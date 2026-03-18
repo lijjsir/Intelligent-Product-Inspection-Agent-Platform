@@ -39,3 +39,11 @@ class TaskService:
 
     async def get_task(self, task_id: str) -> InspectionTask | None:
         return await self._repo.get(self._org_id, task_id)
+
+    async def list_tasks(self, query) -> tuple[list[InspectionTask], int]:
+        return await self._repo.list_paged(
+            org_id=self._org_id,
+            filters=query.to_filters(),
+            page=query.page,
+            size=query.size,
+        )

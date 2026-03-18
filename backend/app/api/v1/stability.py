@@ -20,12 +20,13 @@ async def get_by_task(
     require_role("stability", current.role)
     service = StabilityService(db, current.org_id)
     report = await service.get_by_task(task_id)
+    if not report:
+        from app.core.exceptions import NotFoundError
+        raise NotFoundError("Stability report not found for task")
 
-    return ResponseEnvelope(
-        data=StabilityResponse(
-            id=report.id,
-            task_id=report.task_id,
-            risk_score=float(report.risk_score),
-            risk_level=report.risk_level,
-        )
-    )
+    from app.schemas.stability import StabilityResponse
+    if report.created_at:
+        report.created_at = report.created_at.isoformat()
+    if report.handled_at:
+        report.handled_at = report.handled_at.isoformat()
+    return ResponseEnvelope(data=StabilityResponse.model_validate(report))

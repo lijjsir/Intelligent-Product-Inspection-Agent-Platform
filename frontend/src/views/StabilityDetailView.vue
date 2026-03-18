@@ -1,17 +1,236 @@
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useStabilityStore } from '@/stores/stability.store'
+import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
+
+const route = useRoute()
+const router = useRouter()
+const store = useStabilityStore()
+
+const loading = ref(true)
+const taskId = route.params.id as string
+
+const radarChartRef = ref<HTMLElement | null>(null)
+let chartInstance: echarts.ECharts | null = null
+
+const getRiskType = (level: string) => {
+  const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
+    low: "success",
+    medium: "primary",
+    high: "warning",
+    critical: "danger",
+  };
+  return map[level?.toLowerCase()] || "info";
+}
+
+onMounted(async () => {
+  try {
+    await store.fetchByTask(taskId)
+    await nextTick()
+    if (store.current) {
+      initChart()
+    }
+  } catch (err: any) {
+    if (err.response?.status === 404) {
+      ElMessage.warning("该任务暂无稳定性评估报告")
+    } else {
+      ElMessage.error("获取评估报告失败")
+    }
+  } finally {
+    loading.value = false
+  }
+  
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  if (chartInstance) {
+    chartInstance.dispose()
+  }
+  window.removeEventListener('resize', handleResize)
+})
+
+function handleResize() {
+  if (chartInstance) {
+    chartInstance.resize()
+  }
+}
+
+function initChart() {
+  if (!radarChartRef.value || !store.current) return
+  
+  chartInstance = echarts.init(radarChartRef.value)
+  const report = store.current
+  const option: echarts.EChartsOption = {
+    title: {
+      text: 'AI Agent 五维稳定性雷达',
+      left: 'center'
+    },
+    tooltip: {},
+    radar: {
+      indicator: [
+        { name: '引证佐证 (Evidence)', max: 1 },
+        { name: '前后一致性 (Consistency)', max: 1 },
+        { name: '置信度 (Confidence)', max: 1 },
+        { name: '规则溯源 (Traceability)', max: 1 },
+        { name: '异常波动 (Anomaly)', max: 1 }
+      ],
+      splitArea: {
+        areaStyle: {
+          color: ['#f8f9fa', '#e9ecef', '#dee2e6', '#ced4da']
+        }
+      }
+    },
+    series: [
+      {
+        name: '模型决策稳定性',
+        type: 'radar',
+        data: [
+          {
+            value: [
+              report.evidence_score,
+              report.consistency_score,
+              report.confidence_score,
+              report.traceability_score,
+              report.anomaly_score
+            ],
+            name: '评分数据',
+            areaStyle: {
+              color: 'rgba(64, 158, 255, 0.2)'
+            },
+            lineStyle: {
+              color: '#409EFF',
+              width: 2
+            },
+            itemStyle: {
+              color: '#409EFF'
+            }
+          }
+        ]
+      }
+    ]
+  }
+  chartInstance.setOption(option)
+}
+
+function goBack() {
+  router.back()
+}
+</script>
+
 <template>
-  <section class="card">
-    <h1>稳定性分析</h1>
-    <p>风险等级、仪表盘与五维度评分雷达。</p>
-  </section>
+  <div class="page-container" v-loading="loading">
+    <div class="header">
+      <el-button @click="goBack" class="mb-4">
+        &larr; 返回
+      </el-button>
+      <div v-if="store.current" class="title-area">
+        <h2 class="title">稳定性评估 (Stability)</h2>
+        <el-tag :type="getRiskType(store.current.risk_level)" size="large" class="ml-4">
+          判定面: {{ store.current.risk_level.toUpperCase() }} RISK
+        </el-tag>
+      </div>
+    </div>
+
+    <div v-if="store.current" class="content">
+      <el-row :gutter="20">
+        <!-- 雷达图面板 -->
+        <el-col :span="10">
+          <el-card shadow="never" class="info-card echarts-wrapper">
+            <div ref="radarChartRef" class="chart-container"></div>
+          </el-card>
+        </el-col>
+        
+        <!-- 数据细节和复查面板 -->
+        <el-col :span="14">
+          <el-card shadow="never" class="mb-4">
+            <template #header>关键参数概览</template>
+            <el-descriptions :column="2" border>
+              <el-descriptions-item label="综合风险指数" span="2">
+                <span class="text-xl font-bold" :class="`risk-${store.current.risk_level.toLowerCase()}`">
+                  {{ (store.current.risk_score * 10).toFixed(1) }} / 10.0
+                </span>
+              </el-descriptions-item>
+              <el-descriptions-item label="引证佐证 (Evidence)">{{ store.current.evidence_score }}</el-descriptions-item>
+              <el-descriptions-item label="前后一致性 (Consistency)">{{ store.current.consistency_score }}</el-descriptions-item>
+              <el-descriptions-item label="置信度 (Confidence)">{{ store.current.confidence_score }}</el-descriptions-item>
+              <el-descriptions-item label="规则溯源 (Traceability)">{{ store.current.traceability_score }}</el-descriptions-item>
+              <el-descriptions-item label="异常波动 (Anomaly)">{{ store.current.anomaly_score }}</el-descriptions-item>
+              <el-descriptions-item label="任务生成时间">{{ store.current.created_at ? new Date(store.current.created_at).toLocaleString() : '-' }}</el-descriptions-item>
+            </el-descriptions>
+          </el-card>
+
+          <!-- 诊断原因与溯源 -->
+          <el-card shadow="never" class="mb-4">
+            <template #header>根因溯源 (Root Cause)</template>
+            <p v-if="store.current.root_cause">{{ store.current.root_cause }}</p>
+            <el-empty v-else description="无高危根因警报" :image-size="60" />
+          </el-card>
+        </el-col>
+      </el-row>
+    </div>
+    
+    <div v-else-if="!loading" class="empty-state">
+      <el-empty description="无法获取稳定性评估报告（可能仍在生成或暂无数据）" />
+    </div>
+  </div>
 </template>
 
-<script setup lang="ts"></script>
-
 <style scoped>
-.card {
+.page-container {
   padding: 24px;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
+  background-color: #f3f4f6;
+  min-height: 100vh;
+}
+
+.header {
+  margin-bottom: 24px;
+}
+
+.title-area {
+  display: flex;
+  align-items: center;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  color: #111827;
+}
+
+.ml-4 {
+  margin-left: 16px;
+}
+
+.mb-4 {
+  margin-bottom: 16px;
+}
+
+.text-xl {
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+.font-bold {
+  font-weight: 700;
+}
+
+.risk-low { color: #67c23a; }
+.risk-medium { color: #409eff; }
+.risk-high { color: #e6a23c; }
+.risk-critical { color: #f56c6c; }
+
+.echarts-wrapper {
+  height: 500px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.chart-container {
+  width: 100%;
+  height: 450px;
 }
 </style>

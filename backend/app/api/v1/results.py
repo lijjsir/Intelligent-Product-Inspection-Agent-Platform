@@ -20,13 +20,11 @@ async def get_by_task(
     require_role("result", current.role)
     service = ResultService(db, current.org_id)
     result = await service.get_by_task(task_id)
+    if not result:
+        from app.core.exceptions import NotFoundError
+        raise NotFoundError("Result not found for task")
 
-    return ResponseEnvelope(
-        data=ResultResponse(
-            id=result.id,
-            task_id=result.task_id,
-            org_id=result.org_id,
-            verdict=result.verdict,
-            overall_score=float(result.overall_score),
-        )
-    )
+    from app.schemas.result import ResultResponse
+    if result.created_at:
+        result.created_at = result.created_at.isoformat()
+    return ResponseEnvelope(data=ResultResponse.model_validate(result))
