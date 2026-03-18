@@ -10,6 +10,19 @@ class ResultResponse(BaseModel):
     org_id: str
     verdict: str
     overall_score: float
+    defects: Optional[dict] = None
+    citations: Optional[dict] = None
+    reasoning_chain: Optional[dict] = None
+    llm_model: str
+    prompt_version: str
+    tokens_used: Optional[int] = None
+    latency_ms: Optional[int] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    review_note: Optional[str] = None
+    created_at: Optional[str] = None
+
+    model_config = {"from_attributes": True}
 
 
 class ReviewSubmit(BaseModel):
