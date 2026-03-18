@@ -1,0 +1,31 @@
+from fastapi import APIRouter, Depends
+
+from app.api.v1.deps import get_db, get_current_user
+from app.core.permissions import require_role
+from app.schemas.common import ResponseEnvelope
+from app.schemas.stability import StabilityResponse
+from app.schemas.user import CurrentUser
+from app.services.stability_service import StabilityService
+
+
+router = APIRouter()
+
+
+@router.get("/by-task/{task_id}", response_model=ResponseEnvelope[StabilityResponse])
+async def get_by_task(
+    task_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("stability", current.role)
+    service = StabilityService(db, current.org_id)
+    report = await service.get_by_task(task_id)
+
+    return ResponseEnvelope(
+        data=StabilityResponse(
+            id=report.id,
+            task_id=report.task_id,
+            risk_score=float(report.risk_score),
+            risk_level=report.risk_level,
+        )
+    )

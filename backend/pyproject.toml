@@ -1,0 +1,24 @@
+[project]
+name = "piap-backend"
+version = "0.1.0"
+description = "Product Intelligent Inspection Agent Platform (PIAP) backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "aiomysql>=0.2.0",
+    "alembic>=1.13.0",
+    "python-jose[cryptography]>=3.3.0",
+    "argon2-cffi>=23.1.0",
+    "httpx>=0.27.0",
+    "celery>=5.3.0",
+]
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
