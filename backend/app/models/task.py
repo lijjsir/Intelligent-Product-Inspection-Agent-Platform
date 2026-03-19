@@ -2,13 +2,14 @@ from sqlalchemy import String, SmallInteger, DateTime
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.ids import uuid7
 from app.models.base import Base, UUIDBinary, TimestampMixin
 
 
 class InspectionTask(Base, TimestampMixin):
     __tablename__ = "inspection_tasks"
 
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True)
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
     product_id: Mapped[str] = mapped_column(String(64))

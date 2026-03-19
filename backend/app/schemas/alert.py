@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
 
@@ -19,12 +20,12 @@ class AlertResponse(BaseModel):
     detail: Optional[dict] = None
     status: str
     channels: Optional[dict] = None
-    dispatched_at: Optional[str] = None
+    dispatched_at: Optional[datetime] = None
     ack_by: Optional[str] = None
-    ack_at: Optional[str] = None
+    ack_at: Optional[datetime] = None
     resolved_by: Optional[str] = None
-    resolved_at: Optional[str] = None
-    created_at: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

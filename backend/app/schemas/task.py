@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.schemas.common import PageParams
@@ -28,8 +29,23 @@ class TaskResponse(BaseModel):
     spec_id: str
     status: str
     priority: int
-    created_at: Optional[str] = None
+    image_urls: List[str]
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
+    model_config = {"from_attributes": True}
+
+
+class TaskListItemResponse(BaseModel):
+    id: str
+    org_id: str
+    product_id: str
+    spec_id: str
+    status: str
+    priority: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     model_config = {"from_attributes": True}
 
 

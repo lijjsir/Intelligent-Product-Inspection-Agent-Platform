@@ -17,7 +17,6 @@ export const useAuthStore = defineStore("auth", () => {
   const isAuthed = computed(() => Boolean(token.value));
 
   function setSession(session: AuthSession) {
-    console.log("设置会话数据:", session);
     token.value = session.access_token;
     orgId.value = session.org_id;
     role.value = session.role;
@@ -27,13 +26,10 @@ export const useAuthStore = defineStore("auth", () => {
     localStorage.setItem(ORG_ID_KEY, orgId.value);
     localStorage.setItem(ROLE_KEY, role.value);
     localStorage.setItem(USER_ID_KEY, userId.value);
-    console.log("会话设置完成，isAuthed:", isAuthed.value);
   }
 
   async function login(payload: LoginPayload) {
     const { data } = await authApi.login(payload);
-    console.log("登录 API 响应:", data);
-    console.log("解析的会话数据:", data.data);
     setSession(data.data);
     return data.data;
   }

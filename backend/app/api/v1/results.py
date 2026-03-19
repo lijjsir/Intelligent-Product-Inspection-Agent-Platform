@@ -24,7 +24,4 @@ async def get_by_task(
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Result not found for task")
 
-    from app.schemas.result import ResultResponse
-    if result.created_at:
-        result.created_at = result.created_at.isoformat()
     return ResponseEnvelope(data=ResultResponse.model_validate(result))

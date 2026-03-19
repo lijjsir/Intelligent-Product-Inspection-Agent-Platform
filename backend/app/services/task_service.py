@@ -31,7 +31,7 @@ class TaskService:
                 "org_id": self._org_id,
                 "actor_id": created_by,
                 "resource_type": "task",
-                "resource_id": task.id,
+                "resource_id": str(task.id),
                 "action": "create",
             }
         )

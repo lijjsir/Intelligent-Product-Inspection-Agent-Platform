@@ -121,7 +121,7 @@ function getRoleTag(role: string) {
             <el-select 
               :model-value="row.role" 
               @change="(v) => handleRoleChange(row, v)"
-              :disabled="row.id === authStore.user?.user_id"
+              :disabled="row.id === authStore.userId"
               size="small"
               style="width: 120px"
             >
@@ -137,7 +137,7 @@ function getRoleTag(role: string) {
             <el-switch 
               v-model="row.is_active" 
               @change="() => handleStatusChange(row)" 
-              :disabled="row.id === authStore.user?.user_id" 
+              :disabled="row.id === authStore.userId" 
             />
           </template>
         </el-table-column>

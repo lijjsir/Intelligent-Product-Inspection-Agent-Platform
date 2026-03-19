@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
 
@@ -10,7 +11,7 @@ class ResultResponse(BaseModel):
     org_id: str
     verdict: str
     overall_score: float
-    defects: Optional[dict] = None
+    defects: Optional[list[dict]] = None
     citations: Optional[dict] = None
     reasoning_chain: Optional[dict] = None
     llm_model: str
@@ -18,9 +19,9 @@ class ResultResponse(BaseModel):
     tokens_used: Optional[int] = None
     latency_ms: Optional[int] = None
     reviewed_by: Optional[str] = None
-    reviewed_at: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
     review_note: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

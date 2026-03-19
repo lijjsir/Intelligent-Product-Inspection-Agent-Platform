@@ -14,6 +14,12 @@ class AlertRepository:
         )
         return result.scalar_one_or_none()
 
+    async def create(self, payload: dict) -> AlertEvent:
+        alert = AlertEvent(**payload)
+        self._session.add(alert)
+        await self._session.flush()
+        return alert
+
     async def list_alerts(
         self,
         org_id: str,

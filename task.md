@@ -17,9 +17,6 @@
 - [x] 稳定性评估模块 (Stability)
   - [x] 后端 Stability 评分 API（五维度雷达数据支持）
   - [x] 前端 StabilityDetailView 与 ECharts 雷达趋势图
-- [ ] 告警管理模块 (Alerts) - **当前进行中**
-  - [ ] 后端 Alert 列表和消除接口
-  - [ ] 前端 AlertListView 和严重度标签展示
 - [x] 告警管理模块 (Alerts)
   - [x] 后端 Alert 列表和消除接口
   - [x] 前端 AlertListView 和严重度标签展示
@@ -30,12 +27,12 @@
   - [x] 前端 UserListView 表格管理与角色分配
 
 ## 阶段三：AI Agent 核心工作流
-- [ ] 后端 LangGraph Agent 图结构定义 (`InspectionState` 与 Node)
-- [ ] 大模型 LLM 判断节点对接 (调用 Ollama LLaVA/Llama3 等视觉大模型)
-- [ ] 知识库 RAG 相似度对齐 (基于 Qdrant 接入产品标准书检测)
-- [ ] 稳定性五维打分（一致性、溯源等）算法的纯业务代码实现
-- [ ] 异步 Celery Worker 监听通道激活队列处理
-- [ ] AI 流水线实时流 SSE 推送接口端点及前端长连接协同订阅
+- [x] 后端 LangGraph Agent 图结构定义 (`InspectionState` 与 Node)
+- [x] 大模型 LLM 判断节点对接 (调用 Ollama LLaVA/Llama3 等视觉大模型)
+- [x] 知识库 RAG 相似度对齐 (基于 Qdrant 接入产品标准书检测)
+- [x] 稳定性五维打分（一致性、溯源等）算法的纯业务代码实现
+- [x] 异步 Celery Worker 监听通道激活队列处理
+- [x] AI 流水线实时流 SSE 推送接口端点及前端长连接协同订阅
 
 ## 阶段四：生产化与可观测性
 - [ ] 全量 Audit 审计日志管理

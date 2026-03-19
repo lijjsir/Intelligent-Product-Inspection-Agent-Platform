@@ -24,9 +24,4 @@ async def get_by_task(
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Stability report not found for task")
 
-    from app.schemas.stability import StabilityResponse
-    if report.created_at:
-        report.created_at = report.created_at.isoformat()
-    if report.handled_at:
-        report.handled_at = report.handled_at.isoformat()
     return ResponseEnvelope(data=StabilityResponse.model_validate(report))
