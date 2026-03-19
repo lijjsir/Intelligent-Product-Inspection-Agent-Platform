@@ -11,7 +11,7 @@ from app.services.alert_service import AlertService
 router = APIRouter()
 
 
-@router.get("/", response_model=ResponseEnvelope[PagedResponse[AlertResponse]])
+@router.get("", response_model=ResponseEnvelope[PagedResponse[AlertResponse]])
 async def list_alerts(
     query: AlertListQuery = Depends(),
     current: CurrentUser = Depends(get_current_user),

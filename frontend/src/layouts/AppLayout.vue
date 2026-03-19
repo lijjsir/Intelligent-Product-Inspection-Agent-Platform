@@ -3,7 +3,7 @@
     <aside class="sidebar">
       <div class="logo">PIAP</div>
       <nav class="nav">
-        <RouterLink to="/" class="nav-link">仪表盘</RouterLink>
+        <RouterLink to="/" class="nav-link" exact-active-class="router-link-active">仪表盘</RouterLink>
         <RouterLink to="/tasks" class="nav-link">任务列表</RouterLink>
         <RouterLink to="/alerts" class="nav-link">预警中心</RouterLink>
         <RouterLink to="/analytics" class="nav-link">分析中心</RouterLink>

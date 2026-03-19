@@ -1,12 +1,20 @@
 export type Verdict = 'pass' | 'fail' | 'uncertain' | 'manual_required';
 
+export interface Defect {
+  id?: string;
+  type: string;
+  confidence: number;
+  bbox: [number, number, number, number];
+  description?: string;
+}
+
 export interface InspectionResult {
   id: string;
   task_id: string;
   org_id: string;
   verdict: Verdict;
   overall_score: number;
-  defects: Record<string, any> | null;
+  defects: Defect[] | null;
   citations: Record<string, any> | null;
   reasoning_chain: Record<string, any> | null;
   llm_model: string;
