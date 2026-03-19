@@ -9,7 +9,9 @@ export interface InspectionTask {
   spec_id: string;
   status: TaskStatus;
   priority: number;
+  image_urls: string[];
   created_at?: string;
+  updated_at?: string;
 }
 
 export interface TaskCreate {

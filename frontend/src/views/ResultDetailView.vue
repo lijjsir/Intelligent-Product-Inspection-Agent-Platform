@@ -1,16 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useResultStore } from '@/stores/result.store'
+import { useTaskStore } from '@/stores/task.store'
 import { ElMessage } from 'element-plus'
 import type { Verdict } from '@/types/result.types'
+import DefectImageViewer from '@/components/business/result/DefectImageViewer.vue'
 
 const route = useRoute()
 const router = useRouter()
 const store = useResultStore()
+const taskStore = useTaskStore()
 
 const loading = ref(true)
 const taskId = route.params.id as string
+
+// Get task images for defect visualization
+const taskImages = computed(() => {
+  return taskStore.current?.image_urls || []
+})
 
 const getVerdictType = (verdict: string) => {
   const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
@@ -24,7 +32,11 @@ const getVerdictType = (verdict: string) => {
 
 onMounted(async () => {
   try {
-    await store.fetchByTask(taskId)
+    // Fetch both result and task data
+    await Promise.all([
+      store.fetchByTask(taskId),
+      taskStore.fetchTask(taskId)
+    ])
   } catch (err: any) {
     if (err.response?.status === 404) {
       // 实际上并不是错误，可能只是尚未生成
@@ -77,12 +89,41 @@ function goBack() {
         
         <!-- 主体数据面板 -->
         <el-col :span="16">
+          <!-- 缺陷图像可视化 -->
+          <el-card v-if="taskImages.length > 0 && store.current.defects && store.current.defects.length > 0" shadow="never" class="mb-4">
+            <template #header>缺陷可视化标注</template>
+            <DefectImageViewer
+              :image-url="taskImages[0]"
+              :defects="store.current.defects"
+              :loading="loading"
+              :normalized="true"
+            />
+          </el-card>
+
           <el-card shadow="never" class="mb-4">
             <template #header>缺陷与推理明细</template>
             <el-tabs type="border-card">
               <el-tab-pane label="缺陷坐标清单 (Defects)">
                 <el-empty v-if="!store.current.defects || store.current.defects.length === 0" description="未检出明确缺陷包裹" />
-                <pre v-else class="json-viewer">{{ JSON.stringify(store.current.defects, null, 2) }}</pre>
+                <div v-else>
+                  <el-table :data="store.current.defects" stripe style="width: 100%">
+                    <el-table-column type="index" label="#" width="50" />
+                    <el-table-column prop="type" label="缺陷类型" width="120" />
+                    <el-table-column prop="confidence" label="置信度" width="100">
+                      <template #default="{ row }">
+                        <el-tag :type="row.confidence > 0.8 ? 'danger' : row.confidence > 0.5 ? 'warning' : 'info'">
+                          {{ (row.confidence * 100).toFixed(1) }}%
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="bbox" label="坐标框 (x, y, w, h)" width="200">
+                      <template #default="{ row }">
+                        <code>[{{ row.bbox.map((v: number) => v.toFixed(3)).join(', ') }}]</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="description" label="描述" />
+                  </el-table>
+                </div>
               </el-tab-pane>
               <el-tab-pane label="推理还原链路 (Reasoning)">
                 <el-empty v-if="!store.current.reasoning_chain" description="模型未输出推理链路" />
