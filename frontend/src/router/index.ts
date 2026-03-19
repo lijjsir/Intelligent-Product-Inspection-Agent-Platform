@@ -60,19 +60,13 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore();
-  console.log("路由守卫 - 目标路径:", to.path);
-  console.log("路由守卫 - 是否需要认证:", to.meta.requiresAuth);
-  console.log("路由守卫 - 是否已认证:", auth.isAuthed);
-  
+
   if (to.meta.requiresAuth && !auth.isAuthed) {
-    console.log("路由守卫 - 未认证，跳转到登录页");
     return { path: "/login" };
   }
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
-    console.log("路由守卫 - 已认证，跳转到首页");
     return { path: "/" };
   }
-  console.log("路由守卫 - 允许通过");
   return true;
 });
 

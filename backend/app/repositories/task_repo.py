@@ -1,5 +1,8 @@
-from sqlalchemy import select
+from datetime import datetime
+
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.models.task import InspectionTask
 
@@ -21,9 +24,38 @@ class TaskRepository:
         )
         return result.scalar_one_or_none()
 
+    async def update_status(self, org_id: str, task_id: str, status: str) -> bool:
+        values: dict = {"status": status}
+        if status == "running":
+            values["started_at"] = datetime.utcnow()
+        if status in {"done", "failed"}:
+            values["finished_at"] = datetime.utcnow()
+
+        res = await self._session.execute(
+            update(InspectionTask)
+            .where(InspectionTask.org_id == org_id, InspectionTask.id == task_id)
+            .values(**values)
+        )
+        return bool(res.rowcount and res.rowcount > 0)
+
     async def list_paged(self, org_id: str, filters: dict, page: int, size: int) -> tuple[list[InspectionTask], int]:
         from sqlalchemy import func
-        base = select(InspectionTask).where(InspectionTask.org_id == org_id)
+        base = (
+            select(InspectionTask)
+            .options(
+                load_only(
+                    InspectionTask.id,
+                    InspectionTask.org_id,
+                    InspectionTask.product_id,
+                    InspectionTask.spec_id,
+                    InspectionTask.status,
+                    InspectionTask.priority,
+                    InspectionTask.created_at,
+                    InspectionTask.updated_at,
+                )
+            )
+            .where(InspectionTask.org_id == org_id)
+        )
         if "status" in filters:
             base = base.where(InspectionTask.status == filters["status"])
         if "product_id" in filters:

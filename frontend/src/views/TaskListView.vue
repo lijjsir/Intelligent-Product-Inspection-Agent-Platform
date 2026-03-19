@@ -5,6 +5,7 @@ import { useTaskStore } from "@/stores/task.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
+import type { UploadFile, UploadFiles, UploadUserFile } from "element-plus";
 
 const router = useRouter();
 const store = useTaskStore();
@@ -20,9 +21,10 @@ const formRef = ref<FormInstance>();
 const createForm = ref({
   product_id: "",
   spec_id: "",
-  image_urls_input: "", // comma or newline separated
+  image_urls_input: "",
   priority: 5,
 });
+const uploadFiles = ref<UploadUserFile[]>([]);
 
 const rules: FormRules = {
   product_id: [
@@ -33,7 +35,18 @@ const rules: FormRules = {
     { required: true, message: "检测规格不能为空", trigger: "blur" },
   ],
   image_urls_input: [
-    { required: true, message: "至少提供一个图像URL", trigger: "blur" },
+    {
+      validator: (_rule, value: string, callback) => {
+        const hasUrl = Boolean(value?.trim());
+        const hasUpload = uploadFiles.value.length > 0;
+        if (!hasUrl && !hasUpload) {
+          callback(new Error("至少提供一个图像 URL 或上传一张图片"));
+          return;
+        }
+        callback();
+      },
+      trigger: "blur",
+    },
   ],
 };
 
@@ -64,7 +77,25 @@ function handleReset() {
 
 function handleOpenCreate() {
   createForm.value = { product_id: "", spec_id: "", image_urls_input: "", priority: 5 };
+  uploadFiles.value = [];
   showCreateDialog.value = true;
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function handleUploadChange(_file: UploadFile, files: UploadFiles) {
+  uploadFiles.value = files;
+}
+
+function handleUploadRemove(_file: UploadFile, files: UploadFiles) {
+  uploadFiles.value = files;
 }
 
 async function handleSubmitCreate() {
@@ -74,20 +105,28 @@ async function handleSubmitCreate() {
     
     creating.value = true;
     try {
-      const urls = createForm.value.image_urls_input
+      const urlsFromText = createForm.value.image_urls_input
         .split(/[\n,]+/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-        
-      if (urls.length === 0) {
-        ElMessage.error("未解析到有效的图像 URL");
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      const dataUrls = await Promise.all(
+        uploadFiles.value
+          .map((f) => f.raw)
+          .filter((raw): raw is File => Boolean(raw))
+          .map((raw) => fileToDataUrl(raw))
+      );
+
+      const imageUrls = [...urlsFromText, ...dataUrls];
+      if (imageUrls.length === 0) {
+        ElMessage.error("请提供图像 URL 或上传图片");
         return;
       }
 
       await store.createTask({
         product_id: createForm.value.product_id,
         spec_id: createForm.value.spec_id,
-        image_urls: urls,
+        image_urls: imageUrls,
         priority: createForm.value.priority,
       });
 
@@ -210,8 +249,24 @@ const getStatusType = (status: string) => {
             v-model="createForm.image_urls_input" 
             type="textarea" 
             rows="4" 
-            placeholder="输入图像的 URL 源，多个之间用逗号或换行分隔" 
+            placeholder="可选：输入图像 URL，多个之间用逗号或换行分隔" 
           />
+        </el-form-item>
+        <el-form-item label="上传图片">
+          <el-upload
+            v-model:file-list="uploadFiles"
+            :auto-upload="false"
+            accept="image/*"
+            :limit="5"
+            list-type="text"
+            @change="handleUploadChange"
+            @remove="handleUploadRemove"
+          >
+            <el-button type="primary" plain>选择本地图片</el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持 JPG/PNG/WebP，最多 5 张。上传后会直接参与 AI 分析。</div>
+            </template>
+          </el-upload>
         </el-form-item>
         <el-form-item label="优先级">
           <el-input-number v-model="createForm.priority" :min="1" :max="10" />

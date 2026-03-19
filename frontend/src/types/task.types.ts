@@ -9,7 +9,7 @@ export interface InspectionTask {
   spec_id: string;
   status: TaskStatus;
   priority: number;
-  image_urls: string[];
+  image_urls?: string[];
   created_at?: string;
   updated_at?: string;
 }
@@ -25,4 +25,18 @@ export interface TaskCreate {
 export interface TaskListQuery extends PageParams {
   status?: TaskStatus;
   product_id?: string;
+}
+
+export interface TaskRunResponse {
+  mode: "celery" | "local_background";
+  job_id: string | null;
+}
+
+export interface TaskStreamEvent {
+  type: string;
+  stage?: string;
+  message?: string;
+  status?: TaskStatus;
+  ts?: string;
+  [k: string]: unknown;
 }

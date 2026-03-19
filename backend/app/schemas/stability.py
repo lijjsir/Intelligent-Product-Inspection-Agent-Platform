@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
 
@@ -20,10 +21,10 @@ class StabilityResponse(BaseModel):
     sampling_results: Optional[dict] = None
     root_cause: Optional[str] = None
     handled_by: Optional[str] = None
-    handled_at: Optional[str] = None
+    handled_at: Optional[datetime] = None
     handle_action: Optional[str] = None
     handle_note: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

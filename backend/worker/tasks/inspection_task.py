@@ -1,8 +1,13 @@
 from worker.celery_app import celery_app
-from agent.graph.inspection_graph import InspectionGraph
+import asyncio
+
+from app.services.inspection_pipeline_service import run_inspection_pipeline
 
 
 @celery_app.task
 def run_inspection(task_payload: dict) -> dict:
-    graph = InspectionGraph()
-    return graph.state
+    task_id = str(task_payload.get("task_id") or "")
+    org_id = str(task_payload.get("org_id") or "")
+    if not task_id or not org_id:
+        raise ValueError("task_id and org_id are required")
+    return asyncio.run(run_inspection_pipeline(task_id=task_id, org_id=org_id))

@@ -26,5 +26,17 @@ class Settings(BaseSettings):
     vector_db_host: str = "localhost"
     vector_db_port: int = 19530
 
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
+
+    volcengine_api_key: str = "88b788ed-5070-42c3-85e7-2641472d2f57"
+    volcengine_model_id: str = "ep-20260310154131-fp54f"
+    volcengine_embed_model: str = "ep-20260311135919-gktlx"
+    volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+
+    qdrant_url: str = "http://127.0.0.1:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "piap_standard_book"
+
 
 settings = Settings()

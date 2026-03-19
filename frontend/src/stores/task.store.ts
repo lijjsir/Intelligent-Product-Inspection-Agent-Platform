@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { taskApi } from "@/api/task.api";
-import type { InspectionTask, TaskCreate, TaskListQuery } from "@/types/task.types";
+import type { InspectionTask, TaskCreate, TaskListQuery, TaskStreamEvent } from "@/types/task.types";
 
 export const useTaskStore = defineStore("task", () => {
   const items = ref<InspectionTask[]>([]);
@@ -35,11 +35,33 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
+  async function runTask(id: string) {
+    const { data } = await taskApi.run(id);
+    return data.data;
+  }
+
+  function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
+    const source = taskApi.stream(id, onMessage);
+    return () => source.close();
+  }
+
   function $reset() {
     items.value = [];
     current.value = null;
     total.value = 0;
   }
 
-  return { items, current, total, loading, count, fetchTasks, fetchTask, createTask, $reset };
+  return {
+    items,
+    current,
+    total,
+    loading,
+    count,
+    fetchTasks,
+    fetchTask,
+    createTask,
+    runTask,
+    subscribeTaskStream,
+    $reset,
+  };
 });

@@ -21,19 +21,10 @@ async def list_alerts(
     service = AlertService(db, current.org_id)
     skip = (query.page - 1) * query.size
     total, items = await service.list_alerts(skip, query.size, query.status, query.severity)
-    
-    # Format datetimes
-    formatted_items = []
-    for item in items:
-        if item.created_at: item.created_at = item.created_at.isoformat()
-        if item.dispatched_at: item.dispatched_at = item.dispatched_at.isoformat()
-        if item.ack_at: item.ack_at = item.ack_at.isoformat()
-        if item.resolved_at: item.resolved_at = item.resolved_at.isoformat()
-        formatted_items.append(AlertResponse.model_validate(item))
-        
+
     return ResponseEnvelope(
         data=PagedResponse(
-            items=formatted_items,
+            items=[AlertResponse.model_validate(item) for item in items],
             total=total,
             page=query.page,
             size=query.size,
@@ -52,11 +43,6 @@ async def get_alert(
     if not alert:
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Alert not found")
-        
-    if alert.created_at: alert.created_at = alert.created_at.isoformat()
-    if alert.dispatched_at: alert.dispatched_at = alert.dispatched_at.isoformat()
-    if alert.ack_at: alert.ack_at = alert.ack_at.isoformat()
-    if alert.resolved_at: alert.resolved_at = alert.resolved_at.isoformat()
 
     return ResponseEnvelope(data=AlertResponse.model_validate(alert))
 
@@ -68,7 +54,7 @@ async def resolve_alert(
 ):
     require_role("alert", current.role)
     service = AlertService(db, current.org_id)
-    success = await service.resolve_alert(alert_id, current.id)
+    success = await service.resolve_alert(alert_id, current.user_id)
     if not success:
         from app.core.exceptions import NotFoundError
         raise NotFoundError("Alert not found")

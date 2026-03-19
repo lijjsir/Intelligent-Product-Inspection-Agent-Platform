@@ -28,7 +28,7 @@ describe("auth store", () => {
 
   it("login sets session", async () => {
     const { authApi } = await import("@/api/auth.api");
-    authApi.login = vi.fn().mockResolvedValue({ data: session });
+    authApi.login = vi.fn().mockResolvedValue({ data: { data: session } });
 
     const store = useAuthStore();
     await store.login({ org_id: "org1", username: "a", password: "b" });
@@ -40,7 +40,7 @@ describe("auth store", () => {
 
   it("register sets session", async () => {
     const { authApi } = await import("@/api/auth.api");
-    authApi.register = vi.fn().mockResolvedValue({ data: session });
+    authApi.register = vi.fn().mockResolvedValue({ data: { data: session } });
 
     const store = useAuthStore();
     await store.register({

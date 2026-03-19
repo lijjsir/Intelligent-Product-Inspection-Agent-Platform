@@ -67,7 +67,7 @@ async def test_login_success(monkeypatch):
     monkeypatch.setattr(auth_mod, "create_refresh_token", lambda **_: "refresh")
 
     svc = auth_mod.AuthService(None)
-    access, refresh = await svc.login("org-1", "alice", "pw")
+    _, access, refresh = await svc.login("org-1", "alice", "pw")
     assert access == "access"
     assert refresh == "refresh"
 
