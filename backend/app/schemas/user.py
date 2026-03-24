@@ -1,4 +1,6 @@
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, Field
 
 
 class CurrentUser(BaseModel):
@@ -21,6 +23,8 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     is_active: bool
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class UserRoleUpdate(BaseModel):
@@ -33,3 +37,18 @@ class UserStatusUpdate(BaseModel):
 
 class UserPasswordReset(BaseModel):
     password: str
+
+
+class UserListQuery(BaseModel):
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=20, ge=1, le=200)
+    keyword: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+
+
+class UserProfileUpdate(BaseModel):
+    username: str | None = None
+    email: EmailStr | None = None
+    current_password: str | None = None
+    new_password: str | None = None
