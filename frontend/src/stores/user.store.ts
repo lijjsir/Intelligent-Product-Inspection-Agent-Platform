@@ -1,15 +1,16 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { userApi } from "@/api/user.api";
-import type { User, UserCreate } from "@/types/user.types";
-import type { PageParams } from "@/types/common.types";
+import type { User, UserCreate, UserListQuery, UserProfileUpdate } from "@/types/user.types";
 
 export const useUserStore = defineStore("user", () => {
   const items = ref<User[]>([]);
+  const current = ref<User | null>(null);
   const total = ref(0);
   const loading = ref(false);
+  const assignableRoles = ref<string[]>([]);
 
-  async function fetchUsers(query: PageParams) {
+  async function fetchUsers(query: UserListQuery) {
     loading.value = true;
     try {
       const { data } = await userApi.list(query);
@@ -27,17 +28,59 @@ export const useUserStore = defineStore("user", () => {
     return data.data;
   }
 
+  async function fetchCurrentUser() {
+    const { data } = await userApi.getMe();
+    current.value = data.data;
+    return data.data;
+  }
+
+  async function updateCurrentUser(payload: UserProfileUpdate) {
+    const { data } = await userApi.updateMe(payload);
+    current.value = data.data;
+    return data.data;
+  }
+
+  async function fetchAssignableRoles() {
+    const { data } = await userApi.getAssignableRoles();
+    assignableRoles.value = data.data;
+    return data.data;
+  }
+
   async function updateRole(id: string, role: string) {
-    await userApi.updateRole(id, { role });
+    const { data } = await userApi.updateRole(id, { role });
     const idx = items.value.findIndex(u => u.id === id);
-    if (idx !== -1) items.value[idx].role = role;
+    if (idx !== -1) items.value[idx] = data.data;
+    if (current.value?.id === id) current.value = data.data;
   }
 
   async function updateStatus(id: string, is_active: boolean) {
-    await userApi.updateStatus(id, { is_active });
+    const { data } = await userApi.updateStatus(id, { is_active });
     const idx = items.value.findIndex(u => u.id === id);
-    if (idx !== -1) items.value[idx].is_active = is_active;
+    if (idx !== -1) items.value[idx] = data.data;
+    if (current.value?.id === id) current.value = data.data;
   }
 
-  return { items, total, loading, fetchUsers, createUser, updateRole, updateStatus };
+  async function resetPassword(id: string, password: string) {
+    const { data } = await userApi.resetPassword(id, { password });
+    const idx = items.value.findIndex(u => u.id === id);
+    if (idx !== -1) items.value[idx] = data.data;
+    if (current.value?.id === id) current.value = data.data;
+    return data.data;
+  }
+
+  return {
+    items,
+    current,
+    total,
+    loading,
+    assignableRoles,
+    fetchUsers,
+    createUser,
+    fetchCurrentUser,
+    updateCurrentUser,
+    fetchAssignableRoles,
+    updateRole,
+    updateStatus,
+    resetPassword,
+  };
 });
