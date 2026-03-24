@@ -7,6 +7,8 @@ export interface User {
   email: string;
   role: string;
   is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface UserCreate {
@@ -22,4 +24,21 @@ export interface UserRoleUpdate {
 
 export interface UserStatusUpdate {
   is_active: boolean;
+}
+
+export interface UserPasswordReset {
+  password: string;
+}
+
+export interface UserListQuery extends Partial<PageParams> {
+  keyword?: string;
+  role?: string;
+  is_active?: boolean;
+}
+
+export interface UserProfileUpdate {
+  username?: string;
+  email?: string;
+  current_password?: string;
+  new_password?: string;
 }

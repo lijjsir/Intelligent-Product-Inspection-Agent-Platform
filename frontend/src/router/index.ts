@@ -40,6 +40,7 @@ const routes = [
       { path: "alerts", name: "alerts", component: () => import("@/views/AlertListView.vue") },
       { path: "analytics", name: "analytics", component: () => import("@/views/AnalyticsView.vue") },
       { path: "users", name: "users", component: () => import("@/views/UserListView.vue") },
+      { path: "profile", name: "profile", component: () => import("@/views/ProfileView.vue") },
       ...adminRoutes,
       ...qualityRoutes,
     ],
