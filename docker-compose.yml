@@ -17,7 +17,7 @@ services:
     image: redis:7
     container_name: piap-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:16379:6379"
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -38,8 +38,8 @@ services:
       MINIO_ROOT_USER: piap
       MINIO_ROOT_PASSWORD: piap_password
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "19000:9000"
+      - "19001:9001"
     volumes:
       - minio_data:/data
 

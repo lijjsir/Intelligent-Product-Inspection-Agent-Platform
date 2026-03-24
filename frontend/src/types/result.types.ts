@@ -26,3 +26,23 @@ export interface InspectionResult {
   review_note: string | null;
   created_at: string | null;
 }
+
+export interface ResultListItem {
+  id: string;
+  task_id: string;
+  org_id: string;
+  product_id: string;
+  verdict: Verdict;
+  overall_score: number;
+  llm_model: string;
+  prompt_version: string;
+  created_at: string | null;
+}
+
+export interface ResultListQuery {
+  page: number;
+  size: number;
+  verdict?: Verdict;
+  product_id?: string;
+  model_key?: string;
+}

@@ -86,7 +86,7 @@ async def create_user(
 ):
     require_role("user", current.role)
     service = UserService(db, current.org_id)
-    user = await service.create_user(payload.username, payload.email, payload.password, payload.role)
+    user = await service.create_user(payload.username, payload.email, payload.password, payload.role, current.role)
 
     return ResponseEnvelope(
         data=UserResponse(
@@ -109,7 +109,7 @@ async def update_role(
 ):
     require_role("user", current.role)
     service = UserService(db, current.org_id)
-    user = await service.update_role(user_id, payload.role)
+    user = await service.update_role(user_id, payload.role, current.role)
     return ResponseEnvelope(
         data=UserResponse(
             id=user.id,

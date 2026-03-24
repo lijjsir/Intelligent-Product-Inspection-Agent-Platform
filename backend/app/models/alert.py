@@ -1,4 +1,4 @@
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import String, Text, DateTime, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,4 +22,13 @@ class AlertEvent(Base):
     ack_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     resolved_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    created_at: Mapped[str] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )

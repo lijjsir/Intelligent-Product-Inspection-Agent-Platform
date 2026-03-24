@@ -101,6 +101,30 @@ npm run dev
 
 ---
 
+## 🔌 专用视觉服务接入
+
+如果需要把外部目标检测 / AOI / CV 服务接入到 PIAP 的视觉节点，可参考：
+
+- [backend/docs/vision_detector_protocol.md](backend/docs/vision_detector_protocol.md)
+
+当前视觉链路优先级为：
+- 配置了 `PIAP_VISION_DETECTOR_URL` 时，先调用专用视觉检测服务
+- 若专用服务不可用或返回空结果，则回退到火山多模态大模型
+- 若仍无法产出有效结构化缺陷框，则使用项目内可变兜底输出
+
+---
+
+## 🚢 生产部署参考
+
+已补充最小生产部署文件与公网发布说明：
+
+- [deploy/nginx/piap.conf](deploy/nginx/piap.conf)
+- [deploy/PUBLIC_RELEASE_MINIMUM.md](deploy/PUBLIC_RELEASE_MINIMUM.md)
+- [frontend/.env.production.example](frontend/.env.production.example)
+- [backend/.env.production.example](backend/.env.production.example)
+
+---
+
 ## 💡 开发参考与技能接入说明
 
 后续所有对于本平台 API、组件或后台逻辑的追加，请必须完全遵循 `~/.agents/skills/backend/SKILL.md` 与 `~/.agents/skills/frontend/SKILL.md` 中严格约定的项目代码模式与错误封装协议（如后端使用 `ResponseEnvelope` 进行数据出口封装；前端使用组合式 API 和 `usePermission` 函数隔离路由权限）。详细设计参考根目录下的多份设计源文档（如 `PIAP_SDD_v1.0.0.docx`）。

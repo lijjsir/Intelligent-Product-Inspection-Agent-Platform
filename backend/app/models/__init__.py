@@ -7,6 +7,9 @@ from app.models.stability import StabilityReport
 from app.models.alert import AlertEvent
 from app.models.tool import ToolRegistry, ToolExecution
 from app.models.audit import AuditLog, AuditOutbox
+from app.models.model_config import ModelConfig
+from app.models.token_ledger import TokenUsageLedger
+from app.models.feedback import ResultFeedback
 
 __all__ = [
     "Base",
@@ -20,4 +23,7 @@ __all__ = [
     "ToolExecution",
     "AuditLog",
     "AuditOutbox",
+    "ModelConfig",
+    "TokenUsageLedger",
+    "ResultFeedback",
 ]

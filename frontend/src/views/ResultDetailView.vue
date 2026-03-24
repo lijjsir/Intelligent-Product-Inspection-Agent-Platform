@@ -6,6 +6,7 @@ import { useTaskStore } from '@/stores/task.store'
 import { ElMessage } from 'element-plus'
 import type { Verdict } from '@/types/result.types'
 import DefectImageViewer from '@/components/business/result/DefectImageViewer.vue'
+import FeedbackWidget from '@/components/business/result/FeedbackWidget.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -144,6 +145,11 @@ function goBack() {
               <p>批注: {{ store.current.review_note }}</p>
             </div>
             <el-empty v-else description="暂无人工专家覆写此结果记录" :image-size="60" />
+          </el-card>
+
+          <el-card shadow="never" class="mb-4">
+            <template #header>用户反馈</template>
+            <FeedbackWidget :result-id="store.current.id" />
           </el-card>
         </el-col>
       </el-row>

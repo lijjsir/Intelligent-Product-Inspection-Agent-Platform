@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -14,11 +15,18 @@ from app.core.config import settings
 
 
 class LLMClient:
-    def __init__(self) -> None:
-        self._api_key = settings.volcengine_api_key
-        self._base_url = settings.volcengine_base_url.rstrip("/")
-        self._model_id = settings.volcengine_model_id
-        self._embed_model = settings.volcengine_embed_model
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model_id: str | None = None,
+        embed_model: str | None = None,
+    ) -> None:
+        self._api_key = api_key or settings.volcengine_api_key
+        self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
+        self._model_id = model_id or settings.volcengine_model_id
+        self._embed_model = embed_model or settings.volcengine_embed_model
         self._ark_client = Ark(api_key=self._api_key) if Ark and self._api_key else None
 
     @property
@@ -114,15 +122,49 @@ class LLMClient:
                 )
             data = resp.json()
 
+        meta = {
+            "id": data.get("id"),
+            "model": data.get("model"),
+            "usage": data.get("usage"),
+        }
+
         # OpenAI-compatible response: pick message content and decode JSON object content.
         choices = data.get("choices") or []
         if choices:
             content = ((choices[0] or {}).get("message") or {}).get("content")
             if isinstance(content, str):
-                try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except json.JSONDecodeError:
-                    return {"text": content}
+                parsed = self._extract_json_object(content)
+                if isinstance(parsed, dict):
+                    parsed["__meta__"] = meta
+                    return parsed
+                return {"text": content, "__meta__": meta}
+        if isinstance(data, dict):
+            data["__meta__"] = meta
         return data
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict[str, Any] | None:
+        candidates = [text.strip()]
+        if "```" in text:
+            for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S):
+                candidates.append(block.strip())
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                start = candidate.find("{")
+                end = candidate.rfind("}")
+                if start == -1 or end == -1 or end <= start:
+                    continue
+                try:
+                    parsed = json.loads(candidate[start : end + 1])
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None

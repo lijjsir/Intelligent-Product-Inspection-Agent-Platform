@@ -1,4 +1,4 @@
-from sqlalchemy import String, Boolean, DateTime, SmallInteger
+from sqlalchemy import String, Boolean, DateTime, SmallInteger, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,4 +29,13 @@ class AuditOutbox(Base):
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True)
     payload: Mapped[dict] = mapped_column(JSON)
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[str] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )

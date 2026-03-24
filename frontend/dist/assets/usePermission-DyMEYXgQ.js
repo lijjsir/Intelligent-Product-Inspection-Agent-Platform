@@ -1,0 +1,1 @@
+import{u as s,a as e}from"./index-Lz6I1VMu.js";function a(){const u=s();function n(r){if(!u.isAuthed)return!1;const t=u.role;return t===e?!0:Array.isArray(r)?r.includes(t):t===r}return{hasRole:n}}export{a as u};

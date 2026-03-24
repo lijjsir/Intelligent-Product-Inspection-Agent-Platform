@@ -1,4 +1,4 @@
-from sqlalchemy import String, Integer, Boolean, DateTime, Text
+from sqlalchemy import String, Integer, Boolean, DateTime, Text, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,8 +23,16 @@ class ToolRegistry(Base):
     is_readonly: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[str] = mapped_column(String(32), default="1.0.0")
-    created_at: Mapped[str] = mapped_column(DateTime(timezone=False))
-    updated_at: Mapped[str] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )
 
 
 class ToolExecution(Base):
@@ -42,4 +50,13 @@ class ToolExecution(Base):
     status: Mapped[str] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[str] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )

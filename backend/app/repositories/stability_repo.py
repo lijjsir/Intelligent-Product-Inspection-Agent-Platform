@@ -28,3 +28,12 @@ class StabilityRepository:
         self._session.add(obj)
         await self._session.flush()
         return obj
+
+    async def list_by_range(self, org_id: str, start_date=None, end_date=None) -> list[StabilityReport]:
+        stmt = select(StabilityReport).where(StabilityReport.org_id == org_id)
+        if start_date:
+            stmt = stmt.where(StabilityReport.created_at >= __import__("datetime").datetime.combine(start_date, __import__("datetime").datetime.min.time()))
+        if end_date:
+            stmt = stmt.where(StabilityReport.created_at <= __import__("datetime").datetime.combine(end_date, __import__("datetime").datetime.max.time()))
+        result = await self._session.execute(stmt.order_by(StabilityReport.created_at.asc()))
+        return list(result.scalars().all())

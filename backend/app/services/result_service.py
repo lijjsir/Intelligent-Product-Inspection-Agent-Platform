@@ -11,3 +11,13 @@ class ResultService:
 
     async def get_by_task(self, task_id: str):
         return await self._repo.get_by_task(self._org_id, task_id)
+
+    async def list_results(self, query):
+        return await self._repo.list_paged(
+            self._org_id,
+            verdict=query.verdict,
+            product_id=query.product_id,
+            model_key=query.model_key,
+            page=query.page,
+            size=query.size,
+        )

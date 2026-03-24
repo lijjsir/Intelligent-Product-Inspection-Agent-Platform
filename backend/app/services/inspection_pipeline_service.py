@@ -6,6 +6,9 @@ import traceback
 from agent.graph.inspection_graph import InspectionGraph
 from agent.graph.state import InspectionState
 from agent.llm.client import LLMClient
+from agent.llm.gateway import LLMGateway
+from agent.llm.langfuse_tracer import LangfuseTracer
+from agent.llm.pricing import ModelPricing
 from agent.stability.alert_trigger import should_trigger
 from agent.stability.analyzer import analyze
 from app.core.ids import uuid7
@@ -14,6 +17,8 @@ from app.repositories.alert_repo import AlertRepository
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
+from app.repositories.token_ledger_repo import TokenLedgerRepository
+from app.services.model_config_service import ModelConfigService
 from app.services.stream_service import stream_broker
 from infra.database.session import get_session
 
@@ -24,6 +29,8 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         result_repo = ResultRepository(session)
         stability_repo = StabilityRepository(session)
         alert_repo = AlertRepository(session)
+        token_ledger_repo = TokenLedgerRepository(session)
+        model_config_service = ModelConfigService(session, org_id)
 
         task = await task_repo.get(org_id, task_id)
         if not task:
@@ -38,19 +45,40 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             await stream_broker.publish(task_id, event)
 
         try:
+            runtime = LLMGateway().select_runtime(await model_config_service.list_runtime_models())
+            trace = LangfuseTracer().start_trace(
+                task_id=task.id,
+                org_id=task.org_id,
+                model_key=runtime["model_id"],
+            )
             state: InspectionState = {
                 "task_id": task.id,
                 "org_id": task.org_id,
                 "product_id": task.product_id,
                 "spec_id": task.spec_id,
                 "image_urls": task.image_urls or [],
-                "model_id": LLMClient().model_id,
+                "model_id": str(runtime["model_id"] or LLMClient().model_id),
+                "model_config_id": runtime.get("model_config_id"),
+                "model_base_url": runtime.get("base_url"),
+                "model_api_key": runtime.get("api_key"),
+                "model_provider": runtime.get("provider"),
+                "model_input_price_per_million": runtime.get("input_price_per_million"),
+                "model_output_price_per_million": runtime.get("output_price_per_million"),
+                "trace_id": str(trace["trace_id"]),
                 "timeline": [],
+                "usage_events": [],
             }
             graph = InspectionGraph()
             state = await graph.run(state, on_event=emit)
 
             conclusion = state.get("conclusion") or {}
+            reasoning_chain = dict(state.get("reasoning_chain") or {})
+            reasoning_chain["trace"] = {
+                "trace_id": state.get("trace_id"),
+                "task_id": task.id,
+                "org_id": task.org_id,
+                "model_key": state.get("model_id"),
+            }
             result_payload = {
                 "id": str(uuid7()),
                 "task_id": task.id,
@@ -59,13 +87,55 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "overall_score": float(conclusion.get("overall_score") or 0.5),
                 "defects": state.get("defects") or [],
                 "citations": {"items": state.get("citations") or []},
-                "reasoning_chain": state.get("reasoning_chain") or {},
+                "reasoning_chain": reasoning_chain,
                 "llm_model": state.get("model_id") or "volcengine",
                 "prompt_version": "phase3-v1",
-                "tokens_used": None,
+                "tokens_used": 0,
                 "latency_ms": None,
             }
             result = await result_repo.upsert_by_task(result_payload)
+
+            usage_events = state.get("usage_events") or []
+            total_tokens = 0
+            for event in usage_events:
+                prompt_tokens = int(event.get("prompt_tokens") or 0)
+                completion_tokens = int(event.get("completion_tokens") or 0)
+                event_total_tokens = int(event.get("total_tokens") or (prompt_tokens + completion_tokens))
+                if event_total_tokens <= 0:
+                    continue
+                total_tokens += event_total_tokens
+                await token_ledger_repo.create(
+                    {
+                        "id": str(uuid7()),
+                        "org_id": task.org_id,
+                        "task_id": task.id,
+                        "result_id": result.id,
+                        "model_config_id": state.get("model_config_id"),
+                        "model_key": str(event.get("model_key") or state.get("model_id") or "unknown"),
+                        "product_line": task.product_id,
+                        "trace_id": state.get("trace_id"),
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": event_total_tokens,
+                        "cost_amount": ModelPricing.estimate_cost(
+                            str(event.get("model_key") or state.get("model_id") or ""),
+                            prompt_tokens,
+                            completion_tokens,
+                            input_price_per_million=(
+                                float(state.get("model_input_price_per_million"))
+                                if state.get("model_input_price_per_million") is not None else None
+                            ),
+                            output_price_per_million=(
+                                float(state.get("model_output_price_per_million"))
+                                if state.get("model_output_price_per_million") is not None else None
+                            ),
+                        ),
+                    }
+                )
+
+            if total_tokens > 0:
+                result.tokens_used = total_tokens
+                await session.flush()
 
             stability = await analyze(
                 {
@@ -118,6 +188,14 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             await session.commit()
 
             await emit({"type": "status", "status": "done"})
+            await emit(
+                {
+                    "type": "model_selected",
+                    "model_id": state.get("model_id"),
+                    "model_config_id": state.get("model_config_id"),
+                    "provider": state.get("model_provider"),
+                }
+            )
             await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
             await emit(
                 {

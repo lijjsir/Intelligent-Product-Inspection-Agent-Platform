@@ -10,6 +10,13 @@ class InspectionState(TypedDict, total=False):
     spec_id: str
     image_urls: list[str]
     model_id: str
+    model_config_id: str | None
+    model_base_url: str | None
+    model_api_key: str | None
+    model_provider: str | None
+    model_input_price_per_million: float | None
+    model_output_price_per_million: float | None
+    trace_id: str
 
     plan: dict[str, Any]
     defects: list[dict[str, Any]]
@@ -22,3 +29,4 @@ class InspectionState(TypedDict, total=False):
     alert_needed: bool
 
     timeline: list[dict[str, Any]]
+    usage_events: list[dict[str, Any]]

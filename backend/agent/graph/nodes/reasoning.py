@@ -31,10 +31,27 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
         "docs": [{"id": d.get("id"), "score": d.get("score"), "text": (d.get("text") or "")[:300]} for d in docs],
         "instruction": '输出 JSON: {"verdict":"pass|fail|uncertain","overall_score":0-1,"reasoning_chain":{...}}',
     }
-    client = LLMClient()
+    client = LLMClient(
+        api_key=state.get("model_api_key"),
+        base_url=state.get("model_base_url"),
+        model_id=state.get("model_id"),
+    )
     conclusion: dict[str, Any]
     try:
         data = await client.chat([{"role": "user", "content": str(prompt)}], temperature=0.1)
+        if isinstance(data, dict):
+            meta = data.get("__meta__") or {}
+            usage = meta.get("usage") if isinstance(meta, dict) else None
+            if isinstance(usage, dict):
+                state.setdefault("usage_events", []).append(
+                    {
+                        "stage": "reasoning",
+                        "model_key": str(meta.get("model") or state.get("model_id") or client.model_id),
+                        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                        "completion_tokens": int(usage.get("completion_tokens") or 0),
+                        "total_tokens": int(usage.get("total_tokens") or 0),
+                    }
+                )
         verdict = str(data.get("verdict") or "uncertain")
         overall_score = float(data.get("overall_score") or 0.5)
         reasoning_chain = data.get("reasoning_chain") if isinstance(data.get("reasoning_chain"), dict) else {}
