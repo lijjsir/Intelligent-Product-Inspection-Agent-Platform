@@ -64,8 +64,14 @@ Nginx 负责：
 
 ```bash
 cd frontend
+
+# 1) 复制生产环境变量模板
 cp .env.production.example .env.production
+
+# 2) 安装依赖
 npm install
+
+# 3) 构建生产静态资源
 npm run build
 ```
 
@@ -77,8 +83,14 @@ npm run build
 
 ```bash
 cd backend
+
+# 1) 复制生产环境变量模板
 cp .env.production.example .env
+
+# 2) 执行数据库迁移
 PYTHONPATH=. alembic upgrade head
+
+# 3) 启动后端服务（开发方式）
 python main.py
 ```
 
@@ -94,11 +106,14 @@ uvicorn main:app --host 127.0.0.1 --port 8000
 
 - `/etc/nginx/sites-available/piap.conf`
 
-然后：
-
 ```bash
+# 1) 建立站点启用链接
 sudo ln -s /etc/nginx/sites-available/piap.conf /etc/nginx/sites-enabled/piap.conf
+
+# 2) 检查 Nginx 配置
 sudo nginx -t
+
+# 3) 重载 Nginx
 sudo systemctl reload nginx
 ```
 
