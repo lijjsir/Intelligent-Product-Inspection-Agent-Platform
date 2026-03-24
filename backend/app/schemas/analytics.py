@@ -56,6 +56,9 @@ class ProductLineDrilldown(BaseModel):
     total_cost: float
     task_trend: list[TrendPoint]
     verdict_distribution: list[NamedValue]
+    recent_tasks_total: int
+    recent_tasks_page: int
+    recent_tasks_size: int
     recent_tasks: list[ProductLineRecentTask]
 
 
@@ -77,7 +80,42 @@ class ModelDrilldown(BaseModel):
     total_cost: float
     avg_latency_ms: float
     product_line_distribution: list[NamedValue]
+    recent_results_total: int
+    recent_results_page: int
+    recent_results_size: int
     recent_results: list[ModelRecentResult]
+
+
+class TaskAlertSummary(BaseModel):
+    severity: str
+    title: str
+    status: str
+    created_at: datetime
+
+
+class TaskDrilldown(BaseModel):
+    task_id: str
+    product_line: str
+    spec_id: str
+    status: str
+    priority: int
+    image_count: int
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    has_result: bool
+    verdict: str | None = None
+    overall_score: float | None = None
+    hallucination_flag: bool = False
+    llm_model: str | None = None
+    latency_ms: int | None = None
+    tokens_used: int = 0
+    total_cost: float = 0.0
+    risk_score: float | None = None
+    risk_level: str | None = None
+    open_alert_count: int = 0
+    alert_summaries: list[TaskAlertSummary]
+    related_task_ids: list[str]
 
 
 class OverviewStats(BaseModel):

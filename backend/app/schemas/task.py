@@ -9,9 +9,13 @@ from app.schemas.common import PageParams
 class TaskListQuery(PageParams):
     status: Optional[str] = None
     product_id: Optional[str] = None
+    ids: Optional[str] = None
 
     def to_filters(self) -> dict:
-        return {k: v for k, v in self.model_dump(exclude={"page", "size"}).items() if v is not None}
+        data = {k: v for k, v in self.model_dump(exclude={"page", "size"}).items() if v is not None}
+        if data.get("ids"):
+            data["ids"] = [item.strip() for item in data["ids"].split(",") if item.strip()]
+        return data
 
 
 class TaskCreate(BaseModel):
