@@ -11,10 +11,11 @@ const router = useRouter();
 const store = useResultStore();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
-const filters = ref<{ verdict: Verdict | ""; product_id: string; model_key: string }>({
+const filters = ref<{ verdict: Verdict | ""; product_id: string; model_key: string; task_id: string }>({
   verdict: "",
   product_id: "",
   model_key: "",
+  task_id: "",
 });
 
 onMounted(() => {
@@ -32,6 +33,7 @@ function syncFromRoute() {
     verdict: (route.query.verdict as Verdict | "") || "",
     product_id: String(route.query.product_id || ""),
     model_key: String(route.query.model_key || ""),
+    task_id: String(route.query.task_id || ""),
   };
   page.value = Number(route.query.page || 1);
 }
@@ -43,6 +45,7 @@ async function fetchData() {
     verdict: filters.value.verdict || undefined,
     product_id: filters.value.product_id || undefined,
     model_key: filters.value.model_key || undefined,
+    task_id: filters.value.task_id || undefined,
   });
   total.value = data.total;
 }
@@ -54,6 +57,7 @@ function pushQuery() {
       ...(filters.value.verdict ? { verdict: filters.value.verdict } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
       ...(filters.value.model_key ? { model_key: filters.value.model_key } : {}),
+      ...(filters.value.task_id ? { task_id: filters.value.task_id } : {}),
       page: String(page.value),
     },
   });
@@ -65,7 +69,7 @@ function handleSearch() {
 }
 
 function handleReset() {
-  filters.value = { verdict: "", product_id: "", model_key: "" };
+  filters.value = { verdict: "", product_id: "", model_key: "", task_id: "" };
   resetPage();
   pushQuery();
 }
@@ -114,6 +118,9 @@ const getVerdictType = (verdict: string) => {
         </el-form-item>
         <el-form-item label="模型">
           <el-input v-model="filters.model_key" placeholder="模型标识" clearable />
+        </el-form-item>
+        <el-form-item label="任务 ID">
+          <el-input v-model="filters.task_id" placeholder="任务 ID" clearable />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleSearch">查询</el-button>
