@@ -70,7 +70,14 @@ async def run_vision(state: InspectionState) -> InspectionState:
                                 "total_tokens": int(usage.get("total_tokens") or 0),
                             }
                         )
-            except Exception:
+            except Exception as exc:
+                state.setdefault("runtime_errors", []).append(
+                    {
+                        "stage": "vision",
+                        "model_id": state.get("model_id"),
+                        "message": str(exc),
+                    }
+                )
                 defects = _fallback_defects(images, raw_text)
     if not defects:
         defects = _fallback_defects(images, raw_text)

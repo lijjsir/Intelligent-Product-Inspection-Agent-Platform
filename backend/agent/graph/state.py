@@ -30,3 +30,4 @@ class InspectionState(TypedDict, total=False):
 
     timeline: list[dict[str, Any]]
     usage_events: list[dict[str, Any]]
+    runtime_errors: list[dict[str, Any]]

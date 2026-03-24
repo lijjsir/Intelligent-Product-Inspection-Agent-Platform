@@ -52,3 +52,16 @@ class ModelConfigRepository:
         )
         return list(result.scalars().all())
 
+    async def list_health_targets(self) -> list[ModelConfig]:
+        result = await self._session.execute(
+            select(ModelConfig)
+            .where(ModelConfig.is_active.is_(True))
+            .order_by(ModelConfig.priority.asc(), ModelConfig.display_name.asc())
+        )
+        return list(result.scalars().all())
+
+    async def update_health(self, model: ModelConfig, *, health_status: str, health_message: str | None) -> ModelConfig:
+        model.health_status = health_status
+        model.health_message = health_message
+        await self._session.flush()
+        return model
