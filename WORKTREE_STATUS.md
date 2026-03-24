@@ -1,49 +1,53 @@
 # WORKTREE_STATUS
 
 ## Branch
-- `feature/c-gpu-metrics`
+- `develop`
 
 ## Last Updated
 - `2026-03-24`
 
 ## Owner
-- `C-side governance / gpu`
+- `shared / integration`
 
 ## Worktree Path
-- `/home/lijjsir/program/piap-feature-gpu-metrics`
+- `/tmp/piap-develop-merge`
 
 ## Base Branch
-- `develop`
+- `main`
 
 ## Merge Target
-- `develop`
-
+- `main`
 
 ## Test Command
 - `cd backend && pytest tests -q -p no:cacheprovider`
 - `cd frontend && npm run typecheck`
+- `cd frontend && npm run build`
 
 ## Role
-- C 端治理工作台 GPU 指标分支
+- 集成分支
+- 负责合并各功能分支并做回归验证
 
 ## Goal
-- 补齐 GPU 监控真实后端指标源
-- 打通治理页 GPU 数据展示
+- 集成已完成的功能分支
+- 解决共享文件冲突
+- 为后续发布到 `main` 做准备
 
 ## Done
-- 已建立独立 worktree
-- 已完成分支重命名与 ownership 归类
+- 已创建独立 develop 临时 worktree
+- 正在合并各功能分支
 
 ## Pending
-- 指标采集接口
-- 指标持久化或实时查询方案
-- 前端 GPU 页面接真数据
+- 完成剩余功能分支合并
+- 跑通回归检查
+- 推送 develop
 
 ## Sensitive Files
-- `backend/app/api/v1/*gpu*`
-- `backend/app/services/*gpu*`
-- `frontend/src/views/admin/GpuMonitorView.vue`
+- `frontend/src/router/index.ts`
+- `frontend/src/layouts/AppLayout.vue`
+- `frontend/src/stores/auth.store.ts`
+- `backend/app/services/inspection_pipeline_service.py`
 - `task.md`
 
 ## Merge Notes
-- 不要顺手改认证和任务主链路
+- 遇到分支私有状态文件冲突时，保留 develop 版本
+- 合并完成后统一回归，不直接跳过共享文件冲突

@@ -13,7 +13,7 @@ const store = useTaskStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
-const filters = ref({ status: "", product_id: "" });
+const filters = ref({ status: "", product_id: "", ids: "" });
 
 // --- Create Task Dialog State ---
 const showCreateDialog = ref(false);
@@ -67,6 +67,7 @@ async function fetchData() {
     size: pageSize.value,
     status: filters.value.status || undefined,
     product_id: filters.value.product_id || undefined,
+    ids: filters.value.ids || undefined,
   });
   total.value = store.total;
 }
@@ -75,6 +76,7 @@ function syncFromRoute() {
   filters.value = {
     status: String(route.query.status || ""),
     product_id: String(route.query.product_id || ""),
+    ids: String(route.query.ids || ""),
   };
   page.value = Number(route.query.page || 1);
 }
@@ -86,13 +88,14 @@ function handleSearch() {
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      ...(filters.value.ids ? { ids: filters.value.ids } : {}),
       page: String(page.value),
     },
   });
 }
 
 function handleReset() {
-  filters.value = { status: "", product_id: "" };
+  filters.value = { status: "", product_id: "", ids: "" };
   resetPage();
   router.push({ path: "/tasks", query: { page: "1" } });
 }
@@ -172,6 +175,7 @@ function handleSizeChange(val: number) {
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      ...(filters.value.ids ? { ids: filters.value.ids } : {}),
       page: String(page.value),
     },
   });
@@ -184,6 +188,7 @@ function handleCurrentChange(val: number) {
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      ...(filters.value.ids ? { ids: filters.value.ids } : {}),
       page: String(val),
     },
   });
@@ -226,6 +231,9 @@ const getStatusType = (status: string) => {
         </el-form-item>
         <el-form-item label="产品编号">
           <el-input v-model="filters.product_id" placeholder="输入产品ID搜索" clearable @keyup.enter="handleSearch" />
+        </el-form-item>
+        <el-form-item v-if="filters.ids" label="任务集合">
+          <el-input v-model="filters.ids" readonly />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleSearch">查询</el-button>

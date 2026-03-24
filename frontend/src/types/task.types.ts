@@ -25,6 +25,7 @@ export interface TaskCreate {
 export interface TaskListQuery extends PageParams {
   status?: TaskStatus;
   product_id?: string;
+  ids?: string;
 }
 
 export interface TaskRunResponse {

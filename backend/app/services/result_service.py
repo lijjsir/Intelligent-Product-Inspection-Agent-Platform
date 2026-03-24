@@ -18,6 +18,7 @@ class ResultService:
             verdict=query.verdict,
             product_id=query.product_id,
             model_key=query.model_key,
+            task_id=query.task_id,
             page=query.page,
             size=query.size,
         )

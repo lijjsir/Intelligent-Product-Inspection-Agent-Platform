@@ -49,6 +49,9 @@ export interface ProductLineDrilldown {
   total_cost: number;
   task_trend: TrendPoint[];
   verdict_distribution: NamedValue[];
+  recent_tasks_total: number;
+  recent_tasks_page: number;
+  recent_tasks_size: number;
   recent_tasks: ProductLineRecentTask[];
 }
 
@@ -70,7 +73,42 @@ export interface ModelDrilldown {
   total_cost: number;
   avg_latency_ms: number;
   product_line_distribution: NamedValue[];
+  recent_results_total: number;
+  recent_results_page: number;
+  recent_results_size: number;
   recent_results: ModelRecentResult[];
+}
+
+export interface TaskAlertSummary {
+  severity: string;
+  title: string;
+  status: string;
+  created_at: string;
+}
+
+export interface TaskDrilldown {
+  task_id: string;
+  product_line: string;
+  spec_id: string;
+  status: string;
+  priority: number;
+  image_count: number;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  has_result: boolean;
+  verdict?: string | null;
+  overall_score?: number | null;
+  hallucination_flag: boolean;
+  llm_model?: string | null;
+  latency_ms?: number | null;
+  tokens_used: number;
+  total_cost: number;
+  risk_score?: number | null;
+  risk_level?: string | null;
+  open_alert_count: number;
+  alert_summaries: TaskAlertSummary[];
+  related_task_ids: string[];
 }
 
 export interface OverviewStats {

@@ -36,6 +36,7 @@ class ResultListQuery(PageParams):
     verdict: Optional[str] = None
     product_id: Optional[str] = None
     model_key: Optional[str] = None
+    task_id: Optional[str] = None
 
 
 class ResultListItemResponse(BaseModel):
