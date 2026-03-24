@@ -125,6 +125,15 @@ npm run dev
 
 ---
 
+## 🌿 Git 分支协作
+
+已补充当前项目的分支与并行开发规则：
+
+- [BRANCH_RULES.md](BRANCH_RULES.md)
+- [scripts/create_parallel_branch.sh](scripts/create_parallel_branch.sh)
+
+---
+
 ## 💡 开发参考与技能接入说明
 
 后续所有对于本平台 API、组件或后台逻辑的追加，请必须完全遵循 `~/.agents/skills/backend/SKILL.md` 与 `~/.agents/skills/frontend/SKILL.md` 中严格约定的项目代码模式与错误封装协议（如后端使用 `ResponseEnvelope` 进行数据出口封装；前端使用组合式 API 和 `usePermission` 函数隔离路由权限）。详细设计参考根目录下的多份设计源文档（如 `PIAP_SDD_v1.0.0.docx`）。
