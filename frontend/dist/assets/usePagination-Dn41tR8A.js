@@ -1,1 +1,0 @@
-import{r as a}from"./vendor-vue-C5sU81tB.js";function g(o={}){const e=a(1),t=a(o.defaultSize||20),u=a(0);function i(n){e.value=n}function r(n){t.value=n,e.value=1}function c(){e.value=1}return{page:e,pageSize:t,total:u,onPageChange:i,onSizeChange:r,resetPage:c}}export{g as u};
