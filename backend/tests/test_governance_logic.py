@@ -1,7 +1,13 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
-
+from app.core.claims import (
+    CAPABILITY_CUSTOM_WORKFLOW,
+    WORKSPACE_GOVERNANCE,
+    WORKSPACE_OPS,
+    build_auth_claims,
+)
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.health_checker import ModelHealthChecker
@@ -9,6 +15,7 @@ from agent.llm.model_selector import ModelSelector
 from agent.llm.pricing import ModelPricing
 from agent.vision.heuristic_detector import build_variable_defects, normalize_defects
 from app.services.feedback_service import FeedbackService
+from app.services.inspection_standard_service import InspectionStandardService
 from app.services.quality_report_service import QualityReportService
 from infra.cache.rate_limiter import RateLimiter
 
@@ -311,3 +318,78 @@ def test_model_pricing_prefers_configured_price():
         output_price_per_million=20.0,
     )
     assert cost == 0.02
+
+
+def test_build_auth_claims_for_agent_operator():
+    claims = build_auth_claims("agent_operator", "premium")
+    assert claims.role == "agent_operator"
+    assert claims.roles == ["agent_operator"]
+    assert claims.default_workspace == WORKSPACE_OPS
+    assert claims.workspaces == [WORKSPACE_OPS]
+    assert CAPABILITY_CUSTOM_WORKFLOW in claims.capabilities
+
+
+def test_build_auth_claims_for_governance_role():
+    claims = build_auth_claims("ai_quality", "expert")
+    assert claims.default_workspace == WORKSPACE_GOVERNANCE
+    assert WORKSPACE_GOVERNANCE in claims.workspaces
+
+
+def test_standard_service_blocks_auto_pass_without_spec():
+    result = InspectionStandardService._evaluate_loaded_spec(
+        spec=SimpleNamespace(
+            spec_code="SCREW-A-2026-V1",
+            name="螺钉标准",
+            version="2026.1",
+            product_id="screw",
+            required_image_count=1,
+            auto_pass_enabled=False,
+            ai_gate_confidence_threshold=0.72,
+            ai_gate_evidence_threshold=0.5,
+            ai_gate_traceability_threshold=0.5,
+        ),
+        items=[],
+        image_urls=["https://example.com/screw.png"],
+        defects=[],
+        citations=[{"id": "doc-1"}],
+        reasoning_chain={"summary": "ok"},
+        model_verdict="pass",
+        overall_score=0.91,
+    )
+    assert result["verdict"] == "manual_required"
+    assert "ai_gate_blocked_auto_pass" in result["reasons"]
+
+
+def test_standard_service_rejects_when_rule_matches():
+    spec = SimpleNamespace(
+        spec_code="SCREW-A-2026-V1",
+        name="螺钉标准",
+        version="2026.1",
+        product_id="screw",
+        required_image_count=1,
+        auto_pass_enabled=False,
+        ai_gate_confidence_threshold=0.72,
+        ai_gate_evidence_threshold=0.5,
+        ai_gate_traceability_threshold=0.5,
+    )
+    item = SimpleNamespace(
+        defect_type="surface_scratch",
+        severity="major",
+        disposition="fail",
+        confidence_threshold=0.6,
+        zone_name="body",
+        max_count=1,
+        description="划伤直接拒收",
+    )
+    result = InspectionStandardService._evaluate_loaded_spec(
+        spec=spec,
+        items=[item],
+        image_urls=["https://example.com/screw.png"],
+        defects=[{"type": "surface_scratch", "confidence": 0.82}],
+        citations=[{"id": "doc-1"}],
+        reasoning_chain={"summary": "ok"},
+        model_verdict="pass",
+        overall_score=0.95,
+    )
+    assert result["verdict"] == "fail"
+    assert result["matched_rules"][0]["disposition"] == "fail"

@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import uuid
 
+from app.core.claims import build_auth_claims
 from app.core.exceptions import ConflictError, ForbiddenError
 from app.core.permissions import ROLE_ORG_ADMIN
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
@@ -32,13 +33,14 @@ class AuthService:
             raise ForbiddenError("user disabled")
         if not verify_password(password, user.password_hash):
             raise ForbiddenError("invalid credentials")
+        claims = build_auth_claims(user.role, getattr(org, "plan", None))
         access = create_access_token(
             subject=user.id,
-            extra={"org_id": user.org_id, "role": user.role},
+            extra=claims.as_token_extra(user.org_id),
         )
         refresh = create_refresh_token(
             subject=user.id,
-            extra={"org_id": user.org_id, "role": user.role},
+            extra=claims.as_token_extra(user.org_id),
         )
         return user, access, refresh
 
@@ -69,12 +71,13 @@ class AuthService:
         )
         await self._users.create(user)
 
+        claims = build_auth_claims(user.role, getattr(org, "plan", None))
         access = create_access_token(
             subject=user.id,
-            extra={"org_id": user.org_id, "role": user.role},
+            extra=claims.as_token_extra(user.org_id),
         )
         refresh = create_refresh_token(
             subject=user.id,
-            extra={"org_id": user.org_id, "role": user.role},
+            extra=claims.as_token_extra(user.org_id),
         )
         return user, access, refresh

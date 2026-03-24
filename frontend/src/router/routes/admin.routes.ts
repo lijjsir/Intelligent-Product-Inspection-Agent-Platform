@@ -1,6 +1,12 @@
-import { ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
+import { ROLE_AI_QUALITY, ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
 
 export const adminRoutes = [
+  {
+    path: "admin/inspection-specs",
+    name: "admin-inspection-specs",
+    component: () => import("@/views/admin/InspectionSpecView.vue"),
+    meta: { roles: [ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_SUPER_ADMIN] },
+  },
   {
     path: "admin/models",
     name: "admin-models",
