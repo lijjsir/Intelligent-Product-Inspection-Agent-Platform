@@ -1,12 +1,16 @@
 from datetime import datetime
 
+import pytest
+
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
+from agent.llm.health_checker import ModelHealthChecker
 from agent.llm.model_selector import ModelSelector
 from agent.llm.pricing import ModelPricing
 from agent.vision.heuristic_detector import build_variable_defects, normalize_defects
 from app.services.feedback_service import FeedbackService
 from app.services.quality_report_service import QualityReportService
+from infra.cache.rate_limiter import RateLimiter
 
 
 class FakeResult:
@@ -62,9 +66,10 @@ def test_model_selector_skips_embedding_models_for_inference():
     )
     assert selected["model_key"] == "chat-1"
 
-
-def test_llm_gateway_returns_runtime_payload():
-    runtime = LLMGateway().select_runtime(
+@pytest.mark.asyncio
+async def test_llm_gateway_returns_runtime_payload():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime(
         [
             {
                 "id": "cfg-1",
@@ -82,6 +87,7 @@ def test_llm_gateway_returns_runtime_payload():
         ]
     )
     assert runtime == {
+        "runtime_key": "cfg-1",
         "model_config_id": "cfg-1",
         "model_id": "chat-1",
         "base_url": "https://example.com/api/v3",
@@ -89,7 +95,84 @@ def test_llm_gateway_returns_runtime_payload():
         "provider": "volcengine",
         "input_price_per_million": 1.2,
         "output_price_per_million": 4.8,
+        "rpm_limit": None,
+        "failover_depth": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_fails_over_when_first_model_hits_rpm_limit():
+    RateLimiter.reset()
+    gateway = LLMGateway()
+    models = [
+        {
+            "id": "cfg-1",
+            "provider": "volcengine",
+            "model_key": "chat-1",
+            "endpoint": "https://example.com/api/v3",
+            "api_key": "secret",
+            "model_type": "chat",
+            "is_active": True,
+            "health_status": "healthy",
+            "priority": 1,
+            "rpm_limit": 1,
+        },
+        {
+            "id": "cfg-2",
+            "provider": "volcengine",
+            "model_key": "chat-2",
+            "endpoint": "https://example.com/api/v3",
+            "api_key": "secret",
+            "model_type": "chat",
+            "is_active": True,
+            "health_status": "healthy",
+            "priority": 2,
+            "rpm_limit": 10,
+        },
+    ]
+
+    first = await gateway.select_runtime(models)
+    second = await gateway.select_runtime(models)
+
+    assert first["model_id"] == "chat-1"
+    assert second["model_id"] == "chat-2"
+    assert second["failover_depth"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            return FakeResponse(401, "unauthorized")
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "cfg-1",
+                "endpoint": "https://example.com/api/v3",
+                "model_key": "chat-1",
+                "api_key": "secret",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "unhealthy"
+    assert checked[0]["health_message"] == "/models auth failed: 401"
 
 
 def test_quality_report_result_trend_handles_empty_citations():
