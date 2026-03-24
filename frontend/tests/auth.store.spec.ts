@@ -18,6 +18,11 @@ const session: AuthSession = {
   user_id: "u1",
   org_id: "org1",
   role: "org_admin",
+  roles: ["org_admin"],
+  plan_tier: "basic",
+  capabilities: ["private_rag"],
+  workspaces: ["app"],
+  default_workspace: "app",
 };
 
 describe("auth store", () => {
@@ -34,6 +39,7 @@ describe("auth store", () => {
     await store.login({ org_id: "org1", username: "a", password: "b" });
 
     expect(store.token).toBe("access");
+    expect(store.roles).toEqual(["org_admin"]);
     expect(localStorage.getItem("piap_token")).toBe("access");
     expect(localStorage.getItem("piap_org_id")).toBe("org1");
   });

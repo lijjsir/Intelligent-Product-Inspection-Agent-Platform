@@ -128,3 +128,59 @@ export interface QualityTraceItem {
   last_score_at: string | null;
   created_at: string | null;
 }
+
+export interface InspectionSpecItem {
+  id: string;
+  defect_type: string;
+  severity: string;
+  disposition: string;
+  confidence_threshold: number;
+  zone_name: string | null;
+  max_count: number | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InspectionSpec {
+  id: string;
+  org_id: string | null;
+  spec_code: string;
+  name: string;
+  version: string;
+  product_id: string | null;
+  required_image_count: number;
+  ai_gate_confidence_threshold: number;
+  ai_gate_evidence_threshold: number;
+  ai_gate_traceability_threshold: number;
+  auto_pass_enabled: boolean;
+  is_active: boolean;
+  items: InspectionSpecItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InspectionSpecItemPayload {
+  defect_type: string;
+  severity: string;
+  disposition: string;
+  confidence_threshold: number;
+  zone_name?: string | null;
+  max_count?: number | null;
+  description?: string | null;
+}
+
+export interface InspectionSpecPayload {
+  org_id?: string | null;
+  spec_code: string;
+  name: string;
+  version?: string;
+  product_id?: string | null;
+  required_image_count?: number;
+  ai_gate_confidence_threshold?: number;
+  ai_gate_evidence_threshold?: number;
+  ai_gate_traceability_threshold?: number;
+  auto_pass_enabled?: boolean;
+  is_active?: boolean;
+  items: InspectionSpecItemPayload[];
+}

@@ -33,6 +33,11 @@ class AuthSessionResponse(BaseModel):
     user_id: str
     org_id: str
     role: str
+    roles: list[str] = Field(default_factory=list)
+    plan_tier: str = "basic"
+    capabilities: list[str] = Field(default_factory=list)
+    workspaces: list[str] = Field(default_factory=list)
+    default_workspace: str = "app"
 
 
 # Backwards-compatible alias (older name used by register endpoint).

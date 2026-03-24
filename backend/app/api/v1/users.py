@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_db, get_current_user
+from app.core.claims import normalize_roles
 from app.core.permissions import require_role
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import (
@@ -26,6 +27,7 @@ def _to_response(user) -> UserResponse:
         username=user.username,
         email=user.email,
         role=user.role,
+        roles=normalize_roles(role=user.role),
         is_active=user.is_active,
         created_at=user.created_at,
         updated_at=user.updated_at,

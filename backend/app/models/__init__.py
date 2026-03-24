@@ -10,6 +10,7 @@ from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
 from app.models.feedback import ResultFeedback
+from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
 
 __all__ = [
     "Base",
@@ -26,4 +27,6 @@ __all__ = [
     "ModelConfig",
     "TokenUsageLedger",
     "ResultFeedback",
+    "InspectionSpec",
+    "InspectionSpecItem",
 ]

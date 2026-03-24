@@ -8,10 +8,14 @@
 ## 阶段一：认证、租户与基础设施 (已完成)
 - [x] JWT 登录、注册、刷新与鉴权依赖注入
 - [x] 密码散列、用户状态校验、基础 RBAC 权限矩阵
+- [x] 共享认证契约首版已落地
+- [x] JWT / 登录态已兼容 `roles / plan_tier / capabilities / workspaces / default_workspace`
+- [x] 已新增 `agent_operator` 角色并落到后后端权限矩阵与前端角色常量
 - [x] MySQL + Alembic 基础迁移链路
 - [x] FastAPI 全局异常、请求中间件、统一 `ResponseEnvelope`
 - [x] 前端 HTTP 拦截器、路由守卫、登录态持久化
 - [x] 组织级用户管理基础能力
+- [ ] 三工作台路由壳层仍未完全收口到 `/app /ops /governance`
 
 ## 阶段二：核心业务闭环 (大体完成，仍有可增强项)
 - [x] 质检任务模块
@@ -54,7 +58,11 @@
 - [x] 视觉输出已去除固定缺陷框 fallback
 - [x] `vision` 节点已增强结构化 JSON 解析，失败兜底也会按图像源生成可变缺陷框与分数
 - [x] 已接入专用视觉检测服务适配层（可通过配置启用外部图像分析服务）
-- [ ] 当前仍主要依赖多模态模型输出与启发式兜底，尚未接入专用工业检测模型
+- [x] 缺陷识别检测标准首版已落地
+- [x] 已新增 `inspection_specs / inspection_spec_items` 标准表与基线种子标准
+- [x] `inspection_pipeline_service` 已接入标准判定与 AI 门禁
+- [x] 当前已满足“无有效标准不自动 PASS”的 QS-009 基线约束
+- [ ] 当前仍主要依赖多模态模型输出与外部检测服务适配层，尚未接入专用工业检测模型并形成稳定量产精度
 - [x] 多模型网关已接管主推理链路
 - [x] `inspection_pipeline_service` 已从 `model_configs` 读取可用模型并注入 `LLMClient`
 - [ ] 模型健康探活为占位实现
@@ -106,6 +114,7 @@
 - [ ] 工具注册中心与工具执行引擎尚未按设计文档完整实现
 - [ ] `tool registry / executor / schema 校验 / 限流 / 沙箱` 仍未形成完整闭环
 - [ ] 文档中的 MFA / SSO / API Key 体系未实现
+- [ ] `agent_operator + workspace shell` 只完成认证契约与菜单/守卫兼容，完整三工作台壳层仍待继续实现
 - [ ] Dashboard / Analytics 与 FED 文档存在差距
 - [x] Dashboard 已补齐范围切换、通过率趋势、风险分布、快捷入口、待处理预警与最近任务
 - [x] Analytics 已补齐核心指标卡、趋势图、风险时序图、模型对比表
@@ -134,6 +143,8 @@
 - [x] P2：产品线钻取已继续下钻到任务 / 结果列表联动
 - [x] P2：专用视觉服务协议与接入说明文档已补齐
 - [x] P2：前端代码分包已完成，build chunk warning 已消除
+- [x] P2：`agent_operator + workspace claims` 已落到后端 token 和前端登录态
+- [x] P2：缺陷检测标准首版已接入主流水线，开始按标准与 AI 门禁联合判定
 - [ ] P2：继续拆分 FED 图表业务组件并补齐更深层联动
 - [ ] P2：补齐 GPU 监控后端指标源
 - [x] P2：完善用户管理页高级能力与角色分配策略接口化

@@ -8,6 +8,7 @@ import { useUserStore } from "@/stores/user.store";
 import { usePagination } from "@/composables/usePagination";
 import { usePermission } from "@/composables/usePermission";
 import {
+  ROLE_AGENT_OPERATOR,
   ROLE_AI_QUALITY,
   ROLE_ANALYST,
   ROLE_INSPECTOR,
@@ -58,6 +59,7 @@ const roleMeta: Record<string, { label: string; tag: "danger" | "success" | "war
   [ROLE_ANALYST]: { label: "分析员", tag: "warning" },
   [ROLE_PLATFORM_ADMIN]: { label: "平台管理员", tag: "danger" },
   [ROLE_AI_QUALITY]: { label: "AI 质量专员", tag: "success" },
+  [ROLE_AGENT_OPERATOR]: { label: "Agent 运维员", tag: "warning" },
 };
 
 const roleOptions = computed(() =>

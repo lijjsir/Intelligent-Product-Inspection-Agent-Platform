@@ -1,4 +1,3 @@
-import { ref } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { ROLE_SUPER_ADMIN } from "@/constants/roles";
 
@@ -7,13 +6,29 @@ export function usePermission() {
 
   function hasRole(requiredRole: string | string[]): boolean {
     if (!auth.isAuthed) return false;
-    const currentRole = auth.role;
-    if (currentRole === ROLE_SUPER_ADMIN) return true;
+    const currentRoles = auth.roles.length ? auth.roles : [auth.role];
+    if (currentRoles.includes(ROLE_SUPER_ADMIN)) return true;
     if (Array.isArray(requiredRole)) {
-      return requiredRole.includes(currentRole);
+      return requiredRole.some((role) => currentRoles.includes(role));
     }
-    return currentRole === requiredRole;
+    return currentRoles.includes(requiredRole);
   }
 
-  return { hasRole };
+  function hasWorkspace(workspace: string | string[]): boolean {
+    if (!auth.isAuthed) return false;
+    if (Array.isArray(workspace)) {
+      return workspace.some((item) => auth.workspaces.includes(item));
+    }
+    return auth.workspaces.includes(workspace);
+  }
+
+  function hasCapability(capability: string | string[]): boolean {
+    if (!auth.isAuthed) return false;
+    if (Array.isArray(capability)) {
+      return capability.some((item) => auth.capabilities.includes(item));
+    }
+    return auth.capabilities.includes(capability);
+  }
+
+  return { hasRole, hasWorkspace, hasCapability };
 }

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Header
 from app.api.v1.deps import get_db
 from app.core.config import settings
 from app.core.exceptions import ForbiddenError
+from app.core.claims import normalize_roles
 from app.core.security import safe_decode_token, create_access_token
 from app.schemas.auth import (
     LoginRequest,
@@ -18,6 +19,23 @@ from app.services.auth_service import AuthService
 router = APIRouter()
 
 
+def _build_session_response(access_token: str, refresh_token: str, user_id: str, org_id: str, role: str) -> AuthSessionResponse:
+    decoded = safe_decode_token(access_token)
+    return AuthSessionResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=settings.jwt_exp_minutes * 60,
+        user_id=user_id,
+        org_id=org_id,
+        role=role,
+        roles=normalize_roles(role=role, roles=decoded.get("roles")),
+        plan_tier=str(decoded.get("plan_tier") or "basic"),
+        capabilities=[str(item) for item in (decoded.get("capabilities") or [])],
+        workspaces=[str(item) for item in (decoded.get("workspaces") or [])],
+        default_workspace=str(decoded.get("default_workspace") or "app"),
+    )
+
+
 @router.post("/token", response_model=ResponseEnvelope[AuthSessionResponse])
 async def login(
     payload: LoginRequest,
@@ -26,14 +44,7 @@ async def login(
 ):
     service = AuthService(db)
     user, access, refresh = await service.login(x_org_id, payload.username, payload.password)
-    data = AuthSessionResponse(
-        access_token=access,
-        refresh_token=refresh,
-        expires_in=settings.jwt_exp_minutes * 60,
-        user_id=user.id,
-        org_id=user.org_id,
-        role=user.role,
-    )
+    data = _build_session_response(access, refresh, user.id, user.org_id, user.role)
 
     return ResponseEnvelope(data=data)
 
@@ -47,10 +58,26 @@ async def refresh(payload: RefreshRequest):
     user_id = decoded.get("sub") or ""
     org_id = decoded.get("org_id") or ""
     role = decoded.get("role") or ""
+    roles = normalize_roles(role=role, roles=decoded.get("roles"))
+    plan_tier = str(decoded.get("plan_tier") or "basic")
+    capabilities = [str(item) for item in (decoded.get("capabilities") or [])]
+    workspaces = [str(item) for item in (decoded.get("workspaces") or [])]
+    default_workspace = str(decoded.get("default_workspace") or "app")
     if not user_id or not org_id or not role:
         raise ForbiddenError("invalid refresh token")
 
-    access = create_access_token(subject=user_id, extra={"org_id": org_id, "role": role})
+    access = create_access_token(
+        subject=user_id,
+        extra={
+            "org_id": org_id,
+            "role": role,
+            "roles": roles,
+            "plan_tier": plan_tier,
+            "capabilities": capabilities,
+            "workspaces": workspaces,
+            "default_workspace": default_workspace,
+        },
+    )
     data = TokenResponse(
         access_token=access,
         refresh_token=payload.refresh_token,
@@ -69,12 +96,5 @@ async def register(payload: RegisterRequest, db=Depends(get_db)):
         payload.email,
         payload.password,
     )
-    data = AuthSessionResponse(
-        access_token=access,
-        refresh_token=refresh,
-        expires_in=settings.jwt_exp_minutes * 60,
-        user_id=user.id,
-        org_id=user.org_id,
-        role=user.role,
-    )
+    data = _build_session_response(access, refresh, user.id, user.org_id, user.role)
     return ResponseEnvelope(data=data)

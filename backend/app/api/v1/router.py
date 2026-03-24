@@ -7,6 +7,7 @@ from app.api.v1 import (
     auth,
     billing,
     feedbacks,
+    inspection_specs,
     model_configs,
     quality,
     results,
@@ -27,6 +28,7 @@ router.include_router(tools.router, prefix="/tools", tags=["tools"])
 router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
+router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
