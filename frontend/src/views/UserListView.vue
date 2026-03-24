@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { computed, ref, onMounted } from "vue";
 import { useUserStore } from "@/stores/user.store";
 import { useAuthStore } from "@/stores/auth.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
+import {
+  ROLE_AI_QUALITY,
+  ROLE_ANALYST,
+  ROLE_INSPECTOR,
+  ROLE_ORG_ADMIN,
+  ROLE_PLATFORM_ADMIN,
+  ROLE_SUPER_ADMIN,
+  ROLE_VIEWER,
+} from "@/constants/roles";
 
 const store = useUserStore();
 const authStore = useAuthStore();
@@ -16,6 +25,27 @@ const creating = ref(false);
 const formRef = ref<FormInstance>();
 const createForm = ref({ username: "", email: "", password: "", role: "inspector" });
 
+const assignableRoles = computed(() => {
+  if (authStore.role === ROLE_SUPER_ADMIN) {
+    return [
+      { label: "超级管理员", value: ROLE_SUPER_ADMIN },
+      { label: "机构管理", value: ROLE_ORG_ADMIN },
+      { label: "质检员", value: ROLE_INSPECTOR },
+      { label: "只读访客", value: ROLE_VIEWER },
+      { label: "分析员", value: ROLE_ANALYST },
+      { label: "平台管理员", value: ROLE_PLATFORM_ADMIN },
+      { label: "AI 质量专员", value: ROLE_AI_QUALITY },
+    ];
+  }
+  return [
+    { label: "机构管理", value: ROLE_ORG_ADMIN },
+    { label: "质检员", value: ROLE_INSPECTOR },
+    { label: "只读访客", value: ROLE_VIEWER },
+    { label: "分析员", value: ROLE_ANALYST },
+    { label: "AI 质量专员", value: ROLE_AI_QUALITY },
+  ];
+});
+
 const rules: FormRules = {
   username: [{ required: true, message: "必须要填写用户名", trigger: "blur" }],
   email: [{ required: true, type: "email", message: "邮箱格式错误", trigger: "blur" }],
@@ -23,7 +53,7 @@ const rules: FormRules = {
 };
 
 onMounted(() => {
-  if (!hasRole(['super_admin', 'org_admin'])) {
+  if (!hasRole(["super_admin", "org_admin"])) {
     ElMessage.error("权限不足，无法管理同租户用户");
     return;
   }
@@ -91,7 +121,10 @@ function getRoleTag(role: string) {
     super_admin: "danger",
     org_admin: "success",
     inspector: "warning",
-    viewer: "info"
+    viewer: "info",
+    analyst: "warning",
+    platform_admin: "danger",
+    ai_quality: "success",
   };
   return map[role] || "info";
 }
@@ -104,13 +137,13 @@ function getRoleTag(role: string) {
         <h2 class="title">身份授权与全周期雇员池归档</h2>
         <p class="subtitle">仅限 `ORG_ADMIN` 管理该机构下沉人员权限与活动态</p>
       </div>
-      <el-button type="primary" @click="showCreateDialog = true" v-if="hasRole('org_admin')">
+      <el-button type="primary" @click="showCreateDialog = true" v-if="hasRole(['super_admin', 'org_admin'])">
         + 开设人员条线槽位
       </el-button>
     </div>
 
     <!-- Table -->
-    <el-card shadow="never" class="table-card" v-if="hasRole('org_admin')">
+    <el-card shadow="never" class="table-card" v-if="hasRole(['super_admin', 'org_admin'])">
       <el-table :data="store.items" v-loading="store.loading" border stripe style="width: 100%">
         <el-table-column prop="id" label="聚合 ID/UUID" width="280" show-overflow-tooltip />
         <el-table-column prop="username" label="注册句柄 (Username)" width="150" />
@@ -125,9 +158,12 @@ function getRoleTag(role: string) {
               size="small"
               style="width: 120px"
             >
-              <el-option label="机构管理" value="org_admin" />
-              <el-option label="质检员" value="inspector" />
-              <el-option label="游客阅读" value="viewer" />
+              <el-option
+                v-for="option in assignableRoles"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
             </el-select>
           </template>
         </el-table-column>
@@ -174,9 +210,13 @@ function getRoleTag(role: string) {
         </el-form-item>
         <el-form-item label="权限挂载">
           <el-radio-group v-model="createForm.role">
-            <el-radio label="org_admin">核心管理</el-radio>
-            <el-radio label="inspector">一线执行</el-radio>
-            <el-radio label="viewer">监控席位</el-radio>
+            <el-radio
+              v-for="option in assignableRoles"
+              :key="option.value"
+              :label="option.value"
+            >
+              {{ option.label }}
+            </el-radio>
           </el-radio-group>
         </el-form-item>
       </el-form>

@@ -3,7 +3,10 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStabilityStore } from '@/stores/stability.store'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import { CanvasRenderer } from 'echarts/renderers'
+import { RadarChart } from 'echarts/charts'
+import { LegendComponent, TitleComponent, TooltipComponent } from 'echarts/components'
+import { init, type ECharts, type EChartsOption, use } from 'echarts/core'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,7 +16,9 @@ const loading = ref(true)
 const taskId = route.params.id as string
 
 const radarChartRef = ref<HTMLElement | null>(null)
-let chartInstance: echarts.ECharts | null = null
+let chartInstance: ECharts | null = null
+
+use([CanvasRenderer, RadarChart, LegendComponent, TitleComponent, TooltipComponent])
 
 const getRiskType = (level: string) => {
   const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
@@ -61,9 +66,9 @@ function handleResize() {
 function initChart() {
   if (!radarChartRef.value || !store.current) return
   
-  chartInstance = echarts.init(radarChartRef.value)
+  chartInstance = init(radarChartRef.value)
   const report = store.current
-  const option: echarts.EChartsOption = {
+  const option: EChartsOption = {
     title: {
       text: 'AI Agent 五维稳定性雷达',
       left: 'center'

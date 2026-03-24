@@ -8,6 +8,18 @@
         <RouterLink to="/alerts" class="nav-link">预警中心</RouterLink>
         <RouterLink to="/analytics" class="nav-link">分析中心</RouterLink>
         <RouterLink to="/users" class="nav-link">用户管理</RouterLink>
+        <template v-if="canPlatform">
+          <div class="nav-group">平台管理</div>
+          <RouterLink to="/admin/models" class="nav-link">模型配置</RouterLink>
+          <RouterLink to="/admin/billing" class="nav-link">Token 成本</RouterLink>
+          <RouterLink to="/admin/gpu" class="nav-link">GPU 监控</RouterLink>
+        </template>
+        <template v-if="canQuality">
+          <div class="nav-group">AI 质量</div>
+          <RouterLink to="/quality/report" class="nav-link">质量报告</RouterLink>
+          <RouterLink to="/quality/tracing" class="nav-link">质量追踪</RouterLink>
+          <RouterLink to="/quality/feedbacks" class="nav-link">反馈流水</RouterLink>
+        </template>
       </nav>
     </aside>
     <div class="content">
@@ -24,10 +36,14 @@
 
 <script setup lang="ts">
 import { useRouter } from "vue-router";
+import { computed } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
+import { ROLE_AI_QUALITY, ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
 
 const router = useRouter();
 const auth = useAuthStore();
+const canPlatform = computed(() => [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].includes(auth.role));
+const canQuality = computed(() => [ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(auth.role));
 
 const logout = () => {
   auth.logout();
@@ -62,6 +78,14 @@ const logout = () => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.nav-group {
+  margin-top: 12px;
+  padding: 8px 12px 4px;
+  color: #7dd3fc;
+  font-size: 12px;
+  letter-spacing: 0.08em;
 }
 
 .nav-link {

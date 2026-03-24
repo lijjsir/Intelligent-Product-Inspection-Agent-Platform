@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { ref, onMounted, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useTaskStore } from "@/stores/task.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
@@ -8,6 +8,7 @@ import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import type { UploadFile, UploadFiles, UploadUserFile } from "element-plus";
 
 const router = useRouter();
+const route = useRoute();
 const store = useTaskStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
@@ -51,6 +52,12 @@ const rules: FormRules = {
 };
 
 onMounted(() => {
+  syncFromRoute();
+  fetchData();
+});
+
+watch(() => route.query, () => {
+  syncFromRoute();
   fetchData();
 });
 
@@ -64,15 +71,30 @@ async function fetchData() {
   total.value = store.total;
 }
 
+function syncFromRoute() {
+  filters.value = {
+    status: String(route.query.status || ""),
+    product_id: String(route.query.product_id || ""),
+  };
+  page.value = Number(route.query.page || 1);
+}
+
 function handleSearch() {
   resetPage();
-  fetchData();
+  router.push({
+    path: "/tasks",
+    query: {
+      ...(filters.value.status ? { status: filters.value.status } : {}),
+      ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      page: String(page.value),
+    },
+  });
 }
 
 function handleReset() {
   filters.value = { status: "", product_id: "" };
   resetPage();
-  fetchData();
+  router.push({ path: "/tasks", query: { page: "1" } });
 }
 
 function handleOpenCreate() {
@@ -145,12 +167,26 @@ async function handleSubmitCreate() {
 
 function handleSizeChange(val: number) {
   onSizeChange(val);
-  fetchData();
+  router.push({
+    path: "/tasks",
+    query: {
+      ...(filters.value.status ? { status: filters.value.status } : {}),
+      ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      page: String(page.value),
+    },
+  });
 }
 
 function handleCurrentChange(val: number) {
   onPageChange(val);
-  fetchData();
+  router.push({
+    path: "/tasks",
+    query: {
+      ...(filters.value.status ? { status: filters.value.status } : {}),
+      ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
+      page: String(val),
+    },
+  });
 }
 
 const getStatusType = (status: string) => {

@@ -20,6 +20,28 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return;
+          }
+          if (id.includes("echarts")) {
+            return "vendor-echarts";
+          }
+          if (id.includes("element-plus") || id.includes("@element-plus")) {
+            return "vendor-element-plus";
+          }
+          if (id.includes("vue") || id.includes("pinia") || id.includes("vue-router")) {
+            return "vendor-vue";
+          }
+          return "vendor-misc";
+        },
+      },
+    },
+    chunkSizeWarningLimit: 900,
+  },
   server: {
     port: 5173,
     host: true,

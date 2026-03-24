@@ -2,8 +2,16 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
-from app.core.permissions import ensure_valid_role
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.permissions import (
+    ROLE_AI_QUALITY,
+    ROLE_ANALYST,
+    ROLE_INSPECTOR,
+    ROLE_ORG_ADMIN,
+    ROLE_SUPER_ADMIN,
+    ROLE_VIEWER,
+    ensure_valid_role,
+)
 from app.core.security import hash_password
 from app.models.user import User
 from app.repositories.user_repo import UserRepository
@@ -15,8 +23,9 @@ class UserService:
         self._org_id = org_id
         self._repo = UserRepository(session)
 
-    async def create_user(self, username: str, email: str, password: str, role: str) -> User:
+    async def create_user(self, username: str, email: str, password: str, role: str, actor_role: str) -> User:
         ensure_valid_role(role)
+        self._ensure_assignable_role(actor_role, role)
         if await self._repo.get_by_username(self._org_id, username):
             raise ConflictError("username already exists")
         if await self._repo.get_by_email(self._org_id, email):
@@ -44,8 +53,9 @@ class UserService:
             raise NotFoundError("user not found")
         return user
 
-    async def update_role(self, user_id: str, role: str) -> User:
+    async def update_role(self, user_id: str, role: str, actor_role: str) -> User:
         ensure_valid_role(role)
+        self._ensure_assignable_role(actor_role, role)
         user = await self.get_user(user_id)
         user.role = role
         await self._session.flush()
@@ -62,3 +72,19 @@ class UserService:
         user.password_hash = hash_password(password)
         await self._session.flush()
         return user
+
+    @staticmethod
+    def _ensure_assignable_role(actor_role: str, target_role: str) -> None:
+        if actor_role == ROLE_SUPER_ADMIN:
+            return
+
+        if actor_role == ROLE_ORG_ADMIN and target_role in {
+            ROLE_ORG_ADMIN,
+            ROLE_INSPECTOR,
+            ROLE_VIEWER,
+            ROLE_ANALYST,
+            ROLE_AI_QUALITY,
+        }:
+            return
+
+        raise ForbiddenError(f"role {actor_role} cannot assign {target_role}")

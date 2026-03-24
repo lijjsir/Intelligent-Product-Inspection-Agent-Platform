@@ -1,40 +1,139 @@
 # PIAP 功能实现推进状态
 
-## 阶段一：认证与用户基础 (已完成)
-- [x] 后端基础 JWT & 加密 & ORM 结构完善
-- [x] 前端基础 HTTP 拦截 & 路由拆分
-- [x] 后端 Docker DB 启动与 Alembic 表迁移
-- [x] 实现后台真正的 login 和 register 端点接口
+说明：
+- 本文件已按当前代码实现、`PIAP_SDD_v1.0.0`、`PIAP_SYS_002_MySQL`、`PIAP_BAD_003_Architecture`、`PIAP_FED_004_Frontend`、`PIAP_CHG_006` 重新校准。
+- `已完成` 表示前后端或后端主链路已可用；`部分完成` 表示已有入口/数据结构，但未完全闭环；`待实现` 表示当前仓库尚未真正落地。
+- 旧文档中部分设计与现状不一致的内容已在本任务表中按“当前真实实现”修正，例如当前模型接入以火山引擎 Ark / OpenAI-compatible 接口为主，而非 Ollama 主链路。
 
-## 阶段二：核心业务功能 (进行中)
-- [x] 质检任务模块完整实现 (Task)
-  - [x] 任务列表展示与分页查询
-  - [x] 新建任务表单 (前端验证闭环)
-  - [x] 任务详情展示 (提供完整后端 get_task 接口与 TaskDetailView)
-- [x] 分析结果模块 (Result)
-  - [x] 后端 Result API 及关联 Task
-  - [x] 前端 ResultDetailView 展示缺陷列表及画框渲染
-- [x] 稳定性评估模块 (Stability)
-  - [x] 后端 Stability 评分 API（五维度雷达数据支持）
-  - [x] 前端 StabilityDetailView 与 ECharts 雷达趋势图
-- [x] 告警管理模块 (Alerts)
-  - [x] 后端 Alert 列表和消除接口
-  - [x] 前端 AlertListView 和严重度标签展示
-- [x] 数据看板与分析 (Analytics & Dashboard)
-  - [x] 后端 Analytics API（聚合多维度总计看板数据）
-  - [x] 前端 Dashboard 首页关键指标统计与趋势图表
-- [x] 用户管理 (Users)
-  - [x] 前端 UserListView 表格管理与角色分配
+## 阶段一：认证、租户与基础设施 (已完成)
+- [x] JWT 登录、注册、刷新与鉴权依赖注入
+- [x] 密码散列、用户状态校验、基础 RBAC 权限矩阵
+- [x] MySQL + Alembic 基础迁移链路
+- [x] FastAPI 全局异常、请求中间件、统一 `ResponseEnvelope`
+- [x] 前端 HTTP 拦截器、路由守卫、登录态持久化
+- [x] 组织级用户管理基础能力
 
-## 阶段三：AI Agent 核心工作流
-- [x] 后端 LangGraph Agent 图结构定义 (`InspectionState` 与 Node)
-- [x] 大模型 LLM 判断节点对接 (调用 Ollama LLaVA/Llama3 等视觉大模型)
-- [x] 知识库 RAG 相似度对齐 (基于 Qdrant 接入产品标准书检测)
-- [x] 稳定性五维打分（一致性、溯源等）算法的纯业务代码实现
-- [x] 异步 Celery Worker 监听通道激活队列处理
-- [x] AI 流水线实时流 SSE 推送接口端点及前端长连接协同订阅
+## 阶段二：核心业务闭环 (大体完成，仍有可增强项)
+- [x] 质检任务模块
+- [x] 任务列表、分页、详情、新建任务
+- [x] 任务状态流转：`pending -> running -> done/failed`
+- [x] 任务详情页支持启动 AI 推演
+- [x] 分析结果模块
+- [x] Result API、结果详情、缺陷框渲染、引用信息展示
+- [x] 稳定性评估模块
+- [x] 五维评分、风险等级、稳定性详情页
+- [x] 告警中心模块
+- [x] 告警列表、严重度展示、处理状态流转
+- [x] 仪表盘与分析中心基础统计
+- [x] Analytics Overview 后端聚合接口
+- [x] Dashboard / Analytics 基础指标展示
+- [x] 用户管理页基础能力
+- [x] 用户创建、角色修改、启停用
+- [x] 角色选项已补齐到当前治理体系可见范围
+- [ ] 用户管理页高级能力仍待补充
+- [ ] 用户筛选、搜索、重置密码、个人资料页未完整实现
+- [x] 分析中心高级图表已补齐首版
+- [x] 已实现 6 张指标卡、通过率趋势、幻觉率趋势、风险分布变化、模型性能对比表
+- [ ] FED 文档中的多产品线叠加、典型案例悬停入口仍待增强
 
-## 阶段四：生产化与可观测性
-- [ ] 全量 Audit 审计日志管理
-- [ ] 权限数据强隔离 (Tenant/Org 级别) 的拦截复测
-- [ ] 前后端全链路联调
+## 阶段三：AI Agent 主流程 (主链路已跑通，部分节点待增强)
+- [x] LangGraph 检测图结构与共享状态定义
+- [x] `planner / vision / knowledge / reasoning / finalizer` 节点串联
+- [x] 任务启动后通过 Celery 或本地后台任务执行推演
+- [x] SSE 实时事件流推送与前端时间线订阅
+- [x] 火山引擎模型接入
+- [x] Chat / Vision Chat 已接入 Ark 兼容接口
+- [x] Embedding 已兼容当前火山引擎嵌入模型配置
+- [x] Qdrant RAG 检索链路已接通
+- [x] 知识文档导入脚本已存在
+- [x] 稳定性五维打分与风险告警触发逻辑已实现
+- [x] Token 使用量已接入真实推理链路
+- [x] `inspection_results.tokens_used` 已回填
+- [x] `token_usage_ledger` 已落库
+- [x] 视觉输出已去除固定缺陷框 fallback
+- [x] `vision` 节点已增强结构化 JSON 解析，失败兜底也会按图像源生成可变缺陷框与分数
+- [x] 已接入专用视觉检测服务适配层（可通过配置启用外部图像分析服务）
+- [ ] 当前仍主要依赖多模态模型输出与启发式兜底，尚未接入专用工业检测模型
+- [x] 多模型网关已接管主推理链路
+- [x] `inspection_pipeline_service` 已从 `model_configs` 读取可用模型并注入 `LLMClient`
+- [ ] 模型健康探活为占位实现
+- [ ] `health_checker.py` 目前未接真实外部探活请求
+
+## 阶段四：治理层与 CHG_006 增量 (部分完成)
+- [x] 治理层数据库对象已建表
+- [x] `model_configs`
+- [x] `token_usage_ledger`
+- [x] `result_feedbacks`
+- [x] 治理层后端接口已接入路由
+- [x] `/api/v1/model-configs`
+- [x] `/api/v1/billing/summary`
+- [x] `/api/v1/feedbacks`
+- [x] `/api/v1/quality/report`
+- [x] 治理层前端页面与路由入口已建立
+- [x] 模型配置页
+- [x] Token 成本页
+- [x] GPU 监控页入口
+- [x] AI 质量报告页
+- [x] 质量追踪页
+- [x] 反馈流水页
+- [x] Result 详情页反馈组件 `FeedbackWidget`
+- [x] 角色体系已扩展
+- [x] `platform_admin`
+- [x] `ai_quality`
+- [x] 前端用户管理页已补齐可分配角色展示
+- [ ] 模型配置治理闭环待增强
+- [ ] 当前具备 CRUD 基础能力，主链路也已接入选模，但缺少真实健康检查、限速窗口、自动故障切换闭环
+- [x] 成本治理基础闭环已接通
+- [x] `TokenUsageLedger.cost_amount` 已按内置模型单价表完成估算写入
+- [x] 租户级模型单价策略已实现代码与迁移
+- [x] `model_configs` 已支持配置输入/输出单价，并参与 `cost_amount` 计算
+- [ ] 需要在本地执行 `0005_model_config_pricing` 迁移后数据库才会生效
+- [x] 质量追踪基础链路已接通
+- [x] `/api/v1/quality/traces` 已返回真实追踪聚合数据（结果 / Token / 反馈 / 最近 score）
+- [x] 用户反馈已接入 Langfuse 适配 score 记录
+- [x] 推理链路已生成并持久化 `trace_id`
+- [ ] Langfuse 外部服务真实代理仍待补齐
+- [ ] 当前为本地适配追踪模型，尚未接入官方 Langfuse 服务端与 SDK
+- [ ] GPU 监控仅为占位页面
+- [ ] 前端已有入口，但无后端指标源
+
+## 阶段五：文档设计对照后的缺口 (待补充)
+- [ ] 审计日志体系未完整落地
+- [ ] 当前有 `audit_outbox` 基础写入，但缺少完整审计查询、归档、独立审计库闭环
+- [ ] 多租户强隔离需要继续复测
+- [ ] 当前主要依赖 Service / Repo 注入 `org_id` 过滤，仍需系统性权限与越权回归测试
+- [ ] 工具注册中心与工具执行引擎尚未按设计文档完整实现
+- [ ] `tool registry / executor / schema 校验 / 限流 / 沙箱` 仍未形成完整闭环
+- [ ] 文档中的 MFA / SSO / API Key 体系未实现
+- [ ] Dashboard / Analytics 与 FED 文档存在差距
+- [x] Dashboard 已补齐范围切换、通过率趋势、风险分布、快捷入口、待处理预警与最近任务
+- [x] Analytics 已补齐核心指标卡、趋势图、风险时序图、模型对比表
+- [x] Analytics 已补齐产品线叠加趋势与首版图表钻取抽屉
+- [x] 产品线钻取已升级为真实后端接口
+- [x] 模型钻取已升级为真实后端接口
+- [x] 产品线钻取已联动任务列表 / 结果列表
+- [x] 分析中心钻取面板已支持继续跳转到任务详情 / 结果详情
+- [ ] 仍缺少独立业务组件拆分、更多高级联动和更深层任务级统计钻取
+- [ ] 报告生成、OCR、标准比对、外部 ERP/MES 工具仍待实现
+- [ ] Playwright / Vitest 前端测试覆盖不足
+- [ ] Langfuse、模型健康检查、治理任务定时调度尚未形成生产化闭环
+- [x] 前端已完成路由懒加载与 ECharts 按需引入，构建大 chunk 警告已消除
+- [x] 专用视觉检测服务请求/响应协议文档已补齐
+- [x] 已在根 README 与 backend README 增加协议文档入口
+
+## 建议的下一优先级
+- [x] P1：补齐 `quality/traces` 真数据链路，打通 Langfuse Trace 与反馈 Score
+- [x] P1：把多模型网关接入 `inspection_pipeline_service` 主链路，支持从 `model_configs` 选模型
+- [x] P1：实现 `cost_amount` 估算规则，完成 Billing 看板基础闭环
+- [x] P1：替换固定视觉 fallback，接入真实可变缺陷检测输出首版
+- [x] P2：补齐分析中心与仪表盘图表，实现 FED 文档首版趋势图与模型对比
+- [x] P2：继续细化 FED 文档中的多产品线叠加和首版交互钻取
+- [x] P2：产品线钻取已改为真实后端接口
+- [x] P2：模型钻取已改为真实后端接口
+- [x] P2：产品线钻取已继续下钻到任务 / 结果列表联动
+- [x] P2：专用视觉服务协议与接入说明文档已补齐
+- [x] P2：前端代码分包已完成，build chunk warning 已消除
+- [ ] P2：继续拆分 FED 图表业务组件并补齐更深层联动
+- [ ] P2：补齐 GPU 监控后端指标源
+- [ ] P2：完善用户管理页高级能力与角色分配策略接口化
+- [ ] P3：完善审计、MFA、SSO、工具执行引擎等生产化能力

@@ -23,3 +23,4 @@
 ## 说明
 - 主入口在 `backend/main.py`
 - 配置文件集中在 `backend/app/core/config`（如已存在）
+- 专用视觉检测服务接入协议见 `backend/docs/vision_detector_protocol.md`

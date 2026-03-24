@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, text
 from sqlalchemy.dialects.mysql import BINARY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -33,6 +33,14 @@ class Base(DeclarativeBase):
 
 
 class TimestampMixin:
-    created_at: Mapped[Any] = mapped_column(DateTime(timezone=False))
-    updated_at: Mapped[Any] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )
     deleted_at: Mapped[Any] = mapped_column(DateTime(timezone=False), nullable=True)

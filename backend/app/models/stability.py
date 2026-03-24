@@ -1,4 +1,4 @@
-from sqlalchemy import String, DECIMAL, Text, DateTime
+from sqlalchemy import String, DECIMAL, Text, DateTime, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,4 +26,13 @@ class StabilityReport(Base):
     handled_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     handle_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     handle_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[str] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )

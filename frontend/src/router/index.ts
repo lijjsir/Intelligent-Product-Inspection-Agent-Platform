@@ -1,53 +1,47 @@
 import { createRouter, createWebHistory } from "vue-router";
-import AppLayout from "@/layouts/AppLayout.vue";
-import AuthLayout from "@/layouts/AuthLayout.vue";
-import LoginView from "@/views/LoginView.vue";
-import RegisterView from "@/views/RegisterView.vue";
-import DashboardView from "@/views/DashboardView.vue";
-import TaskListView from "@/views/TaskListView.vue";
-import TaskDetailView from "@/views/TaskDetailView.vue";
-import ResultDetailView from "@/views/ResultDetailView.vue";
-import StabilityDetailView from "@/views/StabilityDetailView.vue";
-import AlertListView from "@/views/AlertListView.vue";
-import AnalyticsView from "@/views/AnalyticsView.vue";
-import UserListView from "@/views/UserListView.vue";
 import { useAuthStore } from "@/stores/auth.store";
+import { adminRoutes } from "@/router/routes/admin.routes";
+import { qualityRoutes } from "@/router/routes/quality.routes";
+import { ROLE_SUPER_ADMIN } from "@/constants/roles";
 
 const routes = [
   {
     path: "/login",
-    component: AuthLayout,
+    component: () => import("@/layouts/AuthLayout.vue"),
     children: [
       {
         path: "",
         name: "login",
-        component: LoginView,
+        component: () => import("@/views/LoginView.vue"),
       },
     ],
   },
   {
     path: "/register",
-    component: AuthLayout,
+    component: () => import("@/layouts/AuthLayout.vue"),
     children: [
       {
         path: "",
         name: "register",
-        component: RegisterView,
+        component: () => import("@/views/RegisterView.vue"),
       },
     ],
   },
   {
     path: "/",
-    component: AppLayout,
+    component: () => import("@/layouts/AppLayout.vue"),
     children: [
-      { path: "", name: "dashboard", component: DashboardView },
-      { path: "tasks", name: "tasks", component: TaskListView },
-      { path: "tasks/:id", name: "task-detail", component: TaskDetailView },
-      { path: "results/:id", name: "result-detail", component: ResultDetailView },
-      { path: "stability/:id", name: "stability-detail", component: StabilityDetailView },
-      { path: "alerts", name: "alerts", component: AlertListView },
-      { path: "analytics", name: "analytics", component: AnalyticsView },
-      { path: "users", name: "users", component: UserListView },
+      { path: "", name: "dashboard", component: () => import("@/views/DashboardView.vue") },
+      { path: "tasks", name: "tasks", component: () => import("@/views/TaskListView.vue") },
+      { path: "tasks/:id", name: "task-detail", component: () => import("@/views/TaskDetailView.vue") },
+      { path: "results", name: "results", component: () => import("@/views/ResultListView.vue") },
+      { path: "results/:id", name: "result-detail", component: () => import("@/views/ResultDetailView.vue") },
+      { path: "stability/:id", name: "stability-detail", component: () => import("@/views/StabilityDetailView.vue") },
+      { path: "alerts", name: "alerts", component: () => import("@/views/AlertListView.vue") },
+      { path: "analytics", name: "analytics", component: () => import("@/views/AnalyticsView.vue") },
+      { path: "users", name: "users", component: () => import("@/views/UserListView.vue") },
+      ...adminRoutes,
+      ...qualityRoutes,
     ],
     meta: { requiresAuth: true },
   },
@@ -63,6 +57,10 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAuth && !auth.isAuthed) {
     return { path: "/login" };
+  }
+  const roles = to.meta.roles as string[] | undefined;
+  if (roles && auth.role !== ROLE_SUPER_ADMIN && !roles.includes(auth.role)) {
+    return { path: "/" };
   }
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
     return { path: "/" };
