@@ -139,8 +139,97 @@ cd frontend && npm run build
 - `fix/*`：缺陷修复
 - `chore/*`：部署、脚本、文档
 
-如果你愿意，下一步可以直接把你当前分支整理成这个结构：
+## 当前仓库基线说明
 
-1. 当前分支重命名为 `develop`
-2. 从当前稳定点创建 `main`
-3. 我再帮你生成一组并行 worktree 分支初始化命令
+当前仓库已按以下方式收口：
+
+- `main`
+  - 保留为正式部署分支
+- `develop`
+  - 已创建
+  - 当前作为日常开发主分支
+- `feature/ljc`
+  - 当前与 `develop` 指向同一提交
+  - 视为历史开发主线别名
+  - 不再建议继续承载新的长期开发任务
+
+当前基线提交：
+
+- `77908fbe` `准备使用并行开发`
+
+建议：
+
+- 后续新的功能开发统一从 `develop` 切出
+- `feature/ljc` 暂时保留，作为迁移过渡和回退参考
+- 在 `develop` 推送远端并稳定使用一段时间后，再考虑是否废弃 `feature/ljc`
+
+## 三端分支命名约束
+
+为对齐 `PIAP_INT_008_three_workspace_collab_spec_v1_0_0`，后续分支命名统一按以下前缀：
+
+- `feature/a-*`
+- `feature/b-*`
+- `feature/c-*`
+- `feature/shared-*`
+
+含义：
+
+- `a-*`
+  - A 端业务工作台
+- `b-*`
+  - B 端运营工作台
+- `c-*`
+  - C 端治理工作台
+- `shared-*`
+  - 共享认证、路由、workspace、公共契约、共享组件、共享数据结构
+
+当前冻结的共享契约见：
+
+- `docs/AGENT_OPERATOR_WORKSPACE_CONTRACT.md`
+
+## 基线提交建议
+
+如果要把当前仓库正式收口为新的开发基线，建议提交内容只包含“分支协作规则与部署辅助文件”，不要夹带业务功能修改。
+
+建议基线提交范围：
+
+- `BRANCH_RULES.md`
+- `README.md`
+- `scripts/create_parallel_branch.sh`
+- `deploy/nginx/piap.conf`
+- `deploy/PUBLIC_RELEASE_MINIMUM.md`
+- `frontend/.env.production.example`
+- `backend/.env.production.example`
+
+建议提交信息：
+
+```bash
+git add BRANCH_RULES.md README.md scripts/create_parallel_branch.sh deploy/nginx/piap.conf deploy/PUBLIC_RELEASE_MINIMUM.md frontend/.env.production.example backend/.env.production.example
+git commit -m "chore: establish develop baseline and deployment workflow"
+```
+
+如果你希望把最近一轮配置一致性修复也一起作为基线提交，可以额外包含：
+
+- `backend/app/core/config.py`
+
+对应提交信息建议：
+
+```bash
+git add BRANCH_RULES.md README.md scripts/create_parallel_branch.sh deploy/nginx/piap.conf deploy/PUBLIC_RELEASE_MINIMUM.md frontend/.env.production.example backend/.env.production.example backend/app/core/config.py
+git commit -m "chore: establish develop baseline and align deployment defaults"
+```
+
+## develop 推送建议
+
+当你确认基线提交完成后，再执行：
+
+```bash
+git push -u origin develop
+```
+
+此时不要立即删除远端 `feature/ljc`。
+建议等以下条件满足后再决定是否清理：
+
+- `develop` 已稳定使用
+- 至少有一轮功能分支从 `develop` 正常创建、合并
+- 正式部署流程已切换到 `main <- develop`
