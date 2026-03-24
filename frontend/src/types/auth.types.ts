@@ -20,4 +20,9 @@ export interface AuthSession {
   user_id: string;
   org_id: string;
   role: string;
+  roles: string[];
+  plan_tier: string;
+  capabilities: string[];
+  workspaces: string[];
+  default_workspace: string;
 }

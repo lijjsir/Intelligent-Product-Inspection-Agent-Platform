@@ -59,11 +59,12 @@ router.beforeEach((to) => {
     return { path: "/login" };
   }
   const roles = to.meta.roles as string[] | undefined;
-  if (roles && auth.role !== ROLE_SUPER_ADMIN && !roles.includes(auth.role)) {
+  const currentRoles = auth.roles.length ? auth.roles : [auth.role];
+  if (roles && !currentRoles.includes(ROLE_SUPER_ADMIN) && !roles.some((role) => currentRoles.includes(role))) {
     return { path: "/" };
   }
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
-    return { path: "/" };
+    return { path: auth.resolveDefaultRoute() };
   }
   return true;
 });

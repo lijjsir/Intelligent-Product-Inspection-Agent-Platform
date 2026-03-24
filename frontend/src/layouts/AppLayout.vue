@@ -7,7 +7,15 @@
         <RouterLink to="/tasks" class="nav-link">任务列表</RouterLink>
         <RouterLink to="/alerts" class="nav-link">预警中心</RouterLink>
         <RouterLink to="/analytics" class="nav-link">分析中心</RouterLink>
-        <RouterLink to="/users" class="nav-link">用户管理</RouterLink>
+        <RouterLink v-if="canUserAdmin" to="/users" class="nav-link">用户管理</RouterLink>
+        <template v-if="canOps">
+          <div class="nav-group">Agent 运维</div>
+          <RouterLink to="/analytics" class="nav-link">运行分析</RouterLink>
+        </template>
+        <template v-if="canSpecConfig">
+          <div class="nav-group">标准治理</div>
+          <RouterLink to="/admin/inspection-specs" class="nav-link">检测标准</RouterLink>
+        </template>
         <template v-if="canPlatform">
           <div class="nav-group">平台管理</div>
           <RouterLink to="/admin/models" class="nav-link">模型配置</RouterLink>
@@ -25,6 +33,7 @@
     <div class="content">
       <header class="topbar">
         <div class="title">PIAP 控制台</div>
+        <div class="workspace-chip">{{ auth.defaultWorkspace }}</div>
         <button class="ghost" @click="logout">退出</button>
       </header>
       <main class="page">
@@ -38,12 +47,34 @@
 import { useRouter } from "vue-router";
 import { computed } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
-import { ROLE_AI_QUALITY, ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
+import {
+  ROLE_AI_QUALITY,
+  ROLE_PLATFORM_ADMIN,
+  ROLE_SUPER_ADMIN,
+  WORKSPACE_GOVERNANCE,
+  WORKSPACE_OPS,
+} from "@/constants/roles";
 
 const router = useRouter();
 const auth = useAuthStore();
-const canPlatform = computed(() => [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].includes(auth.role));
-const canQuality = computed(() => [ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(auth.role));
+const currentRoles = computed(() => (auth.roles.length ? auth.roles : [auth.role]));
+const canOps = computed(() => auth.workspaces.includes(WORKSPACE_OPS));
+const canUserAdmin = computed(() => currentRoles.value.some((role) => ["org_admin", "super_admin"].includes(role)));
+const canPlatform = computed(
+  () =>
+    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
+    currentRoles.value.some((role) => [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].includes(role)),
+);
+const canSpecConfig = computed(
+  () =>
+    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
+    currentRoles.value.some((role) => [ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(role)),
+);
+const canQuality = computed(
+  () =>
+    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
+    currentRoles.value.some((role) => [ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(role)),
+);
 
 const logout = () => {
   auth.logout();
@@ -118,6 +149,18 @@ const logout = () => {
 .title {
   font-weight: 600;
   color: #1b3a5c;
+}
+
+.workspace-chip {
+  margin-left: auto;
+  margin-right: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .page {

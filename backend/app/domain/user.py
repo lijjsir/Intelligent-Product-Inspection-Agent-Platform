@@ -7,6 +7,7 @@ class Role(str, Enum):
     org_admin = "org_admin"
     inspector = "inspector"
     analyst = "analyst"
+    agent_operator = "agent_operator"
     api_service = "api_service"
     auditor = "auditor"
 

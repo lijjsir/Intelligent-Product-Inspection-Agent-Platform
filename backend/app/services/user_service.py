@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.core.permissions import (
+    ROLE_AGENT_OPERATOR,
     ROLE_AI_QUALITY,
     ROLE_ANALYST,
     ROLE_INSPECTOR,
@@ -84,6 +85,7 @@ class UserService:
             ROLE_VIEWER,
             ROLE_ANALYST,
             ROLE_AI_QUALITY,
+            ROLE_AGENT_OPERATOR,
         }:
             return
 

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_db, get_current_user
+from app.core.claims import normalize_roles
 from app.core.permissions import require_role
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import (
@@ -34,6 +35,7 @@ async def list_users(
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
         for user in users
@@ -52,6 +54,7 @@ async def get_me(current: CurrentUser = Depends(get_current_user), db=Depends(ge
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
     )
@@ -73,6 +76,7 @@ async def get_user(
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
     )
@@ -95,6 +99,7 @@ async def create_user(
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
     )
@@ -117,6 +122,7 @@ async def update_role(
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
     )
@@ -139,6 +145,7 @@ async def update_status(
             username=user.username,
             email=user.email,
             role=user.role,
+            roles=normalize_roles(role=user.role),
             is_active=user.is_active,
         )
     )

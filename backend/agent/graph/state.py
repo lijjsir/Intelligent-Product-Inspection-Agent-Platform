@@ -24,6 +24,7 @@ class InspectionState(TypedDict, total=False):
     citations: list[dict[str, Any]]
     reasoning_chain: dict[str, Any]
     conclusion: dict[str, Any]
+    standard_evaluation: dict[str, Any]
     dimensions: dict[str, float]
     stability: dict[str, Any]
     alert_needed: bool

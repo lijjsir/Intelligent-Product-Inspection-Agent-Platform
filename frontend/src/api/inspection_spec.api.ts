@@ -1,0 +1,20 @@
+import { http } from "./http";
+import type { InspectionSpec, InspectionSpecPayload } from "@/types/governance.types";
+
+export const inspectionSpecApi = {
+  list() {
+    return http.get<InspectionSpec[]>("/v1/inspection-specs");
+  },
+  get(id: string) {
+    return http.get<InspectionSpec>(`/v1/inspection-specs/${id}`);
+  },
+  create(payload: InspectionSpecPayload) {
+    return http.post<InspectionSpec>("/v1/inspection-specs", payload);
+  },
+  update(id: string, payload: Partial<InspectionSpecPayload>) {
+    return http.patch<InspectionSpec>(`/v1/inspection-specs/${id}`, payload);
+  },
+  remove(id: string) {
+    return http.delete<boolean>(`/v1/inspection-specs/${id}`);
+  },
+};
