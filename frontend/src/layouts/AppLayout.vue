@@ -25,7 +25,13 @@
     <div class="content">
       <header class="topbar">
         <div class="title">PIAP 控制台</div>
-        <button class="ghost" @click="logout">退出</button>
+        <div class="topbar-actions">
+          <RouterLink to="/profile" class="profile-link">
+            <span class="profile-name">{{ profileName }}</span>
+            <span class="profile-role">{{ auth.role || "未识别角色" }}</span>
+          </RouterLink>
+          <button class="ghost" @click="logout">退出</button>
+        </div>
       </header>
       <main class="page">
         <RouterView />
@@ -36,14 +42,23 @@
 
 <script setup lang="ts">
 import { useRouter } from "vue-router";
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
+import { useUserStore } from "@/stores/user.store";
 import { ROLE_AI_QUALITY, ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
 
 const router = useRouter();
 const auth = useAuthStore();
+const userStore = useUserStore();
 const canPlatform = computed(() => [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].includes(auth.role));
 const canQuality = computed(() => [ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(auth.role));
+const profileName = computed(() => userStore.current?.username || auth.userId || "当前用户");
+
+onMounted(() => {
+  if (auth.isAuthed) {
+    userStore.fetchCurrentUser().catch(() => undefined);
+  }
+});
 
 const logout = () => {
   auth.logout();
@@ -118,6 +133,30 @@ const logout = () => {
 .title {
   font-weight: 600;
   color: #1b3a5c;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #1b3a5c;
+  line-height: 1.2;
+}
+
+.profile-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profile-role {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .page {
