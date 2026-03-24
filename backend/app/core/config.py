@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:16379/0"
     rate_limit_rpm_default: int = 60
+    model_health_timeout_sec: int = 5
 
     s3_endpoint: str = "http://localhost:19000"
     s3_access_key: str = "piap"

@@ -60,7 +60,14 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
             "overall_score": max(0.0, min(overall_score, 1.0)),
             "reasoning_chain": reasoning_chain,
         }
-    except Exception:
+    except Exception as exc:
+        state.setdefault("runtime_errors", []).append(
+            {
+                "stage": "reasoning",
+                "model_id": state.get("model_id"),
+                "message": str(exc),
+            }
+        )
         conclusion = _fallback_conclusion(defects)
 
     state["reasoning_chain"] = conclusion.get("reasoning_chain") or {}
