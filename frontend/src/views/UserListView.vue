@@ -6,6 +6,7 @@ import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import {
+  ROLE_AGENT_OPERATOR,
   ROLE_AI_QUALITY,
   ROLE_ANALYST,
   ROLE_INSPECTOR,
@@ -35,6 +36,7 @@ const assignableRoles = computed(() => {
       { label: "分析员", value: ROLE_ANALYST },
       { label: "平台管理员", value: ROLE_PLATFORM_ADMIN },
       { label: "AI 质量专员", value: ROLE_AI_QUALITY },
+      { label: "Agent 运维员", value: ROLE_AGENT_OPERATOR },
     ];
   }
   return [
@@ -43,6 +45,7 @@ const assignableRoles = computed(() => {
     { label: "只读访客", value: ROLE_VIEWER },
     { label: "分析员", value: ROLE_ANALYST },
     { label: "AI 质量专员", value: ROLE_AI_QUALITY },
+    { label: "Agent 运维员", value: ROLE_AGENT_OPERATOR },
   ];
 });
 
@@ -125,6 +128,7 @@ function getRoleTag(role: string) {
     analyst: "warning",
     platform_admin: "danger",
     ai_quality: "success",
+    agent_operator: "warning",
   };
   return map[role] || "info";
 }

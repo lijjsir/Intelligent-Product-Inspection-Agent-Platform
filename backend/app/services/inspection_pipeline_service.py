@@ -19,6 +19,7 @@ from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.services.model_config_service import ModelConfigService
+from app.services.inspection_standard_service import InspectionStandardService
 from app.services.stream_service import stream_broker
 from infra.database.session import get_session
 
@@ -31,6 +32,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         alert_repo = AlertRepository(session)
         token_ledger_repo = TokenLedgerRepository(session)
         model_config_service = ModelConfigService(session, org_id)
+        standard_service = InspectionStandardService(session, org_id)
 
         task = await task_repo.get(org_id, task_id)
         if not task:
@@ -73,6 +75,17 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
 
             conclusion = state.get("conclusion") or {}
             reasoning_chain = dict(state.get("reasoning_chain") or {})
+            standard_evaluation = await standard_service.evaluate(
+                spec_code=task.spec_id,
+                image_urls=task.image_urls or [],
+                defects=state.get("defects") or [],
+                citations=state.get("citations") or [],
+                reasoning_chain=reasoning_chain,
+                model_verdict=str(conclusion.get("verdict") or "uncertain"),
+                overall_score=float(conclusion.get("overall_score") or 0.5),
+            )
+            state["standard_evaluation"] = standard_evaluation
+            reasoning_chain["standard_evaluation"] = standard_evaluation
             reasoning_chain["trace"] = {
                 "trace_id": state.get("trace_id"),
                 "task_id": task.id,
@@ -83,7 +96,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "id": str(uuid7()),
                 "task_id": task.id,
                 "org_id": task.org_id,
-                "verdict": conclusion.get("verdict") or "uncertain",
+                "verdict": standard_evaluation.get("verdict") or conclusion.get("verdict") or "uncertain",
                 "overall_score": float(conclusion.get("overall_score") or 0.5),
                 "defects": state.get("defects") or [],
                 "citations": {"items": state.get("citations") or []},
@@ -194,6 +207,14 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     "model_id": state.get("model_id"),
                     "model_config_id": state.get("model_config_id"),
                     "provider": state.get("model_provider"),
+                }
+            )
+            await emit(
+                {
+                    "type": "standard_gate",
+                    "spec_id": task.spec_id,
+                    "verdict": standard_evaluation.get("verdict"),
+                    "reasons": standard_evaluation.get("reasons") or [],
                 }
             )
             await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})

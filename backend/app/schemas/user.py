@@ -1,10 +1,15 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 
 class CurrentUser(BaseModel):
     user_id: str
     org_id: str
     role: str
+    roles: list[str] = Field(default_factory=list)
+    plan_tier: str = "basic"
+    capabilities: list[str] = Field(default_factory=list)
+    workspaces: list[str] = Field(default_factory=list)
+    default_workspace: str = "app"
 
 
 class UserCreate(BaseModel):
@@ -20,6 +25,7 @@ class UserResponse(BaseModel):
     username: str
     email: EmailStr
     role: str
+    roles: list[str] = Field(default_factory=list)
     is_active: bool
 
 
