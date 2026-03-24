@@ -60,6 +60,8 @@ class TaskRepository:
             base = base.where(InspectionTask.status == filters["status"])
         if "product_id" in filters:
             base = base.where(InspectionTask.product_id == filters["product_id"])
+        if "ids" in filters and filters["ids"]:
+            base = base.where(InspectionTask.id.in_(filters["ids"]))
 
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))
         

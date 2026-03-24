@@ -45,4 +45,5 @@ export interface ResultListQuery {
   verdict?: Verdict;
   product_id?: string;
   model_key?: string;
+  task_id?: string;
 }
