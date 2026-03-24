@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import traceback
+from typing import Any
 
 from agent.graph.inspection_graph import InspectionGraph
 from agent.graph.state import InspectionState
@@ -21,6 +22,37 @@ from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.services.model_config_service import ModelConfigService
 from app.services.stream_service import stream_broker
 from infra.database.session import get_session
+
+
+def _build_runtime_state(
+    task: InspectionTask,
+    runtime: dict[str, Any],
+    *,
+    trace_id: str,
+    timeline_seed: list[dict[str, Any]],
+) -> InspectionState:
+    return {
+        "task_id": task.id,
+        "org_id": task.org_id,
+        "product_id": task.product_id,
+        "spec_id": task.spec_id,
+        "image_urls": task.image_urls or [],
+        "model_id": str(runtime.get("model_id") or LLMClient().model_id),
+        "model_config_id": runtime.get("model_config_id"),
+        "model_base_url": runtime.get("base_url"),
+        "model_api_key": runtime.get("api_key"),
+        "model_provider": runtime.get("provider"),
+        "model_input_price_per_million": runtime.get("input_price_per_million"),
+        "model_output_price_per_million": runtime.get("output_price_per_million"),
+        "trace_id": trace_id,
+        "timeline": list(timeline_seed),
+        "usage_events": [],
+        "runtime_errors": [],
+    }
+
+
+def _runtime_key(runtime: dict[str, Any]) -> str:
+    return str(runtime.get("runtime_key") or runtime.get("model_config_id") or runtime.get("model_id") or "unknown")
 
 
 async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
@@ -45,31 +77,70 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             await stream_broker.publish(task_id, event)
 
         try:
-            runtime = LLMGateway().select_runtime(await model_config_service.list_runtime_models())
+            runtime_models = await model_config_service.list_runtime_models()
+            gateway = LLMGateway()
+            graph = InspectionGraph()
+            excluded_runtime_ids: set[str] = set()
+            timeline_seed: list[dict[str, Any]] = []
+            state: InspectionState | None = None
+
+            runtime = await gateway.select_runtime(runtime_models, excluded_runtime_ids=excluded_runtime_ids)
+            if not runtime:
+                raise RuntimeError("no runtime model available")
+
             trace = LangfuseTracer().start_trace(
                 task_id=task.id,
                 org_id=task.org_id,
                 model_key=runtime["model_id"],
             )
-            state: InspectionState = {
-                "task_id": task.id,
-                "org_id": task.org_id,
-                "product_id": task.product_id,
-                "spec_id": task.spec_id,
-                "image_urls": task.image_urls or [],
-                "model_id": str(runtime["model_id"] or LLMClient().model_id),
-                "model_config_id": runtime.get("model_config_id"),
-                "model_base_url": runtime.get("base_url"),
-                "model_api_key": runtime.get("api_key"),
-                "model_provider": runtime.get("provider"),
-                "model_input_price_per_million": runtime.get("input_price_per_million"),
-                "model_output_price_per_million": runtime.get("output_price_per_million"),
-                "trace_id": str(trace["trace_id"]),
-                "timeline": [],
-                "usage_events": [],
-            }
             graph = InspectionGraph()
-            state = await graph.run(state, on_event=emit)
+            while True:
+                state = _build_runtime_state(
+                    task,
+                    runtime,
+                    trace_id=str(trace["trace_id"]),
+                    timeline_seed=timeline_seed,
+                )
+                state = await graph.run(state, on_event=emit)
+
+                runtime_errors = state.get("runtime_errors") or []
+                if not runtime_errors:
+                    break
+
+                excluded_runtime_ids.add(_runtime_key(runtime))
+                next_available = await gateway.has_available_runtime(
+                    runtime_models,
+                    excluded_runtime_ids=excluded_runtime_ids,
+                )
+                if not next_available:
+                    break
+
+                detail = "; ".join(str(item.get("message") or "runtime failure") for item in runtime_errors)
+                timeline_seed = list(state.get("timeline") or [])
+                timeline_seed.append(
+                    {
+                        "stage": "gateway",
+                        "message": f"模型 {runtime.get('model_id')} 失败，切换备用模型",
+                        "ts": datetime.utcnow().isoformat(),
+                    }
+                )
+                await emit(
+                    {
+                        "type": "model_failover",
+                        "from_model_id": runtime.get("model_id"),
+                        "from_model_config_id": runtime.get("model_config_id"),
+                        "reason": detail,
+                    }
+                )
+                runtime = await gateway.select_runtime(
+                    runtime_models,
+                    excluded_runtime_ids=excluded_runtime_ids,
+                )
+                if not runtime:
+                    break
+
+            if state is None:
+                raise RuntimeError("inspection graph did not produce a state")
 
             conclusion = state.get("conclusion") or {}
             reasoning_chain = dict(state.get("reasoning_chain") or {})
