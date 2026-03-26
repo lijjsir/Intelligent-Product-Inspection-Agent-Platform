@@ -13,7 +13,7 @@ class InspectionTask(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
     product_id: Mapped[str] = mapped_column(String(64))
-    spec_id: Mapped[str] = mapped_column(String(64))
+    spec_code: Mapped[str] = mapped_column(String(64))
     strategy_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     image_urls: Mapped[list] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="pending")

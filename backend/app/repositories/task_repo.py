@@ -14,6 +14,7 @@ class TaskRepository:
     async def create(self, task: InspectionTask) -> InspectionTask:
         self._session.add(task)
         await self._session.flush()
+        await self._session.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
 
     async def get(self, org_id: str, task_id: str) -> InspectionTask | None:
@@ -47,7 +48,7 @@ class TaskRepository:
                     InspectionTask.id,
                     InspectionTask.org_id,
                     InspectionTask.product_id,
-                    InspectionTask.spec_id,
+                    InspectionTask.spec_code,
                     InspectionTask.status,
                     InspectionTask.priority,
                     InspectionTask.created_at,

@@ -36,7 +36,7 @@ def _build_runtime_state(
         "task_id": task.id,
         "org_id": task.org_id,
         "product_id": task.product_id,
-        "spec_id": task.spec_id,
+        "spec_code": task.spec_code,
         "image_urls": task.image_urls or [],
         "model_id": str(runtime.get("model_id") or LLMClient().model_id),
         "model_config_id": runtime.get("model_config_id"),
@@ -94,6 +94,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 task_id=task.id,
                 org_id=task.org_id,
                 model_key=runtime["model_id"],
+                name="inspection_pipeline",
             )
             graph = InspectionGraph()
             while True:
@@ -114,10 +115,10 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     runtime_models,
                     excluded_runtime_ids=excluded_runtime_ids,
                 )
-                if not next_available:
-                    break
-
                 detail = "; ".join(str(item.get("message") or "runtime failure") for item in runtime_errors)
+                if not next_available:
+                    raise RuntimeError(f"all runtime models failed: {detail}")
+
                 timeline_seed = list(state.get("timeline") or [])
                 timeline_seed.append(
                     {
@@ -147,7 +148,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             conclusion = state.get("conclusion") or {}
             reasoning_chain = dict(state.get("reasoning_chain") or {})
             standard_evaluation = await standard_service.evaluate(
-                spec_code=task.spec_id,
+                spec_code=task.spec_code,
                 image_urls=task.image_urls or [],
                 defects=state.get("defects") or [],
                 citations=state.get("citations") or [],
@@ -159,6 +160,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             reasoning_chain["standard_evaluation"] = standard_evaluation
             reasoning_chain["trace"] = {
                 "trace_id": state.get("trace_id"),
+                "trace_url": trace.get("trace_url"),
                 "task_id": task.id,
                 "org_id": task.org_id,
                 "model_key": state.get("model_id"),
@@ -283,7 +285,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             await emit(
                 {
                     "type": "standard_gate",
-                    "spec_id": task.spec_id,
+                    "spec_code": task.spec_code,
                     "verdict": standard_evaluation.get("verdict"),
                     "reasons": standard_evaluation.get("reasons") or [],
                 }

@@ -156,6 +156,7 @@ class QualityReportService(TenantAwareService):
             traces.append(
                 {
                     "trace_id": trace_id,
+                    "trace_url": trace_meta.get("trace_url"),
                     "result_id": result.id,
                     "task_id": result.task_id,
                     "verdict": result.verdict,

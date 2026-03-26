@@ -118,7 +118,7 @@ function goBack() {
           <el-descriptions-item label="任务 ID">{{ store.current.id }}</el-descriptions-item>
           <el-descriptions-item label="组织 ID">{{ store.current.org_id }}</el-descriptions-item>
           <el-descriptions-item label="产品编号">{{ store.current.product_id }}</el-descriptions-item>
-          <el-descriptions-item label="检测规格">{{ store.current.spec_id }}</el-descriptions-item>
+          <el-descriptions-item label="检测标准">{{ store.current.spec_code }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ store.current.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
             {{ store.current.created_at ? new Date(store.current.created_at).toLocaleString() : "-" }}

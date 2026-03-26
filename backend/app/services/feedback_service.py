@@ -94,5 +94,4 @@ class FeedbackService(TenantAwareService):
         try:
             sync_langfuse_score.delay(score_event)
         except Exception:
-            # Local dev may not have a running worker; keep primary write path non-blocking.
-            pass
+            LangfuseTracer().sync_score(score_event)

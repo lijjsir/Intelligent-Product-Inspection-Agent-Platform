@@ -117,6 +117,7 @@ export interface QualityReport {
 
 export interface QualityTraceItem {
   trace_id: string;
+  trace_url: string | null;
   result_id: string | null;
   task_id: string | null;
   verdict: string | null;

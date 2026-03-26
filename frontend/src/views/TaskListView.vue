@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ElMessage, type FormInstance, type FormRules } from "element-plus";
+import type { UploadFile, UploadFiles, UploadUserFile } from "element-plus";
+
+import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
-import { ElMessage, type FormInstance, type FormRules } from "element-plus";
-import type { UploadFile, UploadFiles, UploadUserFile } from "element-plus";
 
 const router = useRouter();
 const route = useRoute();
 const store = useTaskStore();
+const inspectionSpecStore = useInspectionSpecStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
@@ -21,19 +24,20 @@ const creating = ref(false);
 const formRef = ref<FormInstance>();
 const createForm = ref({
   product_id: "",
-  spec_id: "",
+  spec_code: "",
   image_urls_input: "",
   priority: 5,
 });
 const uploadFiles = ref<UploadUserFile[]>([]);
+const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
 
 const rules: FormRules = {
   product_id: [
     { required: true, message: "产品编号不能为空", trigger: "blur" },
     { max: 64, message: "产品编号不超过 64 个字符", trigger: "blur" },
   ],
-  spec_id: [
-    { required: true, message: "检测规格不能为空", trigger: "blur" },
+  spec_code: [
+    { required: true, message: "检测标准不能为空", trigger: "change" },
   ],
   image_urls_input: [
     {
@@ -54,12 +58,22 @@ const rules: FormRules = {
 onMounted(() => {
   syncFromRoute();
   fetchData();
+  fetchSpecOptions();
 });
 
 watch(() => route.query, () => {
   syncFromRoute();
   fetchData();
 });
+
+async function fetchSpecOptions() {
+  try {
+    await inspectionSpecStore.fetchAll();
+  } catch (e) {
+    console.error(e);
+    ElMessage.warning("检测标准列表加载失败，创建任务时可能无法选择标准");
+  }
+}
 
 async function fetchData() {
   await store.fetchTasks({
@@ -101,7 +115,7 @@ function handleReset() {
 }
 
 function handleOpenCreate() {
-  createForm.value = { product_id: "", spec_id: "", image_urls_input: "", priority: 5 };
+  createForm.value = { product_id: "", spec_code: "", image_urls_input: "", priority: 5 };
   uploadFiles.value = [];
   showCreateDialog.value = true;
 }
@@ -150,15 +164,17 @@ async function handleSubmitCreate() {
 
       await store.createTask({
         product_id: createForm.value.product_id,
-        spec_id: createForm.value.spec_id,
+        spec_code: createForm.value.spec_code,
         image_urls: imageUrls,
         priority: createForm.value.priority,
       });
 
       ElMessage.success("任务创建成功");
       showCreateDialog.value = false;
-      // List will auto-update because store unshifts it, but we can refetch:
-      fetchData();
+      const hasActiveFilters = Boolean(filters.value.status || filters.value.product_id || filters.value.ids);
+      if (page.value !== 1 || hasActiveFilters) {
+        await fetchData();
+      }
     } catch (e: any) {
       // error handled globally by interceptor, but we catch it here just in case
       console.error(e);
@@ -247,7 +263,7 @@ const getStatusType = (status: string) => {
       <el-table :data="store.items" v-loading="store.loading" border stripe style="width: 100%">
         <el-table-column prop="id" label="任务ID" width="300" show-overflow-tooltip />
         <el-table-column prop="product_id" label="产品编号" width="180" />
-        <el-table-column prop="spec_id" label="检测规格" width="180" />
+        <el-table-column prop="spec_code" label="检测标准" width="180" />
         <el-table-column prop="status" label="状态" width="120">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)">{{ row.status.toUpperCase() }}</el-tag>
@@ -285,8 +301,26 @@ const getStatusType = (status: string) => {
         <el-form-item label="产品编号" prop="product_id">
           <el-input v-model="createForm.product_id" placeholder="如: PROD-123456" />
         </el-form-item>
-        <el-form-item label="检测规格" prop="spec_id">
-          <el-input v-model="createForm.spec_id" placeholder="如: SPEC-V1" />
+        <el-form-item label="检测标准" prop="spec_code">
+          <el-select
+            v-model="createForm.spec_code"
+            filterable
+            clearable
+            placeholder="请选择检测标准"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="spec in activeSpecOptions"
+              :key="spec.id"
+              :label="`${spec.spec_code} · ${spec.name}`"
+              :value="spec.spec_code"
+            >
+              <div class="spec-option">
+                <span>{{ spec.spec_code }}</span>
+                <small>{{ spec.name }}{{ spec.product_id ? ` / ${spec.product_id}` : "" }}</small>
+              </div>
+            </el-option>
+          </el-select>
         </el-form-item>
         <el-form-item label="图像 URLs" prop="image_urls_input">
           <el-input 
@@ -356,6 +390,16 @@ const getStatusType = (status: string) => {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
+}
+
+.spec-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spec-option small {
+  color: #6b7280;
 }
 
 .mb-4 {
