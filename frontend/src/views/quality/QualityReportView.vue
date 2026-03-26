@@ -1,19 +1,28 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useQualityStore } from "@/stores/quality.store";
 
+const router = useRouter();
 const store = useQualityStore();
 
 onMounted(() => {
   store.fetchReport();
 });
+
+function goToLangfuseTraces() {
+  router.push({ name: "quality-tracing" });
+}
 </script>
 
 <template>
   <div class="page-container">
     <div class="hero">
-      <h2>AI 质量报告</h2>
-      <p>聚合幻觉率、点踩率、风险分与模型表现。</p>
+      <div>
+        <h2>AI 质量报告</h2>
+        <p>聚合幻觉率、点踩率、风险分与模型表现。</p>
+      </div>
+      <el-button type="primary" @click="goToLangfuseTraces">跳转 Langfuse Trace</el-button>
     </div>
 
     <el-row :gutter="16" v-if="store.report">
@@ -58,6 +67,7 @@ onMounted(() => {
 
 <style scoped>
 .page-container { display: grid; gap: 16px; }
+.hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .hero h2 { margin: 0; color: #1b3a5c; }
 .hero p { margin: 6px 0 0; color: #64748b; }
 .metric-title { color: #64748b; font-size: 13px; }
@@ -65,4 +75,3 @@ onMounted(() => {
 .warning { color: #d97706; }
 .danger { color: #dc2626; }
 </style>
-

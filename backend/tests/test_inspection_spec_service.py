@@ -10,10 +10,10 @@ from app.core.exceptions import NotFoundError
 from app.services import inspection_spec_service as spec_mod
 
 
-def make_spec(spec_id: str, org_id: str | None, spec_code: str = "STD-1", name: str = "默认标准"):
+def make_spec(inspection_spec_row_id: str, org_id: str | None, spec_code: str = "STD-1", name: str = "默认标准"):
     now = datetime(2026, 3, 24, 10, 0, 0)
     return SimpleNamespace(
-        id=spec_id,
+        id=inspection_spec_row_id,
         org_id=org_id,
         spec_code=spec_code,
         name=name,
@@ -56,14 +56,14 @@ class FakeInspectionSpecRepo:
         visible = [spec for spec in self.specs.values() if spec.org_id in {None, org_id}]
         return sorted(visible, key=lambda spec: (spec.org_id is None, spec.spec_code, spec.version))
 
-    async def get(self, org_id: str, spec_id: str):
-        spec = self.specs.get(spec_id)
+    async def get(self, org_id: str, inspection_spec_row_id: str):
+        spec = self.specs.get(inspection_spec_row_id)
         if not spec or spec.org_id not in {None, org_id}:
             return None
         return spec
 
-    async def get_for_write(self, org_id: str, spec_id: str, include_global: bool = False):
-        spec = self.specs.get(spec_id)
+    async def get_for_write(self, org_id: str, inspection_spec_row_id: str, include_global: bool = False):
+        spec = self.specs.get(inspection_spec_row_id)
         if not spec:
             return None
         if spec.org_id == org_id:
@@ -76,11 +76,11 @@ class FakeInspectionSpecRepo:
         return list(self.items.get(spec_row_id, []))
 
     async def list_items_map(self, spec_row_ids: list[str]):
-        return {spec_id: list(self.items.get(spec_id, [])) for spec_id in spec_row_ids}
+        return {spec_row_id: list(self.items.get(spec_row_id, [])) for spec_row_id in spec_row_ids}
 
     async def create_spec(self, payload: dict, items: list[dict]):
         spec = make_spec(
-            spec_id=payload["id"],
+            inspection_spec_row_id=payload["id"],
             org_id=payload.get("org_id"),
             spec_code=payload["spec_code"],
             name=payload["name"],

@@ -42,7 +42,7 @@ class ProductLineSeries(BaseModel):
 class ProductLineRecentTask(BaseModel):
     task_id: str
     status: str
-    spec_id: str
+    spec_code: str
     created_at: datetime
 
 
@@ -96,7 +96,7 @@ class TaskAlertSummary(BaseModel):
 class TaskDrilldown(BaseModel):
     task_id: str
     product_line: str
-    spec_id: str
+    spec_code: str
     status: str
     priority: int
     image_count: int

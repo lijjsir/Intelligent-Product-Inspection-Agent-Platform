@@ -6,18 +6,30 @@ from typing import Any
 from agent.graph.state import InspectionState
 from agent.llm.client import LLMClient
 from agent.vision.detector_client import VisionDetectorClient
-from agent.vision.heuristic_detector import build_variable_defects, extract_defects
+from agent.vision.heuristic_detector import extract_defects
 
 
-def _fallback_defects(images: list[str], raw_text: str | None = None) -> list[dict[str, Any]]:
-    return build_variable_defects(images, raw_text=raw_text)
+def _has_structured_defect_payload(data: object) -> bool:
+    if isinstance(data, dict):
+        for key in ("defects", "items", "detections"):
+            if isinstance(data.get(key), list):
+                return True
+        text = data.get("text")
+        if isinstance(text, str):
+            parsed = LLMClient._extract_json_object(text)
+            if isinstance(parsed, dict):
+                return _has_structured_defect_payload(parsed)
+    elif isinstance(data, str):
+        parsed = LLMClient._extract_json_object(data)
+        if isinstance(parsed, dict):
+            return _has_structured_defect_payload(parsed)
+    return False
 
 
 async def run_vision(state: InspectionState) -> InspectionState:
     now = datetime.utcnow().isoformat()
     images = state.get("image_urls") or []
     defects: list[dict[str, Any]] = []
-    raw_text: str | None = None
     if images:
         detector = VisionDetectorClient()
         if detector.enabled:
@@ -25,14 +37,17 @@ async def run_vision(state: InspectionState) -> InspectionState:
                 detector_data = await detector.detect(
                     image_urls=images,
                     product_id=state.get("product_id"),
-                    spec_id=state.get("spec_id"),
+                    spec_code=state.get("spec_code"),
                 )
                 defects = extract_defects(detector_data)
                 if defects:
                     state.setdefault("timeline", []).append(
                         {"stage": "vision-detector", "message": f"专用视觉服务返回 {len(defects)} 个候选缺陷", "ts": now}
                     )
-            except Exception:
+            except Exception as exc:
+                state.setdefault("timeline", []).append(
+                    {"stage": "vision-detector", "message": f"专用视觉服务不可用，回退到大模型视觉: {exc}", "ts": now}
+                )
                 defects = []
 
         prompt = (
@@ -49,14 +64,23 @@ async def run_vision(state: InspectionState) -> InspectionState:
                 api_key=state.get("model_api_key"),
                 base_url=state.get("model_base_url"),
                 model_id=state.get("model_id"),
+                trace_id=state.get("trace_id"),
+                task_id=state.get("task_id"),
+                org_id=state.get("org_id"),
+                provider=state.get("model_provider"),
             )
             try:
-                data = await client.vision_chat(prompt, images)
+                data = await client.chat(
+                    [{"role": "user", "content": [{"type": "text", "text": prompt}, *[{"type": "image_url", "image_url": {"url": url}} for url in images]]}],
+                    temperature=0.1,
+                    observation_name="inspection.vision",
+                    observation_metadata={"stage": "vision", "image_count": len(images)},
+                )
+                if not _has_structured_defect_payload(data):
+                    raise RuntimeError("vision model returned no structured defects payload")
                 defects = extract_defects(data)
-                if isinstance(data, dict):
-                    raw_text = data.get("text") if isinstance(data.get("text"), str) else None
-                    if isinstance(data.get("image_summary"), str):
-                        state.setdefault("reasoning_chain", {})["vision_summary"] = data.get("image_summary")
+                if isinstance(data, dict) and isinstance(data.get("image_summary"), str):
+                    state.setdefault("reasoning_chain", {})["vision_summary"] = data.get("image_summary")
                 if isinstance(data, dict):
                     meta = data.get("__meta__") or {}
                     usage = meta.get("usage") if isinstance(meta, dict) else None
@@ -78,9 +102,11 @@ async def run_vision(state: InspectionState) -> InspectionState:
                         "message": str(exc),
                     }
                 )
-                defects = _fallback_defects(images, raw_text)
-    if not defects:
-        defects = _fallback_defects(images, raw_text)
+                state.setdefault("timeline", []).append(
+                    {"stage": "vision", "message": f"视觉分析失败: {exc}", "ts": now}
+                )
+                state["defects"] = []
+                return state
 
     state["defects"] = defects
     state.setdefault("timeline", []).append(

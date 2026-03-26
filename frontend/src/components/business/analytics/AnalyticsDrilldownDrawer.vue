@@ -35,7 +35,7 @@ defineEmits<Emits>();
         <el-descriptions :column="1" border>
           <el-descriptions-item label="任务 ID">{{ taskDrilldown.task_id }}</el-descriptions-item>
           <el-descriptions-item label="产品线">{{ taskDrilldown.product_line }}</el-descriptions-item>
-          <el-descriptions-item label="规格">{{ taskDrilldown.spec_id }}</el-descriptions-item>
+          <el-descriptions-item label="检测标准">{{ taskDrilldown.spec_code }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ taskDrilldown.status }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ taskDrilldown.priority }}</el-descriptions-item>
           <el-descriptions-item label="图像数">{{ taskDrilldown.image_count }}</el-descriptions-item>
@@ -97,7 +97,7 @@ defineEmits<Emits>();
           <el-table :data="productLineDrilldown.recent_tasks" size="small" empty-text="暂无任务">
             <el-table-column prop="task_id" label="任务" min-width="180" />
             <el-table-column prop="status" label="状态" width="90" />
-            <el-table-column prop="spec_id" label="规格" width="120" />
+            <el-table-column prop="spec_code" label="检测标准" width="120" />
               <el-table-column label="操作" width="90">
                 <template #default="scope">
                   <el-button link type="primary" @click="$emit('task-drilldown', scope.row.task_id)">统计</el-button>

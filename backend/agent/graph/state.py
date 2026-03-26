@@ -7,7 +7,7 @@ class InspectionState(TypedDict, total=False):
     task_id: str
     org_id: str
     product_id: str
-    spec_id: str
+    spec_code: str
     image_urls: list[str]
     model_id: str
     model_config_id: str | None

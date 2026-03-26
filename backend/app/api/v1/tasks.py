@@ -41,7 +41,7 @@ async def create_task(
     task = await service.create_task(
         created_by=current.user_id,
         product_id=payload.product_id,
-        spec_id=payload.spec_id,
+        spec_code=payload.spec_code,
         image_urls=payload.image_urls,
         priority=payload.priority,
         metadata=payload.metadata,

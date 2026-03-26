@@ -24,14 +24,11 @@ class Settings(BaseSettings):
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
 
-    vector_db_host: str = "localhost"
-    vector_db_port: int = 19530
-
     celery_broker_url: str = "redis://localhost:16379/0"
     celery_result_backend: str = "redis://localhost:16379/0"
 
     volcengine_api_key: str = "88b788ed-5070-42c3-85e7-2641472d2f57"
-    volcengine_model_id: str = "ep-20260310154131-fp54f"
+    volcengine_model_id: str = "ep-20260325082100-v7vs6"
     volcengine_embed_model: str = "ep-20260311135919-gktlx"
     volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     vision_detector_url: str = ""
@@ -42,6 +39,13 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
     governance_secret: str = "piap-governance-secret"
+
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "http://127.0.0.1:3000"
+    langfuse_environment: str = ""
+    langfuse_release: str = ""
 
 
 settings = Settings()

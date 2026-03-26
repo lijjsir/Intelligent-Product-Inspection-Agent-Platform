@@ -145,6 +145,7 @@ class QualityReportResponse(BaseModel):
 
 class QualityTraceItem(BaseModel):
     trace_id: str
+    trace_url: Optional[str] = None
     result_id: Optional[str] = None
     task_id: Optional[str] = None
     verdict: Optional[str] = None

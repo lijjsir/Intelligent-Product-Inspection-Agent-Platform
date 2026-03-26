@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
     DefectImageViewer: typeof import('./src/components/business/result/DefectImageViewer.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']
@@ -33,6 +34,7 @@ declare module 'vue' {
     ElRadio: typeof import('element-plus/es')['ElRadio']
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
     ElRow: typeof import('element-plus/es')['ElRow']
+    ElSegmented: typeof import('element-plus/es')['ElSegmented']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
     ElTable: typeof import('element-plus/es')['ElTable']
@@ -44,6 +46,12 @@ declare module 'vue' {
     ElTimelineItem: typeof import('element-plus/es')['ElTimelineItem']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     FeedbackWidget: typeof import('./src/components/business/result/FeedbackWidget.vue')['default']
+    HallucinationChart: typeof import('./src/components/business/analytics/HallucinationChart.vue')['default']
+    ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
+    OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
+    PassRateTrendChart: typeof import('./src/components/business/analytics/PassRateTrendChart.vue')['default']
+    ProductLineSeriesChart: typeof import('./src/components/business/analytics/ProductLineSeriesChart.vue')['default']
+    RiskDistributionTrendChart: typeof import('./src/components/business/analytics/RiskDistributionTrendChart.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
   }

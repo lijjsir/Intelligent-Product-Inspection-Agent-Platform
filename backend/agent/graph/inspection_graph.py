@@ -30,4 +30,6 @@ class InspectionGraph:
             state = await node(state)
             if on_event:
                 await on_event({"type": "stage_end", "stage": name, "timeline": state.get("timeline", [])[-1:]})
+            if state.get("runtime_errors"):
+                break
         return state

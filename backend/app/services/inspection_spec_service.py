@@ -22,8 +22,8 @@ class InspectionSpecService(TenantAwareService):
         items_map = await self._repo.list_items_map([spec.id for spec in specs])
         return [self._serialize_spec(spec, items_map.get(spec.id, [])) for spec in specs]
 
-    async def get_spec(self, spec_id: str) -> dict[str, Any]:
-        spec = await self._repo.get(self._org_id, spec_id)
+    async def get_spec(self, inspection_spec_row_id: str) -> dict[str, Any]:
+        spec = await self._repo.get(self._org_id, inspection_spec_row_id)
         if not spec:
             raise NotFoundError("inspection spec not found")
         items = await self._repo.list_items(spec.id)
@@ -39,8 +39,8 @@ class InspectionSpecService(TenantAwareService):
         spec = await self._repo.create_spec(body, item_rows)
         return self._serialize_spec(spec, await self._repo.list_items(spec.id))
 
-    async def update_spec(self, spec_id: str, payload: dict[str, Any], actor_role: str) -> dict[str, Any]:
-        spec = await self._get_writable_spec(spec_id, actor_role)
+    async def update_spec(self, inspection_spec_row_id: str, payload: dict[str, Any], actor_role: str) -> dict[str, Any]:
+        spec = await self._get_writable_spec(inspection_spec_row_id, actor_role)
         body = dict(payload)
         items = body.pop("items", None)
         body.pop("org_id", None)
@@ -51,14 +51,14 @@ class InspectionSpecService(TenantAwareService):
             await self._repo.replace_items(spec.id, [self._build_item_payload(spec.id, item) for item in items])
         return self._serialize_spec(spec, await self._repo.list_items(spec.id))
 
-    async def delete_spec(self, spec_id: str, actor_role: str) -> None:
-        spec = await self._get_writable_spec(spec_id, actor_role)
+    async def delete_spec(self, inspection_spec_row_id: str, actor_role: str) -> None:
+        spec = await self._get_writable_spec(inspection_spec_row_id, actor_role)
         await self._repo.delete_spec(spec)
 
-    async def _get_writable_spec(self, spec_id: str, actor_role: str):
+    async def _get_writable_spec(self, inspection_spec_row_id: str, actor_role: str):
         spec = await self._repo.get_for_write(
             self._org_id,
-            spec_id,
+            inspection_spec_row_id,
             include_global=actor_role in GLOBAL_SPEC_ROLES,
         )
         if not spec:

@@ -1,157 +1,439 @@
-# PIAP 智能产品检测 Agent 平台 (Intelligent Product Inspection Agent Platform)
+# PIAP 智能产品检测 Agent 平台
 
-PIAP 是一个基于前沿大语言模型与多智能体（Multi-Agent）技术的产品缺陷智能检测及审核平台。利用大视觉语言模型（Vision LLMs）和检索增强生成（RAG），该平台能够自主加载产品规格说明书，智能化分析产线摄取的图像，并给出一站式的质量检测报告、风险评级和稳定性溯源分析。
+PIAP 是一个面向工业质检场景的全栈 AI Agent 平台。当前项目已经具备以下主链路能力：
 
----
+- 组织注册、登录、JWT 鉴权、多租户隔离
+- 质检任务创建、任务流式状态订阅、结果与稳定性分析
+- 检测标准配置与标准门禁判定
+- 基于 Vision LLM + RAG 的缺陷识别与推理
+- 前端控制台、管理页、分析页与实时 SSE 事件流
 
-## 🏗系统架构与技术栈
+## 当前实现说明
 
-### Backend (后端)
-- **Web 框架**: FastAPI + Uvicorn 
-- **数据库组件**: SQLAlchemy 2 (Alembic) + aiomysql
-- **AI 智能体引擎**: LangGraph
-- **异步任务流**: Celery + RabbitMQ
-- **对象存储与向量**: MinIO 存储图像，Qdrant 处理 RAG 规格说明相似度检测
-- **认证防护**: JOSE JWT + Argon2 密码散列加密，以及严格的多租户（Tenant）权限隔离
+当前仓库的实际实现与一些旧文档描述有差异，以下口径以当前代码为准：
 
-### Frontend (前端)
-- **核心框架**: Vue 3 (Composition API) + Vite + TypeScript
-- **状态管理与路由**: Pinia + Vue Router
-- **UI 和图表组件**: Element Plus + ECharts (趋势图、雷达图、聚合表盘)
-- **交互特性**: 长连接 SSE 接口实时呈现检测进度、业务图谱数据实时过滤
+- 本地依赖编排文件存在于项目根目录：`docker-compose.yml`
+- 本地启动命令应优先使用 `docker compose`，不是旧式 `docker-compose`
+- `docker compose` 默认暴露的 MySQL 端口是 `3306`，不是 `13306`
+- Celery 当前默认 broker / result backend 都是 Redis；RabbitMQ 容器已提供，但不是默认必需依赖
+- RAG 当前主实现使用 Qdrant HTTP API
+- 任务字段已经统一为 `spec_code`，数据库迁移需要执行到 `0010_task_spec_id_to_spec_code`
+- 前端任务创建页当前使用“检测标准”下拉选择，不再手填旧的 `spec_id`
 
----
+## 技术栈
 
-## 📂 核心目录与功能分布
+### 后端
+
+- FastAPI + Uvicorn
+- SQLAlchemy 2 + Alembic + aiomysql
+- Celery
+- LangGraph
+- Qdrant
+- Redis
+- MySQL 8
+- 可选：MinIO、专用视觉检测服务、Langfuse
+
+### 前端
+
+- Vue 3 + Vite + TypeScript
+- Pinia
+- Vue Router
+- Element Plus
+- ECharts
+
+## 目录结构
 
 ```text
 .
 ├── backend/
-│   ├── agent/            # AI Agent 智能体核心决策树与 LangGraph DAG 节点定义
-│   │   ├── graph/        # Agent 图结构定义与 State 声明
-│   │   ├── llm/          # 火山引擎 Ark / OpenAI-compatible 等底层大模型驱动封装
-│   │   ├── rag/          # Qdrant 知识库向量索引、检索工具
-│   │   └── tools/        # 外部供大模型调用的确权执行器（Execution Tools）
+│   ├── agent/                 # Agent 图、RAG、LLM、视觉与稳定性分析
 │   ├── app/
-│   │   ├── api/          # FastAPI 基础 REST 路由实现（分模块）
-│   │   ├── core/         # 全局配置、认证拦截器、中间件以及全局 Exception 定义
-│   │   ├── models/       # ORM SQLAlchemy 表结构申明
-│   │   ├── repositories/ # 强隔离的增删改查底层 Dao（Repository 模式）
-│   │   ├── schemas/      # Pydantic Req/Res 类型约定（输入输出格式化）
-│   │   └── services/     # 复杂多逻辑抽象（Service 模式）处理纯业务逻辑
-│   ├── migrations/       # Alembic 数据库迁移同步链表
-│   └── worker/           # Celery 异步任务定义（处理繁重推理流程）
-│
+│   │   ├── api/               # FastAPI 路由
+│   │   ├── core/              # 配置、权限、中间件、错误处理
+│   │   ├── models/            # ORM 模型
+│   │   ├── repositories/      # 数据访问层
+│   │   ├── schemas/           # Pydantic Schema
+│   │   └── services/          # 业务服务
+│   ├── migrations/            # Alembic 迁移
+│   ├── scripts/               # 运维/导入脚本
+│   ├── tests/                 # 后端测试
+│   └── worker/                # Celery worker 与任务
 ├── frontend/
 │   ├── src/
-│   │   ├── api/          # Axios HTTP / SSE 双向长数据拦截与封装
-│   │   ├── components/   # Element Plus 交互组件（如通用 Header、弹窗、看板）
-│   │   ├── composables/  # Hooks（例如 usePagination、useEcharts、useSSE）
-│   │   ├── router/       # 前端统一拦截守卫及页面路由
-│   │   ├── stores/       # Pinia 各模块状态下发（乐观更新存储）
-│   │   ├── types/        # 前后端严格拉平绑定的 TypeScript 类型约束
-│   │   └── views/        # 各业务域专属 Vue 面板视图 (列表页、聚合页、详情页)
-│   └── vite.config.ts    # 前端代理与构建配置文件
-│
-└── docker-compose.yml    # 项目中间件编排（提供 MySQL、Redis、RabbitMQ、MinIO、Qdrant）
+│   │   ├── api/               # HTTP / SSE API 封装
+│   │   ├── components/        # 业务与通用组件
+│   │   ├── composables/       # 组合式函数
+│   │   ├── router/            # 路由
+│   │   ├── stores/            # Pinia store
+│   │   ├── types/             # TypeScript 类型
+│   │   └── views/             # 页面
+│   └── tests/                 # 前端测试
+├── deploy/
+│   ├── nginx/piap.conf        # Nginx 反代示例
+│   └── PUBLIC_RELEASE_MINIMUM.md
+├── docker-compose.yml         # 本地依赖编排
+└── Makefile                   # 常用开发命令
 ```
 
----
+## 运行前准备
 
-## 🚀 快速启动指南
+### 软件要求
 
-### 1. 启动周边组件生态
+- Python `3.10+`
+- Node.js `18+`
+- npm `9+`
+- Docker Engine + Docker Compose Plugin
 
-系统需要借助 Docker 提供必要的中间件支持。
-打开终端，在项目根目录下拉起依赖：
+### 端口占用
+
+本地默认会使用这些端口：
+
+- Backend: `8000`
+- Frontend Dev Server: `5173`
+- MySQL: `3306`
+- Redis: `16379`
+- RabbitMQ AMQP: `5672`
+- RabbitMQ Console: `15672`
+- MinIO API: `19000`
+- MinIO Console: `19001`
+- Qdrant: `6333`
+
+## 本地开发部署
+
+### 1. 启动中间件
+
+在项目根目录执行：
+
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
-> **涵盖的服务**：MySQL(`127.0.0.1:13306`), Redis(`127.0.0.1:16379`), RabbitMQ(`5672/15672`), MinIO(`19000/19001`), Qdrant(`6333`)。
 
-### 2. 后端部署与应用数据初始化
+也可以使用 Makefile：
 
-后端开发启动步骤：
+```bash
+make dev-up
+```
+
+启动后建议先确认容器状态：
+
+```bash
+docker compose ps
+```
+
+### 2. 配置并启动后端
 
 ```bash
 cd backend
 
-# 1) 创建并激活虚拟环境
+# 1) 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
 
 # 2) 安装依赖
 pip install -r requirements.txt
 
-# 3) 复制环境变量模板
+# 3) 复制环境变量
 cp .env.example .env
+```
 
-# 4) 执行数据库迁移
+默认 `backend/.env.example` 已经对齐宿主机本地开发端口，关键值如下：
+
+- `PIAP_DB_URL=mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main`
+- `PIAP_REDIS_URL=redis://127.0.0.1:16379/0`
+- `PIAP_CELERY_BROKER_URL=redis://127.0.0.1:16379/0`
+- `PIAP_CELERY_RESULT_BACKEND=redis://127.0.0.1:16379/0`
+- `PIAP_QDRANT_URL=http://127.0.0.1:6333`
+- `PIAP_S3_ENDPOINT=http://127.0.0.1:19000`
+
+然后执行数据库迁移：
+
+```bash
 PYTHONPATH=. alembic upgrade head
+```
 
-# 5) 启动后端服务（默认监听 0.0.0.0:8000）
+当前任务表字段迁移必须至少包含：
+
+- `0010_task_spec_id_to_spec_code`
+
+再启动后端：
+
+```bash
 python main.py
 ```
 
-### 3. 前端交互挂载
+或者使用更明确的命令：
 
-前端开发启动步骤：
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+启动后可检查：
+
+- 健康响应：`http://127.0.0.1:8000/`
+- OpenAPI：`http://127.0.0.1:8000/docs`
+
+### 3. 可选：导入标准文档到 Qdrant
+
+如果你希望 RAG 检索立即可用，执行：
+
+```bash
+cd backend
+source venv/bin/activate
+PYTHONPATH=. python scripts/import_standard_docs.py
+```
+
+默认会导入：
+
+- `backend/scripts/standard_docs.seed.jsonl`
+
+如果导入失败并提示 embedding 为空，通常是以下配置未正确填写：
+
+- `PIAP_VOLCENGINE_API_KEY`
+- `PIAP_VOLCENGINE_EMBED_MODEL`
+- `PIAP_VOLCENGINE_BASE_URL`
+
+### 4. 启动前端
+
 ```bash
 cd frontend
-
-# 1) 安装依赖
 npm install
-
-# 2) 启动开发服务（默认监听 0.0.0.0:5173）
+cp .env.example .env.local
 npm run dev
 ```
 
-通过访问 `http://localhost:5173` 即可进入本平台（Vite 会将 `/api` 代理到 `http://localhost:8000`）。如果首次访问，你可以先进入注册页面获取组织身份与 Admin 用户权益。
+默认 `frontend/.env.example` 为：
 
----
+```env
+VITE_API_BASE=/api
+```
 
-## 🔌 专用视觉服务接入
+开发模式下 Vite 会把 `/api` 代理到 `http://localhost:8000`。
 
-如果需要把外部目标检测 / AOI / CV 服务接入到 PIAP 的视觉节点，可参考：
+访问：
 
-- [backend/docs/vision_detector_protocol.md](backend/docs/vision_detector_protocol.md)
+- 前端控制台：`http://127.0.0.1:5173`
 
-当前视觉链路优先级为：
-- 配置了 `PIAP_VISION_DETECTOR_URL` 时，先调用专用视觉检测服务
-- 若专用服务不可用或返回空结果，则回退到火山多模态大模型
-- 若仍无法产出有效结构化缺陷框，则使用项目内可变兜底输出
+### 5. 初始化账号
 
-当前默认关键配置与代码一致：
-- 后端：`0.0.0.0:8000`
-- 前端开发服务：`0.0.0.0:5173`
-- MySQL：`127.0.0.1:13306`
-- Redis：`127.0.0.1:16379`
-- MinIO API：`http://localhost:19000`
-- MinIO Console：`http://localhost:19001`
-- Qdrant：`http://127.0.0.1:6333`
+当前项目没有预置管理员种子账号，建议直接走前端注册页或接口注册：
 
----
+- 前端注册页：`/register`
+- 后端接口：`POST /api/v1/auth/register`
 
-## 🚢 生产部署参考
+注册后会自动创建组织和首个 `org_admin` 用户。
 
-已补充最小生产部署文件与公网发布说明：
+### 6. 可选：启动 Celery Worker
 
-- [deploy/nginx/piap.conf](deploy/nginx/piap.conf)
-- [deploy/PUBLIC_RELEASE_MINIMUM.md](deploy/PUBLIC_RELEASE_MINIMUM.md)
-- [frontend/.env.production.example](frontend/.env.production.example)
-- [backend/.env.production.example](backend/.env.production.example)
+任务执行接口 `backend/app/api/v1/agent.py` 的设计是：
 
----
+- 如果 Celery worker 可用，任务以 `mode=celery` 异步执行
+- 如果 Celery worker 不可用，会自动降级为本地后台任务 `mode=local_background`
 
-## 🌿 Git 分支协作
+因此本地开发可以不启动 worker；如果需要完整验证异步链路，再额外启动：
 
-已补充当前项目的分支与并行开发规则：
+```bash
+cd backend
+source venv/bin/activate
+PYTHONPATH=. celery -A worker.celery_app.celery_app worker -l info
+```
 
-- [BRANCH_RULES.md](BRANCH_RULES.md)
-- [scripts/create_parallel_branch.sh](scripts/create_parallel_branch.sh)
+### 7. 停止本地依赖
 
----
+```bash
+docker compose down
+```
 
-## 💡 开发参考与技能接入说明
+或：
 
-后续所有对于本平台 API、组件或后台逻辑的追加，请必须完全遵循 `~/.agents/skills/backend/SKILL.md` 与 `~/.agents/skills/frontend/SKILL.md` 中严格约定的项目代码模式与错误封装协议（如后端使用 `ResponseEnvelope` 进行数据出口封装；前端使用组合式 API 和 `usePermission` 函数隔离路由权限）。详细设计参考根目录下的多份设计源文档（如 `PIAP_SDD_v1.0.0.docx`）。
+```bash
+make dev-down
+```
+
+## 生产部署步骤
+
+以下步骤适用于单机或单 VM 最小可用部署。
+
+### 1. 准备主机
+
+- 安装 Python 3.10+
+- 安装 Node.js 18+
+- 安装 Nginx
+- 安装 MySQL 8、Redis 7、Qdrant
+- 可选安装 MinIO
+- 如需 Celery 异步执行，保留 Redis 或自行改成 RabbitMQ
+
+推荐只对公网开放：
+
+- `80`
+- `443`
+
+内部服务建议仅监听内网或本机：
+
+- Backend: `127.0.0.1:8000`
+- MySQL: `127.0.0.1:3306`
+- Redis: `127.0.0.1:6379`
+- Qdrant: `127.0.0.1:6333`
+- MinIO: `127.0.0.1:9000`
+
+### 2. 部署后端
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.production.example .env
+```
+
+编辑 `backend/.env.production.example` 对应的生产值，至少确认这些项：
+
+- `PIAP_APP_ENV=prod`
+- `PIAP_DB_URL`
+- `PIAP_DB_REPLICA_URL`
+- `PIAP_REDIS_URL`
+- `PIAP_CELERY_BROKER_URL`
+- `PIAP_CELERY_RESULT_BACKEND`
+- `PIAP_QDRANT_URL`
+- `PIAP_QDRANT_COLLECTION`
+- `PIAP_JWT_PRIVATE_KEY`
+- `PIAP_JWT_PUBLIC_KEY`
+- `PIAP_VOLCENGINE_API_KEY`
+- `PIAP_VOLCENGINE_MODEL_ID`
+- `PIAP_VOLCENGINE_EMBED_MODEL`
+- `PIAP_GOVERNANCE_SECRET`
+
+执行迁移：
+
+```bash
+PYTHONPATH=. alembic upgrade head
+```
+
+启动后端进程：
+
+```bash
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+生产环境建议改成 `systemd` 托管，而不是手工常驻。
+
+### 3. 部署前端
+
+```bash
+cd frontend
+npm install
+cp .env.production.example .env.production
+npm run build
+```
+
+构建产物位于：
+
+- `frontend/dist`
+
+将其发布到：
+
+- `/var/www/piap/frontend/dist`
+
+### 4. 配置 Nginx
+
+项目已提供最小配置：
+
+- `deploy/nginx/piap.conf`
+
+部署步骤：
+
+```bash
+sudo cp deploy/nginx/piap.conf /etc/nginx/sites-available/piap.conf
+sudo ln -sf /etc/nginx/sites-available/piap.conf /etc/nginx/sites-enabled/piap.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+当前配置默认：
+
+- 静态目录：`/var/www/piap/frontend/dist`
+- `/api/` 反代到 `http://127.0.0.1:8000/api/`
+- `/docs` 和 `/openapi.json` 反代到后端
+
+### 5. 可选：启动 Celery Worker
+
+如果生产环境需要独立 worker：
+
+```bash
+cd backend
+source venv/bin/activate
+PYTHONPATH=. celery -A worker.celery_app.celery_app worker -l info
+```
+
+同样建议放入 `systemd`。
+
+### 6. 可选：导入标准文档
+
+生产库初始化后，如需启用 RAG 标准检索：
+
+```bash
+cd backend
+source venv/bin/activate
+PYTHONPATH=. python scripts/import_standard_docs.py
+```
+
+### 7. 验证部署
+
+按以下顺序检查：
+
+1. `curl http://127.0.0.1:8000/` 返回后端欢迎信息
+2. `curl http://127.0.0.1:8000/docs` 返回 Swagger HTML
+3. `curl http://127.0.0.1/` 或域名首页可以返回前端页面
+4. 浏览器可以打开登录页和注册页
+5. 完成一次注册、登录、创建任务、启动任务
+6. 任务详情页能收到 SSE 事件
+7. 检测标准页可正常拉取 `/api/v1/inspection-specs`
+
+## 常见问题
+
+### `Unknown column 'inspection_tasks.spec_code'`
+
+说明数据库还没执行到最新迁移。进入 `backend/` 执行：
+
+```bash
+PYTHONPATH=. alembic upgrade head
+```
+
+### `Can't connect to MySQL server on '127.0.0.1'`
+
+先检查：
+
+- MySQL 是否启动
+- `PIAP_DB_URL` 是否正确
+- Docker 端口是否映射到宿主机
+
+### 前端能打开但 `/api` 失败
+
+检查：
+
+- 后端是否监听 `8000`
+- `frontend/.env.local` 或 `frontend/.env.production` 中的 `VITE_API_BASE`
+- Nginx 的 `/api/` 反向代理是否生效
+
+### 任务运行返回 `local_background`
+
+这是预期降级行为，表示当前没有可用 Celery worker。要切回异步队列模式，启动 worker 即可。
+
+### RAG 检索为空
+
+检查：
+
+- Qdrant 服务是否启动
+- 是否执行过 `python scripts/import_standard_docs.py`
+- embedding 模型配置是否有效
+
+## 相关文件
+
+- 视觉检测服务协议：`backend/docs/vision_detector_protocol.md`
+- 最小公网发布说明：`deploy/PUBLIC_RELEASE_MINIMUM.md`
+- Nginx 示例：`deploy/nginx/piap.conf`
+- 后端说明：`backend/README.md`
+
+
+## 补充文档
+
+- [AI 质量与稳定性指标说明](docs/AI_QUALITY_METRICS.md)

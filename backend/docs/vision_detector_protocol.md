@@ -51,7 +51,7 @@ Authorization: Bearer <PIAP_VISION_DETECTOR_API_KEY>
     "data:image/png;base64,..."
   ],
   "product_id": "SCREW-A",
-  "spec_id": "SCREW-A-2026-V1"
+  "spec_code": "SCREW-A-2026-V1"
 }
 ```
 
@@ -63,9 +63,9 @@ Authorization: Bearer <PIAP_VISION_DETECTOR_API_KEY>
 - `product_id`
   - 可选
   - 用于让外部检测服务按产品线选择模型或阈值
-- `spec_id`
+- `spec_code`
   - 可选
-  - 用于让外部检测服务按规格版本加载规则
+  - 用于让外部检测服务按标准编码加载规则
 
 ## 响应协议
 
@@ -168,7 +168,7 @@ curl -X POST "$PIAP_VISION_DETECTOR_URL" \
   -d '{
     "image_urls": ["https://example.com/part.jpg"],
     "product_id": "SCREW-A",
-    "spec_id": "SCREW-A-2026-V1"
+    "spec_code": "SCREW-A-2026-V1"
   }'
 ```
 
@@ -180,7 +180,7 @@ import httpx
 payload = {
     "image_urls": ["https://example.com/part.jpg"],
     "product_id": "SCREW-A",
-    "spec_id": "SCREW-A-2026-V1",
+    "spec_code": "SCREW-A-2026-V1",
 }
 
 resp = httpx.post("http://127.0.0.1:9008/detect", json=payload, timeout=20)

@@ -115,7 +115,7 @@ class AnalyticsRepository:
         recent_stmt = select(
             InspectionTask.id,
             InspectionTask.status,
-            InspectionTask.spec_id,
+            InspectionTask.spec_code,
             InspectionTask.created_at,
         ).where(
             InspectionTask.org_id == org_id,
@@ -148,7 +148,7 @@ class AnalyticsRepository:
                 {
                     "task_id": str(row.id),
                     "status": str(row.status),
-                    "spec_id": str(row.spec_id),
+                    "spec_code": str(row.spec_code),
                     "created_at": row.created_at,
                 }
                 for row in recent_rows
@@ -318,7 +318,7 @@ class AnalyticsRepository:
         return {
             "task_id": str(task.id),
             "product_line": str(task.product_id),
-            "spec_id": str(task.spec_id),
+            "spec_code": str(task.spec_code),
             "status": str(task.status),
             "priority": int(task.priority or 0),
             "image_count": len(task.image_urls or []),

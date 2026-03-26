@@ -6,7 +6,7 @@ export interface InspectionTask {
   id: string;
   org_id: string;
   product_id: string;
-  spec_id: string;
+  spec_code: string;
   status: TaskStatus;
   priority: number;
   image_urls?: string[];
@@ -16,7 +16,7 @@ export interface InspectionTask {
 
 export interface TaskCreate {
   product_id: string;
-  spec_id: string;
+  spec_code: string;
   image_urls: string[];
   priority?: number;
   metadata?: Record<string, unknown>;

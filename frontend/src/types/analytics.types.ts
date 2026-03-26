@@ -35,7 +35,7 @@ export interface ProductLineSeries {
 export interface ProductLineRecentTask {
   task_id: string;
   status: string;
-  spec_id: string;
+  spec_code: string;
   created_at: string;
 }
 
@@ -89,7 +89,7 @@ export interface TaskAlertSummary {
 export interface TaskDrilldown {
   task_id: string;
   product_line: string;
-  spec_id: string;
+  spec_code: string;
   status: string;
   priority: number;
   image_count: number;

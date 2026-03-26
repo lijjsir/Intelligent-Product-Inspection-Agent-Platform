@@ -11,6 +11,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency at runtime
     Ark = None
 
+from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.config import settings
 
 
@@ -22,56 +23,116 @@ class LLMClient:
         base_url: str | None = None,
         model_id: str | None = None,
         embed_model: str | None = None,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        org_id: str | None = None,
+        provider: str | None = None,
     ) -> None:
         self._api_key = api_key or settings.volcengine_api_key
         self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
         self._model_id = model_id or settings.volcengine_model_id
         self._embed_model = embed_model or settings.volcengine_embed_model
+        self._provider = provider or "volcengine"
+        self._task_id = None if task_id is None else str(task_id)
+        self._org_id = None if org_id is None else str(org_id)
+        self._request_attempts = 3
+        self._tracer = LangfuseTracer()
+        self._trace_id = trace_id or (self._tracer.create_trace_id() if self._tracer.enabled else None)
         self._ark_client = Ark(api_key=self._api_key) if Ark and self._api_key else None
 
     @property
     def model_id(self) -> str:
         return self._model_id
 
-    async def chat(self, messages: list[dict[str, Any]], *, temperature: float = 0.2) -> dict[str, Any]:
+    @property
+    def trace_id(self) -> str | None:
+        return self._trace_id
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float = 0.2,
+        observation_name: str = "llm.chat",
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         payload = {
             "model": self._model_id,
             "messages": messages,
             "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
-        return await self._post_json("/chat/completions", payload)
+        return await self._post_json(
+            "/chat/completions",
+            payload,
+            observation_name=observation_name,
+            observation_type="generation",
+            observation_metadata=observation_metadata,
+        )
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
             content.append({"type": "image_url", "image_url": {"url": url}})
-        return await self.chat([{"role": "user", "content": content}], temperature=0.1)
+        return await self.chat(
+            [{"role": "user", "content": content}],
+            temperature=0.1,
+            observation_name="llm.vision_chat",
+            observation_metadata={"image_count": len(image_urls), "modality": "vision"},
+        )
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(
+        self,
+        text: str,
+        *,
+        observation_name: str = "llm.embedding",
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> list[float]:
+        metadata = dict(observation_metadata or {})
+        metadata.setdefault("modality", "text")
         if self._should_use_multimodal_embedding():
-            vector = await self._embed_with_multimodal_sdk(text)
+            vector = await self._embed_with_multimodal_sdk(
+                text,
+                observation_name=observation_name,
+                observation_metadata=metadata,
+            )
             if vector:
                 return vector
 
         payload = {"model": self._embed_model, "input": [text]}
         try:
-            data = await self._post_json("/embeddings", payload)
+            data = await self._post_json(
+                "/embeddings",
+                payload,
+                observation_name=observation_name,
+                observation_type="embedding",
+                observation_metadata={**metadata, "input_shape": "list"},
+            )
         except httpx.HTTPStatusError:
-            # Some providers accept string, some require list; fallback once.
             fallback_payload = {"model": self._embed_model, "input": text}
-            try:
-                data = await self._post_json("/embeddings", fallback_payload)
-            except httpx.HTTPStatusError:
-                # Embedding failure should not break the whole inspection flow.
-                return []
-        return self._extract_embedding_vector(data)
+            data = await self._post_json(
+                "/embeddings",
+                fallback_payload,
+                observation_name=observation_name,
+                observation_type="embedding",
+                observation_metadata={**metadata, "input_shape": "string", "fallback": True},
+            )
+        vector = self._extract_embedding_vector(data)
+        if not vector:
+            raise RuntimeError("embedding response did not include a vector")
+        return vector
 
     def _should_use_multimodal_embedding(self) -> bool:
         model = (self._embed_model or "").lower()
         return "embedding-vision" in model or model.startswith("ep-")
 
-    async def _embed_with_multimodal_sdk(self, text: str) -> list[float]:
+    async def _embed_with_multimodal_sdk(
+        self,
+        text: str,
+        *,
+        observation_name: str,
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> list[float]:
         if not self._ark_client:
             return []
 
@@ -81,19 +142,47 @@ class LLMClient:
                 input=[{"type": "text", "text": text}],
             )
 
-        try:
-            resp = await asyncio.to_thread(_request)
-        except Exception:
-            return []
+        observation_input = {"model": self._embed_model, "input": [{"type": "text", "text": text}]}
+        with self._tracer.observe(
+            trace_id=self._trace_id,
+            name=observation_name,
+            as_type="embedding",
+            input=observation_input,
+            model=self._embed_model,
+            model_parameters={"transport": "ark_sdk"},
+            metadata=self._build_observation_metadata(path="ark.multimodal_embeddings", extra=observation_metadata),
+        ) as observation:
+            try:
+                resp = await asyncio.to_thread(_request)
+            except Exception as exc:
+                self._safe_update_observation(
+                    observation,
+                    level="ERROR",
+                    status_message=str(exc),
+                    output={"error": str(exc)},
+                )
+                raise
 
-        if hasattr(resp, "model_dump"):
-            data = resp.model_dump()
-        elif isinstance(resp, dict):
-            data = resp
-        else:
-            return []
+            if hasattr(resp, "model_dump"):
+                data = resp.model_dump()
+            elif isinstance(resp, dict):
+                data = resp
+            else:
+                self._safe_update_observation(
+                    observation,
+                    output={"vector_size": 0, "transport": "ark_sdk", "unsupported_response": True},
+                )
+                return []
 
-        return self._extract_embedding_vector(data)
+            vector = self._extract_embedding_vector(data)
+            usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+            self._safe_update_observation(
+                observation,
+                output={"vector_size": len(vector), "transport": "ark_sdk", "response": data},
+                usage_details=usage,
+                metadata={"vector_size": len(vector), "transport": "ark_sdk"},
+            )
+            return vector
 
     def _extract_embedding_vector(self, data: dict[str, Any]) -> list[float]:
         container = data.get("data")
@@ -107,28 +196,112 @@ class LLMClient:
             return embedding if isinstance(embedding, list) else []
         return []
 
-    async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        observation_name: str,
+        observation_type: str,
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not self._api_key:
             raise RuntimeError("VOLCENGINE_API_KEY is not configured")
+
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=45.0) as client:
-            resp = await client.post(path, json=payload, headers=headers)
-            if resp.is_error:
-                detail = resp.text
-                raise httpx.HTTPStatusError(
-                    f"{resp.status_code} for {path}: {detail}",
-                    request=resp.request,
-                    response=resp,
-                )
-            data = resp.json()
+        model_name = str(payload.get("model") or self._model_id)
+        model_parameters = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"messages", "input", "model"}
+        }
+        with self._tracer.observe(
+            trace_id=self._trace_id,
+            name=observation_name,
+            as_type=observation_type,
+            input=payload,
+            model=model_name,
+            model_parameters=model_parameters or None,
+            metadata=self._build_observation_metadata(path=path, extra=observation_metadata),
+        ) as observation:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=45.0) as client:
+                last_error: Exception | None = None
+                request_payload = dict(payload)
+                response_format_fallback = False
+                for attempt in range(1, self._request_attempts + 1):
+                    try:
+                        resp = await client.post(path, json=request_payload, headers=headers)
+                    except httpx.TransportError as exc:
+                        last_error = exc
+                        if attempt >= self._request_attempts:
+                            self._safe_update_observation(
+                                observation,
+                                level="ERROR",
+                                status_message=f"{type(exc).__name__}: {exc}",
+                                output={"error": str(exc)},
+                                metadata={"attempt": attempt, "response_format_fallback": response_format_fallback},
+                            )
+                            raise
+                        await asyncio.sleep(self._retry_delay(attempt))
+                        continue
+
+                    if resp.is_error:
+                        detail = resp.text
+                        status_error = httpx.HTTPStatusError(
+                            f"{resp.status_code} for {path}: {detail}",
+                            request=resp.request,
+                            response=resp,
+                        )
+                        if self._should_retry_without_response_format(path, request_payload, resp):
+                            request_payload = dict(request_payload)
+                            request_payload.pop("response_format", None)
+                            response_format_fallback = True
+                            continue
+                        if resp.status_code in {408, 409, 425, 429, 500, 502, 503, 504} and attempt < self._request_attempts:
+                            last_error = status_error
+                            await asyncio.sleep(self._retry_delay(attempt))
+                            continue
+                        self._safe_update_observation(
+                            observation,
+                            level="ERROR",
+                            status_message=f"{resp.status_code} for {path}",
+                            output={"status_code": resp.status_code, "detail": detail},
+                            metadata={
+                                "status_code": resp.status_code,
+                                "attempt": attempt,
+                                "response_format_fallback": response_format_fallback,
+                            },
+                        )
+                        raise status_error
+
+                    data = resp.json()
+                    usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+                    self._safe_update_observation(
+                        observation,
+                        output=data,
+                        usage_details=usage,
+                        metadata={
+                            "status_code": resp.status_code,
+                            "response_id": data.get("id") if isinstance(data, dict) else None,
+                            "attempt": attempt,
+                            "response_format_fallback": response_format_fallback,
+                        },
+                    )
+                    break
+                else:
+                    if last_error is not None:
+                        raise last_error
+                    raise RuntimeError(f"request failed without response for {path}")
 
         meta = {
             "id": data.get("id"),
             "model": data.get("model"),
             "usage": data.get("usage"),
         }
+        langfuse_meta = self._build_langfuse_meta()
+        if langfuse_meta:
+            meta["langfuse"] = langfuse_meta
 
-        # OpenAI-compatible response: pick message content and decode JSON object content.
         choices = data.get("choices") or []
         if choices:
             content = ((choices[0] or {}).get("message") or {}).get("content")
@@ -141,6 +314,59 @@ class LLMClient:
         if isinstance(data, dict):
             data["__meta__"] = meta
         return data
+
+    def _build_observation_metadata(self, *, path: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "provider": self._provider,
+            "base_url": self._base_url,
+            "path": path,
+        }
+        if self._task_id:
+            metadata["task_id"] = self._task_id
+        if self._org_id:
+            metadata["org_id"] = self._org_id
+        if extra:
+            metadata.update({key: value for key, value in extra.items() if value is not None})
+        return metadata
+
+    def _build_langfuse_meta(self) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        if self._trace_id:
+            meta["trace_id"] = self._trace_id
+            trace_url = self._tracer.get_trace_url(self._trace_id)
+            if trace_url:
+                meta["trace_url"] = trace_url
+        observation_id = self._tracer.current_observation_id()
+        if observation_id:
+            meta["observation_id"] = observation_id
+        return meta
+
+    @staticmethod
+    def _retry_delay(attempt: int) -> float:
+        return min(0.5 * (2 ** max(attempt - 1, 0)), 2.0)
+
+    @staticmethod
+    def _should_retry_without_response_format(path: str, payload: dict[str, Any], response: httpx.Response) -> bool:
+        if path != "/chat/completions":
+            return False
+        response_format = payload.get("response_format")
+        if not isinstance(response_format, dict) or response_format.get("type") != "json_object":
+            return False
+        detail = response.text.lower()
+        return "response_format.type" in detail and "json_object" in detail and "not supported by this model" in detail
+
+    @staticmethod
+    def _safe_update_observation(observation: Any, **kwargs) -> None:
+        updater = getattr(observation, "update", None)
+        if not callable(updater):
+            return
+        payload = {key: value for key, value in kwargs.items() if value is not None}
+        if not payload:
+            return
+        try:
+            updater(**payload)
+        except Exception:
+            return
 
     @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any] | None:
