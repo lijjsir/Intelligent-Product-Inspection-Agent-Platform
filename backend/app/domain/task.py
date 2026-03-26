@@ -15,5 +15,5 @@ class InspectionTask:
     id: str
     org_id: str
     product_id: str
-    spec_id: str
+    spec_code: str
     status: TaskStatus

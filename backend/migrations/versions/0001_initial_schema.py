@@ -70,7 +70,7 @@ def upgrade():
         sa.Column("org_id", mysql.BINARY(16), nullable=False, index=True),
         sa.Column("created_by", mysql.BINARY(16), nullable=False),
         sa.Column("product_id", sa.String(64), nullable=False),
-        sa.Column("spec_id", sa.String(64), nullable=False),
+        sa.Column("spec_code", sa.String(64), nullable=False),
         sa.Column("strategy_id", mysql.BINARY(16), nullable=True),
         sa.Column("image_urls", mysql.JSON, nullable=False),
         sa.Column("status", sa.String(32), nullable=False, server_default="pending"),

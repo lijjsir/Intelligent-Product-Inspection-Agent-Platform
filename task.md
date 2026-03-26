@@ -10,7 +10,7 @@
 - [x] 密码散列、用户状态校验、基础 RBAC 权限矩阵
 - [x] 共享认证契约首版已落地
 - [x] JWT / 登录态已兼容 `roles / plan_tier / capabilities / workspaces / default_workspace`
-- [x] 已新增 `agent_operator` 角色并落到后后端权限矩阵与前端角色常量
+- [x] 已新增 `agent_operator` 角色并落到后端权限矩阵与前端角色常量
 - [x] MySQL + Alembic 基础迁移链路
 - [x] FastAPI 全局异常、请求中间件、统一 `ResponseEnvelope`
 - [x] 前端 HTTP 拦截器、路由守卫、登录态持久化
@@ -65,8 +65,11 @@
 - [ ] 当前仍主要依赖多模态模型输出与外部检测服务适配层，尚未接入专用工业检测模型并形成稳定量产精度
 - [x] 多模型网关已接管主推理链路
 - [x] `inspection_pipeline_service` 已从 `model_configs` 读取可用模型并注入 `LLMClient`
-- [ ] 模型健康探活为占位实现
-- [ ] `health_checker.py` 目前未接真实外部探活请求
+- [x] 模型运行时已支持按 `health_status + priority` 排序选模
+- [x] 已支持基于 `rpm_limit` 的限速控制与失败后备用模型切换
+- [x] 模型健康检查基础探活已实现
+- [x] `health_checker.py` 已支持 `/models` 与 `/chat/completions` 探测
+- [ ] 模型健康状态仍缺少定时调度、更多运维指标和更细粒度熔断策略
 
 ## 阶段四：治理层与 CHG_006 增量 (部分完成)
 - [x] 治理层数据库对象已建表
@@ -74,24 +77,31 @@
 - [x] `token_usage_ledger`
 - [x] `result_feedbacks`
 - [x] 治理层后端接口已接入路由
+- [x] `/api/v1/inspection-specs`
 - [x] `/api/v1/model-configs`
 - [x] `/api/v1/billing/summary`
 - [x] `/api/v1/feedbacks`
 - [x] `/api/v1/quality/report`
+- [x] `/api/v1/quality/traces`
 - [x] 治理层前端页面与路由入口已建立
+- [x] 检测标准页
 - [x] 模型配置页
 - [x] Token 成本页
 - [x] GPU 监控页入口
 - [x] AI 质量报告页
 - [x] 质量追踪页
 - [x] 反馈流水页
+- [x] 检测标准治理基础闭环已接通
+- [x] 已支持检测标准创建、编辑、复制、预览、删除
 - [x] Result 详情页反馈组件 `FeedbackWidget`
 - [x] 角色体系已扩展
 - [x] `platform_admin`
 - [x] `ai_quality`
 - [x] 前端用户管理页已补齐可分配角色展示
 - [ ] 模型配置治理闭环待增强
-- [ ] 当前具备 CRUD 基础能力，主链路也已接入选模，但缺少真实健康检查、限速窗口、自动故障切换闭环
+- [x] 当前具备 CRUD 基础能力，主链路也已接入选模、限速与失败切换
+- [x] 模型健康检查 worker 任务已实现，可批量回写 `health_status / health_message`
+- [ ] 当前仍缺少健康检查定时巡检、GPU/延迟等更完整运维闭环
 - [x] 成本治理基础闭环已接通
 - [x] `TokenUsageLedger.cost_amount` 已按内置模型单价表完成估算写入
 - [x] 租户级模型单价策略已实现代码与迁移
@@ -101,8 +111,10 @@
 - [x] `/api/v1/quality/traces` 已返回真实追踪聚合数据（结果 / Token / 反馈 / 最近 score）
 - [x] 用户反馈已接入 Langfuse 适配 score 记录
 - [x] 推理链路已生成并持久化 `trace_id`
-- [ ] Langfuse 外部服务真实代理仍待补齐
-- [ ] 当前为本地适配追踪模型，尚未接入官方 Langfuse 服务端与 SDK
+- [x] Langfuse SDK 适配层已接入
+- [x] `LangfuseTracer` 已支持 trace / observation / score / trace_url
+- [x] 反馈提交后会异步（失败时降级同步）执行 `sync_langfuse_score`
+- [ ] Langfuse 真实上报依赖外部服务、SDK 安装与密钥配置；未配置时会降级为本地 trace / noop
 - [ ] GPU 监控仅为占位页面
 - [ ] 前端已有入口，但无后端指标源
 
@@ -115,6 +127,7 @@
 - [ ] `tool registry / executor / schema 校验 / 限流 / 沙箱` 仍未形成完整闭环
 - [ ] 文档中的 MFA / SSO / API Key 体系未实现
 - [ ] `agent_operator + workspace shell` 只完成认证契约与菜单/守卫兼容，完整三工作台壳层仍待继续实现
+- [ ] `Agent 运维 -> 运行分析` 当前仍复用 `/analytics`，尚未拆分独立运维分析页
 - [ ] Dashboard / Analytics 与 FED 文档存在差距
 - [x] Dashboard 已补齐范围切换、通过率趋势、风险分布、快捷入口、待处理预警与最近任务
 - [x] Analytics 已补齐核心指标卡、趋势图、风险时序图、模型对比表
@@ -130,6 +143,7 @@
 - [x] 前端已完成路由懒加载与 ECharts 按需引入，构建大 chunk 警告已消除
 - [x] 专用视觉检测服务请求/响应协议文档已补齐
 - [x] 已在根 README 与 backend README 增加协议文档入口
+- [x] AI 质量与稳定性指标说明文档已补齐，并已加入 README 入口
 
 ## 建议的下一优先级
 - [x] P1：补齐 `quality/traces` 真数据链路，打通 Langfuse Trace 与反馈 Score

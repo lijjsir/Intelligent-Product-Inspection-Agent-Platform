@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStabilityStore } from '@/stores/stability.store'
 import { ElMessage } from 'element-plus'
 import { CanvasRenderer } from 'echarts/renderers'
 import { RadarChart } from 'echarts/charts'
-import { LegendComponent, TitleComponent, TooltipComponent } from 'echarts/components'
+import { LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { init, type ECharts, type EChartsOption, use } from 'echarts/core'
 
 const route = useRoute()
@@ -18,7 +18,7 @@ const taskId = route.params.id as string
 const radarChartRef = ref<HTMLElement | null>(null)
 let chartInstance: ECharts | null = null
 
-use([CanvasRenderer, RadarChart, LegendComponent, TitleComponent, TooltipComponent])
+use([CanvasRenderer, RadarChart, RadarComponent, LegendComponent, TitleComponent, TooltipComponent])
 
 const getRiskType = (level: string) => {
   const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
@@ -33,10 +33,6 @@ const getRiskType = (level: string) => {
 onMounted(async () => {
   try {
     await store.fetchByTask(taskId)
-    await nextTick()
-    if (store.current) {
-      initChart()
-    }
   } catch (err: any) {
     if (err.response?.status === 404) {
       ElMessage.warning("该任务暂无稳定性评估报告")
@@ -46,7 +42,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-  
+
   window.addEventListener('resize', handleResize)
 })
 
@@ -63,10 +59,21 @@ function handleResize() {
   }
 }
 
-function initChart() {
+async function renderChart() {
   if (!radarChartRef.value || !store.current) return
-  
-  chartInstance = init(radarChartRef.value)
+
+  await nextTick()
+
+  const width = radarChartRef.value.clientWidth
+  const height = radarChartRef.value.clientHeight
+  if (width <= 0 || height <= 0) {
+    requestAnimationFrame(() => {
+      void renderChart()
+    })
+    return
+  }
+
+  chartInstance ??= init(radarChartRef.value)
   const report = store.current
   const option: EChartsOption = {
     title: {
@@ -118,11 +125,21 @@ function initChart() {
     ]
   }
   chartInstance.setOption(option)
+  chartInstance.resize()
 }
 
 function goBack() {
   router.back()
 }
+
+watch(
+  () => store.current,
+  async (report) => {
+    if (!report) return
+    await renderChart()
+  },
+  { deep: true },
+)
 </script>
 
 <template>
@@ -229,9 +246,15 @@ function goBack() {
 
 .echarts-wrapper {
   height: 500px;
+}
+
+.echarts-wrapper :deep(.el-card__body) {
+  height: 100%;
+  padding: 0;
   display: flex;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .chart-container {

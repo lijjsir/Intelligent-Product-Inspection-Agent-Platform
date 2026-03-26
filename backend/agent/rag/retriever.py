@@ -9,8 +9,8 @@ from app.core.config import settings
 
 
 class Retriever:
-    def __init__(self) -> None:
-        self._embedder = Embedder()
+    def __init__(self, *, trace_id: str | None = None, task_id: str | None = None, org_id: str | None = None) -> None:
+        self._embedder = Embedder(trace_id=trace_id, task_id=task_id, org_id=org_id)
         self._qdrant_url = settings.qdrant_url.rstrip("/")
         self._qdrant_api_key = settings.qdrant_api_key
         self._collection = settings.qdrant_collection
@@ -18,7 +18,7 @@ class Retriever:
     async def retrieve(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         vector = await self._embedder.embed(query)
         if not vector:
-            return []
+            raise RuntimeError("embedding returned empty vector")
 
         payload: dict[str, Any] = {"vector": vector, "limit": top_k, "with_payload": True}
         headers: dict[str, str] = {}

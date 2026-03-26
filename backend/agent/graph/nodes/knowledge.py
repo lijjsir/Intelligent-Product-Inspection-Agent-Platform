@@ -10,9 +10,29 @@ from agent.rag.retriever import Retriever
 
 async def run_knowledge(state: InspectionState) -> InspectionState:
     now = datetime.utcnow().isoformat()
-    query = f"产品 {state.get('product_id', '')} 检测规格 {state.get('spec_id', '')} 缺陷判定标准"
-    retriever = Retriever()
-    docs = await retriever.retrieve(query, top_k=5)
+    query = f"产品 {state.get('product_id', '')} 检测标准 {state.get('spec_code', '')} 缺陷判定标准"
+    retriever = Retriever(
+        trace_id=state.get("trace_id"),
+        task_id=state.get("task_id"),
+        org_id=state.get("org_id"),
+    )
+    try:
+        docs = await retriever.retrieve(query, top_k=5)
+    except Exception as exc:
+        state.setdefault("runtime_errors", []).append(
+            {
+                "stage": "knowledge",
+                "model_id": state.get("model_id"),
+                "message": str(exc),
+            }
+        )
+        state.setdefault("timeline", []).append(
+            {"stage": "knowledge", "message": f"RAG 检索失败: {exc}", "ts": now}
+        )
+        state["knowledge_docs"] = []
+        state["citations"] = []
+        return state
+
     docs = await Reranker().rerank(docs)
     docs = attach_citations(docs)
     state["knowledge_docs"] = docs

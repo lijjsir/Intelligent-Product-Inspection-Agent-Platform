@@ -22,7 +22,7 @@ class VisionDetectorClient:
         *,
         image_urls: list[str],
         product_id: str | None = None,
-        spec_id: str | None = None,
+        spec_code: str | None = None,
     ) -> dict[str, Any] | None:
         if not self.enabled or not image_urls:
             return None
@@ -34,7 +34,7 @@ class VisionDetectorClient:
         payload = {
             "image_urls": image_urls,
             "product_id": product_id,
-            "spec_id": spec_id,
+            "spec_code": spec_code,
         }
 
         async with httpx.AsyncClient(timeout=float(self._timeout)) as client:

@@ -7,18 +7,18 @@ from agent.graph.state import InspectionState
 from agent.llm.client import LLMClient
 
 
-def _fallback_conclusion(defects: list[dict[str, Any]]) -> dict[str, Any]:
-    max_conf = max([float(d.get("confidence") or 0.0) for d in defects], default=0.0)
-    verdict = "pass" if max_conf < 0.55 else "fail"
-    score = 1.0 - min(max_conf, 1.0)
-    return {
-        "verdict": verdict,
-        "overall_score": round(score, 4),
-        "reasoning_chain": {
-            "summary": "基于缺陷置信度的保守策略输出结论",
-            "max_confidence": max_conf,
-        },
-    }
+def _is_valid_conclusion_payload(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    verdict = data.get("verdict")
+    if not isinstance(verdict, str) or not verdict.strip():
+        return False
+    try:
+        float(data.get("overall_score"))
+    except (TypeError, ValueError):
+        return False
+    reasoning_chain = data.get("reasoning_chain")
+    return reasoning_chain is None or isinstance(reasoning_chain, dict)
 
 
 async def run_reasoning(state: InspectionState) -> InspectionState:
@@ -35,10 +35,20 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
         api_key=state.get("model_api_key"),
         base_url=state.get("model_base_url"),
         model_id=state.get("model_id"),
+        trace_id=state.get("trace_id"),
+        task_id=state.get("task_id"),
+        org_id=state.get("org_id"),
+        provider=state.get("model_provider"),
     )
-    conclusion: dict[str, Any]
     try:
-        data = await client.chat([{"role": "user", "content": str(prompt)}], temperature=0.1)
+        data = await client.chat(
+            [{"role": "user", "content": str(prompt)}],
+            temperature=0.1,
+            observation_name="inspection.reasoning",
+            observation_metadata={"stage": "reasoning", "doc_count": len(docs), "defect_count": len(defects)},
+        )
+        if not _is_valid_conclusion_payload(data):
+            raise RuntimeError("reasoning model returned invalid structured payload")
         if isinstance(data, dict):
             meta = data.get("__meta__") or {}
             usage = meta.get("usage") if isinstance(meta, dict) else None
@@ -68,7 +78,10 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
                 "message": str(exc),
             }
         )
-        conclusion = _fallback_conclusion(defects)
+        state.setdefault("timeline", []).append(
+            {"stage": "reasoning", "message": f"推理失败: {exc}", "ts": now}
+        )
+        return state
 
     state["reasoning_chain"] = conclusion.get("reasoning_chain") or {}
     state["conclusion"] = conclusion
