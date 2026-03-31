@@ -11,6 +11,7 @@ from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
 from app.models.feedback import ResultFeedback
 from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
+from app.models.agent_ops import AgentDefinition, PromptVersion, IntentRoute
 
 __all__ = [
     "Base",
@@ -29,4 +30,7 @@ __all__ = [
     "ResultFeedback",
     "InspectionSpec",
     "InspectionSpecItem",
+    "AgentDefinition",
+    "PromptVersion",
+    "IntentRoute",
 ]
