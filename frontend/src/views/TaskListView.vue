@@ -98,7 +98,7 @@ function syncFromRoute() {
 function handleSearch() {
   resetPage();
   router.push({
-    path: "/tasks",
+    path: "/app/tasks",
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
@@ -111,7 +111,7 @@ function handleSearch() {
 function handleReset() {
   filters.value = { status: "", product_id: "", ids: "" };
   resetPage();
-  router.push({ path: "/tasks", query: { page: "1" } });
+  router.push({ path: "/app/tasks", query: { page: "1" } });
 }
 
 function handleOpenCreate() {
@@ -187,7 +187,7 @@ async function handleSubmitCreate() {
 function handleSizeChange(val: number) {
   onSizeChange(val);
   router.push({
-    path: "/tasks",
+    path: "/app/tasks",
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
@@ -200,7 +200,7 @@ function handleSizeChange(val: number) {
 function handleCurrentChange(val: number) {
   onPageChange(val);
   router.push({
-    path: "/tasks",
+    path: "/app/tasks",
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
@@ -277,7 +277,7 @@ const getStatusType = (status: string) => {
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="router.push(`/tasks/${row.id}`)">详情</el-button>
+            <el-button link type="primary" @click="router.push(`/app/tasks/${row.id}`)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>

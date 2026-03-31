@@ -8,14 +8,10 @@ import { useUserStore } from "@/stores/user.store";
 import { usePagination } from "@/composables/usePagination";
 import { usePermission } from "@/composables/usePermission";
 import {
+  ROLE_ADMIN,
   ROLE_AGENT_OPERATOR,
-  ROLE_AI_QUALITY,
   ROLE_ANALYST,
   ROLE_INSPECTOR,
-  ROLE_ORG_ADMIN,
-  ROLE_PLATFORM_ADMIN,
-  ROLE_SUPER_ADMIN,
-  ROLE_VIEWER,
 } from "@/constants/roles";
 import type { User } from "@/types/user.types";
 
@@ -25,7 +21,7 @@ const authStore = useAuthStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
-const canManageUsers = computed(() => hasRole([ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN]));
+const canManageUsers = computed(() => hasRole(ROLE_ADMIN));
 
 const filters = reactive({
   keyword: "",
@@ -52,13 +48,9 @@ const resetPasswordForm = reactive({
 });
 
 const roleMeta: Record<string, { label: string; tag: "danger" | "success" | "warning" | "info" }> = {
-  [ROLE_SUPER_ADMIN]: { label: "超级管理员", tag: "danger" },
-  [ROLE_ORG_ADMIN]: { label: "机构管理", tag: "success" },
+  [ROLE_ADMIN]: { label: "管理员", tag: "danger" },
   [ROLE_INSPECTOR]: { label: "质检员", tag: "warning" },
-  [ROLE_VIEWER]: { label: "只读访客", tag: "info" },
-  [ROLE_ANALYST]: { label: "分析员", tag: "warning" },
-  [ROLE_PLATFORM_ADMIN]: { label: "平台管理员", tag: "danger" },
-  [ROLE_AI_QUALITY]: { label: "AI 质量专员", tag: "success" },
+  [ROLE_ANALYST]: { label: "分析员", tag: "success" },
   [ROLE_AGENT_OPERATOR]: { label: "Agent 运维员", tag: "warning" },
 };
 
@@ -195,7 +187,7 @@ async function handleResetPassword() {
 }
 
 function goProfile() {
-  router.push("/profile");
+  router.push("/app/profile");
 }
 
 function formatDateTime(value?: string) {

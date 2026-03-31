@@ -3,30 +3,27 @@
     <aside class="sidebar">
       <div class="logo">PIAP</div>
       <nav class="nav">
-        <RouterLink to="/" class="nav-link" exact-active-class="router-link-active">仪表盘</RouterLink>
-        <RouterLink to="/tasks" class="nav-link">任务列表</RouterLink>
-        <RouterLink to="/alerts" class="nav-link">预警中心</RouterLink>
-        <RouterLink to="/analytics" class="nav-link">分析中心</RouterLink>
-        <RouterLink v-if="canUserAdmin" to="/users" class="nav-link">用户管理</RouterLink>
+        <template v-if="canApp">
+          <div class="nav-group">应用工作台</div>
+          <RouterLink to="/app/dashboard" class="nav-link" exact-active-class="router-link-active">仪表盘</RouterLink>
+          <RouterLink to="/app/tasks" class="nav-link">任务列表</RouterLink>
+          <RouterLink to="/app/alerts" class="nav-link">预警中心</RouterLink>
+          <RouterLink to="/app/analytics" class="nav-link">分析中心</RouterLink>
+          <RouterLink v-if="canUserAdmin" to="/app/users" class="nav-link">用户管理</RouterLink>
+        </template>
         <template v-if="canOps">
-          <div class="nav-group">Agent 运维</div>
-          <RouterLink to="/analytics" class="nav-link">运行分析</RouterLink>
+          <div class="nav-group">运维工作台</div>
+          <RouterLink to="/ops/runtime" class="nav-link">运行中心</RouterLink>
         </template>
-        <template v-if="canSpecConfig">
-          <div class="nav-group">标准治理</div>
-          <RouterLink to="/admin/inspection-specs" class="nav-link">检测标准</RouterLink>
-        </template>
-        <template v-if="canPlatform">
-          <div class="nav-group">平台管理</div>
-          <RouterLink to="/admin/models" class="nav-link">模型配置</RouterLink>
-          <RouterLink to="/admin/billing" class="nav-link">Token 成本</RouterLink>
-          <RouterLink to="/admin/gpu" class="nav-link">GPU 监控</RouterLink>
-        </template>
-        <template v-if="canQuality">
-          <div class="nav-group">AI 质量</div>
-          <RouterLink to="/quality/report" class="nav-link">质量报告</RouterLink>
-          <RouterLink to="/quality/tracing" class="nav-link">质量追踪</RouterLink>
-          <RouterLink to="/quality/feedbacks" class="nav-link">反馈流水</RouterLink>
+        <template v-if="canGovernance">
+          <div class="nav-group">治理工作台</div>
+          <RouterLink to="/governance/admin/inspection-specs" class="nav-link">检测标准</RouterLink>
+          <RouterLink to="/governance/admin/models" class="nav-link">模型配置</RouterLink>
+          <RouterLink to="/governance/admin/billing" class="nav-link">Token 成本</RouterLink>
+          <RouterLink to="/governance/admin/gpu" class="nav-link">GPU 监控</RouterLink>
+          <RouterLink to="/governance/quality/report" class="nav-link">质量报告</RouterLink>
+          <RouterLink to="/governance/quality/tracing" class="nav-link">质量追踪</RouterLink>
+          <RouterLink to="/governance/quality/feedbacks" class="nav-link">反馈流水</RouterLink>
         </template>
       </nav>
     </aside>
@@ -35,7 +32,7 @@
         <div class="title">PIAP 控制台</div>
         <div class="topbar-actions">
           <div class="workspace-chip">{{ auth.defaultWorkspace }}</div>
-          <RouterLink to="/profile" class="profile-link">
+          <RouterLink to="/app/profile" class="profile-link">
             <span class="profile-name">{{ profileName }}</span>
             <span class="profile-role">{{ auth.role || "未识别角色" }}</span>
           </RouterLink>
@@ -55,34 +52,22 @@ import { computed, onMounted } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useUserStore } from "@/stores/user.store";
 import {
-  ROLE_AI_QUALITY,
-  ROLE_PLATFORM_ADMIN,
-  ROLE_SUPER_ADMIN,
+  ROLE_ADMIN,
   WORKSPACE_GOVERNANCE,
   WORKSPACE_OPS,
+  WORKSPACE_APP,
+  normalizeRole,
 } from "@/constants/roles";
 
 const router = useRouter();
 const auth = useAuthStore();
 const userStore = useUserStore();
 const currentRoles = computed(() => (auth.roles.length ? auth.roles : [auth.role]));
+const normalizedRoles = computed(() => currentRoles.value.map(normalizeRole));
+const canApp = computed(() => auth.isAuthed);
 const canOps = computed(() => auth.workspaces.includes(WORKSPACE_OPS));
-const canUserAdmin = computed(() => currentRoles.value.some((role) => ["org_admin", "super_admin"].includes(role)));
-const canPlatform = computed(
-  () =>
-    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
-    currentRoles.value.some((role) => [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].includes(role)),
-);
-const canSpecConfig = computed(
-  () =>
-    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
-    currentRoles.value.some((role) => [ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(role)),
-);
-const canQuality = computed(
-  () =>
-    auth.workspaces.includes(WORKSPACE_GOVERNANCE) &&
-    currentRoles.value.some((role) => [ROLE_AI_QUALITY, ROLE_SUPER_ADMIN].includes(role)),
-);
+const canGovernance = computed(() => auth.workspaces.includes(WORKSPACE_GOVERNANCE));
+const canUserAdmin = computed(() => normalizedRoles.value.includes(ROLE_ADMIN));
 const profileName = computed(() => userStore.current?.username || auth.userId || "当前用户");
 
 onMounted(() => {

@@ -4,7 +4,7 @@ import uuid
 
 from app.core.claims import build_auth_claims
 from app.core.exceptions import ConflictError, ForbiddenError
-from app.core.permissions import ROLE_ORG_ADMIN
+from app.core.permissions import ROLE_ADMIN
 from app.core.security import create_access_token, create_refresh_token, hash_password, verify_password
 from app.models.organization import Organization
 from app.models.user import User
@@ -66,7 +66,7 @@ class AuthService:
             username=username,
             email=email,
             password_hash=hash_password(password),
-            role=ROLE_ORG_ADMIN,
+            role=ROLE_ADMIN,
             is_active=True,
         )
         await self._users.create(user)

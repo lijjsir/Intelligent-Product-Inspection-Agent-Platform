@@ -5,53 +5,58 @@ from typing import Dict, Set
 from app.core.exceptions import ForbiddenError, ValidationError
 
 
-ROLE_SUPER_ADMIN = "super_admin"
-ROLE_ORG_ADMIN = "org_admin"
+ROLE_ADMIN = "admin"
 ROLE_INSPECTOR = "inspector"
-ROLE_VIEWER = "viewer"
 ROLE_ANALYST = "analyst"
-ROLE_API_SERVICE = "api_service"
-ROLE_AUDITOR = "auditor"
-ROLE_PLATFORM_ADMIN = "platform_admin"
-ROLE_AI_QUALITY = "ai_quality"
 ROLE_AGENT_OPERATOR = "agent_operator"
+ROLE_API_SERVICE = "api_service"
 
 ALL_ROLES = {
-    ROLE_SUPER_ADMIN,
-    ROLE_ORG_ADMIN,
+    ROLE_ADMIN,
     ROLE_INSPECTOR,
-    ROLE_VIEWER,
     ROLE_ANALYST,
-    ROLE_API_SERVICE,
-    ROLE_AUDITOR,
-    ROLE_PLATFORM_ADMIN,
-    ROLE_AI_QUALITY,
     ROLE_AGENT_OPERATOR,
+    ROLE_API_SERVICE,
+}
+
+LEGACY_ROLE_MAP = {
+    "super_admin": ROLE_ADMIN,
+    "org_admin": ROLE_ADMIN,
+    "platform_admin": ROLE_ADMIN,
+    "auditor": ROLE_ADMIN,
+    "viewer": ROLE_INSPECTOR,
+    "ai_quality": ROLE_ANALYST,
 }
 
 PERMISSIONS: Dict[str, Set[str]] = {
-    "user": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN},
-    "task": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_VIEWER, ROLE_AGENT_OPERATOR},
-    "result": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_VIEWER, ROLE_AGENT_OPERATOR},
-    "stability": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_VIEWER, ROLE_AGENT_OPERATOR},
-    "alert": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_VIEWER, ROLE_AGENT_OPERATOR},
-    "tool": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_AGENT_OPERATOR},
-    "analytics": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_ANALYST, ROLE_VIEWER, ROLE_AGENT_OPERATOR},
-    "audit": {ROLE_SUPER_ADMIN, ROLE_AUDITOR},
-    "model_config": {ROLE_SUPER_ADMIN, ROLE_PLATFORM_ADMIN},
-    "inspection_spec": {ROLE_SUPER_ADMIN, ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_ORG_ADMIN},
-    "billing": {ROLE_SUPER_ADMIN, ROLE_PLATFORM_ADMIN, ROLE_ORG_ADMIN},
-    "feedback": {ROLE_SUPER_ADMIN, ROLE_ORG_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AI_QUALITY},
-    "quality": {ROLE_SUPER_ADMIN, ROLE_AI_QUALITY},
+    "user": {ROLE_ADMIN},
+    "task": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "result": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "stability": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "alert": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "tool": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "analytics": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "audit": {ROLE_ADMIN},
+    "model_config": {ROLE_ADMIN},
+    "inspection_spec": {ROLE_ADMIN, ROLE_ANALYST},
+    "billing": {ROLE_ADMIN},
+    "feedback": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST},
+    "quality": {ROLE_ADMIN, ROLE_ANALYST},
 }
 
 
 def require_role(resource: str, role: str) -> None:
+    normalized = LEGACY_ROLE_MAP.get(role, role)
     allowed = PERMISSIONS.get(resource, set())
-    if role not in allowed:
+    if normalized not in allowed:
         raise ForbiddenError(f"role {role} cannot access {resource}")
 
 
 def ensure_valid_role(role: str) -> None:
-    if role not in ALL_ROLES:
+    normalized = LEGACY_ROLE_MAP.get(role, role)
+    if normalized not in ALL_ROLES:
         raise ValidationError(f"invalid role: {role}")
+
+
+def normalize_role(role: str) -> str:
+    return LEGACY_ROLE_MAP.get(role, role)

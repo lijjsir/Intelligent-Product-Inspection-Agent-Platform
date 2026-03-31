@@ -162,9 +162,9 @@ function renderCharts() {
           <el-button :type="selectedRange === 90 ? 'primary' : 'default'" @click="setRange(90)">90 日</el-button>
         </div>
         <div class="button-group">
-          <el-button type="primary" @click="router.push('/tasks/new')">新建任务</el-button>
-          <el-button plain @click="router.push('/results')">查看报告</el-button>
-          <el-button plain @click="router.push('/alerts')">预警中心</el-button>
+          <el-button type="primary" @click="router.push('/app/tasks')">新建任务</el-button>
+          <el-button plain @click="router.push('/app/results')">查看报告</el-button>
+          <el-button plain @click="router.push('/app/alerts')">预警中心</el-button>
         </div>
       </div>
     </section>
@@ -177,7 +177,7 @@ function renderCharts() {
     />
 
     <section v-if="overview" class="metric-grid">
-      <el-card shadow="never" class="metric-card cyan" @click="router.push('/tasks')">
+      <el-card shadow="never" class="metric-card cyan" @click="router.push('/app/tasks')">
         <div class="label">范围内任务数</div>
         <div class="value">{{ overview.total_tasks }}</div>
         <div class="meta">已沉淀结果 {{ overview.total_results }}</div>
@@ -187,7 +187,7 @@ function renderCharts() {
         <div class="value">{{ (overview.pass_rate * 100).toFixed(1) }}%</div>
         <div class="meta">主图联动展示最近 {{ selectedRange }} 日走势</div>
       </el-card>
-      <el-card shadow="never" class="metric-card amber" @click="router.push('/alerts')">
+      <el-card shadow="never" class="metric-card amber" @click="router.push('/app/alerts')">
         <div class="label">高风险预警数</div>
         <div class="value">{{ highRiskAlerts }}</div>
         <div class="meta">未处理 warning / critical 告警</div>
@@ -211,12 +211,12 @@ function renderCharts() {
         </template>
         <div ref="trendRef" class="chart-host"></div>
       </el-card>
-      <el-card shadow="never" class="chart-card" @click="router.push('/stability')">
+      <el-card shadow="never" class="chart-card" @click="router.push('/app/stability')">
         <template #header>
           <div class="card-head">
             <div>
               <strong>风险等级分布</strong>
-              <span>点击可进一步进入稳定性分析</span>
+              <span>点击进入稳定性总览</span>
             </div>
           </div>
         </template>

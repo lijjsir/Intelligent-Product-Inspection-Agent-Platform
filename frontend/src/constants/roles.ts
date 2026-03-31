@@ -1,23 +1,30 @@
-export const ROLE_SUPER_ADMIN = "super_admin";
-export const ROLE_ORG_ADMIN = "org_admin";
+export const ROLE_ADMIN = "admin";
 export const ROLE_INSPECTOR = "inspector";
-export const ROLE_VIEWER = "viewer";
 export const ROLE_ANALYST = "analyst";
-export const ROLE_PLATFORM_ADMIN = "platform_admin";
-export const ROLE_AI_QUALITY = "ai_quality";
 export const ROLE_AGENT_OPERATOR = "agent_operator";
+export const ROLE_API_SERVICE = "api_service";
 
 export const ALL_ROLES = [
-  ROLE_SUPER_ADMIN,
-  ROLE_ORG_ADMIN,
+  ROLE_ADMIN,
   ROLE_INSPECTOR,
-  ROLE_VIEWER,
   ROLE_ANALYST,
-  ROLE_PLATFORM_ADMIN,
-  ROLE_AI_QUALITY,
   ROLE_AGENT_OPERATOR,
+  ROLE_API_SERVICE,
 ] as const;
+
+export const LEGACY_ROLE_MAP: Record<string, string> = {
+  super_admin: ROLE_ADMIN,
+  org_admin: ROLE_ADMIN,
+  platform_admin: ROLE_ADMIN,
+  auditor: ROLE_ADMIN,
+  viewer: ROLE_INSPECTOR,
+  ai_quality: ROLE_ANALYST,
+};
 
 export const WORKSPACE_APP = "app";
 export const WORKSPACE_OPS = "ops";
 export const WORKSPACE_GOVERNANCE = "governance";
+
+export function normalizeRole(role: string): string {
+  return LEGACY_ROLE_MAP[role] || role;
+}

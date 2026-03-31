@@ -15,7 +15,7 @@
 - [x] FastAPI 全局异常、请求中间件、统一 `ResponseEnvelope`
 - [x] 前端 HTTP 拦截器、路由守卫、登录态持久化
 - [x] 组织级用户管理基础能力
-- [ ] 三工作台路由壳层仍未完全收口到 `/app /ops /governance`
+- [x] 三工作台路由壳层已收口到 `/app /ops /governance`
 
 ## 阶段二：核心业务闭环 (大体完成，仍有可增强项)
 - [x] 质检任务模块
@@ -126,8 +126,8 @@
 - [ ] 工具注册中心与工具执行引擎尚未按设计文档完整实现
 - [ ] `tool registry / executor / schema 校验 / 限流 / 沙箱` 仍未形成完整闭环
 - [ ] 文档中的 MFA / SSO / API Key 体系未实现
-- [ ] `agent_operator + workspace shell` 只完成认证契约与菜单/守卫兼容，完整三工作台壳层仍待继续实现
-- [ ] `Agent 运维 -> 运行分析` 当前仍复用 `/analytics`，尚未拆分独立运维分析页
+- [x] `agent_operator + workspace shell` 已完成认证契约与菜单/守卫兼容，三工作台壳层已收口
+- [x] `Agent 运维 -> 运行中心` 已拆分独立运维运行页 `/ops/runtime`
 - [ ] Dashboard / Analytics 与 FED 文档存在差距
 - [x] Dashboard 已补齐范围切换、通过率趋势、风险分布、快捷入口、待处理预警与最近任务
 - [x] Analytics 已补齐核心指标卡、趋势图、风险时序图、模型对比表

@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import type { InspectionSpec, InspectionSpecItemPayload, InspectionSpecPayload } from "@/types/governance.types";
-import { ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_ANALYST, normalizeRole } from "@/constants/roles";
 import { useAuthStore } from "@/stores/auth.store";
 
 interface RuleForm {
@@ -42,9 +42,10 @@ const form = reactive({
   items: [] as RuleForm[],
 });
 
-const canManageGlobal = computed(() =>
-  [ROLE_PLATFORM_ADMIN, ROLE_SUPER_ADMIN].some((role) => auth.roles.includes(role) || auth.role === role),
-);
+const canManageGlobal = computed(() => {
+  const normalizedRoles = [...auth.roles, auth.role].filter(Boolean).map(normalizeRole);
+  return normalizedRoles.includes(ROLE_ADMIN) || normalizedRoles.includes(ROLE_ANALYST);
+});
 const productOptions = computed(() =>
   Array.from(new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[])).sort(),
 );

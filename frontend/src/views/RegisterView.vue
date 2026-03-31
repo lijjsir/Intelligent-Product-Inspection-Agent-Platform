@@ -62,7 +62,7 @@ const submit = async () => {
       email: email.value,
       password: password.value,
     });
-    router.push("/");
+    router.push(auth.resolveDefaultRoute());
   } finally {
     loading.value = false;
   }

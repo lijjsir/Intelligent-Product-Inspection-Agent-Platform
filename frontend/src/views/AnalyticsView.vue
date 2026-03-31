@@ -161,42 +161,42 @@ async function fetchTaskDrilldown(taskId: string) {
 
 function goToProductLineTasks() {
   if (!productLineDrilldown.value) return;
-  router.push({ path: "/tasks", query: { product_id: productLineDrilldown.value.product_line } });
+  router.push({ path: "/app/tasks", query: { product_id: productLineDrilldown.value.product_line } });
 }
 
 function goToProductLineResults() {
   if (!productLineDrilldown.value) return;
-  router.push({ path: "/results", query: { product_id: productLineDrilldown.value.product_line } });
+  router.push({ path: "/app/results", query: { product_id: productLineDrilldown.value.product_line } });
 }
 
 function goToModelResults() {
   if (!modelDrilldown.value) return;
-  router.push({ path: "/results", query: { model_key: modelDrilldown.value.model_key } });
+  router.push({ path: "/app/results", query: { model_key: modelDrilldown.value.model_key } });
 }
 
 function goToTaskDetail(taskId: string) {
-  router.push(`/tasks/${taskId}`);
+  router.push(`/app/tasks/${taskId}`);
 }
 
 function goToResultDetail(taskId: string) {
-  router.push(`/results/${taskId}`);
+  router.push(`/app/results/${taskId}`);
 }
 
 function goToTaskResultList(taskId: string) {
-  router.push({ path: "/results", query: { task_id: taskId } });
+  router.push({ path: "/app/results", query: { task_id: taskId } });
 }
 
 function goToTaskStabilityDetail(taskId: string) {
-  router.push(`/stability/${taskId}`);
+  router.push(`/app/stability/${taskId}`);
 }
 
 function goToRelatedTaskList(taskIds: string[]) {
   if (!taskIds.length) return;
-  router.push({ path: "/tasks", query: { ids: taskIds.join(",") } });
+  router.push({ path: "/app/tasks", query: { ids: taskIds.join(",") } });
 }
 
 function goToProductLineTaskList(productLine: string) {
-  router.push({ path: "/tasks", query: { product_id: productLine } });
+  router.push({ path: "/app/tasks", query: { product_id: productLine } });
 }
 </script>
 
