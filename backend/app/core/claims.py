@@ -4,15 +4,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.permissions import (
+    ROLE_ADMIN,
     ROLE_AGENT_OPERATOR,
-    ROLE_AI_QUALITY,
     ROLE_ANALYST,
-    ROLE_AUDITOR,
     ROLE_INSPECTOR,
-    ROLE_ORG_ADMIN,
-    ROLE_PLATFORM_ADMIN,
-    ROLE_SUPER_ADMIN,
-    ROLE_VIEWER,
+    normalize_role,
 )
 
 
@@ -75,7 +71,8 @@ def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
         capabilities.add(CAPABILITY_ADVANCED_ANALYTICS)
     if plan_tier == PLAN_ENTERPRISE:
         capabilities.add(CAPABILITY_MODEL_CONTROL)
-    if any(role in {ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_SUPER_ADMIN} for role in roles):
+    normalized = [normalize_role(r) for r in roles]
+    if any(role in {ROLE_ADMIN, ROLE_ANALYST} for role in normalized):
         capabilities.add(CAPABILITY_GOVERNANCE)
         capabilities.add(CAPABILITY_MODEL_CONTROL)
     return sorted(capabilities)
@@ -83,11 +80,12 @@ def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
 
 def derive_workspaces(roles: list[str]) -> list[str]:
     workspaces: list[str] = []
-    if any(role in {ROLE_INSPECTOR, ROLE_VIEWER, ROLE_ANALYST, ROLE_ORG_ADMIN} for role in roles):
+    normalized = [normalize_role(r) for r in roles]
+    if any(role in {ROLE_INSPECTOR, ROLE_ANALYST, ROLE_ADMIN} for role in normalized):
         workspaces.append(WORKSPACE_APP)
-    if any(role in {ROLE_AGENT_OPERATOR, ROLE_SUPER_ADMIN} for role in roles):
+    if any(role in {ROLE_AGENT_OPERATOR, ROLE_ADMIN} for role in normalized):
         workspaces.append(WORKSPACE_OPS)
-    if any(role in {ROLE_PLATFORM_ADMIN, ROLE_AI_QUALITY, ROLE_AUDITOR, ROLE_SUPER_ADMIN} for role in roles):
+    if any(role in {ROLE_ADMIN, ROLE_ANALYST} for role in normalized):
         workspaces.append(WORKSPACE_GOVERNANCE)
     if not workspaces:
         workspaces.append(WORKSPACE_APP)
@@ -95,11 +93,12 @@ def derive_workspaces(roles: list[str]) -> list[str]:
 
 
 def derive_default_workspace(roles: list[str], workspaces: list[str]) -> str:
-    if ROLE_SUPER_ADMIN in roles:
+    normalized = [normalize_role(r) for r in roles]
+    if ROLE_ADMIN in normalized:
         return WORKSPACE_GOVERNANCE
-    if ROLE_PLATFORM_ADMIN in roles or ROLE_AI_QUALITY in roles or ROLE_AUDITOR in roles:
+    if ROLE_ANALYST in normalized:
         return WORKSPACE_GOVERNANCE
-    if ROLE_AGENT_OPERATOR in roles:
+    if ROLE_AGENT_OPERATOR in normalized:
         return WORKSPACE_OPS
     return workspaces[0]
 
@@ -116,4 +115,3 @@ def build_auth_claims(primary_role: str, organization_plan: str | None = None) -
         workspaces=workspaces,
         default_workspace=derive_default_workspace(roles, workspaces),
     )
-

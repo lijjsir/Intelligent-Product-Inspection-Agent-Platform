@@ -1,8 +1,9 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "@/stores/auth.store";
-import { adminRoutes } from "@/router/routes/admin.routes";
-import { qualityRoutes } from "@/router/routes/quality.routes";
-import { ROLE_SUPER_ADMIN } from "@/constants/roles";
+import { appRoutes } from "@/router/routes/app.routes";
+import { opsRoutes } from "@/router/routes/ops.routes";
+import { governanceRoutes } from "@/router/routes/governance.routes";
+import { ROLE_ADMIN, normalizeRole } from "@/constants/roles";
 
 const routes = [
   {
@@ -28,23 +29,26 @@ const routes = [
     ],
   },
   {
-    path: "/",
+    path: "/app",
     component: () => import("@/layouts/AppLayout.vue"),
-    children: [
-      { path: "", name: "dashboard", component: () => import("@/views/DashboardView.vue") },
-      { path: "tasks", name: "tasks", component: () => import("@/views/TaskListView.vue") },
-      { path: "tasks/:id", name: "task-detail", component: () => import("@/views/TaskDetailView.vue") },
-      { path: "results", name: "results", component: () => import("@/views/ResultListView.vue") },
-      { path: "results/:id", name: "result-detail", component: () => import("@/views/ResultDetailView.vue") },
-      { path: "stability/:id", name: "stability-detail", component: () => import("@/views/StabilityDetailView.vue") },
-      { path: "alerts", name: "alerts", component: () => import("@/views/AlertListView.vue") },
-      { path: "analytics", name: "analytics", component: () => import("@/views/AnalyticsView.vue") },
-      { path: "users", name: "users", component: () => import("@/views/UserListView.vue") },
-      { path: "profile", name: "profile", component: () => import("@/views/ProfileView.vue") },
-      ...adminRoutes,
-      ...qualityRoutes,
-    ],
+    children: appRoutes,
     meta: { requiresAuth: true },
+  },
+  {
+    path: "/ops",
+    component: () => import("@/layouts/AppLayout.vue"),
+    children: opsRoutes,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/governance",
+    component: () => import("@/layouts/AppLayout.vue"),
+    children: governanceRoutes,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/:pathMatch(.*)*",
+    redirect: "/app/dashboard",
   },
 ];
 
@@ -61,8 +65,9 @@ router.beforeEach((to) => {
   }
   const roles = to.meta.roles as string[] | undefined;
   const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-  if (roles && !currentRoles.includes(ROLE_SUPER_ADMIN) && !roles.some((role) => currentRoles.includes(role))) {
-    return { path: "/" };
+  const normalizedRoles = currentRoles.map(normalizeRole);
+  if (roles && !normalizedRoles.includes(ROLE_ADMIN) && !roles.some((role) => normalizedRoles.includes(normalizeRole(role)))) {
+    return { path: "/app/dashboard" };
   }
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
     return { path: auth.resolveDefaultRoute() };

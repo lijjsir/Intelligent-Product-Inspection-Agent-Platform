@@ -52,7 +52,7 @@ const submit = async () => {
       password: password.value,
     });
     console.log("登录成功，准备跳转，当前 auth.isAuthed:", auth.isAuthed);
-    await router.push("/");
+    await router.push(auth.resolveDefaultRoute());
     console.log("路由跳转已执行");
   } catch (error) {
     console.error("登录失败:", error);

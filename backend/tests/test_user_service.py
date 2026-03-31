@@ -52,10 +52,10 @@ async def test_list_users_forwards_filters(monkeypatch):
     monkeypatch.setattr(user_mod, "UserRepository", lambda session: fake_repo)
 
     svc = user_mod.UserService(FakeSession(), "org-1")
-    await svc.list_users(2, 10, keyword="alice", role="viewer", is_active=True)
+    await svc.list_users(2, 10, keyword="alice", role="inspector", is_active=True)
 
-    assert fake_repo.last_list_args == ("org-1", 10, 10, "alice", "viewer", True)
-    assert fake_repo.last_count_args == ("org-1", "alice", "viewer", True)
+    assert fake_repo.last_list_args == ("org-1", 10, 10, "alice", "inspector", True)
+    assert fake_repo.last_count_args == ("org-1", "alice", "inspector", True)
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_update_role_rejects_self_change(monkeypatch):
 
     svc = user_mod.UserService(FakeSession(), "org-1")
     with pytest.raises(ForbiddenError):
-        await svc.update_role("user-1", "viewer", "super_admin", "user-1")
+        await svc.update_role("user-1", "inspector", "admin", "user-1")
 
 
 @pytest.mark.asyncio
@@ -103,6 +103,6 @@ async def test_update_profile_changes_password(monkeypatch):
     assert user.password_hash == "new::new-password"
 
 
-def test_get_assignable_roles_for_org_admin():
-    roles = user_mod.UserService.get_assignable_roles("org_admin")
-    assert roles == ["org_admin", "inspector", "viewer", "analyst", "ai_quality"]
+def test_get_assignable_roles_for_admin():
+    roles = user_mod.UserService.get_assignable_roles("admin")
+    assert roles == ["admin", "inspector", "analyst", "agent_operator"]

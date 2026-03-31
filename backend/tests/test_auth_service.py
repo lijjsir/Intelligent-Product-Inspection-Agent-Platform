@@ -3,7 +3,7 @@ import pytest
 
 from app.services import auth_service as auth_mod
 from app.core.exceptions import ForbiddenError, ConflictError
-from app.core.permissions import ROLE_ORG_ADMIN
+from app.core.permissions import ROLE_ADMIN
 
 
 class FakeUser:
@@ -56,7 +56,7 @@ async def test_login_success(monkeypatch):
         org_id="org-1",
         username="alice",
         password_hash="hashed",
-        role="org_admin",
+        role="admin",
         is_active=True,
     )
 
@@ -82,7 +82,7 @@ async def test_login_disabled_user(monkeypatch):
         org_id="org-1",
         username="alice",
         password_hash="hashed",
-        role="org_admin",
+        role="admin",
         is_active=False,
     )
 
@@ -124,4 +124,4 @@ async def test_register_success(monkeypatch):
     user, access, refresh = await svc.register("PIAP", "piap", "admin", "a@a.com", "pw")
     assert access == "access"
     assert refresh == "refresh"
-    assert user.role == ROLE_ORG_ADMIN
+    assert user.role == ROLE_ADMIN

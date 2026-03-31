@@ -3,13 +3,13 @@ import { computed, ref } from "vue";
 import { authApi } from "@/api/auth.api";
 import type { LoginPayload, RegisterPayload, AuthSession } from "@/types/auth.types";
 import {
+  ROLE_ADMIN,
   ROLE_AGENT_OPERATOR,
-  ROLE_AI_QUALITY,
-  ROLE_PLATFORM_ADMIN,
-  ROLE_SUPER_ADMIN,
+  ROLE_ANALYST,
   WORKSPACE_APP,
   WORKSPACE_GOVERNANCE,
   WORKSPACE_OPS,
+  normalizeRole,
 } from "@/constants/roles";
 
 const TOKEN_KEY = "piap_token";
@@ -47,14 +47,11 @@ export const useAuthStore = defineStore("auth", () => {
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
   }
+  const normalizedRoles = roles.value.map(normalizeRole);
   if (!workspaces.value.length) {
-    if (
-      roles.value.includes(ROLE_PLATFORM_ADMIN) ||
-      roles.value.includes(ROLE_AI_QUALITY) ||
-      roles.value.includes(ROLE_SUPER_ADMIN)
-    ) {
+    if (normalizedRoles.includes(ROLE_ADMIN) || normalizedRoles.includes(ROLE_ANALYST)) {
       workspaces.value = [WORKSPACE_GOVERNANCE];
-    } else if (roles.value.includes(ROLE_AGENT_OPERATOR)) {
+    } else if (normalizedRoles.includes(ROLE_AGENT_OPERATOR)) {
       workspaces.value = [WORKSPACE_OPS];
     } else if (role.value) {
       workspaces.value = [WORKSPACE_APP];
@@ -134,12 +131,12 @@ export const useAuthStore = defineStore("auth", () => {
 
   function resolveDefaultRoute() {
     if (hasWorkspace(WORKSPACE_GOVERNANCE)) {
-      return "/quality/report";
+      return "/governance/quality/report";
     }
     if (hasWorkspace(WORKSPACE_OPS)) {
-      return "/analytics";
+      return "/ops/runtime";
     }
-    return "/";
+    return "/app/dashboard";
   }
 
   return {

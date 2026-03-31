@@ -95,7 +95,7 @@ function goBack() {
           type="success"
           plain
           class="ml-4"
-          @click="router.push(`/results/${store.current.id}`)"
+          @click="router.push(`/app/results/${store.current.id}`)"
         >
           查看分析结果报告
         </el-button>
@@ -104,7 +104,7 @@ function goBack() {
           type="warning"
           plain
           class="ml-2"
-          @click="router.push(`/stability/${store.current.id}`)"
+          @click="router.push(`/app/stability/${store.current.id}`)"
         >
           查看稳定性雷达
         </el-button>

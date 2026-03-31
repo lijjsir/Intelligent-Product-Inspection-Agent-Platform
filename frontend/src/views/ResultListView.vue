@@ -52,7 +52,7 @@ async function fetchData() {
 
 function pushQuery() {
   router.push({
-    path: "/results",
+    path: "/app/results",
     query: {
       ...(filters.value.verdict ? { verdict: filters.value.verdict } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
@@ -148,7 +148,7 @@ const getVerdictType = (verdict: string) => {
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="scope">
-            <el-button link type="primary" @click="router.push(`/results/${scope.row.task_id}`)">详情</el-button>
+            <el-button link type="primary" @click="router.push(`/app/results/${scope.row.task_id}`)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>

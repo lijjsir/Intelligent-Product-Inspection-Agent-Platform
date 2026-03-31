@@ -1,5 +1,5 @@
 import { useAuthStore } from "@/stores/auth.store";
-import { ROLE_SUPER_ADMIN } from "@/constants/roles";
+import { ROLE_ADMIN, normalizeRole } from "@/constants/roles";
 
 export function usePermission() {
   const auth = useAuthStore();
@@ -7,11 +7,12 @@ export function usePermission() {
   function hasRole(requiredRole: string | string[]): boolean {
     if (!auth.isAuthed) return false;
     const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-    if (currentRoles.includes(ROLE_SUPER_ADMIN)) return true;
+    const normalizedRoles = currentRoles.map(normalizeRole);
+    if (normalizedRoles.includes(ROLE_ADMIN)) return true;
     if (Array.isArray(requiredRole)) {
-      return requiredRole.some((role) => currentRoles.includes(role));
+      return requiredRole.some((role) => normalizedRoles.includes(normalizeRole(role)));
     }
-    return currentRoles.includes(requiredRole);
+    return normalizedRoles.includes(normalizeRole(requiredRole));
   }
 
   function hasWorkspace(workspace: string | string[]): boolean {
