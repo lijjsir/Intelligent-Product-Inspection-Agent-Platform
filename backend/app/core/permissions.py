@@ -42,6 +42,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "billing": {ROLE_ADMIN},
     "feedback": {ROLE_ADMIN, ROLE_INSPECTOR, ROLE_ANALYST},
     "quality": {ROLE_ADMIN, ROLE_ANALYST},
+    "agent_ops": {ROLE_ADMIN, ROLE_AGENT_OPERATOR},
 }
 
 

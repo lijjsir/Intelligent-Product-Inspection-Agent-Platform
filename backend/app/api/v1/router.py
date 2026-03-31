@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     agent,
+    agent_ops,
     alerts,
     analytics,
     auth,
@@ -27,6 +28,7 @@ router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 router.include_router(tools.router, prefix="/tools", tags=["tools"])
 router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
+router.include_router(agent_ops.router, tags=["agent-ops"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
 router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])

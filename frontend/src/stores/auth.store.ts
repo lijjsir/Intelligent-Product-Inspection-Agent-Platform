@@ -49,8 +49,10 @@ export const useAuthStore = defineStore("auth", () => {
   }
   const normalizedRoles = roles.value.map(normalizeRole);
   if (!workspaces.value.length) {
-    if (normalizedRoles.includes(ROLE_ADMIN) || normalizedRoles.includes(ROLE_ANALYST)) {
-      workspaces.value = [WORKSPACE_GOVERNANCE];
+    if (normalizedRoles.includes(ROLE_ADMIN)) {
+      workspaces.value = [WORKSPACE_APP, WORKSPACE_OPS, WORKSPACE_GOVERNANCE];
+    } else if (normalizedRoles.includes(ROLE_ANALYST)) {
+      workspaces.value = [WORKSPACE_APP, WORKSPACE_GOVERNANCE];
     } else if (normalizedRoles.includes(ROLE_AGENT_OPERATOR)) {
       workspaces.value = [WORKSPACE_OPS];
     } else if (role.value) {
@@ -130,12 +132,6 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function resolveDefaultRoute() {
-    if (hasWorkspace(WORKSPACE_GOVERNANCE)) {
-      return "/governance/quality/report";
-    }
-    if (hasWorkspace(WORKSPACE_OPS)) {
-      return "/ops/runtime";
-    }
     return "/app/dashboard";
   }
 

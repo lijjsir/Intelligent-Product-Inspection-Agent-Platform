@@ -19,6 +19,7 @@ class BaseRepository(Generic[T]):
     async def create(self, instance: T) -> T:
         self._session.add(instance)
         await self._session.flush()
+        await self._session.refresh(instance)
         return instance
 
     async def list_paged(self, model: Any, page: int, size: int):

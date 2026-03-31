@@ -8,6 +8,9 @@ class FakeSession:
     async def flush(self):
         return None
 
+    async def refresh(self, obj):
+        return None
+
 
 class FakeUser:
     def __init__(self, **kwargs):
