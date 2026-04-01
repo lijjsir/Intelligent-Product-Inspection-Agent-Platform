@@ -15,11 +15,18 @@ class TaskService:
         self._spec_repo = InspectionSpecRepository(session)
 
     async def create_task(
-        self, created_by: str, product_id: str, spec_code: str, image_urls: list[str], priority: int, metadata: dict | None
+        self,
+        created_by: str,
+        product_id: str,
+        spec_code: str,
+        image_urls: list[str],
+        priority: int,
+        metadata: dict | None,
     ) -> InspectionTask:
         normalized_spec_code = str(spec_code).strip()
         if not normalized_spec_code:
             raise ValidationError("检测标准编码不能为空")
+
         spec = await self._spec_repo.get_active_spec(self._org_id, normalized_spec_code)
         if not spec:
             raise ValidationError(f"检测标准 {normalized_spec_code} 不存在或未启用")

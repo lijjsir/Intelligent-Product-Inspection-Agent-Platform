@@ -1,4 +1,5 @@
 import { http } from "./http";
+import { streamApi } from "./stream.api";
 import type { InspectionTask, TaskCreate, TaskListQuery, TaskRunResponse, TaskStreamEvent } from "@/types/task.types";
 import type { PagedResponse } from "@/types/common.types";
 
@@ -21,8 +22,9 @@ export const taskApi = {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
   },
 
-  stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): EventSource {
-    const token = localStorage.getItem("piap_token") || "";
+  async stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): Promise<EventSource> {
+    const { data } = await streamApi.create("task", taskId);
+    const token = data.data.stream_token;
     const sep = apiBase.endsWith("/") ? "" : "/";
     const url = `${apiBase}${sep}v1/agent/tasks/${taskId}/stream?token=${encodeURIComponent(token)}`;
     const source = new EventSource(url);

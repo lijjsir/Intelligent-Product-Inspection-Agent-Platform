@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     s3_access_key: str = "piap"
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
+    local_upload_dir: str = "runtime_uploads"
+    local_upload_url_prefix: str = "/uploads"
 
     celery_broker_url: str = "redis://localhost:16379/0"
     celery_result_backend: str = "redis://localhost:16379/0"

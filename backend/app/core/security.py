@@ -54,6 +54,21 @@ def create_refresh_token(subject: str, extra: Dict[str, Any] | None = None) -> s
     return jwt.encode(payload, settings.jwt_private_key, algorithm="RS256")
 
 
+def create_stream_token(subject: str, extra: Dict[str, Any] | None = None, ttl_seconds: int = 600) -> str:
+    now = datetime.now(timezone.utc)
+    payload: Dict[str, Any] = {
+        "sub": subject,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
+        "typ": "stream",
+    }
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, settings.jwt_private_key, algorithm="RS256")
+
+
 def decode_token(token: str) -> Dict[str, Any]:
     return jwt.decode(
         token,

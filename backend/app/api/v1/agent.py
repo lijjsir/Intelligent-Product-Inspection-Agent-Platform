@@ -36,6 +36,13 @@ def get_current_user_for_sse(
         user_id=payload.get("sub", ""),
         org_id=payload.get("org_id", ""),
         role=payload.get("role", ""),
+        roles=[str(item) for item in (payload.get("roles") or [])],
+        plan_tier=str(payload.get("plan_tier") or "basic"),
+        capabilities=[str(item) for item in (payload.get("capabilities") or [])],
+        workspaces=[str(item) for item in (payload.get("workspaces") or [])],
+        default_workspace=str(payload.get("default_workspace") or "app"),
+        stream_resource=str(payload.get("resource") or ""),
+        stream_resource_id=str(payload.get("resource_id") or ""),
     )
 
 
@@ -68,6 +75,10 @@ async def stream_task_events(
     db=Depends(get_db),
 ) -> StreamingResponse:
     require_role("task", current.role)
+    if current.stream_resource and (
+        current.stream_resource != "task" or current.stream_resource_id != task_id
+    ):
+        raise ForbiddenError("invalid stream token")
     task = await TaskRepository(db).get(current.org_id, task_id)
     if not task:
         raise NotFoundError("task not found")

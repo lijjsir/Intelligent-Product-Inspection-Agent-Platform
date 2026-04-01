@@ -1,24 +1,29 @@
 <template>
   <section class="login">
     <h2>欢迎回来</h2>
-    <p>请输入组织 ID 与账号密码登录。</p>
+    <p>请输入组织 ID 或组织 slug，以及账号密码进行登录。</p>
+
     <form @submit.prevent="submit">
       <label>
-        组织 ID
-        <input v-model="orgId" type="text" placeholder="org-uuid" />
+        组织 ID / slug
+        <input v-model="orgId" type="text" placeholder="例如：admin 或组织 UUID" />
       </label>
+
       <label>
         账号
-        <input v-model="username" type="text" placeholder="admin" />
+        <input v-model="username" type="text" placeholder="例如：admin" />
       </label>
+
       <label>
         密码
-        <input v-model="password" type="password" placeholder="••••••" />
+        <input v-model="password" type="password" placeholder="请输入密码" />
       </label>
+
       <button type="submit" :disabled="loading">
         {{ loading ? "登录中..." : "登录" }}
       </button>
     </form>
+
     <div class="footer">
       还没有账号？
       <RouterLink to="/register">创建组织</RouterLink>
@@ -45,15 +50,12 @@ const submit = async () => {
   }
   loading.value = true;
   try {
-    console.log("开始登录...");
     await auth.login({
       org_id: orgId.value,
       username: username.value,
       password: password.value,
     });
-    console.log("登录成功，准备跳转，当前 auth.isAuthed:", auth.isAuthed);
     await router.push(auth.resolveDefaultRoute());
-    console.log("路由跳转已执行");
   } catch (error) {
     console.error("登录失败:", error);
   } finally {

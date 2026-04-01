@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta
+from typing import Any, AsyncIterator
+
+from fastapi import Header, Query
+
+from agent.subgraphs.quality_chat import QualityChatGraph
+from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
+from app.core.ids import uuid7
+from app.core.permissions import require_role
+from app.core.security import create_stream_token, safe_decode_token
+from app.repositories.chat_repo import ChatMessageRepository, ChatOpsRepository, ChatSessionRepository
+from app.repositories.task_repo import TaskRepository
+from app.schemas.chat import (
+    ChatMessageResponse,
+    ChatMessageSendRequest,
+    ChatSendResponse,
+    ChatSessionResponse,
+    ChatTaskResultAppendRequest,
+)
+from app.schemas.stream import StreamSessionResponse
+from app.schemas.user import CurrentUser
+from app.services.rag_space_service import RagSpaceService
+from app.services.stream_service import chat_stream_broker
+from infra.database.session import get_session
+
+
+def get_current_user_for_stream(
+    authorization: str = Header(default=""),
+    token: str = Query(default=""),
+) -> CurrentUser:
+    raw_token = ""
+    if authorization.startswith("Bearer "):
+        raw_token = authorization.split(" ", 1)[1]
+    elif token:
+        raw_token = token
+    if not raw_token:
+        raise ForbiddenError("missing stream token")
+    payload = safe_decode_token(raw_token)
+    if payload.get("typ") != "stream":
+        raise ForbiddenError("invalid stream token type")
+    return CurrentUser(
+        user_id=str(payload.get("user_id") or payload.get("sub") or ""),
+        org_id=str(payload.get("org_id") or ""),
+        role=str(payload.get("role") or ""),
+        roles=[str(item) for item in (payload.get("roles") or [])],
+        plan_tier=str(payload.get("plan_tier") or "basic"),
+        capabilities=[str(item) for item in (payload.get("capabilities") or [])],
+        workspaces=[str(item) for item in (payload.get("workspaces") or [])],
+        default_workspace=str(payload.get("default_workspace") or "app"),
+        stream_resource=str(payload.get("resource") or ""),
+        stream_resource_id=str(payload.get("resource_id") or ""),
+    )
+
+
+class ChatService:
+    def __init__(self, *, org_id: str, user_id: str, current: CurrentUser):
+        self._org_id = org_id
+        self._user_id = user_id
+        self._current = current
+        self._graph = QualityChatGraph()
+
+    async def create_session(self, title: str | None = None) -> ChatSessionResponse:
+        async with get_session() as session:
+            repo = ChatSessionRepository(session)
+            obj = await repo.create(self._org_id, self._user_id, title=title or "新会话")
+            await session.commit()
+            return ChatSessionResponse.model_validate(obj)
+
+    async def list_sessions(self, limit: int = 100) -> list[ChatSessionResponse]:
+        async with get_session() as session:
+            repo = ChatSessionRepository(session)
+            rows = await repo.list_for_user(self._org_id, self._user_id, limit=limit)
+            return [ChatSessionResponse.model_validate(item) for item in rows]
+
+    async def list_messages(self, session_id: str, after_seq: int = 0, limit: int = 200) -> list[ChatMessageResponse]:
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            if not await session_repo.get(self._org_id, self._user_id, session_id):
+                raise NotFoundError("chat session not found")
+            repo = ChatMessageRepository(session)
+            rows = await repo.list_for_session(
+                org_id=self._org_id,
+                session_id=session_id,
+                after_seq=after_seq,
+                limit=limit,
+            )
+            return [ChatMessageResponse.model_validate(item) for item in rows]
+
+    async def delete_session(self, session_id: str) -> bool:
+        async with get_session() as session:
+            repo = ChatSessionRepository(session)
+            deleted = await repo.soft_delete(self._org_id, self._user_id, session_id)
+            await session.commit()
+            return deleted
+
+    async def create_stream_session(self, *, resource: str, resource_id: str) -> StreamSessionResponse:
+        require_role("chat" if resource == "chat" else "task", self._current.role)
+        async with get_session() as session:
+            if resource == "chat":
+                session_repo = ChatSessionRepository(session)
+                if not await session_repo.get(self._org_id, self._user_id, resource_id):
+                    raise NotFoundError("chat session not found")
+            else:
+                task_repo = TaskRepository(session)
+                if not await task_repo.get(self._org_id, resource_id):
+                    raise NotFoundError("task not found")
+        expires_at = datetime.utcnow() + timedelta(minutes=10)
+        token = create_stream_token(
+            self._user_id,
+            extra={
+                "org_id": self._org_id,
+                "user_id": self._user_id,
+                "role": self._current.role,
+                "roles": self._current.roles,
+                "plan_tier": self._current.plan_tier,
+                "capabilities": self._current.capabilities,
+                "workspaces": self._current.workspaces,
+                "default_workspace": self._current.default_workspace,
+                "resource": resource,
+                "resource_id": resource_id,
+            },
+            ttl_seconds=600,
+        )
+        return StreamSessionResponse(
+            stream_token=token,
+            expires_at=expires_at.replace(microsecond=0),
+            resource=resource,
+            resource_id=resource_id,
+        )
+
+    async def send_message(self, session_id: str, payload: ChatMessageSendRequest) -> ChatSendResponse:
+        workflow_run_id = str(uuid7())
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            message_repo = ChatMessageRepository(session)
+            ops_repo = ChatOpsRepository(session, self._org_id)
+            chat_session = await session_repo.get(self._org_id, self._user_id, session_id)
+            if not chat_session:
+                raise NotFoundError("chat session not found")
+            await ops_repo.ensure_quality_chat_binding()
+
+            rag_space_id = str((payload.ext or {}).get("selected_rag_space_id") or "").strip()
+            if rag_space_id:
+                rag_service = RagSpaceService(session, org_id=self._org_id, user_id=self._user_id)
+                try:
+                    await rag_service.note_selected(rag_space_id)
+                except ServiceUnavailableError:
+                    # This counter is auxiliary metadata and should not block ordinary chat delivery.
+                    pass
+
+            user_message = await message_repo.create(
+                session_id=session_id,
+                org_id=self._org_id,
+                user_id=self._user_id,
+                role="user",
+                content=payload.message.strip(),
+                message_type="text",
+                payload={
+                    "schema_version": payload.schema_version,
+                    "workspace": payload.workspace,
+                    "metadata": payload.metadata or {},
+                    "ext": payload.ext or {},
+                },
+            )
+            assistant_message = await message_repo.create(
+                session_id=session_id,
+                org_id=self._org_id,
+                user_id=None,
+                role="assistant",
+                content="",
+                message_type="streaming",
+                payload={
+                    "status": "running",
+                    "workflow_run_id": workflow_run_id,
+                },
+            )
+            await session_repo.touch(self._org_id, self._user_id, session_id)
+            await session.commit()
+
+        asyncio.create_task(
+            self._run_workflow(
+                session_id=session_id,
+                assistant_message_id=str(assistant_message.id),
+                request=payload,
+                workflow_run_id=workflow_run_id,
+            )
+        )
+
+        return ChatSendResponse(
+            session=ChatSessionResponse.model_validate(chat_session),
+            user_message=ChatMessageResponse.model_validate(user_message),
+            assistant_message_id=str(assistant_message.id),
+            workflow_run_id=workflow_run_id,
+        )
+
+    async def append_task_result(
+        self,
+        *,
+        session_id: str,
+        payload: ChatTaskResultAppendRequest,
+    ) -> ChatMessageResponse:
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            if not await session_repo.get(self._org_id, self._user_id, session_id):
+                raise NotFoundError("chat session not found")
+            message_repo = ChatMessageRepository(session)
+            content = (
+                "检测任务已创建成功。\n\n"
+                f"任务 ID：{payload.task_id}\n"
+                f"产品编号：{payload.product_id}\n"
+                f"检测标准：{payload.spec_code}\n"
+                f"当前状态：{payload.status}\n"
+                f"图片数量：{payload.image_count}"
+            )
+            message = await message_repo.create(
+                session_id=session_id,
+                org_id=self._org_id,
+                user_id=None,
+                role="assistant",
+                content=content,
+                message_type="task_result",
+                payload={
+                    "answer": content,
+                    "summary": "任务创建成功",
+                    "message_type": "task_result",
+                    "action_state": "task_created",
+                    "created_task": {
+                        "id": payload.task_id,
+                        "status": payload.status,
+                        "product_id": payload.product_id,
+                        "spec_code": payload.spec_code,
+                        "priority": payload.priority,
+                        "image_count": payload.image_count,
+                    },
+                },
+            )
+            await session_repo.touch(self._org_id, self._user_id, session_id)
+            await session.commit()
+            return ChatMessageResponse.model_validate(message)
+
+    async def _run_workflow(
+        self,
+        *,
+        session_id: str,
+        assistant_message_id: str,
+        request: ChatMessageSendRequest,
+        workflow_run_id: str,
+    ) -> None:
+        async def emit(event: dict[str, Any]) -> None:
+            event.setdefault("ts", datetime.utcnow().isoformat())
+            await chat_stream_broker.publish(session_id, event)
+
+        await emit(
+            {
+                "event": "run_started",
+                "session_id": session_id,
+                "message_id": assistant_message_id,
+                "workflow_run_id": workflow_run_id,
+            }
+        )
+
+        try:
+            await self._graph.run(
+                {
+                    "schema_version": request.schema_version,
+                    "request_id": str(uuid7()),
+                    "workflow_run_id": workflow_run_id,
+                    "session_id": session_id,
+                    "assistant_message_id": assistant_message_id,
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "plan_tier": self._current.plan_tier,
+                    "capabilities": self._current.capabilities,
+                    "workspace": request.workspace,
+                    "query": request.message.strip(),
+                    "metadata": request.metadata or {},
+                    "ext": request.ext or {},
+                    "emit": emit,
+                }
+            )
+        except Exception as exc:
+            content = (
+                "这次质量检测问答暂时失败了。我已经保留了你的提问。"
+                "请稍后重试，或者补充更明确的标准编号、产品信息和问题上下文。"
+            )
+            failure_payload = {"status": "failed", "error": str(exc)}
+            async with get_session() as session:
+                repo = ChatMessageRepository(session)
+                await repo.update_assistant_message(
+                    org_id=self._org_id,
+                    message_id=assistant_message_id,
+                    content=content,
+                    message_type="error",
+                    payload=failure_payload,
+                )
+                await session.commit()
+            await emit(
+                {
+                    "event": "run_failed",
+                    "session_id": session_id,
+                    "message_id": assistant_message_id,
+                    "workflow_run_id": workflow_run_id,
+                    "content": content,
+                    "payload": failure_payload,
+                }
+            )
+
+    async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
+        async for event in chat_stream_broker.subscribe(session_id):
+            yield event

@@ -3,7 +3,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
-import { ROLE_ADMIN, normalizeRole } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_USER, normalizeRole } from "@/constants/roles";
 
 const routes = [
   {
@@ -63,11 +63,25 @@ router.beforeEach((to) => {
   if (to.meta.requiresAuth && !auth.isAuthed) {
     return { path: "/login" };
   }
+
+  const primaryRole = normalizeRole(auth.primaryRole);
+  if (auth.isAuthed && primaryRole === ROLE_USER && !["/app/chat", "/app/rag-spaces"].includes(to.path)) {
+    return { path: "/app/chat" };
+  }
+
   const roles = to.meta.roles as string[] | undefined;
   const currentRoles = auth.roles.length ? auth.roles : [auth.role];
   const normalizedRoles = currentRoles.map(normalizeRole);
-  if (roles && !normalizedRoles.includes(ROLE_ADMIN) && !roles.some((role) => normalizedRoles.includes(normalizeRole(role)))) {
-    return { path: "/app/dashboard" };
+  if (roles) {
+    const normalizedRequiredRoles = roles.map(normalizeRole);
+    const hasMatchedRole = normalizedRequiredRoles.some((role) => normalizedRoles.includes(role));
+    const isUserOnlyRoute = normalizedRequiredRoles.includes(ROLE_USER);
+    if (isUserOnlyRoute && !hasMatchedRole) {
+      return { path: "/app/dashboard" };
+    }
+    if (!isUserOnlyRoute && !normalizedRoles.includes(ROLE_ADMIN) && !hasMatchedRole) {
+      return { path: "/app/dashboard" };
+    }
   }
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
     return { path: auth.resolveDefaultRoute() };

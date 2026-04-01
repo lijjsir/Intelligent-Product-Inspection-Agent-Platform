@@ -1,0 +1,20 @@
+[2026-04-01 11:43:48,951: INFO/MainProcess] Connected to redis://localhost:16379/0
+[2026-04-01 11:43:48,970: INFO/MainProcess] mingle: searching for neighbors
+[2026-04-01 11:43:50,053: INFO/MainProcess] mingle: all alone
+[2026-04-01 11:43:50,154: INFO/MainProcess] celery@LAPTOP-6U9Q7SPQ ready.
+[2026-04-01 11:43:50,268: INFO/SpawnPoolWorker-1] child process 23456 calling self.run()
+[2026-04-01 11:43:50,338: INFO/SpawnPoolWorker-4] child process 14472 calling self.run()
+[2026-04-01 11:43:50,419: INFO/SpawnPoolWorker-2] child process 40728 calling self.run()
+[2026-04-01 11:43:50,458: INFO/SpawnPoolWorker-5] child process 40500 calling self.run()
+[2026-04-01 11:43:50,497: INFO/SpawnPoolWorker-6] child process 624 calling self.run()
+[2026-04-01 11:43:50,526: INFO/SpawnPoolWorker-3] child process 16068 calling self.run()
+[2026-04-01 11:43:50,550: INFO/SpawnPoolWorker-8] child process 35216 calling self.run()
+[2026-04-01 11:43:50,568: INFO/SpawnPoolWorker-7] child process 20604 calling self.run()
+[2026-04-01 11:43:50,581: INFO/SpawnPoolWorker-10] child process 28860 calling self.run()
+[2026-04-01 11:43:50,595: INFO/SpawnPoolWorker-12] child process 21980 calling self.run()
+[2026-04-01 11:43:50,599: INFO/SpawnPoolWorker-9] child process 9132 calling self.run()
+[2026-04-01 11:43:50,629: INFO/SpawnPoolWorker-11] child process 12456 calling self.run()
+[2026-04-01 11:43:50,641: INFO/SpawnPoolWorker-14] child process 9876 calling self.run()
+[2026-04-01 11:43:50,645: INFO/SpawnPoolWorker-13] child process 41616 calling self.run()
+[2026-04-01 11:43:50,649: INFO/SpawnPoolWorker-16] child process 14796 calling self.run()
+[2026-04-01 11:43:50,656: INFO/SpawnPoolWorker-15] child process 20936 calling self.run()

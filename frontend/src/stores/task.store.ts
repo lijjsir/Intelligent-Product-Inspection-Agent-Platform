@@ -41,8 +41,21 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
-    const source = taskApi.stream(id, onMessage);
-    return () => source.close();
+    let source: EventSource | null = null;
+    let closed = false;
+    taskApi.stream(id, onMessage)
+      .then((instance) => {
+        if (closed) {
+          instance.close();
+          return;
+        }
+        source = instance;
+      })
+      .catch(() => undefined);
+    return () => {
+      closed = true;
+      source?.close();
+    };
   }
 
   function $reset() {
