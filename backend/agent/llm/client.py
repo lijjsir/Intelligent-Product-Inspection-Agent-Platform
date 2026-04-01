@@ -175,12 +175,15 @@ class LLMClient:
                 return []
 
             vector = self._extract_embedding_vector(data)
-            usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+            usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
             self._safe_update_observation(
                 observation,
                 output={"vector_size": len(vector), "transport": "ark_sdk", "response": data},
-                usage_details=usage,
-                metadata={"vector_size": len(vector), "transport": "ark_sdk"},
+                metadata={
+                    "vector_size": len(vector),
+                    "transport": "ark_sdk",
+                    **({"usage": usage_metadata} if usage_metadata else {}),
+                },
             )
             return vector
 
@@ -228,6 +231,8 @@ class LLMClient:
                 last_error: Exception | None = None
                 request_payload = dict(payload)
                 response_format_fallback = False
+                observation_id: str | None = None
+                data: dict[str, Any] = {}
                 for attempt in range(1, self._request_attempts + 1):
                     try:
                         resp = await client.post(path, json=request_payload, headers=headers)
@@ -275,16 +280,17 @@ class LLMClient:
                         raise status_error
 
                     data = resp.json()
-                    usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+                    usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+                    observation_id = self._tracer.current_observation_id()
                     self._safe_update_observation(
                         observation,
                         output=data,
-                        usage_details=usage,
                         metadata={
                             "status_code": resp.status_code,
                             "response_id": data.get("id") if isinstance(data, dict) else None,
                             "attempt": attempt,
                             "response_format_fallback": response_format_fallback,
+                            **({"usage": usage_metadata} if usage_metadata else {}),
                         },
                     )
                     break
@@ -298,7 +304,7 @@ class LLMClient:
             "model": data.get("model"),
             "usage": data.get("usage"),
         }
-        langfuse_meta = self._build_langfuse_meta()
+        langfuse_meta = self._build_langfuse_meta(observation_id=observation_id)
         if langfuse_meta:
             meta["langfuse"] = langfuse_meta
 
@@ -329,17 +335,28 @@ class LLMClient:
             metadata.update({key: value for key, value in extra.items() if value is not None})
         return metadata
 
-    def _build_langfuse_meta(self) -> dict[str, Any]:
+    def _build_langfuse_meta(self, *, observation_id: str | None = None) -> dict[str, Any]:
         meta: dict[str, Any] = {}
         if self._trace_id:
             meta["trace_id"] = self._trace_id
             trace_url = self._tracer.get_trace_url(self._trace_id)
             if trace_url:
                 meta["trace_url"] = trace_url
-        observation_id = self._tracer.current_observation_id()
         if observation_id:
             meta["observation_id"] = observation_id
         return meta
+
+    @staticmethod
+    def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
+        if not isinstance(raw_usage, dict):
+            return None
+
+        normalized: dict[str, int] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = raw_usage.get(key)
+            if isinstance(value, (int, float)):
+                normalized[key] = int(value)
+        return normalized or None
 
     @staticmethod
     def _retry_delay(attempt: int) -> float:

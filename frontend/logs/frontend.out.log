@@ -1,0 +1,30 @@
+
+> piap-frontend@0.1.0 dev
+> vite
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m1173[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.242.1:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.44.1:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.206.1:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://10.16.107.233:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.23.208.1:[1m5173[22m/[39m
+[2m19:15:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue, /src/layouts/AppLayout.vue?vue&type=style&index=0&scoped=e7291ef4&lang.css[22m
+[2m19:15:50[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue, /src/layouts/AppLayout.vue?vue&type=style&index=0&scoped=e7291ef4&lang.css[22m
+[2m19:17:03[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue, /src/layouts/AppLayout.vue?vue&type=style&index=0&scoped=e7291ef4&lang.css[22m
+[2m19:18:39[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue, /src/layouts/AppLayout.vue?vue&type=style&index=0&scoped=e7291ef4&lang.css[22m
+[2m19:30:27[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/constants/roles.ts[22m
+[2m19:30:33[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router/routes/app.routes.ts[22m
+[2m19:30:42[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router/index.ts[22m
+[2m19:30:51[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/stores/auth.store.ts[22m
+[2m19:31:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue[22m
+[2m19:31:27[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/AppLayout.vue[22m
+[2m19:31:38[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router/index.ts[22m
+[2m20:14:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ChatView.vue, /src/views/ChatView.vue?vue&type=style&index=0&scoped=a497a79e&lang.css[22m
+[2m22:27:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ChatView.vue[22m
+[2m22:27:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/DashboardView.vue, /src/views/TaskListView.vue[22m
+[2m22:27:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/DashboardView.vue, /src/views/TaskListView.vue[22m
+[2m22:27:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ChatView.vue[22m
+[2m22:27:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ChatView.vue, /src/views/ChatView.vue?vue&type=style&index=0&scoped=a497a79e&lang.css[22m

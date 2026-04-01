@@ -1,0 +1,19 @@
+ 
+ -------------- celery@LAPTOP-6U9Q7SPQ v5.6.3 (recovery)
+--- ***** ----- 
+-- ******* ---- Windows-10-10.0.26200-SP0 2026-04-01 11:43:48
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         piap:0x124864a2050
+- ** ---------- .> transport:   redis://localhost:16379/0
+- ** ---------- .> results:     redis://localhost:16379/0
+- *** --- * --- .> concurrency: 16 (prefork)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> celery           exchange=celery(direct) key=celery
+                
+
+[tasks]
+
+

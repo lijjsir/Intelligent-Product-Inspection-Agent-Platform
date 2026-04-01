@@ -1,3 +1,5 @@
+import { ROLE_USER } from "@/constants/roles";
+
 export const appRoutes = [
   { path: "dashboard", name: "app-dashboard", component: () => import("@/views/DashboardView.vue") },
   { path: "tasks", name: "app-tasks", component: () => import("@/views/TaskListView.vue") },
@@ -10,4 +12,6 @@ export const appRoutes = [
   { path: "analytics", name: "app-analytics", component: () => import("@/views/AnalyticsView.vue") },
   { path: "users", name: "app-users", component: () => import("@/views/UserListView.vue") },
   { path: "profile", name: "app-profile", component: () => import("@/views/ProfileView.vue") },
+  { path: "chat", name: "app-chat", component: () => import("@/views/ChatView.vue"), meta: { roles: [ROLE_USER] } },
+  { path: "rag-spaces", name: "app-rag-spaces", component: () => import("@/views/RagSpaceView.vue"), meta: { roles: [ROLE_USER] } },
 ];

@@ -50,6 +50,7 @@ class KnowledgeIndexer:
                         "title": str(doc.get("title") or "标准文档"),
                         "text": text,
                         "source": str(doc.get("source") or ""),
+                        **dict(doc.get("payload") or {}),
                     },
                 }
             )

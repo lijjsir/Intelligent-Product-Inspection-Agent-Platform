@@ -6,13 +6,16 @@ from app.api.v1 import (
     alerts,
     analytics,
     auth,
+    chat,
     billing,
     feedbacks,
     inspection_specs,
     model_configs,
     quality,
+    rag_spaces,
     results,
     stability,
+    streams,
     tasks,
     tools,
     users,
@@ -29,6 +32,9 @@ router.include_router(tools.router, prefix="/tools", tags=["tools"])
 router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(agent_ops.router, tags=["agent-ops"])
+router.include_router(chat.router, tags=["chat"])
+router.include_router(rag_spaces.router, tags=["rag-spaces"])
+router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
 router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])

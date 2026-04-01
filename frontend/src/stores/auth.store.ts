@@ -6,6 +6,7 @@ import {
   ROLE_ADMIN,
   ROLE_AGENT_OPERATOR,
   ROLE_ANALYST,
+  ROLE_USER,
   WORKSPACE_APP,
   WORKSPACE_GOVERNANCE,
   WORKSPACE_OPS,
@@ -132,6 +133,9 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function resolveDefaultRoute() {
+    if (normalizeRole(primaryRole.value) === ROLE_USER) {
+      return "/app/chat";
+    }
     return "/app/dashboard";
   }
 

@@ -8,6 +8,7 @@ from app.core.permissions import (
     ROLE_AGENT_OPERATOR,
     ROLE_ANALYST,
     ROLE_INSPECTOR,
+    ROLE_USER,
     normalize_role,
 )
 
@@ -81,7 +82,7 @@ def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
 def derive_workspaces(roles: list[str]) -> list[str]:
     workspaces: list[str] = []
     normalized = [normalize_role(r) for r in roles]
-    if any(role in {ROLE_INSPECTOR, ROLE_ANALYST, ROLE_ADMIN} for role in normalized):
+    if any(role in {ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_ADMIN} for role in normalized):
         workspaces.append(WORKSPACE_APP)
     if any(role in {ROLE_AGENT_OPERATOR, ROLE_ADMIN} for role in normalized):
         workspaces.append(WORKSPACE_OPS)

@@ -1,4 +1,5 @@
 export const ROLE_ADMIN = "admin";
+export const ROLE_USER = "user";
 export const ROLE_INSPECTOR = "inspector";
 export const ROLE_ANALYST = "analyst";
 export const ROLE_AGENT_OPERATOR = "agent_operator";
@@ -6,6 +7,7 @@ export const ROLE_API_SERVICE = "api_service";
 
 export const ALL_ROLES = [
   ROLE_ADMIN,
+  ROLE_USER,
   ROLE_INSPECTOR,
   ROLE_ANALYST,
   ROLE_AGENT_OPERATOR,

@@ -5,10 +5,10 @@ from collections import defaultdict, deque
 from typing import AsyncIterator
 
 
-class TaskStreamBroker:
-    def __init__(self) -> None:
+class MemoryStreamBroker:
+    def __init__(self, history_size: int = 200) -> None:
         self._queues: dict[str, set[asyncio.Queue]] = defaultdict(set)
-        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+        self._history: dict[str, deque] = defaultdict(lambda: deque(maxlen=history_size))
         self._lock = asyncio.Lock()
 
     async def publish(self, task_id: str, event: dict) -> None:
@@ -34,4 +34,6 @@ class TaskStreamBroker:
                 self._queues[task_id].discard(q)
 
 
-stream_broker = TaskStreamBroker()
+task_stream_broker = MemoryStreamBroker()
+chat_stream_broker = MemoryStreamBroker(history_size=500)
+stream_broker = task_stream_broker
