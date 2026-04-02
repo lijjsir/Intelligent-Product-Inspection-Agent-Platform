@@ -9,6 +9,7 @@ class TokenUsageLedger(Base):
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True)
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     task_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     result_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     model_config_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)

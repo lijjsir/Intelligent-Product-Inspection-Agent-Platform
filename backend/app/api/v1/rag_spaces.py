@@ -57,3 +57,16 @@ async def upload_rag_documents(
     require_role("chat", current.role)
     service = RagSpaceService(db, org_id=current.org_id, user_id=current.user_id)
     return ResponseEnvelope(data=await service.upload_documents(rag_space_id=rag_space_id, files=files))
+
+
+@router.delete("/{rag_space_id}/documents/{file_id}", response_model=ResponseEnvelope[dict])
+async def delete_rag_document(
+    rag_space_id: str,
+    file_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("chat", current.role)
+    service = RagSpaceService(db, org_id=current.org_id, user_id=current.user_id)
+    await service.delete_document(rag_space_id=rag_space_id, file_id=file_id)
+    return ResponseEnvelope(data={"deleted": True})

@@ -19,7 +19,12 @@ async def list_tasks(
     db=Depends(get_db),
 ):
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     items, total = await service.list_tasks(query)
     return ResponseEnvelope(
         data=PagedResponse(
@@ -57,7 +62,12 @@ async def get_task(
     db=Depends(get_db),
 ):
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     task = await service.get_task(task_id)
     if not task:
         raise NotFoundError(f"Task {task_id} not found")
@@ -71,9 +81,34 @@ async def get_status(
     db=Depends(get_db),
 ):
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     task = await service.get_task(task_id)
     if not task:
         raise NotFoundError(f"Task {task_id} not found")
 
     return ResponseEnvelope(data=TaskStatusResponse(id=task.id, status=task.status))
+
+
+@router.delete("/{task_id}", response_model=ResponseEnvelope[dict])
+async def delete_task(
+    task_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("task", current.role)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
+    task = await service.delete_task(task_id)
+    if not task:
+        raise NotFoundError(f"Task {task_id} not found")
+    await db.commit()
+    return ResponseEnvelope(data={"deleted": True, "task_id": task_id})

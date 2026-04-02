@@ -91,6 +91,16 @@ class RagSpaceService:
             await self._get_owned_space(rag_space_id)
             if not files:
                 raise ValidationError("no files uploaded")
+            if len(files) != 1:
+                raise ValidationError("每个 RAG 空间只允许上传一个文档")
+            existing_rows = await self._files.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+                limit=2,
+            )
+            if existing_rows:
+                raise ValidationError("每个 RAG 空间只允许保留一个文档，请先删除原文档")
 
             saved_rows: list[RagSpaceFileResponse] = []
             for upload in files:
@@ -137,6 +147,43 @@ class RagSpaceService:
             )
             await self._session.commit()
             return saved_rows
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def delete_document(self, *, rag_space_id: str, file_id: str) -> None:
+        try:
+            await self._get_owned_space(rag_space_id)
+            row = await self._files.soft_delete(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                file_id=file_id,
+                owner_user_id=self._user_id,
+            )
+            if row is None:
+                raise NotFoundError("rag document not found")
+            self._storage.delete_by_url(str(row.file_url))
+            await self._indexer.delete_by_filter(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "rag_space_id": rag_space_id,
+                    "file_name": str(row.file_name),
+                }
+            )
+            await self._spaces.recalculate_file_count(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            refreshed_space = await self._get_owned_space(rag_space_id)
+            if int(refreshed_space.file_count or 0) <= 0:
+                await self._spaces.soft_delete(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    owner_user_id=self._user_id,
+                )
+            await self._session.commit()
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise

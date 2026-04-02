@@ -8,7 +8,10 @@ from sqlalchemy.exc import ProgrammingError
 from agent.llm.client import LLMClient
 from app.services.rag_space_service import _is_rag_metadata_missing
 from agent.subgraphs.quality_chat.graph import (
+    _extract_named_user_from_history,
+    _chat_usage_from_state,
     _fallback_answer,
+    _smalltalk_answer,
     knowledge,
     planner,
     quality_gate,
@@ -62,6 +65,53 @@ def test_normalize_usage_accepts_object_shape():
     }
 
 
+def test_chat_usage_from_state_extracts_llm_usage_for_general_qa():
+    usage = _chat_usage_from_state(
+        {
+            "org_id": "org-1",
+            "user_id": "user-1",
+            "workspace": "app",
+            "trace": {"trace_id": "trace-root"},
+            "reasoning": {
+                "llm_meta": {
+                    "model": "ep-chat",
+                    "usage": {
+                        "prompt_tokens": 30,
+                        "completion_tokens": 12,
+                        "total_tokens": 42,
+                    },
+                    "langfuse": {"trace_id": "trace-llm"},
+                }
+            },
+        }
+    )
+
+    assert usage is not None
+    assert usage["model_key"] == "ep-chat"
+    assert usage["total_tokens"] == 42
+    assert usage["trace_id"] == "trace-llm"
+
+
+def test_smalltalk_answer_remembers_user_name_from_history():
+    answer = _smalltalk_answer(
+        "我叫什么名字",
+        [
+            {"role": "user", "content": "你好"},
+            {"role": "user", "content": "我叫tgg"},
+        ],
+    )
+    assert answer == "你之前告诉过我，你叫tgg。"
+
+
+def test_extract_named_user_from_history_reads_latest_name():
+    history = [
+        {"role": "user", "content": "我叫alice"},
+        {"role": "assistant", "content": "好的"},
+        {"role": "user", "content": "我叫tgg"},
+    ]
+    assert _extract_named_user_from_history(history) == "tgg"
+
+
 def test_rag_metadata_missing_detection_matches_missing_table_error():
     exc = ProgrammingError(
         "SELECT * FROM rag_spaces",
@@ -95,8 +145,8 @@ async def test_planner_routes_smalltalk_without_task_state():
         "ext": {},
     }
     updated = await planner(state)
-    assert updated["intent"] == "general_qa"
-    assert updated["intent_confidence"] >= 0.8
+    assert updated["intent"] == "smalltalk"
+    assert updated["intent_confidence"] >= 0.9
 
 
 @pytest.mark.asyncio
@@ -132,7 +182,7 @@ async def test_planner_routes_task_create_for_plain_quality_detection_trigger():
         "ext": {},
     }
     updated = await planner(state)
-    assert updated["intent"] == "quality_qa"
+    assert updated["intent"] == "task_create"
 
 
 @pytest.mark.asyncio
@@ -189,7 +239,7 @@ async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
 async def test_task_extractor_marks_missing_slots_for_incomplete_task_request():
     state = {
         "intent": "task_create",
-        "query": "help me create an inspection task, product id P-1001",
+        "query": "请帮我创建检测任务，产品编号 P-1001",
         "metadata": {},
         "ext": {},
         "task_draft": {},
@@ -197,8 +247,8 @@ async def test_task_extractor_marks_missing_slots_for_incomplete_task_request():
     }
     updated = await task_extractor(state)
     assert updated["action_state"] == "awaiting_task_details"
-    assert updated["task_draft"]["product_id"] == "id"
-    assert updated["missing_slots"] == ["image_urls"]
+    assert updated["task_draft"]["product_id"] == "P-1001"
+    assert updated["missing_slots"] == ["spec_code", "image_urls"]
 
 
 @pytest.mark.asyncio
@@ -218,7 +268,7 @@ async def test_task_followup_confirm_requests_creation_when_slots_are_complete()
         "awaiting_confirmation": True,
     }
     updated = await task_extractor(state)
-    assert updated["action_state"] == "awaiting_task_confirmation"
+    assert updated["action_state"] == "task_create_requested"
     assert updated["missing_slots"] == []
 
 

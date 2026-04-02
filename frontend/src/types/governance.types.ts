@@ -40,6 +40,7 @@ export interface BillingBucket {
 
 export interface TokenLedger {
   id: string;
+  user_id: string | null;
   model_key: string;
   product_line: string | null;
   total_tokens: number;
@@ -54,6 +55,31 @@ export interface BillingSummary {
   total_cost: number;
   buckets: BillingBucket[];
   ledger_items: TokenLedger[];
+  user_summaries: UserTokenUsageSummary[];
+}
+
+export interface UserTokenUsageSummary {
+  user_id: string;
+  org_id: string;
+  username: string;
+  role: string;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost: number;
+  request_count: number;
+  last_ledger_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CurrentUserTokenUsage {
+  user_id: string;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_cost: number;
+  request_count: number;
+  last_ledger_at: string | null;
 }
 
 export interface BillingQuery {

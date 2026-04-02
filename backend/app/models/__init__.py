@@ -9,6 +9,7 @@ from app.models.tool import ToolRegistry, ToolExecution
 from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
+from app.models.user_token_usage import UserTokenUsageSummary
 from app.models.feedback import ResultFeedback
 from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
 from app.models.agent_ops import AgentDefinition, PromptVersion, IntentRoute
@@ -29,6 +30,7 @@ __all__ = [
     "AuditOutbox",
     "ModelConfig",
     "TokenUsageLedger",
+    "UserTokenUsageSummary",
     "ResultFeedback",
     "InspectionSpec",
     "InspectionSpecItem",

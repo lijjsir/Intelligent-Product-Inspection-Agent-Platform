@@ -23,4 +23,8 @@ export const ragSpaceApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+
+  deleteDocument(ragSpaceId: string, fileId: string) {
+    return http.delete<{ deleted: boolean }>(`/v1/rag-spaces/${ragSpaceId}/documents/${fileId}`);
+  },
 };

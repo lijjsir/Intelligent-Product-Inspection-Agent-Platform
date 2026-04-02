@@ -44,6 +44,20 @@ export const chatApi = {
     return http.post<ChatMessage>(`/v1/chat/sessions/${sessionId}/task-result`, payload);
   },
 
+  submitTask(
+    sessionId: string,
+    payload: {
+      source_message_id?: string | null;
+      product_id: string;
+      spec_code: string;
+      image_urls: string[];
+      priority: number;
+      metadata?: Record<string, unknown>;
+    },
+  ) {
+    return http.post<ChatMessage>(`/v1/chat/sessions/${sessionId}/tasks/submit`, payload);
+  },
+
   async uploadAttachments(files: File[]) {
     const form = new FormData();
     for (const file of files) {

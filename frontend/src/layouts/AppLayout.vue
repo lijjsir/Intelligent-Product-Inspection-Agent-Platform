@@ -38,6 +38,10 @@
             <el-icon><ChatDotRound /></el-icon>
             <span>智能体对话</span>
           </RouterLink>
+          <RouterLink to="/app/tasks" class="nav-link">
+            <el-icon><List /></el-icon>
+            <span>我的任务</span>
+          </RouterLink>
           <RouterLink to="/app/rag-spaces" class="nav-link">
             <el-icon><CollectionTag /></el-icon>
             <span>RAG 空间</span>
@@ -208,7 +212,7 @@ const canOps = computed(() => !canChat.value && auth.workspaces.includes(WORKSPA
 const canGovernance = computed(() => !canChat.value && auth.workspaces.includes(WORKSPACE_GOVERNANCE));
 const canUserAdmin = computed(() => normalizedRoles.value.includes(ROLE_ADMIN));
 const showChatControls = computed(() => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"));
-const profileName = computed(() => userStore.current?.username || auth.userId || "当前用户");
+const profileName = computed(() => userStore.current?.username || auth.username || auth.userId || "当前用户");
 const workspaceLabel = computed(() => {
   switch (auth.defaultWorkspace) {
     case "app":

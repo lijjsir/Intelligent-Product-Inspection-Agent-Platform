@@ -2,13 +2,17 @@
 import { CollectionTag, Paperclip, Promotion } from "@element-plus/icons-vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { chatApi } from "@/api/chat.api";
+import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
-import type { ChatAttachment, ChatCreatedTask, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
+import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { TaskCreate } from "@/types/task.types";
 
+const router = useRouter();
+const billingStore = useBillingStore();
 const chatStore = useChatStore();
 const taskStore = useTaskStore();
 const inspectionSpecStore = useInspectionSpecStore();
@@ -23,6 +27,8 @@ const taskSubmitting = ref(false);
 const taskFormRef = ref<FormInstance>();
 const taskSourceMessage = ref<ChatMessage | null>(null);
 const taskFormAttachments = ref<ChatAttachment[]>([]);
+const taskStreamStates = ref<Record<string, { status: string; stage?: string; message?: string }>>({});
+const taskStreamDisposers = new Map<string, () => void>();
 const taskForm = ref({
   product_id: "",
   spec_code: "",
@@ -58,6 +64,18 @@ const streamStatusText = computed(() => {
   return "智能体处理中...";
 });
 const specOptions = computed(() => inspectionSpecStore.items);
+const totalTokenText = computed(() => (billingStore.myUsage?.total_tokens ?? 0).toLocaleString("zh-CN"));
+const latestTokenCountedMessageId = computed(() => {
+  const candidates = [...chatStore.messages].reverse();
+  for (const message of candidates) {
+    if (message.role !== "assistant") continue;
+    if (message.message_type === "streaming") continue;
+    if (!["assistant_text", "quality_answer"].includes(message.message_type)) continue;
+    return message.id;
+  }
+  return "";
+});
+const syncedUsageMessageId = ref("");
 
 function formatTime(value?: string | null) {
   if (!value) return "";
@@ -200,17 +218,6 @@ function buildTaskPayload(message: ChatMessage, useDialogState: boolean): TaskCr
   };
 }
 
-function normalizeCreatedTask(task: Awaited<ReturnType<typeof taskStore.createTask>>): ChatCreatedTask {
-  return {
-    id: task.id,
-    status: task.status,
-    product_id: task.product_id,
-    spec_code: task.spec_code,
-    priority: task.priority,
-    image_count: task.image_urls?.length || 0,
-  };
-}
-
 async function createTaskFromMessage(message: ChatMessage, useDialogState: boolean) {
   const payload = buildTaskPayload(message, useDialogState);
   if (!payload.product_id || !payload.spec_code || payload.image_urls.length === 0) {
@@ -220,9 +227,18 @@ async function createTaskFromMessage(message: ChatMessage, useDialogState: boole
 
   taskSubmitting.value = true;
   try {
-    const created = await taskStore.createTask(payload);
-    await chatStore.appendTaskResult(normalizeCreatedTask(created));
-    ElMessage.success("检测任务已创建。");
+    const createdMessage = await chatStore.submitTask({
+      source_message_id: message.id,
+      product_id: payload.product_id,
+      spec_code: payload.spec_code,
+      image_urls: payload.image_urls,
+      priority: payload.priority ?? 5,
+      metadata: payload.metadata,
+    });
+    if (createdMessage?.payload?.created_task?.id) {
+      ensureTaskStream(createdMessage.payload.created_task.id);
+    }
+    ElMessage.success("检测任务已创建并开始执行。");
     if (useDialogState) {
       resetTaskDialog();
     }
@@ -323,6 +339,63 @@ async function scrollToBottom() {
   container.scrollTop = container.scrollHeight;
 }
 
+function taskState(taskId: string) {
+  return taskStreamStates.value[taskId] || null;
+}
+
+function disposeTaskStreams() {
+  for (const dispose of taskStreamDisposers.values()) {
+    dispose();
+  }
+  taskStreamDisposers.clear();
+}
+
+function ensureTaskStream(taskId: string) {
+  if (!taskId || taskStreamDisposers.has(taskId)) return;
+  taskStreamStates.value = {
+    ...taskStreamStates.value,
+    [taskId]: taskStreamStates.value[taskId] || { status: "running" },
+  };
+  const dispose = taskStore.subscribeTaskStream(taskId, async (event) => {
+    taskStreamStates.value = {
+      ...taskStreamStates.value,
+      [taskId]: {
+        status: String(event.status || taskStreamStates.value[taskId]?.status || "running"),
+        stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage,
+        message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message,
+      },
+    };
+    if (event.status === "done" || event.status === "failed") {
+      const currentDispose = taskStreamDisposers.get(taskId);
+      currentDispose?.();
+      taskStreamDisposers.delete(taskId);
+      await chatStore.reloadCurrentSessionMessages();
+    }
+  });
+  taskStreamDisposers.set(taskId, dispose);
+}
+
+function syncTaskStreamsFromMessages() {
+  const createdTaskIds = new Set(
+    chatStore.messages
+      .map((message) => message.payload?.created_task?.id)
+      .filter((value): value is string => Boolean(value)),
+  );
+  for (const taskId of createdTaskIds) {
+    const message = chatStore.messages.find((item) => item.payload?.created_task?.id === taskId);
+    const status = String(message?.payload?.created_task?.status || "");
+    if (status !== "done" && status !== "failed") {
+      ensureTaskStream(taskId);
+    }
+  }
+  for (const [taskId, dispose] of taskStreamDisposers.entries()) {
+    if (!createdTaskIds.has(taskId)) {
+      dispose();
+      taskStreamDisposers.delete(taskId);
+    }
+  }
+}
+
 onMounted(async () => {
   try {
     await chatStore.initForChatPage();
@@ -339,17 +412,26 @@ onMounted(async () => {
     // Spec loading should not block chat usage.
   }
 
+  try {
+    await billingStore.fetchMyUsage();
+  } catch {
+    // Token summary is informative only.
+  }
+
   await scrollToBottom();
+  syncTaskStreamsFromMessages();
 });
 
 onBeforeUnmount(() => {
   chatStore.stopStream();
+  disposeTaskStreams();
 });
 
 watch(
   () => chatStore.messages.length,
   async () => {
     await scrollToBottom();
+    syncTaskStreamsFromMessages();
   },
 );
 
@@ -357,8 +439,19 @@ watch(
   () => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"),
   async () => {
     await scrollToBottom();
+    syncTaskStreamsFromMessages();
   },
 );
+
+watch(latestTokenCountedMessageId, async (messageId) => {
+  if (!messageId || messageId === syncedUsageMessageId.value) return;
+  syncedUsageMessageId.value = messageId;
+  try {
+    await billingStore.fetchMyUsage();
+  } catch {
+    // Ignore refresh failures for the lightweight token badge.
+  }
+});
 </script>
 
 <template>
@@ -382,6 +475,9 @@ watch(
             :value="space.id"
           />
         </el-select>
+        <el-tag type="info" effect="plain" class="token-tag">
+          已使用 Token：{{ totalTokenText }}
+        </el-tag>
       </div>
 
       <div class="toolbar-status">
@@ -459,6 +555,17 @@ watch(
                   <span>{{ message.payload.created_task.spec_code }}</span>
                   <span>图片数量</span>
                   <span>{{ message.payload.created_task.image_count }}</span>
+                </div>
+                <div v-if="taskState(message.payload.created_task.id)" class="task-stream-inline">
+                  <el-tag size="small" type="warning" effect="plain">
+                    {{ taskState(message.payload.created_task.id)?.status || "running" }}
+                  </el-tag>
+                  <span class="task-stream-text">
+                    {{ taskState(message.payload.created_task.id)?.stage || taskState(message.payload.created_task.id)?.message || "智能体执行中..." }}
+                  </span>
+                </div>
+                <div class="task-action-buttons task-card-actions">
+                  <el-button size="small" @click="router.push(`/app/tasks/${message.payload.created_task.id}`)">查看任务详情</el-button>
                 </div>
               </div>
 
@@ -655,6 +762,10 @@ watch(
   color: #0f3d4c;
 }
 
+.token-tag {
+  font-weight: 600;
+}
+
 .rag-select {
   width: 300px;
 }
@@ -785,6 +896,23 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.task-stream-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.task-stream-text {
+  line-height: 1.6;
+}
+
+.task-card-actions {
+  margin-top: 12px;
 }
 
 .composer {

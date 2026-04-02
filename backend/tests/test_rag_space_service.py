@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.services.rag_space_service import RagSpaceService
 
 
@@ -41,6 +41,8 @@ class FakeSpaceRepo:
         self.list_calls: list[dict[str, object]] = []
         self.get_calls: list[dict[str, object]] = []
         self.increment_calls: list[dict[str, object]] = []
+        self.deleted_space_ids: list[str] = []
+        self.file_counts: dict[str, int] = {"space-1": 1}
 
     async def create(self, **kwargs):
         return FakeSpace(
@@ -69,7 +71,9 @@ class FakeSpaceRepo:
         )
         if rag_space_id == "foreign-space":
             return None
-        return FakeSpace(rag_space_id=rag_space_id, org_id=org_id, created_by=owner_user_id)
+        space = FakeSpace(rag_space_id=rag_space_id, org_id=org_id, created_by=owner_user_id)
+        space.file_count = self.file_counts.get(rag_space_id, space.file_count)
+        return space
 
     async def increment_selected_count(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
         self.increment_calls.append(
@@ -81,12 +85,19 @@ class FakeSpaceRepo:
         )
 
     async def recalculate_file_count(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+        self.file_counts[rag_space_id] = 0
         return None
+
+    async def soft_delete(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+        self.deleted_space_ids.append(rag_space_id)
+        return FakeSpace(rag_space_id=rag_space_id, org_id=org_id, created_by=owner_user_id)
 
 
 class FakeFileRepo:
     def __init__(self):
         self.list_calls: list[dict[str, object]] = []
+        self.deleted_file_ids: list[str] = []
+        self.rows: list[FakeFile] = [FakeFile(rag_space_id="space-1", org_id="org-1")]
 
     async def list_for_space(
         self,
@@ -104,7 +115,21 @@ class FakeFileRepo:
                 "limit": limit,
             }
         )
-        return [FakeFile(rag_space_id=rag_space_id, org_id=org_id)]
+        return list(self.rows[:limit])
+
+    async def soft_delete(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        file_id: str,
+        owner_user_id: str | None = None,
+    ):
+        if file_id == "missing":
+            return None
+        self.deleted_file_ids.append(file_id)
+        self.rows = []
+        return FakeFile(rag_space_id=rag_space_id, org_id=org_id)
 
 
 class FakeStorageService:
@@ -117,10 +142,16 @@ class FakeStorageService:
             "size_bytes": len(kwargs.get("data") or b""),
         }
 
+    def delete_by_url(self, url: str):
+        return None
+
 
 class FakeIndexer:
     async def index(self, docs):
         return {"accepted": len(docs)}
+
+    async def delete_by_filter(self, payload_filter):
+        return None
 
 
 class FakeSession:
@@ -174,6 +205,35 @@ async def test_note_selected_rejects_foreign_rag_space(monkeypatch):
         await service.note_selected("foreign-space")
 
     assert space_repo.increment_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_document_uses_current_user_scope(monkeypatch):
+    service, space_repo, file_repo = build_service(monkeypatch)
+
+    await service.delete_document(rag_space_id="space-1", file_id="file-1")
+
+    assert file_repo.deleted_file_ids == ["file-1"]
+    assert space_repo.deleted_space_ids == ["space-1"]
+
+
+@pytest.mark.asyncio
+async def test_upload_documents_rejects_multiple_files(monkeypatch):
+    service, _, _ = build_service(monkeypatch)
+
+    class FakeUpload:
+        def __init__(self, filename: str):
+            self.filename = filename
+            self.content_type = "text/plain"
+
+        async def read(self):
+            return b"hello"
+
+    with pytest.raises(ValidationError, match="只允许上传一个文档"):
+        await service.upload_documents(
+            rag_space_id="space-1",
+            files=[FakeUpload("a.txt"), FakeUpload("b.txt")],
+        )
 
 
 def test_build_docs_from_file_includes_user_scope_in_payload(monkeypatch):

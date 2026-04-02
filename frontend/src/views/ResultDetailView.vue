@@ -1,25 +1,33 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { useResultStore } from '@/stores/result.store'
-import { useTaskStore } from '@/stores/task.store'
-import { ElMessage } from 'element-plus'
-import type { Verdict } from '@/types/result.types'
-import DefectImageViewer from '@/components/business/result/DefectImageViewer.vue'
-import FeedbackWidget from '@/components/business/result/FeedbackWidget.vue'
+import { computed, onMounted, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
+import DefectImageViewer from "@/components/business/result/DefectImageViewer.vue";
+import FeedbackWidget from "@/components/business/result/FeedbackWidget.vue";
+import { useResultStore } from "@/stores/result.store";
+import { useTaskStore } from "@/stores/task.store";
 
-const route = useRoute()
-const router = useRouter()
-const store = useResultStore()
-const taskStore = useTaskStore()
+const route = useRoute();
+const router = useRouter();
+const store = useResultStore();
+const taskStore = useTaskStore();
 
-const loading = ref(true)
-const taskId = route.params.id as string
+const loading = ref(true);
+const taskId = route.params.id as string;
 
-// Get task images for defect visualization
+function resolveTaskImageUrl(value?: string | null) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (url.startsWith("data:")) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith("/uploads/")) return url;
+  if (url.startsWith("uploads/")) return `/${url}`;
+  return url;
+}
+
 const taskImages = computed(() => {
-  return taskStore.current?.image_urls || []
-})
+  return (taskStore.current?.image_urls || []).map((item) => resolveTaskImageUrl(item)).filter(Boolean);
+});
 
 const getVerdictType = (verdict: string) => {
   const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
@@ -29,29 +37,27 @@ const getVerdictType = (verdict: string) => {
     manual_required: "info",
   };
   return map[verdict] || "info";
-}
+};
 
 onMounted(async () => {
   try {
-    // Fetch both result and task data
     await Promise.all([
       store.fetchByTask(taskId),
       taskStore.fetchTask(taskId)
-    ])
+    ]);
   } catch (err: any) {
     if (err.response?.status === 404) {
-      // 实际上并不是错误，可能只是尚未生成
-      ElMessage.warning("该任务暂无检测结果或不存在")
+      ElMessage.warning("该任务暂无检测结果或不存在");
     } else {
-      ElMessage.error("获取检测结果失败")
+      ElMessage.error("获取检测结果失败");
     }
   } finally {
-    loading.value = false
+    loading.value = false;
   }
-})
+});
 
 function goBack() {
-  router.back()
+  router.back();
 }
 </script>
 
