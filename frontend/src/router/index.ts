@@ -47,6 +47,19 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: "/users",
+    component: () => import("@/layouts/AppLayout.vue"),
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: "",
+        name: "users",
+        component: () => import("@/views/UserListView.vue"),
+        meta: { title: "用户管理", roles: ["admin"] },
+      },
+    ],
+  },
+  {
     path: "/:pathMatch(.*)*",
     redirect: "/app/dashboard",
   },
