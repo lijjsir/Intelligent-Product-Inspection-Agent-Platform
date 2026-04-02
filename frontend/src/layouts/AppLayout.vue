@@ -19,19 +19,15 @@
               </RouterLink>
               <RouterLink to="/app/tasks" class="nav-link">
                 <el-icon><List /></el-icon>
-                <span>任务列表</span>
+                <span>任务管理</span>
               </RouterLink>
-              <RouterLink to="/app/alerts" class="nav-link">
+              <RouterLink to="/app/stability" class="nav-link">
                 <el-icon><Bell /></el-icon>
-                <span>预警中心</span>
+                <span>稳定性工作台</span>
               </RouterLink>
-              <RouterLink to="/app/analytics" class="nav-link">
-                <el-icon><TrendCharts /></el-icon>
-                <span>分析中心</span>
-              </RouterLink>
-              <RouterLink v-if="canUserAdmin" to="/app/users" class="nav-link">
-                <el-icon><User /></el-icon>
-                <span>用户管理</span>
+              <RouterLink to="/app/feedbacks" class="nav-link">
+                <el-icon><ChatLineRound /></el-icon>
+                <span>反馈流水</span>
               </RouterLink>
             </div>
           </el-collapse-item>
@@ -49,23 +45,23 @@
             <div class="nav-items">
               <RouterLink to="/ops/runtime" class="nav-link">
                 <el-icon><VideoPlay /></el-icon>
-                <span>运行中心</span>
-              </RouterLink>
-              <RouterLink to="/ops/agents" class="nav-link">
-                <el-icon><ChatDotRound /></el-icon>
-                <span>Agent 管理</span>
-              </RouterLink>
-              <RouterLink to="/ops/prompts" class="nav-link">
-                <el-icon><Document /></el-icon>
-                <span>Prompt 管理</span>
-              </RouterLink>
-              <RouterLink to="/ops/intent-routes" class="nav-link">
-                <el-icon><Share /></el-icon>
-                <span>意图路由</span>
+                <span>Agent 运行中心</span>
               </RouterLink>
               <RouterLink to="/ops/rag-analysis" class="nav-link">
-                <el-icon><Search /></el-icon>
-                <span>RAG 分析</span>
+                <el-icon><DataAnalysis /></el-icon>
+                <span>RAG 召回分析</span>
+              </RouterLink>
+              <RouterLink to="/ops/analytics" class="nav-link">
+                <el-icon><TrendCharts /></el-icon>
+                <span>分析中心</span>
+              </RouterLink>
+              <RouterLink to="/ops/billing" class="nav-link">
+                <el-icon><Wallet /></el-icon>
+                <span>Token 成本</span>
+              </RouterLink>
+              <RouterLink to="/ops/gpu" class="nav-link">
+                <el-icon><Histogram /></el-icon>
+                <span>GPU 监控</span>
               </RouterLink>
             </div>
           </el-collapse-item>
@@ -81,38 +77,25 @@
               </div>
             </template>
             <div class="nav-items">
-              <RouterLink to="/governance/admin/inspection-specs" class="nav-link">
-                <el-icon><Checked /></el-icon>
-                <span>检测标准</span>
-              </RouterLink>
               <RouterLink to="/governance/admin/models" class="nav-link">
                 <el-icon><Cpu /></el-icon>
                 <span>模型配置</span>
               </RouterLink>
-              <RouterLink to="/governance/admin/billing" class="nav-link">
-                <el-icon><Wallet /></el-icon>
-                <span>Token 成本</span>
-              </RouterLink>
-              <RouterLink to="/governance/admin/gpu" class="nav-link">
-                <el-icon><Histogram /></el-icon>
-                <span>GPU 监控</span>
-              </RouterLink>
-              <RouterLink to="/governance/quality/report" class="nav-link">
-                <el-icon><DocumentChecked /></el-icon>
-                <span>质量报告</span>
-              </RouterLink>
-              <RouterLink to="/governance/quality/tracing" class="nav-link">
-                <el-icon><Connection /></el-icon>
-                <span>质量追踪</span>
-              </RouterLink>
-              <RouterLink to="/governance/quality/feedbacks" class="nav-link">
-                <el-icon><ChatLineRound /></el-icon>
-                <span>反馈流水</span>
+              <RouterLink to="/governance/data-management" class="nav-link">
+                <el-icon><DataAnalysis /></el-icon>
+                <span>数据管理</span>
               </RouterLink>
             </div>
           </el-collapse-item>
         </el-collapse>
       </nav>
+      <div v-if="canUserAdmin" class="sidebar-bottom">
+        <div class="sidebar-bottom-title">系统管理</div>
+        <RouterLink to="/users" class="nav-link fixed-nav-link" exact-active-class="router-link-active">
+          <el-icon><User /></el-icon>
+          <span>用户管理</span>
+        </RouterLink>
+      </div>
     </aside>
     <div class="content">
       <header class="topbar">
@@ -147,18 +130,12 @@ import {
   User,
   Setting,
   VideoPlay,
-  ChatDotRound,
-  Document,
-  Share,
-  Search,
+  ChatLineRound,
+  DataAnalysis,
   Management,
-  Checked,
   Cpu,
   Wallet,
   Histogram,
-  DocumentChecked,
-  Connection,
-  ChatLineRound,
 } from "@element-plus/icons-vue";
 import {
   ROLE_ADMIN,
@@ -210,10 +187,11 @@ const logout = () => {
 
 <style scoped>
 .layout {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 220px 1fr;
   background: #eef2f6;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -224,6 +202,25 @@ const logout = () => {
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 .logo {
@@ -237,6 +234,22 @@ const logout = () => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 12px 8px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.sidebar-bottom-title {
+  margin-bottom: 8px;
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* 折叠面板样式 */
@@ -317,10 +330,15 @@ const logout = () => {
   flex-shrink: 0;
 }
 
+.fixed-nav-link {
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .content {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
 }
 
 .topbar {

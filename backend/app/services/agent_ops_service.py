@@ -7,6 +7,12 @@ from app.repositories.agent_ops_repo import (
     AgentDefinitionRepository,
     IntentRouteRepository,
     PromptVersionRepository,
+    RagAnalysisRepository,
+)
+from app.repositories.agent_management_repo import (
+    AgentExecutionMetricsRepository,
+    AgentConfigVersionRepository,
+    AgentBatchOperationRepository,
 )
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
@@ -66,7 +72,7 @@ class AgentOpsService:
             prompt = await self._prompt_repo.get(body.prompt_version_id)
             if not prompt:
                 raise ValidationError(f"Prompt version {body.prompt_version_id} not found")
-        obj = await self._agent_repo.create(body.model_dump())
+        obj = await self._agent_repo.create(body.model_dump(exclude_none=True))
         await self._log_audit("agent_definition", str(obj.id), "create")
         return AgentDefinitionResponse.model_validate(obj)
 
@@ -153,11 +159,106 @@ class AgentOpsService:
         await self._log_audit("intent_route", id, "delete")
 
     async def get_rag_analysis(self) -> RagAnalysisResponse:
+        rag_repo = RagAnalysisRepository(self._session, self._org_id)
+        stats_data = await rag_repo.get_rag_stats()
+        recent_items_data = await rag_repo.get_recent_rag_items()
+
         stats = RagAnalysisStats(
-            total_queries=0,
-            avg_hit_rate=0.0,
-            avg_citation_coverage=0.0,
-            empty_recall_count=0,
-            avg_latency_ms=0.0,
+            total_queries=stats_data["total_queries"],
+            avg_hit_rate=stats_data["avg_hit_rate"],
+            avg_citation_coverage=stats_data["citation_coverage"],
+            empty_recall_count=stats_data["empty_recall_count"],
+            avg_latency_ms=stats_data["avg_latency_ms"],
         )
-        return RagAnalysisResponse(stats=stats, recent_items=[])
+
+        recent_items = [
+            RagAnalysisItem(
+                task_id=item["task_id"],
+                query="",
+                hit_rate=item["hit_rate"],
+                citation_coverage=item["citation_coverage"],
+                latency_ms=item["latency_ms"],
+                created_at=item["created_at"],
+            )
+            for item in recent_items_data
+        ]
+
+        return RagAnalysisResponse(stats=stats, recent_items=recent_items)
+
+    async def batch_update_status(self, agent_ids: list[str], is_active: bool) -> dict:
+        batch_repo = AgentBatchOperationRepository(self._session, self._org_id)
+        success_count = await batch_repo.batch_update_status(agent_ids, is_active)
+        await self._log_audit("agent_definition", f"batch_{len(agent_ids)}", "batch_update_status")
+        return {
+            "success_count": success_count,
+            "failed_count": len(agent_ids) - success_count,
+            "total_count": len(agent_ids),
+        }
+
+    async def batch_delete(self, agent_ids: list[str]) -> dict:
+        batch_repo = AgentBatchOperationRepository(self._session, self._org_id)
+        success_count = await batch_repo.batch_delete(agent_ids)
+        await self._log_audit("agent_definition", f"batch_{len(agent_ids)}", "batch_delete")
+        return {
+            "success_count": success_count,
+            "failed_count": len(agent_ids) - success_count,
+            "total_count": len(agent_ids),
+        }
+
+    async def get_agent_metrics(self, agent_id: str) -> dict:
+        metrics_repo = AgentExecutionMetricsRepository(self._session, self._org_id)
+        metrics = await metrics_repo.get_metrics(agent_id)
+        if not metrics:
+            raise NotFoundError(f"Metrics for agent {agent_id} not found")
+        return metrics
+
+    async def create_config_version(self, agent_id: str, config: dict) -> dict:
+        agent = await self._agent_repo.get(agent_id)
+        if not agent:
+            raise NotFoundError(f"Agent {agent_id} not found")
+        version_repo = AgentConfigVersionRepository(self._session, self._org_id)
+        version = await version_repo.create_version(agent_id, config, self._actor_id)
+        await self._log_audit("agent_config_version", str(version.id), "create")
+        return {
+            "id": str(version.id),
+            "agent_id": agent_id,
+            "version": version.version,
+            "created_at": version.created_at,
+        }
+
+    async def list_config_versions(self, agent_id: str, limit: int = 10) -> list[dict]:
+        agent = await self._agent_repo.get(agent_id)
+        if not agent:
+            raise NotFoundError(f"Agent {agent_id} not found")
+        version_repo = AgentConfigVersionRepository(self._session, self._org_id)
+        versions = await version_repo.list_versions(agent_id, limit)
+        return [
+            {
+                "id": str(v.id),
+                "agent_id": agent_id,
+                "version": v.version,
+                "config_snapshot": v.config_snapshot,
+                "created_by": str(v.created_by) if v.created_by else None,
+                "created_at": v.created_at,
+                "is_active": v.is_active,
+            }
+            for v in versions
+        ]
+
+    async def rollback_config(self, agent_id: str, target_version: int) -> dict:
+        agent = await self._agent_repo.get(agent_id)
+        if not agent:
+            raise NotFoundError(f"Agent {agent_id} not found")
+        version_repo = AgentConfigVersionRepository(self._session, self._org_id)
+        target = await version_repo.get_version(agent_id, target_version)
+        if not target:
+            raise NotFoundError(f"Version {target_version} not found for agent {agent_id}")
+        new_version = await version_repo.create_version(agent_id, target.config_snapshot, self._actor_id)
+        await self._log_audit("agent_config_version", str(new_version.id), "rollback")
+        return {
+            "id": str(new_version.id),
+            "agent_id": agent_id,
+            "version": new_version.version,
+            "rolled_back_from": target_version,
+            "created_at": new_version.created_at,
+        }

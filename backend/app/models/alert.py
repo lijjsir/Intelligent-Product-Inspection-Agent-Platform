@@ -22,6 +22,9 @@ class AlertEvent(Base):
     ack_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     resolved_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    suppressed_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    suppressed_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    action_note: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
