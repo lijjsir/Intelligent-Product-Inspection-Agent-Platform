@@ -9,32 +9,16 @@ from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.permissions import require_role
+from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role, require_role
 from app.core.security import safe_decode_token
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
-from app.services.inspection_pipeline_service import run_inspection_pipeline
+from app.services.task_execution_service import launch_task_execution
 from app.services.stream_service import stream_broker
-from worker.celery_app import celery_app
-from worker.tasks.inspection_task import run_inspection
 
 
 router = APIRouter()
-
-
-def _inspect_celery_workers() -> bool:
-    try:
-        inspector = celery_app.control.inspect(timeout=0.5)
-        if inspector is None:
-            return False
-        return bool(inspector.ping())
-    except Exception:
-        return False
-
-
-async def _has_active_celery_worker() -> bool:
-    return await asyncio.to_thread(_inspect_celery_workers)
 
 
 def get_current_user_for_sse(
@@ -68,18 +52,14 @@ async def run_task_pipeline(
     db=Depends(get_db),
 ):
     require_role("task", current.role)
-    task = await TaskRepository(db).get(current.org_id, task_id)
+    normalized_role = normalize_role(current.role)
+    owner_user_id = current.user_id if normalized_role == ROLE_USER else None
+    org_scope = None if normalized_role == ROLE_ADMIN else current.org_id
+    task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
 
-    payload = {"task_id": task_id, "org_id": current.org_id}
-    if await _has_active_celery_worker():
-        async_result = run_inspection.delay(payload)
-        data = {"mode": "celery", "job_id": async_result.id}
-    else:
-        # Fallback for local dev when celery worker is not running.
-        asyncio.create_task(run_inspection_pipeline(task_id=task_id, org_id=current.org_id))
-        data = {"mode": "local_background", "job_id": None}
+    data = await launch_task_execution(task_id=task_id, org_id=current.org_id)
     return ResponseEnvelope(data=data)
 
 
@@ -94,7 +74,10 @@ async def stream_task_events(
         current.stream_resource != "task" or current.stream_resource_id != task_id
     ):
         raise ForbiddenError("invalid stream token")
-    task = await TaskRepository(db).get(current.org_id, task_id)
+    normalized_role = normalize_role(current.role)
+    owner_user_id = current.user_id if normalized_role == ROLE_USER else None
+    org_scope = None if normalized_role == ROLE_ADMIN else current.org_id
+    task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
 

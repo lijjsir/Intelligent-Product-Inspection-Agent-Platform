@@ -9,7 +9,7 @@ from fastapi import Header, Query
 from agent.subgraphs.quality_chat import QualityChatGraph
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.core.ids import uuid7
-from app.core.permissions import require_role
+from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role, require_role
 from app.core.security import create_stream_token, safe_decode_token
 from app.repositories.chat_repo import ChatMessageRepository, ChatOpsRepository, ChatSessionRepository
 from app.repositories.task_repo import TaskRepository
@@ -18,12 +18,15 @@ from app.schemas.chat import (
     ChatMessageSendRequest,
     ChatSendResponse,
     ChatSessionResponse,
+    ChatTaskSubmitRequest,
     ChatTaskResultAppendRequest,
 )
 from app.schemas.stream import StreamSessionResponse
 from app.schemas.user import CurrentUser
 from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
+from app.services.task_execution_service import launch_task_execution
+from app.services.task_service import TaskService
 from infra.database.session import get_session
 
 def get_current_user_for_stream(
@@ -64,7 +67,7 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            obj = await repo.create(self._org_id, self._user_id, title=title or "New Session")
+            obj = await repo.create(self._org_id, self._user_id, title=title or "新会话")
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
 
@@ -104,7 +107,10 @@ class ChatService:
                     raise NotFoundError("chat session not found")
             else:
                 task_repo = TaskRepository(session)
-                if not await task_repo.get(self._org_id, resource_id):
+                normalized_role = normalize_role(self._current.role)
+                owner_user_id = self._user_id if normalized_role == ROLE_USER else None
+                org_scope = None if normalized_role == ROLE_ADMIN else self._org_id
+                if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
         expires_at = datetime.utcnow() + timedelta(minutes=10)
         token = create_stream_token(
@@ -218,12 +224,12 @@ class ChatService:
                 raise NotFoundError("chat session not found")
             message_repo = ChatMessageRepository(session)
             content = (
-                "Inspection task created successfully.\n\n"
-                f"Task ID: {payload.task_id}\n"
-                f"Product ID: {payload.product_id}\n"
-                f"Spec Code: {payload.spec_code}\n"
-                f"Current Status: {payload.status}\n"
-                f"Image Count: {payload.image_count}"
+                "检测任务已创建成功。\n\n"
+                f"任务 ID：{payload.task_id}\n"
+                f"产品编号：{payload.product_id}\n"
+                f"检测标准：{payload.spec_code}\n"
+                f"当前状态：{payload.status}\n"
+                f"图片数量：{payload.image_count}"
             )
             message = await message_repo.create(
                 session_id=session_id,
@@ -234,7 +240,7 @@ class ChatService:
                 message_type="task_result",
                 payload={
                     "answer": content,
-                    "summary": "Task created successfully",
+                    "summary": "任务创建成功",
                     "action_state": "task_created",
                     "created_task": {
                         "id": payload.task_id,
@@ -244,6 +250,72 @@ class ChatService:
                         "priority": payload.priority,
                         "image_count": payload.image_count,
                     },
+                },
+            )
+            await session_repo.touch(self._org_id, self._user_id, session_id)
+            await session.commit()
+            return ChatMessageResponse.model_validate(message)
+
+    async def submit_task(
+        self,
+        *,
+        session_id: str,
+        payload: ChatTaskSubmitRequest,
+    ) -> ChatMessageResponse:
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            if not await session_repo.get(self._org_id, self._user_id, session_id):
+                raise NotFoundError("chat session not found")
+
+            task_service = TaskService(session, self._org_id)
+            task_metadata = {
+                "source": "chat",
+                "chat_session_id": session_id,
+                "chat_source_message_id": payload.source_message_id,
+                **dict(payload.metadata or {}),
+            }
+            task = await task_service.create_task(
+                created_by=self._user_id,
+                product_id=payload.product_id.strip(),
+                spec_code=payload.spec_code.strip(),
+                image_urls=[item for item in payload.image_urls if item],
+                priority=payload.priority,
+                metadata=task_metadata,
+            )
+            await session.commit()
+
+        launch = await launch_task_execution(task_id=str(task.id), org_id=self._org_id)
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            message_repo = ChatMessageRepository(session)
+            content = (
+                "检测任务已创建并启动执行。\n\n"
+                f"任务 ID：{task.id}\n"
+                f"产品编号：{task.product_id}\n"
+                f"检测标准：{task.spec_code}\n"
+                f"执行方式：{launch['mode']}\n"
+                f"图片数量：{len(task.image_urls or [])}"
+            )
+            message = await message_repo.create(
+                session_id=session_id,
+                org_id=self._org_id,
+                user_id=None,
+                role="assistant",
+                content=content,
+                message_type="task_result",
+                payload={
+                    "answer": content,
+                    "summary": "任务已创建并启动执行",
+                    "action_state": "task_started",
+                    "created_task": {
+                        "id": str(task.id),
+                        "status": "running",
+                        "product_id": str(task.product_id),
+                        "spec_code": str(task.spec_code),
+                        "priority": int(task.priority),
+                        "image_count": len(task.image_urls or []),
+                    },
+                    "execution": launch,
                 },
             )
             await session_repo.touch(self._org_id, self._user_id, session_id)
@@ -292,8 +364,8 @@ class ChatService:
             )
         except Exception as exc:
             content = (
-                "The quality chat workflow could not complete this time. "
-                "Please retry later or provide clearer context such as spec code, product information, and issue details."
+                "这次聊天任务没有顺利完成。"
+                "请稍后重试，或补充更明确的检测标准、产品信息和问题细节。"
             )
             failure_payload = {"status": "failed", "error": str(exc)}
             async with get_session() as session:

@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
+from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role
 from app.models.task import InspectionTask
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.repositories.task_repo import TaskRepository
@@ -8,9 +9,18 @@ from app.services.audit_service import AuditService
 
 
 class TaskService:
-    def __init__(self, session: AsyncSession, org_id: str):
+    def __init__(
+        self,
+        session: AsyncSession,
+        org_id: str,
+        *,
+        actor_user_id: str | None = None,
+        actor_role: str | None = None,
+    ):
         self._session = session
         self._org_id = org_id
+        self._actor_user_id = actor_user_id
+        self._actor_role = normalize_role(actor_role or "")
         self._repo = TaskRepository(session)
         self._spec_repo = InspectionSpecRepository(session)
 
@@ -58,12 +68,46 @@ class TaskService:
         return task
 
     async def get_task(self, task_id: str) -> InspectionTask | None:
-        return await self._repo.get(self._org_id, task_id)
+        return await self._repo.get_for_user(
+            self._task_scope_org_id,
+            task_id,
+            owner_user_id=self._owner_user_id,
+        )
 
     async def list_tasks(self, query) -> tuple[list[InspectionTask], int]:
         return await self._repo.list_paged(
-            org_id=self._org_id,
+            org_id=self._task_scope_org_id,
             filters=query.to_filters(),
             page=query.page,
             size=query.size,
+            owner_user_id=self._owner_user_id,
         )
+
+    async def delete_task(self, task_id: str) -> InspectionTask | None:
+        task = await self._repo.get_for_user(
+            org_id=self._task_scope_org_id,
+            task_id=task_id,
+            owner_user_id=self._owner_user_id,
+        )
+        if task is None:
+            return None
+        if str(task.status) == "running":
+            raise ValidationError("运行中的任务不能删除")
+        deleted = await self._repo.soft_delete(
+            org_id=self._task_scope_org_id,
+            task_id=task_id,
+            owner_user_id=self._owner_user_id,
+        )
+        return deleted
+
+    @property
+    def _owner_user_id(self) -> str | None:
+        if self._actor_role == ROLE_USER:
+            return self._actor_user_id
+        return None
+
+    @property
+    def _task_scope_org_id(self) -> str | None:
+        if self._actor_role == ROLE_ADMIN:
+            return None
+        return self._org_id

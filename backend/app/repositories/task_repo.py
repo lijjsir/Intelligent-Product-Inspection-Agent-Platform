@@ -17,12 +17,31 @@ class TaskRepository:
         await self._session.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
 
-    async def get(self, org_id: str, task_id: str) -> InspectionTask | None:
-        result = await self._session.execute(
-            select(InspectionTask).where(
-                InspectionTask.org_id == org_id, InspectionTask.id == task_id
-            )
+    async def get(self, org_id: str | None, task_id: str) -> InspectionTask | None:
+        stmt = select(InspectionTask).where(
+            InspectionTask.id == task_id,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            stmt = stmt.where(InspectionTask.org_id == org_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_for_user(
+        self,
+        org_id: str | None,
+        task_id: str,
+        owner_user_id: str | None = None,
+    ) -> InspectionTask | None:
+        stmt = select(InspectionTask).where(
+            InspectionTask.id == task_id,
+            InspectionTask.deleted_at.is_(None),
+        )
+        if org_id:
+            stmt = stmt.where(InspectionTask.org_id == org_id)
+        if owner_user_id:
+            stmt = stmt.where(InspectionTask.created_by == owner_user_id)
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def update_status(self, org_id: str, task_id: str, status: str) -> bool:
@@ -39,7 +58,14 @@ class TaskRepository:
         )
         return bool(res.rowcount and res.rowcount > 0)
 
-    async def list_paged(self, org_id: str, filters: dict, page: int, size: int) -> tuple[list[InspectionTask], int]:
+    async def list_paged(
+        self,
+        org_id: str | None,
+        filters: dict,
+        page: int,
+        size: int,
+        owner_user_id: str | None = None,
+    ) -> tuple[list[InspectionTask], int]:
         from sqlalchemy import func
         base = (
             select(InspectionTask)
@@ -55,8 +81,12 @@ class TaskRepository:
                     InspectionTask.updated_at,
                 )
             )
-            .where(InspectionTask.org_id == org_id)
+            .where(InspectionTask.deleted_at.is_(None))
         )
+        if org_id:
+            base = base.where(InspectionTask.org_id == org_id)
+        if owner_user_id:
+            base = base.where(InspectionTask.created_by == owner_user_id)
         if "status" in filters:
             base = base.where(InspectionTask.status == filters["status"])
         if "product_id" in filters:
@@ -72,3 +102,16 @@ class TaskRepository:
             .limit(size)
         )
         return list(items.scalars().all()), int(total or 0)
+
+    async def soft_delete(
+        self,
+        org_id: str | None,
+        task_id: str,
+        owner_user_id: str | None = None,
+    ) -> InspectionTask | None:
+        obj = await self.get_for_user(org_id=org_id, task_id=task_id, owner_user_id=owner_user_id)
+        if obj is None:
+            return None
+        obj.deleted_at = datetime.utcnow()
+        await self._session.flush()
+        return obj

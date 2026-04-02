@@ -18,6 +18,7 @@ export interface AuthSession {
   token_type: string;
   expires_in: number;
   user_id: string;
+  username: string;
   org_id: string;
   role: string;
   roles: string[];

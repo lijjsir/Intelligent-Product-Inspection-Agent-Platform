@@ -35,6 +35,15 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
+  async function deleteTask(id: string) {
+    await taskApi.delete(id);
+    items.value = items.value.filter((item) => item.id !== id);
+    if (current.value?.id === id) {
+      current.value = null;
+    }
+    total.value = Math.max(0, total.value - 1);
+  }
+
   async function runTask(id: string) {
     const { data } = await taskApi.run(id);
     return data.data;
@@ -73,6 +82,7 @@ export const useTaskStore = defineStore("task", () => {
     fetchTasks,
     fetchTask,
     createTask,
+    deleteTask,
     runTask,
     subscribeTaskStream,
     $reset,

@@ -283,8 +283,9 @@ export const useChatStore = defineStore("chat", () => {
   async function createRagSpace(payload: { name: string; description?: string }, files: File[]) {
     const { data } = await ragSpaceApi.create(payload);
     const created = data.data;
-    if (files.length > 0) {
-      await ragSpaceApi.uploadDocuments(created.id, files);
+    const selectedFiles = files.slice(0, 1);
+    if (selectedFiles.length > 0) {
+      await ragSpaceApi.uploadDocuments(created.id, selectedFiles);
     }
     await fetchRagSpaces();
     return ragSpaces.value.find((item) => item.id === created.id) || created;
@@ -337,6 +338,15 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
     return session.value;
+  }
+
+  async function reloadCurrentSessionMessages() {
+    if (!session.value) return [];
+    const rows = await chatApi.listMessages(session.value.id, 0, 500);
+    messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+    sortMessages();
+    await fetchSessions();
+    return messages.value;
   }
 
   async function initForChatPage() {
@@ -510,6 +520,21 @@ export const useChatStore = defineStore("chat", () => {
     return data.data;
   }
 
+  async function submitTask(payload: {
+    source_message_id?: string | null;
+    product_id: string;
+    spec_code: string;
+    image_urls: string[];
+    priority: number;
+    metadata?: Record<string, unknown>;
+  }) {
+    if (!session.value) return null;
+    const { data } = await chatApi.submitTask(session.value.id, payload);
+    appendMessages([{ ...data.data, client_seq: data.data.seq_no }]);
+    await fetchSessions();
+    return data.data;
+  }
+
   async function deleteSession(sessionId: string) {
     await chatApi.deleteSession(sessionId);
     const deletingCurrent = session.value?.id === sessionId;
@@ -643,7 +668,9 @@ export const useChatStore = defineStore("chat", () => {
     selectSession,
     initForChatPage,
     sendMessage,
+    reloadCurrentSessionMessages,
     appendTaskResult,
+    submitTask,
     deleteSession,
     stopStream,
   };

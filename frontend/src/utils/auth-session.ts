@@ -2,6 +2,7 @@ export const TOKEN_KEY = "piap_token";
 export const ORG_ID_KEY = "piap_org_id";
 export const ROLE_KEY = "piap_role";
 export const USER_ID_KEY = "piap_user_id";
+export const USERNAME_KEY = "piap_username";
 export const ROLES_KEY = "piap_roles";
 export const PLAN_TIER_KEY = "piap_plan_tier";
 export const CAPABILITIES_KEY = "piap_capabilities";
@@ -13,6 +14,7 @@ const STORAGE_KEYS = [
   ORG_ID_KEY,
   ROLE_KEY,
   USER_ID_KEY,
+  USERNAME_KEY,
   ROLES_KEY,
   PLAN_TIER_KEY,
   CAPABILITIES_KEY,

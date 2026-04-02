@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import base64
+from urllib.parse import urlparse
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,3 +42,46 @@ class FileStorageService:
             "content_type": resolved_type,
             "size_bytes": os.path.getsize(target),
         }
+
+    def delete_relative_path(self, relative_path: str) -> None:
+        if not relative_path:
+            return
+        target = (self._root / relative_path).resolve()
+        root = self._root.resolve()
+        if not str(target).startswith(str(root)):
+            return
+        if target.exists() and target.is_file():
+            target.unlink()
+
+    def delete_by_url(self, url: str) -> None:
+        prefix = settings.local_upload_url_prefix.rstrip("/")
+        path = url
+        if "://" in url:
+            path = urlparse(url).path or ""
+        if not path.startswith(prefix):
+            return
+        relative_path = path[len(prefix) :].lstrip("/").replace("/", os.sep)
+        self.delete_relative_path(relative_path)
+
+    def file_bytes_from_url(self, url: str) -> tuple[bytes, str] | None:
+        prefix = settings.local_upload_url_prefix.rstrip("/")
+        path = url
+        if "://" in url:
+            path = urlparse(url).path or ""
+        if not path.startswith(prefix):
+            return None
+        relative_path = path[len(prefix) :].lstrip("/").replace("/", os.sep)
+        target = (self._root / relative_path).resolve()
+        root = self._root.resolve()
+        if not str(target).startswith(str(root)) or not target.exists() or not target.is_file():
+            return None
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return target.read_bytes(), content_type
+
+    def to_data_url(self, url: str) -> str | None:
+        payload = self.file_bytes_from_url(url)
+        if payload is None:
+            return None
+        content, content_type = payload
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"

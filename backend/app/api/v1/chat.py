@@ -16,6 +16,7 @@ from app.schemas.chat import (
     ChatSendResponse,
     ChatSessionCreateRequest,
     ChatSessionResponse,
+    ChatTaskSubmitRequest,
     ChatTaskResultAppendRequest,
 )
 from app.schemas.common import ResponseEnvelope
@@ -80,6 +81,16 @@ async def append_task_result(
 ):
     service = _build_service(current)
     return ResponseEnvelope(data=await service.append_task_result(session_id=session_id, payload=body))
+
+
+@router.post("/sessions/{session_id}/tasks/submit", response_model=ResponseEnvelope[ChatMessageResponse])
+async def submit_task_from_chat(
+    session_id: str,
+    body: ChatTaskSubmitRequest,
+    current: CurrentUser = Depends(get_current_user),
+):
+    service = _build_service(current)
+    return ResponseEnvelope(data=await service.submit_task(session_id=session_id, payload=body))
 
 
 @router.post("/uploads", response_model=ResponseEnvelope[AttachmentUploadResponse])

@@ -78,7 +78,16 @@ router.beforeEach((to) => {
   }
 
   const primaryRole = normalizeRole(auth.primaryRole);
-  if (auth.isAuthed && primaryRole === ROLE_USER && !["/app/chat", "/app/rag-spaces"].includes(to.path)) {
+  const userAllowedPrefixes = [
+    "/app/chat",
+    "/app/rag-spaces",
+    "/app/tasks",
+    "/app/results",
+    "/app/stability",
+    "/app/feedbacks",
+    "/app/profile",
+  ];
+  if (auth.isAuthed && primaryRole === ROLE_USER && !userAllowedPrefixes.some((prefix) => to.path.startsWith(prefix))) {
     return { path: "/app/chat" };
   }
 

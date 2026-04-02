@@ -18,6 +18,10 @@ export const taskApi = {
     return http.post<InspectionTask>("/v1/tasks", payload);
   },
 
+  delete(taskId: string) {
+    return http.delete<{ deleted: boolean; task_id: string }>(`/v1/tasks/${taskId}`);
+  },
+
   run(taskId: string) {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
   },

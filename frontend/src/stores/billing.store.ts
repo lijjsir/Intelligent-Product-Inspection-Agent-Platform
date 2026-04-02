@@ -1,11 +1,13 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { billingApi } from "@/api/billing.api";
-import type { BillingQuery, BillingSummary } from "@/types/governance.types";
+import type { BillingQuery, BillingSummary, CurrentUserTokenUsage } from "@/types/governance.types";
 
 export const useBillingStore = defineStore("billing", () => {
   const current = ref<BillingSummary | null>(null);
+  const myUsage = ref<CurrentUserTokenUsage | null>(null);
   const loading = ref(false);
+  const myUsageLoading = ref(false);
   const filters = ref<BillingQuery>({ granularity: "day" });
 
   async function fetchSummary(query?: BillingQuery) {
@@ -19,6 +21,16 @@ export const useBillingStore = defineStore("billing", () => {
     }
   }
 
-  return { current, loading, filters, fetchSummary };
+  async function fetchMyUsage() {
+    myUsageLoading.value = true;
+    try {
+      const { data } = await billingApi.getMyUsage();
+      myUsage.value = data.data;
+    } finally {
+      myUsageLoading.value = false;
+    }
+  }
+
+  return { current, myUsage, loading, myUsageLoading, filters, fetchSummary, fetchMyUsage };
 });
 

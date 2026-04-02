@@ -12,6 +12,7 @@ const ragDocumentInputRef = ref<HTMLInputElement | null>(null);
 const ragCreating = ref(false);
 const ragFiles = ref<File[]>([]);
 const documentLoading = ref(false);
+const deletingDocumentId = ref("");
 const documentError = ref("");
 const activeDocuments = ref<RagSpaceFile[]>([]);
 const ragForm = ref({
@@ -63,7 +64,7 @@ const triggerRagDocumentSelect = () => {
 
 const handleRagFilesSelected = (event: Event) => {
   const inputElement = event.target as HTMLInputElement;
-  ragFiles.value = Array.from(inputElement.files || []);
+  ragFiles.value = Array.from(inputElement.files || []).slice(0, 1);
   inputElement.value = "";
 };
 
@@ -99,9 +100,28 @@ const loadDocuments = async (ragSpaceId: string) => {
   }
 };
 
+const deleteDocument = async (file: RagSpaceFile) => {
+  if (!chatStore.selectedRagSpaceId) return;
+  deletingDocumentId.value = file.id;
+  try {
+    await ragSpaceApi.deleteDocument(chatStore.selectedRagSpaceId, file.id);
+    activeDocuments.value = activeDocuments.value.filter((item) => item.id !== file.id);
+    await chatStore.fetchRagSpaces();
+    ElMessage.success("文档已删除");
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, "文档删除失败，请稍后重试"));
+  } finally {
+    deletingDocumentId.value = "";
+  }
+};
+
 const submitRagSpace = async () => {
   if (!ragForm.value.name.trim()) {
     ElMessage.warning("请先填写 RAG 空间名称");
+    return;
+  }
+  if (ragFiles.value.length === 0) {
+    ElMessage.warning("请先选择文档。一个文档会创建成一个独立空间。");
     return;
   }
   ragCreating.value = true;
@@ -195,12 +215,12 @@ onMounted(async () => {
               <input
                 ref="ragDocumentInputRef"
                 type="file"
-                multiple
                 accept=".pdf,.txt,.md,.jsonl"
                 class="hidden-input"
                 @change="handleRagFilesSelected"
               />
               <el-button plain :icon="DocumentAdd" @click="triggerRagDocumentSelect">选择文档</el-button>
+              <div class="top-gap hint-text">一个文档会创建成一个独立空间；删除文档时会同时移除空空间。</div>
               <div v-if="ragFiles.length" class="chip-row top-gap">
                 <el-tag v-for="file in ragFiles" :key="file.name" size="small" effect="plain">{{ file.name }}</el-tag>
               </div>
@@ -297,6 +317,14 @@ onMounted(async () => {
                 <div class="rag-document-meta">
                   <el-tag size="small" effect="plain">{{ file.status }}</el-tag>
                   <span>{{ formatFileSize(file.size_bytes) }}</span>
+                  <el-button
+                    link
+                    type="danger"
+                    :loading="deletingDocumentId === file.id"
+                    @click="deleteDocument(file)"
+                  >
+                    删除
+                  </el-button>
                 </div>
               </div>
             </div>
@@ -335,7 +363,8 @@ onMounted(async () => {
 .card-subtitle,
 .panel-subtitle,
 .rag-space-desc,
-.rag-document-subtitle {
+.rag-document-subtitle,
+.hint-text {
   font-size: 12px;
   color: #475569;
   line-height: 1.6;

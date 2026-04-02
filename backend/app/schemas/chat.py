@@ -78,6 +78,15 @@ class ChatTaskResultAppendRequest(BaseModel):
     image_count: int
 
 
+class ChatTaskSubmitRequest(BaseModel):
+    source_message_id: str | None = None
+    product_id: str = Field(..., min_length=1, max_length=64)
+    spec_code: str = Field(..., min_length=1, max_length=64)
+    image_urls: list[str] = Field(default_factory=list, min_length=1)
+    priority: int = Field(default=5, ge=1, le=10)
+    metadata: dict[str, Any] | None = None
+
+
 class ChatSendResponse(BaseModel):
     session: ChatSessionResponse
     user_message: ChatMessageResponse
