@@ -24,6 +24,18 @@ async def list_rag_spaces(
     return ResponseEnvelope(data=await service.list_spaces(limit=limit))
 
 
+@router.get("/{rag_space_id}/documents", response_model=ResponseEnvelope[list[RagSpaceFileResponse]])
+async def list_rag_documents(
+    rag_space_id: str,
+    limit: int = Query(default=1000, ge=1, le=5000),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("chat", current.role)
+    service = RagSpaceService(db, org_id=current.org_id, user_id=current.user_id)
+    return ResponseEnvelope(data=await service.list_documents(rag_space_id=rag_space_id, limit=limit))
+
+
 @router.post("", response_model=ResponseEnvelope[RagSpaceResponse])
 async def create_rag_space(
     body: RagSpaceCreateRequest,

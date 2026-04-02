@@ -6,6 +6,10 @@ export const ragSpaceApi = {
     return http.get<RagSpace[]>("/v1/rag-spaces", { params: { limit } });
   },
 
+  listDocuments(ragSpaceId: string, limit = 1000) {
+    return http.get<RagSpaceFile[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, { params: { limit } });
+  },
+
   create(payload: RagSpaceCreateRequest) {
     return http.post<RagSpace>("/v1/rag-spaces", payload);
   },

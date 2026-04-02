@@ -11,6 +11,8 @@ export interface ChatSession {
   updated_at?: string | null;
 }
 
+export type ChatStreamPhase = "idle" | "connecting" | "streaming" | "closing";
+
 export interface ChatAttachment {
   id: string;
   name: string;
@@ -55,7 +57,7 @@ export interface ChatMessagePayload {
   prompt_version?: string;
   retrieval_metrics?: Record<string, unknown>;
   summary?: string;
-  intent?: "smalltalk" | "quality_qa" | "task_create" | "task_followup" | string;
+  intent?: "smalltalk" | "general_qa" | "quality_qa" | "task_create" | "task_followup" | string;
   intent_confidence?: number;
   action_state?: string;
   task_draft?: ChatTaskDraft | null;

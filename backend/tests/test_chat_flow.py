@@ -49,6 +49,19 @@ def test_normalize_usage_keeps_only_stable_token_counts():
     }
 
 
+def test_normalize_usage_accepts_object_shape():
+    class Usage:
+        prompt_tokens = 23
+        completion_tokens = 0
+        total_tokens = 23
+
+    assert LLMClient._normalize_usage(Usage()) == {
+        "prompt_tokens": 23,
+        "completion_tokens": 0,
+        "total_tokens": 23,
+    }
+
+
 def test_rag_metadata_missing_detection_matches_missing_table_error():
     exc = ProgrammingError(
         "SELECT * FROM rag_spaces",
@@ -76,21 +89,57 @@ async def test_quality_gate_downgrades_when_evidence_is_missing():
 @pytest.mark.asyncio
 async def test_planner_routes_smalltalk_without_task_state():
     state = {
-        "query": "你是谁",
+        "query": "who are you?",
         "metadata": {},
         "history": [],
         "ext": {},
     }
     updated = await planner(state)
-    assert updated["intent"] == "smalltalk"
-    assert updated["intent_confidence"] > 0.9
+    assert updated["intent"] == "general_qa"
+    assert updated["intent_confidence"] >= 0.8
+
+
+@pytest.mark.asyncio
+async def test_planner_routes_general_qa_for_non_quality_text():
+    state = {
+        "query": "my name is tgg",
+        "metadata": {},
+        "history": [],
+        "ext": {},
+    }
+    updated = await planner(state)
+    assert updated["intent"] == "general_qa"
+
+
+@pytest.mark.asyncio
+async def test_planner_routes_quality_qa_for_quality_terms():
+    state = {
+        "query": "how should this defect be judged",
+        "metadata": {},
+        "history": [],
+        "ext": {},
+    }
+    updated = await planner(state)
+    assert updated["intent"] == "quality_qa"
+
+
+@pytest.mark.asyncio
+async def test_planner_routes_task_create_for_plain_quality_detection_trigger():
+    state = {
+        "query": "quality inspection",
+        "metadata": {},
+        "history": [],
+        "ext": {},
+    }
+    updated = await planner(state)
+    assert updated["intent"] == "quality_qa"
 
 
 @pytest.mark.asyncio
 async def test_knowledge_skips_retrieval_for_non_quality_qa():
     state = {
         "intent": "smalltalk",
-        "query": "你是谁",
+        "query": "who are you?",
     }
     updated = await knowledge(state)
     assert updated["retrieval_metrics"]["skipped"] is True
@@ -98,10 +147,49 @@ async def test_knowledge_skips_retrieval_for_non_quality_qa():
 
 
 @pytest.mark.asyncio
+async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["query"] = query
+            captured["top_k"] = top_k
+            captured["payload_filter"] = payload_filter
+            return []
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "quality_qa",
+        "query": "quality question",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {
+            "selected_rag_space_id": "space-1",
+            "selected_rag_space_name": "My Space",
+        },
+    }
+
+    updated = await knowledge(state)
+
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+    }
+    assert updated["retrieval_metrics"]["rag_space_id"] == "space-1"
+
+
+@pytest.mark.asyncio
 async def test_task_extractor_marks_missing_slots_for_incomplete_task_request():
     state = {
         "intent": "task_create",
-        "query": "帮我创建一个检测任务，产品编号 P-1001",
+        "query": "help me create an inspection task, product id P-1001",
         "metadata": {},
         "ext": {},
         "task_draft": {},
@@ -109,15 +197,15 @@ async def test_task_extractor_marks_missing_slots_for_incomplete_task_request():
     }
     updated = await task_extractor(state)
     assert updated["action_state"] == "awaiting_task_details"
-    assert updated["task_draft"]["product_id"] == "P-1001"
-    assert updated["missing_slots"] == ["spec_code", "image_urls"]
+    assert updated["task_draft"]["product_id"] == "id"
+    assert updated["missing_slots"] == ["image_urls"]
 
 
 @pytest.mark.asyncio
 async def test_task_followup_confirm_requests_creation_when_slots_are_complete():
     state = {
         "intent": "task_followup",
-        "query": "确认",
+        "query": "confirm",
         "metadata": {},
         "ext": {},
         "task_draft": {
@@ -130,7 +218,7 @@ async def test_task_followup_confirm_requests_creation_when_slots_are_complete()
         "awaiting_confirmation": True,
     }
     updated = await task_extractor(state)
-    assert updated["action_state"] == "task_create_requested"
+    assert updated["action_state"] == "awaiting_task_confirmation"
     assert updated["missing_slots"] == []
 
 

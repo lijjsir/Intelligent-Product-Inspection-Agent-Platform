@@ -30,6 +30,7 @@ TASK_CREATE_PATTERNS = [
         r"(帮我|给我).{0,8}(创建|发起|提交).{0,8}(任务|检测|质检)",
         r"(帮我|给我).{0,8}(进行|做).{0,8}(质量检测|质检|检测)",
         r"(需要|想要).{0,8}(创建|发起).{0,8}(任务|检测)",
+        r"^\s*(质量检测|质检|检测任务|开始检测|启动检测)\s*[!！。.]?\s*$",
     ]
 ]
 CONFIRM_PATTERNS = [
@@ -44,6 +45,20 @@ CANCEL_PATTERNS = [
         r"^\s*(取消|不用了|算了|先不要|停止创建|别创建了|no)\s*[!！。.]?\s*$",
     ]
 ]
+QUALITY_QA_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"(质量|质检|检测|检验|缺陷|瑕疵|判定|允收|不良|NG|OK|标准|规范|条款|公差|尺寸|外观|划痕|裂纹|毛刺|飞边|凹陷|污渍|色差|气泡|变形|烧焦|缩水|夹杂|焊点|工艺)",
+        r"(QC|QA|IQC|IPQC|FQC|OQC|AQL|SOP|SIP|GB/?T|ISO\s*\d+)",
+        r"(spec|defect|inspection|quality|standard|tolerance|scratch|burr|dent|stain|crack)",
+    ]
+]
+QUALITY_CONTEXT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"(这个|那这个|这种|那种|该怎么|为什么|是否|算不算|属于|依据是什么|怎么判|如何判定)",
+    ]
+]
 URL_PATTERN = re.compile(r"https?://[^\s,，；;]+", re.IGNORECASE)
 
 
@@ -54,6 +69,33 @@ def _clean_text(value: str) -> str:
 def _is_smalltalk(query: str) -> bool:
     text = _clean_text(query)
     return any(pattern.search(text) for pattern in SMALLTALK_PATTERNS)
+
+
+def _has_recent_quality_context(history: list[dict[str, Any]]) -> bool:
+    for item in reversed(history[-4:]):
+        payload = item.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("intent") == "quality_qa":
+            return True
+        if payload.get("message_type") == "quality_answer":
+            return True
+        if item.get("message_type") == "quality_answer":
+            return True
+    return False
+
+
+def _is_quality_qa_candidate(query: str, history: list[dict[str, Any]] | None = None) -> bool:
+    text = _clean_text(query)
+    if not text:
+        return False
+    if any(pattern.search(text) for pattern in QUALITY_QA_PATTERNS):
+        return True
+    if _has_recent_quality_context(list(history or [])) and any(
+        pattern.search(text) for pattern in QUALITY_CONTEXT_PATTERNS
+    ):
+        return True
+    return False
 
 
 def _is_task_create_candidate(query: str, ext: dict[str, Any] | None) -> bool:
@@ -227,6 +269,17 @@ def _smalltalk_answer(query: str) -> str:
     )
 
 
+def _general_answer_fallback(query: str) -> dict[str, Any]:
+    return {
+        "answer": (
+            f"我收到了你的问题“{query}”。如果你想继续普通交流，我可以直接回答；"
+            "如果你想咨询质量检测相关内容，也可以补充标准编号、缺陷现象或产品上下文。"
+        ),
+        "summary": "普通问答",
+        "citations": [],
+    }
+
+
 def _fallback_answer(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
     if not docs:
         return {
@@ -312,7 +365,8 @@ async def history_loader(state: QualityChatState) -> QualityChatState:
 
 async def planner(state: QualityChatState) -> QualityChatState:
     query = str(state.get("query") or "")
-    pending = _latest_pending_task(list(state.get("history") or []))
+    history = list(state.get("history") or [])
+    pending = _latest_pending_task(history)
     if pending is not None:
         state["intent"] = "task_followup"
         state["intent_confidence"] = 0.96 if (_is_confirm(query) or _is_cancel(query)) else 0.83
@@ -327,15 +381,20 @@ async def planner(state: QualityChatState) -> QualityChatState:
         state["intent"] = "task_create"
         state["intent_confidence"] = 0.92
         state["pending_action"] = "create_task"
-    else:
+    elif _is_quality_qa_candidate(query, history):
         state["intent"] = "quality_qa"
-        state["intent_confidence"] = 0.78
+        state["intent_confidence"] = 0.86
+    else:
+        state["intent"] = "general_qa"
+        state["intent_confidence"] = 0.8
 
     state["metadata"]["intent"] = state["intent"]
     state["metadata"]["intent_confidence"] = state["intent_confidence"]
-    state["metadata"]["target"] = (
-        "quality_assistant" if state["intent"] in {"quality_qa", "smalltalk"} else "task_assistant"
-    )
+    state["metadata"]["target"] = {
+        "quality_qa": "quality_assistant",
+        "general_qa": "general_assistant",
+        "smalltalk": "general_assistant",
+    }.get(str(state["intent"]), "task_assistant")
     return state
 
 
@@ -392,12 +451,12 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
 
     trace_id = str((state.get("trace") or {}).get("trace_id") or "")
     selected_rag = _selected_rag_space(state.get("ext") or {})
-    payload_filter = None
+    payload_filter: dict[str, Any] = {
+        "org_id": str(state["org_id"]),
+        "user_id": str(state["user_id"]),
+    }
     if selected_rag:
-        payload_filter = {
-            "rag_space_id": selected_rag["id"],
-            "org_id": str(state["org_id"]),
-        }
+        payload_filter["rag_space_id"] = selected_rag["id"]
 
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
     docs = await retriever.retrieve(str(state["query"]), top_k=4, payload_filter=payload_filter)
@@ -432,6 +491,55 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
             "summary": "普通对话",
             "citations": [],
         }
+        state["action_state"] = "answered"
+        return state
+
+    if intent == "general_qa":
+        llm = LLMClient(
+            trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None,
+            task_id=str(state["session_id"]),
+            org_id=str(state["org_id"]),
+        )
+        history_lines = [
+            f"{item.get('role', 'user')}: {item.get('content', '')}"
+            for item in list(state.get("history") or [])[-6:]
+            if item.get("content")
+        ]
+        history_text = "\n".join(history_lines) if history_lines else "无"
+        prompt = (
+            "你是平台内的通用聊天助手。对于不属于质量检测、也不是任务创建的普通问答，"
+            "请直接自然回答；如果用户信息不足，就简洁追问。"
+            '只返回 JSON，格式为 {"answer": string, "summary": string}。'
+        )
+        user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}"
+        try:
+            response = await llm.chat(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.4,
+                observation_name="quality_chat.general_reasoning",
+                observation_metadata={"workflow_version": "quality_chat_v1"},
+            )
+            answer = str(response.get("answer") or "").strip()
+            summary = str(response.get("summary") or "").strip()
+            if not answer:
+                fallback = _general_answer_fallback(str(state["query"]))
+                answer = fallback["answer"]
+                summary = fallback["summary"]
+            state["reasoning"] = {
+                "answer": answer,
+                "summary": summary or "普通问答",
+                "citations": [],
+                "llm_meta": dict(response.get("__meta__") or {}),
+            }
+        except Exception as exc:
+            state["reasoning"] = {
+                **_general_answer_fallback(str(state["query"])),
+                "llm_error": str(exc),
+                "llm_meta": {},
+            }
         state["action_state"] = "answered"
         return state
 
@@ -674,7 +782,7 @@ def _message_type_for_state(state: QualityChatState) -> str:
         return "task_result"
     if action_state in {"awaiting_task_confirmation", "awaiting_task_details", "task_cancelled", "task_create_failed"}:
         return "task_action"
-    if state.get("intent") == "smalltalk":
+    if state.get("intent") in {"smalltalk", "general_qa"}:
         return "assistant_text"
     return "quality_answer"
 

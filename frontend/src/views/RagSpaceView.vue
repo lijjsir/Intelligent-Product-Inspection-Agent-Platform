@@ -1,18 +1,31 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { CollectionTag, DocumentAdd } from "@element-plus/icons-vue";
+import { ragSpaceApi } from "@/api/rag-space.api";
 import { useChatStore } from "@/stores/chat.store";
+import type { RagSpaceFile } from "@/types/rag-space.types";
 
 const chatStore = useChatStore();
 
 const ragDocumentInputRef = ref<HTMLInputElement | null>(null);
 const ragCreating = ref(false);
+const ragFiles = ref<File[]>([]);
+const documentLoading = ref(false);
+const documentError = ref("");
+const activeDocuments = ref<RagSpaceFile[]>([]);
 const ragForm = ref({
   name: "",
   description: "",
 });
-const ragFiles = ref<File[]>([]);
+
+const currentUsageLabel = computed(() => chatStore.selectedRagSpace?.name || "不使用文档");
+const documentPanelSubtitle = computed(() => {
+  if (!chatStore.selectedRagSpace) {
+    return "当前默认不使用文档，聊天时不会附带任何 RAG 空间。";
+  }
+  return `${chatStore.selectedRagSpace.name} 中的数据库文档记录`;
+});
 
 const resolveErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error === "object" && error !== null) {
@@ -29,6 +42,21 @@ const resolveErrorMessage = (error: unknown, fallback: string) => {
   return fallback;
 };
 
+const formatTime = (value?: string | null) => {
+  if (!value) return "未知时间";
+  const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+};
+
+const formatFileSize = (value?: number) => {
+  const size = Number(value || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+};
+
 const triggerRagDocumentSelect = () => {
   ragDocumentInputRef.value?.click();
 };
@@ -37,6 +65,38 @@ const handleRagFilesSelected = (event: Event) => {
   const inputElement = event.target as HTMLInputElement;
   ragFiles.value = Array.from(inputElement.files || []);
   inputElement.value = "";
+};
+
+const chooseNoDocument = () => {
+  chatStore.clearSelectedRagSpace();
+};
+
+const chooseRagSpace = (spaceId: string) => {
+  chatStore.selectRagSpace(spaceId);
+};
+
+const loadDocuments = async (ragSpaceId: string) => {
+  if (!ragSpaceId) {
+    activeDocuments.value = [];
+    documentError.value = "";
+    documentLoading.value = false;
+    return;
+  }
+  documentLoading.value = true;
+  documentError.value = "";
+  try {
+    const { data } = await ragSpaceApi.listDocuments(ragSpaceId, 5000);
+    if (chatStore.selectedRagSpaceId !== ragSpaceId) return;
+    activeDocuments.value = data.data;
+  } catch (error) {
+    if (chatStore.selectedRagSpaceId !== ragSpaceId) return;
+    activeDocuments.value = [];
+    documentError.value = resolveErrorMessage(error, "文档列表加载失败，请稍后重试");
+  } finally {
+    if (chatStore.selectedRagSpaceId === ragSpaceId) {
+      documentLoading.value = false;
+    }
+  }
 };
 
 const submitRagSpace = async () => {
@@ -67,11 +127,25 @@ const submitRagSpace = async () => {
   }
 };
 
+watch(
+  () => chatStore.selectedRagSpaceId,
+  (ragSpaceId) => {
+    if (!ragSpaceId) {
+      activeDocuments.value = [];
+      documentError.value = "";
+      documentLoading.value = false;
+      return;
+    }
+    loadDocuments(ragSpaceId).catch(() => undefined);
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   try {
     await chatStore.fetchRagSpaces();
   } catch {
-    // The page will render a dedicated warning banner from store state.
+    // The page renders store-level and local error states.
   }
 });
 </script>
@@ -85,8 +159,8 @@ onMounted(async () => {
             <div class="card-title">RAG 空间</div>
             <div class="card-subtitle">管理聊天检索用的私有知识空间，并选择当前默认使用的空间。</div>
           </div>
-          <el-tag v-if="chatStore.selectedRagSpace" type="success" effect="plain">
-            当前使用：{{ chatStore.selectedRagSpace.name }}
+          <el-tag :type="chatStore.selectedRagSpace ? 'success' : 'info'" effect="plain">
+            当前使用：{{ currentUsageLabel }}
           </el-tag>
         </div>
       </template>
@@ -138,40 +212,95 @@ onMounted(async () => {
           </el-form>
         </div>
 
-        <div class="rag-list">
-          <el-empty v-if="chatStore.ragSpaces.length === 0 && !chatStore.ragSpacesError" description="还没有 RAG 空间" />
-          <div v-else-if="chatStore.ragSpaces.length > 0" class="rag-space-list">
-            <div
-              v-for="space in chatStore.ragSpaces"
-              :key="space.id"
-              class="rag-space-item"
-              :class="{ active: chatStore.selectedRagSpaceId === space.id }"
-            >
-              <div class="rag-space-top">
-                <div class="rag-space-copy">
-                  <div class="rag-space-name">{{ space.name }}</div>
-                  <div class="rag-space-desc">{{ space.description || "暂无描述" }}</div>
+        <div class="rag-browser">
+          <section class="rag-panel rag-space-panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">空间列表</div>
+                <div class="panel-subtitle">选择聊天默认使用的知识空间，或切回不使用文档。</div>
+              </div>
+              <el-tag size="small" effect="plain">共 {{ chatStore.ragSpaces.length }} 个空间</el-tag>
+            </div>
+
+            <div class="rag-space-list">
+              <button class="rag-space-item no-doc-item" :class="{ active: !chatStore.selectedRagSpaceId }" @click="chooseNoDocument">
+                <div class="rag-space-top">
+                  <div class="rag-space-copy">
+                    <div class="rag-space-name">不使用文档</div>
+                    <div class="rag-space-desc">聊天时不附带任何 RAG 空间，适合普通问答或纯对话场景。</div>
+                  </div>
+                  <el-tag :type="chatStore.selectedRagSpaceId ? 'info' : 'success'" effect="plain" size="small">
+                    {{ chatStore.selectedRagSpaceId ? "设为默认" : "当前默认" }}
+                  </el-tag>
                 </div>
-                <el-button
-                  size="small"
-                  :type="chatStore.selectedRagSpaceId === space.id ? 'success' : 'primary'"
-                  plain
-                  @click="chatStore.selectRagSpace(space.id)"
-                >
-                  {{ chatStore.selectedRagSpaceId === space.id ? "使用中" : "使用" }}
-                </el-button>
-              </div>
+              </button>
 
-              <div class="rag-space-meta">
-                <el-tag size="small" effect="plain" :icon="CollectionTag">文档数：{{ space.file_count }}</el-tag>
-                <el-tag size="small" effect="plain">启用次数：{{ space.selected_count }}</el-tag>
-              </div>
+              <el-empty v-if="chatStore.ragSpaces.length === 0 && !chatStore.ragSpacesError" description="还没有 RAG 空间" />
 
-              <div v-if="space.files?.length" class="chip-row">
-                <el-tag v-for="file in space.files" :key="file.id" size="small" effect="plain">{{ file.file_name }}</el-tag>
+              <button
+                v-for="space in chatStore.ragSpaces"
+                :key="space.id"
+                class="rag-space-item"
+                :class="{ active: chatStore.selectedRagSpaceId === space.id }"
+                @click="chooseRagSpace(space.id)"
+              >
+                <div class="rag-space-top">
+                  <div class="rag-space-copy">
+                    <div class="rag-space-name">{{ space.name }}</div>
+                    <div class="rag-space-desc">{{ space.description || "暂无描述" }}</div>
+                  </div>
+                  <el-tag :type="chatStore.selectedRagSpaceId === space.id ? 'success' : 'primary'" effect="plain" size="small">
+                    {{ chatStore.selectedRagSpaceId === space.id ? "使用中" : "点击使用" }}
+                  </el-tag>
+                </div>
+
+                <div class="rag-space-meta">
+                  <el-tag size="small" effect="plain" :icon="CollectionTag">文档数：{{ space.file_count }}</el-tag>
+                  <el-tag size="small" effect="plain">启用次数：{{ space.selected_count }}</el-tag>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <section class="rag-panel rag-documents-panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">文档列表</div>
+                <div class="panel-subtitle">{{ documentPanelSubtitle }}</div>
+              </div>
+              <el-tag :type="chatStore.selectedRagSpace ? 'success' : 'info'" effect="plain">
+                {{ chatStore.selectedRagSpace ? `${activeDocuments.length} 份文档` : "默认关闭" }}
+              </el-tag>
+            </div>
+
+            <el-alert
+              v-if="documentError"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="documentError"
+            />
+
+            <div v-else-if="documentLoading" class="document-loading">正在加载文档列表...</div>
+
+            <el-empty v-else-if="!chatStore.selectedRagSpaceId" description="当前默认不使用文档" />
+
+            <el-empty v-else-if="activeDocuments.length === 0" description="该空间还没有文档" />
+
+            <div v-else class="rag-document-list">
+              <div v-for="file in activeDocuments" :key="file.id" class="rag-document-row">
+                <div class="rag-document-main">
+                  <div class="rag-document-name">{{ file.file_name }}</div>
+                  <div class="rag-document-subtitle">{{ formatTime(file.created_at) }}</div>
+                </div>
+
+                <div class="rag-document-meta">
+                  <el-tag size="small" effect="plain">{{ file.status }}</el-tag>
+                  <span>{{ formatFileSize(file.size_bytes) }}</span>
+                </div>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </div>
     </el-card>
@@ -196,14 +325,17 @@ onMounted(async () => {
   align-items: flex-start;
 }
 
-.card-title {
+.card-title,
+.panel-title {
   font-size: 16px;
   font-weight: 700;
   color: #0f766e;
 }
 
 .card-subtitle,
-.rag-space-desc {
+.panel-subtitle,
+.rag-space-desc,
+.rag-document-subtitle {
   font-size: 12px;
   color: #475569;
   line-height: 1.6;
@@ -215,51 +347,117 @@ onMounted(async () => {
   gap: 16px;
 }
 
-.rag-alert {
-  margin-bottom: 16px;
+.rag-create,
+.rag-browser,
+.rag-panel,
+.rag-space-copy,
+.rag-space-list,
+.rag-document-main {
+  display: grid;
+  gap: 10px;
+}
+
+.rag-browser {
+  grid-template-rows: minmax(220px, 1fr) minmax(260px, 1fr);
+}
+
+.rag-panel {
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid #cbe9dc;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 250, 245, 0.94)),
+    radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 35%);
+  min-height: 0;
+}
+
+.panel-header,
+.rag-space-top,
+.rag-space-meta,
+.rag-document-row,
+.rag-document-meta,
+.chip-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rag-space-meta,
+.rag-document-meta,
+.chip-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.rag-space-list,
+.rag-document-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .rag-space-list {
-  display: grid;
   gap: 12px;
 }
 
 .rag-space-item {
+  width: 100%;
   padding: 14px;
   border-radius: 16px;
   border: 1px solid #e2e8f0;
   background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.rag-space-item:hover {
+  border-color: #7dd3a6;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06);
+  transform: translateY(-1px);
 }
 
 .rag-space-item.active {
   border-color: #10b981;
-  box-shadow: 0 10px 22px rgba(16, 185, 129, 0.12);
+  box-shadow: 0 12px 24px rgba(16, 185, 129, 0.14);
 }
 
-.rag-space-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+.no-doc-item {
+  border-style: dashed;
+  background: #f8fafc;
 }
 
-.rag-space-copy,
-.rag-list {
-  display: grid;
-  gap: 8px;
-}
-
-.rag-space-name {
+.rag-space-name,
+.rag-document-name {
   font-size: 14px;
   font-weight: 600;
   color: #0f172a;
 }
 
-.rag-space-meta,
-.chip-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+.rag-document-list {
+  display: grid;
+  gap: 10px;
+}
+
+.rag-document-row {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid #dbe7f0;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.document-loading {
+  padding: 18px 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.rag-alert {
+  margin-bottom: 16px;
 }
 
 .top-gap {
@@ -273,9 +471,19 @@ onMounted(async () => {
 @media (max-width: 960px) {
   .rag-header,
   .rag-layout,
-  .rag-space-top {
-    grid-template-columns: 1fr;
+  .panel-header,
+  .rag-space-top,
+  .rag-document-row {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .rag-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-browser {
+    grid-template-rows: auto auto;
   }
 }
 </style>

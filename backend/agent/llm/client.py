@@ -163,16 +163,16 @@ class LLMClient:
                 )
                 raise
 
-            if hasattr(resp, "model_dump"):
-                data = resp.model_dump()
-            elif isinstance(resp, dict):
+            if isinstance(resp, dict):
                 data = resp
             else:
-                self._safe_update_observation(
-                    observation,
-                    output={"vector_size": 0, "transport": "ark_sdk", "unsupported_response": True},
-                )
-                return []
+                data = self._normalize_multimodal_embedding_response(resp)
+                if not data:
+                    self._safe_update_observation(
+                        observation,
+                        output={"vector_size": 0, "transport": "ark_sdk", "unsupported_response": True},
+                    )
+                    return []
 
             vector = self._extract_embedding_vector(data)
             usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
@@ -198,6 +198,64 @@ class LLMClient:
             embedding = container.get("embedding")
             return embedding if isinstance(embedding, list) else []
         return []
+
+    @classmethod
+    def _normalize_multimodal_embedding_response(cls, response: Any) -> dict[str, Any] | None:
+        raw_data = cls._read_field(response, "data")
+        normalized_data = cls._normalize_embedding_payload(raw_data)
+        if normalized_data is None:
+            return None
+
+        payload: dict[str, Any] = {
+            "data": normalized_data,
+            "model": cls._read_field(response, "model"),
+        }
+        usage = cls._usage_to_dict(cls._read_field(response, "usage"))
+        if usage:
+            payload["usage"] = usage
+        return payload
+
+    @classmethod
+    def _normalize_embedding_payload(cls, value: Any) -> list[dict[str, Any]] | dict[str, Any] | None:
+        if isinstance(value, list):
+            items = [item for item in (cls._normalize_embedding_item(entry) for entry in value) if item]
+            return items
+        if isinstance(value, dict):
+            return value
+        item = cls._normalize_embedding_item(value)
+        return item
+
+    @staticmethod
+    def _normalize_embedding_item(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, dict):
+            embedding = value.get("embedding")
+            if isinstance(embedding, list):
+                normalized = {"embedding": embedding}
+                if "index" in value:
+                    normalized["index"] = value.get("index")
+                if "object" in value:
+                    normalized["object"] = value.get("object")
+                return normalized
+            return None
+
+        embedding = getattr(value, "embedding", None)
+        if not isinstance(embedding, list):
+            return None
+
+        normalized = {"embedding": embedding}
+        index = getattr(value, "index", None)
+        object_name = getattr(value, "object", None)
+        if index is not None:
+            normalized["index"] = index
+        if object_name is not None:
+            normalized["object"] = object_name
+        return normalized
+
+    @staticmethod
+    def _read_field(value: Any, key: str) -> Any:
+        if isinstance(value, dict):
+            return value.get(key)
+        return getattr(value, key, None)
 
     async def _post_json(
         self,
@@ -348,15 +406,30 @@ class LLMClient:
 
     @staticmethod
     def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
-        if not isinstance(raw_usage, dict):
+        usage_dict = LLMClient._usage_to_dict(raw_usage)
+        if usage_dict is None:
             return None
 
         normalized: dict[str, int] = {}
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            value = raw_usage.get(key)
+            value = usage_dict.get(key)
             if isinstance(value, (int, float)):
                 normalized[key] = int(value)
         return normalized or None
+
+    @staticmethod
+    def _usage_to_dict(raw_usage: Any) -> dict[str, Any] | None:
+        if isinstance(raw_usage, dict):
+            return raw_usage
+        if raw_usage is None:
+            return None
+
+        payload: dict[str, Any] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(raw_usage, key, None)
+            if value is not None:
+                payload[key] = value
+        return payload or None
 
     @staticmethod
     def _retry_delay(attempt: int) -> float:

@@ -26,7 +26,6 @@ from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
 from infra.database.session import get_session
 
-
 def get_current_user_for_stream(
     authorization: str = Header(default=""),
     token: str = Query(default=""),
@@ -65,7 +64,7 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            obj = await repo.create(self._org_id, self._user_id, title=title or "新会话")
+            obj = await repo.create(self._org_id, self._user_id, title=title or "New Session")
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
 
@@ -133,6 +132,8 @@ class ChatService:
 
     async def send_message(self, session_id: str, payload: ChatMessageSendRequest) -> ChatSendResponse:
         workflow_run_id = str(uuid7())
+        ext_payload = dict(payload.ext or {})
+
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             message_repo = ChatMessageRepository(session)
@@ -142,11 +143,20 @@ class ChatService:
                 raise NotFoundError("chat session not found")
             await ops_repo.ensure_quality_chat_binding()
 
-            rag_space_id = str((payload.ext or {}).get("selected_rag_space_id") or "").strip()
+            rag_space_id = str(ext_payload.get("selected_rag_space_id") or "").strip()
             if rag_space_id:
                 rag_service = RagSpaceService(session, org_id=self._org_id, user_id=self._user_id)
                 try:
                     await rag_service.note_selected(rag_space_id)
+                except NotFoundError:
+                    rag_space_id = ""
+                    for key in (
+                        "selected_rag_space_id",
+                        "selected_rag_space_name",
+                        "selected_rag_space_description",
+                        "selected_rag_space",
+                    ):
+                        ext_payload.pop(key, None)
                 except ServiceUnavailableError:
                     # This counter is auxiliary metadata and should not block ordinary chat delivery.
                     pass
@@ -162,7 +172,7 @@ class ChatService:
                     "schema_version": payload.schema_version,
                     "workspace": payload.workspace,
                     "metadata": payload.metadata or {},
-                    "ext": payload.ext or {},
+                    "ext": ext_payload,
                 },
             )
             assistant_message = await message_repo.create(
@@ -184,7 +194,7 @@ class ChatService:
             self._run_workflow(
                 session_id=session_id,
                 assistant_message_id=str(assistant_message.id),
-                request=payload,
+                request=payload.model_copy(update={"ext": ext_payload}),
                 workflow_run_id=workflow_run_id,
             )
         )
@@ -208,12 +218,12 @@ class ChatService:
                 raise NotFoundError("chat session not found")
             message_repo = ChatMessageRepository(session)
             content = (
-                "检测任务已创建成功。\n\n"
-                f"任务 ID：{payload.task_id}\n"
-                f"产品编号：{payload.product_id}\n"
-                f"检测标准：{payload.spec_code}\n"
-                f"当前状态：{payload.status}\n"
-                f"图片数量：{payload.image_count}"
+                "Inspection task created successfully.\n\n"
+                f"Task ID: {payload.task_id}\n"
+                f"Product ID: {payload.product_id}\n"
+                f"Spec Code: {payload.spec_code}\n"
+                f"Current Status: {payload.status}\n"
+                f"Image Count: {payload.image_count}"
             )
             message = await message_repo.create(
                 session_id=session_id,
@@ -224,8 +234,7 @@ class ChatService:
                 message_type="task_result",
                 payload={
                     "answer": content,
-                    "summary": "任务创建成功",
-                    "message_type": "task_result",
+                    "summary": "Task created successfully",
                     "action_state": "task_created",
                     "created_task": {
                         "id": payload.task_id,
@@ -283,8 +292,8 @@ class ChatService:
             )
         except Exception as exc:
             content = (
-                "这次质量检测问答暂时失败了。我已经保留了你的提问。"
-                "请稍后重试，或者补充更明确的标准编号、产品信息和问题上下文。"
+                "The quality chat workflow could not complete this time. "
+                "Please retry later or provide clearer context such as spec code, product information, and issue details."
             )
             failure_payload = {"status": "failed", "error": str(exc)}
             async with get_session() as session:

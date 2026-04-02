@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 import traceback
@@ -50,10 +50,12 @@ def _build_runtime_state(
         "usage_events": [],
         "runtime_errors": [],
     }
-
-
-def _runtime_key(runtime: dict[str, Any]) -> str:
     return str(runtime.get("runtime_key") or runtime.get("model_config_id") or runtime.get("model_id") or "unknown")
+
+
+def _linked_chat_session_id(task: InspectionTask) -> str:
+    metadata = task.meta_data if isinstance(task.meta_data, dict) else {}
+    return str(metadata.get("chat_session_id") or "").strip()
 
 
 async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
@@ -123,7 +125,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 timeline_seed.append(
                     {
                         "stage": "gateway",
-                        "message": f"模型 {runtime.get('model_id')} 失败，切换备用模型",
+                        "message": f"Model {runtime.get('model_id')} failed, switching fallback model",
                         "ts": datetime.utcnow().isoformat(),
                     }
                 )
@@ -258,7 +260,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                         "stability_id": stability_obj.id,
                         "alert_type": "stability_risk",
                         "severity": severity,
-                        "title": f"任务 {task.id} 稳定性风险 {stability.get('risk_level')}",
+                        "title": f"任务 {task.id} 触发稳定性风险告警，等级 {stability.get('risk_level')}",
                         "detail": {
                             "risk_level": stability.get("risk_level"),
                             "risk_score": stability.get("risk_score_100"),
@@ -268,10 +270,11 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                         "created_at": datetime.utcnow(),
                     }
                 )
-                await emit({"type": "alert", "message": "已触发稳定性风险告警"})
+                await emit({"type": "alert", "message": "stability risk alert triggered"})
 
             await task_repo.update_status(org_id, task_id, "done")
             await session.commit()
+
 
             await emit({"type": "status", "status": "done"})
             await emit(
