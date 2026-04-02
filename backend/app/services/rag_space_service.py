@@ -66,28 +66,29 @@ class RagSpaceService:
 
     async def list_spaces(self, limit: int = 200) -> list[RagSpaceResponse]:
         try:
-            rows = await self._spaces.list_for_org(org_id=self._org_id, limit=limit)
-            payload: list[RagSpaceResponse] = []
-            for row in rows:
-                files = await self._files.list_for_space(org_id=self._org_id, rag_space_id=str(row.id), limit=50)
-                payload.append(
-                    RagSpaceResponse.model_validate(
-                        {
-                            **row.__dict__,
-                            "files": [RagSpaceFileResponse.model_validate(item) for item in files],
-                        }
-                    )
-                )
-            return payload
+            rows = await self._spaces.list_for_org(org_id=self._org_id, owner_user_id=self._user_id, limit=limit)
+            return [RagSpaceResponse.model_validate(row) for row in rows]
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def list_documents(self, *, rag_space_id: str, limit: int = 1000) -> list[RagSpaceFileResponse]:
+        try:
+            await self._get_owned_space(rag_space_id)
+            rows = await self._files.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+                limit=limit,
+            )
+            return [RagSpaceFileResponse.model_validate(item) for item in rows]
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise
 
     async def upload_documents(self, *, rag_space_id: str, files: list[UploadFile]) -> list[RagSpaceFileResponse]:
         try:
-            space = await self._spaces.get(org_id=self._org_id, rag_space_id=rag_space_id)
-            if space is None:
-                raise NotFoundError("rag space not found")
+            await self._get_owned_space(rag_space_id)
             if not files:
                 raise ValidationError("no files uploaded")
 
@@ -129,7 +130,11 @@ class RagSpaceService:
                 )
                 saved_rows.append(RagSpaceFileResponse.model_validate(row))
 
-            await self._spaces.recalculate_file_count(org_id=self._org_id, rag_space_id=rag_space_id)
+            await self._spaces.recalculate_file_count(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
             await self._session.commit()
             return saved_rows
         except Exception as exc:
@@ -140,7 +145,12 @@ class RagSpaceService:
         if not rag_space_id:
             return
         try:
-            await self._spaces.increment_selected_count(org_id=self._org_id, rag_space_id=rag_space_id)
+            await self._get_owned_space(rag_space_id)
+            await self._spaces.increment_selected_count(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise
@@ -187,6 +197,7 @@ class RagSpaceService:
         payload = {
             "rag_space_id": rag_space_id,
             "org_id": self._org_id,
+            "user_id": self._user_id,
             "file_name": file_name,
             "file_url": file_url,
         }
@@ -244,3 +255,13 @@ class RagSpaceService:
     def _raise_if_rag_metadata_missing(self, exc: Exception) -> None:
         if _is_rag_metadata_missing(exc):
             raise ServiceUnavailableError(RAG_METADATA_MISSING_MESSAGE) from exc
+
+    async def _get_owned_space(self, rag_space_id: str):
+        space = await self._spaces.get(
+            org_id=self._org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=self._user_id,
+        )
+        if space is None:
+            raise NotFoundError("rag space not found")
+        return space

@@ -1,4 +1,4 @@
-import { defineStore } from "pinia";
+﻿import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { chatApi } from "@/api/chat.api";
 import { ragSpaceApi } from "@/api/rag-space.api";
@@ -9,9 +9,13 @@ import type {
   ChatMessagePayload,
   ChatMessageSendRequest,
   ChatSession,
+  ChatStreamPhase,
   ChatStreamEvent,
 } from "@/types/chat.types";
 import type { RagSpace } from "@/types/rag-space.types";
+
+const POLL_INTERVAL_MS = 1200;
+const POLL_TIMEOUT_MS = 25000;
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -83,9 +87,15 @@ export const useChatStore = defineStore("chat", () => {
   const sessions = ref<ChatSession[]>([]);
   const session = ref<ChatSession | null>(null);
   const messages = ref<ChatMessage[]>([]);
+  const streamPhase = ref<ChatStreamPhase>("idle");
   const streamConnected = ref(false);
   const eventSource = ref<EventSource | null>(null);
-  const reconnectFailTimer = ref<number | null>(null);
+  const initPromise = ref<Promise<void> | null>(null);
+  const streamPromise = ref<Promise<void> | null>(null);
+  const activeAssistantMessageId = ref<string | null>(null);
+  const pollTimer = ref<number | null>(null);
+  const pollDeadline = ref<number>(0);
+  const pollInFlight = ref(false);
   const ragSpaces = ref<RagSpace[]>([]);
   const ragSpacesError = ref("");
   const selectedRagSpaceId = ref("");
@@ -154,6 +164,99 @@ export const useChatStore = defineStore("chat", () => {
     return current;
   }
 
+  function isTerminalAssistantMessage(message: ChatMessage | undefined) {
+    if (!message) return false;
+    if (message.message_type && message.message_type !== "streaming") {
+      return true;
+    }
+    const status = String(message.payload?.status || "").toLowerCase();
+    return ["failed", "done", "finished", "completed", "success"].includes(status);
+  }
+
+  function stopPolling() {
+    if (pollTimer.value != null) {
+      window.clearTimeout(pollTimer.value);
+      pollTimer.value = null;
+    }
+    pollDeadline.value = 0;
+    pollInFlight.value = false;
+  }
+
+  function closeStreamConnection() {
+    if (eventSource.value) {
+      eventSource.value.close();
+      eventSource.value = null;
+    }
+    streamConnected.value = false;
+  }
+
+  function finishActiveSend() {
+    activeAssistantMessageId.value = null;
+    loading.value = false;
+    streamPhase.value = "idle";
+  }
+
+  function stopStreamForIdle() {
+    streamPromise.value = null;
+    stopPolling();
+    closeStreamConnection();
+    finishActiveSend();
+  }
+
+  function finalizeStreaming() {
+    streamPhase.value = "closing";
+    stopPolling();
+    closeStreamConnection();
+    finishActiveSend();
+  }
+
+  function checkAndFinalizeByMessage(messageId: string) {
+    const target = messages.value.find((item) => item.id === messageId);
+    if (!isTerminalAssistantMessage(target)) {
+      return false;
+    }
+    finalizeStreaming();
+    return true;
+  }
+
+  function startFallbackPolling(sessionId: string, messageId: string) {
+    if (!messageId || pollTimer.value != null) return;
+    pollDeadline.value = Date.now() + POLL_TIMEOUT_MS;
+    streamPhase.value = "streaming";
+
+    const tick = async () => {
+      if (!session.value || session.value.id !== sessionId || activeAssistantMessageId.value !== messageId) {
+        stopPolling();
+        return;
+      }
+      if (Date.now() > pollDeadline.value) {
+        stopPolling();
+        finishActiveSend();
+        return;
+      }
+      if (pollInFlight.value) {
+        pollTimer.value = window.setTimeout(tick, POLL_INTERVAL_MS);
+        return;
+      }
+      pollInFlight.value = true;
+      try {
+        const rows = await chatApi.listMessages(sessionId, 0, 500);
+        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        sortMessages();
+        if (checkAndFinalizeByMessage(messageId)) {
+          return;
+        }
+      } catch {
+        // Ignore transient polling errors and continue until timeout.
+      } finally {
+        pollInFlight.value = false;
+      }
+      pollTimer.value = window.setTimeout(tick, POLL_INTERVAL_MS);
+    };
+
+    pollTimer.value = window.setTimeout(tick, POLL_INTERVAL_MS);
+  }
+
   async function fetchSessions() {
     const { data } = await chatApi.listSessions(200);
     sessions.value = data.data;
@@ -172,7 +275,7 @@ export const useChatStore = defineStore("chat", () => {
     } catch (error) {
       ragSpaces.value = [];
       selectedRagSpaceId.value = "";
-      ragSpacesError.value = resolveErrorMessage(error, "RAG 空间尚未初始化，请先完成数据库迁移。");
+      ragSpacesError.value = resolveErrorMessage(error, "RAG 空间暂不可用，请稍后重试。");
       throw error;
     }
   }
@@ -211,16 +314,20 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function createNewSession(title = "新会话") {
+    stopStreamForIdle();
     const { data } = await chatApi.createSession(title);
     session.value = data.data;
     if (session.value?.id) saveCurrentSession(session.value.id);
     messages.value = [];
     await fetchSessions();
-    reconnectStream();
     return session.value;
   }
 
   async function selectSession(sessionId: string) {
+    if (session.value?.id === sessionId && messages.value.length > 0) {
+      return session.value;
+    }
+    stopStreamForIdle();
     const found = sessions.value.find((x) => x.id === sessionId);
     session.value = found || null;
     messages.value = [];
@@ -229,32 +336,44 @@ export const useChatStore = defineStore("chat", () => {
     const rows = await chatApi.listMessages(session.value.id, 0, 500);
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
-    reconnectStream();
     return session.value;
   }
 
   async function initForChatPage() {
-    await fetchSessions();
+    if (initPromise.value) {
+      await initPromise.value;
+      return;
+    }
+    initPromise.value = (async () => {
+      await fetchSessions();
+      try {
+        await fetchRagSpaces();
+      } catch {
+        // RAG metadata initialization should not block ordinary chat usage.
+      }
+      const savedSessionId = getSavedSession();
+      if (savedSessionId && sessions.value.some((x) => x.id === savedSessionId)) {
+        await selectSession(savedSessionId);
+        return;
+      }
+      if (sessions.value.length > 0) {
+        await selectSession(sessions.value[0].id);
+        return;
+      }
+      await createNewSession();
+    })();
     try {
-      await fetchRagSpaces();
-    } catch {
-      // RAG metadata initialization should not block ordinary chat usage.
+      await initPromise.value;
+    } finally {
+      initPromise.value = null;
     }
-    const savedSessionId = getSavedSession();
-    if (savedSessionId && sessions.value.some((x) => x.id === savedSessionId)) {
-      await selectSession(savedSessionId);
-      return;
-    }
-    if (sessions.value.length > 0) {
-      await selectSession(sessions.value[0].id);
-      return;
-    }
-    await createNewSession();
   }
 
   async function sendMessage(payload: ChatMessageSendRequest) {
     if (!session.value) await createNewSession();
     if (!session.value) return null;
+    const sessionId = session.value.id;
+    stopStreamForIdle();
 
     const clientSeqStart = allocateClientSeq(2);
     const selected = getSelectedRagSpaceSnapshot();
@@ -278,7 +397,7 @@ export const useChatStore = defineStore("chat", () => {
     appendMessages([
       {
         id: tempUserId,
-        session_id: session.value.id,
+        session_id: sessionId,
         seq_no: 0,
         client_seq: clientSeqStart,
         optimistic: true,
@@ -299,7 +418,7 @@ export const useChatStore = defineStore("chat", () => {
       },
       {
         id: tempAssistantId,
-        session_id: session.value.id,
+        session_id: sessionId,
         seq_no: 0,
         client_seq: clientSeqStart + 1,
         optimistic: true,
@@ -314,8 +433,17 @@ export const useChatStore = defineStore("chat", () => {
     ]);
 
     loading.value = true;
+    streamPhase.value = "connecting";
+    let streamStarted = false;
     try {
-      const { data } = await chatApi.sendMessage(session.value.id, {
+      await ensureStream(sessionId);
+      streamStarted = !!eventSource.value;
+    } catch {
+      streamStarted = false;
+    }
+
+    try {
+      const { data } = await chatApi.sendMessage(sessionId, {
         ...payload,
         ext,
       });
@@ -338,7 +466,7 @@ export const useChatStore = defineStore("chat", () => {
         },
         {
           id: data.data.assistant_message_id,
-          session_id: session.value.id,
+          session_id: sessionId,
           seq_no: 0,
           client_seq: clientSeqStart + 1,
           role: "assistant",
@@ -351,14 +479,19 @@ export const useChatStore = defineStore("chat", () => {
           created_at: new Date().toISOString(),
         },
       ]);
+      activeAssistantMessageId.value = data.data.assistant_message_id;
       clearPendingAttachments();
       await fetchSessions();
+      if (!streamStarted || !eventSource.value) {
+        startFallbackPolling(sessionId, data.data.assistant_message_id);
+      } else if (!checkAndFinalizeByMessage(data.data.assistant_message_id)) {
+        streamPhase.value = streamConnected.value ? "streaming" : "connecting";
+      }
       return data.data;
     } catch (error) {
       removeMessages([tempUserId, tempAssistantId]);
+      stopStreamForIdle();
       throw error;
-    } finally {
-      loading.value = false;
     }
   }
 
@@ -431,6 +564,9 @@ export const useChatStore = defineStore("chat", () => {
         created_at: current?.created_at || event.ts || new Date().toISOString(),
       });
       sortMessages();
+      if (event.message_id && activeAssistantMessageId.value === event.message_id) {
+        finalizeStreaming();
+      }
       return;
     }
     if (event.event === "quality_signal" && current) {
@@ -442,63 +578,50 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  async function ensureStream() {
+  async function ensureStream(sessionId: string) {
     if (!session.value || eventSource.value) return;
-    const sessionId = session.value.id;
-    const source = await chatApi.stream(sessionId, lastSeq.value, (event) => {
-      applyStreamEvent(event);
-    });
-    if (!session.value || session.value.id !== sessionId) {
-      source.close();
+    if (streamPromise.value) {
+      await streamPromise.value;
       return;
     }
-    if (reconnectFailTimer.value != null) {
-      window.clearTimeout(reconnectFailTimer.value);
-      reconnectFailTimer.value = null;
-    }
-    source.onopen = () => {
-      if (reconnectFailTimer.value != null) {
-        window.clearTimeout(reconnectFailTimer.value);
-        reconnectFailTimer.value = null;
-      }
-      streamConnected.value = true;
-    };
-    source.onerror = () => {
-      if (source.readyState === EventSource.CLOSED) {
-        streamConnected.value = false;
+    streamPromise.value = (async () => {
+      const source = await chatApi.stream(sessionId, lastSeq.value, (event) => {
+        applyStreamEvent(event);
+      });
+      if (!session.value || session.value.id !== sessionId) {
+        source.close();
         return;
       }
-      if (reconnectFailTimer.value == null) {
-        reconnectFailTimer.value = window.setTimeout(() => {
-          streamConnected.value = false;
-          reconnectFailTimer.value = null;
-        }, 6000);
-      }
-    };
-    eventSource.value = source;
+      source.onopen = () => {
+        streamConnected.value = true;
+        streamPhase.value = "streaming";
+      };
+      source.onerror = () => {
+        streamConnected.value = false;
+        closeStreamConnection();
+        if (activeAssistantMessageId.value) {
+          streamPhase.value = "streaming";
+          startFallbackPolling(sessionId, activeAssistantMessageId.value);
+          return;
+        }
+        streamPhase.value = "idle";
+      };
+      eventSource.value = source;
+    })();
+    try {
+      await streamPromise.value;
+    } finally {
+      streamPromise.value = null;
+    }
   }
 
   function stopStream() {
-    if (reconnectFailTimer.value != null) {
-      window.clearTimeout(reconnectFailTimer.value);
-      reconnectFailTimer.value = null;
-    }
-    if (eventSource.value) {
-      eventSource.value.close();
-      eventSource.value = null;
-    }
-    streamConnected.value = false;
-  }
-
-  function reconnectStream() {
-    stopStream();
-    ensureStream().catch(() => {
-      streamConnected.value = false;
-    });
+    stopStreamForIdle();
   }
 
   return {
     loading,
+    streamPhase,
     sessions,
     session,
     messages,
@@ -525,3 +648,4 @@ export const useChatStore = defineStore("chat", () => {
     stopStream,
   };
 });
+

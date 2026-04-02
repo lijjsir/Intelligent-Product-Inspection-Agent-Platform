@@ -2,6 +2,7 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="logo">PIAP</div>
+
       <nav class="nav">
         <el-collapse v-if="canApp" v-model="activeNames" class="nav-collapse">
           <el-collapse-item name="app">
@@ -35,7 +36,7 @@
         <div v-if="canChat" class="chat-nav-group">
           <RouterLink to="/app/chat" class="nav-link">
             <el-icon><ChatDotRound /></el-icon>
-            <span>聊天</span>
+            <span>智能体对话</span>
           </RouterLink>
           <RouterLink to="/app/rag-spaces" class="nav-link">
             <el-icon><CollectionTag /></el-icon>
@@ -54,19 +55,19 @@
             <div class="nav-items">
               <RouterLink to="/ops/runtime" class="nav-link">
                 <el-icon><VideoPlay /></el-icon>
-                <span>Agent 运行中心</span>
+                <span>Agent 运行态</span>
               </RouterLink>
               <RouterLink to="/ops/rag-analysis" class="nav-link">
                 <el-icon><DataAnalysis /></el-icon>
-                <span>RAG 召回分析</span>
+                <span>RAG 分析</span>
               </RouterLink>
               <RouterLink to="/ops/analytics" class="nav-link">
                 <el-icon><TrendCharts /></el-icon>
-                <span>分析中心</span>
+                <span>数据分析</span>
               </RouterLink>
               <RouterLink to="/ops/billing" class="nav-link">
                 <el-icon><Wallet /></el-icon>
-                <span>Token 成本</span>
+                <span>Token 计费</span>
               </RouterLink>
               <RouterLink to="/ops/gpu" class="nav-link">
                 <el-icon><Histogram /></el-icon>
@@ -121,7 +122,7 @@
               :model-value="chatStore.session?.id || ''"
               class="topbar-session-select"
               filterable
-              placeholder="选择历史会话"
+              placeholder="选择会话"
               @change="handleChatSessionChange"
             >
               <el-option
@@ -132,22 +133,19 @@
               />
             </el-select>
 
-            <el-button type="primary" plain size="small" @click="createChatSession">新增会话</el-button>
+            <el-button type="primary" plain size="small" @click="createChatSession">新建会话</el-button>
             <el-button type="danger" plain size="small" @click="deleteChatSession">删除会话</el-button>
             <el-tag type="info" effect="plain">会话数：{{ chatStore.sessions.length }}</el-tag>
-            <el-tag :type="chatStore.streamConnected ? 'success' : 'warning'" effect="light">
-              {{ chatStore.streamConnected ? "流式连接正常" : "流式连接中断" }}
-            </el-tag>
           </div>
         </div>
 
         <div class="topbar-actions">
-          <div class="workspace-chip">{{ auth.defaultWorkspace }}</div>
+          <div class="workspace-chip">{{ workspaceLabel }}</div>
           <RouterLink to="/app/profile" class="profile-link">
             <span class="profile-name">{{ profileName }}</span>
-            <span class="profile-role">{{ auth.role || "未识别角色" }}</span>
+            <span class="profile-role">{{ roleLabel }}</span>
           </RouterLink>
-          <button class="ghost" @click="logout">退出</button>
+          <button class="ghost" @click="logout">退出登录</button>
         </div>
       </header>
 
@@ -209,8 +207,30 @@ const canApp = computed(() => auth.isAuthed && !canChat.value);
 const canOps = computed(() => !canChat.value && auth.workspaces.includes(WORKSPACE_OPS));
 const canGovernance = computed(() => !canChat.value && auth.workspaces.includes(WORKSPACE_GOVERNANCE));
 const canUserAdmin = computed(() => normalizedRoles.value.includes(ROLE_ADMIN));
+const showChatControls = computed(() => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"));
 const profileName = computed(() => userStore.current?.username || auth.userId || "当前用户");
-const showChatControls = computed(() => route.path === "/app/chat");
+const workspaceLabel = computed(() => {
+  switch (auth.defaultWorkspace) {
+    case "app":
+      return "应用";
+    case "ops":
+      return "运维";
+    case "governance":
+      return "治理";
+    default:
+      return auth.defaultWorkspace || "工作台";
+  }
+});
+const roleLabel = computed(() => {
+  switch (normalizeRole(auth.role)) {
+    case ROLE_ADMIN:
+      return "管理员";
+    case ROLE_USER:
+      return "普通用户";
+    default:
+      return auth.role || "未识别角色";
+  }
+});
 
 const sessionOptions = computed(() => {
   const rows = [...chatStore.sessions];
@@ -227,13 +247,13 @@ function formatTime(ts?: string | null) {
   const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(ts) ? ts : `${ts}Z`;
   const dt = new Date(normalized);
   if (Number.isNaN(dt.getTime())) return ts;
-  return dt.toLocaleString();
+  return dt.toLocaleString("zh-CN", { hour12: false });
 }
 
 function sessionLabel(sessionId: string) {
   const found = chatStore.sessions.find((item) => item.id === sessionId);
   if (!found) return sessionId;
-  const title = found.title || `会话 ${found.id.slice(-6)}`;
+  const title = found.title || `会话-${found.id.slice(-6)}`;
   const ts = found.last_message_at || found.updated_at || found.created_at;
   return `${title} · ${formatTime(ts)}`;
 }
@@ -248,9 +268,7 @@ function updateActiveNames() {
 }
 
 async function ensureChatTopbarState() {
-  if (!showChatControls.value || !canChat.value || !auth.isAuthed) {
-    return;
-  }
+  if (!showChatControls.value || !canChat.value || !auth.isAuthed) return;
   if (chatInitialized.value) {
     if (!chatStore.session && chatStore.sessions.length > 0) {
       await chatStore.selectSession(chatStore.sessions[0].id);
@@ -266,7 +284,7 @@ async function handleChatSessionChange(sessionId: string) {
   try {
     await chatStore.selectSession(sessionId);
   } catch (error) {
-    ElMessage.error("切换会话失败，请稍后重试");
+    ElMessage.error("切换会话失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -275,7 +293,7 @@ async function createChatSession() {
   try {
     await chatStore.createNewSession("新会话");
   } catch (error) {
-    ElMessage.error("新增会话失败，请稍后重试");
+    ElMessage.error("新建会话失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -285,7 +303,7 @@ async function deleteChatSession() {
   try {
     await chatStore.deleteSession(chatStore.session.id);
   } catch (error) {
-    ElMessage.error("删除会话失败，请稍后重试");
+    ElMessage.error("删除会话失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -294,6 +312,10 @@ watch(() => route.path, updateActiveNames, { immediate: true });
 watch(
   () => route.path,
   () => {
+    if (!showChatControls.value) {
+      chatStore.stopStream();
+      return;
+    }
     ensureChatTopbarState().catch((error) => {
       console.error(error);
     });
@@ -302,13 +324,13 @@ watch(
 );
 
 onMounted(() => {
-  if (auth.isAuthed) {
+  if (auth.isAuthed && !userStore.current) {
     userStore.fetchCurrentUser().catch(() => undefined);
-    ensureChatTopbarState().catch(() => undefined);
   }
 });
 
 const logout = () => {
+  chatStore.stopStream();
   auth.logout();
   router.push("/login");
 };
@@ -377,7 +399,6 @@ const logout = () => {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .nav-collapse {
@@ -519,9 +540,8 @@ const logout = () => {
   background: #e0f2fe;
   color: #075985;
   font-size: 11px;
-  text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .profile-link {

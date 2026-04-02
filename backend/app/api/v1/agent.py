@@ -16,10 +16,25 @@ from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
 from app.services.inspection_pipeline_service import run_inspection_pipeline
 from app.services.stream_service import stream_broker
+from worker.celery_app import celery_app
 from worker.tasks.inspection_task import run_inspection
 
 
 router = APIRouter()
+
+
+def _inspect_celery_workers() -> bool:
+    try:
+        inspector = celery_app.control.inspect(timeout=0.5)
+        if inspector is None:
+            return False
+        return bool(inspector.ping())
+    except Exception:
+        return False
+
+
+async def _has_active_celery_worker() -> bool:
+    return await asyncio.to_thread(_inspect_celery_workers)
 
 
 def get_current_user_for_sse(
@@ -58,10 +73,10 @@ async def run_task_pipeline(
         raise NotFoundError("task not found")
 
     payload = {"task_id": task_id, "org_id": current.org_id}
-    try:
+    if await _has_active_celery_worker():
         async_result = run_inspection.delay(payload)
         data = {"mode": "celery", "job_id": async_result.id}
-    except Exception:
+    else:
         # Fallback for local dev when celery worker is not running.
         asyncio.create_task(run_inspection_pipeline(task_id=task_id, org_id=current.org_id))
         data = {"mode": "local_background", "job_id": None}

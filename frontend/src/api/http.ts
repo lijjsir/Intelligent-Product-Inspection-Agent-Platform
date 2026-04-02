@@ -1,6 +1,8 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
+import { clearStoredAuthSession, ORG_ID_KEY, TOKEN_KEY, readStoredValue } from "@/utils/auth-session";
 
 const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
+let handlingAuthFailure = false;
 
 export interface ApiEnvelope<T> {
   code: string | number;
@@ -20,8 +22,8 @@ const instance: AxiosInstance = axios.create({
 });
 
 instance.interceptors.request.use((config: any) => {
-  const token = localStorage.getItem("piap_token");
-  const orgId = localStorage.getItem("piap_org_id");
+  const token = readStoredValue(TOKEN_KEY);
+  const orgId = readStoredValue(ORG_ID_KEY);
   if (token) {
     config.headers = {
       ...config.headers,
@@ -61,22 +63,47 @@ const showToast = (message: string) => {
   }, 3000);
 };
 
+const redirectToLogin = () => {
+  const currentPath = window.location.pathname;
+  if (currentPath === "/login" || currentPath === "/register") {
+    handlingAuthFailure = false;
+    return;
+  }
+  window.setTimeout(() => {
+    window.location.replace("/login");
+  }, 0);
+};
+
 instance.interceptors.response.use(
   (response: any) => response,
   (error: any) => {
     const response = error.response;
     const serverMessage = response?.data?.message;
+    const requestUrl = String(error?.config?.url || "");
+    const isLoginTokenRequest = requestUrl.includes("/v1/auth/token");
     if (response) {
       if (response.status === 401) {
-        localStorage.removeItem("piap_token");
-        showToast(serverMessage || "登录已过期，请重新登录");
+        if (isLoginTokenRequest) {
+          showToast(serverMessage || "登录失败，请检查组织 ID、账号和密码");
+          return Promise.reject(error);
+        }
+        clearStoredAuthSession();
+        if (!handlingAuthFailure) {
+          handlingAuthFailure = true;
+          showToast(serverMessage || "登录已失效，请重新登录");
+          redirectToLogin();
+        }
       } else if (response.status === 403) {
         showToast(serverMessage || "当前请求被后端拒绝，请检查组织 ID、账号和权限");
       } else {
         showToast(serverMessage || "请求失败");
       }
     } else {
-      showToast("网络连接异常，请确认前后端服务已经启动");
+      if (isLoginTokenRequest) {
+        showToast("后端连接失败，登录接口不可达，请确认后端服务和端口已启动");
+      } else {
+        showToast("后端连接失败，请确认后端服务和端口已启动");
+      }
     }
     return Promise.reject(error);
   },
