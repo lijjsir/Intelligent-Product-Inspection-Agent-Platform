@@ -25,6 +25,7 @@ class AgentDefinition(Base, TimestampMixin):
     workflow_binding: Mapped[str | None] = mapped_column(String(100), nullable=True)
     intent_config_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class PromptVersion(Base, TimestampMixin):

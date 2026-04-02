@@ -12,6 +12,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
+    AnalyticsOverviewPanel: typeof import('./src/components/business/analytics/AnalyticsOverviewPanel.vue')['default']
+    AnalyticsTabNav: typeof import('./src/components/business/analytics/AnalyticsTabNav.vue')['default']
     DefectImageViewer: typeof import('./src/components/business/result/DefectImageViewer.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElButton: typeof import('element-plus/es')['ElButton']
@@ -58,9 +60,12 @@ declare module 'vue' {
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
     PassRateTrendChart: typeof import('./src/components/business/analytics/PassRateTrendChart.vue')['default']
     ProductLineSeriesChart: typeof import('./src/components/business/analytics/ProductLineSeriesChart.vue')['default']
+    QualityReportPanel: typeof import('./src/components/business/analytics/QualityReportPanel.vue')['default']
+    QualityTracingPanel: typeof import('./src/components/business/analytics/QualityTracingPanel.vue')['default']
     RiskDistributionTrendChart: typeof import('./src/components/business/analytics/RiskDistributionTrendChart.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

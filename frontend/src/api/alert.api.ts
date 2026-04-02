@@ -1,5 +1,5 @@
 import { http } from "./http";
-import type { AlertEvent, AlertListQuery } from "@/types/alert.types";
+import type { AlertEvent, AlertListQuery, AlertHandlePayload } from "@/types/alert.types";
 import type { PagedResponse } from "@/types/common.types";
 
 export const alertApi = {
@@ -9,7 +9,10 @@ export const alertApi = {
   get(id: string) {
     return http.get<AlertEvent>(`/v1/alerts/${id}`);
   },
+  handle(id: string, payload: AlertHandlePayload) {
+    return http.patch<AlertEvent>(`/v1/alerts/${id}`, payload);
+  },
   resolve(id: string) {
     return http.put<boolean>(`/v1/alerts/${id}/resolve`);
-  }
+  },
 };

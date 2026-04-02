@@ -51,3 +51,12 @@ class AlertRepository:
         )
         res = await self._session.execute(stmt)
         return res.rowcount > 0
+
+    async def handle_alert(self, org_id: str, alert_id: str, values: dict) -> bool:
+        stmt = (
+            update(AlertEvent)
+            .where(AlertEvent.org_id == org_id, AlertEvent.id == alert_id)
+            .values(**values)
+        )
+        res = await self._session.execute(stmt)
+        return res.rowcount > 0
