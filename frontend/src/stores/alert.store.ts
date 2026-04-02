@@ -19,18 +19,27 @@ export const useAlertStore = defineStore("alert", () => {
     }
   }
 
-  async function resolveAlert(id: string) {
-    loading.value = true;
-    try {
-      await alertApi.resolve(id);
-      const idx = items.value.findIndex(a => a.id === id);
-      if (idx !== -1) {
-        items.value[idx].status = 'resolved';
-      }
-    } finally {
-      loading.value = false;
+  function _updateItem(id: string, updated: AlertEvent) {
+    const idx = items.value.findIndex((a) => a.id === id);
+    if (idx !== -1) {
+      items.value[idx] = updated;
     }
   }
 
-  return { items, total, loading, fetchAlerts, resolveAlert };
+  async function ackAlert(id: string, actionNote?: string) {
+    const { data } = await alertApi.handle(id, { action: "acknowledge", action_note: actionNote });
+    _updateItem(id, data.data);
+  }
+
+  async function suppressAlert(id: string, actionNote: string) {
+    const { data } = await alertApi.handle(id, { action: "suppress", action_note: actionNote });
+    _updateItem(id, data.data);
+  }
+
+  async function resolveAlert(id: string, actionNote?: string) {
+    const { data } = await alertApi.handle(id, { action: "resolve", action_note: actionNote });
+    _updateItem(id, data.data);
+  }
+
+  return { items, total, loading, fetchAlerts, ackAlert, suppressAlert, resolveAlert };
 });

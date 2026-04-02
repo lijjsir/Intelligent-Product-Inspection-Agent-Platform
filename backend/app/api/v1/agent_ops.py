@@ -17,6 +17,15 @@ from app.schemas.agent_ops import (
     PromptVersionListQuery,
     RagAnalysisResponse,
 )
+from app.schemas.agent_management import (
+    BatchUpdateStatusRequest,
+    BatchDeleteRequest,
+    BatchOperationResponse,
+    AgentMetricsResponse,
+    AgentConfigVersionResponse,
+    CreateConfigVersionRequest,
+    RollbackConfigRequest,
+)
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import CurrentUser
 from app.services.agent_ops_service import AgentOpsService
@@ -237,3 +246,91 @@ async def get_rag_analysis(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.get_rag_analysis())
+
+
+@router.post("/agents/batch/status", response_model=ResponseEnvelope[BatchOperationResponse])
+async def batch_update_status(
+    body: BatchUpdateStatusRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        result = await svc.batch_update_status(body.agent_ids, body.is_active)
+        return ResponseEnvelope(data=BatchOperationResponse(**result))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/agents/batch/delete", response_model=ResponseEnvelope[BatchOperationResponse])
+async def batch_delete(
+    body: BatchDeleteRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        result = await svc.batch_delete(body.agent_ids)
+        return ResponseEnvelope(data=BatchOperationResponse(**result))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/agents/{id}/metrics", response_model=ResponseEnvelope[AgentMetricsResponse])
+async def get_agent_metrics(
+    id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        metrics = await svc.get_agent_metrics(id)
+        return ResponseEnvelope(data=AgentMetricsResponse(**metrics))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/agents/{id}/config-versions", response_model=ResponseEnvelope[dict], status_code=201)
+async def create_config_version(
+    id: str,
+    body: CreateConfigVersionRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        config = body.model_dump(exclude_none=True)
+        result = await svc.create_config_version(id, config)
+        return ResponseEnvelope(data=result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/agents/{id}/config-versions", response_model=ResponseEnvelope[list[AgentConfigVersionResponse]])
+async def list_config_versions(
+    id: str,
+    limit: int = Query(10, ge=1, le=100),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        versions = await svc.list_config_versions(id, limit)
+        return ResponseEnvelope(data=versions)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/agents/{id}/config-versions/rollback", response_model=ResponseEnvelope[dict])
+async def rollback_config(
+    id: str,
+    body: RollbackConfigRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        result = await svc.rollback_config(id, body.version)
+        return ResponseEnvelope(data=result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

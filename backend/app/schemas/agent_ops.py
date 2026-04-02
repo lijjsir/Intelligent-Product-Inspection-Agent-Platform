@@ -3,18 +3,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from app.schemas.common import PageParams
 
 
 class AgentDefinitionBase(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: str = Field(..., max_length=100, description="Agent name")
-    description: Optional[str] = Field(None, description="Agent description")
-    prompt_version_id: Optional[str] = Field(None, description="Associated prompt version ID")
-    workflow_binding: Optional[str] = Field(None, max_length=100, description="Workflow binding")
-    intent_config_id: Optional[str] = Field(None, description="Intent config ID")
+    description: Optional[str] = Field(default=None, description="Agent description")
+    prompt_version_id: Optional[str] = Field(default=None, description="Associated prompt version ID")
+    workflow_binding: Optional[str] = Field(default=None, max_length=100, description="Workflow binding")
+    intent_config_id: Optional[str] = Field(default=None, description="Intent config ID")
     is_active: bool = Field(default=True, description="Whether agent is active")
+
+    @field_validator("description", "prompt_version_id", "workflow_binding", "intent_config_id", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v):
+        return None if v == "" else v
 
 
 class AgentDefinitionCreate(AgentDefinitionBase):
@@ -130,7 +137,7 @@ class RagAnalysisStats(BaseModel):
 
 class RagAnalysisItem(BaseModel):
     task_id: str
-    query: str
+    query: Optional[str] = Field(default=None, description="Query text if available")
     hit_rate: float
     citation_coverage: float
     latency_ms: float

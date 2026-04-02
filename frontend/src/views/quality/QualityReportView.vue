@@ -2,6 +2,7 @@
 import { onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useQualityStore } from "@/stores/quality.store";
+import AnalyticsTabNav from "@/components/business/analytics/AnalyticsTabNav.vue";
 
 const router = useRouter();
 const store = useQualityStore();
@@ -11,7 +12,7 @@ onMounted(() => {
 });
 
 function goToLangfuseTraces() {
-  router.push({ name: "quality-tracing" });
+  router.push({ name: "ops-analytics-tracing" });
 }
 </script>
 
@@ -24,6 +25,8 @@ function goToLangfuseTraces() {
       </div>
       <el-button type="primary" @click="goToLangfuseTraces">跳转 Langfuse Trace</el-button>
     </div>
+
+    <AnalyticsTabNav />
 
     <el-row :gutter="16" v-if="store.report">
       <el-col :span="8"><el-card shadow="never"><div class="metric-title">总结果数</div><div class="metric-value">{{ store.report.total_results }}</div></el-card></el-col>
