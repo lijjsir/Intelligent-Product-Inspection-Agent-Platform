@@ -9,15 +9,18 @@ from app.models.task import InspectionTask
 
 class TaskRepository:
     def __init__(self, session: AsyncSession):
+        """封装任务表的基础读写操作。"""
         self._session = session
 
     async def create(self, task: InspectionTask) -> InspectionTask:
+        """写入新任务，并回填创建、更新时间字段。"""
         self._session.add(task)
         await self._session.flush()
         await self._session.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
 
     async def get(self, org_id: str, task_id: str) -> InspectionTask | None:
+        """按租户和任务 ID 查询单个任务。"""
         result = await self._session.execute(
             select(InspectionTask).where(
                 InspectionTask.org_id == org_id, InspectionTask.id == task_id
@@ -26,6 +29,7 @@ class TaskRepository:
         return result.scalar_one_or_none()
 
     async def update_status(self, org_id: str, task_id: str, status: str) -> bool:
+        """更新任务状态，并在进入运行态或结束态时写入对应时间戳。"""
         values: dict = {"status": status}
         if status == "running":
             values["started_at"] = datetime.utcnow()
@@ -40,6 +44,7 @@ class TaskRepository:
         return bool(res.rowcount and res.rowcount > 0)
 
     async def list_paged(self, org_id: str, filters: dict, page: int, size: int) -> tuple[list[InspectionTask], int]:
+        """按状态、产品和任务集合筛选后返回分页任务列表。"""
         from sqlalchemy import func
         base = (
             select(InspectionTask)

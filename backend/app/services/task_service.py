@@ -9,6 +9,7 @@ from app.services.audit_service import AuditService
 
 class TaskService:
     def __init__(self, session: AsyncSession, org_id: str):
+        """绑定当前租户上下文和任务相关仓储。"""
         self._session = session
         self._org_id = org_id
         self._repo = TaskRepository(session)
@@ -17,6 +18,7 @@ class TaskService:
     async def create_task(
         self, created_by: str, product_id: str, spec_code: str, image_urls: list[str], priority: int, metadata: dict | None
     ) -> InspectionTask:
+        """校验检测标准、落库待处理任务，并写入审计事件。"""
         normalized_spec_code = str(spec_code).strip()
         if not normalized_spec_code:
             raise ValidationError("检测标准编码不能为空")
@@ -51,9 +53,11 @@ class TaskService:
         return task
 
     async def get_task(self, task_id: str) -> InspectionTask | None:
+        """按租户范围查询单个任务。"""
         return await self._repo.get(self._org_id, task_id)
 
     async def list_tasks(self, query) -> tuple[list[InspectionTask], int]:
+        """按筛选条件返回租户范围内的分页任务列表。"""
         return await self._repo.list_paged(
             org_id=self._org_id,
             filters=query.to_filters(),

@@ -32,6 +32,7 @@ def _build_runtime_state(
     trace_id: str,
     timeline_seed: list[dict[str, Any]],
 ) -> InspectionState:
+    """根据任务记录和选中的运行时模型构造图执行的初始状态。"""
     return {
         "task_id": task.id,
         "org_id": task.org_id,
@@ -53,10 +54,12 @@ def _build_runtime_state(
 
 
 def _runtime_key(runtime: dict[str, Any]) -> str:
+    """生成运行时模型的稳定标识，供失败切换时排除已失败模型。"""
     return str(runtime.get("runtime_key") or runtime.get("model_config_id") or runtime.get("model_id") or "unknown")
 
 
 async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
+    """执行完整的 AI 质检流水线，包括状态流转、图推理、结果持久化和稳定性分析。"""
     async with get_session() as session:
         task_repo = TaskRepository(session)
         result_repo = ResultRepository(session)
@@ -75,6 +78,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         await stream_broker.publish(task_id, {"type": "status", "status": "running", "ts": datetime.utcnow().isoformat()})
 
         async def emit(event: dict) -> None:
+            """为流水线事件补齐服务端时间戳并发布到任务事件流。"""
             event.setdefault("ts", datetime.utcnow().isoformat())
             await stream_broker.publish(task_id, event)
 

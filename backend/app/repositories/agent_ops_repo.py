@@ -35,6 +35,16 @@ class AgentDefinitionRepository(AgentOpsRepository):
     async def get(self, id: str) -> AgentDefinition | None:
         return await self._get_by_id(AgentDefinition, id)
 
+    async def get_by_name(self, name: str) -> AgentDefinition | None:
+        result = await self._session.execute(
+            select(AgentDefinition).where(
+                AgentDefinition.org_id == self._org_id,
+                AgentDefinition.name == name,
+                AgentDefinition.deleted_at.is_(None)
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def update(self, id: str, data: dict) -> AgentDefinition | None:
         obj = await self.get(id)
         if not obj:

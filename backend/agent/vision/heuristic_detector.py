@@ -21,6 +21,7 @@ def build_variable_defects(
     raw_text: str | None = None,
     max_items: int = 3,
 ) -> list[dict[str, Any]]:
+    """基于输入内容生成稳定但伪随机的候选缺陷，供兜底演示或测试使用。"""
     seed_source = "|".join(image_urls) + "|" + (raw_text or "")
     digest = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()
     defect_count = 1 + (int(digest[0:2], 16) % max(1, min(max_items, 3)))
@@ -49,6 +50,7 @@ def build_variable_defects(
 
 
 def normalize_defects(payload: object) -> list[dict[str, Any]]:
+    """把不同来源的缺陷候选统一标准化为系统内部结构。"""
     if not isinstance(payload, list):
         return []
 
@@ -77,6 +79,7 @@ def normalize_defects(payload: object) -> list[dict[str, Any]]:
 
 
 def extract_defects(data: object) -> list[dict[str, Any]]:
+    """从字典、字符串或嵌套 JSON 文本中提取缺陷列表。"""
     if isinstance(data, dict):
         candidates = data.get("defects") or data.get("items") or data.get("detections")
         defects = normalize_defects(candidates)
@@ -96,6 +99,7 @@ def extract_defects(data: object) -> list[dict[str, Any]]:
 
 
 def _normalize_confidence(value: object) -> float:
+    """把各种置信度表达归一化到 0-1 区间。"""
     try:
         confidence = float(value)
     except (TypeError, ValueError):
@@ -106,6 +110,7 @@ def _normalize_confidence(value: object) -> float:
 
 
 def _normalize_bbox(value: object) -> list[float] | None:
+    """把边界框坐标规整为归一化的 [left, top, width, height] 形式。"""
     if not isinstance(value, (list, tuple)) or len(value) != 4:
         return None
     try:
@@ -126,6 +131,7 @@ def _normalize_bbox(value: object) -> list[float] | None:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
+    """从普通文本或 Markdown 代码块中抽取首个 JSON 对象。"""
     stripped = text.strip()
     candidates = [stripped]
     if "```" in stripped:

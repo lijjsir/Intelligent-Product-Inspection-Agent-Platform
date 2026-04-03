@@ -6,6 +6,7 @@ from agent.graph.state import InspectionState
 
 
 async def plan(state: InspectionState) -> InspectionState:
+    """生成本次质检的执行计划，供后续阶段和时间线展示使用。"""
     now = datetime.utcnow().isoformat()
     state["plan"] = {
         "task": "vision_inspection",

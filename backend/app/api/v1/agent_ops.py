@@ -106,6 +106,33 @@ async def delete_agent(
     return ResponseEnvelope(data={"deleted": True})
 
 
+@router.get("/runtime-agents", response_model=ResponseEnvelope[list[dict]])
+async def get_runtime_agents(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    data = await svc.get_runtime_agents()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/agents/import-runtime", response_model=ResponseEnvelope[AgentDefinitionResponse], status_code=201)
+async def import_runtime_agent(
+    body: dict,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        data = await svc.import_runtime_agent(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ResponseEnvelope(data=data)
+
+
 @router.get("/prompts", response_model=ResponseEnvelope[PagedResponse[PromptVersionResponse]])
 async def list_prompts(
     query: PromptVersionListQuery = Depends(),

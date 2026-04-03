@@ -34,6 +34,14 @@ from app.schemas.agent_ops import (
 from app.services.audit_service import AuditService
 
 
+# 运行中心的 agent 实例数据
+RUNTIME_AGENTS = [
+    {"name": "vision-inspector", "status": "running", "tasks": 5, "latency": 1.2},
+    {"name": "knowledge-retriever", "status": "idle", "tasks": 0, "latency": 0.8},
+    {"name": "reasoning-engine", "status": "running", "tasks": 3, "latency": 2.1},
+]
+
+
 class AgentOpsService:
     def __init__(self, session: AsyncSession, org_id: str, actor_id: str):
         self._session = session
@@ -55,7 +63,24 @@ class AgentOpsService:
             }
         )
 
+    async def _sync_runtime_agents(self) -> None:
+        """Mirror built-in runtime agents into agent definitions without overwriting user-managed records."""
+        for runtime_agent in RUNTIME_AGENTS:
+            existing = await self._agent_repo.get_by_name(runtime_agent["name"])
+            if existing:
+                continue
+
+            await self._agent_repo.create(
+                {
+                    "name": runtime_agent["name"],
+                    "description": f"Imported from runtime center - {runtime_agent['status']}",
+                    "workflow_binding": runtime_agent["name"],
+                    "is_active": True,
+                }
+            )
+
     async def list_agents(self, query: AgentDefinitionListQuery) -> tuple[list[AgentDefinitionResponse], int]:
+        await self._sync_runtime_agents()
         items, total = await self._agent_repo.list_paged(
             filters=query.to_filters(), page=query.page, size=query.size
         )
@@ -88,6 +113,28 @@ class AgentOpsService:
         if not success:
             raise NotFoundError(f"Agent {id} not found")
         await self._log_audit("agent_definition", id, "delete")
+
+    async def get_runtime_agents(self) -> list[dict]:
+        """获取运行中心的 agent 实例列表"""
+        return RUNTIME_AGENTS
+
+    async def import_runtime_agent(self, name: str) -> AgentDefinitionResponse:
+        """将运行中心的 agent 导入为 AgentDefinition"""
+        runtime_agent = next((a for a in RUNTIME_AGENTS if a["name"] == name), None)
+        if not runtime_agent:
+            raise ValidationError(f"Runtime agent {name} not found")
+
+        existing = await self._agent_repo.get_by_name(name)
+        if existing:
+            raise ValidationError(f"Agent {name} already exists")
+
+        obj = await self._agent_repo.create({
+            "name": runtime_agent["name"],
+            "description": f"Imported from runtime center - {runtime_agent['status']}",
+            "is_active": True,
+        })
+        await self._log_audit("agent_definition", str(obj.id), "import_runtime")
+        return AgentDefinitionResponse.model_validate(obj)
 
     async def list_prompts(self, query: PromptVersionListQuery) -> tuple[list[PromptVersionResponse], int]:
         items, total = await self._prompt_repo.list_paged(

@@ -8,6 +8,7 @@ from agent.llm.client import LLMClient
 
 
 def _is_valid_conclusion_payload(data: object) -> bool:
+    """校验大模型返回的结构化推理结果是否满足最小字段要求。"""
     if not isinstance(data, dict):
         return False
     verdict = data.get("verdict")
@@ -22,6 +23,7 @@ def _is_valid_conclusion_payload(data: object) -> bool:
 
 
 async def run_reasoning(state: InspectionState) -> InspectionState:
+    """结合缺陷信息和检索到的证据，生成结构化的质检结论。"""
     now = datetime.utcnow().isoformat()
     defects = state.get("defects") or []
     docs = state.get("knowledge_docs") or []

@@ -9,6 +9,7 @@ from agent.rag.retriever import Retriever
 
 
 async def run_knowledge(state: InspectionState) -> InspectionState:
+    """检索并重排检测标准证据，再为后续推理阶段挂载引用信息。"""
     now = datetime.utcnow().isoformat()
     query = f"产品 {state.get('product_id', '')} 检测标准 {state.get('spec_code', '')} 缺陷判定标准"
     retriever = Retriever(

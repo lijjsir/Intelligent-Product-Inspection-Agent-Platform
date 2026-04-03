@@ -18,6 +18,7 @@ async def list_tasks(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """返回任务管理页需要的分页任务列表。"""
     require_role("task", current.role)
     service = TaskService(db, current.org_id)
     items, total = await service.list_tasks(query)
@@ -36,6 +37,7 @@ async def create_task(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """校验检测标准后创建待执行的质检任务。"""
     require_role("task", current.role)
     service = TaskService(db, current.org_id)
     task = await service.create_task(
@@ -56,6 +58,7 @@ async def get_task(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """返回任务详情页展示和运行态刷新所需的单个任务数据。"""
     require_role("task", current.role)
     service = TaskService(db, current.org_id)
     task = await service.get_task(task_id)
@@ -70,6 +73,7 @@ async def get_status(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """返回任务的最新状态，供轻量轮询场景使用。"""
     require_role("task", current.role)
     service = TaskService(db, current.org_id)
     task = await service.get_task(task_id)
