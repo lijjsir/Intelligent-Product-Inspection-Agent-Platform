@@ -10,6 +10,7 @@ from agent.vision.heuristic_detector import extract_defects
 
 
 def _has_structured_defect_payload(data: object) -> bool:
+    """判断视觉服务或大模型返回值里是否包含可标准化的缺陷列表。"""
     if isinstance(data, dict):
         for key in ("defects", "items", "detections"):
             if isinstance(data.get(key), list):
@@ -27,6 +28,7 @@ def _has_structured_defect_payload(data: object) -> bool:
 
 
 async def run_vision(state: InspectionState) -> InspectionState:
+    """优先调用专用视觉检测服务，失败时回退到多模态大模型识别候选缺陷。"""
     now = datetime.utcnow().isoformat()
     images = state.get("image_urls") or []
     defects: list[dict[str, Any]] = []

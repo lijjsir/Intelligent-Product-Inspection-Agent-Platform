@@ -7,6 +7,7 @@ from infra.cache.rate_limiter import RateLimiter
 
 class LLMGateway:
     def __init__(self) -> None:
+        """封装运行时模型选择和限流校验逻辑。"""
         self._selector = ModelSelector()
 
     async def select_runtime(
@@ -16,6 +17,7 @@ class LLMGateway:
         excluded_runtime_ids: set[str] | None = None,
         reserve: bool = True,
     ) -> dict[str, str | int | float | None] | None:
+        """从候选模型中选择当前可用的最佳运行时配置，跳过被排除或已限流的模型。"""
         excluded_runtime_ids = excluded_runtime_ids or set()
         candidates = self._selector.ordered_candidates(models or [], excluded_runtime_ids=excluded_runtime_ids)
         for failover_depth, item in enumerate(candidates):
@@ -36,6 +38,7 @@ class LLMGateway:
         *,
         excluded_runtime_ids: set[str] | None = None,
     ) -> bool:
+        """在不占用配额的前提下判断是否仍有可切换的运行时模型。"""
         runtime = await self.select_runtime(
             models=models,
             excluded_runtime_ids=excluded_runtime_ids,
@@ -44,6 +47,7 @@ class LLMGateway:
         return runtime is not None
 
     async def _within_rate_limit(self, model: dict, *, reserve: bool) -> bool:
+        """检查或预占指定模型的 RPM 配额。"""
         rpm_limit = model.get("rpm_limit")
         limiter = RateLimiter(int(rpm_limit) if rpm_limit is not None else None)
         key = f"llm:{self._runtime_key(model)}"
@@ -57,6 +61,7 @@ class LLMGateway:
         *,
         failover_depth: int,
     ) -> dict[str, str | int | float | None]:
+        """把模型配置记录转换为图执行阶段使用的运行时负载。"""
         return {
             "runtime_key": self._runtime_key(selected),
             "model_config_id": str(selected.get("id") or "") or None,
@@ -71,6 +76,7 @@ class LLMGateway:
         }
 
     def _default_runtime(self) -> dict[str, str | int | float | None]:
+        """返回基于环境变量构造的默认兜底运行时配置。"""
         return {
             "runtime_key": f"default::{settings.volcengine_model_id}",
             "model_config_id": None,
@@ -84,6 +90,7 @@ class LLMGateway:
         }
 
     def _runtime_key(self, selected: dict) -> str:
+        """返回运行时配置的稳定标识，用于去重和失败切换排除。"""
         if selected.get("runtime_key"):
             return str(selected["runtime_key"])
         return ModelSelector.runtime_id(selected)

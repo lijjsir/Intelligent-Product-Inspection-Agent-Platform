@@ -9,12 +9,14 @@ from app.core.config import settings
 
 class VisionDetectorClient:
     def __init__(self) -> None:
+        """读取视觉检测服务配置，准备向外部检测器发送请求。"""
         self._url = settings.vision_detector_url.strip()
         self._api_key = settings.vision_detector_api_key.strip()
         self._timeout = settings.vision_detector_timeout_sec
 
     @property
     def enabled(self) -> bool:
+        """判断当前环境是否启用了专用视觉检测服务。"""
         return bool(self._url)
 
     async def detect(
@@ -24,6 +26,7 @@ class VisionDetectorClient:
         product_id: str | None = None,
         spec_code: str | None = None,
     ) -> dict[str, Any] | None:
+        """调用外部视觉检测服务，返回原始结构化检测结果。"""
         if not self.enabled or not image_urls:
             return None
 

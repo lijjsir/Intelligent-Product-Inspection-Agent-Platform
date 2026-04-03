@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 def attach_citations(docs: list[dict]) -> list[dict]:
+    """为检索文档补充统一的 citation 结构，便于结果展示和可追溯性分析。"""
     enriched: list[dict] = []
     for idx, doc in enumerate(docs, start=1):
         citation = {

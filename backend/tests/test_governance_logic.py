@@ -21,8 +21,10 @@ from agent.llm.model_selector import ModelSelector
 from agent.llm.pricing import ModelPricing
 from agent.vision.heuristic_detector import build_variable_defects, normalize_defects
 from app.services.feedback_service import FeedbackService
+from app.services.agent_ops_service import AgentOpsService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.quality_report_service import QualityReportService
+from app.schemas.agent_ops import AgentDefinitionListQuery
 from infra.cache.rate_limiter import RateLimiter
 
 
@@ -259,6 +261,62 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
             "last_score_at": "2026-03-24T11:00:00",
             "created_at": datetime(2026, 3, 24, 10, 0, 0),
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_ops_list_agents_auto_syncs_runtime_agents(monkeypatch):
+    class FakeAgentRepo:
+        def __init__(self, session, org_id):
+            self.org_id = org_id
+            self.items = {}
+
+        async def get_by_name(self, name):
+            return self.items.get(name)
+
+        async def create(self, data):
+            now = datetime(2026, 4, 2, 12, 0, 0)
+            item = SimpleNamespace(
+                id=f"id-{data['name']}",
+                org_id=self.org_id,
+                name=data["name"],
+                description=data.get("description"),
+                prompt_version_id=data.get("prompt_version_id"),
+                workflow_binding=data.get("workflow_binding"),
+                intent_config_id=data.get("intent_config_id"),
+                is_active=data.get("is_active", True),
+                created_at=now,
+                updated_at=now,
+            )
+            self.items[item.name] = item
+            return item
+
+        async def list_paged(self, filters, page, size):
+            items = list(self.items.values())
+            if filters.get("name"):
+                items = [item for item in items if filters["name"] in item.name]
+            if "is_active" in filters:
+                items = [item for item in items if item.is_active == filters["is_active"]]
+            return items, len(items)
+
+    class DummyRepo:
+        def __init__(self, session, org_id):
+            self.session = session
+            self.org_id = org_id
+
+    monkeypatch.setattr("app.services.agent_ops_service.AgentDefinitionRepository", FakeAgentRepo)
+    monkeypatch.setattr("app.services.agent_ops_service.PromptVersionRepository", DummyRepo)
+    monkeypatch.setattr("app.services.agent_ops_service.IntentRouteRepository", DummyRepo)
+
+    service = AgentOpsService(session=None, org_id="00000000-0000-0000-0000-000000000001", actor_id="user-1")
+
+    items, total = await service.list_agents(AgentDefinitionListQuery(page=1, size=10))
+
+    assert total == 3
+    assert [item.name for item in items] == [
+        "vision-inspector",
+        "knowledge-retriever",
+        "reasoning-engine",
     ]
 
 

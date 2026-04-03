@@ -13,6 +13,7 @@ VALID_DISPOSITIONS = {"pass", "fail", "uncertain", "manual_required"}
 
 class InspectionStandardService:
     def __init__(self, session: AsyncSession, org_id: str):
+        """绑定租户上下文，用于按检测标准对模型结果做规则门禁。"""
         self._repo = InspectionSpecRepository(session)
         self._org_id = org_id
 
@@ -26,6 +27,7 @@ class InspectionStandardService:
         model_verdict: str,
         overall_score: float,
     ) -> dict[str, Any]:
+        """加载生效标准并综合缺陷、证据和模型结论给出最终门禁判定。"""
         spec = await self._repo.get_active_spec(self._org_id, spec_code)
         if not spec:
             return {
@@ -62,6 +64,7 @@ class InspectionStandardService:
         model_verdict: str,
         overall_score: float,
     ) -> dict[str, Any]:
+        """在标准和规则已加载的前提下执行详细的规则匹配和 AI 门禁判定。"""
         if len(image_urls) < int(spec.required_image_count or 1):
             ai_gate = cls._build_ai_gate(spec, citations, reasoning_chain, defects, overall_score)
             ai_gate["reasons"].append("insufficient_required_views")
@@ -156,6 +159,7 @@ class InspectionStandardService:
         defects: list[dict[str, Any]],
         overall_score: float,
     ) -> dict[str, Any]:
+        """根据证据覆盖度、可追溯性和模型分数构造 AI 门禁结果。"""
         evidence_score = 1.0 if not defects else min(1.0, len(citations) / max(len(defects), 1))
         traceability_score = 1.0 if reasoning_chain and citations else 0.6 if reasoning_chain else 0.0
         confidence_threshold = float(spec.ai_gate_confidence_threshold) if spec else 0.72
@@ -183,6 +187,7 @@ class InspectionStandardService:
 
     @staticmethod
     def _serialize_spec(spec: InspectionSpec) -> dict[str, Any]:
+        """提取前端和结果页需要的标准摘要信息。"""
         return {
             "spec_code": spec.spec_code,
             "name": spec.name,
@@ -200,6 +205,7 @@ class InspectionStandardService:
         unmatched_defects: list[str],
         ai_gate_reasons: list[str],
     ) -> str:
+        """根据最终判定和命中原因生成人可读的结果摘要。"""
         if verdict == "pass":
             return f"按标准 {spec_code} 校验通过，且 AI 门禁满足自动放行条件。"
         if verdict == "fail":

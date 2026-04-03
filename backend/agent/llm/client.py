@@ -28,6 +28,7 @@ class LLMClient:
         org_id: str | None = None,
         provider: str | None = None,
     ) -> None:
+        """为单次模型调用流程绑定鉴权、追踪上下文和提供商配置。"""
         self._api_key = api_key or settings.volcengine_api_key
         self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
         self._model_id = model_id or settings.volcengine_model_id
@@ -42,10 +43,12 @@ class LLMClient:
 
     @property
     def model_id(self) -> str:
+        """返回当前客户端实际使用的聊天模型标识。"""
         return self._model_id
 
     @property
     def trace_id(self) -> str | None:
+        """返回当前流水线中多次模型调用共享的追踪标识。"""
         return self._trace_id
 
     async def chat(
@@ -56,6 +59,7 @@ class LLMClient:
         observation_name: str = "llm.chat",
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """调用聊天补全接口，并尽量把响应标准化为 JSON 优先的结果。"""
         payload = {
             "model": self._model_id,
             "messages": messages,
@@ -71,6 +75,7 @@ class LLMClient:
         )
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
+        """封装带图片输入的多模态聊天请求。"""
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
             content.append({"type": "image_url", "image_url": {"url": url}})
@@ -88,6 +93,7 @@ class LLMClient:
         observation_name: str = "llm.embedding",
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
+        """生成文本向量；当模型要求多模态 SDK 时自动切换实现路径。"""
         metadata = dict(observation_metadata or {})
         metadata.setdefault("modality", "text")
         if self._should_use_multimodal_embedding():
@@ -123,6 +129,7 @@ class LLMClient:
         return vector
 
     def _should_use_multimodal_embedding(self) -> bool:
+        """判断当前 embedding 模型是否必须通过 Ark 多模态 SDK 调用。"""
         model = (self._embed_model or "").lower()
         return "embedding-vision" in model or model.startswith("ep-")
 
@@ -133,6 +140,7 @@ class LLMClient:
         observation_name: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
+        """通过 Ark SDK 执行向量生成，并同步记录 Langfuse 观测数据。"""
         if not self._ark_client:
             return []
 
@@ -185,6 +193,7 @@ class LLMClient:
             return vector
 
     def _extract_embedding_vector(self, data: dict[str, Any]) -> list[float]:
+        """从不同供应商风格的响应结构中提取第一条向量结果。"""
         container = data.get("data")
         if isinstance(container, list):
             if not container:
@@ -205,6 +214,7 @@ class LLMClient:
         observation_type: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """发送 JSON 请求，并处理重试、JSON 模式回退和追踪元数据写入。"""
         if not self._api_key:
             raise RuntimeError("VOLCENGINE_API_KEY is not configured")
 
@@ -316,6 +326,7 @@ class LLMClient:
         return data
 
     def _build_observation_metadata(self, *, path: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        """合并通用链路元数据和单次调用附加的观测信息。"""
         metadata: dict[str, Any] = {
             "provider": self._provider,
             "base_url": self._base_url,
@@ -330,6 +341,7 @@ class LLMClient:
         return metadata
 
     def _build_langfuse_meta(self) -> dict[str, Any]:
+        """为解析后的模型输出附带 trace 和 observation 标识。"""
         meta: dict[str, Any] = {}
         if self._trace_id:
             meta["trace_id"] = self._trace_id
@@ -343,10 +355,12 @@ class LLMClient:
 
     @staticmethod
     def _retry_delay(attempt: int) -> float:
+        """返回 HTTP 重试使用的短指数退避间隔。"""
         return min(0.5 * (2 ** max(attempt - 1, 0)), 2.0)
 
     @staticmethod
     def _should_retry_without_response_format(path: str, payload: dict[str, Any], response: httpx.Response) -> bool:
+        """识别不支持 JSON 模式的模型响应，以便自动去掉 response_format 重试。"""
         if path != "/chat/completions":
             return False
         response_format = payload.get("response_format")
@@ -357,6 +371,7 @@ class LLMClient:
 
     @staticmethod
     def _safe_update_observation(observation: Any, **kwargs) -> None:
+        """尽力更新 Langfuse 观测对象，但不能影响主请求的错误抛出。"""
         updater = getattr(observation, "update", None)
         if not callable(updater):
             return
@@ -370,6 +385,7 @@ class LLMClient:
 
     @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any] | None:
+        """从模型原始文本或代码块中提取首个合法 JSON 对象。"""
         candidates = [text.strip()]
         if "```" in text:
             for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S):

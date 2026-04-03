@@ -26,6 +26,7 @@ def get_current_user_for_sse(
     authorization: str = Header(default=""),
     token: str = Query(default=""),
 ) -> CurrentUser:
+    """为 SSE 长连接请求解析当前用户，兼容请求头和查询参数两种令牌传递方式。"""
     if authorization.startswith("Bearer "):
         payload = safe_decode_token(authorization.split(" ", 1)[1])
     elif token:
@@ -45,6 +46,7 @@ async def run_task_pipeline(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """启动指定任务的 AI 检测流水线，优先投递到 Celery，失败时回退到本地后台执行。"""
     require_role("task", current.role)
     task = await TaskRepository(db).get(current.org_id, task_id)
     if not task:
@@ -67,12 +69,14 @@ async def stream_task_events(
     current: CurrentUser = Depends(get_current_user_for_sse),
     db=Depends(get_db),
 ) -> StreamingResponse:
+    """通过 SSE 持续向前端推送任务状态变化和图执行阶段事件。"""
     require_role("task", current.role)
     task = await TaskRepository(db).get(current.org_id, task_id)
     if not task:
         raise NotFoundError("task not found")
 
     async def event_iter() -> AsyncIterator[str]:
+        """按 SSE 协议格式输出历史事件和后续实时事件。"""
         yield "event: ready\ndata: {\"message\":\"stream_connected\"}\n\n"
         async for event in stream_broker.subscribe(task_id):
             payload = json.dumps(event, ensure_ascii=False)
