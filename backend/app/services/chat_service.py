@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Any, AsyncIterator
 
 from fastapi import Header, Query
 
-from agent.subgraphs.quality_chat import QualityChatGraph
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.core.ids import uuid7
 from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role, require_role
@@ -18,16 +18,21 @@ from app.schemas.chat import (
     ChatMessageSendRequest,
     ChatSendResponse,
     ChatSessionResponse,
-    ChatTaskSubmitRequest,
     ChatTaskResultAppendRequest,
+    ChatTaskSubmitRequest,
 )
+from agent.contracts import NormalizedAttachment
 from app.schemas.stream import StreamSessionResponse
 from app.schemas.user import CurrentUser
+from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
 from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
 from app.services.task_execution_service import launch_task_execution
 from app.services.task_service import TaskService
 from infra.database.session import get_session
+
+logger = logging.getLogger(__name__)
+
 
 def get_current_user_for_stream(
     authorization: str = Header(default=""),
@@ -62,7 +67,7 @@ class ChatService:
         self._org_id = org_id
         self._user_id = user_id
         self._current = current
-        self._graph = QualityChatGraph()
+        self._orchestrator = QualityAgentOrchestratorService()
 
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
@@ -77,7 +82,12 @@ class ChatService:
             rows = await repo.list_for_user(self._org_id, self._user_id, limit=limit)
             return [ChatSessionResponse.model_validate(item) for item in rows]
 
-    async def list_messages(self, session_id: str, after_seq: int = 0, limit: int = 200) -> list[ChatMessageResponse]:
+    async def list_messages(
+        self,
+        session_id: str,
+        after_seq: int = 0,
+        limit: int = 200,
+    ) -> list[ChatMessageResponse]:
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             if not await session_repo.get(self._org_id, self._user_id, session_id):
@@ -155,7 +165,6 @@ class ChatService:
                 try:
                     await rag_service.note_selected(rag_space_id)
                 except NotFoundError:
-                    rag_space_id = ""
                     for key in (
                         "selected_rag_space_id",
                         "selected_rag_space_name",
@@ -164,7 +173,6 @@ class ChatService:
                     ):
                         ext_payload.pop(key, None)
                 except ServiceUnavailableError:
-                    # This counter is auxiliary metadata and should not block ordinary chat delivery.
                     pass
 
             user_message = await message_repo.create(
@@ -269,7 +277,7 @@ class ChatService:
 
             task_service = TaskService(session, self._org_id)
             task_metadata = {
-                "source": "chat",
+                "source": "chat_submit",
                 "chat_session_id": session_id,
                 "chat_source_message_id": payload.source_message_id,
                 **dict(payload.metadata or {}),
@@ -344,9 +352,10 @@ class ChatService:
         )
 
         try:
-            await self._graph.run(
+            ext_payload = dict(request.ext or {})
+            ext_payload["emit"] = emit
+            await self._orchestrator.run_chat(
                 {
-                    "schema_version": request.schema_version,
                     "request_id": str(uuid7()),
                     "workflow_run_id": workflow_run_id,
                     "session_id": session_id,
@@ -357,14 +366,28 @@ class ChatService:
                     "capabilities": self._current.capabilities,
                     "workspace": request.workspace,
                     "query": request.message.strip(),
-                    "metadata": request.metadata or {},
-                    "ext": request.ext or {},
-                    "emit": emit,
+                    "metadata": dict(request.metadata or {}),
+                    "ext": ext_payload,
+                    "attachments": [
+                        NormalizedAttachment.model_validate(item).model_dump()
+                        for item in list(ext_payload.get("attachments") or [])
+                    ],
+                    "image_urls": [
+                        str(item.get("url") or "").strip()
+                        for item in list(ext_payload.get("attachments") or [])
+                        if isinstance(item, dict) and str(item.get("kind") or "").lower() == "image" and str(item.get("url") or "").strip()
+                    ],
                 }
             )
         except Exception as exc:
+            logger.exception(
+                "chat workflow failed session_id=%s assistant_message_id=%s workflow_run_id=%s",
+                session_id,
+                assistant_message_id,
+                workflow_run_id,
+            )
             content = (
-                "这次聊天任务没有顺利完成。"
+                "这次聊天任务没有顺利完成。\n"
                 "请稍后重试，或补充更明确的检测标准、产品信息和问题细节。"
             )
             failure_payload = {"status": "failed", "error": str(exc)}

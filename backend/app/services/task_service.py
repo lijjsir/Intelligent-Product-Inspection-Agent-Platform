@@ -4,6 +4,7 @@ from app.core.exceptions import ValidationError
 from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role
 from app.models.task import InspectionTask
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
+from app.repositories.organization_repo import OrganizationRepository
 from app.repositories.task_repo import TaskRepository
 from app.services.audit_service import AuditService
 
@@ -23,6 +24,7 @@ class TaskService:
         self._actor_role = normalize_role(actor_role or "")
         self._repo = TaskRepository(session)
         self._spec_repo = InspectionSpecRepository(session)
+        self._org_repo = OrganizationRepository(session)
 
     async def create_task(
         self,
@@ -68,20 +70,24 @@ class TaskService:
         return task
 
     async def get_task(self, task_id: str) -> InspectionTask | None:
-        return await self._repo.get_for_user(
+        task = await self._repo.get_for_user(
             self._task_scope_org_id,
             task_id,
             owner_user_id=self._owner_user_id,
         )
+        await self._annotate_tasks([task] if task else [])
+        return task
 
     async def list_tasks(self, query) -> tuple[list[InspectionTask], int]:
-        return await self._repo.list_paged(
+        items, total = await self._repo.list_paged(
             org_id=self._task_scope_org_id,
             filters=query.to_filters(),
             page=query.page,
             size=query.size,
             owner_user_id=self._owner_user_id,
         )
+        await self._annotate_tasks(items)
+        return items, total
 
     async def delete_task(self, task_id: str) -> InspectionTask | None:
         task = await self._repo.get_for_user(
@@ -111,3 +117,23 @@ class TaskService:
         if self._actor_role == ROLE_ADMIN:
             return None
         return self._org_id
+
+    async def _annotate_tasks(self, tasks: list[InspectionTask]) -> None:
+        valid_tasks = [task for task in tasks if task is not None]
+        if not valid_tasks:
+            return
+
+        org_map = {}
+        if hasattr(self._session, "execute"):
+            org_map = {
+                str(item.id): item
+                for item in await self._org_repo.list_by_ids(
+                    list({str(task.org_id) for task in valid_tasks if task.org_id})
+                )
+            }
+        for task in valid_tasks:
+            meta = dict(getattr(task, "meta_data", None) or {})
+            org = org_map.get(str(task.org_id))
+            setattr(task, "org_slug", getattr(org, "slug", None))
+            setattr(task, "source_kind", str(meta.get("source") or "unknown"))
+            setattr(task, "source_graph", str(meta.get("source_graph") or meta.get("source_subgraph") or ""))

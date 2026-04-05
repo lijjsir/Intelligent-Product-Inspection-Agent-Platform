@@ -11,7 +11,7 @@ export const governanceRoutes = [
     path: "data-management",
     name: "governance-data-management",
     component: () => import("@/views/ops/DataManagementView.vue"),
-    meta: { title: "数据管理", roles: [ROLE_ADMIN] },
+    meta: { title: "治理工作台", roles: [ROLE_ADMIN] },
   },
   {
     path: "data-management/agents",
@@ -23,7 +23,7 @@ export const governanceRoutes = [
     path: "data-management/prompts",
     name: "governance-prompts",
     component: () => import("@/views/ops/PromptManageView.vue"),
-    meta: { title: "Prompt 管理", roles: [ROLE_ADMIN] },
+    meta: { title: "DSPy 优化工作台", roles: [ROLE_ADMIN] },
   },
   {
     path: "data-management/intent-routes",

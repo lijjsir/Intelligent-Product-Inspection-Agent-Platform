@@ -25,8 +25,14 @@ class ResultRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_by_range(self, org_id: str, start_date=None, end_date=None) -> list[InspectionResult]:
-        stmt = select(InspectionResult).where(InspectionResult.org_id == org_id)
+    async def list_by_range(self, org_id: str | None, start_date=None, end_date=None) -> list[InspectionResult]:
+        stmt = (
+            select(InspectionResult)
+            .join(InspectionTask, InspectionTask.id == InspectionResult.task_id)
+            .where(InspectionTask.deleted_at.is_(None))
+        )
+        if org_id:
+            stmt = stmt.where(InspectionResult.org_id == org_id, InspectionTask.org_id == org_id)
         if start_date:
             stmt = stmt.where(InspectionResult.created_at >= __import__("datetime").datetime.combine(start_date, __import__("datetime").datetime.min.time()))
         if end_date:
@@ -48,8 +54,10 @@ class ResultRepository:
         stmt = (
             select(InspectionResult, InspectionTask.product_id)
             .join(InspectionTask, InspectionTask.id == InspectionResult.task_id)
-            .where(InspectionResult.org_id == org_id, InspectionTask.org_id == org_id)
+            .where(InspectionTask.deleted_at.is_(None))
         )
+        if org_id:
+            stmt = stmt.where(InspectionResult.org_id == org_id, InspectionTask.org_id == org_id)
         if verdict:
             stmt = stmt.where(InspectionResult.verdict == verdict)
         if product_id:

@@ -39,6 +39,35 @@ export interface ChatCreatedTask {
   image_count: number;
 }
 
+export interface ChatExpectationCheck {
+  expected_verdict: string;
+  actual_verdict: string;
+  matched: boolean;
+}
+
+export interface ChatRagSummary {
+  rag_space_id?: string | null;
+  rag_space_name?: string | null;
+  hit_count: number;
+  citation_coverage: number;
+  top_sources: string[];
+  source_graph?: string | null;
+}
+
+export interface ChatResultCard {
+  product_id: string;
+  product_family?: string | null;
+  product_name?: string | null;
+  spec_code: string;
+  verdict: string;
+  overall_score: number;
+  risk_level: string;
+  key_reasons: string[];
+  failed_rules: string[];
+  expectation_check?: ChatExpectationCheck | null;
+  rag_summary?: ChatRagSummary | null;
+}
+
 export interface ChatMessagePayload {
   answer?: string;
   citations?: Array<Record<string, unknown>>;
@@ -52,6 +81,9 @@ export interface ChatMessagePayload {
     passed?: boolean;
     hallucination_flags?: string[];
   };
+  result_card?: ChatResultCard | null;
+  expectation_check?: ChatExpectationCheck | null;
+  rag_summary?: ChatRagSummary | null;
   trace_id?: string | null;
   workflow_version?: string;
   prompt_version?: string;
@@ -67,6 +99,10 @@ export interface ChatMessagePayload {
   pending_action?: string | null;
   awaiting_confirmation?: boolean;
   created_task?: ChatCreatedTask | null;
+  materialized_task?: ChatCreatedTask | null;
+  materialization_status?: "synced" | "failed" | string;
+  materialization_error?: string | null;
+  source_graph?: string | null;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   message_type?: string;

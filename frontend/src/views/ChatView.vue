@@ -114,6 +114,24 @@ function intentLabel(intent?: string) {
   }
 }
 
+function verdictTagType(verdict?: string | null) {
+  if (verdict === "pass") return "success";
+  if (verdict === "fail") return "danger";
+  return "warning";
+}
+
+function riskTagType(level?: string | null) {
+  if (level === "low" || level === "green") return "success";
+  if (level === "medium" || level === "yellow" || level === "orange") return "warning";
+  return "danger";
+}
+
+function materializationTagType(status?: string | null) {
+  if (status === "synced") return "success";
+  if (status === "failed") return "danger";
+  return "info";
+}
+
 function attachmentName(url: string) {
   const last = url.split("/").pop() || url;
   return decodeURIComponent(last);
@@ -542,6 +560,130 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <el-tag v-if="message.payload?.citations?.length" size="small" effect="plain" type="info">
                   引用 {{ message.payload.citations.length }}
                 </el-tag>
+                <el-tag v-if="message.payload?.source_graph" size="small" effect="plain" type="warning">
+                  子图：{{ message.payload.source_graph }}
+                </el-tag>
+              </div>
+
+              <div v-if="message.payload?.result_card" class="result-card">
+                <div class="result-card-head">
+                  <div>
+                    <div class="result-card-title">
+                      {{ message.payload.result_card.product_name || message.payload.result_card.product_id }}
+                    </div>
+                    <div class="result-card-subtitle">
+                      {{ message.payload.result_card.product_family || "unknown" }} · {{ message.payload.result_card.spec_code }}
+                    </div>
+                  </div>
+                  <div class="result-card-tags">
+                    <el-tag size="small" effect="dark" :type="verdictTagType(message.payload.result_card.verdict)">
+                      {{ message.payload.result_card.verdict.toUpperCase() }}
+                    </el-tag>
+                    <el-tag size="small" effect="plain" :type="riskTagType(message.payload.result_card.risk_level)">
+                      风险 {{ message.payload.result_card.risk_level }}
+                    </el-tag>
+                  </div>
+                </div>
+
+                <div class="result-card-grid">
+                  <div>
+                    <span>总体得分</span>
+                    <strong>{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong>
+                  </div>
+                  <div>
+                    <span>RAG 空间</span>
+                    <strong>{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong>
+                  </div>
+                  <div>
+                    <span>引用数量</span>
+                    <strong>{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong>
+                  </div>
+                  <div>
+                    <span>引用覆盖率</span>
+                    <strong>{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong>
+                  </div>
+                </div>
+
+                <div v-if="message.payload.result_card.key_reasons?.length" class="result-section">
+                  <div class="result-section-label">关键原因</div>
+                  <div class="result-pill-list">
+                    <el-tag
+                      v-for="reason in message.payload.result_card.key_reasons"
+                      :key="reason"
+                      size="small"
+                      effect="plain"
+                    >
+                      {{ reason }}
+                    </el-tag>
+                  </div>
+                </div>
+
+                <div v-if="message.payload.result_card.failed_rules?.length" class="result-section">
+                  <div class="result-section-label">失败规则</div>
+                  <div class="result-pill-list">
+                    <el-tag
+                      v-for="rule in message.payload.result_card.failed_rules"
+                      :key="rule"
+                      size="small"
+                      type="danger"
+                      effect="plain"
+                    >
+                      {{ rule }}
+                    </el-tag>
+                  </div>
+                </div>
+
+                <div class="result-footer">
+                  <div class="result-footer-block">
+                    <span class="result-section-label">预期对照</span>
+                    <el-tag
+                      v-if="message.payload.expectation_check"
+                      size="small"
+                      effect="plain"
+                      :type="message.payload.expectation_check.matched ? 'success' : 'danger'"
+                    >
+                      {{
+                        message.payload.expectation_check.matched
+                          ? "系统结果与样本预期一致"
+                          : "系统结果与样本预期不一致"
+                      }}
+                    </el-tag>
+                    <span v-else class="result-muted">未提供样本预期</span>
+                  </div>
+                  <div class="result-footer-block">
+                    <span class="result-section-label">Top Sources</span>
+                    <span class="result-muted">
+                      {{ message.payload.rag_summary?.top_sources?.join(" / ") || "暂无引用来源" }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="result-sync">
+                  <el-tag
+                    v-if="message.payload.materialization_status"
+                    size="small"
+                    effect="plain"
+                    :type="materializationTagType(message.payload.materialization_status)"
+                  >
+                    {{
+                      message.payload.materialization_status === "synced"
+                        ? "已同步到任务/分析统计"
+                        : "同步到后台统计失败"
+                    }}
+                  </el-tag>
+                  <el-button
+                    v-if="message.payload.materialized_task?.id"
+                    size="small"
+                    link
+                    type="primary"
+                    @click="router.push(`/app/tasks/${message.payload.materialized_task.id}`)"
+                  >
+                    查看同步任务
+                  </el-button>
+                  <span v-if="message.payload.materialization_error" class="result-muted">
+                    {{ message.payload.materialization_error }}
+                  </span>
+                </div>
               </div>
 
               <div v-if="message.payload?.created_task" class="task-card">
@@ -853,6 +995,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
 .attachment-list,
 .message-tags,
+.result-card,
 .task-card,
 .task-actions {
   margin-top: 14px;
@@ -873,6 +1016,94 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   padding: 14px 16px;
   border-radius: 18px;
   background: rgba(15, 118, 110, 0.06);
+}
+
+.result-card {
+  padding: 16px 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(14, 165, 233, 0.14);
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
+    linear-gradient(145deg, rgba(240, 249, 255, 0.92), rgba(255, 255, 255, 0.98));
+}
+
+.result-card-head,
+.result-card-tags,
+.result-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.result-card-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.result-card-subtitle,
+.result-muted {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.result-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.result-card-grid div {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(191, 219, 254, 0.8);
+}
+
+.result-card-grid span,
+.result-section-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.result-card-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.result-section {
+  margin-top: 14px;
+}
+
+.result-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.result-footer {
+  margin-top: 14px;
+  align-items: flex-start;
+}
+
+.result-sync {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.result-footer-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 48%;
 }
 
 .task-card-title {
@@ -975,6 +1206,16 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   .rag-select,
   .message-bubble {
     width: 100%;
+    max-width: 100%;
+  }
+
+  .result-card-grid,
+  .result-footer {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .result-footer-block {
     max-width: 100%;
   }
 }

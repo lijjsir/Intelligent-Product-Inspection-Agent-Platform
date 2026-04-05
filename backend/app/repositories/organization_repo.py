@@ -26,3 +26,11 @@ class OrganizationRepository:
         self._session.add(org)
         await self._session.flush()
         return org
+
+    async def list_by_ids(self, org_ids: list[str]) -> list[Organization]:
+        if not org_ids:
+            return []
+        result = await self._session.execute(
+            select(Organization).where(Organization.id.in_(org_ids))
+        )
+        return list(result.scalars().all())

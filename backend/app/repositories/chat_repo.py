@@ -177,10 +177,18 @@ class ChatOpsRepository:
                 name="质量检测聊天智能体",
                 description="面向质量检测问答场景的聊天子图",
                 workflow_binding="quality_chat_v1",
+                subgraph_key="legacy_quality",
+                entry_graph="QualityAgentRootGraph",
+                supports_start_stop=True,
+                graph_version="v1",
                 is_active=True,
             )
             self._session.add(agent)
             await self._session.flush()
+        else:
+            agent.subgraph_key = str(agent.subgraph_key or "legacy_quality")
+            agent.entry_graph = str(agent.entry_graph or "QualityAgentRootGraph")
+            agent.graph_version = str(agent.graph_version or "v1")
 
         route_result = await self._session.execute(
             select(IntentRoute).where(

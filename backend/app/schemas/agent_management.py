@@ -31,12 +31,12 @@ class AgentConfigVersionResponse(BaseModel):
 
 
 class BatchUpdateStatusRequest(BaseModel):
-    agent_ids: list[str] = Field(..., min_items=1, description="List of agent IDs to update")
+    agent_ids: list[str] = Field(..., min_length=1, description="List of agent IDs to update")
     is_active: bool = Field(..., description="Target status")
 
 
 class BatchDeleteRequest(BaseModel):
-    agent_ids: list[str] = Field(..., min_items=1, description="List of agent IDs to delete")
+    agent_ids: list[str] = Field(..., min_length=1, description="List of agent IDs to delete")
 
 
 class BatchOperationResponse(BaseModel):

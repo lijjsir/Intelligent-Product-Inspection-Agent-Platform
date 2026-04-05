@@ -16,8 +16,8 @@ import type { ModelAnalyticsMetric, ModelDrilldown, ProductLineDrilldown, TaskDr
 interface Props {
   dateRange: [Date, Date] | null;
 }
-const props = defineProps<Props>();
 
+const props = defineProps<Props>();
 const router = useRouter();
 const analyticsStore = useAnalyticsStore();
 
@@ -30,6 +30,7 @@ const taskDrilldown = ref<TaskDrilldown | null>(null);
 const drawerLoading = ref(false);
 
 const overview = computed(() => analyticsStore.overview);
+const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
 const redRate = computed(() => {
   const items = overview.value?.alert_distribution ?? [];
   const total = items.reduce((sum, item) => sum + item.value, 0);
@@ -122,22 +123,38 @@ function goToProductLineTasks() {
   if (!productLineDrilldown.value) return;
   router.push({ path: "/app/tasks", query: { product_id: productLineDrilldown.value.product_line } });
 }
+
 function goToProductLineResults() {
   if (!productLineDrilldown.value) return;
   router.push({ path: "/app/results", query: { product_id: productLineDrilldown.value.product_line } });
 }
+
 function goToModelResults() {
   if (!modelDrilldown.value) return;
   router.push({ path: "/app/results", query: { model_key: modelDrilldown.value.model_key } });
 }
-function goToTaskDetail(taskId: string) { router.push(`/app/tasks/${taskId}`); }
-function goToResultDetail(taskId: string) { router.push(`/app/results/${taskId}`); }
-function goToTaskResultList(taskId: string) { router.push({ path: "/app/results", query: { task_id: taskId } }); }
-function goToTaskStabilityDetail(taskId: string) { router.push(`/app/stability/${taskId}`); }
+
+function goToTaskDetail(taskId: string) {
+  router.push(`/app/tasks/${taskId}`);
+}
+
+function goToResultDetail(taskId: string) {
+  router.push(`/app/results/${taskId}`);
+}
+
+function goToTaskResultList(taskId: string) {
+  router.push({ path: "/app/results", query: { task_id: taskId } });
+}
+
+function goToTaskStabilityDetail(taskId: string) {
+  router.push(`/app/stability/${taskId}`);
+}
+
 function goToRelatedTaskList(taskIds: string[]) {
   if (!taskIds.length) return;
   router.push({ path: "/app/tasks", query: { ids: taskIds.join(",") } });
 }
+
 function goToProductLineTaskList(productLine: string) {
   router.push({ path: "/app/tasks", query: { product_id: productLine } });
 }
@@ -146,6 +163,11 @@ function goToProductLineTaskList(productLine: string) {
 <template>
   <div class="overview-panel">
     <el-alert v-if="analyticsStore.error" :title="analyticsStore.error" type="warning" :closable="false" />
+
+    <div v-if="overview" class="scope-banner">
+      <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
+      <span>分析中心与仪表盘、任务列表、稳定性工作台使用相同统计范围和删除过滤规则。</span>
+    </div>
 
     <div class="filter-stack">
       <div class="filter-title">产品线叠加</div>
@@ -160,25 +182,63 @@ function goToProductLineTaskList(productLine: string) {
 
     <section class="chart-grid">
       <el-card shadow="never" class="chart-card wide">
-        <template #header><div class="card-head"><div><strong>通过率趋势</strong><span>统一时间窗口下的主稳定性指标</span></div></div></template>
+        <template #header>
+          <div class="card-head">
+            <div>
+              <strong>通过率趋势</strong>
+              <span>统一时间窗口下的主稳定性指标</span>
+            </div>
+          </div>
+        </template>
         <PassRateTrendChart v-if="overview" :points="overview.pass_rate_trend" />
       </el-card>
+
       <el-card shadow="never" class="chart-card wide">
-        <template #header><div class="card-head"><div><strong>产品线叠加趋势</strong><span>点击折线可打开产品线钻取面板</span></div></div></template>
+        <template #header>
+          <div class="card-head">
+            <div>
+              <strong>产品线任务趋势</strong>
+              <span>点击折线可进入产品线钻取面板</span>
+            </div>
+          </div>
+        </template>
         <ProductLineSeriesChart v-if="overview" :series="activeProductLineSeries" @select="openProductLineDrilldown" />
       </el-card>
+
       <el-card shadow="never" class="chart-card">
-        <template #header><div class="card-head"><div><strong>幻觉率趋势</strong><span>峰值点自动高亮</span></div></div></template>
+        <template #header>
+          <div class="card-head">
+            <div>
+              <strong>幻觉率趋势</strong>
+              <span>引用为空的结果会被计入幻觉率</span>
+            </div>
+          </div>
+        </template>
         <HallucinationChart v-if="overview" :points="overview.hallucination_trend" />
       </el-card>
+
       <el-card shadow="never" class="chart-card">
-        <template #header><div class="card-head"><div><strong>风险分布变化</strong><span>按日期堆叠展示风险等级演化</span></div></div></template>
+        <template #header>
+          <div class="card-head">
+            <div>
+              <strong>风险分布变化</strong>
+              <span>按日期堆叠展示风险等级演化</span>
+            </div>
+          </div>
+        </template>
         <RiskDistributionTrendChart v-if="overview" :points="overview.risk_distribution_trend" />
       </el-card>
     </section>
 
     <el-card v-if="overview" shadow="never" class="table-card">
-      <template #header><div class="card-head"><div><strong>模型性能对比</strong><span>点击某一行可查看模型钻取信息</span></div></div></template>
+      <template #header>
+        <div class="card-head">
+          <div>
+            <strong>模型性能对比</strong>
+            <span>点击某一行可查看模型钻取信息</span>
+          </div>
+        </div>
+      </template>
       <ModelCompareTable :items="overview.model_metrics" @select="openModelDrilldown" />
     </el-card>
 
@@ -205,6 +265,17 @@ function goToProductLineTaskList(productLine: string) {
 
 <style scoped>
 .overview-panel { display: grid; gap: 18px; }
+.scope-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(16, 36, 61, 0.08);
+}
+.scope-banner span { color: #52606d; font-size: 13px; }
 .filter-stack { display: flex; flex-direction: column; gap: 8px; }
 .filter-title { font-size: 16px; font-weight: 700; color: #172033; }
 .chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }

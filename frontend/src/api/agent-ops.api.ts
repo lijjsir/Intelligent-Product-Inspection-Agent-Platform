@@ -2,17 +2,28 @@ import { http } from "./http";
 import type {
   AgentDefinition,
   AgentDefinitionCreate,
-  AgentDefinitionUpdate,
   AgentDefinitionListQuery,
-  PromptVersion,
-  PromptVersionCreate,
-  PromptVersionUpdate,
-  PromptVersionListQuery,
+  AgentDefinitionUpdate,
+  AgentRuntimeInstance,
+  AgentRuntimeOverview,
+  AgentTopology,
   IntentRoute,
   IntentRouteCreate,
-  IntentRouteUpdate,
   IntentRouteListQuery,
+  IntentRouteUpdate,
+  PromptDSPyConfig,
+  PromptOptimizationConfig,
+  PromptOptimizationConfigPayload,
+  PromptOptimizationRun,
+  PromptOptimizationTarget,
+  PromptOptimizationTargetListQuery,
+  PromptOptimizationTargetsResponse,
+  PromptVersion,
+  PromptVersionCreate,
+  PromptVersionListQuery,
+  PromptVersionUpdate,
   RagAnalysisResponse,
+  RoutingStrategyOverview,
 } from "@/types/agent-ops.types";
 import type { PagedResponse } from "@/types/common.types";
 
@@ -57,8 +68,53 @@ export const agentOpsApi = {
     return http.delete<{ deleted: boolean }>(`/v1/agent-ops/prompts/${id}`);
   },
 
+  getPromptDspy(id: string) {
+    return http.get<PromptDSPyConfig | null>(`/v1/agent-ops/prompts/${id}/dspy`);
+  },
+
+  updatePromptDspy(id: string, payload: PromptDSPyConfig) {
+    return http.put<PromptDSPyConfig>(`/v1/agent-ops/prompts/${id}/dspy`, payload);
+  },
+
+  listPromptOptimizationTargets(query: PromptOptimizationTargetListQuery) {
+    return http.get<PromptOptimizationTargetsResponse>("/v1/agent-ops/prompt-optimization/targets", { params: query });
+  },
+
+  getPromptOptimizationTarget(targetKey: string) {
+    return http.get<PromptOptimizationTarget>(`/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}`);
+  },
+
+  updatePromptOptimizationConfig(targetKey: string, payload: PromptOptimizationConfigPayload) {
+    return http.put<PromptOptimizationConfig>(
+      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/config`,
+      payload,
+    );
+  },
+
+  compilePromptOptimizationTarget(targetKey: string) {
+    return http.post<PromptOptimizationRun>(
+      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/compile`,
+    );
+  },
+
+  listPromptOptimizationRuns(targetKey: string) {
+    return http.get<PromptOptimizationRun[]>(
+      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/runs`,
+    );
+  },
+
+  rollbackPromptOptimizationTarget(targetKey: string) {
+    return http.post<PromptOptimizationRun>(
+      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/rollback`,
+    );
+  },
+
   listRoutes(query: IntentRouteListQuery) {
     return http.get<PagedResponse<IntentRoute>>("/v1/agent-ops/routes", { params: query });
+  },
+
+  getRoutingStrategy() {
+    return http.get<RoutingStrategyOverview>("/v1/agent-ops/routing/strategy");
   },
 
   getRoute(id: string) {
@@ -77,7 +133,37 @@ export const agentOpsApi = {
     return http.delete<{ deleted: boolean }>(`/v1/agent-ops/routes/${id}`);
   },
 
+  getRouteGraph(id: string) {
+    return http.get<AgentTopology>(`/v1/agent-ops/routes/${id}/graph`);
+  },
+
   getRagAnalysis() {
     return http.get<RagAnalysisResponse>("/v1/agent-ops/rag-analysis");
+  },
+
+  getRuntimeOverview() {
+    return http.get<AgentRuntimeOverview>("/v1/agent-ops/runtime/overview");
+  },
+
+  listRuntimeAgents() {
+    return http.get<AgentRuntimeInstance[]>("/v1/agent-ops/runtime/agents");
+  },
+
+  startRuntimeAgent(runtimeKey: string) {
+    return http.post<AgentRuntimeInstance>(
+      `/v1/agent-ops/runtime/agents/${encodeURIComponent(runtimeKey)}/start`,
+    );
+  },
+
+  stopRuntimeAgent(runtimeKey: string) {
+    return http.post<AgentRuntimeInstance>(
+      `/v1/agent-ops/runtime/agents/${encodeURIComponent(runtimeKey)}/stop`,
+    );
+  },
+
+  getAgentsTopology(subgraphKey = "all") {
+    return http.get<AgentTopology>("/v1/agent-ops/agents/topology", {
+      params: { subgraph_key: subgraphKey },
+    });
   },
 };

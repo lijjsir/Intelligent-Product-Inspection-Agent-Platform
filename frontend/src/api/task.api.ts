@@ -3,7 +3,7 @@ import { streamApi } from "./stream.api";
 import type { InspectionTask, TaskCreate, TaskListQuery, TaskRunResponse, TaskStreamEvent } from "@/types/task.types";
 import type { PagedResponse } from "@/types/common.types";
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const taskApi = {
   list(query: TaskListQuery) {

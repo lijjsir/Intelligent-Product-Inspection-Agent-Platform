@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -77,6 +77,7 @@ class TaskRepository:
                     InspectionTask.spec_code,
                     InspectionTask.status,
                     InspectionTask.priority,
+                    InspectionTask.meta_data,
                     InspectionTask.created_at,
                     InspectionTask.updated_at,
                 )
@@ -102,6 +103,31 @@ class TaskRepository:
             .limit(size)
         )
         return list(items.scalars().all()), int(total or 0)
+
+    async def get_by_chat_materialization_key(
+        self,
+        org_id: str,
+        workflow_run_id: str,
+        assistant_message_id: str,
+    ) -> InspectionTask | None:
+        stmt = (
+            select(InspectionTask)
+            .where(
+                InspectionTask.org_id == org_id,
+                InspectionTask.deleted_at.is_(None),
+                func.json_unquote(
+                    func.json_extract(InspectionTask.meta_data, "$.workflow_run_id")
+                )
+                == workflow_run_id,
+                func.json_unquote(
+                    func.json_extract(InspectionTask.meta_data, "$.assistant_message_id")
+                )
+                == assistant_message_id,
+            )
+            .order_by(InspectionTask.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
 
     async def soft_delete(
         self,
