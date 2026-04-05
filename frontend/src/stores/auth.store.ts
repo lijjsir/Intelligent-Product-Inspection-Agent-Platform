@@ -102,19 +102,26 @@ export const useAuthStore = defineStore("auth", () => {
     };
   }
 
-  async function login(payload: LoginPayload) {
+  async function syncCurrentUserProfile() {
     const userStore = useUserStore();
+    try {
+      await userStore.fetchCurrentUser();
+    } catch (error) {
+      console.warn("Failed to refresh current user profile after auth session setup", error);
+    }
+  }
+
+  async function login(payload: LoginPayload) {
     const { data } = await authApi.login(payload);
     setSession(data.data);
-    await userStore.fetchCurrentUser();
+    await syncCurrentUserProfile();
     return data.data;
   }
 
   async function register(payload: RegisterPayload) {
-    const userStore = useUserStore();
     const { data } = await authApi.register(payload);
     setSession(data.data);
-    await userStore.fetchCurrentUser();
+    await syncCurrentUserProfile();
     return data.data;
   }
 

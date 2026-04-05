@@ -17,7 +17,7 @@ _TRANSITIONS: dict[tuple[str, AlertAction], str] = {
 
 
 class AlertService:
-    def __init__(self, session: AsyncSession, org_id: str):
+    def __init__(self, session: AsyncSession, org_id: str | None):
         self._session = session
         self._org_id = org_id
         self._repo = AlertRepository(session)

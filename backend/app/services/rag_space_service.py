@@ -8,6 +8,7 @@ from fastapi import UploadFile
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.tools.file_parsers import parse_file_content
 from agent.rag.knowledge_indexer import KnowledgeIndexer
 from app.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
 from app.repositories.rag_space_repo import RagSpaceFileRepository, RagSpaceRepository
@@ -15,7 +16,7 @@ from app.schemas.rag_space import RagSpaceFileResponse, RagSpaceResponse
 from app.services.file_storage_service import FileStorageService
 
 
-ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".txt", ".md", ".jsonl"}
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".txt", ".md", ".jsonl", ".json", ".docx", ".csv", ".xlsx"}
 ALLOWED_ATTACHMENT_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -27,6 +28,9 @@ ALLOWED_ATTACHMENT_EXTENSIONS = {
     ".md",
     ".json",
     ".jsonl",
+    ".docx",
+    ".csv",
+    ".xlsx",
 }
 RAG_METADATA_MISSING_MESSAGE = "RAG 空间尚未初始化，请先完成数据库迁移。"
 
@@ -286,18 +290,13 @@ class RagSpaceService:
         ]
 
     def _extract_text(self, *, file_name: str, suffix: str, content: bytes) -> str:
-        if suffix in {".txt", ".md"}:
-            return content.decode("utf-8", errors="ignore")
-        if suffix == ".pdf":
-            try:
-                from pypdf import PdfReader
-            except Exception as exc:  # pragma: no cover - runtime dependency
-                raise ValidationError(f"pdf parsing dependency unavailable: {exc}") from exc
-            from io import BytesIO
-
-            reader = PdfReader(BytesIO(content))
-            return "\n".join((page.extract_text() or "") for page in reader.pages)
-        raise ValidationError(f"unsupported document type: {file_name}")
+        try:
+            parsed = parse_file_content(file_name, content)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        if suffix not in {".txt", ".md", ".pdf", ".json", ".docx", ".csv", ".xlsx"}:
+            raise ValidationError(f"unsupported document type: {file_name}")
+        return str(parsed.get("text") or "")
 
     def _raise_if_rag_metadata_missing(self, exc: Exception) -> None:
         if _is_rag_metadata_missing(exc):

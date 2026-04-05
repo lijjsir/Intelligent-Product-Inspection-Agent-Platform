@@ -23,6 +23,7 @@ from agent.vision.heuristic_detector import build_variable_defects, normalize_de
 from app.services.feedback_service import FeedbackService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.quality_report_service import QualityReportService
+from app.repositories.analytics_repo import AnalyticsRepository
 from infra.cache.rate_limiter import RateLimiter
 
 
@@ -349,7 +350,15 @@ def test_standard_service_blocks_auto_pass_without_spec():
             name="螺钉标准",
             version="2026.1",
             product_id="screw",
+            product_family="fastener",
+            applicable_skus=[],
+            required_views=[],
+            effective_from=None,
+            effective_to=None,
             required_image_count=1,
+            aggregation_rules={},
+            ai_gate_rules={},
+            manual_review_policies={},
             auto_pass_enabled=False,
             ai_gate_confidence_threshold=0.72,
             ai_gate_evidence_threshold=0.5,
@@ -373,7 +382,15 @@ def test_standard_service_rejects_when_rule_matches():
         name="螺钉标准",
         version="2026.1",
         product_id="screw",
+        product_family="fastener",
+        applicable_skus=[],
+        required_views=[],
+        effective_from=None,
+        effective_to=None,
         required_image_count=1,
+        aggregation_rules={},
+        ai_gate_rules={},
+        manual_review_policies={},
         auto_pass_enabled=False,
         ai_gate_confidence_threshold=0.72,
         ai_gate_evidence_threshold=0.5,
@@ -400,6 +417,36 @@ def test_standard_service_rejects_when_rule_matches():
     )
     assert result["verdict"] == "fail"
     assert result["matched_rules"][0]["disposition"] == "fail"
+
+
+def test_analytics_normalizes_color_risk_levels():
+    assert AnalyticsRepository._normalize_risk_level("green") == "low"
+    assert AnalyticsRepository._normalize_risk_level("yellow") == "medium"
+    assert AnalyticsRepository._normalize_risk_level("orange") == "high"
+    assert AnalyticsRepository._normalize_risk_level("red") == "critical"
+    assert AnalyticsRepository._normalize_risk_level("severe") == "critical"
+
+
+def test_analytics_risk_distribution_trend_maps_historical_colors():
+    repo = AnalyticsRepository(None)
+    items = [
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 0, 0), risk_level="green"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 5, 0), risk_level="red"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 10, 0), risk_level="yellow"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 20, 0), risk_level="orange"),
+    ]
+
+    trend = repo._build_risk_distribution_trend(items, lambda item: item.created_at)
+
+    assert trend == [
+        {
+            "bucket": "2026-04-05",
+            "low": 1.0,
+            "medium": 1.0,
+            "high": 1.0,
+            "critical": 1.0,
+        }
+    ]
 
 
 def test_langfuse_tracer_starts_trace_and_syncs_score(monkeypatch):
@@ -540,7 +587,7 @@ async def test_llm_client_chat_records_langfuse_metadata(monkeypatch):
     }
     assert fake_tracer.observe_calls[0]["trace_id"] == "trace-1"
     assert fake_tracer.observe_calls[0]["name"] == "inspection.reasoning"
-    assert fake_tracer.observation.updates[0]["usage_details"]["total_tokens"] == 10
+    assert fake_tracer.observation.updates[0]["metadata"]["usage"]["total_tokens"] == 10
 
 
 @pytest.mark.asyncio

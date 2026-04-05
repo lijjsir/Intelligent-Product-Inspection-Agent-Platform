@@ -112,6 +112,7 @@ export interface TaskDrilldown {
 }
 
 export interface OverviewStats {
+  scope_kind?: string;
   total_tasks: number;
   total_alerts: number;
   total_results: number;

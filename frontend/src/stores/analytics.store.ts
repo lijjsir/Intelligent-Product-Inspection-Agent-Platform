@@ -34,6 +34,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         alert_distribution: [],
         model_metrics: [],
         product_line_series: [],
+        scope_kind: "org",
       };
     } finally {
       loading.value = false;

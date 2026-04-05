@@ -98,18 +98,32 @@ export const useChatStore = defineStore("chat", () => {
   const pollInFlight = ref(false);
   const ragSpaces = ref<RagSpace[]>([]);
   const ragSpacesError = ref("");
-  const selectedRagSpaceId = ref("");
   const pendingAttachments = ref<ChatAttachment[]>([]);
   const nextClientSeq = ref(1);
   const STORAGE_CURRENT_SESSION = "chat_current_session_id";
+  const STORAGE_SELECTED_RAG_SPACE = "chat_selected_rag_space_id";
 
   function saveCurrentSession(sessionId: string) {
     sessionStorage.setItem(STORAGE_CURRENT_SESSION, sessionId);
   }
 
+  function saveSelectedRagSpace(spaceId: string) {
+    sessionStorage.setItem(STORAGE_SELECTED_RAG_SPACE, spaceId);
+  }
+
   function getSavedSession() {
     return sessionStorage.getItem(STORAGE_CURRENT_SESSION) || "";
   }
+
+  function getSavedSelectedRagSpace() {
+    return sessionStorage.getItem(STORAGE_SELECTED_RAG_SPACE) || "";
+  }
+
+  function clearSavedSelectedRagSpace() {
+    sessionStorage.removeItem(STORAGE_SELECTED_RAG_SPACE);
+  }
+
+  const selectedRagSpaceId = ref(getSavedSelectedRagSpace());
 
   function getSelectedRagSpaceSnapshot() {
     return ragSpaces.value.find((item) => item.id === selectedRagSpaceId.value) || null;
@@ -270,11 +284,13 @@ export const useChatStore = defineStore("chat", () => {
       ragSpacesError.value = "";
       if (selectedRagSpaceId.value && !ragSpaces.value.some((item) => item.id === selectedRagSpaceId.value)) {
         selectedRagSpaceId.value = "";
+        clearSavedSelectedRagSpace();
       }
       return ragSpaces.value;
     } catch (error) {
       ragSpaces.value = [];
       selectedRagSpaceId.value = "";
+      clearSavedSelectedRagSpace();
       ragSpacesError.value = resolveErrorMessage(error, "RAG 空间暂不可用，请稍后重试。");
       throw error;
     }
@@ -308,10 +324,12 @@ export const useChatStore = defineStore("chat", () => {
 
   function selectRagSpace(spaceId: string) {
     selectedRagSpaceId.value = spaceId;
+    saveSelectedRagSpace(spaceId);
   }
 
   function clearSelectedRagSpace() {
     selectedRagSpaceId.value = "";
+    clearSavedSelectedRagSpace();
   }
 
   async function createNewSession(title = "新会话") {

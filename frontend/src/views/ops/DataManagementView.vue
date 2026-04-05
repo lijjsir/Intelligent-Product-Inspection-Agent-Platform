@@ -1,36 +1,43 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router";
+import {
+  ArrowRight,
+  DocumentChecked,
+  EditPen,
+  Guide,
+  Monitor,
+} from "@element-plus/icons-vue";
 
 const router = useRouter();
 
 const modules = [
   {
     title: "Agent 管理",
-    description: "创建和管理业务 Agent，配置工作流绑定与启停状态",
-    icon: "Monitor",
+    description: "自动发现当前 LangGraph 子图，查看运行状态、拓扑结构和可启停能力。",
+    icon: Monitor,
     route: "governance-agents",
-    color: "#409eff",
+    color: "#2563eb",
   },
   {
-    title: "Prompt 管理",
-    description: "管理 Prompt 模板与版本，支持多版本对比和发布",
-    icon: "EditPen",
+    title: "DSPy 优化工作台",
+    description: "自动发现需要优化的提示词位点，集中管理 DSPy 配置、编译运行和版本回退。",
+    icon: EditPen,
     route: "governance-prompts",
-    color: "#67c23a",
+    color: "#0f766e",
   },
   {
     title: "意图路由配置",
-    description: "配置用户意图到 Agent 的路由映射规则",
-    icon: "Guide",
+    description: "查看意图到智能体的流程图和路由优先级，理解请求如何被分发。",
+    icon: Guide,
     route: "governance-intent-routes",
-    color: "#e6a23c",
+    color: "#d97706",
   },
   {
     title: "检测标准",
-    description: "维护产品检测标准与缺陷分类规范",
-    icon: "DocumentChecked",
+    description: "维护产品检测标准、缺陷分类和质量阈值，是 RAG 与判定的业务基线。",
+    icon: DocumentChecked,
     route: "governance-inspection-specs",
-    color: "#f56c6c",
+    color: "#dc2626",
   },
 ];
 
@@ -42,8 +49,10 @@ function navigateTo(routeName: string) {
 <template>
   <div class="page-container">
     <div class="page-header">
-      <h1>数据管理</h1>
-      <p class="subtitle">管理 Agent 运维相关的核心数据资源</p>
+      <h1>治理工作台</h1>
+      <p class="subtitle">
+        围绕智能体、DSPy 优化、意图路由和标准治理的核心配置入口。
+      </p>
     </div>
 
     <div class="module-grid">
@@ -55,7 +64,7 @@ function navigateTo(routeName: string) {
         @click="navigateTo(item.route)"
       >
         <div class="module-card-body">
-          <div class="module-icon" :style="{ backgroundColor: item.color + '1a', color: item.color }">
+          <div class="module-icon" :style="{ backgroundColor: `${item.color}18`, color: item.color }">
             <el-icon :size="28"><component :is="item.icon" /></el-icon>
           </div>
           <div class="module-info">
@@ -64,7 +73,7 @@ function navigateTo(routeName: string) {
           </div>
         </div>
         <div class="module-arrow">
-          <el-icon :size="16" color="#c0c4cc"><ArrowRight /></el-icon>
+          <el-icon :size="16" color="#94a3b8"><ArrowRight /></el-icon>
         </div>
       </el-card>
     </div>
@@ -74,66 +83,75 @@ function navigateTo(routeName: string) {
 <style scoped>
 .page-container {
   padding: 24px;
-  background: #f5f7fa;
   min-height: 100%;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef4f7 100%);
 }
+
 .page-header {
   margin-bottom: 24px;
 }
+
 .page-header h1 {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 0 0 8px 0;
+  margin: 0 0 8px;
+  font-size: 26px;
+  color: #0f172a;
 }
+
 .subtitle {
-  color: #909399;
   margin: 0;
+  color: #64748b;
 }
+
 .module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 16px;
 }
+
 .module-card {
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  border-radius: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
+
 .module-card:hover {
   transform: translateY(-2px);
 }
+
 .module-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
+  padding: 22px 24px;
 }
+
 .module-card-body {
   display: flex;
   align-items: center;
   gap: 16px;
 }
+
 .module-icon {
   width: 56px;
   height: 56px;
-  border-radius: 12px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
+
 .module-info h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0 0 4px 0;
-  color: #303133;
+  margin: 0 0 6px;
+  font-size: 17px;
+  color: #0f172a;
 }
+
 .module-info p {
-  font-size: 13px;
-  color: #909399;
   margin: 0;
-  line-height: 1.5;
-}
-.module-arrow {
-  flex-shrink: 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
 }
 </style>

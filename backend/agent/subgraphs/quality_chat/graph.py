@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from time import perf_counter
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -13,8 +14,10 @@ from agent.subgraphs.quality_chat.state import QualityChatState
 from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
 from app.repositories.chat_repo import ChatMessageRepository
+from app.repositories.agent_ops_repo import RagAnalysisRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.dspy_runtime_service import build_runtime_prompt_section, resolve_dspy_runtime_profile
 from app.services.task_execution_service import launch_task_execution
 from app.services.task_service import TaskService
 from infra.database.session import get_session
@@ -278,10 +281,51 @@ def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"id": rag_space_id, "name": str(ext.get("selected_rag_space_name") or ""), "description": str(ext.get("selected_rag_space_description") or "") or None}
 
 
+def _dspy_runtime_meta(state: QualityChatState) -> dict[str, Any]:
+    return dict((state.get("metadata") or {}).get("dspy_runtime") or {})
+
+
+def _dspy_target_payload(state: QualityChatState, target_key: str) -> dict[str, Any]:
+    return dict(_dspy_runtime_meta(state).get("targets", {}).get(target_key, {}).get("config_payload") or {})
+
+
+def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str:
+    runtime_meta = _dspy_runtime_meta(state)
+    targets = {}
+    for key in target_keys:
+        target = dict(runtime_meta.get("targets", {}).get(key) or {})
+        if target:
+            targets[key] = target
+    if not targets:
+        return ""
+    profile_like = type(
+        "ProfileLike",
+        (),
+        {
+            "get": lambda self, item: type(
+                "TargetLike",
+                (),
+                {
+                    "is_enabled": True,
+                    "target_key": item,
+                    "artifact_version": str(targets[item].get("artifact_version") or ""),
+                    "optimization_goal": str(targets[item].get("optimization_goal") or targets[item].get("module_name") or item),
+                    "metric_names": list(targets[item].get("metric_names") or []),
+                    "prompt_content": str(targets[item].get("prompt_content") or ""),
+                    "config_payload": dict(targets[item].get("config_payload") or {}),
+                },
+            ) if item in targets else None,
+        },
+    )()
+    return build_runtime_prompt_section(profile_like, [key for key in target_keys if key in targets])
+
+
 async def input_adapter(state: QualityChatState) -> QualityChatState:
+    runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "legacy_quality")
     state["workflow_version"] = "quality_chat_v1"
-    state["prompt_version"] = str(state.get("prompt_version") or "builtin-quality-chat-v1")
+    state["prompt_version"] = runtime_profile.active_prompt_version
     state["metadata"] = dict(state.get("metadata") or {})
+    state["metadata"]["dspy_runtime"] = runtime_profile.as_metadata()
     state["ext"] = dict(state.get("ext") or {})
     state["history"] = list(state.get("history") or [])
     state["intent"] = str(state.get("intent") or "")
@@ -305,8 +349,11 @@ async def history_loader(state: QualityChatState) -> QualityChatState:
 
 async def planner(state: QualityChatState) -> QualityChatState:
     query = str(state.get("query") or "")
+    lowered_query = query.lower()
     history = list(state.get("history") or [])
     pending = _latest_pending_task(history)
+    planner_payload = _dspy_target_payload(state, "legacy_quality.planner")
+    extra_task_keywords = [str(item).strip().lower() for item in list(planner_payload.get("task_keywords") or []) if str(item).strip()]
     if pending is not None:
         state["intent"] = "task_followup"
         state["intent_confidence"] = 0.96 if (_is_confirm(query) or _is_cancel(query)) else 0.83
@@ -317,7 +364,7 @@ async def planner(state: QualityChatState) -> QualityChatState:
     elif _is_smalltalk(query):
         state["intent"] = "smalltalk"
         state["intent_confidence"] = 0.98
-    elif _is_task_create_candidate(query, state.get("ext") or {}):
+    elif _is_task_create_candidate(query, state.get("ext") or {}) or any(keyword in lowered_query for keyword in extra_task_keywords):
         state["intent"] = "task_create"
         state["intent_confidence"] = 0.92
         state["pending_action"] = "create_task"
@@ -372,7 +419,11 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
     if selected_rag:
         payload_filter["rag_space_id"] = selected_rag["id"]
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-    docs = await retriever.retrieve(str(state["query"]), top_k=4, payload_filter=payload_filter)
+    knowledge_payload = _dspy_target_payload(state, "legacy_quality.knowledge")
+    top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or 4)))
+    started_at = perf_counter()
+    docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
+    latency_ms = round((perf_counter() - started_at) * 1000)
     citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("text") or "")[:180]} for doc in docs]
     state["retrieved_chunks"] = docs
     state["citations"] = citations
@@ -382,7 +433,9 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
         "empty_recall": len(docs) == 0,
         "top_score": float(docs[0]["score"]) if docs else 0.0,
         "skipped": False,
+        "latency_ms": latency_ms,
         "rag_space_id": selected_rag["id"] if selected_rag else None,
+        "top_k": top_k,
     }
     return state
 
@@ -401,6 +454,16 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         llm = LLMClient(trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
         history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
         prompt = "你是平台内的通用聊天助手。对普通问答直接自然回答；若信息不足就简洁追问。只返回 JSON：{\"answer\": string, \"summary\": string}。"
+        prompt_section = _dspy_prompt_section(
+            state,
+            [
+                "legacy_quality.planner",
+                "legacy_quality.reasoning",
+                "legacy_quality.response_writer",
+            ],
+        )
+        if prompt_section:
+            prompt = f"{prompt}\n\n{prompt_section}"
         history_text = "\n".join(history_lines) if history_lines else "无"
         user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}"
         try:
@@ -450,6 +513,16 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
     doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
     history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
     prompt = "你是质量检测聊天智能体。请严格基于检索证据回答，不足时明确说明不确定性。只返回 JSON：{\"answer\": string, \"summary\": string}。"
+    prompt_section = _dspy_prompt_section(
+        state,
+        [
+            "legacy_quality.knowledge",
+            "legacy_quality.reasoning",
+            "legacy_quality.response_writer",
+        ],
+    )
+    if prompt_section:
+        prompt = f"{prompt}\n\n{prompt_section}"
     history_text = "\n".join(history_lines) if history_lines else "无"
     doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
     user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
@@ -484,7 +557,7 @@ async def quality_gate(state: QualityChatState) -> QualityChatState:
     if len(answer) < 20:
         hallucination_flags.append("thin_answer")
     passed = confidence >= 0.85 and evidence_coverage >= 1.0 and traceability >= 0.9 and faithfulness >= 0.85 and "low_evidence" not in hallucination_flags
-    risk_level = "green" if passed else ("yellow" if citations else "red")
+    risk_level = "low" if passed else ("medium" if citations else "critical")
     risk_score = 0.08 if passed else (0.42 if citations else 0.78)
     state["quality"] = {
         "confidence": round(confidence, 4),
@@ -640,6 +713,37 @@ async def _persist_chat_token_usage(session, state: QualityChatState) -> None:
     )
 
 
+async def _persist_rag_query_log(session, state: QualityChatState) -> None:
+    metrics = dict(state.get("retrieval_metrics") or {})
+    if bool(metrics.get("skipped")):
+        return
+    rag_repo = RagAnalysisRepository(session, str(state["org_id"]))
+    citation_count = len(list(state.get("citations") or []))
+    hit_count = int(metrics.get("hit_count") or 0)
+    hit_rate = min(1.0, hit_count / 4) if hit_count else 0.0
+    coverage = 0.0
+    if hit_count > 0:
+        coverage = min(1.0, citation_count / hit_count)
+    await rag_repo.create_log(
+        {
+            "session_id": str(state["session_id"]),
+            "user_id": str(state["user_id"]),
+            "query": str(metrics.get("query") or state.get("query") or ""),
+            "rag_space_id": metrics.get("rag_space_id"),
+            "hit_count": hit_count,
+            "hit_rate": round(hit_rate, 4),
+            "citation_coverage": round(coverage, 4),
+            "latency_ms": int(metrics.get("latency_ms") or 0),
+            "source_graph": "legacy_quality",
+            "metadata_json": {
+                "intent": state.get("intent"),
+                "empty_recall": bool(metrics.get("empty_recall")),
+                "top_score": float(metrics.get("top_score") or 0.0),
+            },
+        }
+    )
+
+
 async def response_writer(state: QualityChatState) -> QualityChatState:
     answer = str((state.get("reasoning") or {}).get("answer") or "")
     emit = state["emit"]
@@ -670,6 +774,7 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "created_task": dict(state.get("created_task") or {}) or None,
         "selected_rag_space": selected_rag,
         "attachment_echo": attachments,
+        "dspy_runtime": _dspy_runtime_meta(state),
         "message_type": _message_type_for_state(state),
     }
     if state.get("quality"):
@@ -683,6 +788,7 @@ async def finalizer(state: QualityChatState) -> QualityChatState:
         repo = ChatMessageRepository(session)
         await repo.update_assistant_message(org_id=str(state["org_id"]), message_id=str(state["assistant_message_id"]), content=str(payload.get("answer") or ""), message_type=str(payload.get("message_type") or "quality_answer"), payload=payload)
         await _persist_chat_token_usage(session, state)
+        await _persist_rag_query_log(session, state)
         await session.commit()
     await state["emit"]({"event": "message_final", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "content": str(payload.get("answer") or ""), "payload": payload, "quality": state.get("quality") or {}})
     return state

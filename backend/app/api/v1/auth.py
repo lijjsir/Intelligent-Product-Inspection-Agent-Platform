@@ -104,5 +104,6 @@ async def register(payload: RegisterRequest, db=Depends(get_db)):
         payload.email,
         payload.password,
     )
+    await db.commit()
     data = _build_session_response(access, refresh, user.id, user.username, user.org_id, user.role)
     return ResponseEnvelope(data=data)

@@ -9,11 +9,13 @@ import { graphic, init, type ECharts, use } from "echarts/core";
 import { useAlertStore } from "@/stores/alert.store";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 import { useTaskStore } from "@/stores/task.store";
+import { usePermission } from "@/composables/usePermission";
 
 const router = useRouter();
 const analyticsStore = useAnalyticsStore();
 const taskStore = useTaskStore();
 const alertStore = useAlertStore();
+const { hasRole } = usePermission();
 
 const trendRef = ref<HTMLElement | null>(null);
 const riskRef = ref<HTMLElement | null>(null);
@@ -25,10 +27,12 @@ use([CanvasRenderer, LineChart, PieChart, GridComponent, LegendComponent, Toolti
 const overview = computed(() => analyticsStore.overview);
 const openAlerts = computed(() => alertStore.items.slice(0, 5));
 const recentTasks = computed(() => taskStore.items.slice(0, 10));
-const highRiskAlerts = computed(() => {
-  return openAlerts.value.filter((item) => ["critical", "warning", "orange", "red"].includes(String(item.severity).toLowerCase())).length;
-});
 const selectedRange = ref<7 | 30 | 90>(30);
+const isAdmin = computed(() => hasRole("admin"));
+const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
+const highRiskAlerts = computed(() =>
+  openAlerts.value.filter((item) => ["critical", "warning", "error", "high"].includes(String(item.severity).toLowerCase())).length,
+);
 
 onMounted(async () => {
   await fetchDashboard();
@@ -62,8 +66,8 @@ async function fetchDashboard() {
       start_date: formatDate(start),
       end_date: formatDate(end),
     }),
-    taskStore.fetchTasks({ page: 1, page_size: 10 }),
-    alertStore.fetchAlerts({ page: 1, page_size: 5, status: "open" }),
+    taskStore.fetchTasks({ page: 1, size: 10 }),
+    alertStore.fetchAlerts({ page: 1, size: 5, status: "open" }),
   ]);
 }
 
@@ -77,17 +81,18 @@ function handleResize() {
 }
 
 function renderCharts() {
-  if (!overview.value) {
-    return;
-  }
+  if (!overview.value) return;
 
   if (trendRef.value) {
     trendChart ??= init(trendRef.value);
     trendChart.setOption({
-      animationDuration: 600,
+      animationDuration: 500,
       color: ["#0f766e"],
-      tooltip: { trigger: "axis", valueFormatter: (value: number) => `${(value * 100).toFixed(1)}%` },
-      grid: { left: 38, right: 24, top: 32, bottom: 30 },
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value: number) => `${(value * 100).toFixed(1)}%`,
+      },
+      grid: { left: 40, right: 24, top: 28, bottom: 32 },
       xAxis: {
         type: "category",
         data: overview.value.pass_rate_trend.map((item) => item.bucket),
@@ -114,7 +119,7 @@ function renderCharts() {
           itemStyle: { color: "#0f766e" },
           areaStyle: {
             color: new graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: "rgba(15,118,110,0.28)" },
+              { offset: 0, color: "rgba(15,118,110,0.24)" },
               { offset: 1, color: "rgba(15,118,110,0.02)" },
             ]),
           },
@@ -126,20 +131,20 @@ function renderCharts() {
   if (riskRef.value) {
     riskChart ??= init(riskRef.value);
     riskChart.setOption({
-      animationDuration: 600,
+      animationDuration: 500,
       tooltip: { trigger: "item" },
       legend: { bottom: 0, textStyle: { color: "#52606d" } },
       series: [
         {
           type: "pie",
-          radius: ["45%", "72%"],
+          radius: ["44%", "72%"],
           center: ["50%", "42%"],
           label: { color: "#1f2937" },
+          color: ["#0f766e", "#f59e0b", "#ef4444", "#7c3aed"],
           data: overview.value.risk_distribution.map((item) => ({
             name: item.name,
             value: item.value,
           })),
-          color: ["#0f766e", "#f59e0b", "#ef4444", "#7c3aed"],
         },
       ],
     });
@@ -153,8 +158,16 @@ function renderCharts() {
       <div class="hero-copy">
         <p class="eyebrow">PIAP Operations</p>
         <h2>数据与统计看板</h2>
-        <p class="subtitle">仪表盘承担值守主屏职责，聚焦任务吞吐、通过率、高风险预警和平均耗时，并提供快捷入口。</p>
+        <p class="subtitle">
+          仪表盘现在只统计真实物化后的任务、结果、稳定性和告警，不再把聊天中间态当作统计源。
+        </p>
+        <div class="scope-strip">
+          <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
+          <el-tag type="info" effect="plain">最近 {{ selectedRange }} 日</el-tag>
+          <el-tag v-if="isAdmin" type="warning" effect="plain">admin 默认聚合全部组织</el-tag>
+        </div>
       </div>
+
       <div class="hero-actions">
         <div class="range-switch">
           <el-button :type="selectedRange === 7 ? 'primary' : 'default'" @click="setRange(7)">7 日</el-button>
@@ -162,9 +175,9 @@ function renderCharts() {
           <el-button :type="selectedRange === 90 ? 'primary' : 'default'" @click="setRange(90)">90 日</el-button>
         </div>
         <div class="button-group">
-          <el-button type="primary" @click="router.push('/app/tasks')">新建任务</el-button>
-          <el-button plain @click="router.push('/app/results')">查看报告</el-button>
-          <el-button plain @click="router.push('/app/alerts')">预警中心</el-button>
+          <el-button type="primary" @click="router.push('/app/tasks')">查看任务</el-button>
+          <el-button plain @click="router.push('/ops/analytics')">查看分析</el-button>
+          <el-button plain @click="router.push('/app/stability')">稳定性工作台</el-button>
         </div>
       </div>
     </section>
@@ -182,20 +195,23 @@ function renderCharts() {
         <div class="value">{{ overview.total_tasks }}</div>
         <div class="meta">已沉淀结果 {{ overview.total_results }}</div>
       </el-card>
+
       <el-card shadow="never" class="metric-card green">
         <div class="label">智能判定通过率</div>
         <div class="value">{{ (overview.pass_rate * 100).toFixed(1) }}%</div>
-        <div class="meta">主图联动展示最近 {{ selectedRange }} 日走势</div>
+        <div class="meta">仅统计真实结果记录</div>
       </el-card>
+
       <el-card shadow="never" class="metric-card amber" @click="router.push('/app/alerts')">
         <div class="label">高风险预警数</div>
         <div class="value">{{ highRiskAlerts }}</div>
-        <div class="meta">未处理 warning / critical 告警</div>
+        <div class="meta">仅显示未关闭且未关联已删除任务的告警</div>
       </el-card>
+
       <el-card shadow="never" class="metric-card rose">
         <div class="label">平均耗时</div>
         <div class="value">{{ overview.avg_latency_ms.toFixed(0) }} ms</div>
-        <div class="meta">累计成本 ￥{{ overview.total_cost.toFixed(4) }}</div>
+        <div class="meta">累计成本 ¥{{ overview.total_cost.toFixed(4) }}</div>
       </el-card>
     </section>
 
@@ -205,18 +221,19 @@ function renderCharts() {
           <div class="card-head">
             <div>
               <strong>通过率趋势</strong>
-              <span>对应 FED 文档中的仪表盘主趋势图</span>
+              <span>按当前统计范围展示真实结果的通过率走势</span>
             </div>
           </div>
         </template>
         <div ref="trendRef" class="chart-host"></div>
       </el-card>
+
       <el-card shadow="never" class="chart-card" @click="router.push('/app/stability')">
         <template #header>
           <div class="card-head">
             <div>
               <strong>风险等级分布</strong>
-              <span>点击进入稳定性总览</span>
+              <span>点击进入稳定性工作台查看详情</span>
             </div>
           </div>
         </template>
@@ -226,8 +243,8 @@ function renderCharts() {
 
     <section class="table-grid">
       <el-card shadow="never">
-        <template #header>待处理预警列表</template>
-        <el-table :data="openAlerts" size="small" empty-text="暂无待处理预警">
+        <template #header>最近预警</template>
+        <el-table :data="openAlerts" size="small" empty-text="当前范围内暂无预警">
           <el-table-column prop="severity" label="级别" width="110" />
           <el-table-column prop="title" label="标题" min-width="220" />
           <el-table-column prop="created_at" label="触发时间" width="180" />
@@ -235,12 +252,14 @@ function renderCharts() {
       </el-card>
 
       <el-card shadow="never">
-        <template #header>最近任务列表</template>
-        <el-table :data="recentTasks" size="small" empty-text="暂无任务数据">
-          <el-table-column prop="id" label="任务编号" min-width="220" />
-          <el-table-column prop="status" label="状态" width="100" />
+        <template #header>最近任务</template>
+        <el-table :data="recentTasks" size="small" empty-text="当前范围内暂无任务">
+          <el-table-column prop="id" label="任务 ID" min-width="240" show-overflow-tooltip />
+          <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
           <el-table-column prop="product_id" label="产品编号" width="120" />
-          <el-table-column prop="created_at" label="提交时间" width="180" />
+          <el-table-column prop="status" label="状态" width="110" />
+          <el-table-column prop="source_kind" label="来源" width="160" />
+          <el-table-column prop="source_graph" label="子图" width="150" />
         </el-table>
       </el-card>
     </section>
@@ -253,8 +272,8 @@ function renderCharts() {
   min-height: 100vh;
   padding: 24px;
   background:
-    radial-gradient(circle at top left, rgba(15,118,110,0.12), transparent 30%),
-    radial-gradient(circle at top right, rgba(190,24,93,0.08), transparent 24%),
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 30%),
+    radial-gradient(circle at top right, rgba(190, 24, 93, 0.08), transparent 24%),
     linear-gradient(180deg, #f7f3ea 0%, #eef2f6 100%);
   display: grid;
   gap: 18px;
@@ -266,7 +285,7 @@ function renderCharts() {
   gap: 24px;
   padding: 28px;
   border-radius: 24px;
-  background: linear-gradient(135deg, rgba(16,36,61,0.98), rgba(17,94,89,0.9));
+  background: linear-gradient(135deg, rgba(16, 36, 61, 0.98), rgba(17, 94, 89, 0.9));
   color: #f8fafc;
 }
 
@@ -285,9 +304,16 @@ function renderCharts() {
 }
 
 .subtitle {
-  max-width: 720px;
+  max-width: 760px;
   margin: 12px 0 0;
   color: rgba(248, 250, 252, 0.82);
+}
+
+.scope-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .hero-actions {
@@ -316,10 +342,6 @@ function renderCharts() {
   border-radius: 20px;
   border: 1px solid var(--line);
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
-}
-
-.metric-card {
-  cursor: default;
 }
 
 .metric-card :deep(.el-card__body) {

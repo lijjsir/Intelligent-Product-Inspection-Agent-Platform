@@ -5,7 +5,7 @@ from app.repositories.analytics_repo import AnalyticsRepository
 
 
 class AnalyticsService:
-    def __init__(self, session: AsyncSession, org_id: str):
+    def __init__(self, session: AsyncSession, org_id: str | None):
         self._session = session
         self._org_id = org_id
         self._repo = AnalyticsRepository(session)

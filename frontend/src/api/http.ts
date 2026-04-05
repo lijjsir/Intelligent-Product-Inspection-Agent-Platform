@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
 import { clearStoredAuthSession, ORG_ID_KEY, TOKEN_KEY, readStoredValue } from "@/utils/auth-session";
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 let handlingAuthFailure = false;
 
 export interface ApiEnvelope<T> {

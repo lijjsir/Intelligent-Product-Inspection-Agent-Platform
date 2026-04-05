@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
     governance_secret: str = "piap-governance-secret"
+    agent_route_mode: str = "router_enabled"
+    cors_allowed_origins: list[str] = [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:15173",
+        "http://localhost:15173",
+    ]
+    cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
     langfuse_enabled: bool = False
     langfuse_public_key: str = ""

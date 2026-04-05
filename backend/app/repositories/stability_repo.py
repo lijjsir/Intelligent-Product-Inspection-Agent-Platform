@@ -1,7 +1,10 @@
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.stability import StabilityReport
+from app.models.task import InspectionTask
 
 
 class StabilityRepository:
@@ -10,8 +13,12 @@ class StabilityRepository:
 
     async def get_by_task(self, org_id: str, task_id: str) -> StabilityReport | None:
         result = await self._session.execute(
-            select(StabilityReport).where(
-                StabilityReport.org_id == org_id, StabilityReport.task_id == task_id
+            select(StabilityReport)
+            .join(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where(
+                StabilityReport.org_id == org_id,
+                StabilityReport.task_id == task_id,
+                InspectionTask.deleted_at.is_(None),
             )
         )
         return result.scalar_one_or_none()
@@ -29,11 +36,17 @@ class StabilityRepository:
         await self._session.flush()
         return obj
 
-    async def list_by_range(self, org_id: str, start_date=None, end_date=None) -> list[StabilityReport]:
-        stmt = select(StabilityReport).where(StabilityReport.org_id == org_id)
+    async def list_by_range(self, org_id: str | None, start_date=None, end_date=None) -> list[StabilityReport]:
+        stmt = (
+            select(StabilityReport)
+            .join(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where(InspectionTask.deleted_at.is_(None))
+        )
+        if org_id:
+            stmt = stmt.where(StabilityReport.org_id == org_id, InspectionTask.org_id == org_id)
         if start_date:
-            stmt = stmt.where(StabilityReport.created_at >= __import__("datetime").datetime.combine(start_date, __import__("datetime").datetime.min.time()))
+            stmt = stmt.where(StabilityReport.created_at >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
-            stmt = stmt.where(StabilityReport.created_at <= __import__("datetime").datetime.combine(end_date, __import__("datetime").datetime.max.time()))
+            stmt = stmt.where(StabilityReport.created_at <= datetime.combine(end_date, datetime.max.time()))
         result = await self._session.execute(stmt.order_by(StabilityReport.created_at.asc()))
         return list(result.scalars().all())

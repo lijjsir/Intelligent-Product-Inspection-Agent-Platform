@@ -17,6 +17,7 @@ class TokenLedgerRepository:
         obj = TokenUsageLedger(**payload)
         self._session.add(obj)
         await self._session.flush()
+        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
         return obj
 
     async def list_filtered(

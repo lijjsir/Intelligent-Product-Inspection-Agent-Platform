@@ -38,6 +38,8 @@ const createForm = ref({
 });
 
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
+const isAdmin = computed(() => hasRole("admin"));
+const canCreateTask = computed(() => hasRole(["user", "inspector"]));
 
 const rules: FormRules = {
   product_id: [
@@ -163,11 +165,10 @@ async function handleSubmitCreate() {
         .filter((item): item is File => Boolean(item))
         .map((item) => fileToDataUrl(item)),
     );
-    const imageUrls = [...urlsFromText, ...dataUrls];
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
-      image_urls: imageUrls,
+      image_urls: [...urlsFromText, ...dataUrls],
       priority: createForm.value.priority,
       metadata: { source: "task_list" },
     });
@@ -237,9 +238,9 @@ watch(
     <div class="header">
       <div>
         <h2 class="title">任务管理</h2>
-        <p class="subtitle">查看聊天提交或手动创建的检测任务，并进入详情页跟踪执行状态。</p>
+        <p class="subtitle">这里展示所有真实物化后的检测任务。聊天终态、聊天提交和手动创建都会进入同一任务主表。</p>
       </div>
-      <el-button v-if="hasRole(['user', 'inspector'])" type="primary" @click="handleOpenCreate">新建任务</el-button>
+      <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
     </div>
 
     <el-card class="mb-4" shadow="never">
@@ -267,15 +268,18 @@ watch(
 
     <el-card shadow="never">
       <el-table :data="taskStore.items" v-loading="taskStore.loading" border stripe>
-        <el-table-column prop="id" label="任务 ID" min-width="280" show-overflow-tooltip />
-        <el-table-column prop="product_id" label="产品编号" width="160" />
+        <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
+        <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
+        <el-table-column prop="product_id" label="产品编号" width="150" />
         <el-table-column prop="spec_code" label="检测标准" width="180" />
-        <el-table-column prop="status" label="状态" width="120">
+        <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)">{{ row.status.toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="100" align="center" />
+        <el-table-column prop="source_kind" label="来源" width="160" />
+        <el-table-column prop="source_graph" label="子图" width="150" />
+        <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
             {{ row.created_at ? new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
@@ -369,7 +373,7 @@ watch(
       destroy-on-close
       :close-on-click-modal="false"
     >
-      <div class="delete-dialog-copy">删除后该任务将不再出现在任务列表中，是否继续？</div>
+      <div class="delete-dialog-copy">删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？</div>
       <template #footer>
         <div class="dialog-footer">
           <el-button @click="cancelDeleteTask">取消</el-button>

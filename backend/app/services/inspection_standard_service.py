@@ -188,7 +188,15 @@ class InspectionStandardService:
             "name": spec.name,
             "version": spec.version,
             "product_id": spec.product_id,
+            "product_family": spec.product_family,
+            "applicable_skus": list(spec.applicable_skus or []),
+            "required_views": list(spec.required_views or []),
+            "effective_from": spec.effective_from,
+            "effective_to": spec.effective_to,
             "required_image_count": int(spec.required_image_count or 1),
+            "aggregation_rules": dict(spec.aggregation_rules or {}),
+            "ai_gate_rules": dict(spec.ai_gate_rules or {}),
+            "manual_review_policies": dict(spec.manual_review_policies or {}),
             "auto_pass_enabled": bool(spec.auto_pass_enabled),
         }
 

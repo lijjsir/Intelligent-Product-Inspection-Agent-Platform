@@ -9,7 +9,7 @@ import type {
   ChatStreamEvent,
 } from "@/types/chat.types";
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const chatApi = {
   listSessions(limit = 100) {

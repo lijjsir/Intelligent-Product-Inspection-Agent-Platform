@@ -71,12 +71,14 @@ class InspectionSpecRepository:
         for row in items:
             self._session.add(InspectionSpecItem(**row))
         await self._session.flush()
+        await self._session.refresh(spec, attribute_names=["created_at", "updated_at"])
         return spec
 
     async def save_spec(self, spec: InspectionSpec, payload: dict) -> InspectionSpec:
         for key, value in payload.items():
             setattr(spec, key, value)
         await self._session.flush()
+        await self._session.refresh(spec, attribute_names=["updated_at"])
         return spec
 
     async def list_items(self, spec_row_id: str) -> list[InspectionSpecItem]:
