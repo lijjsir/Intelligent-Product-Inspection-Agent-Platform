@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
+import { workbenchRoutes } from "@/router/routes/workbench.routes";
 import { ROLE_ADMIN, normalizeRole } from "@/constants/roles";
 
 const routes = [
@@ -44,6 +45,12 @@ const routes = [
     path: "/governance",
     component: () => import("@/layouts/AppLayout.vue"),
     children: governanceRoutes,
+    meta: { requiresAuth: true },
+  },
+  {
+    path: "/workbench",
+    component: () => import("@/layouts/AppLayout.vue"),
+    children: workbenchRoutes,
     meta: { requiresAuth: true },
   },
   {

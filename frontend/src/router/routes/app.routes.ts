@@ -1,7 +1,5 @@
 export const appRoutes = [
   { path: "dashboard", name: "app-dashboard", component: () => import("@/views/DashboardView.vue") },
-  { path: "chat", name: "app-chat", component: () => import("@/views/ChatView.vue"), meta: { title: "智能对话" } },
-  { path: "rag-spaces", name: "app-rag-spaces", component: () => import("@/views/RagSpaceView.vue"), meta: { title: "知识库" } },
   { path: "tasks", name: "app-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务管理" } },
   { path: "tasks/:id", name: "app-task-detail", component: () => import("@/views/TaskDetailView.vue") },
   { path: "results", name: "app-results", component: () => import("@/views/ResultListView.vue") },

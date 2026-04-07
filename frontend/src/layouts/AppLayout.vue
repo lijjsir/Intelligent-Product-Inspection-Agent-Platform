@@ -3,6 +3,28 @@
     <aside class="sidebar">
       <div class="logo">PIAP</div>
       <nav class="nav">
+        <!-- 工作台 -->
+        <el-collapse v-if="canApp" v-model="activeNames" class="nav-collapse">
+          <el-collapse-item name="workbench">
+            <template #title>
+              <div class="collapse-title">
+                <el-icon><Monitor /></el-icon>
+                <span>聊天</span>
+              </div>
+            </template>
+            <div class="nav-items">
+              <RouterLink to="/workbench/chat" class="nav-link">
+                <el-icon><ChatDotRound /></el-icon>
+                <span>智能对话</span>
+              </RouterLink>
+              <RouterLink to="/workbench/rag-spaces" class="nav-link">
+                <el-icon><FolderOpened /></el-icon>
+                <span>知识库</span>
+              </RouterLink>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
         <!-- 应用工作台 -->
         <el-collapse v-if="canApp" v-model="activeNames" class="nav-collapse">
           <el-collapse-item name="app">
@@ -16,14 +38,6 @@
               <RouterLink to="/app/dashboard" class="nav-link" exact-active-class="router-link-active">
                 <el-icon><DataLine /></el-icon>
                 <span>仪表盘</span>
-              </RouterLink>
-              <RouterLink to="/app/chat" class="nav-link">
-                <el-icon><ChatDotRound /></el-icon>
-                <span>智能对话</span>
-              </RouterLink>
-              <RouterLink to="/app/rag-spaces" class="nav-link">
-                <el-icon><FolderOpened /></el-icon>
-                <span>知识库</span>
               </RouterLink>
               <RouterLink to="/app/tasks" class="nav-link">
                 <el-icon><List /></el-icon>
@@ -174,6 +188,7 @@ const activeNames = ref<string[]>([]);
 function updateActiveNames() {
   const path = route.path;
   const names: string[] = [];
+  if (path.startsWith("/workbench")) names.push("workbench");
   if (path.startsWith("/app")) names.push("app");
   if (path.startsWith("/ops")) names.push("ops");
   if (path.startsWith("/governance")) names.push("governance");
