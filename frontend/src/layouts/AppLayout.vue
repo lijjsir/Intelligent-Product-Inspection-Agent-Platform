@@ -17,6 +17,14 @@
                 <el-icon><DataLine /></el-icon>
                 <span>仪表盘</span>
               </RouterLink>
+              <RouterLink to="/app/chat" class="nav-link">
+                <el-icon><ChatDotRound /></el-icon>
+                <span>智能对话</span>
+              </RouterLink>
+              <RouterLink to="/app/rag-spaces" class="nav-link">
+                <el-icon><FolderOpened /></el-icon>
+                <span>知识库</span>
+              </RouterLink>
               <RouterLink to="/app/tasks" class="nav-link">
                 <el-icon><List /></el-icon>
                 <span>任务管理</span>
@@ -131,6 +139,8 @@ import {
   Setting,
   VideoPlay,
   ChatLineRound,
+  ChatDotRound,
+  FolderOpened,
   DataAnalysis,
   Management,
   Cpu,

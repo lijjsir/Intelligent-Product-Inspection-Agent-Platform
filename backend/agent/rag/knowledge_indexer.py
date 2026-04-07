@@ -50,6 +50,7 @@ class KnowledgeIndexer:
                         "title": str(doc.get("title") or "标准文档"),
                         "text": text,
                         "source": str(doc.get("source") or ""),
+                        **dict(doc.get("payload") or {}),
                     },
                 }
             )
@@ -71,6 +72,33 @@ class KnowledgeIndexer:
             )
             resp.raise_for_status()
         return {"accepted": len(points), "failed_embeddings": failed_embeddings}
+
+    async def delete_by_filter(self, payload_filter: dict[str, Any]) -> None:
+        must = [
+            {
+                "key": key,
+                "match": {"value": value},
+            }
+            for key, value in payload_filter.items()
+            if value is not None and value != ""
+        ]
+        if not must:
+            return
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._qdrant_api_key:
+            headers["api-key"] = self._qdrant_api_key
+        payload = {
+            "filter": {
+                "must": must,
+            }
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self._qdrant_url}/collections/{self._collection}/points/delete",
+                json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
 
     def _normalize_point_id(self, raw_id: Any) -> str | int:
         if raw_id is None:

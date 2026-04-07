@@ -12,6 +12,9 @@ from app.models.token_ledger import TokenUsageLedger
 from app.models.feedback import ResultFeedback
 from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
 from app.models.agent_ops import AgentDefinition, PromptVersion, IntentRoute
+from app.models.chat import ChatSession, ChatMessage
+from app.models.rag_space import RagSpace, RagSpaceFile
+from app.models.user_token_usage import UserTokenUsageSummary
 
 __all__ = [
     "Base",
@@ -33,4 +36,9 @@ __all__ = [
     "AgentDefinition",
     "PromptVersion",
     "IntentRoute",
+    "ChatSession",
+    "ChatMessage",
+    "RagSpace",
+    "RagSpaceFile",
+    "UserTokenUsageSummary",
 ]

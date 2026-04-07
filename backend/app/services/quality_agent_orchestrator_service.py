@@ -1,0 +1,744 @@
+from __future__ import annotations
+
+import logging
+from time import perf_counter
+from typing import Any
+
+from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
+from agent.graphs.quality_root import QualityAgentRootGraph
+from agent.llm.pricing import ModelPricing
+from agent.topology_catalog import get_registered_subgraphs
+from app.core.ids import uuid7
+from app.models.task import InspectionTask
+from app.repositories.agent_management_repo import AgentExecutionMetricsRepository
+from app.repositories.agent_ops_repo import (
+    AgentDefinitionRepository,
+    AgentRuntimeRepository,
+    RagAnalysisRepository,
+)
+from app.repositories.alert_repo import AlertRepository
+from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
+from app.repositories.result_repo import ResultRepository
+from app.repositories.stability_repo import StabilityRepository
+from app.repositories.task_repo import TaskRepository
+from app.repositories.token_ledger_repo import TokenLedgerRepository
+from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.task_service import TaskService
+from infra.database.session import get_session
+
+logger = logging.getLogger(__name__)
+
+
+class QualityAgentOrchestratorService:
+    def __init__(self) -> None:
+        self._graph = QualityAgentRootGraph()
+
+    async def run_chat(self, payload: dict) -> dict:
+        started_at = perf_counter()
+        request = NormalizedRequest(
+            request_kind="chat",
+            request_id=str(payload["request_id"]),
+            workflow_run_id=str(payload.get("workflow_run_id") or payload["request_id"]),
+            session_id=str(payload["session_id"]),
+            assistant_message_id=str(payload["assistant_message_id"]),
+            org_id=str(payload["org_id"]),
+            user_id=str(payload["user_id"]),
+            workspace=str(payload.get("workspace") or "app"),
+            plan_tier=str(payload.get("plan_tier") or "basic"),
+            capabilities=list(payload.get("capabilities") or []),
+            query=str(payload.get("query") or ""),
+            metadata=dict(payload.get("metadata") or {}),
+            ext=dict(payload.get("ext") or {}),
+            attachments=[
+                NormalizedAttachment.model_validate(item)
+                for item in list(payload.get("attachments") or [])
+            ],
+            image_urls=[
+                str(item).strip()
+                for item in list(payload.get("image_urls") or [])
+                if str(item).strip()
+            ],
+            product_id=str(payload.get("product_id") or "") or None,
+            spec_code=str(payload.get("spec_code") or "") or None,
+            route_hints=dict(payload.get("route_hints") or {}),
+        )
+        success = True
+        result = await self._graph.run(request)
+        agent_output = AgentOutput.model_validate(result["agent_output"])
+        route_decision = agent_output.route_decision
+        success = await self._persist_chat_result(request, agent_output)
+        await self._record_runtime_metrics(
+            request.org_id,
+            route_decision.selected_subgraph if route_decision else "legacy_quality",
+            success=success,
+            latency_ms=int(round((perf_counter() - started_at) * 1000)),
+        )
+        return result
+
+    async def _persist_chat_result(
+        self,
+        request: NormalizedRequest,
+        output: AgentOutput,
+    ) -> bool:
+        if not self._should_materialize_chat_output(output):
+            return True
+
+        emit = request.ext.get("emit")
+        materialized: dict[str, Any] | None = None
+        materialization_error: str | None = None
+        try:
+            materialized = await self._materialize_chat_output(request, output)
+        except Exception as exc:  # pragma: no cover - defensive runtime path
+            materialization_error = str(exc)
+            logger.exception("chat materialize failed session_id=%s", request.session_id)
+
+        materialized_task = None
+        task_form_defaults = dict(output.task_draft or {})
+        if materialized:
+            materialized_task = {
+                "id": materialized["task_id"],
+                "status": materialized["task_status"],
+                "product_id": materialized["product_id"],
+                "spec_code": materialized["spec_code"],
+                "priority": materialized["priority"],
+                "image_count": materialized["image_count"],
+            }
+            task_form_defaults = {
+                **task_form_defaults,
+                "product_id": materialized["product_id"],
+                "spec_code": materialized["spec_code"],
+                "priority": materialized["priority"],
+                "image_urls": list(task_form_defaults.get("image_urls") or []),
+            }
+
+        response_payload = self._build_response_payload(
+            request=request,
+            output=output,
+            task_form_defaults=task_form_defaults,
+            materialized_task=materialized_task,
+            materialization_error=materialization_error,
+        )
+
+        is_legacy_stream = (
+            output.route_decision is not None
+            and output.route_decision.selected_subgraph == "legacy_quality"
+        )
+        if callable(emit) and not is_legacy_stream:
+            answer = str(output.answer or "")
+            for start in range(0, len(answer), 48):
+                await emit(
+                    {
+                        "event": "message_delta",
+                        "session_id": request.session_id,
+                        "message_id": request.assistant_message_id,
+                        "workflow_run_id": request.workflow_run_id,
+                        "delta": answer[start : start + 48],
+                    }
+                )
+            if output.quality:
+                await emit(
+                    {
+                        "event": "quality_signal",
+                        "session_id": request.session_id,
+                        "message_id": request.assistant_message_id,
+                        "workflow_run_id": request.workflow_run_id,
+                        "quality": output.quality,
+                    }
+                )
+
+        async with get_session() as session:
+            message_repo = ChatMessageRepository(session)
+            session_repo = ChatSessionRepository(session)
+            await message_repo.update_assistant_message(
+                org_id=request.org_id,
+                message_id=str(request.assistant_message_id),
+                content=str(output.answer or ""),
+                message_type=str(output.message_type or "assistant_text"),
+                payload=response_payload,
+            )
+            await session_repo.touch(request.org_id, str(request.user_id or ""), str(request.session_id))
+
+            if output.route_decision and output.route_decision.selected_subgraph != "legacy_quality":
+                rag_repo = RagAnalysisRepository(session, request.org_id)
+                for item in list(output.persistable_output.rag_queries or []):
+                    await rag_repo.create_log(
+                        {
+                            "task_id": None if not materialized else materialized["task_id"],
+                            "session_id": str(request.session_id),
+                            "user_id": str(request.user_id or ""),
+                            "query": item.query,
+                            "rag_space_id": item.rag_space_id,
+                            "hit_count": item.hit_count,
+                            "hit_rate": item.hit_rate,
+                            "citation_coverage": item.citation_coverage,
+                            "latency_ms": int(item.latency_ms or 0),
+                            "source_graph": item.source_graph,
+                            "metadata_json": dict(item.metadata or {}),
+                        }
+                    )
+            await session.commit()
+
+        if callable(emit):
+            await emit(
+                {
+                    "event": "message_final",
+                    "session_id": request.session_id,
+                    "message_id": request.assistant_message_id,
+                    "workflow_run_id": request.workflow_run_id,
+                    "content": str(output.answer or ""),
+                    "payload": response_payload,
+                    "quality": dict(output.quality or {}),
+                }
+            )
+        return materialization_error is None
+
+    def _should_materialize_chat_output(self, output: AgentOutput) -> bool:
+        return str(output.message_type or "") == "quality_answer"
+
+    def _build_response_payload(
+        self,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        task_form_defaults: dict[str, Any],
+        materialized_task: dict[str, Any] | None,
+        materialization_error: str | None,
+    ) -> dict[str, Any]:
+        base_payload = {}
+        if isinstance(output.raw_state, dict):
+            base_payload = dict(output.raw_state.get("response_payload") or {})
+
+        return {
+            **base_payload,
+            "answer": output.answer,
+            "summary": output.summary,
+            "citations": list(output.citations or []),
+            "quality": dict(output.quality or {}),
+            "result_card": dict(output.result_card) if output.result_card else None,
+            "expectation_check": dict(output.expectation_check or {}) if output.expectation_check else None,
+            "rag_summary": dict(output.rag_summary) if output.rag_summary else None,
+            "intent": "quality_chat",
+            "action_state": output.action_state,
+            "task_draft": task_form_defaults or None,
+            "task_form_defaults": task_form_defaults or None,
+            "task_submit_mode": base_payload.get("task_submit_mode"),
+            "missing_slots": list((output.clarification.missing_fields if output.clarification else []) or []),
+            "clarification": output.clarification.model_dump() if output.clarification else None,
+            "pending_action": base_payload.get("pending_action"),
+            "awaiting_confirmation": bool(base_payload.get("awaiting_confirmation") or False),
+            "created_task": base_payload.get("created_task"),
+            "materialized_task": materialized_task,
+            "message_type": output.message_type,
+            "route_decision": output.route_decision.model_dump() if output.route_decision else None,
+            "workflow_version": "quality_agent_root_v1",
+            "prompt_version": (
+                output.persistable_output.quality_trace.prompt_version
+                if output.persistable_output and output.persistable_output.quality_trace
+                else base_payload.get("prompt_version")
+                or "quality_agent_root_v1"
+            ),
+            "selected_rag_space": request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
+            "source_graph": (
+                output.route_decision.selected_subgraph
+                if output.route_decision
+                else (base_payload.get("source_graph") or "legacy_quality")
+            ),
+            "materialization_status": "failed" if materialization_error else "synced",
+            "materialization_error": materialization_error,
+        }
+
+    async def _materialize_chat_output(
+        self,
+        request: NormalizedRequest,
+        output: AgentOutput,
+    ) -> dict[str, Any]:
+        if output.persistable_output.task and output.persistable_output.result and output.persistable_output.stability:
+            return await self._materialize_structured_output(
+                request,
+                output.persistable_output,
+                source_graph=(
+                    output.route_decision.selected_subgraph
+                    if output.route_decision
+                    else "llm_native_quality"
+                ),
+                source_kind="chat_quality_answer",
+                persist_usage=True,
+            )
+        return await self._materialize_legacy_quality_answer(request, output)
+
+    async def _materialize_structured_output(
+        self,
+        request: NormalizedRequest,
+        persistable_output: PersistableOutput,
+        *,
+        source_graph: str,
+        source_kind: str,
+        persist_usage: bool,
+    ) -> dict[str, Any]:
+        task_data = persistable_output.task
+        result_data = persistable_output.result
+        stability_data = persistable_output.stability
+        if not task_data or not result_data or not stability_data:
+            raise ValueError("Persistable output is missing task, result, or stability aggregates")
+
+        async with get_session() as session:
+            task_repo = TaskRepository(session)
+            result_repo = ResultRepository(session)
+            stability_repo = StabilityRepository(session)
+            alert_repo = AlertRepository(session)
+            token_repo = TokenLedgerRepository(session)
+            user_summary_repo = UserTokenUsageSummaryRepository(session)
+            token_repo = TokenLedgerRepository(session)
+            user_summary_repo = UserTokenUsageSummaryRepository(session)
+            task_service = TaskService(session, request.org_id)
+
+            reasoning_chain = dict(result_data.reasoning_chain or {})
+            structured_record = dict(reasoning_chain.get("structured_record") or {})
+            task_image_urls = list(request.image_urls or [])
+            if not task_image_urls:
+                raw_image_urls = structured_record.get("image_urls")
+                if isinstance(raw_image_urls, list):
+                    task_image_urls = [str(item).strip() for item in raw_image_urls if str(item).strip()]
+                elif isinstance(raw_image_urls, str):
+                    task_image_urls = [
+                        part.strip()
+                        for part in raw_image_urls.replace(";", ",").split(",")
+                        if part.strip()
+                    ]
+
+            metadata = {
+                "source": source_kind,
+                "source_graph": source_graph,
+                "chat_session_id": request.session_id,
+                "assistant_message_id": request.assistant_message_id,
+                "request_id": request.request_id,
+                "workflow_run_id": request.workflow_run_id,
+                "route_decision": (
+                    persistable_output.quality_trace.model_dump()
+                    if persistable_output.quality_trace
+                    else {}
+                ),
+                "query": request.query,
+                "attachments": [item.model_dump() for item in request.attachments],
+                **dict(task_data.model_dump(exclude_none=True)),
+            }
+
+            task = await task_repo.get_by_chat_materialization_key(
+                request.org_id,
+                str(request.workflow_run_id or request.request_id),
+                str(request.assistant_message_id or ""),
+            )
+            if task is None:
+                task = await task_service.create_task(
+                    created_by=str(request.user_id or request.org_id),
+                    product_id=str(task_data.product_id or ""),
+                    spec_code=str(task_data.spec_code or ""),
+                    image_urls=task_image_urls,
+                    priority=int(task_data.priority or 5),
+                    metadata=metadata,
+                )
+            else:
+                task.product_id = str(task_data.product_id or task.product_id)
+                task.spec_code = str(task_data.spec_code or task.spec_code)
+                task.image_urls = task_image_urls
+                task.priority = int(task_data.priority or task.priority or 5)
+                task.meta_data = metadata
+                await session.flush()
+
+            task_status = self._normalize_task_status(task_data.status)
+            await task_repo.update_status(request.org_id, str(task.id), task_status)
+
+            result = await result_repo.upsert_by_task(
+                {
+                    "id": str(result_data.id or uuid7()),
+                    "task_id": str(task.id),
+                    "org_id": request.org_id,
+                    "verdict": str(result_data.verdict or "manual_required"),
+                    "overall_score": float(result_data.overall_score or 0.0),
+                    "defects": (
+                        result_data.reasoning_chain or {}
+                    ).get("standard_evaluation", {}).get("matched_rules", [])
+                    if isinstance(result_data.reasoning_chain, dict)
+                    else [],
+                    "citations": dict(result_data.citations or {}),
+                    "reasoning_chain": {
+                        **reasoning_chain,
+                        "trace": (
+                            persistable_output.quality_trace.model_dump(exclude_none=True)
+                            if persistable_output.quality_trace
+                            else {}
+                        ),
+                    },
+                    "llm_model": str(result_data.llm_model or "llm_native_quality"),
+                    "prompt_version": str(
+                        (persistable_output.quality_trace.prompt_version if persistable_output.quality_trace else None)
+                        or "llm_native_quality_v1"
+                    ),
+                    "tokens_used": sum(int(item.total_tokens or 0) for item in persistable_output.token_usage),
+                    "latency_ms": int(
+                        sum(float(item.latency_ms or 0.0) for item in persistable_output.rag_queries)
+                    ),
+                }
+            )
+
+            stability = await stability_repo.upsert_by_task(
+                {
+                    "id": str(uuid7()),
+                    "result_id": str(result.id),
+                    "task_id": str(task.id),
+                    "org_id": request.org_id,
+                    "evidence_score": float(stability_data.evidence_score or 0.0),
+                    "consistency_score": float(stability_data.faithfulness_score or 0.0),
+                    "confidence_score": float(stability_data.confidence_score or 0.0),
+                    "traceability_score": float(stability_data.traceability_score or 0.0),
+                    "anomaly_score": float(stability_data.physical_hallucination_score or 0.0),
+                    "risk_score": float(stability_data.risk_score or 0.0),
+                    "risk_level": str(stability_data.risk_level or "medium"),
+                    "dimension_detail": {
+                        "faithfulness_score": float(stability_data.faithfulness_score or 0.0),
+                        "physical_hallucination_score": float(stability_data.physical_hallucination_score or 0.0),
+                    },
+                    "sampling_results": {
+                        "route_subgraph": (
+                            persistable_output.quality_trace.route_subgraph
+                            if persistable_output.quality_trace
+                            else source_graph
+                        ),
+                    },
+                    "root_cause": str(result_data.verdict or "manual_required"),
+                }
+            )
+
+            for item in persistable_output.alerts:
+                await alert_repo.create(
+                    {
+                        "id": str(uuid7()),
+                        "org_id": request.org_id,
+                        "stability_id": str(stability.id),
+                        "alert_type": "quality_review",
+                        "severity": item.severity,
+                        "title": item.title,
+                        "detail": {"message": item.message, "task_id": str(task.id), "result_id": str(result.id)},
+                        "status": "open",
+                        "channels": {"ui": True},
+                    }
+                )
+
+            if persist_usage:
+                for item in persistable_output.token_usage:
+                    ledger = await token_repo.create(
+                        {
+                            "id": str(uuid7()),
+                            "org_id": request.org_id,
+                            "user_id": str(request.user_id or "") or None,
+                            "task_id": str(task.id),
+                            "result_id": str(result.id),
+                            "model_config_id": None,
+                            "model_key": item.model_key,
+                            "product_line": str(task.product_id),
+                            "trace_id": item.trace_id,
+                            "prompt_tokens": int(item.prompt_tokens or 0),
+                            "completion_tokens": int(item.completion_tokens or 0),
+                            "total_tokens": int(item.total_tokens or 0),
+                            "cost_amount": float(item.cost_amount or 0.0),
+                        }
+                    )
+                    if request.user_id:
+                        await user_summary_repo.increment(
+                            org_id=request.org_id,
+                            user_id=str(request.user_id),
+                            prompt_tokens=int(item.prompt_tokens or 0),
+                            completion_tokens=int(item.completion_tokens or 0),
+                            total_tokens=int(item.total_tokens or 0),
+                            cost_amount=float(item.cost_amount or 0.0),
+                            ledger_created_at=ledger.created_at,
+                        )
+
+            await session.commit()
+            return {
+                "task_id": str(task.id),
+                "task_status": task_status,
+                "result_id": str(result.id),
+                "stability_id": str(stability.id),
+                "product_id": str(task.product_id),
+                "spec_code": str(task.spec_code),
+                "priority": int(task.priority),
+                "image_count": len(task.image_urls or []),
+            }
+
+    async def _materialize_legacy_quality_answer(
+        self,
+        request: NormalizedRequest,
+        output: AgentOutput,
+    ) -> dict[str, Any]:
+        async with get_session() as session:
+            task_repo = TaskRepository(session)
+            result_repo = ResultRepository(session)
+            stability_repo = StabilityRepository(session)
+            alert_repo = AlertRepository(session)
+
+            task = await task_repo.get_by_chat_materialization_key(
+                request.org_id,
+                str(request.workflow_run_id or request.request_id),
+                str(request.assistant_message_id or ""),
+            )
+            if task is None:
+                task = await task_repo.create(
+                    InspectionTask(
+                        org_id=request.org_id,
+                        created_by=str(request.user_id or request.org_id),
+                        product_id=self._legacy_product_id(request, output),
+                        spec_code=self._legacy_spec_code(request, output),
+                        image_urls=list(request.image_urls or []),
+                        status="done",
+                        priority=5,
+                        meta_data={
+                            "source": "chat_quality_answer",
+                            "source_graph": "legacy_quality",
+                            "chat_session_id": request.session_id,
+                            "assistant_message_id": request.assistant_message_id,
+                            "request_id": request.request_id,
+                            "workflow_run_id": request.workflow_run_id,
+                            "query": request.query,
+                            "route_reason": output.route_decision.reason if output.route_decision else "",
+                        },
+                    )
+                )
+            else:
+                task.product_id = self._legacy_product_id(request, output)
+                task.spec_code = self._legacy_spec_code(request, output)
+                task.status = "done"
+                task.meta_data = {
+                    **dict(task.meta_data or {}),
+                    "source": "chat_quality_answer",
+                    "source_graph": "legacy_quality",
+                    "chat_session_id": request.session_id,
+                    "assistant_message_id": request.assistant_message_id,
+                    "request_id": request.request_id,
+                    "workflow_run_id": request.workflow_run_id,
+                    "query": request.query,
+                }
+                await session.flush()
+
+            result = await result_repo.upsert_by_task(
+                {
+                    "id": str(uuid7()),
+                    "task_id": str(task.id),
+                    "org_id": request.org_id,
+                    "verdict": self._legacy_verdict(output),
+                    "overall_score": float(self._legacy_overall_score(output)),
+                    "defects": {
+                        "failed_rules": list((output.result_card or {}).get("failed_rules") or [])
+                    },
+                    "citations": {"items": list(output.citations or [])},
+                    "reasoning_chain": {
+                        "legacy_state": dict(output.raw_state or {}),
+                        "quality": dict(output.quality or {}),
+                        "route_decision": (
+                            output.route_decision.model_dump() if output.route_decision else None
+                        ),
+                    },
+                    "llm_model": self._legacy_model_key(output),
+                    "prompt_version": self._legacy_prompt_version(output),
+                    "tokens_used": int(self._legacy_usage(output).get("total_tokens") or 0),
+                    "latency_ms": int(
+                        ((output.raw_state or {}).get("retrieval_metrics") or {}).get("latency_ms") or 0
+                    ),
+                }
+            )
+
+            stability = await stability_repo.upsert_by_task(
+                {
+                    "id": str(uuid7()),
+                    "result_id": str(result.id),
+                    "task_id": str(task.id),
+                    "org_id": request.org_id,
+                    "evidence_score": float((output.quality or {}).get("evidence_coverage") or 0.0),
+                    "consistency_score": float((output.quality or {}).get("faithfulness") or 0.0),
+                    "confidence_score": float((output.quality or {}).get("confidence") or 0.0),
+                    "traceability_score": float((output.quality or {}).get("traceability") or 0.0),
+                    "anomaly_score": float(
+                        1.0
+                        if "low_evidence" in list((output.quality or {}).get("hallucination_flags") or [])
+                        else 0.0
+                    ),
+                    "risk_score": float((output.quality or {}).get("risk_score") or 0.0),
+                    "risk_level": self._legacy_risk_level(output),
+                    "dimension_detail": {
+                        "faithfulness_score": float((output.quality or {}).get("faithfulness") or 0.0),
+                        "hallucination_flags": list((output.quality or {}).get("hallucination_flags") or []),
+                    },
+                    "sampling_results": {"route_subgraph": "legacy_quality"},
+                    "root_cause": str((output.summary or output.answer or "")[:255]),
+                }
+            )
+
+            if self._legacy_should_alert(output):
+                await alert_repo.create(
+                    {
+                        "id": str(uuid7()),
+                        "org_id": request.org_id,
+                        "stability_id": str(stability.id),
+                        "alert_type": "quality_review",
+                        "severity": self._legacy_alert_severity(output),
+                        "title": "Legacy quality answer requires review",
+                        "detail": {
+                            "message": output.summary or output.answer,
+                            "task_id": str(task.id),
+                            "result_id": str(result.id),
+                        },
+                        "status": "open",
+                        "channels": {"ui": True},
+                    }
+                )
+
+            usage = self._legacy_usage(output)
+            if usage["total_tokens"] > 0:
+                ledger = await token_repo.create(
+                    {
+                        "id": str(uuid7()),
+                        "org_id": request.org_id,
+                        "user_id": str(request.user_id or "") or None,
+                        "task_id": str(task.id),
+                        "result_id": str(result.id),
+                        "model_config_id": None,
+                        "model_key": usage["model_key"],
+                        "product_line": str(task.product_id),
+                        "trace_id": str((output.raw_state or {}).get("trace_id") or ""),
+                        "prompt_tokens": int(usage["prompt_tokens"] or 0),
+                        "completion_tokens": int(usage["completion_tokens"] or 0),
+                        "total_tokens": int(usage["total_tokens"] or 0),
+                        "cost_amount": float(usage["cost_amount"] or 0.0),
+                    }
+                )
+                if request.user_id:
+                    await user_summary_repo.increment(
+                        org_id=request.org_id,
+                        user_id=str(request.user_id),
+                        prompt_tokens=int(usage["prompt_tokens"] or 0),
+                        completion_tokens=int(usage["completion_tokens"] or 0),
+                        total_tokens=int(usage["total_tokens"] or 0),
+                        cost_amount=float(usage["cost_amount"] or 0.0),
+                        ledger_created_at=ledger.created_at,
+                    )
+
+            await session.commit()
+            return {
+                "task_id": str(task.id),
+                "task_status": str(task.status),
+                "result_id": str(result.id),
+                "stability_id": str(stability.id),
+                "product_id": str(task.product_id),
+                "spec_code": str(task.spec_code),
+                "priority": int(task.priority),
+                "image_count": len(task.image_urls or []),
+            }
+
+    def _legacy_product_id(self, request: NormalizedRequest, output: AgentOutput) -> str:
+        result_card = dict(output.result_card or {})
+        return str(
+            result_card.get("product_id")
+            or request.product_id
+            or request.metadata.get("product_id")
+            or "chat_quality"
+        )
+
+    def _legacy_spec_code(self, request: NormalizedRequest, output: AgentOutput) -> str:
+        result_card = dict(output.result_card or {})
+        return str(
+            result_card.get("spec_code")
+            or request.spec_code
+            or request.metadata.get("spec_code")
+            or "CHAT-QUALITY-QA"
+        )
+
+    def _legacy_verdict(self, output: AgentOutput) -> str:
+        result_card = dict(output.result_card or {})
+        verdict = str(result_card.get("verdict") or "").strip().lower()
+        if verdict:
+            return verdict
+        if bool((output.quality or {}).get("passed")):
+            return "pass"
+        return "manual_required"
+
+    def _legacy_overall_score(self, output: AgentOutput) -> float:
+        result_card = dict(output.result_card or {})
+        if result_card.get("overall_score") is not None:
+            return float(result_card.get("overall_score") or 0.0)
+        return float((output.quality or {}).get("confidence") or 0.0)
+
+    def _legacy_risk_level(self, output: AgentOutput) -> str:
+        level = str((output.quality or {}).get("risk_level") or "yellow").lower()
+        mapping = {"green": "low", "yellow": "medium", "orange": "high", "red": "critical"}
+        return mapping.get(level, level or "medium")
+
+    def _legacy_should_alert(self, output: AgentOutput) -> bool:
+        return self._legacy_risk_level(output) in {"high", "critical"}
+
+    def _legacy_alert_severity(self, output: AgentOutput) -> str:
+        return "critical" if self._legacy_risk_level(output) == "critical" else "warning"
+
+    def _legacy_model_key(self, output: AgentOutput) -> str:
+        raw_state = dict(output.raw_state or {})
+        reasoning = dict(raw_state.get("reasoning") or {})
+        llm_meta = dict(reasoning.get("llm_meta") or {})
+        return str(llm_meta.get("model") or "legacy_quality")
+
+    def _legacy_prompt_version(self, output: AgentOutput) -> str:
+        raw_state = dict(output.raw_state or {})
+        return str(raw_state.get("prompt_version") or "builtin-quality-chat-v1")
+
+    def _legacy_usage(self, output: AgentOutput) -> dict[str, Any]:
+        raw_state = dict(output.raw_state or {})
+        reasoning = dict(raw_state.get("reasoning") or {})
+        llm_meta = dict(reasoning.get("llm_meta") or {})
+        usage = dict(llm_meta.get("usage") or {})
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+        return {
+            "model_key": str(llm_meta.get("model") or "legacy_quality"),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cost_amount": ModelPricing.estimate_cost(
+                str(llm_meta.get("model") or "legacy_quality"),
+                prompt_tokens,
+                completion_tokens,
+            ),
+        }
+
+    def _normalize_task_status(self, status: str | None) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized in {"pending", "running", "done", "failed", "reviewing"}:
+            return normalized
+        if normalized in {"completed", "complete", "success", "succeeded"}:
+            return "done"
+        if normalized in {"error", "errored"}:
+            return "failed"
+        return "done"
+
+    async def _record_runtime_metrics(
+        self,
+        org_id: str,
+        subgraph_key: str,
+        *,
+        success: bool,
+        latency_ms: int,
+    ) -> None:
+        async with get_session() as session:
+            agent_repo = AgentDefinitionRepository(session, org_id)
+            runtime_repo = AgentRuntimeRepository(session, org_id)
+            metrics_repo = AgentExecutionMetricsRepository(session, org_id)
+            registry_entry = next(
+                (item for item in get_registered_subgraphs() if item["subgraph_key"] == subgraph_key),
+                None,
+            )
+            if not registry_entry:
+                return
+            agent = await agent_repo.get_by_subgraph_key(subgraph_key)
+            if not agent:
+                agent = await agent_repo.create(dict(registry_entry))
+            await runtime_repo.ensure_for_agent(agent)
+            await metrics_repo.update_metrics(str(agent.id), success=success, latency_ms=latency_ms)
+            await session.commit()
