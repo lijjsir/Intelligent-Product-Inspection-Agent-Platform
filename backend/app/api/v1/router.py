@@ -7,12 +7,15 @@ from app.api.v1 import (
     analytics,
     auth,
     billing,
+    chat,
     feedbacks,
     inspection_specs,
     model_configs,
     quality,
+    rag_spaces,
     results,
     stability,
+    streams,
     tasks,
     tools,
     users,
@@ -34,3 +37,6 @@ router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
+router.include_router(chat.router)
+router.include_router(rag_spaces.router)
+router.include_router(streams.router)

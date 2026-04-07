@@ -28,7 +28,6 @@ class LLMClient:
         org_id: str | None = None,
         provider: str | None = None,
     ) -> None:
-        """为单次模型调用流程绑定鉴权、追踪上下文和提供商配置。"""
         self._api_key = api_key or settings.volcengine_api_key
         self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
         self._model_id = model_id or settings.volcengine_model_id
@@ -43,12 +42,10 @@ class LLMClient:
 
     @property
     def model_id(self) -> str:
-        """返回当前客户端实际使用的聊天模型标识。"""
         return self._model_id
 
     @property
     def trace_id(self) -> str | None:
-        """返回当前流水线中多次模型调用共享的追踪标识。"""
         return self._trace_id
 
     async def chat(
@@ -59,7 +56,6 @@ class LLMClient:
         observation_name: str = "llm.chat",
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """调用聊天补全接口，并尽量把响应标准化为 JSON 优先的结果。"""
         payload = {
             "model": self._model_id,
             "messages": messages,
@@ -75,7 +71,6 @@ class LLMClient:
         )
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
-        """封装带图片输入的多模态聊天请求。"""
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
             content.append({"type": "image_url", "image_url": {"url": url}})
@@ -93,7 +88,6 @@ class LLMClient:
         observation_name: str = "llm.embedding",
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
-        """生成文本向量；当模型要求多模态 SDK 时自动切换实现路径。"""
         metadata = dict(observation_metadata or {})
         metadata.setdefault("modality", "text")
         if self._should_use_multimodal_embedding():
@@ -129,7 +123,6 @@ class LLMClient:
         return vector
 
     def _should_use_multimodal_embedding(self) -> bool:
-        """判断当前 embedding 模型是否必须通过 Ark 多模态 SDK 调用。"""
         model = (self._embed_model or "").lower()
         return "embedding-vision" in model or model.startswith("ep-")
 
@@ -140,7 +133,6 @@ class LLMClient:
         observation_name: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
-        """通过 Ark SDK 执行向量生成，并同步记录 Langfuse 观测数据。"""
         if not self._ark_client:
             return []
 
@@ -171,29 +163,31 @@ class LLMClient:
                 )
                 raise
 
-            if hasattr(resp, "model_dump"):
-                data = resp.model_dump()
-            elif isinstance(resp, dict):
+            if isinstance(resp, dict):
                 data = resp
             else:
-                self._safe_update_observation(
-                    observation,
-                    output={"vector_size": 0, "transport": "ark_sdk", "unsupported_response": True},
-                )
-                return []
+                data = self._normalize_multimodal_embedding_response(resp)
+                if not data:
+                    self._safe_update_observation(
+                        observation,
+                        output={"vector_size": 0, "transport": "ark_sdk", "unsupported_response": True},
+                    )
+                    return []
 
             vector = self._extract_embedding_vector(data)
-            usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+            usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
             self._safe_update_observation(
                 observation,
                 output={"vector_size": len(vector), "transport": "ark_sdk", "response": data},
-                usage_details=usage,
-                metadata={"vector_size": len(vector), "transport": "ark_sdk"},
+                metadata={
+                    "vector_size": len(vector),
+                    "transport": "ark_sdk",
+                    **({"usage": usage_metadata} if usage_metadata else {}),
+                },
             )
             return vector
 
     def _extract_embedding_vector(self, data: dict[str, Any]) -> list[float]:
-        """从不同供应商风格的响应结构中提取第一条向量结果。"""
         container = data.get("data")
         if isinstance(container, list):
             if not container:
@@ -205,6 +199,64 @@ class LLMClient:
             return embedding if isinstance(embedding, list) else []
         return []
 
+    @classmethod
+    def _normalize_multimodal_embedding_response(cls, response: Any) -> dict[str, Any] | None:
+        raw_data = cls._read_field(response, "data")
+        normalized_data = cls._normalize_embedding_payload(raw_data)
+        if normalized_data is None:
+            return None
+
+        payload: dict[str, Any] = {
+            "data": normalized_data,
+            "model": cls._read_field(response, "model"),
+        }
+        usage = cls._usage_to_dict(cls._read_field(response, "usage"))
+        if usage:
+            payload["usage"] = usage
+        return payload
+
+    @classmethod
+    def _normalize_embedding_payload(cls, value: Any) -> list[dict[str, Any]] | dict[str, Any] | None:
+        if isinstance(value, list):
+            items = [item for item in (cls._normalize_embedding_item(entry) for entry in value) if item]
+            return items
+        if isinstance(value, dict):
+            return value
+        item = cls._normalize_embedding_item(value)
+        return item
+
+    @staticmethod
+    def _normalize_embedding_item(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, dict):
+            embedding = value.get("embedding")
+            if isinstance(embedding, list):
+                normalized = {"embedding": embedding}
+                if "index" in value:
+                    normalized["index"] = value.get("index")
+                if "object" in value:
+                    normalized["object"] = value.get("object")
+                return normalized
+            return None
+
+        embedding = getattr(value, "embedding", None)
+        if not isinstance(embedding, list):
+            return None
+
+        normalized = {"embedding": embedding}
+        index = getattr(value, "index", None)
+        object_name = getattr(value, "object", None)
+        if index is not None:
+            normalized["index"] = index
+        if object_name is not None:
+            normalized["object"] = object_name
+        return normalized
+
+    @staticmethod
+    def _read_field(value: Any, key: str) -> Any:
+        if isinstance(value, dict):
+            return value.get(key)
+        return getattr(value, key, None)
+
     async def _post_json(
         self,
         path: str,
@@ -214,7 +266,6 @@ class LLMClient:
         observation_type: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """发送 JSON 请求，并处理重试、JSON 模式回退和追踪元数据写入。"""
         if not self._api_key:
             raise RuntimeError("VOLCENGINE_API_KEY is not configured")
 
@@ -238,6 +289,8 @@ class LLMClient:
                 last_error: Exception | None = None
                 request_payload = dict(payload)
                 response_format_fallback = False
+                observation_id: str | None = None
+                data: dict[str, Any] = {}
                 for attempt in range(1, self._request_attempts + 1):
                     try:
                         resp = await client.post(path, json=request_payload, headers=headers)
@@ -285,16 +338,17 @@ class LLMClient:
                         raise status_error
 
                     data = resp.json()
-                    usage = data.get("usage") if isinstance(data, dict) and isinstance(data.get("usage"), dict) else None
+                    usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+                    observation_id = self._tracer.current_observation_id()
                     self._safe_update_observation(
                         observation,
                         output=data,
-                        usage_details=usage,
                         metadata={
                             "status_code": resp.status_code,
                             "response_id": data.get("id") if isinstance(data, dict) else None,
                             "attempt": attempt,
                             "response_format_fallback": response_format_fallback,
+                            **({"usage": usage_metadata} if usage_metadata else {}),
                         },
                     )
                     break
@@ -308,7 +362,7 @@ class LLMClient:
             "model": data.get("model"),
             "usage": data.get("usage"),
         }
-        langfuse_meta = self._build_langfuse_meta()
+        langfuse_meta = self._build_langfuse_meta(observation_id=observation_id)
         if langfuse_meta:
             meta["langfuse"] = langfuse_meta
 
@@ -326,7 +380,6 @@ class LLMClient:
         return data
 
     def _build_observation_metadata(self, *, path: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-        """合并通用链路元数据和单次调用附加的观测信息。"""
         metadata: dict[str, Any] = {
             "provider": self._provider,
             "base_url": self._base_url,
@@ -340,27 +393,50 @@ class LLMClient:
             metadata.update({key: value for key, value in extra.items() if value is not None})
         return metadata
 
-    def _build_langfuse_meta(self) -> dict[str, Any]:
-        """为解析后的模型输出附带 trace 和 observation 标识。"""
+    def _build_langfuse_meta(self, *, observation_id: str | None = None) -> dict[str, Any]:
         meta: dict[str, Any] = {}
         if self._trace_id:
             meta["trace_id"] = self._trace_id
             trace_url = self._tracer.get_trace_url(self._trace_id)
             if trace_url:
                 meta["trace_url"] = trace_url
-        observation_id = self._tracer.current_observation_id()
         if observation_id:
             meta["observation_id"] = observation_id
         return meta
 
     @staticmethod
+    def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:
+        usage_dict = LLMClient._usage_to_dict(raw_usage)
+        if usage_dict is None:
+            return None
+
+        normalized: dict[str, int] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage_dict.get(key)
+            if isinstance(value, (int, float)):
+                normalized[key] = int(value)
+        return normalized or None
+
+    @staticmethod
+    def _usage_to_dict(raw_usage: Any) -> dict[str, Any] | None:
+        if isinstance(raw_usage, dict):
+            return raw_usage
+        if raw_usage is None:
+            return None
+
+        payload: dict[str, Any] = {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(raw_usage, key, None)
+            if value is not None:
+                payload[key] = value
+        return payload or None
+
+    @staticmethod
     def _retry_delay(attempt: int) -> float:
-        """返回 HTTP 重试使用的短指数退避间隔。"""
         return min(0.5 * (2 ** max(attempt - 1, 0)), 2.0)
 
     @staticmethod
     def _should_retry_without_response_format(path: str, payload: dict[str, Any], response: httpx.Response) -> bool:
-        """识别不支持 JSON 模式的模型响应，以便自动去掉 response_format 重试。"""
         if path != "/chat/completions":
             return False
         response_format = payload.get("response_format")
@@ -371,7 +447,6 @@ class LLMClient:
 
     @staticmethod
     def _safe_update_observation(observation: Any, **kwargs) -> None:
-        """尽力更新 Langfuse 观测对象，但不能影响主请求的错误抛出。"""
         updater = getattr(observation, "update", None)
         if not callable(updater):
             return
@@ -385,7 +460,6 @@ class LLMClient:
 
     @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any] | None:
-        """从模型原始文本或代码块中提取首个合法 JSON 对象。"""
         candidates = [text.strip()]
         if "```" in text:
             for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S):

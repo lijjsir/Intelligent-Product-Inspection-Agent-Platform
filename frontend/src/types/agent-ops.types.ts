@@ -125,3 +125,70 @@ export interface RagAnalysisResponse {
   stats: RagAnalysisStats;
   recent_items: RagAnalysisItem[];
 }
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  kind: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface GraphOverview {
+  selected_subgraph?: string;
+  intent_name?: string;
+  agent_name?: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface RouteSignal {
+  key: string;
+  label: string;
+  description: string;
+  source_stage: string;
+}
+
+export interface PriorityRule {
+  order: number;
+  when: string;
+  target_subgraph: string;
+  reason: string;
+  examples?: string[];
+  stop_on_match: boolean;
+}
+
+export interface DecisionCard {
+  key: string;
+  title: string;
+  target_subgraph: string;
+  reason: string;
+  priority_order: number;
+  matched_signals: string[];
+  summary: string;
+}
+
+export interface SubgraphOverview {
+  subgraph_key: string;
+  label: string;
+  summary: string;
+  entry_node: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  typical_scenarios?: string[];
+}
+
+export interface RoutingStrategyOverview {
+  route_mode: string;
+  default_target: string;
+  root_graph: GraphOverview;
+  signals: RouteSignal[];
+  priority_rules: PriorityRule[];
+  decision_cards: DecisionCard[];
+  subgraphs: SubgraphOverview[];
+  registered_route_count: number;
+  registered_intents: string[];
+}
