@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import AsyncIterator
 
@@ -14,9 +13,8 @@ from app.core.security import safe_decode_token
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
-from app.services.inspection_pipeline_service import run_inspection_pipeline
+from app.services.task_execution_service import launch_task_execution
 from app.services.stream_service import stream_broker
-from worker.tasks.inspection_task import run_inspection
 
 
 router = APIRouter()
@@ -46,20 +44,13 @@ async def run_task_pipeline(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """启动指定任务的 AI 检测流水线，优先投递到 Celery，失败时回退到本地后台执行。"""
+    """启动指定任务的 AI 检测流水线，按 worker 可用性选择执行模式。"""
     require_role("task", current.role)
     task = await TaskRepository(db).get(current.org_id, task_id)
     if not task:
         raise NotFoundError("task not found")
 
-    payload = {"task_id": task_id, "org_id": current.org_id}
-    try:
-        async_result = run_inspection.delay(payload)
-        data = {"mode": "celery", "job_id": async_result.id}
-    except Exception:
-        # Fallback for local dev when celery worker is not running.
-        asyncio.create_task(run_inspection_pipeline(task_id=task_id, org_id=current.org_id))
-        data = {"mode": "local_background", "job_id": None}
+    data = await launch_task_execution(task_id=task_id, org_id=current.org_id)
     return ResponseEnvelope(data=data)
 
 

@@ -33,6 +33,11 @@ export interface TaskRunResponse {
   job_id: string | null;
 }
 
+export interface TaskStatusResponse {
+  id: string;
+  status: TaskStatus;
+}
+
 export interface TaskStreamEvent {
   type: string;
   stage?: string;

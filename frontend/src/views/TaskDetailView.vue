@@ -15,6 +15,7 @@ const running = ref(false);
 const taskId = route.params.id as string;
 const timeline = ref<TaskStreamEvent[]>([]);
 let unsubscribe: (() => void) | null = null;
+let pollTimer: ReturnType<typeof window.setInterval> | null = null;
 
 const getStatusType = (status: string) => {
   const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
@@ -34,8 +35,40 @@ function pushEvent(event: TaskStreamEvent) {
   }
   if (event.status === "done" || event.status === "failed") {
     running.value = false;
+    stopStatusPolling();
     store.fetchTask(taskId);
   }
+}
+
+function stopStatusPolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function startStatusPolling() {
+  if (pollTimer !== null) {
+    return;
+  }
+  pollTimer = window.setInterval(async () => {
+    try {
+      const status = await store.fetchTaskStatus(taskId);
+      if (store.current) {
+        store.current.status = status.status;
+      }
+      if (status.status === "done" || status.status === "failed") {
+        pushEvent({
+          type: "status_poll",
+          status: status.status,
+          message: "通过状态轮询检测到任务结束",
+          ts: new Date().toISOString(),
+        });
+      }
+    } catch {
+      // Ignore transient polling failures and rely on the next interval tick.
+    }
+  }, 3000);
 }
 
 async function startPipeline() {
@@ -43,16 +76,22 @@ async function startPipeline() {
     running.value = true;
     const result = await store.runTask(taskId);
     pushEvent({ type: "run", message: `任务已提交 (${result.mode})`, ts: new Date().toISOString() });
+    startStatusPolling();
   } catch (err: any) {
     running.value = false;
+    stopStatusPolling();
     ElMessage.error(err?.response?.data?.message || "启动任务失败");
   }
 }
 
 onMounted(async () => {
   try {
-    await store.fetchTask(taskId);
+    const task = await store.fetchTask(taskId);
     unsubscribe = store.subscribeTaskStream(taskId, pushEvent);
+    if (task.status === "running") {
+      running.value = true;
+      startStatusPolling();
+    }
   } catch {
     ElMessage.error("获取任务详情失败");
   } finally {
@@ -65,6 +104,7 @@ onUnmounted(() => {
     unsubscribe();
     unsubscribe = null;
   }
+  stopStatusPolling();
 });
 
 function goBack() {
