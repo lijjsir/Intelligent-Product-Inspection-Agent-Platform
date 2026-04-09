@@ -17,6 +17,11 @@ services:
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
       PIAP_S3_ENDPOINT: http://minio:9000
       PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local-secret
+      PIAP_LANGFUSE_ENVIRONMENT: docker-local
     depends_on:
       mysql:
         condition: service_healthy
@@ -25,6 +30,8 @@ services:
       minio:
         condition: service_started
       qdrant:
+        condition: service_started
+      langfuse-web:
         condition: service_started
     ports:
       - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
@@ -47,6 +54,11 @@ services:
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
       PIAP_S3_ENDPOINT: http://minio:9000
       PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local-secret
+      PIAP_LANGFUSE_ENVIRONMENT: docker-local
     depends_on:
       mysql:
         condition: service_healthy
@@ -55,6 +67,8 @@ services:
       minio:
         condition: service_started
       qdrant:
+        condition: service_started
+      langfuse-web:
         condition: service_started
     volumes:
       - ./backend:/app/backend
@@ -69,7 +83,7 @@ services:
       MYSQL_USER: piap
       MYSQL_PASSWORD: piap
     ports:
-      - "127.0.0.1:13306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -122,7 +136,172 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    container_name: piap-langfuse-worker
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: http://127.0.0.1:${LANGFUSE_HOST_PORT:-3000}
+      DATABASE_URL: postgresql://postgres:postgres@langfuse-postgres:5432/postgres
+      SALT: 7d6648c6b31a4f709e11e39f3c3a2a38
+      ENCRYPTION_KEY: 2cf1beac8ae8c7a1c0aa7058ef8fa2a7a8658d08978d712104b6710926e83538
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_PREFIX: exports/
+      LANGFUSE_S3_BATCH_EXPORT_REGION: auto
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: http://127.0.0.1:${LANGFUSE_MINIO_API_PORT:-19090}
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: myredissecret
+      REDIS_TLS_ENABLED: "false"
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    container_name: piap-langfuse-web
+    restart: unless-stopped
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LANGFUSE_HOST_PORT:-3000}:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: 5b5bc79cc9e745d2984f41ad8b4c2824
+      LANGFUSE_INIT_ORG_ID: piap-local
+      LANGFUSE_INIT_ORG_NAME: PIAP Local
+      LANGFUSE_INIT_PROJECT_ID: piap-dev
+      LANGFUSE_INIT_PROJECT_NAME: PIAP Dev
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-piap-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-piap-local-secret
+      LANGFUSE_INIT_USER_EMAIL: admin@piap.local
+      LANGFUSE_INIT_USER_NAME: piap-admin
+      LANGFUSE_INIT_USER_PASSWORD: piap-admin-123
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    container_name: piap-langfuse-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    ports:
+      - "127.0.0.1:${LANGFUSE_CLICKHOUSE_HTTP_PORT:-18123}:8123"
+      - "127.0.0.1:${LANGFUSE_CLICKHOUSE_NATIVE_PORT:-19092}:9000"
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    container_name: piap-langfuse-minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    ports:
+      - "127.0.0.1:${LANGFUSE_MINIO_API_PORT:-19090}:9000"
+      - "127.0.0.1:${LANGFUSE_MINIO_CONSOLE_PORT:-19091}:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 2s
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    container_name: piap-langfuse-redis
+    restart: unless-stopped
+    command: >
+      --requirepass myredissecret
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:${LANGFUSE_REDIS_PORT:-16380}:6379"
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a myredissecret ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-postgres:
+    image: docker.io/postgres:17
+    container_name: piap-langfuse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:${LANGFUSE_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
 volumes:
   mysql_data:
   minio_data:
   qdrant_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:

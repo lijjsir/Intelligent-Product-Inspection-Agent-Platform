@@ -1,5 +1,12 @@
 import { http } from "./http";
-import type { InspectionTask, TaskCreate, TaskListQuery, TaskRunResponse, TaskStreamEvent } from "@/types/task.types";
+import type {
+  InspectionTask,
+  TaskCreate,
+  TaskListQuery,
+  TaskRunResponse,
+  TaskStatusResponse,
+  TaskStreamEvent,
+} from "@/types/task.types";
 import type { PagedResponse } from "@/types/common.types";
 
 const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
@@ -19,6 +26,10 @@ export const taskApi = {
 
   run(taskId: string) {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
+  },
+
+  getStatus(taskId: string) {
+    return http.get<TaskStatusResponse>(`/v1/tasks/${taskId}/status`);
   },
 
   stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): EventSource {

@@ -100,9 +100,9 @@ JWT_ALGORITHM=HS256
 
 # Langfuse
 LANGFUSE_ENABLED=true
-LANGFUSE_HOST=https://cloud.langfuse.com
-LANGFUSE_PUBLIC_KEY=pk-lf-xxx
-LANGFUSE_SECRET_KEY=sk-lf-xxx
+LANGFUSE_HOST=http://127.0.0.1:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-piap-local
+LANGFUSE_SECRET_KEY=sk-lf-piap-local-secret
 
 # 加密（API Key 存储）
 ENCRYPTION_KEY=base64-encoded-32-bytes

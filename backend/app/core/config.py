@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     jwt_exp_minutes: int = 15
     jwt_refresh_days: int = 7
 
-    db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
-    db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
+    db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
+    db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
 
     redis_url: str = "redis://localhost:16379/0"
     rate_limit_rpm_default: int = 60
@@ -51,11 +51,11 @@ class Settings(BaseSettings):
     cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
     langfuse_enabled: bool = False
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
+    langfuse_public_key: str = "pk-lf-810db81f-0a13-43f8-9d4e-66266d58f85f"
+    langfuse_secret_key: str = "sk-lf-0009d713-228b-4aec-8abc-739fa1a8605f"
     langfuse_host: str = "http://127.0.0.1:3000"
-    langfuse_environment: str = ""
-    langfuse_release: str = ""
+    langfuse_environment: str = "local"
+    langfuse_release: str = "backend-env"
 
 
 settings = Settings()

@@ -40,6 +40,11 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
+  async function fetchTaskStatus(id: string) {
+    const { data } = await taskApi.getStatus(id);
+    return data.data;
+  }
+
   function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
     const source = taskApi.stream(id, onMessage);
     return () => source.close();
@@ -61,6 +66,7 @@ export const useTaskStore = defineStore("task", () => {
     fetchTask,
     createTask,
     runTask,
+    fetchTaskStatus,
     subscribeTaskStream,
     $reset,
   };

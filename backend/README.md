@@ -32,11 +32,14 @@ python main.py
 - MinIO API：`http://127.0.0.1:19000`
 - MinIO Console：`http://127.0.0.1:19001`
 - Qdrant：`http://127.0.0.1:6333`
+- Langfuse Web：`http://127.0.0.1:3000`
+- Langfuse MinIO Console：`http://127.0.0.1:19091`
 
 说明：
 
 - 当前 Celery 默认 broker / result backend 使用 Redis
 - `backend/.env.example` 已对齐宿主机本地开发端口
+- Langfuse 默认改为本地自托管，初始化项目 key 与 `backend/.env.example` 保持一致
 - 任务表字段当前使用 `spec_code`，迁移需执行到 `0010_task_spec_id_to_spec_code`
 
 ## 迁移
