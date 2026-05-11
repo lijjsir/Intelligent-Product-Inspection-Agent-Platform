@@ -585,16 +585,14 @@ class AgentOpsService:
         }
         subgraphs: list[RoutingSubgraphDescriptor] = []
         scenario_map = {
-            "legacy_quality": [
+            "quality_judgement": [
                 "用户消息中出现创建任务、提交任务、task 等任务意图关键词",
                 "本轮请求携带图片附件，需要走旧任务流并自动回填任务表单图片",
-            ],
-            "llm_native_quality": [
                 "用户发送纯文本问答，不涉及创建任务",
                 "用户上传 txt、docx、xlsx、csv、json 等非图片文件，需要做结构化解析与质检",
             ],
         }
-        for key in ("legacy_quality", "llm_native_quality"):
+        for key in ("quality_judgement",):
             topology = get_topology(key, include_root=False)
             meta = subgraph_meta.get(key, {})
             entry_node = next(
@@ -650,22 +648,22 @@ class AgentOpsService:
             RoutingPriorityRule(
                 order=1,
                 when="命中 has_task_keyword",
-                target_subgraph="legacy_quality",
-                reason="Task creation intent detected; route to legacy task flow",
+                target_subgraph="quality_judgement",
+                reason="Task creation intent detected; route to quality judgement flow",
                 examples=["创建任务", "新建任务", "提交任务", "task"],
             ),
             RoutingPriorityRule(
                 order=2,
                 when="未命中任务意图且检测到 has_images",
-                target_subgraph="legacy_quality",
-                reason="Image attachment detected; route to legacy vision workflow",
+                target_subgraph="quality_judgement",
+                reason="Image attachment detected; route to quality vision workflow",
                 examples=["上传产品图片", "多张缺陷图片", "图片附件检测"],
             ),
             RoutingPriorityRule(
                 order=3,
                 when="前两条未命中，且检测到 has_file_attachments 或 request_kind=chat",
-                target_subgraph="llm_native_quality",
-                reason="Text or non-image file detected; route to LLM-native quality flow",
+                target_subgraph="quality_judgement",
+                reason="Text or non-image file detected; route to quality judgement flow",
                 examples=["文本问答", "txt/docx/xlsx/csv/json 文件", "非图片资料解析"],
             ),
         ]
@@ -674,29 +672,29 @@ class AgentOpsService:
             RoutingDecisionCard(
                 key="task-intent",
                 title="任务意图优先",
-                target_subgraph="legacy_quality",
+                target_subgraph="quality_judgement",
                 reason=priority_rules[0].reason,
                 priority_order=1,
                 matched_signals=["has_task_keyword"],
-                summary="一旦文本命中任务流关键词，直接进入 legacy_quality，后续图片/文件判断不再继续参与。",
+                summary="一旦文本命中任务流关键词，直接进入 quality_judgement，后续图片/文件判断不再继续参与。",
             ),
             RoutingDecisionCard(
                 key="image-first",
-                title="图片走旧智能体",
-                target_subgraph="legacy_quality",
+                title="图片走质量判定智能体",
+                target_subgraph="quality_judgement",
                 reason=priority_rules[1].reason,
                 priority_order=2,
                 matched_signals=["has_images"],
-                summary="图片输入需要兼容旧任务流与图片自动回填，因此在非任务关键词场景下优先进入 legacy_quality。",
+                summary="图片输入需要兼容任务流与图片自动回填，因此在非任务关键词场景下优先进入 quality_judgement。",
             ),
             RoutingDecisionCard(
                 key="text-file-native",
-                title="文本与非图片文件走新智能体",
-                target_subgraph="llm_native_quality",
+                title="文本与非图片文件走质量判定智能体",
+                target_subgraph="quality_judgement",
                 reason=priority_rules[2].reason,
                 priority_order=3,
                 matched_signals=["has_file_attachments", "request_kind"],
-                summary="纯文本或非图片文件会进入 llm_native_quality，执行文件解析、契约推断、RAG 与结构化质检流程。",
+                summary="纯文本或非图片文件会进入 quality_judgement，执行文件解析、契约推断、RAG 与结构化质检流程。",
             ),
         ]
 
@@ -705,13 +703,13 @@ class AgentOpsService:
 
         return RoutingStrategyOverviewResponse(
             route_mode=route_mode,
-            default_target="legacy_quality",
+            default_target="quality_judgement",
             root_graph=AgentTopologyResponse(
                 selected_subgraph="all",
                 nodes=root_nodes,
                 edges=root_edges,
-                intent_name="quality_root",
-                agent_name="QualityAgentRootGraph",
+                intent_name="memory_manager",
+                agent_name="MemoryManagerGraph",
             ),
             subgraphs=subgraphs,
             priority_rules=priority_rules,
@@ -961,12 +959,12 @@ class AgentOpsService:
         if not route:
             raise NotFoundError(f"Intent route {route_id} not found")
         agent_name = None
-        subgraph_key = "legacy_quality"
+        subgraph_key = "quality_judgement"
         if route.agent_id:
             agent = await self._agent_repo.get(str(route.agent_id))
             if agent:
                 agent_name = agent.name
-                subgraph_key = str(agent.subgraph_key or "legacy_quality")
+                subgraph_key = str(agent.subgraph_key or "quality_judgement")
         topology = get_route_topology(
             intent_name=route.intent_name,
             agent_name=agent_name,

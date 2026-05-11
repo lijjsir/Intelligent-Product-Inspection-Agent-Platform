@@ -55,8 +55,8 @@ class RouteSignals(BaseModel):
 
 class RouteDecision(BaseModel):
     mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "legacy_only"
-    selected_subgraph: Literal["legacy_quality", "llm_native_quality"] = "legacy_quality"
-    fallback_subgraph: Literal["legacy_quality", "llm_native_quality"] = "legacy_quality"
+    selected_subgraph: Literal["quality_judgement"] = "quality_judgement"
+    fallback_subgraph: Literal["quality_judgement"] = "quality_judgement"
     reason: str = ""
     signals: RouteSignals = Field(default_factory=RouteSignals)
 
@@ -121,7 +121,7 @@ class RagQueryLog(BaseModel):
     hit_rate: float = 0.0
     citation_coverage: float = 0.0
     latency_ms: float = 0.0
-    source_graph: str = "legacy_quality"
+    source_graph: str = "quality_judgement"
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
