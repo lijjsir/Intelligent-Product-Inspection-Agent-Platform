@@ -20,7 +20,7 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
-    role: str = "inspector"
+    role: str = "user"
 
 
 class UserResponse(BaseModel):
