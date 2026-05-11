@@ -4,13 +4,13 @@ from typing import Any
 
 from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
-from app.core.permissions import ROLE_ANALYST, normalize_role
+from app.core.permissions import ROLE_ALGORITHM_ENGINEER
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.services.base import TenantAwareService
 
 
-GLOBAL_SPEC_LEGACY_ROLES = {"platform_admin", "super_admin"}
-GLOBAL_SPEC_NORMALIZED_ROLES = {ROLE_ANALYST}
+GLOBAL_SPEC_LEGACY_ROLES: set[str] = set()
+GLOBAL_SPEC_NORMALIZED_ROLES = {ROLE_ALGORITHM_ENGINEER}
 
 
 class InspectionSpecService(TenantAwareService):
@@ -33,8 +33,7 @@ class InspectionSpecService(TenantAwareService):
     async def create_spec(self, payload: dict[str, Any], actor_role: str) -> dict[str, Any]:
         body = dict(payload)
         items = body.pop("items", [])
-        normalized_role = normalize_role(actor_role)
-        can_manage_global = self._can_manage_global_specs(actor_role, normalized_role)
+        can_manage_global = self._can_manage_global_specs(actor_role)
         target_org_id = self._resolve_target_org_id(body.pop("org_id", None), can_manage_global)
         body["id"] = str(uuid7())
         body["org_id"] = target_org_id
@@ -43,8 +42,7 @@ class InspectionSpecService(TenantAwareService):
         return self._serialize_spec(spec, await self._repo.list_items(spec.id))
 
     async def update_spec(self, inspection_spec_row_id: str, payload: dict[str, Any], actor_role: str) -> dict[str, Any]:
-        normalized_role = normalize_role(actor_role)
-        can_manage_global = self._can_manage_global_specs(actor_role, normalized_role)
+        can_manage_global = self._can_manage_global_specs(actor_role)
         spec = await self._get_writable_spec(inspection_spec_row_id, can_manage_global)
         body = dict(payload)
         items = body.pop("items", None)
@@ -57,8 +55,7 @@ class InspectionSpecService(TenantAwareService):
         return self._serialize_spec(spec, await self._repo.list_items(spec.id))
 
     async def delete_spec(self, inspection_spec_row_id: str, actor_role: str) -> None:
-        normalized_role = normalize_role(actor_role)
-        can_manage_global = self._can_manage_global_specs(actor_role, normalized_role)
+        can_manage_global = self._can_manage_global_specs(actor_role)
         spec = await self._get_writable_spec(inspection_spec_row_id, can_manage_global)
         await self._repo.delete_spec(spec)
 
@@ -81,8 +78,8 @@ class InspectionSpecService(TenantAwareService):
         return self._org_id
 
     @staticmethod
-    def _can_manage_global_specs(actor_role: str, normalized_role: str) -> bool:
-        return actor_role in GLOBAL_SPEC_LEGACY_ROLES or normalized_role in GLOBAL_SPEC_NORMALIZED_ROLES
+    def _can_manage_global_specs(actor_role: str) -> bool:
+        return actor_role in GLOBAL_SPEC_NORMALIZED_ROLES
 
     @staticmethod
     def _build_item_payload(spec_row_id: str, payload: dict[str, Any]) -> dict[str, Any]:

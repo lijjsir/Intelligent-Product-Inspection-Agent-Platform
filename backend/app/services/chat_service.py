@@ -9,7 +9,7 @@ from fastapi import Header, Query
 
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.core.ids import uuid7
-from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role, require_role
+from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER, require_role
 from app.core.security import create_stream_token, safe_decode_token
 from app.repositories.chat_repo import ChatMessageRepository, ChatOpsRepository, ChatSessionRepository
 from app.repositories.task_repo import TaskRepository
@@ -117,9 +117,8 @@ class ChatService:
                     raise NotFoundError("chat session not found")
             else:
                 task_repo = TaskRepository(session)
-                normalized_role = normalize_role(self._current.role)
-                owner_user_id = self._user_id if normalized_role == ROLE_USER else None
-                org_scope = None if normalized_role == ROLE_ADMIN else self._org_id
+                owner_user_id = self._user_id if self._current.role in (ROLE_USER, ROLE_EXPERT) else None
+                org_scope = None if self._current.role == ROLE_ADMIN else self._org_id
                 if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
         expires_at = datetime.utcnow() + timedelta(minutes=10)

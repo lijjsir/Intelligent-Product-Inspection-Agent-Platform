@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
-from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role
+from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER
 from app.models.task import InspectionTask
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.repositories.organization_repo import OrganizationRepository
@@ -21,7 +21,7 @@ class TaskService:
         self._session = session
         self._org_id = org_id
         self._actor_user_id = actor_user_id
-        self._actor_role = normalize_role(actor_role or "")
+        self._actor_role = actor_role or ""
         self._repo = TaskRepository(session)
         self._spec_repo = InspectionSpecRepository(session)
         self._org_repo = OrganizationRepository(session)
@@ -108,7 +108,7 @@ class TaskService:
 
     @property
     def _owner_user_id(self) -> str | None:
-        if self._actor_role == ROLE_USER:
+        if self._actor_role in (ROLE_USER, ROLE_EXPERT):
             return self._actor_user_id
         return None
 
