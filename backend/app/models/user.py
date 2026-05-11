@@ -12,7 +12,7 @@ class User(Base, TimestampMixin):
     username: Mapped[str] = mapped_column(String(64))
     email: Mapped[str] = mapped_column(String(256))
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    role: Mapped[str] = mapped_column(String(32), default="inspector")
+    role: Mapped[str] = mapped_column(String(32), default="user")
     mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     sso_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
