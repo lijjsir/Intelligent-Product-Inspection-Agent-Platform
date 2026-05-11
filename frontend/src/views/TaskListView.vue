@@ -39,7 +39,7 @@ const createForm = ref({
 
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
 const isAdmin = computed(() => hasRole("admin"));
-const canCreateTask = computed(() => hasRole(["user", "inspector"]));
+const canCreateTask = computed(() => hasRole(["user"]));
 
 const rules: FormRules = {
   product_id: [
@@ -234,19 +234,19 @@ watch(
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="header">
+  <div class="flex flex-col gap-5">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
-        <h2 class="title">任务管理</h2>
-        <p class="subtitle">这里展示所有真实物化后的检测任务。聊天终态、聊天提交和手动创建都会进入同一任务主表。</p>
+        <h2 class="text-2xl font-bold text-zinc-900">任务管理</h2>
+        <p class="mt-2 text-sm text-zinc-500">这里展示所有真实物化后的检测任务。聊天终态、聊天提交和手动创建都会进入同一任务主表。</p>
       </div>
       <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
     </div>
 
-    <el-card class="mb-4" shadow="never">
-      <el-form :model="filters" inline class="filter-form">
+    <div class="card-surface p-4">
+      <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
         <el-form-item label="任务状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
+          <el-select v-model="filters.status" placeholder="全部状态" clearable class="!w-[160px]" size="small">
             <el-option label="待执行" value="pending" />
             <el-option label="执行中" value="running" />
             <el-option label="已完成" value="done" />
@@ -254,27 +254,27 @@ watch(
           </el-select>
         </el-form-item>
         <el-form-item label="产品编号">
-          <el-input v-model="filters.product_id" placeholder="输入产品编号" clearable @keyup.enter="handleSearch" />
+          <el-input v-model="filters.product_id" placeholder="输入产品编号" clearable size="small" @keyup.enter="handleSearch" />
         </el-form-item>
         <el-form-item v-if="filters.ids" label="任务集合">
-          <el-input v-model="filters.ids" readonly />
+          <el-input v-model="filters.ids" readonly size="small" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">查询</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button type="primary" size="small" @click="handleSearch">查询</el-button>
+          <el-button size="small" @click="handleReset">重置</el-button>
         </el-form-item>
       </el-form>
-    </el-card>
+    </div>
 
-    <el-card shadow="never">
-      <el-table :data="taskStore.items" v-loading="taskStore.loading" border stripe>
+    <div class="card-surface">
+      <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
         <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
         <el-table-column prop="product_id" label="产品编号" width="150" />
         <el-table-column prop="spec_code" label="检测标准" width="180" />
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)">{{ row.status.toUpperCase() }}</el-tag>
+            <el-tag :type="getStatusType(row.status)" size="small">{{ row.status.toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="source_kind" label="来源" width="160" />
@@ -287,10 +287,11 @@ watch(
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
+            <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
             <el-button
               link
               type="danger"
+              size="small"
               :loading="deletingTaskId === row.id"
               @click="handleDeleteTask(row.id)"
             >
@@ -300,18 +301,19 @@ watch(
         </el-table-column>
       </el-table>
 
-      <div class="pagination-wrapper">
+      <div class="flex justify-end p-4">
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
           :total="total"
+          small
           @size-change="handleSizeChange"
           @current-change="handleCurrentChange"
         />
       </div>
-    </el-card>
+    </div>
 
     <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
       <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
@@ -319,7 +321,7 @@ watch(
           <el-input v-model="createForm.product_id" placeholder="例如：P-1001" />
         </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" style="width: 100%">
+          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full">
             <el-option
               v-for="spec in activeSpecOptions"
               :key="spec.id"
@@ -347,18 +349,18 @@ watch(
             @change="handleUploadChange"
             @remove="handleUploadRemove"
           >
-            <el-button type="primary" plain>选择本地图片</el-button>
+            <el-button type="primary" plain size="small">选择本地图片</el-button>
             <template #tip>
               <div class="el-upload__tip">支持 JPG/PNG/WebP，最多 5 张。</div>
             </template>
           </el-upload>
         </el-form-item>
         <el-form-item label="优先级">
-          <el-input-number v-model="createForm.priority" :min="1" :max="10" />
+          <el-input-number v-model="createForm.priority" :min="1" :max="10" size="small" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <div class="dialog-footer">
+        <div class="flex justify-end gap-2">
           <el-button @click="showCreateDialog = false">取消</el-button>
           <el-button type="primary" :loading="creating" @click="handleSubmitCreate">确认创建</el-button>
         </div>
@@ -373,9 +375,9 @@ watch(
       destroy-on-close
       :close-on-click-modal="false"
     >
-      <div class="delete-dialog-copy">删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？</div>
+      <p class="leading-relaxed text-zinc-700">删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？</p>
       <template #footer>
-        <div class="dialog-footer">
+        <div class="flex justify-end gap-2">
           <el-button @click="cancelDeleteTask">取消</el-button>
           <el-button type="danger" :loading="Boolean(deletingTaskId)" @click="confirmDeleteTask">删除</el-button>
         </div>
@@ -385,56 +387,10 @@ watch(
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
+.list-table :deep(.el-table__header th) {
+  @apply text-zinc-500 font-medium text-[13px] bg-zinc-50;
 }
-
-.header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.title {
-  margin: 0 0 8px;
-  font-size: 24px;
-  color: #111827;
-}
-
-.subtitle {
-  margin: 0;
-  font-size: 14px;
-  color: #6b7280;
-}
-
-.filter-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-}
-
-.mb-4 {
-  margin-bottom: 16px;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.delete-dialog-copy {
-  line-height: 1.8;
-  color: #374151;
+.list-table :deep(.el-table__body tr:hover > td) {
+  @apply bg-zinc-50;
 }
 </style>
