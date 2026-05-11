@@ -3,7 +3,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
-import { ROLE_ADMIN, ROLE_USER, normalizeRole } from "@/constants/roles";
+import { ROLE_ADMIN } from "@/constants/roles";
 
 const routes = [
   {
@@ -77,37 +77,21 @@ router.beforeEach((to) => {
     return { path: "/login" };
   }
 
-  const primaryRole = normalizeRole(auth.primaryRole);
-  const userAllowedPrefixes = [
-    "/app/chat",
-    "/app/rag-spaces",
-    "/app/tasks",
-    "/app/results",
-    "/app/stability",
-    "/app/feedbacks",
-    "/app/profile",
-  ];
-  if (auth.isAuthed && primaryRole === ROLE_USER && !userAllowedPrefixes.some((prefix) => to.path.startsWith(prefix))) {
-    return { path: "/app/chat" };
-  }
-
-  const roles = to.meta.roles as string[] | undefined;
-  const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-  const normalizedRoles = currentRoles.map(normalizeRole);
-  if (roles) {
-    const normalizedRequiredRoles = roles.map(normalizeRole);
-    const hasMatchedRole = normalizedRequiredRoles.some((role) => normalizedRoles.includes(role));
-    const isUserOnlyRoute = normalizedRequiredRoles.includes(ROLE_USER);
-    if (isUserOnlyRoute && !hasMatchedRole) {
-      return { path: "/app/dashboard" };
-    }
-    if (!isUserOnlyRoute && !normalizedRoles.includes(ROLE_ADMIN) && !hasMatchedRole) {
-      return { path: "/app/dashboard" };
-    }
-  }
+  // Redirect authenticated users away from auth pages
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
     return { path: auth.resolveDefaultRoute() };
   }
+
+  // Check route meta role restrictions
+  const routeRoles = to.meta.roles as string[] | undefined;
+  if (routeRoles && routeRoles.length) {
+    const currentRoles = auth.roles.length ? auth.roles : [auth.role];
+    const hasAccess = currentRoles.includes(ROLE_ADMIN) || routeRoles.some((r) => currentRoles.includes(r));
+    if (!hasAccess) {
+      return { path: auth.resolveDefaultRoute() };
+    }
+  }
+
   return true;
 });
 
