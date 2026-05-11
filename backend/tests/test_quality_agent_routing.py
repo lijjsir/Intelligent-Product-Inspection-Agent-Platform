@@ -1,7 +1,7 @@
 import pytest
 
 from agent.contracts import RouteSignals
-from agent.graphs.quality_root.policy import select_subgraph
+from agent.graphs.memory_manager.policy import select_subgraph
 from app.core.config import settings
 
 
@@ -14,7 +14,7 @@ def test_select_subgraph_prefers_legacy_for_task_keywords(monkeypatch):
             attachment_types=["txt"],
         )
     )
-    assert decision.selected_subgraph == "legacy_quality"
+    assert decision.selected_subgraph == "quality_judgement"
 
 
 def test_select_subgraph_routes_non_image_files_to_native(monkeypatch):
@@ -27,7 +27,7 @@ def test_select_subgraph_routes_non_image_files_to_native(monkeypatch):
             attachment_types=["txt"],
         )
     )
-    assert decision.selected_subgraph == "llm_native_quality"
+    assert decision.selected_subgraph == "quality_judgement"
 
 
 def test_select_subgraph_routes_images_to_legacy(monkeypatch):
@@ -38,4 +38,4 @@ def test_select_subgraph_routes_images_to_legacy(monkeypatch):
             attachment_types=["image"],
         )
     )
-    assert decision.selected_subgraph == "legacy_quality"
+    assert decision.selected_subgraph == "quality_judgement"
