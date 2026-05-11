@@ -22,6 +22,7 @@ frontend/node_modules/.vite/
 .coverage
 coverage/
 htmlcov/
+.worktrees/
 
 # OS / editor
 .DS_Store
