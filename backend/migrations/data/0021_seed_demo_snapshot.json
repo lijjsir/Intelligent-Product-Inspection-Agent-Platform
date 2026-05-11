@@ -269,6 +269,50 @@
         "aggregation_rules": null,
         "ai_gate_rules": null,
         "manual_review_policies": null
+      },
+      {
+        "id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "org_id": null,
+        "spec_code": "ELEC-RAG-BASE-V1",
+        "name": "Electronics structured inspection baseline",
+        "version": "2026.1",
+        "product_id": "electronics",
+        "required_image_count": 1,
+        "ai_gate_confidence_threshold": "0.7200",
+        "ai_gate_evidence_threshold": "0.5000",
+        "ai_gate_traceability_threshold": "0.5000",
+        "auto_pass_enabled": 0,
+        "is_active": 1,
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null,
+        "product_family": "electronics",
+        "applicable_skus": [
+          "electronics"
+        ],
+        "required_views": [
+          "marking",
+          "safety",
+          "documents"
+        ],
+        "effective_from": null,
+        "effective_to": null,
+        "aggregation_rules": {
+          "overall": "fail_if_any_critical_else_manual_when_unmapped",
+          "max_minor_count": 2
+        },
+        "ai_gate_rules": {
+          "evidence": 0.5,
+          "confidence": 0.72,
+          "faithfulness": 0.85,
+          "traceability": 0.5,
+          "physical_hallucination": 0.2
+        },
+        "manual_review_policies": {
+          "low_evidence": "manual_required",
+          "unmapped_defect": "manual_required",
+          "missing_required_views": "manual_required"
+        }
       }
     ],
     "inspection_spec_items": [
@@ -495,6 +539,300 @@
         "created_at": "2026-04-01T03:39:53.724000",
         "updated_at": "2026-04-01T03:39:53.724000",
         "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c701",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.marking.rated_output_marked",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "marking",
+        "max_count": 1,
+        "description": "Rated output marking is required for electronics products.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c702",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.marking.manufacturer_address_marked",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "marking",
+        "max_count": 1,
+        "description": "Manufacturer address marking is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c703",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.marking.warning_marked",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "marking",
+        "max_count": 1,
+        "description": "Safety warning marking is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c704",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.structure.socket_shutter_present",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "structure",
+        "max_count": 1,
+        "description": "Socket shutter protection is mandatory for this baseline.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c705",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.structure.sharp_edge",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "structure",
+        "max_count": 1,
+        "description": "Sharp enclosure edges directly fail the inspection.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c706",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.structure.fire_enclosure_material_grade",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "structure",
+        "max_count": 1,
+        "description": "Fire enclosure material grade must meet the baseline requirement.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c707",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.safety.ground_continuity_ohm",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7500",
+        "zone_name": "safety",
+        "max_count": 1,
+        "description": "Ground continuity resistance exceeds the allowed threshold.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c708",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.safety.electric_strength_kv",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7500",
+        "zone_name": "safety",
+        "max_count": 1,
+        "description": "Electric strength must meet the baseline withstand requirement.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c709",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.safety.temperature_rise_max_c",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7500",
+        "zone_name": "safety",
+        "max_count": 1,
+        "description": "Temperature rise exceeds the allowed baseline.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c710",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.safety.creepage_distance_mm",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7500",
+        "zone_name": "safety",
+        "max_count": 1,
+        "description": "Creepage distance is below the baseline requirement.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c711",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.safety.clearance_mm",
+        "severity": "critical",
+        "disposition": "fail",
+        "confidence_threshold": "0.7500",
+        "zone_name": "safety",
+        "max_count": 1,
+        "description": "Clearance distance is below the baseline requirement.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c712",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.emc.conducted_emission",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "emc",
+        "max_count": 1,
+        "description": "Conducted emission must pass.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c713",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.emc.radiated_emission",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "emc",
+        "max_count": 1,
+        "description": "Radiated emission must pass.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c714",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.emc.esd_immunity",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "emc",
+        "max_count": 1,
+        "description": "ESD immunity must pass without function loss.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c715",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.emc.surge_immunity",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "emc",
+        "max_count": 1,
+        "description": "Surge immunity must pass.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c716",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.emc.eft_immunity",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "emc",
+        "max_count": 1,
+        "description": "EFT immunity must pass.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c717",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.documents.inspection_report",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "documents",
+        "max_count": 1,
+        "description": "Inspection report is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c718",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.documents.certificate_file",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "documents",
+        "max_count": 1,
+        "description": "Certificate file is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c719",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.documents.traceability_code",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "documents",
+        "max_count": 1,
+        "description": "Traceability code is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c720",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.documents.ccc_file",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "documents",
+        "max_count": 1,
+        "description": "CCC file is required.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
+      },
+      {
+        "id": "2ae7d4f1-0a85-44f8-8a0c-85051df5c721",
+        "spec_row_id": "5fb833bd-9b6c-4d70-b5ec-d7bbf4d8d701",
+        "defect_type": "electronics.functional.usb_output_voltage_v",
+        "severity": "major",
+        "disposition": "fail",
+        "confidence_threshold": "0.7000",
+        "zone_name": "functional",
+        "max_count": 1,
+        "description": "USB output voltage must remain within the baseline range.",
+        "created_at": "2026-04-08T13:00:00.000000",
+        "updated_at": "2026-04-08T13:00:00.000000",
+        "deleted_at": null
       }
     ],
     "rag_spaces": [
@@ -559,8 +897,8 @@
       {
         "id": "019d5c7d-3562-71db-a376-7a3236832915",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "name": "legacy_quality.knowledge",
-        "content": "[system-generated dspy artifact]\ntarget=legacy_quality.knowledge\nartifact_version=legacy_quality-knowledge-v1\nmodule_name=LegacyKnowledgeRouter\noptimizer_strategy=bootstrap-fewshot\noptimization_goal=Improve retrieval and grounding decisions before the legacy reasoning phase.\nmetric_names=faithfulness,traceability,physical_hallucination\nconfig_payload={}\n\ninstruction:\nApply the compiled DSPy strategy for `legacy_quality.knowledge`. Prioritize the optimization goal `Improve retrieval and grounding decisions before the legacy reasoning phase.` and optimize for metrics faithfulness, traceability, physical_hallucination.",
+        "name": "quality_judgement.knowledge",
+        "content": "[system-generated dspy artifact]\ntarget=legacy_quality.knowledge\nartifact_version=quality_judgement-knowledge-v1\nmodule_name=LegacyKnowledgeRouter\noptimizer_strategy=bootstrap-fewshot\noptimization_goal=Improve retrieval and grounding decisions before the legacy reasoning phase.\nmetric_names=faithfulness,traceability,physical_hallucination\nconfig_payload={}\n\ninstruction:\nApply the compiled DSPy strategy for `legacy_quality.knowledge`. Prioritize the optimization goal `Improve retrieval and grounding decisions before the legacy reasoning phase.` and optimize for metrics faithfulness, traceability, physical_hallucination.",
         "version": 1,
         "status": "approved",
         "created_by": "40959c3e-b538-40ae-9a35-a79dfc1c627a",
@@ -571,8 +909,8 @@
       {
         "id": "019d5c7c-a67d-7129-b342-6dc74741f3d2",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "name": "legacy_quality.planner",
-        "content": "[system-generated dspy artifact]\ntarget=legacy_quality.planner\nartifact_version=legacy_quality-planner-v1\nmodule_name=LegacyQualityPlanner\noptimizer_strategy=bootstrap-fewshot\noptimization_goal=Improve task planning clarity and reduce ambiguous branching in legacy quality conversations.\nmetric_names=faithfulness,traceability,pass_rate\nconfig_payload={}\n\ninstruction:\nApply the compiled DSPy strategy for `legacy_quality.planner`. Prioritize the optimization goal `Improve task planning clarity and reduce ambiguous branching in legacy quality conversations.` and optimize for metrics faithfulness, traceability, pass_rate.",
+        "name": "quality_judgement.planner",
+        "content": "[system-generated dspy artifact]\ntarget=legacy_quality.planner\nartifact_version=quality_judgement-planner-v1\nmodule_name=LegacyQualityPlanner\noptimizer_strategy=bootstrap-fewshot\noptimization_goal=Improve task planning clarity and reduce ambiguous branching in legacy quality conversations.\nmetric_names=faithfulness,traceability,pass_rate\nconfig_payload={}\n\ninstruction:\nApply the compiled DSPy strategy for `legacy_quality.planner`. Prioritize the optimization goal `Improve task planning clarity and reduce ambiguous branching in legacy quality conversations.` and optimize for metrics faithfulness, traceability, pass_rate.",
         "version": 1,
         "status": "approved",
         "created_by": "40959c3e-b538-40ae-9a35-a79dfc1c627a",
@@ -586,8 +924,8 @@
       {
         "id": "019d5c5e-98a4-74ed-945a-03a9be977219",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.knowledge",
-        "subgraph_key": "legacy_quality",
+        "target_key": "quality_judgement.knowledge",
+        "subgraph_key": "quality_judgement",
         "node_id": "knowledge",
         "node_label": "Knowledge",
         "module_name": "LegacyKnowledgeRouter",
@@ -603,7 +941,7 @@
         "is_enabled": 1,
         "is_active_target": 1,
         "supports_compile": 1,
-        "current_artifact_version": "legacy_quality-knowledge-v1",
+        "current_artifact_version": "quality_judgement-knowledge-v1",
         "current_prompt_version_id": "019d5c7d-3562-71db-a376-7a3236832915",
         "previous_artifact_version": null,
         "previous_prompt_version_id": null,
@@ -624,8 +962,8 @@
       {
         "id": "019d5c5e-988c-7463-8088-f0e21e43f8fe",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.planner",
-        "subgraph_key": "legacy_quality",
+        "target_key": "quality_judgement.planner",
+        "subgraph_key": "quality_judgement",
         "node_id": "planner",
         "node_label": "Planner",
         "module_name": "LegacyQualityPlanner",
@@ -641,7 +979,7 @@
         "is_enabled": 1,
         "is_active_target": 1,
         "supports_compile": 1,
-        "current_artifact_version": "legacy_quality-planner-v1",
+        "current_artifact_version": "quality_judgement-planner-v1",
         "current_prompt_version_id": "019d5c7c-a67d-7129-b342-6dc74741f3d2",
         "previous_artifact_version": null,
         "previous_prompt_version_id": null,
@@ -662,8 +1000,8 @@
       {
         "id": "019d5c5e-98ab-7977-ace7-325c532accc6",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.reasoning",
-        "subgraph_key": "legacy_quality",
+        "target_key": "quality_judgement.reasoning",
+        "subgraph_key": "quality_judgement",
         "node_id": "reasoning",
         "node_label": "Reasoning",
         "module_name": "LegacyReasoningCore",
@@ -697,8 +1035,8 @@
       {
         "id": "019d5c5e-98b2-71d8-858b-ee9903c7979d",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.response_writer",
-        "subgraph_key": "legacy_quality",
+        "target_key": "quality_judgement.response_writer",
+        "subgraph_key": "quality_judgement",
         "node_id": "response_writer",
         "node_label": "Response Writer",
         "module_name": "LegacyResponseWriter",
@@ -730,8 +1068,8 @@
       {
         "id": "019d5c5e-989a-7983-8125-3b8042943f55",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.task_extractor",
-        "subgraph_key": "legacy_quality",
+        "target_key": "quality_judgement.task_extractor",
+        "subgraph_key": "quality_judgement",
         "node_id": "task_extractor",
         "node_label": "Task Extractor",
         "module_name": "LegacyTaskExtractor",
@@ -764,8 +1102,8 @@
       {
         "id": "019d5c5e-98b9-7190-b01c-0c5c2276d30f",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "llm_native_quality.contract_inferencer_dspy",
-        "subgraph_key": "llm_native_quality",
+        "target_key": "quality_judgement.contract_inferencer_dspy",
+        "subgraph_key": "quality_judgement",
         "node_id": "contract_inferencer_dspy",
         "node_label": "Contract Inferencer",
         "module_name": "QualityContractInferencer",
@@ -798,8 +1136,8 @@
       {
         "id": "019d5c5e-98cc-7a6d-b840-8f12c9ee2edb",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "llm_native_quality.evidence_synthesizer",
-        "subgraph_key": "llm_native_quality",
+        "target_key": "quality_judgement.evidence_synthesizer",
+        "subgraph_key": "quality_judgement",
         "node_id": "evidence_synthesizer",
         "node_label": "Evidence Synthesizer",
         "module_name": "EvidenceSynthesizer",
@@ -833,8 +1171,8 @@
       {
         "id": "019d5c5e-98c5-7d07-819c-ca97954d6c0d",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "llm_native_quality.knowledge_router",
-        "subgraph_key": "llm_native_quality",
+        "target_key": "quality_judgement.knowledge_router",
+        "subgraph_key": "quality_judgement",
         "node_id": "knowledge_router",
         "node_label": "Knowledge Router",
         "module_name": "NativeKnowledgeRouter",
@@ -867,8 +1205,8 @@
       {
         "id": "019d5c5e-98bf-7ec5-9b33-3326e096e9c6",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "llm_native_quality.planner",
-        "subgraph_key": "llm_native_quality",
+        "target_key": "quality_judgement.planner",
+        "subgraph_key": "quality_judgement",
         "node_id": "planner",
         "node_label": "Planner",
         "module_name": "NativeQualityPlanner",
@@ -901,8 +1239,8 @@
       {
         "id": "019d5c5e-98d0-76d0-b3e8-a21223feec89",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "llm_native_quality.review_gate",
-        "subgraph_key": "llm_native_quality",
+        "target_key": "quality_judgement.review_gate",
+        "subgraph_key": "quality_judgement",
         "node_id": "review_gate",
         "node_label": "Review Gate",
         "module_name": "NativeReviewGate",
@@ -938,11 +1276,11 @@
       {
         "id": "019d5c7d-3510-7678-886a-e16c3878fd30",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.knowledge",
+        "target_key": "quality_judgement.knowledge",
         "run_type": "compile",
         "status": "completed",
         "compiler_version": null,
-        "artifact_version": "legacy_quality-knowledge-v1",
+        "artifact_version": "quality_judgement-knowledge-v1",
         "prompt_version_id": "019d5c7d-3562-71db-a376-7a3236832915",
         "metrics_snapshot": {
           "faithfulness": 0.93,
@@ -968,11 +1306,11 @@
       {
         "id": "019d5c7c-a624-71eb-afd8-2269822a6757",
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
-        "target_key": "legacy_quality.planner",
+        "target_key": "quality_judgement.planner",
         "run_type": "compile",
         "status": "completed",
         "compiler_version": null,
-        "artifact_version": "legacy_quality-planner-v1",
+        "artifact_version": "quality_judgement-planner-v1",
         "prompt_version_id": "019d5c7c-a67d-7129-b342-6dc74741f3d2",
         "metrics_snapshot": {
           "pass_rate": 0.83,
@@ -1010,7 +1348,7 @@
         "updated_at": "2026-04-05T04:47:11.437000",
         "deleted_at": null,
         "current_version": 1,
-        "subgraph_key": "legacy_quality",
+        "subgraph_key": "quality_judgement",
         "entry_graph": "QualityAgentRootGraph",
         "supports_start_stop": 1,
         "graph_version": "v1"
@@ -1021,14 +1359,14 @@
         "name": "LLM-native Quality",
         "description": "LLM-native file and text driven quality workflow.",
         "prompt_version_id": null,
-        "workflow_binding": "llm_native_quality_v1",
+        "workflow_binding": "quality_judgement_v2",
         "intent_config_id": null,
         "is_active": 1,
         "created_at": "2026-04-05T04:47:11.465000",
         "updated_at": "2026-04-05T04:47:11.465000",
         "deleted_at": null,
         "current_version": 1,
-        "subgraph_key": "llm_native_quality",
+        "subgraph_key": "quality_judgement",
         "entry_graph": "QualityAgentRootGraph",
         "supports_start_stop": 1,
         "graph_version": "v1"
@@ -1039,14 +1377,14 @@
         "name": "LLM-native Quality",
         "description": "LLM-native file and text driven quality workflow.",
         "prompt_version_id": null,
-        "workflow_binding": "llm_native_quality_v1",
+        "workflow_binding": "quality_judgement_v2",
         "intent_config_id": null,
         "is_active": 1,
         "created_at": "2026-04-05T09:30:23.652000",
         "updated_at": "2026-04-05T09:30:23.652000",
         "deleted_at": null,
         "current_version": 1,
-        "subgraph_key": "llm_native_quality",
+        "subgraph_key": "quality_judgement",
         "entry_graph": "QualityAgentRootGraph",
         "supports_start_stop": 1,
         "graph_version": "v1"
@@ -1064,7 +1402,7 @@
         "updated_at": "2026-04-04T18:32:10.014000",
         "deleted_at": null,
         "current_version": 1,
-        "subgraph_key": "legacy_quality",
+        "subgraph_key": "quality_judgement",
         "entry_graph": "QualityAgentRootGraph",
         "supports_start_stop": 1,
         "graph_version": "v1"
@@ -1076,7 +1414,7 @@
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
         "agent_id": "019d5bf7-5e4d-77b1-8caa-bf1059dd8463",
         "runtime_key": "Legacy Quality:legacy_quality",
-        "subgraph_key": "legacy_quality",
+        "subgraph_key": "quality_judgement",
         "status": "running",
         "supports_start_stop": 1,
         "metadata_json": {
@@ -1094,7 +1432,7 @@
         "org_id": "88f65310-fb78-4ebf-b371-2394a9e6ca59",
         "agent_id": "019d5bf7-5e69-723a-88b0-d9ed2d7667e4",
         "runtime_key": "LLM-native Quality:llm_native_quality",
-        "subgraph_key": "llm_native_quality",
+        "subgraph_key": "quality_judgement",
         "status": "running",
         "supports_start_stop": 1,
         "metadata_json": {
@@ -1112,7 +1450,7 @@
         "org_id": "eda60984-bb05-4388-b239-94546a3c745c",
         "agent_id": "019d5cfa-a64f-7c62-ae85-9827bff701aa",
         "runtime_key": "LLM-native Quality:llm_native_quality",
-        "subgraph_key": "llm_native_quality",
+        "subgraph_key": "quality_judgement",
         "status": "running",
         "supports_start_stop": 1,
         "metadata_json": {
@@ -1413,7 +1751,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -1524,7 +1862,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -1542,7 +1880,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -1569,7 +1907,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -1585,8 +1923,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -1602,7 +1940,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -1822,7 +2160,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -1942,7 +2280,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -1960,7 +2298,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -1993,7 +2331,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -2009,8 +2347,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -2026,7 +2364,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -2255,7 +2593,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -2371,7 +2709,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -2389,7 +2727,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -2418,7 +2756,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -2434,8 +2772,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -2451,7 +2789,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -2633,7 +2971,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -2742,7 +3080,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -2758,7 +3096,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -2785,7 +3123,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -2801,8 +3139,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -2814,7 +3152,7 @@
           "selected_rag_space": null,
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -2996,7 +3334,7 @@
             "image_urls"
           ],
           "pending_action": null,
-          "prompt_version": "llm_native_quality_v1",
+          "prompt_version": "quality_judgement_v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -3010,8 +3348,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -3090,7 +3428,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -3199,7 +3537,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -3215,7 +3553,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -3242,7 +3580,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -3258,8 +3596,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -3271,7 +3609,7 @@
           "selected_rag_space": null,
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -3453,7 +3791,7 @@
             "image_urls"
           ],
           "pending_action": null,
-          "prompt_version": "llm_native_quality_v1",
+          "prompt_version": "quality_judgement_v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -3467,8 +3805,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -3547,7 +3885,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -3656,7 +3994,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -3672,7 +4010,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -3699,7 +4037,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -3715,8 +4053,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -3728,7 +4066,7 @@
           "selected_rag_space": null,
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -3910,7 +4248,7 @@
             "image_urls"
           ],
           "pending_action": null,
-          "prompt_version": "llm_native_quality_v1",
+          "prompt_version": "quality_judgement_v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -3924,8 +4262,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -4043,7 +4381,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -4154,7 +4492,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -4172,7 +4510,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -4199,7 +4537,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -4215,8 +4553,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -4232,7 +4570,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -4421,7 +4759,7 @@
             "image_urls"
           ],
           "pending_action": null,
-          "prompt_version": "llm_native_quality_v1",
+          "prompt_version": "quality_judgement_v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -4435,8 +4773,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -4558,7 +4896,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -4669,7 +5007,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -4687,7 +5025,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -4714,7 +5052,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -4730,8 +5068,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -4747,7 +5085,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -4936,7 +5274,7 @@
             "image_urls"
           ],
           "pending_action": null,
-          "prompt_version": "llm_native_quality_v1",
+          "prompt_version": "quality_judgement_v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -4950,8 +5288,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -5038,7 +5376,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -5147,7 +5485,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -5163,7 +5501,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -5190,7 +5528,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -5206,8 +5544,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -5222,7 +5560,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -5399,7 +5737,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -5508,7 +5846,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -5524,7 +5862,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -5551,7 +5889,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -5567,8 +5905,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -5580,7 +5918,7 @@
           "selected_rag_space": null,
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -5757,7 +6095,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -5866,7 +6204,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -5882,7 +6220,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -5909,7 +6247,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -5925,8 +6263,8 @@
               "selected_rag_space_id": null,
               "needs_external_knowledge": false
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -5938,7 +6276,7 @@
           "selected_rag_space": null,
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -6155,7 +6493,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -6266,7 +6604,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -6284,7 +6622,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -6311,7 +6649,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -6327,8 +6665,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -6344,7 +6682,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -6563,7 +6901,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -6683,7 +7021,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -6701,7 +7039,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -6734,7 +7072,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -6750,8 +7088,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -6767,7 +7105,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -6995,7 +7333,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -7111,7 +7449,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -7129,7 +7467,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -7158,7 +7496,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -7174,8 +7512,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -7191,7 +7529,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -7413,7 +7751,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -7524,7 +7862,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -7542,7 +7880,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -7569,7 +7907,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -7585,8 +7923,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -7602,7 +7940,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -7821,7 +8159,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -7941,7 +8279,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -7959,7 +8297,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -7992,7 +8330,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -8008,8 +8346,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -8025,7 +8363,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -8253,7 +8591,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -8369,7 +8707,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -8387,7 +8725,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -8416,7 +8754,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -8432,8 +8770,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -8449,7 +8787,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -8671,7 +9009,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -8782,7 +9120,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -8800,7 +9138,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -8827,7 +9165,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -8843,8 +9181,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -8860,7 +9198,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "高钙灭菌纯牛奶",
               "product_family": "food",
               "structured_record": {
@@ -9079,7 +9417,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -9199,7 +9537,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -9217,7 +9555,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -9250,7 +9588,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -9266,8 +9604,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -9283,7 +9621,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "青柠风味饮料",
               "product_family": "food",
               "structured_record": {
@@ -9511,7 +9849,7 @@
           ],
           "task_draft": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -9627,7 +9965,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -9645,7 +9983,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -9674,7 +10012,7 @@
           "clarification": null,
           "missing_slots": [],
           "pending_action": null,
-          "prompt_version": "builtin-llm_native_quality-v1",
+          "prompt_version": "builtin-quality_judgement-v2",
           "route_decision": {
             "mode": "router_enabled",
             "reason": "Text or non-image file detected; route to LLM-native quality flow",
@@ -9690,8 +10028,8 @@
               "selected_rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
               "needs_external_knowledge": true
             },
-            "fallback_subgraph": "legacy_quality",
-            "selected_subgraph": "llm_native_quality"
+            "fallback_subgraph": "quality_judgement",
+            "selected_subgraph": "quality_judgement"
           },
           "task_submit_mode": null,
           "workflow_version": "quality_agent_root_v1",
@@ -9707,7 +10045,7 @@
           },
           "task_form_defaults": {
             "metadata": {
-              "source": "llm_native_quality",
+              "source": "quality_judgement",
               "product_name": "原味酥性饼干",
               "product_family": "food",
               "structured_record": {
@@ -9856,12 +10194,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5cfa-8332-70d8-a91e-e82e58fbc062",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5cfa-8310-7cdf-8d9a-c9fbb402b336",
@@ -9903,12 +10241,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5cfb-49b1-79f9-8bde-7f1175c1e242",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5cfb-4994-78ca-bec0-2f91b3ce5c3d",
@@ -9950,12 +10288,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5cfb-6ec5-7b3a-9dce-01a5db8ef445",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5cfb-6ea6-73d2-9f26-475571da7095",
@@ -9997,12 +10335,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d10-51bd-76d1-ab5a-f22a16e62084",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5cfb-6ea6-73d2-9f26-475571da7095",
@@ -10044,12 +10382,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d12-d916-784d-bfcd-44895b1e9d23",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d12-bbf5-7e84-8845-08fef451e14a",
@@ -10091,12 +10429,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d15-68ce-78fd-bbc2-bfa7322a709d",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d15-4b10-74f0-a2f5-cc0486c72b7d",
@@ -10138,12 +10476,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d18-6134-7024-ab69-da78cd5dbd41",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d18-4341-7943-8a45-524834606907",
@@ -10185,12 +10523,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d1c-0d87-74c3-b59f-28d2106c62d8",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d1b-fc80-7284-8016-ce8517beee90",
@@ -10232,12 +10570,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d22-1155-7176-80eb-49185aedeeb6",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d22-065f-7b91-b4ec-d963d66243af",
@@ -10279,12 +10617,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d23-89c2-74d4-a8cb-3cbfddca41f6",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d23-7e5f-77f5-a444-0765455ab84f",
@@ -10326,12 +10664,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d23-fa75-7690-bf23-f27b296f53a9",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d23-efa4-7a22-8ddf-45d166f3a966",
@@ -10373,12 +10711,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d25-0129-7ffa-89e5-48692343cda8",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d24-f64c-7a16-a065-c6e71fa186a6",
@@ -10420,12 +10758,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d25-1994-7d1e-a0c3-f662c8cdf617",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d24-f64c-7a16-a065-c6e71fa186a6",
@@ -10467,12 +10805,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d25-3251-79f8-b472-451bc7a03040",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d24-f64c-7a16-a065-c6e71fa186a6",
@@ -10514,12 +10852,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d26-3237-7655-9153-682cf37f1b0c",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d26-2733-70b1-a828-1e846897f213",
@@ -10561,12 +10899,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d26-4ac1-7c21-93ad-f3bcd64ac742",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d26-2733-70b1-a828-1e846897f213",
@@ -10608,12 +10946,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d26-63ce-79ec-be68-95d3e5a03c90",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d26-2733-70b1-a828-1e846897f213",
@@ -10655,12 +10993,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d27-4e21-7162-b468-d2271f9b6278",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d27-43ac-7625-9d64-21bca5a1cfdf",
@@ -10702,12 +11040,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d27-66c9-71d6-9240-bb918868cdbc",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d27-43ac-7625-9d64-21bca5a1cfdf",
@@ -10749,12 +11087,12 @@
             }
           ],
           "image_count": 0,
-          "source_graph": "llm_native_quality",
+          "source_graph": "quality_judgement",
           "route_decision": {
             "trace_id": "019d5d27-8002-7d51-896c-6f5951ab4445",
             "trace_url": null,
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "chat_session_id": "019d5d27-43ac-7625-9d64-21bca5a1cfdf",
@@ -10822,8 +11160,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5cfa-8332-70d8-a91e-e82e58fbc062",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -10843,7 +11181,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -10861,7 +11199,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -10877,8 +11215,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -11094,8 +11432,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 376,
         "reviewed_by": null,
@@ -11191,8 +11529,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5cfb-49b1-79f9-8bde-7f1175c1e242",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -11214,7 +11552,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -11232,7 +11570,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -11254,8 +11592,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "source_files": [
@@ -11517,8 +11855,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 351,
         "reviewed_by": null,
@@ -11590,8 +11928,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5cfb-6ec5-7b3a-9dce-01a5db8ef445",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -11613,7 +11951,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -11631,7 +11969,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -11649,8 +11987,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "source_files": [
@@ -11882,8 +12220,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 221,
         "reviewed_by": null,
@@ -11914,8 +12252,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d10-51bd-76d1-ab5a-f22a16e62084",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -11933,7 +12271,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -11949,7 +12287,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -11965,8 +12303,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -12149,8 +12487,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 198,
         "reviewed_by": null,
@@ -12181,8 +12519,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d12-d916-784d-bfcd-44895b1e9d23",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -12200,7 +12538,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -12216,7 +12554,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -12232,8 +12570,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -12416,8 +12754,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 38,
         "reviewed_by": null,
@@ -12448,8 +12786,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d15-68ce-78fd-bbc2-bfa7322a709d",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -12467,7 +12805,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -12483,7 +12821,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -12499,8 +12837,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -12683,8 +13021,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 43,
         "reviewed_by": null,
@@ -12747,8 +13085,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d18-6134-7024-ab69-da78cd5dbd41",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -12768,7 +13106,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -12786,7 +13124,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -12802,8 +13140,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -13019,8 +13357,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 514,
         "reviewed_by": null,
@@ -13083,8 +13421,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d1c-0d87-74c3-b59f-28d2106c62d8",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -13104,7 +13442,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -13122,7 +13460,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -13138,8 +13476,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -13355,8 +13693,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 166,
         "reviewed_by": null,
@@ -13387,8 +13725,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d22-1155-7176-80eb-49185aedeeb6",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -13406,7 +13744,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -13422,7 +13760,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -13438,8 +13776,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -13622,8 +13960,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 23,
         "reviewed_by": null,
@@ -13654,8 +13992,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d23-89c2-74d4-a8cb-3cbfddca41f6",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -13673,7 +14011,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -13689,7 +14027,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -13705,8 +14043,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -13889,8 +14227,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 20,
         "reviewed_by": null,
@@ -13921,8 +14259,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d23-fa75-7690-bf23-f27b296f53a9",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -13940,7 +14278,7 @@
             "hit_count": 0,
             "top_sources": [],
             "rag_space_id": null,
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": null,
             "citation_coverage": 1.0
           },
@@ -13956,7 +14294,7 @@
               "hit_count": 0,
               "top_sources": [],
               "rag_space_id": null,
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": null,
               "citation_coverage": 1.0
             },
@@ -13972,8 +14310,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -14156,8 +14494,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 32,
         "reviewed_by": null,
@@ -14220,8 +14558,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d25-0129-7ffa-89e5-48692343cda8",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -14241,7 +14579,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -14259,7 +14597,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -14275,8 +14613,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -14492,8 +14830,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 139,
         "reviewed_by": null,
@@ -14589,8 +14927,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d25-1994-7d1e-a0c3-f662c8cdf617",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -14612,7 +14950,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -14630,7 +14968,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -14652,8 +14990,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "source_files": [
@@ -14915,8 +15253,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 146,
         "reviewed_by": null,
@@ -14988,8 +15326,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d25-3251-79f8-b472-451bc7a03040",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -15011,7 +15349,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -15029,7 +15367,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -15047,8 +15385,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "source_files": [
@@ -15280,8 +15618,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 155,
         "reviewed_by": null,
@@ -15344,8 +15682,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d26-3237-7655-9153-682cf37f1b0c",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -15365,7 +15703,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -15383,7 +15721,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -15399,8 +15737,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -15616,8 +15954,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 151,
         "reviewed_by": null,
@@ -15713,8 +16051,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d26-4ac1-7c21-93ad-f3bcd64ac742",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -15736,7 +16074,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -15754,7 +16092,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -15776,8 +16114,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "source_files": [
@@ -16039,8 +16377,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 337,
         "reviewed_by": null,
@@ -16112,8 +16450,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d26-63ce-79ec-be68-95d3e5a03c90",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -16135,7 +16473,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -16153,7 +16491,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -16171,8 +16509,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "source_files": [
@@ -16404,8 +16742,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 150,
         "reviewed_by": null,
@@ -16468,8 +16806,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d27-4e21-7162-b468-d2271f9b6278",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -16489,7 +16827,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -16507,7 +16845,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -16523,8 +16861,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "source_files": [
@@ -16740,8 +17078,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 148,
         "reviewed_by": null,
@@ -16837,8 +17175,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d27-66c9-71d6-9240-bb918868cdbc",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -16860,7 +17198,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -16878,7 +17216,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -16900,8 +17238,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "source_files": [
@@ -17163,8 +17501,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 155,
         "reviewed_by": null,
@@ -17236,8 +17574,8 @@
         "reasoning_chain": {
           "trace": {
             "trace_id": "019d5d27-8002-7d51-896c-6f5951ab4445",
-            "prompt_version": "builtin-llm_native_quality-v1",
-            "route_subgraph": "llm_native_quality",
+            "prompt_version": "builtin-quality_judgement-v2",
+            "route_subgraph": "quality_judgement",
             "workflow_version": "quality_agent_root_v1"
           },
           "quality": {
@@ -17259,7 +17597,7 @@
               "食品质量合规要求_国家标准整理版.pdf"
             ],
             "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-            "source_graph": "llm_native_quality",
+            "source_graph": "quality_judgement",
             "rag_space_name": "food",
             "citation_coverage": 1.0
           },
@@ -17277,7 +17615,7 @@
                 "食品质量合规要求_国家标准整理版.pdf"
               ],
               "rag_space_id": "019d5cbb-9a11-71f0-8fde-041044796292",
-              "source_graph": "llm_native_quality",
+              "source_graph": "quality_judgement",
               "rag_space_name": "food",
               "citation_coverage": 1.0
             },
@@ -17295,8 +17633,8 @@
           },
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "source_files": [
@@ -17528,8 +17866,8 @@
             "file_citation_count": 1
           }
         },
-        "llm_model": "llm_native_quality",
-        "prompt_version": "builtin-llm_native_quality-v1",
+        "llm_model": "quality_judgement",
+        "prompt_version": "builtin-quality_judgement-v2",
         "tokens_used": 0,
         "latency_ms": 148,
         "reviewed_by": null,
@@ -17558,7 +17896,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17585,7 +17923,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -17612,7 +17950,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -17639,7 +17977,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17666,7 +18004,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17693,7 +18031,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17720,7 +18058,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17747,7 +18085,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17774,7 +18112,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17801,7 +18139,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17828,7 +18166,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17855,7 +18193,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17882,7 +18220,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -17909,7 +18247,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -17936,7 +18274,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -17963,7 +18301,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -17990,7 +18328,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -18017,7 +18355,7 @@
           "physical_hallucination_score": 0.08
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "pass",
         "handled_by": null,
@@ -18044,7 +18382,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -18071,7 +18409,7 @@
           "physical_hallucination_score": 0.29
         },
         "sampling_results": {
-          "route_subgraph": "llm_native_quality"
+          "route_subgraph": "quality_judgement"
         },
         "root_cause": "fail",
         "handled_by": null,
@@ -18123,7 +18461,7 @@
         "task_id": "019d5cfa-a57b-76c4-80b0-db3ca4fa1df7",
         "result_id": "019d5cfa-a58f-7082-a936-0c1eaeb8ebf6",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5cfa-8332-70d8-a91e-e82e58fbc062",
         "prompt_tokens": 0,
@@ -18140,7 +18478,7 @@
         "task_id": "019d5cfb-6bf5-7596-a814-eab2cab159c8",
         "result_id": "019d5cfb-6c06-70c5-a622-1a88374bed80",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-002",
         "trace_id": "019d5cfb-49b1-79f9-8bde-7f1175c1e242",
         "prompt_tokens": 0,
@@ -18157,7 +18495,7 @@
         "task_id": "019d5cfb-7a25-778c-b25f-d5866ac73625",
         "result_id": "019d5cfb-7a34-7a08-8c36-26c5001bb94a",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-003",
         "trace_id": "019d5cfb-6ec5-7b3a-9dce-01a5db8ef445",
         "prompt_tokens": 0,
@@ -18174,7 +18512,7 @@
         "task_id": "019d5d10-52d2-7084-9781-2266b920f9d0",
         "result_id": "019d5d10-52e9-75cc-88b4-26e9118586ac",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d10-51bd-76d1-ab5a-f22a16e62084",
         "prompt_tokens": 0,
@@ -18191,7 +18529,7 @@
         "task_id": "019d5d12-d985-7eef-93f2-b245e384b975",
         "result_id": "019d5d12-d998-7861-b5cd-264f1d00babd",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d12-d916-784d-bfcd-44895b1e9d23",
         "prompt_tokens": 0,
@@ -18208,7 +18546,7 @@
         "task_id": "019d5d15-6945-7d0e-8d7a-1177da014d91",
         "result_id": "019d5d15-695a-74ff-9722-0793b4d10662",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d15-68ce-78fd-bbc2-bfa7322a709d",
         "prompt_tokens": 0,
@@ -18225,7 +18563,7 @@
         "task_id": "019d5d18-6e55-75a7-b544-2a9d71320402",
         "result_id": "019d5d18-6e75-71ed-bf6f-0387b0f36c33",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d18-6134-7024-ab69-da78cd5dbd41",
         "prompt_tokens": 0,
@@ -18242,7 +18580,7 @@
         "task_id": "019d5d1c-18b1-7450-9881-6e3e1f666abb",
         "result_id": "019d5d1c-18bf-7b5a-96c9-772d5705f620",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d1c-0d87-74c3-b59f-28d2106c62d8",
         "prompt_tokens": 0,
@@ -18259,7 +18597,7 @@
         "task_id": "019d5d22-11b6-79a6-80a3-e189b46bdd2a",
         "result_id": "019d5d22-11d0-7aae-b519-84230c08fb27",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d22-1155-7176-80eb-49185aedeeb6",
         "prompt_tokens": 0,
@@ -18276,7 +18614,7 @@
         "task_id": "019d5d23-93f0-7391-9c0f-5ff9b13e7a17",
         "result_id": "019d5d23-93fc-73a4-91eb-21c9b8abdd8a",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d23-89c2-74d4-a8cb-3cbfddca41f6",
         "prompt_tokens": 0,
@@ -18293,7 +18631,7 @@
         "task_id": "019d5d24-050f-72c0-8e7f-c236dfa2f401",
         "result_id": "019d5d24-0524-71a4-8dc1-af298ae80def",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d23-fa75-7690-bf23-f27b296f53a9",
         "prompt_tokens": 0,
@@ -18310,7 +18648,7 @@
         "task_id": "019d5d25-0b5e-7bc9-98c1-e16805b76ab9",
         "result_id": "019d5d25-0b6c-73a8-b7d9-84a63736c265",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d25-0129-7ffa-89e5-48692343cda8",
         "prompt_tokens": 0,
@@ -18327,7 +18665,7 @@
         "task_id": "019d5d25-23f1-793c-aa2e-a405c1b85750",
         "result_id": "019d5d25-23ff-75fb-b69e-52c82c3720aa",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-002",
         "trace_id": "019d5d25-1994-7d1e-a0c3-f662c8cdf617",
         "prompt_tokens": 0,
@@ -18344,7 +18682,7 @@
         "task_id": "019d5d25-3d5b-7f9b-85c8-763ca2ae5540",
         "result_id": "019d5d25-3d68-7982-b81d-2dbcff67e6fe",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-003",
         "trace_id": "019d5d25-3251-79f8-b472-451bc7a03040",
         "prompt_tokens": 0,
@@ -18361,7 +18699,7 @@
         "task_id": "019d5d26-3c89-7b26-b4f2-5160a795d748",
         "result_id": "019d5d26-3c95-7cbc-a7c2-d4bf4dda7296",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d26-3237-7655-9153-682cf37f1b0c",
         "prompt_tokens": 0,
@@ -18378,7 +18716,7 @@
         "task_id": "019d5d26-5652-7f76-9e0b-09b6335c148a",
         "result_id": "019d5d26-565f-72dd-946c-0d3cc72978b5",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-002",
         "trace_id": "019d5d26-4ac1-7c21-93ad-f3bcd64ac742",
         "prompt_tokens": 0,
@@ -18395,7 +18733,7 @@
         "task_id": "019d5d26-6f12-707a-a94a-319754a4bbb8",
         "result_id": "019d5d26-6f1e-7211-953c-f87ab6a08b35",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-003",
         "trace_id": "019d5d26-63ce-79ec-be68-95d3e5a03c90",
         "prompt_tokens": 0,
@@ -18412,7 +18750,7 @@
         "task_id": "019d5d27-58c7-78f6-9013-932515e05830",
         "result_id": "019d5d27-58d4-7929-9b3c-d5cac0a911ff",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-001",
         "trace_id": "019d5d27-4e21-7162-b468-d2271f9b6278",
         "prompt_tokens": 0,
@@ -18429,7 +18767,7 @@
         "task_id": "019d5d27-7102-7b32-97db-273714f996f4",
         "result_id": "019d5d27-710d-765a-b364-7a7187bcc99f",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-002",
         "trace_id": "019d5d27-66c9-71d6-9240-bb918868cdbc",
         "prompt_tokens": 0,
@@ -18446,7 +18784,7 @@
         "task_id": "019d5d27-8a68-780d-84d7-3cdcb5a15cde",
         "result_id": "019d5d27-8a75-7fbd-8ace-0220e86b17f1",
         "model_config_id": null,
-        "model_key": "llm_native_quality",
+        "model_key": "quality_judgement",
         "product_line": "FOOD-003",
         "trace_id": "019d5d27-8002-7d51-896c-6f5951ab4445",
         "prompt_tokens": 0,
@@ -18497,7 +18835,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 376,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -18508,8 +18846,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -18629,7 +18967,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 351,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -18646,8 +18984,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "product_family": "food",
@@ -18776,7 +19114,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 221,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -18789,8 +19127,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "product_family": "food",
@@ -18915,7 +19253,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 198,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -18924,8 +19262,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19045,7 +19383,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 38,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19054,8 +19392,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19175,7 +19513,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 43,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19184,8 +19522,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19305,7 +19643,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 514,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19316,8 +19654,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19437,7 +19775,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 166,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19448,8 +19786,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19569,7 +19907,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 23,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19578,8 +19916,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19699,7 +20037,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 20,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19708,8 +20046,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19829,7 +20167,7 @@
         "hit_rate": "0.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 32,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19838,8 +20176,8 @@
           "top_sources": [],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -19959,7 +20297,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 139,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -19970,8 +20308,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -20091,7 +20429,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 146,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -20108,8 +20446,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "product_family": "food",
@@ -20238,7 +20576,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 155,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -20251,8 +20589,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "product_family": "food",
@@ -20377,7 +20715,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 151,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -20388,8 +20726,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -20509,7 +20847,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 337,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -20526,8 +20864,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "product_family": "food",
@@ -20656,7 +20994,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 150,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -20669,8 +21007,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "product_family": "food",
@@ -20795,7 +21133,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 148,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "pass",
           "rule_hits": [],
@@ -20806,8 +21144,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "高钙灭菌纯牛奶",
           "product_family": "food",
@@ -20927,7 +21265,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 155,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -20944,8 +21282,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "青柠风味饮料",
           "product_family": "food",
@@ -21074,7 +21412,7 @@
         "hit_rate": "1.0000",
         "citation_coverage": "1.0000",
         "latency_ms": 148,
-        "source_graph": "llm_native_quality",
+        "source_graph": "quality_judgement",
         "metadata_json": {
           "verdict": "fail",
           "rule_hits": [
@@ -21087,8 +21425,8 @@
           ],
           "dspy_runtime": {
             "targets": {},
-            "subgraph_key": "llm_native_quality",
-            "active_prompt_version": "builtin-llm_native_quality-v1"
+            "subgraph_key": "quality_judgement",
+            "active_prompt_version": "builtin-quality_judgement-v2"
           },
           "product_name": "原味酥性饼干",
           "product_family": "food",
