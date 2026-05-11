@@ -5,11 +5,11 @@ from typing import Any
 
 from app.core.permissions import (
     ROLE_ADMIN,
-    ROLE_AGENT_OPERATOR,
-    ROLE_ANALYST,
-    ROLE_INSPECTOR,
+    ROLE_APP_DEVELOPER,
+    ROLE_ALGORITHM_ENGINEER,
+    ROLE_PLATFORM_OPERATOR,
     ROLE_USER,
-    normalize_role,
+    ROLE_EXPERT,
 )
 
 
@@ -22,7 +22,9 @@ PLAN_PREMIUM = "premium"
 PLAN_ENTERPRISE = "enterprise"
 
 CAPABILITY_PRIVATE_RAG = "private_rag"
+CAPABILITY_CUSTOM_PROMPT = "custom_prompt"
 CAPABILITY_CUSTOM_WORKFLOW = "custom_workflow"
+CAPABILITY_COT_CONTROL = "cot_control"
 CAPABILITY_GOVERNANCE = "governance_console"
 CAPABILITY_ADVANCED_ANALYTICS = "advanced_analytics"
 CAPABILITY_MODEL_CONTROL = "model_control"
@@ -66,27 +68,35 @@ def derive_plan_tier(plan: str | None) -> str:
 
 
 def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
-    capabilities = {CAPABILITY_PRIVATE_RAG}
+    capabilities: set[str] = set()
+    if ROLE_EXPERT in roles:
+        capabilities.add(CAPABILITY_PRIVATE_RAG)
+        capabilities.add(CAPABILITY_CUSTOM_PROMPT)
+    if any(r in {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_EXPERT} for r in roles):
+        capabilities.add(CAPABILITY_CUSTOM_WORKFLOW)
+    if any(r in {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT} for r in roles):
+        capabilities.add(CAPABILITY_COT_CONTROL)
+    if any(r in {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
+        capabilities.add(CAPABILITY_GOVERNANCE)
+    if any(r in {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER} for r in roles):
+        capabilities.add(CAPABILITY_MODEL_CONTROL)
+    if any(r in {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
+        capabilities.add(CAPABILITY_ADVANCED_ANALYTICS)
     if plan_tier in {PLAN_PREMIUM, PLAN_ENTERPRISE}:
         capabilities.add(CAPABILITY_CUSTOM_WORKFLOW)
         capabilities.add(CAPABILITY_ADVANCED_ANALYTICS)
     if plan_tier == PLAN_ENTERPRISE:
-        capabilities.add(CAPABILITY_MODEL_CONTROL)
-    normalized = [normalize_role(r) for r in roles]
-    if any(role in {ROLE_ADMIN, ROLE_ANALYST} for role in normalized):
-        capabilities.add(CAPABILITY_GOVERNANCE)
         capabilities.add(CAPABILITY_MODEL_CONTROL)
     return sorted(capabilities)
 
 
 def derive_workspaces(roles: list[str]) -> list[str]:
     workspaces: list[str] = []
-    normalized = [normalize_role(r) for r in roles]
-    if any(role in {ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_ADMIN} for role in normalized):
+    if any(r in {ROLE_ADMIN, ROLE_USER, ROLE_EXPERT} for r in roles):
         workspaces.append(WORKSPACE_APP)
-    if any(role in {ROLE_AGENT_OPERATOR, ROLE_ADMIN} for role in normalized):
+    if any(r in {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
         workspaces.append(WORKSPACE_OPS)
-    if any(role in {ROLE_ADMIN, ROLE_ANALYST} for role in normalized):
+    if any(r in {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
         workspaces.append(WORKSPACE_GOVERNANCE)
     if not workspaces:
         workspaces.append(WORKSPACE_APP)
@@ -94,14 +104,15 @@ def derive_workspaces(roles: list[str]) -> list[str]:
 
 
 def derive_default_workspace(roles: list[str], workspaces: list[str]) -> str:
-    normalized = [normalize_role(r) for r in roles]
-    if ROLE_ADMIN in normalized:
+    if ROLE_ADMIN in roles:
         return WORKSPACE_GOVERNANCE
-    if ROLE_ANALYST in normalized:
+    if ROLE_ALGORITHM_ENGINEER in roles:
         return WORKSPACE_GOVERNANCE
-    if ROLE_AGENT_OPERATOR in normalized:
+    if ROLE_APP_DEVELOPER in roles:
         return WORKSPACE_OPS
-    return workspaces[0]
+    if ROLE_PLATFORM_OPERATOR in roles:
+        return WORKSPACE_OPS
+    return workspaces[0] if workspaces else WORKSPACE_APP
 
 
 def build_auth_claims(primary_role: str, organization_plan: str | None = None) -> AuthClaims:
