@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+from app.core.permissions import ROLE_ADMIN, ROLE_USER
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.base import TenantAwareService
 
 
 class BillingService(TenantAwareService):
-    def __init__(self, session, org_id: str, actor_role: str = "user"):
+    def __init__(self, session, org_id: str, actor_role: str = ROLE_USER):
         super().__init__(session, org_id)
         self._repo = TokenLedgerRepository(session)
         self._user_summary_repo = UserTokenUsageSummaryRepository(session)
-        self._scope_org_id = None if actor_role == "admin" else org_id
+        self._scope_org_id = None if actor_role == ROLE_ADMIN else org_id
 
     async def get_summary(self, query):
         items, buckets = await self._repo.aggregate(

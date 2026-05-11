@@ -5,11 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
 from app.core.permissions import (
     ROLE_ADMIN,
-    ROLE_AGENT_OPERATOR,
-    ROLE_ANALYST,
-    ROLE_INSPECTOR,
+    ROLE_APP_DEVELOPER,
+    ROLE_ALGORITHM_ENGINEER,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_USER,
+    ROLE_EXPERT,
     ensure_valid_role,
-    normalize_role,
 )
 from app.core.security import hash_password, verify_password
 from app.models.user import User
@@ -125,19 +126,19 @@ class UserService:
 
     @staticmethod
     def get_assignable_roles(actor_role: str) -> list[str]:
-        normalized = normalize_role(actor_role)
-        if normalized == ROLE_ADMIN:
+        if actor_role == ROLE_ADMIN:
             return [
                 ROLE_ADMIN,
-                ROLE_INSPECTOR,
-                ROLE_ANALYST,
-                ROLE_AGENT_OPERATOR,
+                ROLE_APP_DEVELOPER,
+                ROLE_PLATFORM_OPERATOR,
+                ROLE_ALGORITHM_ENGINEER,
+                ROLE_USER,
+                ROLE_EXPERT,
             ]
         return []
 
     @staticmethod
     def _ensure_assignable_role(actor_role: str, target_role: str) -> None:
-        normalized = normalize_role(actor_role)
-        if normalized == ROLE_ADMIN:
+        if actor_role == ROLE_ADMIN:
             return
         raise ForbiddenError(f"role {actor_role} cannot assign {target_role}")
