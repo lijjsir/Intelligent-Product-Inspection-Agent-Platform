@@ -6,61 +6,46 @@ from app.core.exceptions import ForbiddenError, ValidationError
 
 
 ROLE_ADMIN = "admin"
+ROLE_APP_DEVELOPER = "app_developer"
+ROLE_PLATFORM_OPERATOR = "platform_operator"
+ROLE_ALGORITHM_ENGINEER = "algorithm_engineer"
 ROLE_USER = "user"
-ROLE_INSPECTOR = "inspector"
-ROLE_ANALYST = "analyst"
-ROLE_AGENT_OPERATOR = "agent_operator"
-ROLE_API_SERVICE = "api_service"
+ROLE_EXPERT = "expert"
 
 ALL_ROLES = {
     ROLE_ADMIN,
+    ROLE_APP_DEVELOPER,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_ALGORITHM_ENGINEER,
     ROLE_USER,
-    ROLE_INSPECTOR,
-    ROLE_ANALYST,
-    ROLE_AGENT_OPERATOR,
-    ROLE_API_SERVICE,
-}
-
-LEGACY_ROLE_MAP = {
-    "super_admin": ROLE_ADMIN,
-    "org_admin": ROLE_ADMIN,
-    "platform_admin": ROLE_ADMIN,
-    "auditor": ROLE_ADMIN,
-    "viewer": ROLE_INSPECTOR,
-    "ai_quality": ROLE_ANALYST,
+    ROLE_EXPERT,
 }
 
 PERMISSIONS: Dict[str, Set[str]] = {
     "user": {ROLE_ADMIN},
-    "task": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
-    "result": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
-    "stability": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
-    "alert": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
-    "tool": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
-    "analytics": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "task": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_USER, ROLE_EXPERT},
+    "result": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_USER, ROLE_EXPERT},
+    "stability": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER},
+    "alert": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER},
+    "tool": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER},
+    "analytics": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER},
     "audit": {ROLE_ADMIN},
-    "model_config": {ROLE_ADMIN},
-    "inspection_spec": {ROLE_ADMIN, ROLE_USER, ROLE_ANALYST},
+    "model_config": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER},
+    "inspection_spec": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_ALGORITHM_ENGINEER},
     "billing": {ROLE_ADMIN},
-    "feedback": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST},
-    "quality": {ROLE_ADMIN, ROLE_USER, ROLE_ANALYST},
-    "agent_ops": {ROLE_ADMIN, ROLE_AGENT_OPERATOR},
-    "chat": {ROLE_ADMIN, ROLE_USER, ROLE_INSPECTOR, ROLE_ANALYST, ROLE_AGENT_OPERATOR, ROLE_API_SERVICE},
+    "feedback": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_USER, ROLE_EXPERT},
+    "quality": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER},
+    "agent_ops": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR},
+    "chat": {ROLE_USER, ROLE_EXPERT},
 }
 
 
 def require_role(resource: str, role: str) -> None:
-    normalized = LEGACY_ROLE_MAP.get(role, role)
     allowed = PERMISSIONS.get(resource, set())
-    if normalized not in allowed:
+    if role not in allowed:
         raise ForbiddenError(f"role {role} cannot access {resource}")
 
 
 def ensure_valid_role(role: str) -> None:
-    normalized = LEGACY_ROLE_MAP.get(role, role)
-    if normalized not in ALL_ROLES:
+    if role not in ALL_ROLES:
         raise ValidationError(f"invalid role: {role}")
-
-
-def normalize_role(role: str) -> str:
-    return LEGACY_ROLE_MAP.get(role, role)
