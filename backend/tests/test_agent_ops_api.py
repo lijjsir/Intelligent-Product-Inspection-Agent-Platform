@@ -61,8 +61,8 @@ def test_routing_strategy_route_is_registered():
 
 
 def test_agent_ops_admin_scope_is_global_for_rag_analysis():
-    admin = SimpleNamespace(role="admin", org_id="org-admin")
-    user = SimpleNamespace(role="user", org_id="org-user")
+    admin = SimpleNamespace(role="admin", roles=["admin"], org_id="org-admin")
+    user = SimpleNamespace(role="user", roles=["user"], org_id="org-user")
 
     assert agent_ops_api_mod._use_global_scope(admin) is True
     assert agent_ops_api_mod._use_global_scope(user) is False
