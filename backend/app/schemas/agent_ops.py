@@ -16,7 +16,7 @@ class AgentDefinitionBase(BaseModel):
     prompt_version_id: Optional[str] = Field(default=None, description="Associated prompt version ID")
     workflow_binding: Optional[str] = Field(default=None, max_length=100, description="Workflow binding")
     intent_config_id: Optional[str] = Field(default=None, description="Intent config ID")
-    subgraph_key: str = Field(default="legacy_quality", max_length=64, description="Bound subgraph key")
+    subgraph_key: str = Field(default="quality_judgement", max_length=64, description="Bound subgraph key")
     entry_graph: Optional[str] = Field(default=None, max_length=128, description="Entry graph identifier")
     supports_start_stop: bool = Field(default=True, description="Whether runtime supports start/stop")
     graph_version: str = Field(default="v1", max_length=32, description="Graph version")

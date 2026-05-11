@@ -40,7 +40,7 @@ from app.services.inspection_standard_service import InspectionStandardService
 from app.services.rag_retrieval_service import RagRetrievalService
 from infra.database.session import get_session
 
-# ── Route signal detection (from quality_root/graph.py) ──────────────
+# ── Route signal detection (from memory_manager/graph.py) ──────────────
 
 TASK_KEYWORD_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -50,7 +50,7 @@ TASK_KEYWORD_PATTERNS = [
     ]
 ]
 
-# ── Helper functions (from llm_native_quality/graph.py) ──────────────
+# ── Helper functions (from quality_judgement/graph.py) ──────────────
 
 QUALITY_MISSING_FIELD_HINTS = {
     "product_id": "请提供产品编号，例如：FOOD-001 或 ELEC-001",
@@ -196,18 +196,18 @@ def _build_answer_title(*, product_family: str, product_id: str, product_name: s
     return f"结构化质检已完成：`{label}`"
 
 
-# ── LLM-native structured inspection (from llm_native_quality/graph.py) ─
+# ── LLM-native structured inspection (from quality_judgement/graph.py) ─
 
 async def _run_structured_inspection(request: NormalizedRequest) -> AgentOutput:
     """Run the file/text-driven structured quality inspection."""
     started_at = perf_counter()
     storage = FileStorageService()
-    runtime_profile = await resolve_dspy_runtime_profile(request.org_id, "llm_native_quality")
-    contract_target = runtime_profile.get("llm_native_quality.contract_inferencer_dspy")
-    planner_target = runtime_profile.get("llm_native_quality.planner")
-    knowledge_target = runtime_profile.get("llm_native_quality.knowledge_router")
-    synthesizer_target = runtime_profile.get("llm_native_quality.evidence_synthesizer")
-    review_target = runtime_profile.get("llm_native_quality.review_gate")
+    runtime_profile = await resolve_dspy_runtime_profile(request.org_id, "quality_judgement")
+    contract_target = runtime_profile.get("quality_judgement.contract_inferencer_dspy")
+    planner_target = runtime_profile.get("quality_judgement.planner")
+    knowledge_target = runtime_profile.get("quality_judgement.knowledge_router")
+    synthesizer_target = runtime_profile.get("quality_judgement.evidence_synthesizer")
+    review_target = runtime_profile.get("quality_judgement.review_gate")
 
     parsed_files: list[dict[str, Any]] = []
     for attachment in request.attachments:
@@ -489,7 +489,7 @@ class QualityJudgementSubgraph:
         self._storage = FileStorageService()
 
     async def run(self, request: NormalizedRequest) -> AgentOutput:
-        # Route decision logic (from quality_root/graph.py route_policy)
+        # Route decision logic (from memory_manager/graph.py route_policy)
         has_non_pdf = False
         has_task_keyword = False
         for item in request.attachments:
