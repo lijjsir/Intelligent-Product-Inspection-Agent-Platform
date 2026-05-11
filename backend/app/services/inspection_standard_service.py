@@ -30,7 +30,7 @@ class InspectionStandardService:
         if not spec:
             return {
                 "verdict": "manual_required",
-                "summary": "未找到有效检测标准，按 QS-009 禁止自动放行。",
+                "summary": "未找到有效的检验标准，按 QS-009 要求禁止自动放行。",
                 "reasons": ["missing_spec"],
                 "matched_rules": [],
                 "unmatched_defects": [str(item.get("type") or "unknown") for item in defects],
@@ -67,7 +67,7 @@ class InspectionStandardService:
             ai_gate["reasons"].append("insufficient_required_views")
             return {
                 "verdict": "manual_required",
-                "summary": "图像视角或数量不足，不能自动放行。",
+                "summary": "图像视角或数量不足，当前不能自动放行。",
                 "reasons": ["insufficient_required_views"],
                 "matched_rules": [],
                 "unmatched_defects": [str(item.get("type") or "unknown") for item in defects],
@@ -220,4 +220,4 @@ class InspectionStandardService:
         if matched_rules and verdict == "manual_required":
             details.append("命中人工复核规则")
         suffix = "；".join(details) if details else "需要人工复核"
-        return f"按标准 {spec_code} 不能自动放行，{suffix}。"
+        return f"按标准 {spec_code} 当前不能自动放行；{suffix}。"

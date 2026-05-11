@@ -1,0 +1,99 @@
+{
+  "product_id": "FOOD-003",
+  "category": "food",
+  "product_name": "原味酥性饼干",
+  "brand": "金禾",
+  "specification": "400g/袋",
+  "batch_no": "BK20260404007",
+  "manufacturer": {
+    "name": "金禾食品制造有限公司",
+    "address": "江苏省苏州市吴中区食品路36号",
+    "contact": "0512-66889977"
+  },
+  "production_date": "2026-03-30",
+  "shelf_life_days": 270,
+  "storage_condition": "置于阴凉干燥处，避免阳光直射",
+  "product_type": "饼干",
+  "ingredients": [
+    "小麦粉",
+    "白砂糖",
+    "精炼植物油",
+    "食用盐",
+    "碳酸氢钠",
+    "碳酸氢铵",
+    "食用香精"
+  ],
+  "allergens": ["小麦"],
+  "nutrition_facts_per_100g": {
+    "energy_kj": 2050,
+    "protein_g": 6.2,
+    "fat_g": 21.0,
+    "carbohydrate_g": 66.0,
+    "sodium_mg": 280
+  },
+  "label_info": {
+    "product_name_present": true,
+    "ingredient_list_present": true,
+    "net_content_present": true,
+    "manufacturer_present": true,
+    "production_date_present": true,
+    "shelf_life_present": true,
+    "storage_condition_present": true,
+    "nutrition_table_present": true,
+    "allergen_warning_present": true,
+    "barcode_present": true,
+    "font_clear": true
+  },
+  "packaging": {
+    "package_type": "复合膜袋",
+    "seal_integrity": "partial_opening_risk",
+    "leakage": false,
+    "deformation": false,
+    "surface_contamination": false,
+    "oxygen_absorber_present": false
+  },
+  "sensory": {
+    "color": "浅金黄色",
+    "odor": "正常烘焙香气",
+    "state": "大部分完整，少量碎裂"
+  },
+  "process_records": {
+    "raw_material_acceptance_record": true,
+    "cleaning_disinfection_record": true,
+    "personnel_hygiene_record": true,
+    "traceability_record": true,
+    "pest_control_record": true
+  },
+  "test_results": {
+    "microbiology": {
+      "total_colony_count_cfu_per_g": 1200,
+      "mold_cfu_per_g": 40,
+      "coliform_cfu_per_g": 0
+    },
+    "contaminants": {
+      "lead_mg_per_kg": 0.04,
+      "cadmium_mg_per_kg": 0.01
+    },
+    "physicochemical": {
+      "moisture_percent": 5.8,
+      "acid_value_mg_per_g": 2.8,
+      "peroxide_value_g_per_100g": 0.18
+    }
+  },
+  "traceability": {
+    "qr_code": "https://trace.example.com/FOOD-003",
+    "supplier_batch_linked": true,
+    "warehouse_outbound_record": true
+  },
+  "expected_result": {
+    "is_qualified": false,
+    "risk_level": "medium",
+    "failed_rules": [
+      "food.packaging.seal_integrity"
+    ],
+    "key_reasons": [
+      "包装密封存在开启风险",
+      "可能影响货架期和微生物稳定性"
+    ]
+  }
+}
