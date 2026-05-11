@@ -1,0 +1,76 @@
+{
+  "product_id": "ELEC-001",
+  "category": "electronics",
+  "product_name": "65W USB-C 电源适配器",
+  "brand": "启辰",
+  "model": "PD65-A1",
+  "manufacturer": {
+    "name": "启辰电子科技有限公司",
+    "address": "深圳市宝安区航城大道66号",
+    "contact": "400-900-2233"
+  },
+  "production_date": "2026-03-22",
+  "batch_no": "ADP2026032201",
+  "rated_parameters": {
+    "input": "100-240V~ 50/60Hz 1.5A",
+    "output": "5V=3A, 9V=3A, 12V=3A, 15V=3A, 20V=3.25A",
+    "max_power_w": 65
+  },
+  "marking_info": {
+    "model_marked": true,
+    "rated_input_marked": true,
+    "rated_output_marked": true,
+    "manufacturer_name_marked": true,
+    "manufacturer_address_marked": true,
+    "warning_marked": true,
+    "serial_number_marked": true,
+    "polarity_marked": true
+  },
+  "structure_check": {
+    "enclosure_crack": false,
+    "port_looseness": false,
+    "plug_dimension_ok": true,
+    "sharp_edge": false,
+    "fire_enclosure_material_grade": "V-0"
+  },
+  "electrical_safety": {
+    "ground_continuity_required": false,
+    "electric_strength_kv": 3.0,
+    "leakage_current_ma": 0.08,
+    "touch_current_ma": 0.05,
+    "temperature_rise_max_c": 48,
+    "creepage_distance_mm": 5.2,
+    "clearance_mm": 4.8
+  },
+  "emc_test": {
+    "conducted_emission": "pass",
+    "radiated_emission": "pass",
+    "esd_immunity": "pass",
+    "surge_immunity": "pass",
+    "eft_immunity": "pass",
+    "harmonic_current": "pass"
+  },
+  "reliability": {
+    "drop_test": "pass",
+    "plug_in_out_cycles": 5000,
+    "high_temperature_operating_c": 40,
+    "burn_in_hours": 4
+  },
+  "documents": {
+    "user_manual": true,
+    "inspection_report": true,
+    "certificate_file": true,
+    "traceability_code": true
+  },
+  "expected_result": {
+    "is_qualified": true,
+    "risk_level": "low",
+    "failed_rules": [],
+    "key_reasons": [
+      "标识完整",
+      "电气安全参数正常",
+      "EMC测试通过",
+      "资料齐全"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+record_id=NATIVE-1775337185
+product_id=screw_native_1775337185
+spec_code=SCREW-A-2026-V1
+inspection_type=appearance
+surface_condition=scratch
+crack_count=0
+surface_scratch_count=2
+coating_defect_count=0
+thread_damage_count=0
+oil_stain_count=0
+inspector_note=native api repro
+expected_decision=FAIL

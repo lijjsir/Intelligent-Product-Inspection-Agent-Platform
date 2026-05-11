@@ -1,0 +1,12 @@
+record_id=UI-NATIVE-FAIL-1775338525
+product_id=screw_native_ui_1775338525
+spec_code=SCREW-A-2026-V1
+inspection_type=appearance
+surface_condition=scratch
+crack_count=0
+surface_scratch_count=2
+coating_defect_count=0
+thread_damage_count=0
+oil_stain_count=0
+inspector_note=UI smoke native fail sample
+expected_decision=FAIL

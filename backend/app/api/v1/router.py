@@ -10,6 +10,7 @@ from app.api.v1 import (
     billing,
     feedbacks,
     inspection_specs,
+    memory,
     model_configs,
     quality,
     rag_spaces,
@@ -40,3 +41,4 @@ router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
+router.include_router(memory.router, prefix="/memory", tags=["memory"])

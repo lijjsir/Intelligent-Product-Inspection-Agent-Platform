@@ -1,0 +1,92 @@
+{
+  "product_id": "FOOD-001",
+  "category": "food",
+  "product_name": "高钙灭菌纯牛奶",
+  "brand": "晨源",
+  "specification": "250mL/盒",
+  "batch_no": "MN20260405001",
+  "manufacturer": {
+    "name": "华源乳业有限公司",
+    "address": "河北省石家庄市高新区兴业路88号",
+    "contact": "400-800-1001"
+  },
+  "production_date": "2026-03-25",
+  "shelf_life_days": 180,
+  "storage_condition": "常温阴凉干燥处保存",
+  "product_type": "灭菌乳",
+  "ingredients": ["生牛乳"],
+  "allergens": ["乳"],
+  "nutrition_facts_per_100ml": {
+    "energy_kj": 280,
+    "protein_g": 3.6,
+    "fat_g": 4.0,
+    "carbohydrate_g": 4.8,
+    "sodium_mg": 55,
+    "calcium_mg": 120
+  },
+  "label_info": {
+    "product_name_present": true,
+    "ingredient_list_present": true,
+    "net_content_present": true,
+    "manufacturer_present": true,
+    "production_date_present": true,
+    "shelf_life_present": true,
+    "storage_condition_present": true,
+    "nutrition_table_present": true,
+    "allergen_warning_present": true,
+    "barcode_present": true,
+    "font_clear": true
+  },
+  "packaging": {
+    "package_type": "利乐砖",
+    "seal_integrity": "good",
+    "leakage": false,
+    "deformation": false,
+    "surface_contamination": false
+  },
+  "sensory": {
+    "color": "乳白色",
+    "odor": "具有牛乳固有香气",
+    "state": "均匀液体，无凝块，无肉眼可见杂质"
+  },
+  "process_records": {
+    "raw_material_acceptance_record": true,
+    "cleaning_disinfection_record": true,
+    "personnel_hygiene_record": true,
+    "traceability_record": true,
+    "temperature_control_record": true
+  },
+  "test_results": {
+    "microbiology": {
+      "total_colony_count_cfu_per_ml": 10,
+      "coliform_cfu_per_ml": 0,
+      "pathogen_salmonella": "not_detected",
+      "pathogen_staphylococcus_aureus": "not_detected"
+    },
+    "contaminants": {
+      "lead_mg_per_kg": 0.01,
+      "aflatoxin_m1_ug_per_kg": 0.2
+    },
+    "physicochemical": {
+      "protein_g_per_100ml": 3.5,
+      "fat_g_per_100ml": 4.0,
+      "acidity_t": 16
+    }
+  },
+  "traceability": {
+    "qr_code": "https://trace.example.com/FOOD-001",
+    "supplier_batch_linked": true,
+    "warehouse_outbound_record": true
+  },
+  "expected_result": {
+    "is_qualified": true,
+    "risk_level": "low",
+    "failed_rules": [],
+    "key_reasons": [
+      "标签信息完整",
+      "生产记录完整",
+      "微生物和污染物结果正常",
+      "包装密封完好"
+    ]
+  }
+}

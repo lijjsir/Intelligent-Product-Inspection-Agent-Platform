@@ -32,6 +32,14 @@ from app.models.agent_ops import (
 )
 from app.models.chat import ChatMessage, ChatSession
 from app.models.rag_space import RagSpace, RagSpaceFile
+from app.models.memory import (
+    MemoryDependencyEdge,
+    MemoryEvaluation,
+    MemoryEvent,
+    MemoryItem,
+    MemoryPolicy,
+    MemoryRollback,
+)
 
 __all__ = [
     "Base",
@@ -68,4 +76,10 @@ __all__ = [
     "ChatMessage",
     "RagSpace",
     "RagSpaceFile",
+    "MemoryItem",
+    "MemoryEvent",
+    "MemoryDependencyEdge",
+    "MemoryPolicy",
+    "MemoryRollback",
+    "MemoryEvaluation",
 ]
