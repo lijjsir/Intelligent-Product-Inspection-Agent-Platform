@@ -75,9 +75,9 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
             self.dedupe_calls = []
             self.set_status_calls = []
             self.runtime = SimpleNamespace(
-                runtime_key="Legacy Quality:legacy_quality",
+                runtime_key="Legacy Quality:quality_judgement",
                 agent_id="agent-1",
-                subgraph_key="legacy_quality",
+                subgraph_key="quality_judgement",
                 status="running",
                 supports_start_stop=True,
                 last_started_at=None,
@@ -129,14 +129,14 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
     original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
     agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
     try:
-        data = await svc.set_runtime_status("Legacy Quality:legacy_quality", status="stopped")
+        data = await svc.set_runtime_status("Legacy Quality:quality_judgement", status="stopped")
     finally:
         agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
 
     assert sync_calls == [True]
-    assert svc._runtime_repo.dedupe_calls == ["Legacy Quality:legacy_quality"]
-    assert svc._runtime_repo.set_status_calls == [("Legacy Quality:legacy_quality", "stopped")]
-    assert data.runtime_key == "Legacy Quality:legacy_quality"
+    assert svc._runtime_repo.dedupe_calls == ["Legacy Quality:quality_judgement"]
+    assert svc._runtime_repo.set_status_calls == [("Legacy Quality:quality_judgement", "stopped")]
+    assert data.runtime_key == "Legacy Quality:quality_judgement"
     assert data.status == "stopped"
 
 
@@ -145,14 +145,14 @@ def test_dspy_optimization_catalog_exposes_expected_targets_and_graph_context():
     target_keys = {item["target_key"] for item in targets}
 
     assert len(targets) == 10
-    assert "legacy_quality.planner" in target_keys
-    assert "llm_native_quality.contract_inferencer_dspy" in target_keys
+    assert "quality_judgement.planner" in target_keys
+    assert "quality_judgement.contract_inferencer_dspy" in target_keys
 
-    graph = get_dspy_graph_context("llm_native_quality.review_gate")
+    graph = get_dspy_graph_context("quality_judgement.review_gate")
     assert graph is not None
-    assert graph["focus_node_id"] == "llm_native_quality.review_gate"
-    assert "llm_native_quality.contract_mapper" in graph["upstream_nodes"]
-    assert "llm_native_quality.persist_emit" in graph["downstream_nodes"]
+    assert graph["focus_node_id"] == "quality_judgement.review_gate"
+    assert "quality_judgement.contract_mapper" in graph["upstream_nodes"]
+    assert "quality_judgement.persist_emit" in graph["downstream_nodes"]
 
 
 @pytest.mark.asyncio
@@ -214,10 +214,10 @@ async def test_compile_prompt_optimization_target_creates_pending_run_and_schedu
 
     monkeypatch.setattr(agent_ops_mod.asyncio, "create_task", fake_create_task)
 
-    run = await svc.compile_prompt_optimization_target("llm_native_quality.review_gate")
+    run = await svc.compile_prompt_optimization_target("quality_judgement.review_gate")
 
     assert svc._optimization_run_repo.created_payload == {
-        "target_key": "llm_native_quality.review_gate",
+        "target_key": "quality_judgement.review_gate",
         "run_type": "compile",
         "status": "pending",
         "compiler_version": "dspy-2.0",
@@ -249,27 +249,27 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
 
     data = await svc.get_routing_strategy()
 
-    assert data.default_target == "legacy_quality"
-    assert data.root_graph.agent_name == "QualityAgentRootGraph"
+    assert data.default_target == "quality_judgement"
+    assert data.root_graph.agent_name == "MemoryManagerGraph"
     assert {node.id for node in data.root_graph.nodes} >= {
         "request_intake",
         "route_signal_builder",
         "route_policy",
         "subgraph_runner",
         "contract_finalize",
-        "legacy_quality",
-        "llm_native_quality",
+        "quality_judgement",
+        "quality_judgement",
     }
     assert [rule.target_subgraph for rule in data.priority_rules] == [
-        "legacy_quality",
-        "legacy_quality",
-        "llm_native_quality",
+        "quality_judgement",
+        "quality_judgement",
+        "quality_judgement",
     ]
     assert [rule.order for rule in data.priority_rules] == [1, 2, 3]
     assert data.decision_cards[0].matched_signals == ["has_task_keyword"]
     assert data.decision_cards[1].matched_signals == ["has_images"]
     assert data.decision_cards[2].matched_signals == ["has_file_attachments", "request_kind"]
-    assert {item.subgraph_key for item in data.subgraphs} == {"legacy_quality", "llm_native_quality"}
+    assert {item.subgraph_key for item in data.subgraphs} == {"quality_judgement", "quality_judgement"}
     assert data.registered_route_count == 2
     assert data.registered_intents == ["quality_chat", "quality_task_create"]
 
@@ -300,7 +300,7 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "hit_rate": 1.0,
                     "citation_coverage": 1.0,
                     "latency_ms": 12,
-                    "source_graph": "llm_native_quality",
+                    "source_graph": "quality_judgement",
                     "created_at": now,
                     "metadata": {
                         "rag_space_name": "food",
@@ -321,7 +321,7 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "hit_rate": 0.5,
                     "citation_coverage": 0.4,
                     "latency_ms": 24,
-                    "source_graph": "llm_native_quality",
+                    "source_graph": "quality_judgement",
                     "created_at": now,
                     "metadata": {
                         "rag_space_name": "food",
@@ -347,7 +347,7 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
     assert data.recent_items[0].rag_space_name == "food"
     assert data.recent_items[0].product_family == "food"
     assert data.space_breakdown[0].key == "rag-food"
-    assert data.source_graph_breakdown[0].key == "llm_native_quality"
+    assert data.source_graph_breakdown[0].key == "quality_judgement"
     assert data.product_family_breakdown[0].key == "food"
     assert {item.rule_key for item in data.evidence_impact} == {
         "food.traceability.qr_code_required",
