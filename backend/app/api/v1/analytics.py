@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_db, get_current_user
-from app.core.permissions import ROLE_ADMIN, normalize_role, require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.analytics import ModelDrilldown, OverviewStats, ProductLineDrilldown, TaskDrilldown
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 def _scope_org_id(current: CurrentUser) -> str | None:
-    return None if normalize_role(current.role) == ROLE_ADMIN else current.org_id
+    return None if ROLE_ADMIN in current.roles else current.org_id
 
 
 @router.get("/overview", response_model=ResponseEnvelope[OverviewStats])
