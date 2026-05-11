@@ -144,15 +144,15 @@ def test_dspy_optimization_catalog_exposes_expected_targets_and_graph_context():
     targets = get_dspy_optimization_targets()
     target_keys = {item["target_key"] for item in targets}
 
-    assert len(targets) == 10
+    assert len(targets) == 5
     assert "quality_judgement.planner" in target_keys
-    assert "quality_judgement.contract_inferencer_dspy" in target_keys
+    assert "quality_judgement.contract_inferencer" in target_keys
 
     graph = get_dspy_graph_context("quality_judgement.review_gate")
     assert graph is not None
     assert graph["focus_node_id"] == "quality_judgement.review_gate"
-    assert "quality_judgement.contract_mapper" in graph["upstream_nodes"]
-    assert "quality_judgement.persist_emit" in graph["downstream_nodes"]
+    assert "quality_judgement.evidence_synthesizer" in graph["upstream_nodes"]
+    assert "quality_judgement.task_executor" in graph["downstream_nodes"]
 
 
 @pytest.mark.asyncio
@@ -253,11 +253,10 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
     assert data.root_graph.agent_name == "MemoryManagerGraph"
     assert {node.id for node in data.root_graph.nodes} >= {
         "request_intake",
-        "route_signal_builder",
-        "route_policy",
+        "memory_context_loader",
+        "manager_route_policy",
         "subgraph_runner",
-        "contract_finalize",
-        "quality_judgement",
+        "result_synthesizer",
         "quality_judgement",
     }
     assert [rule.target_subgraph for rule in data.priority_rules] == [
