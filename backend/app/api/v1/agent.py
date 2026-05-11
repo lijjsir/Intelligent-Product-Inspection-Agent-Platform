@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.permissions import ROLE_ADMIN, ROLE_USER, normalize_role, require_role
+from app.core.permissions import require_role, ROLE_ADMIN, ROLE_USER
 from app.core.security import safe_decode_token
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import ResponseEnvelope
@@ -52,9 +52,8 @@ async def run_task_pipeline(
     db=Depends(get_db),
 ):
     require_role("task", current.role)
-    normalized_role = normalize_role(current.role)
-    owner_user_id = current.user_id if normalized_role == ROLE_USER else None
-    org_scope = None if normalized_role == ROLE_ADMIN else current.org_id
+    owner_user_id = current.user_id if ROLE_USER in current.roles else None
+    org_scope = None if ROLE_ADMIN in current.roles else current.org_id
     task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
@@ -74,9 +73,8 @@ async def stream_task_events(
         current.stream_resource != "task" or current.stream_resource_id != task_id
     ):
         raise ForbiddenError("invalid stream token")
-    normalized_role = normalize_role(current.role)
-    owner_user_id = current.user_id if normalized_role == ROLE_USER else None
-    org_scope = None if normalized_role == ROLE_ADMIN else current.org_id
+    owner_user_id = current.user_id if ROLE_USER in current.roles else None
+    org_scope = None if ROLE_ADMIN in current.roles else current.org_id
     task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")

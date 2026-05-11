@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.permissions import ROLE_ADMIN, normalize_role, require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
     AgentDefinitionResponse,
@@ -53,7 +53,7 @@ def _build_service(current: CurrentUser, db) -> AgentOpsService:
 
 
 def _use_global_scope(current: CurrentUser) -> bool:
-    return normalize_role(current.role) == ROLE_ADMIN
+    return ROLE_ADMIN in current.roles
 
 
 @router.get("/agents", response_model=ResponseEnvelope[PagedResponse[AgentDefinitionResponse]])

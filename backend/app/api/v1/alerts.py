@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import get_db, get_current_user
-from app.core.permissions import ROLE_ADMIN, normalize_role, require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.alert import AlertResponse, AlertListQuery, AlertHandleRequest
 from app.schemas.common import ResponseEnvelope, PagedResponse
 from app.schemas.user import CurrentUser
@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 def _scope_org_id(current: CurrentUser) -> str | None:
-    return None if normalize_role(current.role) == ROLE_ADMIN else current.org_id
+    return None if ROLE_ADMIN in current.roles else current.org_id
 
 
 @router.get("", response_model=ResponseEnvelope[PagedResponse[AlertResponse]])
