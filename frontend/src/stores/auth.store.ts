@@ -5,13 +5,14 @@ import { useUserStore } from "@/stores/user.store";
 import type { LoginPayload, RegisterPayload, AuthSession } from "@/types/auth.types";
 import {
   ROLE_ADMIN,
-  ROLE_AGENT_OPERATOR,
-  ROLE_ANALYST,
+  ROLE_APP_DEVELOPER,
+  ROLE_PLATFORM_OPERATOR,
+  ROLE_ALGORITHM_ENGINEER,
   ROLE_USER,
+  ROLE_EXPERT,
   WORKSPACE_APP,
   WORKSPACE_GOVERNANCE,
   WORKSPACE_OPS,
-  normalizeRole,
 } from "@/constants/roles";
 import {
   CAPABILITIES_KEY,
@@ -46,17 +47,19 @@ export const useAuthStore = defineStore("auth", () => {
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
   }
-  const normalizedRoles = roles.value.map(normalizeRole);
   if (!workspaces.value.length) {
-    if (normalizedRoles.includes(ROLE_ADMIN)) {
-      workspaces.value = [WORKSPACE_APP, WORKSPACE_OPS, WORKSPACE_GOVERNANCE];
-    } else if (normalizedRoles.includes(ROLE_ANALYST)) {
-      workspaces.value = [WORKSPACE_APP, WORKSPACE_GOVERNANCE];
-    } else if (normalizedRoles.includes(ROLE_AGENT_OPERATOR)) {
-      workspaces.value = [WORKSPACE_OPS];
-    } else if (role.value) {
-      workspaces.value = [WORKSPACE_APP];
+    const rs = roles.value;
+    const w: string[] = [];
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
+      w.push(WORKSPACE_APP);
     }
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+      w.push(WORKSPACE_OPS);
+    }
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+      w.push(WORKSPACE_GOVERNANCE);
+    }
+    workspaces.value = w.length ? w : [WORKSPACE_APP];
   }
 
   const isAuthed = computed(() => Boolean(token.value));
@@ -150,8 +153,15 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function resolveDefaultRoute() {
-    if (normalizeRole(primaryRole.value) === ROLE_USER) {
+    const r = primaryRole.value;
+    if (r === ROLE_USER || r === ROLE_EXPERT) {
       return "/app/chat";
+    }
+    if (r === ROLE_ADMIN || r === ROLE_ALGORITHM_ENGINEER) {
+      return "/governance/quality/report";
+    }
+    if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
+      return "/ops/agents";
     }
     return "/app/dashboard";
   }
