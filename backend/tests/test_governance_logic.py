@@ -328,17 +328,17 @@ def test_model_pricing_prefers_configured_price():
     assert cost == 0.02
 
 
-def test_build_auth_claims_for_agent_operator():
-    claims = build_auth_claims("agent_operator", "premium")
-    assert claims.role == "agent_operator"
-    assert claims.roles == ["agent_operator"]
+def test_build_auth_claims_for_app_developer():
+    claims = build_auth_claims("app_developer", "premium")
+    assert claims.role == "app_developer"
+    assert claims.roles == ["app_developer"]
     assert claims.default_workspace == WORKSPACE_OPS
     assert claims.workspaces == [WORKSPACE_OPS]
     assert CAPABILITY_CUSTOM_WORKFLOW in claims.capabilities
 
 
 def test_build_auth_claims_for_governance_role():
-    claims = build_auth_claims("ai_quality", "expert")
+    claims = build_auth_claims("algorithm_engineer", "expert")
     assert claims.default_workspace == WORKSPACE_GOVERNANCE
     assert WORKSPACE_GOVERNANCE in claims.workspaces
 
