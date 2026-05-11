@@ -3,13 +3,13 @@ from enum import Enum
 
 
 class Role(str, Enum):
-    super_admin = "super_admin"
-    org_admin = "org_admin"
-    inspector = "inspector"
-    analyst = "analyst"
-    agent_operator = "agent_operator"
+    admin = "admin"
+    app_developer = "app_developer"
+    platform_operator = "platform_operator"
+    algorithm_engineer = "algorithm_engineer"
+    user = "user"
+    expert = "expert"
     api_service = "api_service"
-    auditor = "auditor"
 
 
 @dataclass(frozen=True)
