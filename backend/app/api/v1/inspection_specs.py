@@ -16,7 +16,7 @@ async def list_inspection_specs(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("inspection_spec", current.role)
+    require_role("inspection_spec_read", current.role)
     service = InspectionSpecService(db, current.org_id)
     return ResponseEnvelope(data=await service.list_specs())
 
@@ -27,7 +27,7 @@ async def get_inspection_spec(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("inspection_spec", current.role)
+    require_role("inspection_spec_read", current.role)
     service = InspectionSpecService(db, current.org_id)
     return ResponseEnvelope(data=await service.get_spec(inspection_spec_row_id))
 

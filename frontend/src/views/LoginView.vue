@@ -1,34 +1,60 @@
 <template>
-  <section class="login">
-    <h2>欢迎回来</h2>
-    <p>请输入组织 ID 或组织 slug，以及账号密码进行登录。</p>
+  <div class="w-full max-w-[360px]">
+    <div class="mb-8">
+      <h2 class="text-2xl font-bold text-zinc-900">欢迎回来</h2>
+      <p class="mt-2 text-sm text-zinc-500">请输入组织标识和账号密码进行登录</p>
+    </div>
 
-    <form @submit.prevent="submit">
-      <label>
-        组织 ID / slug
-        <input v-model="orgId" type="text" placeholder="例如：admin 或组织 UUID" />
-      </label>
+    <form class="flex flex-col gap-5" @submit.prevent="submit">
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">组织 ID / slug</label>
+        <el-input
+          v-model="orgId"
+          placeholder="admin 或组织 UUID"
+          size="large"
+          clearable
+        />
+      </div>
 
-      <label>
-        账号
-        <input v-model="username" type="text" placeholder="例如：admin" />
-      </label>
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">账号</label>
+        <el-input
+          v-model="username"
+          placeholder="admin"
+          size="large"
+          clearable
+        />
+      </div>
 
-      <label>
-        密码
-        <input v-model="password" type="password" placeholder="请输入密码" />
-      </label>
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">密码</label>
+        <el-input
+          v-model="password"
+          type="password"
+          placeholder="请输入密码"
+          size="large"
+          show-password
+          @keydown.enter="submit"
+        />
+      </div>
 
-      <button type="submit" :disabled="loading">
+      <el-button
+        type="primary"
+        size="large"
+        native-type="submit"
+        :loading="loading"
+        class="!w-full !mt-2"
+        @click="submit"
+      >
         {{ loading ? "登录中..." : "登录" }}
-      </button>
+      </el-button>
     </form>
 
-    <div class="footer">
+    <p class="mt-6 text-center text-[13px] text-zinc-400">
       还没有账号？
-      <RouterLink to="/register">创建组织</RouterLink>
-    </div>
-  </section>
+      <RouterLink to="/register" class="text-zinc-900 font-medium hover:underline">创建组织</RouterLink>
+    </p>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -63,55 +89,3 @@ const submit = async () => {
   }
 };
 </script>
-
-<style scoped>
-.login {
-  width: min(420px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  background: #fff;
-  padding: 32px;
-  border-radius: 16px;
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
-}
-
-form {
-  display: grid;
-  gap: 16px;
-}
-
-label {
-  display: grid;
-  gap: 6px;
-  font-size: 14px;
-  color: #475569;
-}
-
-input {
-  height: 44px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  padding: 0 12px;
-}
-
-button {
-  height: 44px;
-  border: none;
-  border-radius: 10px;
-  background: #1b3a5c;
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-button:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-.footer {
-  font-size: 13px;
-  color: #64748b;
-}
-</style>

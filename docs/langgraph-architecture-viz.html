@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PIAP LangGraph 架构可视化</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f4f4f5; color: #18181b; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .subtitle { color: #71717a; font-size: 14px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  .card { background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px; }
+  .card h2 { font-size: 16px; margin-bottom: 12px; color: #18181b; }
+  .card-full { grid-column: 1 / -1; }
+  .mermaid { display: flex; justify-content: center; overflow-x: auto; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-ok { background: #dcfce7; color: #166534; }
+  .badge-warn { background: #fef9c3; color: #854d0e; }
+  .badge-err { background: #fee2e2; color: #991b1b; }
+  .badge-info { background: #dbeafe; color: #1e40af; }
+  .issues { margin-top: 16px; }
+  .issue { padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+  .issue-warn { background: #fef9c3; border-left: 3px solid #eab308; }
+  .issue-err { background: #fee2e2; border-left: 3px solid #ef4444; }
+  .issue-info { background: #dbeafe; border-left: 3px solid #3b82f6; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat { background: #fff; border: 1px solid #e4e4e7; border-radius: 10px; padding: 14px 20px; min-width: 120px; }
+  .stat-num { font-size: 28px; font-weight: 700; }
+  .stat-label { font-size: 12px; color: #71717a; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>PIAP LangGraph 架构拓扑</h1>
+  <p class="subtitle">智能产品检测代理平台 — 图结构完整可视化</p>
+
+  <div class="stat-row">
+    <div class="stat"><div class="stat-num">3</div><div class="stat-label">StateGraph 图</div></div>
+    <div class="stat"><div class="stat-num">16</div><div class="stat-label">MemoryManager 节点</div></div>
+    <div class="stat"><div class="stat-num">10</div><div class="stat-label">QualityChat 节点</div></div>
+    <div class="stat"><div class="stat-num">5</div><div class="stat-label">Inspection 节点</div></div>
+    <div class="stat"><div class="stat-num">7</div><div class="stat-label">注册子图</div></div>
+    <div class="stat"><div class="stat-num">2</div><div class="stat-label">活跃子图</div></div>
+  </div>
+
+  <!-- 总览图 -->
+  <div class="card card-full">
+    <h2>总览 — 三层图架构</h2>
+    <div class="mermaid">
+graph TB
+    subgraph API["入口层"]
+        CHAT["/chat 对话接口<br/>QualityAgentOrchestratorService"]
+        PIPE["/pipeline 检测接口<br/>run_inspection_pipeline()"]
+    end
+
+    subgraph SUPERVISOR["监督层 — MemoryManagerGraph (StateGraph v2)"]
+        direction TB
+        RI["request_intake<br/>📥 请求接入"] --> MCL["memory_context_loader<br/>🧠 记忆上下文加载"]
+        MCL --> MRP["manager_route_policy<br/>🔀 路由策略"]
+
+        MRP --> MMA["market_monitor_agent<br/>📊 市场监控"]
+        MRP --> POA["public_opinion_agent<br/>📢 舆情分析"]
+        MRP --> TEA["trend_evolution_agent<br/>📈 趋势演化"]
+        MRP --> QJA["quality_judgement_agent<br/>✅ 质量判定"]
+
+        MMA --> CMB["candidate_memory_builder<br/>📝 候选记忆构建"]
+        POA --> CMB
+        TEA --> CMB
+        QJA --> CMB
+
+        CMB --> WGN["write_gate_node<br/>🚪 写入门控"]
+        WGN --> CMN["contamination_monitor_node<br/>🛡️ 污染监控"]
+
+        CMN -->|"clean"| RS["result_synthesizer<br/>📋 结果合成"]
+        CMN -->|"governance"| GOV["治理恢复分支<br/>provenance → propagation → rollback → recovery → replay"]
+        GOV --> RS
+    end
+
+    subgraph EXEC["执行层"]
+        QCSG["QualityJudgementSubgraph<br/>路由包装器"]
+        QCG["QualityChatGraph<br/>StateGraph (v1)"]
+        IG["InspectionGraph<br/>顺序管道 (非LangGraph)"]
+    end
+
+    CHAT --> SUPERVISOR
+    PIPE --> IG
+    SUPERVISOR --> QCSG
+    QCSG --> QCG
+
+    style SUPERVISOR fill:#f0f9ff,stroke:#0284c7
+    style EXEC fill:#fdf4ff,stroke:#a21caf
+    style API fill:#f0fdf4,stroke:#16a34a
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- MemoryManagerGraph 详细 -->
+    <div class="card">
+      <h2>MemoryManagerGraph <span class="badge badge-info">StateGraph v2</span></h2>
+      <div class="mermaid">
+graph TB
+    RI["1. request_intake<br/>📥 请求规范化"]
+    MCL["2. memory_context_loader<br/>🧠 加载记忆上下文"]
+    MRP["3. manager_route_policy<br/>🔀 路由策略节点"]
+
+    MMA["4. market_monitor<br/>📊 市场监控"]
+    POA["5. public_opinion<br/>📢 舆情分析"]
+    TEA["6. trend_evolution<br/>📈 趋势演化"]
+    QJA["7. quality_judgement<br/>✅ 质量判定"]
+    SSA["⚠️ supervision_sampling<br/>无入边=不可达"]
+    LDA["⚠️ lab_detection<br/>无入边=不可达"]
+
+    CMB["8. candidate_memory_builder<br/>📝 聚合候选记忆"]
+    WGN["9. write_gate_node<br/>🚪 验证 & 写入"]
+    CMN["10. contamination_monitor<br/>🛡️ 污染检测"]
+
+    PV["11. provenance_node<br/>🔗 溯源"]
+    PG["12. propagation_graph<br/>🌐 传播图"]
+    RP["13. rollback_planner<br/>📋 回滚计划"]
+    GR["14. governance_recovery<br/>🔄 执行恢复"]
+    RE["15. replay_evaluation<br/>📊 恢复评估"]
+
+    RS["16. result_synthesizer<br/>📋 最终结果合成"]
+
+    RI --> MCL --> MRP
+    MRP --> MMA & POA & TEA & QJA
+    MMA & POA & TEA & QJA --> CMB
+    CMB --> WGN --> CMN
+    CMN -->|"✅ clean"| RS
+    CMN -->|"🚨 governance"| PV --> PG --> RP --> GR --> RE --> RS
+
+    style RI fill:#dbeafe,stroke:#3b82f6
+    style RS fill:#dcfce7,stroke:#16a34a
+    style SSA fill:#fee2e2,stroke:#ef4444,stroke-dasharray: 5 5
+    style LDA fill:#fee2e2,stroke:#ef4444,stroke-dasharray: 5 5
+    style MRP fill:#fef9c3,stroke:#eab308
+    style CMN fill:#fef9c3,stroke:#eab308
+      </div>
+    </div>
+
+    <!-- 问题分析 -->
+    <div class="card">
+      <h2>结构问题分析</h2>
+      <div class="issues">
+        <div class="issue issue-err">
+          <strong>🔴 严重：2 个节点不可达</strong><br/>
+          <code>supervision_sampling_agent</code> 和 <code>lab_detection_agent</code> 已在图中注册但没有任何入边，
+          manager_route_policy 没有连接到它们，永远不会被执行。
+        </div>
+        <div class="issue issue-warn">
+          <strong>🟡 中等：专业 Agent 节点全是占位</strong><br/>
+          market_monitor、public_opinion、trend_evolution 等节点返回硬编码的空 <code>candidate_memories</code>，
+          只有 quality_judgement 有实际逻辑。
+        </div>
+        <div class="issue issue-warn">
+          <strong>🟡 中等：子图集成非 LangGraph 原生方式</strong><br/>
+          MemoryManagerGraph 没有使用 <code>add_node(graph)</code> 方式集成子图，
+          而是手动调用异步函数。QualityJudgementSubgraph 只是一个 Python 类包装器。
+        </div>
+        <div class="issue issue-warn">
+          <strong>🟡 中等：路由策略单一</strong><br/>
+          <code>select_subgraph()</code> 始终返回 <code>quality_judgement</code>，三种路由模式
+          (legacy_only / canary_non_pdf / router_enabled) 最终都指向同一目标。
+        </div>
+        <div class="issue issue-info">
+          <strong>🔵 注意：两套并行系统</strong><br/>
+          InspectionGraph (顺序管道) 和 MemoryManagerGraph (StateGraph) 互不通信，
+          分别处理 pipeline 和 chat 入口，代码路径完全独立。
+        </div>
+        <div class="issue issue-info">
+          <strong>🔵 注意：拓扑目录与运行时不一致</strong><br/>
+          topology_catalog 声明 7 个子图归属 MemoryManagerGraph，但只有 2 个活跃 (v1+)，
+          其余 5 个为 v0 占位。
+        </div>
+      </div>
+    </div>
+
+    <!-- QualityChatGraph -->
+    <div class="card">
+      <h2>QualityChatGraph <span class="badge badge-ok">StateGraph v1</span></h2>
+      <div class="mermaid">
+graph LR
+    IA["1. input_adapter<br/>📥 DSPy 配置解析"]
+    HL["2. history_loader<br/>📜 加载聊天历史"]
+    PL["3. planner<br/>🎯 意图分类"]
+    TE["4. task_extractor<br/>📋 任务抽取"]
+    KN["5. knowledge<br/>🔍 RAG 检索"]
+    RS["6. reasoning<br/>🧠 LLM 推理"]
+    QG["7. quality_gate<br/>🛡️ 质量门控"]
+    TX["8. task_executor<br/>⚡ 任务创建"]
+    RW["9. response_writer<br/>📤 流式响应"]
+    FN["10. finalizer<br/>💾 持久化 & 记费"]
+
+    IA --> HL --> PL --> TE --> KN --> RS --> QG --> TX --> RW --> FN
+
+    style PL fill:#fef9c3,stroke:#eab308
+    style QG fill:#fef9c3,stroke:#eab308
+    style FN fill:#dbeafe,stroke:#3b82f6
+      </div>
+      <p style="font-size:12px;color:#71717a;margin-top:8px">
+        planner 内部分类：smalltalk | task_create | quality_qa | general_qa | task_followup<br/>
+        各下游节点根据 intent 决定是否执行实际逻辑
+      </p>
+    </div>
+
+    <!-- InspectionGraph -->
+    <div class="card">
+      <h2>InspectionGraph <span class="badge badge-warn">非LangGraph</span></h2>
+      <div class="mermaid">
+graph LR
+    P["plan<br/>📋 计划"] --> V["run_vision<br/>👁️ 视觉分析"]
+    V --> K["run_knowledge<br/>📚 知识检索"]
+    K --> R["run_reasoning<br/>🧠 推理判断"]
+    R --> F["finalize<br/>📋 结论生成"]
+      </div>
+      <p style="font-size:12px;color:#71717a;margin-top:8px">
+        纯顺序管道，5 个节点硬编码依次执行。遇 runtime_errors 提前中断。<br/>
+        执行后由 InspectionStandardService.evaluate() 和 stability.analyzer 做后处理。
+      </p>
+    </div>
+
+    <!-- 路由策略 -->
+    <div class="card">
+      <h2>路由策略 (policy.py)</h2>
+      <div class="mermaid">
+graph TB
+    INPUT["RouteSignals 输入<br/>has_task_keyword<br/>has_images<br/>has_file_attachments<br/>request_kind"]
+    MODE{"agent_route_mode?"}
+    LEGACY["legacy_only → quality_judgement"]
+    TASK["has_task_keyword → quality_judgement"]
+    IMG["has_images → quality_judgement"]
+    FILE["has_file / chat → quality_judgement"]
+    DEFAULT["fallback → quality_judgement"]
+
+    INPUT --> MODE
+    MODE -->|legacy_only| LEGACY
+    MODE -->|router_enabled| TASK
+    TASK -->|no| IMG
+    IMG -->|no| FILE
+    FILE -->|no| DEFAULT
+    LEGACY & TASK & IMG & FILE & DEFAULT --> SAME["🎯 全部指向 quality_judgement"]
+
+    style SAME fill:#fef9c3,stroke:#eab308
+      </div>
+    </div>
+
+    <!-- 架构评价 -->
+    <div class="card">
+      <h2>总体评价</h2>
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #e4e4e7">
+          <td style="padding:8px;font-weight:600">设计意图</td>
+          <td style="padding:8px">监督者-工作者 (Supervisor-Worker) 模式，MemoryManager 作为中央调度器</td>
+        </tr>
+        <tr style="border-bottom:1px solid #e4e4e7">
+          <td style="padding:8px;font-weight:600">当前状态</td>
+          <td style="padding:8px">MVP 阶段 — 核心链路可用，多 Agent 扩展骨架已搭建但未实现</td>
+        </tr>
+        <tr style="border-bottom:1px solid #e4e4e7">
+          <td style="padding:8px;font-weight:600">合理之处</td>
+          <td style="padding:8px">
+            ✅ Supervisor-Worker 模式适合多 Agent 协作<br/>
+            ✅ 记忆生命周期（候选→验证→治理）设计完整<br/>
+            ✅ 质量门控 + 污染监控的防御性设计<br/>
+            ✅ QualityChatGraph 顺序管道简洁清晰，适合 QA 场景
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px;font-weight:600">待改进</td>
+          <td style="padding:8px">
+            ❌ 2 个不可达节点应补全路由或移除<br/>
+            ❌ 5 个 v0 占位子图要么实现要么清理<br/>
+            ❌ 路由策略需要真正的多路分发逻辑<br/>
+            ❌ 两条入口 (chat/pipeline) 应该统一到一个监督图<br/>
+            ❌ 应使用 LangGraph 原生 subgraph add_node 方式集成
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+mermaid.initialize({ startOnLoad: true, theme: 'base', securityLevel: 'loose',
+  themeVariables: { fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif', fontSize: '13px' } });
+</script>
+</body>
+</html>

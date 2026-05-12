@@ -5,7 +5,6 @@ import {
   ROLE_APP_DEVELOPER,
   ROLE_PLATFORM_OPERATOR,
   ROLE_ALGORITHM_ENGINEER,
-  ROLE_USER,
   ROLE_EXPERT,
 } from "@/constants/roles";
 

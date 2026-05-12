@@ -1,21 +1,101 @@
-:root {
-  font-family: "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
-  color: #1f2937;
-  background-color: #f8fafc;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Element Plus theme bridge — map to zinc monochrome palette */
+    --el-color-primary: #18181b;
+    --el-color-primary-light-3: #3f3f46;
+    --el-color-primary-light-5: #52525b;
+    --el-color-primary-light-7: #a1a1aa;
+    --el-color-primary-light-8: #d4d4d8;
+    --el-color-primary-light-9: #e4e4e7;
+    --el-color-primary-dark-2: #09090b;
+    --el-color-success: #22c55e;
+    --el-color-warning: #f59e0b;
+    --el-color-danger: #ef4444;
+    --el-color-info: #71717a;
+
+    --el-border-radius-base: 8px;
+    --el-border-radius-small: 6px;
+    --el-border-radius-round: 9999px;
+
+    --el-bg-color: #ffffff;
+    --el-bg-color-page: #fafafa;
+    --el-bg-color-overlay: #ffffff;
+
+    --el-text-color-primary: #09090b;
+    --el-text-color-regular: #3f3f46;
+    --el-text-color-secondary: #71717a;
+    --el-text-color-placeholder: #a1a1aa;
+
+    --el-border-color: #e4e4e7;
+    --el-border-color-light: #f4f4f5;
+    --el-border-color-lighter: #fafafa;
+
+    --el-fill-color: #f4f4f5;
+    --el-fill-color-light: #fafafa;
+    --el-fill-color-blank: #ffffff;
+
+    --el-box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --el-box-shadow-light: 0 4px 12px rgba(0, 0, 0, 0.06);
+    --el-box-shadow-lighter: 0 12px 24px rgba(0, 0, 0, 0.08);
+    --el-box-shadow-dark: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    font-family: "Noto Sans SC", "Source Han Sans SC", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    min-height: 100vh;
+    @apply bg-zinc-50 text-zinc-950;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d4d4d8;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a1a1aa;
+  }
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+@layer components {
+  /* Thin utility for common patterns */
+  .page-shell {
+    @apply min-h-[calc(100vh-48px)] p-6 flex flex-col gap-5;
+  }
 
-body {
-  min-height: 100vh;
-  background: #f8fafc;
-}
+  .card-surface {
+    @apply bg-white rounded-card border border-zinc-200 shadow-surface-sm;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
+  .card-surface-hover {
+    @apply card-surface hover:shadow-surface-md hover:border-zinc-300 transition-shadow duration-200;
+  }
 }

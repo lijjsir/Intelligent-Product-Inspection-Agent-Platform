@@ -62,13 +62,13 @@ function goBack() {
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
       <el-button @click="goBack" class="mb-4">
         &larr; 返回
       </el-button>
       <div v-if="store.current" class="title-area">
-        <h2 class="title">分析结果大盘</h2>
+        <h2 class="text-2xl font-bold text-zinc-900">分析结果大盘</h2>
         <el-tag :type="getVerdictType(store.current.verdict)" size="large" class="ml-4">
           判定结论: {{ store.current.verdict.toUpperCase() }}
         </el-tag>
@@ -76,12 +76,12 @@ function goBack() {
     </div>
 
     <div v-if="store.current" class="content">
-      <el-row :gutter="20">
+      <div class="flex gap-5">
         <!-- 侧边摘要面板 -->
-        <el-col :span="8">
+        <div>
           <el-card shadow="never" class="info-card">
             <template #header>结论摘要</template>
-            <el-descriptions :column="1" border size="large">
+            <el-descriptions :column="1" size="large">
               <el-descriptions-item label="任务编号">{{ store.current.task_id }}</el-descriptions-item>
               <el-descriptions-item label="检出异常分数">
                 <span class="text-xl font-bold">{{ (store.current.overall_score * 100).toFixed(1) }}</span> 分
@@ -92,10 +92,10 @@ function goBack() {
               <el-descriptions-item label="Tokens">消耗 {{ store.current.tokens_used || '-' }} Token</el-descriptions-item>
             </el-descriptions>
           </el-card>
-        </el-col>
+        </div>
         
         <!-- 主体数据面板 -->
-        <el-col :span="16">
+        <div>
           <!-- 缺陷图像可视化 -->
           <el-card v-if="taskImages.length > 0 && store.current.defects && store.current.defects.length > 0" shadow="never" class="mb-4">
             <template #header>缺陷可视化标注</template>
@@ -157,8 +157,8 @@ function goBack() {
             <template #header>用户反馈</template>
             <FeedbackWidget :result-id="store.current.id" />
           </el-card>
-        </el-col>
-      </el-row>
+        </div>
+      </div>
     </div>
     
     <div v-else-if="!loading" class="empty-state">
@@ -168,34 +168,18 @@ function goBack() {
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
-}
 
-.header {
-  margin-bottom: 24px;
-}
 
 .title-area {
   display: flex;
   align-items: center;
 }
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
 .ml-4 {
   margin-left: 16px;
 }
 
-.mb-4 {
-  margin-bottom: 16px;
-}
 
 .text-xl {
   font-size: 1.25rem;
@@ -211,7 +195,7 @@ function goBack() {
   background: #1e1e1e;
   color: #d4d4d4;
   padding: 16px;
-  border-radius: 8px;
+ border-radius: 8px;
   overflow: auto;
   max-height: 500px;
   font-family: Consolas, Monaco, monospace;

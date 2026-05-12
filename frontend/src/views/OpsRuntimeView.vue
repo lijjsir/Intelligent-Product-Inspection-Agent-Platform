@@ -39,44 +39,44 @@ function getStatusType(status: string) {
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
-      <h2 class="title">Agent 运行中心</h2>
-      <p class="subtitle">展示真实运行态接口返回的 Agent 概览和运行单元状态。</p>
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
+      <h2 class="text-2xl font-bold text-zinc-900">Agent 运行中心</h2>
+      <p class="mt-2 text-sm text-zinc-500">展示真实运行态接口返回的 Agent 概览和运行单元状态。</p>
     </div>
 
-    <el-row :gutter="20" class="mb-4">
-      <el-col :span="4">
+    <div class="grid grid-cols-5 gap-4">
+      <div>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ store.runtimeOverview?.active_agents ?? 0 }}</div>
           <div class="stat-label">启用 Agent</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ store.runtimeOverview?.running_agents ?? 0 }}</div>
           <div class="stat-label">运行中</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ store.runtimeOverview?.stopped_agents ?? 0 }}</div>
           <div class="stat-label">已停止</div>
         </el-card>
-      </el-col>
-      <el-col :span="6">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ store.runtimeOverview?.completed_today ?? 0 }}</div>
           <div class="stat-label">今日完成</div>
         </el-card>
-      </el-col>
-      <el-col :span="6">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
           <div class="stat-value">{{ store.runtimeOverview?.avg_latency_ms ?? 0 }} ms</div>
           <div class="stat-label">平均延迟</div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <el-card shadow="never">
       <template #header>
@@ -118,31 +118,10 @@ function getStatusType(status: string) {
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background: #f8fafc;
-  min-height: 100%;
-}
 
-.header {
-  margin-bottom: 24px;
-}
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
-.subtitle {
-  margin: 4px 0 0;
-  color: #6b7280;
-  font-size: 14px;
-}
 
-.mb-4 {
-  margin-bottom: 16px;
-}
 
 .stat-card {
   text-align: center;

@@ -132,7 +132,7 @@ async def test_quality_gate_downgrades_when_evidence_is_missing():
     }
     updated = await quality_gate(state)
     assert updated["quality"]["passed"] is False
-    assert updated["quality"]["risk_level"] == "red"
+    assert updated["quality"]["risk_level"] == "critical"
     assert len(updated["reasoning"]["answer"]) > len(original_answer)
 
 
