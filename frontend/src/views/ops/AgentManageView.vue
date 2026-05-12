@@ -148,10 +148,10 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <div class="page-header">
       <h1>Agent 管理</h1>
-      <p class="subtitle">自动发现当前 LangGraph 子图，查看运行状态，并管理可启停的智能体运行单元。</p>
+      <p class="mt-2 text-sm text-zinc-500">自动发现当前 LangGraph 子图，查看运行状态，并管理可启停的智能体运行单元。</p>
     </div>
 
     <el-tabs v-model="activeTab">
@@ -226,38 +226,38 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
       </el-tab-pane>
 
       <el-tab-pane label="运行态" name="runtime">
-        <el-row :gutter="16" class="mb-4">
-          <el-col :span="4">
+        <div class="flex gap-4 mb-4">
+          <div class="flex-1">
             <el-card shadow="never" class="stat-card">
               <div class="stat-value">{{ store.runtimeOverview?.active_agents ?? 0 }}</div>
               <div class="stat-label">启用 Agent</div>
             </el-card>
-          </el-col>
-          <el-col :span="4">
+          </div>
+          <div class="flex-1">
             <el-card shadow="never" class="stat-card">
               <div class="stat-value">{{ store.runtimeOverview?.running_agents ?? 0 }}</div>
               <div class="stat-label">运行中</div>
             </el-card>
-          </el-col>
-          <el-col :span="4">
+          </div>
+          <div class="flex-1">
             <el-card shadow="never" class="stat-card">
               <div class="stat-value">{{ store.runtimeOverview?.stopped_agents ?? 0 }}</div>
               <div class="stat-label">已停止</div>
             </el-card>
-          </el-col>
-          <el-col :span="6">
+          </div>
+          <div class="flex-1">
             <el-card shadow="never" class="stat-card">
               <div class="stat-value">{{ store.runtimeOverview?.total_executions ?? 0 }}</div>
               <div class="stat-label">累计执行</div>
             </el-card>
-          </el-col>
-          <el-col :span="6">
+          </div>
+          <div class="flex-1">
             <el-card shadow="never" class="stat-card">
               <div class="stat-value">{{ store.runtimeOverview?.avg_latency_ms ?? 0 }} ms</div>
               <div class="stat-label">平均延迟</div>
             </el-card>
-          </el-col>
-        </el-row>
+          </div>
+        </div>
 
         <el-card shadow="never">
           <template #header>
@@ -385,11 +385,6 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-  min-height: 100%;
-}
 
 .page-header {
   margin-bottom: 20px;
@@ -400,10 +395,6 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
   font-size: 26px;
 }
 
-.subtitle {
-  margin: 0;
-  color: #64748b;
-}
 
 .card-header,
 .toolbar {
@@ -417,15 +408,7 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
   justify-content: flex-end;
 }
 
-.mb-4 {
-  margin-bottom: 16px;
-}
 
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
-}
 
 .stat-card {
   text-align: center;
@@ -464,8 +447,8 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
 
 .graph-panel-wrap {
   min-height: 560px;
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
+ border: 1px solid #dbe4f0;
+ border-radius: 16px;
   background:
     radial-gradient(circle at top right, rgba(191, 219, 254, 0.45), transparent 28%),
     linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
@@ -484,8 +467,8 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
 }
 
 .topology-section {
-  border: 1px solid #dbe4f0;
-  border-radius: 16px;
+ border: 1px solid #dbe4f0;
+ border-radius: 16px;
   background: #fff;
   padding: 14px;
 }
@@ -517,7 +500,7 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
 .legend-dot {
   width: 10px;
   height: 10px;
-  border-radius: 999px;
+ border-radius: 999px;
   flex: 0 0 auto;
 }
 
@@ -525,7 +508,7 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
   font-family: "Consolas", "SFMono-Regular", monospace;
   color: #1e293b;
   background: #f8fafc;
-  border-radius: 8px;
+ border-radius: 8px;
   padding: 2px 6px;
   max-width: 100%;
   overflow: hidden;

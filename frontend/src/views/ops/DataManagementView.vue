@@ -47,10 +47,10 @@ function navigateTo(routeName: string) {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <div class="page-header">
       <h1>治理工作台</h1>
-      <p class="subtitle">
+      <p class="mt-2 text-sm text-zinc-500">
         围绕智能体、DSPy 优化、意图路由和标准治理的核心配置入口。
       </p>
     </div>
@@ -81,11 +81,6 @@ function navigateTo(routeName: string) {
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  min-height: 100%;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef4f7 100%);
-}
 
 .page-header {
   margin-bottom: 24px;
@@ -97,10 +92,6 @@ function navigateTo(routeName: string) {
   color: #0f172a;
 }
 
-.subtitle {
-  margin: 0;
-  color: #64748b;
-}
 
 .module-grid {
   display: grid;
@@ -110,8 +101,8 @@ function navigateTo(routeName: string) {
 
 .module-card {
   cursor: pointer;
-  border-radius: 20px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+ border-radius: 20px;
+ border: 1px solid rgba(15, 23, 42, 0.08);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -135,7 +126,7 @@ function navigateTo(routeName: string) {
 .module-icon {
   width: 56px;
   height: 56px;
-  border-radius: 16px;
+ border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;

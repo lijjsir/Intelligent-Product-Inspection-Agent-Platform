@@ -204,7 +204,7 @@ function updateCharts() {
       {
         type: "bar",
         barWidth: 18,
-        borderRadius: [8, 8, 0, 0],
+       borderRadius: [8, 8, 0, 0],
         data: items.map((item) => item.latency_ms),
       },
     ],
@@ -224,12 +224,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <section class="hero-card">
       <div>
         <p class="eyebrow">Knowledge Evidence Workbench</p>
         <h1>RAG 分析</h1>
-        <p class="subtitle">
+        <p class="mt-2 text-sm text-zinc-500">
           观察不同 RAG 空间、不同子图、不同产品族的检索表现，并追踪证据如何影响最终质检结论。
         </p>
       </div>
@@ -438,22 +438,14 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page-container {
-  min-height: 100%;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top left, rgba(251, 191, 36, 0.14), transparent 26%),
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 26%),
-    linear-gradient(180deg, #fffef6 0%, #f8fafc 44%, #f4f7fb 100%);
-}
 
 .hero-card {
   display: flex;
   justify-content: space-between;
   gap: 20px;
   padding: 28px 30px;
-  border-radius: 28px;
-  border: 1px solid rgba(226, 232, 240, 0.78);
+ border-radius: 28px;
+ border: 1px solid rgba(226, 232, 240, 0.78);
   background: rgba(255, 255, 255, 0.84);
   box-shadow: 0 18px 52px rgba(15, 23, 42, 0.06);
 }
@@ -473,12 +465,6 @@ onMounted(async () => {
   color: #0f172a;
 }
 
-.subtitle {
-  max-width: 760px;
-  margin: 10px 0 0;
-  line-height: 1.8;
-  color: #475569;
-}
 
 .hero-tags {
   display: flex;
@@ -489,7 +475,7 @@ onMounted(async () => {
 
 .hero-chip {
   padding: 8px 14px;
-  border-radius: 999px;
+ border-radius: 999px;
   background: rgba(15, 118, 110, 0.08);
   color: #0f766e;
   font-size: 13px;
@@ -508,9 +494,9 @@ onMounted(async () => {
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 16px;
   padding: 18px;
-  border-radius: 24px;
+ border-radius: 24px;
   background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(226, 232, 240, 0.78);
+ border: 1px solid rgba(226, 232, 240, 0.78);
 }
 
 .filter-field {
@@ -533,8 +519,8 @@ onMounted(async () => {
 
 .stat-card {
   padding: 18px 20px;
-  border-radius: 22px;
-  border: 1px solid rgba(226, 232, 240, 0.84);
+ border-radius: 22px;
+ border: 1px solid rgba(226, 232, 240, 0.84);
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 18px 32px rgba(15, 23, 42, 0.04);
 }
@@ -582,13 +568,13 @@ onMounted(async () => {
 }
 
 .panel-card {
-  border-radius: 24px;
-  border: 1px solid rgba(226, 232, 240, 0.8);
+ border-radius: 24px;
+ border: 1px solid rgba(226, 232, 240, 0.8);
   background: rgba(255, 255, 255, 0.88);
 }
 
 .panel-card :deep(.el-card__header) {
-  border-bottom-color: rgba(226, 232, 240, 0.72);
+ border-bottom-color: rgba(226, 232, 240, 0.72);
 }
 
 .panel-card.compact {
@@ -631,9 +617,9 @@ onMounted(async () => {
 .rank-row,
 .evidence-card {
   padding: 14px 16px;
-  border-radius: 18px;
+ border-radius: 18px;
   background: linear-gradient(145deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.98));
-  border: 1px solid rgba(226, 232, 240, 0.74);
+ border: 1px solid rgba(226, 232, 240, 0.74);
 }
 
 .rank-copy {
@@ -651,14 +637,14 @@ onMounted(async () => {
 
 .rank-bar {
   height: 9px;
-  border-radius: 999px;
+ border-radius: 999px;
   background: rgba(226, 232, 240, 0.9);
   overflow: hidden;
 }
 
 .rank-bar-fill {
   height: 100%;
-  border-radius: inherit;
+ border-radius: inherit;
 }
 
 .rank-bar-fill.ocean {

@@ -143,13 +143,13 @@ watch(
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
       <el-button @click="goBack" class="mb-4">
         &larr; 返回
       </el-button>
       <div v-if="store.current" class="title-area">
-        <h2 class="title">稳定性评估 (Stability)</h2>
+        <h2 class="text-2xl font-bold text-zinc-900">稳定性评估 (Stability)</h2>
         <el-tag :type="getRiskType(store.current.risk_level)" size="large" class="ml-4">
           判定面: {{ store.current.risk_level.toUpperCase() }} RISK
         </el-tag>
@@ -157,19 +157,19 @@ watch(
     </div>
 
     <div v-if="store.current" class="content">
-      <el-row :gutter="20">
+      <div class="flex gap-5">
         <!-- 雷达图面板 -->
-        <el-col :span="10">
+        <div>
           <el-card shadow="never" class="info-card echarts-wrapper">
             <div ref="radarChartRef" class="chart-container"></div>
           </el-card>
-        </el-col>
+        </div>
         
         <!-- 数据细节和复查面板 -->
-        <el-col :span="14">
+        <div>
           <el-card shadow="never" class="mb-4">
             <template #header>关键参数概览</template>
-            <el-descriptions :column="2" border>
+            <el-descriptions :column="2">
               <el-descriptions-item label="综合风险指数" span="2">
                 <span class="text-xl font-bold" :class="`risk-${store.current.risk_level.toLowerCase()}`">
                   {{ (store.current.risk_score * 10).toFixed(1) }} / 10.0
@@ -190,8 +190,8 @@ watch(
             <p v-if="store.current.root_cause">{{ store.current.root_cause }}</p>
             <el-empty v-else description="无高危根因警报" :image-size="60" />
           </el-card>
-        </el-col>
-      </el-row>
+        </div>
+      </div>
     </div>
     
     <div v-else-if="!loading" class="empty-state">
@@ -201,34 +201,18 @@ watch(
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
-}
 
-.header {
-  margin-bottom: 24px;
-}
 
 .title-area {
   display: flex;
   align-items: center;
 }
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
 .ml-4 {
   margin-left: 16px;
 }
 
-.mb-4 {
-  margin-bottom: 16px;
-}
 
 .text-xl {
   font-size: 1.5rem;
@@ -254,7 +238,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
+  box-sizing:-box;
 }
 
 .chart-container {

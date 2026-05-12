@@ -40,7 +40,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <div class="hero">
       <div>
         <h2>Token 计费看板</h2>
@@ -59,20 +59,20 @@ onMounted(() => {
       <el-button type="primary" @click="reload">查询</el-button>
     </el-card>
 
-    <el-row :gutter="16">
-      <el-col :span="12">
+    <div class="flex gap-4">
+      <div class="flex-1">
         <el-card shadow="never">
           <div class="metric-title">累计 Token</div>
           <div class="metric-value">{{ formatNumber(store.current?.total_tokens) }}</div>
         </el-card>
-      </el-col>
-      <el-col :span="12">
+      </div>
+      <div class="flex-1">
         <el-card shadow="never">
           <div class="metric-title">累计成本</div>
           <div class="metric-value">{{ formatCurrency(store.current?.total_cost) }}</div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <el-card shadow="never">
       <template #header>各用户累计 Token</template>
@@ -121,10 +121,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-container {
-  display: grid;
-  gap: 16px;
-}
 
 .hero h2 {
   margin: 0;

@@ -97,11 +97,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
       <el-button @click="goBack" class="back-button">&larr; 返回列表</el-button>
       <div v-if="taskStore.current" class="title-area">
-        <h2 class="title">任务：{{ taskStore.current.id }}</h2>
+        <h2 class="text-2xl font-bold text-zinc-900">任务：{{ taskStore.current.id }}</h2>
         <el-tag :type="getStatusType(taskStore.current.status)" size="large">
           {{ taskStore.current.status.toUpperCase() }}
         </el-tag>
@@ -144,7 +144,7 @@ onUnmounted(() => {
     <div v-if="taskStore.current" class="content">
       <el-card shadow="never">
         <template #header>基本信息</template>
-        <el-descriptions :column="2" border>
+        <el-descriptions :column="2">
           <el-descriptions-item label="任务 ID">{{ taskStore.current.id }}</el-descriptions-item>
           <el-descriptions-item label="组织 ID">{{ taskStore.current.org_id }}</el-descriptions-item>
           <el-descriptions-item label="产品编号">{{ taskStore.current.product_id }}</el-descriptions-item>
@@ -192,15 +192,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
-}
 
-.header {
-  margin-bottom: 24px;
-}
 
 .back-button {
   margin-bottom: 16px;
@@ -213,11 +205,6 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
 .content {
   display: grid;

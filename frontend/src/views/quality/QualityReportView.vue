@@ -17,7 +17,7 @@ function goToLangfuseTraces() {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <div class="hero">
       <div>
         <h2>AI 质量报告</h2>
@@ -28,11 +28,11 @@ function goToLangfuseTraces() {
 
     <AnalyticsTabNav />
 
-    <el-row :gutter="16" v-if="store.report">
-      <el-col :span="8"><el-card shadow="never"><div class="metric-title">总结果数</div><div class="metric-value">{{ store.report.total_results }}</div></el-card></el-col>
-      <el-col :span="8"><el-card shadow="never"><div class="metric-title">幻觉率</div><div class="metric-value warning">{{ (store.report.hallucination_rate * 100).toFixed(1) }}%</div></el-card></el-col>
-      <el-col :span="8"><el-card shadow="never"><div class="metric-title">点踩率</div><div class="metric-value danger">{{ (store.report.thumbs_down_rate * 100).toFixed(1) }}%</div></el-card></el-col>
-    </el-row>
+    <div class="flex gap-4" v-if="store.report">
+      <div class="flex-1"><el-card shadow="never"><div class="metric-title">总结果数</div><div class="metric-value">{{ store.report.total_results }}</div></el-card></div>
+      <div class="flex-1"><el-card shadow="never"><div class="metric-title">幻觉率</div><div class="metric-value warning">{{ (store.report.hallucination_rate * 100).toFixed(1) }}%</div></el-card></div>
+      <div class="flex-1"><el-card shadow="never"><div class="metric-title">点踩率</div><div class="metric-value danger">{{ (store.report.thumbs_down_rate * 100).toFixed(1) }}%</div></el-card></div>
+    </div>
 
     <el-card shadow="never">
       <template #header>模型对比</template>
@@ -45,8 +45,8 @@ function goToLangfuseTraces() {
       </el-table>
     </el-card>
 
-    <el-row :gutter="16">
-      <el-col :span="12">
+    <div class="flex gap-4">
+      <div class="flex-1">
         <el-card shadow="never">
           <template #header>幻觉率趋势</template>
           <el-table :data="store.report?.hallucination_trend || []" size="small">
@@ -54,8 +54,8 @@ function goToLangfuseTraces() {
             <el-table-column label="值"><template #default="{ row }">{{ (row.value * 100).toFixed(1) }}%</template></el-table-column>
           </el-table>
         </el-card>
-      </el-col>
-      <el-col :span="12">
+      </div>
+      <div class="flex-1">
         <el-card shadow="never">
           <template #header>点踩率趋势</template>
           <el-table :data="store.report?.thumbs_down_trend || []" size="small">
@@ -63,18 +63,10 @@ function goToLangfuseTraces() {
             <el-table-column label="值"><template #default="{ row }">{{ (row.value * 100).toFixed(1) }}%</template></el-table-column>
           </el-table>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.page-container { display: grid; gap: 16px; }
-.hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.hero h2 { margin: 0; color: #1b3a5c; }
-.hero p { margin: 6px 0 0; color: #64748b; }
-.metric-title { color: #64748b; font-size: 13px; }
-.metric-value { margin-top: 8px; font-size: 30px; font-weight: 700; color: #1b3a5c; }
-.warning { color: #d97706; }
-.danger { color: #dc2626; }
 </style>
