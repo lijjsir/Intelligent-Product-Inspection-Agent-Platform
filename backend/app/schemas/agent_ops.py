@@ -16,9 +16,20 @@ class AgentDefinitionBase(BaseModel):
     prompt_version_id: Optional[str] = Field(default=None, description="Associated prompt version ID")
     workflow_binding: Optional[str] = Field(default=None, max_length=100, description="Workflow binding")
     intent_config_id: Optional[str] = Field(default=None, description="Intent config ID")
+    subgraph_key: str = Field(default="quality_judgement", max_length=64, description="Bound subgraph key")
+    entry_graph: Optional[str] = Field(default=None, max_length=128, description="Entry graph identifier")
+    supports_start_stop: bool = Field(default=True, description="Whether runtime supports start/stop")
+    graph_version: str = Field(default="v1", max_length=32, description="Graph version")
     is_active: bool = Field(default=True, description="Whether agent is active")
 
-    @field_validator("description", "prompt_version_id", "workflow_binding", "intent_config_id", mode="before")
+    @field_validator(
+        "description",
+        "prompt_version_id",
+        "workflow_binding",
+        "intent_config_id",
+        "entry_graph",
+        mode="before",
+    )
     @classmethod
     def empty_str_to_none(cls, v):
         return None if v == "" else v
@@ -34,12 +45,18 @@ class AgentDefinitionUpdate(BaseModel):
     prompt_version_id: Optional[str] = None
     workflow_binding: Optional[str] = None
     intent_config_id: Optional[str] = None
+    subgraph_key: Optional[str] = Field(default=None, max_length=64)
+    entry_graph: Optional[str] = Field(default=None, max_length=128)
+    supports_start_stop: Optional[bool] = None
+    graph_version: Optional[str] = Field(default=None, max_length=32)
     is_active: Optional[bool] = None
 
 
 class AgentDefinitionResponse(AgentDefinitionBase):
     id: str
     org_id: str
+    runtime_status: Optional[str] = None
+    metrics_summary: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -76,6 +93,7 @@ class PromptVersionResponse(PromptVersionBase):
     id: str
     org_id: str
     created_by: Optional[str]
+    dspy_config: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -135,15 +153,250 @@ class RagAnalysisStats(BaseModel):
     avg_latency_ms: float = Field(default=0.0, description="Average latency in ms")
 
 
+class RagAnalysisBreakdownItem(BaseModel):
+    key: str
+    label: str
+    value: int = 0
+    avg_hit_rate: float = 0.0
+    avg_citation_coverage: float = 0.0
+
+
+class RagEvidenceImpactItem(BaseModel):
+    rule_key: str
+    verdicts: list[str] = Field(default_factory=list)
+    source_count: int = 0
+    query_count: int = 0
+    sources: list[str] = Field(default_factory=list)
+
+
 class RagAnalysisItem(BaseModel):
     task_id: str
+    session_id: Optional[str] = Field(default=None, description="Chat session ID if available")
     query: Optional[str] = Field(default=None, description="Query text if available")
+    rag_space_id: Optional[str] = None
+    rag_space_name: Optional[str] = None
+    hit_count: int = 0
     hit_rate: float
     citation_coverage: float
     latency_ms: float
+    source_graph: Optional[str] = None
+    product_family: Optional[str] = None
+    product_id: Optional[str] = None
+    verdict: Optional[str] = None
+    expectation_matched: Optional[bool] = None
+    top_sources: list[str] = Field(default_factory=list)
+    rule_hits: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
 class RagAnalysisResponse(BaseModel):
     stats: RagAnalysisStats
+    space_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    source_graph_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    product_family_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    evidence_impact: list[RagEvidenceImpactItem] = Field(default_factory=list)
     recent_items: list[RagAnalysisItem]
+
+
+class PromptDSPyConfigPayload(BaseModel):
+    module_name: str = Field(..., max_length=128)
+    compiler_version: Optional[str] = Field(default=None, max_length=64)
+    fallback_prompt: Optional[str] = None
+    metric_names: list[str] = Field(default_factory=list)
+    config_payload: dict = Field(default_factory=dict)
+    is_enabled: bool = True
+
+
+class PromptDSPyConfigResponse(PromptDSPyConfigPayload):
+    id: str
+    org_id: str
+    prompt_version_id: str
+    updated_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PromptOptimizationConfigPayload(BaseModel):
+    module_name: str = Field(..., max_length=128)
+    compiler_version: Optional[str] = Field(default=None, max_length=64)
+    optimizer_strategy: str = Field(default="bootstrap-fewshot", max_length=64)
+    metric_names: list[str] = Field(default_factory=list)
+    config_payload: dict = Field(default_factory=dict)
+    is_enabled: bool = True
+
+
+class PromptOptimizationConfigResponse(PromptOptimizationConfigPayload):
+    id: str
+    target_key: str
+    subgraph_key: str
+    node_id: str
+    node_label: str
+    optimization_goal: str
+    supports_compile: bool = True
+    is_active_target: bool = True
+    current_artifact_version: Optional[str] = None
+    previous_artifact_version: Optional[str] = None
+    latest_failed_artifact_version: Optional[str] = None
+    latest_error_message: Optional[str] = None
+    latest_metrics_snapshot: Optional[dict] = None
+    last_compiled_at: Optional[datetime] = None
+    last_evaluated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PromptOptimizationRunResponse(BaseModel):
+    id: str
+    target_key: str
+    run_type: str
+    status: str
+    compiler_version: Optional[str] = None
+    artifact_version: Optional[str] = None
+    prompt_version_id: Optional[str] = None
+    metrics_snapshot: Optional[dict] = None
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PromptOptimizationGraphContext(BaseModel):
+    focus_node_id: str
+    focus_node_label: str
+    upstream_nodes: list[str] = Field(default_factory=list)
+    downstream_nodes: list[str] = Field(default_factory=list)
+    nodes: list[TopologyNode] = Field(default_factory=list)
+    edges: list[TopologyEdge] = Field(default_factory=list)
+
+
+class PromptOptimizationTargetResponse(BaseModel):
+    target_key: str
+    subgraph_key: str
+    node_id: str
+    node_label: str
+    module_name: str
+    optimization_goal: str
+    supports_compile: bool = True
+    current_status: str = "idle"
+    current_artifact_version: Optional[str] = None
+    latest_metrics: Optional[dict] = None
+    graph_context: PromptOptimizationGraphContext
+    config: PromptOptimizationConfigResponse
+    recent_runs: list[PromptOptimizationRunResponse] = Field(default_factory=list)
+
+
+class PromptOptimizationOverview(BaseModel):
+    total_targets: int = 0
+    enabled_targets: int = 0
+    active_targets: int = 0
+    successful_runs: int = 0
+    failed_runs: int = 0
+    pending_runs: int = 0
+
+
+class PromptOptimizationTargetListQuery(PageParams):
+    subgraph_key: Optional[str] = None
+    status: Optional[str] = None
+    is_enabled: Optional[bool] = None
+
+
+class PromptOptimizationTargetsResponse(BaseModel):
+    overview: PromptOptimizationOverview
+    items: list[PromptOptimizationTargetResponse]
+
+
+class AgentRuntimeOverviewResponse(BaseModel):
+    active_agents: int = 0
+    running_agents: int = 0
+    stopped_agents: int = 0
+    total_executions: int = 0
+    avg_latency_ms: float = 0.0
+    queued_tasks: int = 0
+    completed_today: int = 0
+
+
+class AgentRuntimeInstanceResponse(BaseModel):
+    runtime_key: str
+    agent_id: str
+    agent_name: str
+    subgraph_key: str
+    status: str
+    supports_start_stop: bool
+    is_active: bool
+    execution_count: int = 0
+    success_rate: float = 0.0
+    avg_latency_ms: float = 0.0
+    last_executed_at: Optional[datetime] = None
+    last_started_at: Optional[datetime] = None
+    last_stopped_at: Optional[datetime] = None
+
+
+class TopologyNode(BaseModel):
+    id: str
+    label: str
+    kind: str
+
+
+class TopologyEdge(BaseModel):
+    source: str
+    target: str
+
+
+class AgentTopologyResponse(BaseModel):
+    selected_subgraph: str
+    nodes: list[TopologyNode]
+    edges: list[TopologyEdge]
+    intent_name: Optional[str] = None
+    agent_name: Optional[str] = None
+
+
+class RoutingSignalDescriptor(BaseModel):
+    key: str
+    label: str
+    description: str
+    source_stage: str
+
+
+class RoutingPriorityRule(BaseModel):
+    order: int
+    when: str
+    target_subgraph: str
+    reason: str
+    examples: list[str] = Field(default_factory=list)
+    stop_on_match: bool = True
+
+
+class RoutingDecisionCard(BaseModel):
+    key: str
+    title: str
+    target_subgraph: str
+    reason: str
+    priority_order: int
+    matched_signals: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class RoutingSubgraphDescriptor(BaseModel):
+    subgraph_key: str
+    label: str
+    summary: str
+    entry_node: str
+    nodes: list[TopologyNode] = Field(default_factory=list)
+    edges: list[TopologyEdge] = Field(default_factory=list)
+    typical_scenarios: list[str] = Field(default_factory=list)
+
+
+class RoutingStrategyOverviewResponse(BaseModel):
+    route_mode: str
+    default_target: str
+    root_graph: AgentTopologyResponse
+    subgraphs: list[RoutingSubgraphDescriptor] = Field(default_factory=list)
+    priority_rules: list[RoutingPriorityRule] = Field(default_factory=list)
+    signals: list[RoutingSignalDescriptor] = Field(default_factory=list)
+    decision_cards: list[RoutingDecisionCard] = Field(default_factory=list)
+    registered_route_count: int = 0
+    registered_intents: list[str] = Field(default_factory=list)

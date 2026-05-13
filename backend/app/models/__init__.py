@@ -9,12 +9,37 @@ from app.models.tool import ToolRegistry, ToolExecution
 from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
-from app.models.feedback import ResultFeedback
-from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
-from app.models.agent_ops import AgentDefinition, PromptVersion, IntentRoute
-from app.models.chat import ChatSession, ChatMessage
-from app.models.rag_space import RagSpace, RagSpaceFile
 from app.models.user_token_usage import UserTokenUsageSummary
+from app.models.feedback import ResultFeedback
+from app.models.inspection_spec import (
+    DefectTaxonomy,
+    InspectionResultEvidence,
+    InspectionSpec,
+    InspectionSpecItem,
+    ProductZoneMap,
+    SpecAggregationRule,
+    SpecChangeLog,
+)
+from app.models.agent_ops import (
+    AgentDefinition,
+    AgentRuntimeInstance,
+    DSPyOptimizationConfig,
+    DSPyOptimizationRun,
+    IntentRoute,
+    PromptDSPyConfig,
+    PromptVersion,
+    RagQueryLog,
+)
+from app.models.chat import ChatMessage, ChatSession
+from app.models.rag_space import RagSpace, RagSpaceFile
+from app.models.memory import (
+    MemoryDependencyEdge,
+    MemoryEvaluation,
+    MemoryEvent,
+    MemoryItem,
+    MemoryPolicy,
+    MemoryRollback,
+)
 
 __all__ = [
     "Base",
@@ -30,15 +55,31 @@ __all__ = [
     "AuditOutbox",
     "ModelConfig",
     "TokenUsageLedger",
+    "UserTokenUsageSummary",
     "ResultFeedback",
     "InspectionSpec",
     "InspectionSpecItem",
+    "DefectTaxonomy",
+    "ProductZoneMap",
+    "SpecAggregationRule",
+    "SpecChangeLog",
+    "InspectionResultEvidence",
     "AgentDefinition",
     "PromptVersion",
     "IntentRoute",
+    "PromptDSPyConfig",
+    "DSPyOptimizationConfig",
+    "DSPyOptimizationRun",
+    "AgentRuntimeInstance",
+    "RagQueryLog",
     "ChatSession",
     "ChatMessage",
     "RagSpace",
     "RagSpaceFile",
-    "UserTokenUsageSummary",
+    "MemoryItem",
+    "MemoryEvent",
+    "MemoryDependencyEdge",
+    "MemoryPolicy",
+    "MemoryRollback",
+    "MemoryEvaluation",
 ]

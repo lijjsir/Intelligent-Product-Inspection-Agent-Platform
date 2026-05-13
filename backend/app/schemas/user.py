@@ -7,13 +7,20 @@ class CurrentUser(BaseModel):
     user_id: str
     org_id: str
     role: str
+    roles: list[str] = []
+    plan_tier: str = "basic"
+    capabilities: list[str] = []
+    workspaces: list[str] = []
+    default_workspace: str = "app"
+    stream_resource: str | None = None
+    stream_resource_id: str | None = None
 
 
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
-    role: str = "inspector"
+    role: str = "user"
 
 
 class UserResponse(BaseModel):

@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     volcengine_model_id: str = "ep-20260325082100-v7vs6"
     volcengine_embed_model: str = "ep-20260311135919-gktlx"
     volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model_id: str = "deepseek-v4-flash"
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20

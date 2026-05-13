@@ -10,6 +10,23 @@ vi.mock("@/api/auth.api", () => ({
   },
 }));
 
+vi.mock("@/api/user.api", () => ({
+  userApi: {
+    getMe: vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          id: "u1",
+          org_id: "org1",
+          username: "admin",
+          email: "admin@example.com",
+          role: "org_admin",
+          is_active: true,
+        },
+      },
+    }),
+  },
+}));
+
 const session: AuthSession = {
   access_token: "access",
   refresh_token: "refresh",
@@ -29,6 +46,8 @@ describe("auth store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     localStorage.clear();
+    sessionStorage.clear();
+    vi.clearAllMocks();
   });
 
   it("login sets session", async () => {
@@ -40,8 +59,8 @@ describe("auth store", () => {
 
     expect(store.token).toBe("access");
     expect(store.roles).toEqual(["org_admin"]);
-    expect(localStorage.getItem("piap_token")).toBe("access");
-    expect(localStorage.getItem("piap_org_id")).toBe("org1");
+    expect(sessionStorage.getItem("piap_token")).toBe("access");
+    expect(sessionStorage.getItem("piap_org_id")).toBe("org1");
   });
 
   it("register sets session", async () => {
@@ -65,6 +84,6 @@ describe("auth store", () => {
     const store = useAuthStore();
     store.logout();
     expect(store.token).toBe("");
-    expect(localStorage.getItem("piap_token")).toBe(null);
+    expect(sessionStorage.getItem("piap_token")).toBe(null);
   });
 });

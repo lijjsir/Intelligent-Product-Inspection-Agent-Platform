@@ -136,7 +136,7 @@ def patch_uuid(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_spec_scopes_org_admin_to_current_org(monkeypatch):
+async def test_create_spec_scopes_admin_to_current_org(monkeypatch):
     repo = FakeInspectionSpecRepo(None)
     monkeypatch.setattr(spec_mod, "InspectionSpecRepository", lambda session: repo)
     patch_uuid(monkeypatch)
@@ -167,7 +167,7 @@ async def test_create_spec_scopes_org_admin_to_current_org(monkeypatch):
                 }
             ],
         },
-        "org_admin",
+        "admin",
     )
 
     assert created["org_id"] == "org-1"
@@ -177,7 +177,7 @@ async def test_create_spec_scopes_org_admin_to_current_org(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_spec_allows_global_scope_for_platform_admin(monkeypatch):
+async def test_create_spec_allows_global_scope_for_algorithm_engineer(monkeypatch):
     repo = FakeInspectionSpecRepo(None)
     monkeypatch.setattr(spec_mod, "InspectionSpecRepository", lambda session: repo)
     patch_uuid(monkeypatch)
@@ -208,7 +208,7 @@ async def test_create_spec_allows_global_scope_for_platform_admin(monkeypatch):
                 }
             ],
         },
-        "platform_admin",
+        "algorithm_engineer",
     )
 
     assert created["org_id"] is None
@@ -240,7 +240,7 @@ async def test_update_spec_replaces_rule_items(monkeypatch):
                 }
             ],
         },
-        "org_admin",
+        "admin",
     )
 
     assert updated["name"] == "新标准"
@@ -249,7 +249,7 @@ async def test_update_spec_replaces_rule_items(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_org_admin_cannot_modify_global_spec(monkeypatch):
+async def test_admin_cannot_modify_global_spec(monkeypatch):
     repo = FakeInspectionSpecRepo(None)
     repo.specs["spec-global"] = make_spec("spec-global", None, spec_code="STD-G", name="全局标准")
     repo.items["spec-global"] = [make_item("item-1", "spec-global", "dent")]
@@ -257,7 +257,7 @@ async def test_org_admin_cannot_modify_global_spec(monkeypatch):
 
     svc = spec_mod.InspectionSpecService(None, "org-1")
     with pytest.raises(NotFoundError):
-        await svc.delete_spec("spec-global", "org_admin")
+        await svc.delete_spec("spec-global", "admin")
 
 
 @pytest.mark.asyncio

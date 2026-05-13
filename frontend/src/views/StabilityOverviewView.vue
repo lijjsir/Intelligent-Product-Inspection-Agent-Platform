@@ -19,14 +19,15 @@ const selectedRange = ref<RangeOption>(30);
 const loaded = ref<Record<TabKey, boolean>>({ overview: true, alerts: false });
 
 const overview = computed(() => analyticsStore.overview);
-const totalReports = computed(() => {
-  return (overview.value?.risk_distribution ?? []).reduce((sum, item) => sum + item.value, 0);
-});
-const highRiskReports = computed(() => {
-  return (overview.value?.risk_distribution ?? [])
+const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
+const totalReports = computed(() =>
+  (overview.value?.risk_distribution ?? []).reduce((sum, item) => sum + item.value, 0),
+);
+const highRiskReports = computed(() =>
+  (overview.value?.risk_distribution ?? [])
     .filter((item) => ["high", "critical"].includes(item.name.toLowerCase()))
-    .reduce((sum, item) => sum + item.value, 0);
-});
+    .reduce((sum, item) => sum + item.value, 0),
+);
 const mediumRiskRate = computed(() => (overview.value?.risk_yellow_rate ?? 0) * 100);
 const riskItems = computed(() => {
   const current = new Map((overview.value?.risk_distribution ?? []).map((item) => [item.name.toLowerCase(), item.value]));
@@ -51,17 +52,19 @@ onMounted(async () => {
 function handleTabChange(tab: TabKey) {
   activeTab.value = tab;
   if (!loaded.value[tab]) loaded.value[tab] = true;
-  router.replace({ query: { ...route.query, tab: tab } });
+  router.replace({ query: { ...route.query, tab } });
 }
 
-// URL query 同步
-watch(() => route.query.tab, (val) => {
-  const t = (val as TabKey) || "overview";
-  if (t !== activeTab.value) {
-    activeTab.value = t;
-    if (!loaded.value[t]) loaded.value[t] = true;
-  }
-});
+watch(
+  () => route.query.tab,
+  (val) => {
+    const tab = (val as TabKey) || "overview";
+    if (tab !== activeTab.value) {
+      activeTab.value = tab;
+      if (!loaded.value[tab]) loaded.value[tab] = true;
+    }
+  },
+);
 
 async function setRange(days: RangeOption) {
   if (selectedRange.value === days && overview.value) return;
@@ -90,7 +93,11 @@ function formatDate(value: Date) {
       <div>
         <p class="eyebrow">PIAP Stability Desk</p>
         <h2>稳定性工作台</h2>
-        <p class="subtitle">风险总览与预警处置一体化流程，支持 ACK / 压制 / 解决告警闭环。</p>
+        <p class="subtitle">风险总览和预警处置现在与任务主表共享同一统计范围，并自动排除已删除任务。</p>
+        <div class="scope-row">
+          <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
+          <el-tag type="info" effect="plain">最近 {{ selectedRange }} 日</el-tag>
+        </div>
       </div>
       <div class="hero-actions">
         <div class="range-switch" :style="{ visibility: activeTab === 'overview' ? 'visible' : 'hidden' }">
@@ -105,13 +112,11 @@ function formatDate(value: Date) {
       </div>
     </section>
 
-    <!-- Tab 切换 -->
     <div class="tab-bar">
       <button :class="['tab-btn', { active: activeTab === 'overview' }]" @click="handleTabChange('overview')">稳定性总览</button>
       <button :class="['tab-btn', { active: activeTab === 'alerts' }]" @click="handleTabChange('alerts')">预警处置</button>
     </div>
 
-    <!-- 总览 Tab -->
     <div v-show="activeTab === 'overview'" class="overview-panel">
       <el-alert
         v-if="analyticsStore.error"
@@ -119,11 +124,12 @@ function formatDate(value: Date) {
         type="warning"
         :closable="false"
       />
+
       <section v-if="overview" class="metric-grid">
         <el-card shadow="never" class="metric-card">
           <div class="metric-label">稳定性报告数</div>
           <div class="metric-value">{{ totalReports }}</div>
-          <div class="metric-meta">最近 {{ selectedRange }} 日内有稳定性评估的任务总量</div>
+          <div class="metric-meta">当前范围内有稳定性评估的任务总量</div>
         </el-card>
         <el-card shadow="never" class="metric-card high-risk">
           <div class="metric-label">高风险任务数</div>
@@ -138,7 +144,7 @@ function formatDate(value: Date) {
         <el-card shadow="never" class="metric-card medium-risk">
           <div class="metric-label">中风险占比</div>
           <div class="metric-value">{{ mediumRiskRate.toFixed(1) }}%</div>
-          <div class="metric-meta">对应后端聚合字段 risk_yellow_rate</div>
+          <div class="metric-meta">对应聚合字段 risk_yellow_rate</div>
         </el-card>
       </section>
 
@@ -160,7 +166,7 @@ function formatDate(value: Date) {
             <div class="panel-head">
               <div>
                 <strong>当前风险结构</strong>
-                <span>基于聚合统计展示当前各等级占比</span>
+                <span>当前范围内各等级占比</span>
               </div>
             </div>
           </template>
@@ -185,7 +191,6 @@ function formatDate(value: Date) {
       </section>
     </div>
 
-    <!-- 预警 Tab -->
     <div v-if="loaded.alerts" v-show="activeTab === 'alerts'" class="alert-tab-wrapper">
       <StabilityAlertTab />
     </div>
@@ -225,28 +230,9 @@ function formatDate(value: Date) {
 
 .hero-panel h2 { margin: 0; font-size: 40px; }
 .subtitle { margin: 12px 0 0; max-width: 780px; color: rgba(248, 250, 252, 0.82); }
+.scope-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
 .hero-actions { display: grid; gap: 14px; align-content: start; }
 .range-switch, .action-group { display: flex; justify-content: flex-end; gap: 10px; }
-.hero-actions :deep(.el-button--default) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.26);
-  color: #f8fafc;
-}
-.hero-actions :deep(.el-button--default:hover) {
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.35);
-  color: #ffffff;
-}
-.hero-actions :deep(.el-button--primary) {
-  background: #f8fafc;
-  border-color: #f8fafc;
-  color: #10243d;
-}
-.hero-actions :deep(.el-button--primary:hover) {
-  background: #ffffff;
-  border-color: #ffffff;
-  color: #0f172a;
-}
 
 .overview-panel { display: grid; gap: 18px; }
 
@@ -258,6 +244,7 @@ function formatDate(value: Date) {
   border-radius: 12px;
   width: fit-content;
 }
+
 .tab-btn {
   padding: 10px 22px;
   border: none;
@@ -267,9 +254,8 @@ function formatDate(value: Date) {
   font-weight: 500;
   color: #64748b;
   cursor: pointer;
-  transition: all 0.2s;
 }
-.tab-btn:hover { color: #10243d; }
+
 .tab-btn.active {
   background: #fff;
   color: #0f766e;
@@ -289,7 +275,6 @@ function formatDate(value: Date) {
 .content-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; align-items: start; }
 .panel { border-radius: 24px; border: 1px solid rgba(16, 36, 61, 0.08); }
 .panel :deep(.el-card__body) { padding: 24px; }
-.panel-head { display: flex; justify-content: space-between; gap: 12px; }
 .panel-head strong { display: block; color: #10243d; font-size: 18px; }
 .panel-head span { color: #64748b; font-size: 13px; }
 
@@ -307,16 +292,11 @@ function formatDate(value: Date) {
 @media (max-width: 1280px) {
   .content-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 1180px) {
-  .hero-panel { gap: 16px; padding: 24px; }
-  .metric-grid { gap: 16px; }
-}
+
 @media (max-width: 860px) {
   .stability-shell { padding: 16px; gap: 14px; }
   .hero-panel { padding: 22px; display: grid; grid-template-columns: 1fr; }
   .range-switch, .action-group { flex-wrap: wrap; justify-content: flex-start; }
   .metric-grid { grid-template-columns: 1fr; gap: 14px; }
-  .content-grid { gap: 14px; }
-  .metric-card :deep(.el-card__body), .panel :deep(.el-card__body) { padding: 16px; }
 }
 </style>

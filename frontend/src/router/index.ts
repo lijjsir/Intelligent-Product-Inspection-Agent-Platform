@@ -3,8 +3,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
-import { workbenchRoutes } from "@/router/routes/workbench.routes";
-import { ROLE_ADMIN, normalizeRole } from "@/constants/roles";
+import { ROLE_ADMIN } from "@/constants/roles";
 
 const routes = [
   {
@@ -48,12 +47,6 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    path: "/workbench",
-    component: () => import("@/layouts/AppLayout.vue"),
-    children: workbenchRoutes,
-    meta: { requiresAuth: true },
-  },
-  {
     path: "/users",
     component: () => import("@/layouts/AppLayout.vue"),
     meta: { requiresAuth: true },
@@ -83,15 +76,22 @@ router.beforeEach((to) => {
   if (to.meta.requiresAuth && !auth.isAuthed) {
     return { path: "/login" };
   }
-  const roles = to.meta.roles as string[] | undefined;
-  const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-  const normalizedRoles = currentRoles.map(normalizeRole);
-  if (roles && !normalizedRoles.includes(ROLE_ADMIN) && !roles.some((role) => normalizedRoles.includes(normalizeRole(role)))) {
-    return { path: "/app/dashboard" };
-  }
+
+  // Redirect authenticated users away from auth pages
   if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
     return { path: auth.resolveDefaultRoute() };
   }
+
+  // Check route meta role restrictions
+  const routeRoles = to.meta.roles as string[] | undefined;
+  if (routeRoles && routeRoles.length) {
+    const currentRoles = auth.roles.length ? auth.roles : [auth.role];
+    const hasAccess = currentRoles.includes(ROLE_ADMIN) || routeRoles.some((r) => currentRoles.includes(r));
+    if (!hasAccess) {
+      return { path: auth.resolveDefaultRoute() };
+    }
+  }
+
   return true;
 });
 

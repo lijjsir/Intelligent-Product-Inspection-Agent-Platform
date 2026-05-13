@@ -1,6 +1,6 @@
 import { http } from "./http";
 import type { InspectionResult, ResultListItem, ResultListQuery } from "@/types/result.types";
-import type { PagedResponse, ResponseEnvelope } from "@/types/common.types";
+import type { PagedResponse } from "@/types/common.types";
 
 export const resultApi = {
   list(query: ResultListQuery) {

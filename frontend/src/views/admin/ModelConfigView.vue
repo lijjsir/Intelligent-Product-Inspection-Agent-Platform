@@ -95,7 +95,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <div class="hero">
       <div>
         <h2>模型配置</h2>
@@ -164,8 +164,4 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-container { display: grid; gap: 16px; }
-.hero { display: flex; justify-content: space-between; align-items: center; }
-.hero h2 { margin: 0; color: #1b3a5c; }
-.hero p { margin: 6px 0 0; color: #64748b; }
 </style>

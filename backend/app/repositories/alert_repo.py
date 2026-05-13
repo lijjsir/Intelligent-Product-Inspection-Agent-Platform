@@ -2,22 +2,30 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import AlertEvent
+from app.models.stability import StabilityReport
+from app.models.task import InspectionTask
 
 
 class AlertRepository:
     def __init__(self, session: AsyncSession):
-        """封装告警事件的创建、筛选和状态更新。"""
         self._session = session
 
-    async def get(self, org_id: str, alert_id: str) -> AlertEvent | None:
-        """按租户和告警 ID 查询单条告警。"""
-        result = await self._session.execute(
-            select(AlertEvent).where(AlertEvent.org_id == org_id, AlertEvent.id == alert_id)
+    async def get(self, org_id: str | None, alert_id: str) -> AlertEvent | None:
+        stmt = (
+            select(AlertEvent)
+            .outerjoin(StabilityReport, StabilityReport.id == AlertEvent.stability_id)
+            .outerjoin(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where(
+                AlertEvent.id == alert_id,
+                (StabilityReport.id.is_(None)) | (InspectionTask.deleted_at.is_(None)),
+            )
         )
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def create(self, payload: dict) -> AlertEvent:
-        """创建一条新的告警事件。"""
         alert = AlertEvent(**payload)
         self._session.add(alert)
         await self._session.flush()
@@ -25,14 +33,20 @@ class AlertRepository:
 
     async def list_alerts(
         self,
-        org_id: str,
+        org_id: str | None,
         skip: int = 0,
         limit: int = 20,
         status: str | None = None,
         severity: str | None = None
     ):
-        """按状态和严重级别筛选告警，并返回总数和明细列表。"""
-        query = select(AlertEvent).where(AlertEvent.org_id == org_id)
+        query = (
+            select(AlertEvent)
+            .outerjoin(StabilityReport, StabilityReport.id == AlertEvent.stability_id)
+            .outerjoin(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where((StabilityReport.id.is_(None)) | (InspectionTask.deleted_at.is_(None)))
+        )
+        if org_id:
+            query = query.where(AlertEvent.org_id == org_id)
         if status:
             query = query.where(AlertEvent.status == status)
         if severity:
@@ -47,22 +61,18 @@ class AlertRepository:
         items = items_res.scalars().all()
         return total, list(items)
 
-    async def update_status(self, org_id: str, alert_id: str, status: str, resolved_by: str, resolved_at) -> bool:
-        """更新告警状态及其处理人、处理时间。"""
-        stmt = (
-            update(AlertEvent)
-            .where(AlertEvent.org_id == org_id, AlertEvent.id == alert_id)
-            .values(status=status, resolved_by=resolved_by, resolved_at=resolved_at)
-        )
+    async def update_status(self, org_id: str | None, alert_id: str, status: str, resolved_by: str, resolved_at) -> bool:
+        stmt = update(AlertEvent).where(AlertEvent.id == alert_id)
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        stmt = stmt.values(status=status, resolved_by=resolved_by, resolved_at=resolved_at)
         res = await self._session.execute(stmt)
         return res.rowcount > 0
 
-    async def handle_alert(self, org_id: str, alert_id: str, values: dict) -> bool:
-        """按传入字段批量更新告警处理结果。"""
-        stmt = (
-            update(AlertEvent)
-            .where(AlertEvent.org_id == org_id, AlertEvent.id == alert_id)
-            .values(**values)
-        )
+    async def handle_alert(self, org_id: str | None, alert_id: str, values: dict) -> bool:
+        stmt = update(AlertEvent).where(AlertEvent.id == alert_id)
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        stmt = stmt.values(**values)
         res = await self._session.execute(stmt)
         return res.rowcount > 0

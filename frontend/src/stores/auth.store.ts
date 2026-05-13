@@ -1,63 +1,65 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { authApi } from "@/api/auth.api";
+import { useUserStore } from "@/stores/user.store";
 import type { LoginPayload, RegisterPayload, AuthSession } from "@/types/auth.types";
 import {
   ROLE_ADMIN,
-  ROLE_AGENT_OPERATOR,
-  ROLE_ANALYST,
+  ROLE_APP_DEVELOPER,
+  ROLE_PLATFORM_OPERATOR,
+  ROLE_ALGORITHM_ENGINEER,
+  ROLE_USER,
+  ROLE_EXPERT,
   WORKSPACE_APP,
   WORKSPACE_GOVERNANCE,
   WORKSPACE_OPS,
-  normalizeRole,
 } from "@/constants/roles";
-
-const TOKEN_KEY = "piap_token";
-const ORG_ID_KEY = "piap_org_id";
-const ROLE_KEY = "piap_role";
-const USER_ID_KEY = "piap_user_id";
-const ROLES_KEY = "piap_roles";
-const PLAN_TIER_KEY = "piap_plan_tier";
-const CAPABILITIES_KEY = "piap_capabilities";
-const WORKSPACES_KEY = "piap_workspaces";
-const DEFAULT_WORKSPACE_KEY = "piap_default_workspace";
-
-function readArray(key: string): string[] {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
-  }
-}
+import {
+  CAPABILITIES_KEY,
+  DEFAULT_WORKSPACE_KEY,
+  ORG_ID_KEY,
+  PLAN_TIER_KEY,
+  ROLE_KEY,
+  ROLES_KEY,
+  TOKEN_KEY,
+  USER_ID_KEY,
+  USERNAME_KEY,
+  WORKSPACES_KEY,
+  clearStoredAuthSession,
+  readStoredArray,
+  readStoredValue,
+  setStoredArray,
+  setStoredValue,
+} from "@/utils/auth-session";
 
 export const useAuthStore = defineStore("auth", () => {
-  const token = ref(localStorage.getItem(TOKEN_KEY) || "");
-  const orgId = ref(localStorage.getItem(ORG_ID_KEY) || "");
-  const role = ref(localStorage.getItem(ROLE_KEY) || "");
-  const userId = ref(localStorage.getItem(USER_ID_KEY) || "");
-  const roles = ref<string[]>(readArray(ROLES_KEY));
-  const planTier = ref(localStorage.getItem(PLAN_TIER_KEY) || "basic");
-  const capabilities = ref<string[]>(readArray(CAPABILITIES_KEY));
-  const workspaces = ref<string[]>(readArray(WORKSPACES_KEY));
-  const defaultWorkspace = ref(localStorage.getItem(DEFAULT_WORKSPACE_KEY) || WORKSPACE_APP);
+  const token = ref(readStoredValue(TOKEN_KEY));
+  const orgId = ref(readStoredValue(ORG_ID_KEY));
+  const role = ref(readStoredValue(ROLE_KEY));
+  const userId = ref(readStoredValue(USER_ID_KEY));
+  const username = ref(readStoredValue(USERNAME_KEY));
+  const roles = ref<string[]>(readStoredArray(ROLES_KEY));
+  const planTier = ref(readStoredValue(PLAN_TIER_KEY) || "basic");
+  const capabilities = ref<string[]>(readStoredArray(CAPABILITIES_KEY));
+  const workspaces = ref<string[]>(readStoredArray(WORKSPACES_KEY));
+  const defaultWorkspace = ref(readStoredValue(DEFAULT_WORKSPACE_KEY) || WORKSPACE_APP);
 
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
   }
-  const normalizedRoles = roles.value.map(normalizeRole);
   if (!workspaces.value.length) {
-    if (normalizedRoles.includes(ROLE_ADMIN)) {
-      workspaces.value = [WORKSPACE_APP, WORKSPACE_OPS, WORKSPACE_GOVERNANCE];
-    } else if (normalizedRoles.includes(ROLE_ANALYST)) {
-      workspaces.value = [WORKSPACE_APP, WORKSPACE_GOVERNANCE];
-    } else if (normalizedRoles.includes(ROLE_AGENT_OPERATOR)) {
-      workspaces.value = [WORKSPACE_OPS];
-    } else if (role.value) {
-      workspaces.value = [WORKSPACE_APP];
+    const rs = roles.value;
+    const w: string[] = [];
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
+      w.push(WORKSPACE_APP);
     }
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+      w.push(WORKSPACE_OPS);
+    }
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+      w.push(WORKSPACE_GOVERNANCE);
+    }
+    workspaces.value = w.length ? w : [WORKSPACE_APP];
   }
 
   const isAuthed = computed(() => Boolean(token.value));
@@ -69,58 +71,77 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function setSession(session: AuthSession) {
+    const userStore = useUserStore();
     token.value = session.access_token;
     orgId.value = session.org_id;
     role.value = session.role;
     userId.value = session.user_id;
+    username.value = session.username;
     roles.value = normalizeRoles(session);
     planTier.value = session.plan_tier || "basic";
     capabilities.value = [...(session.capabilities || [])];
     workspaces.value = [...(session.workspaces || [WORKSPACE_APP])];
     defaultWorkspace.value = session.default_workspace || workspaces.value[0] || WORKSPACE_APP;
 
-    localStorage.setItem(TOKEN_KEY, token.value);
-    localStorage.setItem(ORG_ID_KEY, orgId.value);
-    localStorage.setItem(ROLE_KEY, role.value);
-    localStorage.setItem(USER_ID_KEY, userId.value);
-    localStorage.setItem(ROLES_KEY, JSON.stringify(roles.value));
-    localStorage.setItem(PLAN_TIER_KEY, planTier.value);
-    localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities.value));
-    localStorage.setItem(WORKSPACES_KEY, JSON.stringify(workspaces.value));
-    localStorage.setItem(DEFAULT_WORKSPACE_KEY, defaultWorkspace.value);
+    setStoredValue(TOKEN_KEY, token.value);
+    setStoredValue(ORG_ID_KEY, orgId.value);
+    setStoredValue(ROLE_KEY, role.value);
+    setStoredValue(USER_ID_KEY, userId.value);
+    setStoredValue(USERNAME_KEY, username.value);
+    setStoredArray(ROLES_KEY, roles.value);
+    setStoredValue(PLAN_TIER_KEY, planTier.value);
+    setStoredArray(CAPABILITIES_KEY, capabilities.value);
+    setStoredArray(WORKSPACES_KEY, workspaces.value);
+    setStoredValue(DEFAULT_WORKSPACE_KEY, defaultWorkspace.value);
+    userStore.current = {
+      id: session.user_id,
+      org_id: session.org_id,
+      username: session.username,
+      email: userStore.current?.email || "",
+      role: session.role,
+      is_active: true,
+      created_at: userStore.current?.created_at,
+      updated_at: userStore.current?.updated_at,
+    };
+  }
+
+  async function syncCurrentUserProfile() {
+    const userStore = useUserStore();
+    try {
+      await userStore.fetchCurrentUser();
+    } catch (error) {
+      console.warn("Failed to refresh current user profile after auth session setup", error);
+    }
   }
 
   async function login(payload: LoginPayload) {
     const { data } = await authApi.login(payload);
     setSession(data.data);
+    await syncCurrentUserProfile();
     return data.data;
   }
 
   async function register(payload: RegisterPayload) {
     const { data } = await authApi.register(payload);
     setSession(data.data);
+    await syncCurrentUserProfile();
     return data.data;
   }
 
   function logout() {
+    const userStore = useUserStore();
     token.value = "";
     orgId.value = "";
     role.value = "";
     userId.value = "";
+    username.value = "";
     roles.value = [];
     planTier.value = "basic";
     capabilities.value = [];
     workspaces.value = [];
     defaultWorkspace.value = WORKSPACE_APP;
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(ORG_ID_KEY);
-    localStorage.removeItem(ROLE_KEY);
-    localStorage.removeItem(USER_ID_KEY);
-    localStorage.removeItem(ROLES_KEY);
-    localStorage.removeItem(PLAN_TIER_KEY);
-    localStorage.removeItem(CAPABILITIES_KEY);
-    localStorage.removeItem(WORKSPACES_KEY);
-    localStorage.removeItem(DEFAULT_WORKSPACE_KEY);
+    clearStoredAuthSession();
+    userStore.$reset();
   }
 
   function hasWorkspace(workspace: string) {
@@ -132,6 +153,16 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function resolveDefaultRoute() {
+    const r = primaryRole.value;
+    if (r === ROLE_USER || r === ROLE_EXPERT) {
+      return "/app/chat";
+    }
+    if (r === ROLE_ADMIN || r === ROLE_ALGORITHM_ENGINEER) {
+      return "/governance/quality/report";
+    }
+    if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
+      return "/ops/agents";
+    }
     return "/app/dashboard";
   }
 
@@ -145,6 +176,7 @@ export const useAuthStore = defineStore("auth", () => {
     workspaces,
     defaultWorkspace,
     userId,
+    username,
     isAuthed,
     primaryRole,
     login,

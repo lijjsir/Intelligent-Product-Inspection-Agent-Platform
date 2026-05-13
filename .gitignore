@@ -17,11 +17,17 @@ frontend/node_modules/
 frontend/dist/
 .vite/
 frontend/node_modules/.vite/
+frontend/logs/
 
 # Test artifacts
 .coverage
 coverage/
 htmlcov/
+.worktrees/
+
+# Runtime artifacts
+backend/logs/
+backend/runtime_uploads/
 
 # OS / editor
 .DS_Store

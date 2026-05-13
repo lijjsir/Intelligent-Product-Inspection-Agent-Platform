@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.permissions import require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.common import ResponseEnvelope
 from app.schemas.governance import QualityReportResponse, QualityTraceItem
 from app.schemas.user import CurrentUser
@@ -9,6 +9,10 @@ from app.services.quality_report_service import QualityReportService
 
 
 router = APIRouter()
+
+
+def _scope_org_id(current: CurrentUser) -> str | None:
+    return None if ROLE_ADMIN in current.roles else current.org_id
 
 
 @router.get("/report", response_model=ResponseEnvelope[QualityReportResponse])
@@ -19,7 +23,7 @@ async def get_quality_report(
     db=Depends(get_db),
 ):
     require_role("quality", current.role)
-    service = QualityReportService(db, current.org_id)
+    service = QualityReportService(db, _scope_org_id(current))
     data = await service.build_report(
         start_date=None if not start_date else __import__("datetime").date.fromisoformat(start_date),
         end_date=None if not end_date else __import__("datetime").date.fromisoformat(end_date),
@@ -34,6 +38,6 @@ async def list_quality_traces(
     db=Depends(get_db),
 ):
     require_role("quality", current.role)
-    service = QualityReportService(db, current.org_id)
+    service = QualityReportService(db, _scope_org_id(current))
     data = await service.list_traces(limit=limit)
     return ResponseEnvelope(data=[QualityTraceItem(**item) for item in data])

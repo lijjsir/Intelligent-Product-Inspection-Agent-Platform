@@ -20,7 +20,12 @@ async def list_tasks(
 ):
     """返回任务管理页需要的分页任务列表。"""
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     items, total = await service.list_tasks(query)
     return ResponseEnvelope(
         data=PagedResponse(
@@ -60,7 +65,12 @@ async def get_task(
 ):
     """返回任务详情页展示和运行态刷新所需的单个任务数据。"""
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     task = await service.get_task(task_id)
     if not task:
         raise NotFoundError(f"Task {task_id} not found")
@@ -75,9 +85,34 @@ async def get_status(
 ):
     """返回任务的最新状态，供轻量轮询场景使用。"""
     require_role("task", current.role)
-    service = TaskService(db, current.org_id)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
     task = await service.get_task(task_id)
     if not task:
         raise NotFoundError(f"Task {task_id} not found")
 
     return ResponseEnvelope(data=TaskStatusResponse(id=task.id, status=task.status))
+
+
+@router.delete("/{task_id}", response_model=ResponseEnvelope[dict])
+async def delete_task(
+    task_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("task", current.role)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
+    task = await service.delete_task(task_id)
+    if not task:
+        raise NotFoundError(f"Task {task_id} not found")
+    await db.commit()
+    return ResponseEnvelope(data={"deleted": True, "task_id": task_id})

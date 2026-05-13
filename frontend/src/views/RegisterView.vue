@@ -1,37 +1,81 @@
 <template>
-  <section class="login">
-    <h2>创建组织</h2>
-    <p>注册后会自动创建组织与管理员账号。</p>
-    <form @submit.prevent="submit">
-      <label>
-        组织名称
-        <input v-model="orgName" type="text" placeholder="PIAP Labs" />
-      </label>
-      <label>
-        组织标识
-        <input v-model="orgSlug" type="text" placeholder="piap-labs" />
-      </label>
-      <label>
-        管理员账号
-        <input v-model="username" type="text" placeholder="admin" />
-      </label>
-      <label>
-        管理员邮箱
-        <input v-model="email" type="email" placeholder="admin@piap.ai" />
-      </label>
-      <label>
-        管理员密码
-        <input v-model="password" type="password" placeholder="••••••" />
-      </label>
-      <button type="submit" :disabled="loading">
-        {{ loading ? "创建中..." : "创建并登录" }}
-      </button>
-    </form>
-    <div class="footer">
-      已有账号？
-      <RouterLink to="/login">返回登录</RouterLink>
+  <div class="w-full max-w-[360px]">
+    <div class="mb-8">
+      <h2 class="text-2xl font-bold text-zinc-900">创建组织</h2>
+      <p class="mt-2 text-sm text-zinc-500">注册后会自动创建组织与管理员账号</p>
     </div>
-  </section>
+
+    <form class="flex flex-col gap-5" @submit.prevent="submit">
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">组织名称</label>
+        <el-input
+          v-model="orgName"
+          placeholder="PIAP Labs"
+          size="large"
+          clearable
+        />
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">组织标识</label>
+        <el-input
+          v-model="orgSlug"
+          placeholder="piap-labs"
+          size="large"
+          clearable
+        />
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">管理员账号</label>
+        <el-input
+          v-model="username"
+          placeholder="admin"
+          size="large"
+          clearable
+        />
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">管理员邮箱</label>
+        <el-input
+          v-model="email"
+          type="email"
+          placeholder="admin@piap.ai"
+          size="large"
+          clearable
+        />
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-medium text-zinc-600">管理员密码</label>
+        <el-input
+          v-model="password"
+          type="password"
+          placeholder="••••••"
+          size="large"
+          show-password
+          @keydown.enter="submit"
+        />
+      </div>
+
+      <el-button
+        type="primary"
+        size="large"
+        native-type="submit"
+        :loading="loading"
+        class="!w-full !mt-2"
+        @click="submit"
+      >
+        {{ loading ? "创建中..." : "创建并登录" }}
+      </el-button>
+    </form>
+
+    <p class="mt-6 text-center text-[13px] text-zinc-400">
+      已有账号？
+      <RouterLink to="/login" class="text-zinc-900 font-medium hover:underline">返回登录</RouterLink>
+    </p>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -68,55 +112,3 @@ const submit = async () => {
   }
 };
 </script>
-
-<style scoped>
-.login {
-  width: min(420px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  background: #fff;
-  padding: 32px;
-  border-radius: 16px;
-  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
-}
-
-form {
-  display: grid;
-  gap: 16px;
-}
-
-label {
-  display: grid;
-  gap: 6px;
-  font-size: 14px;
-  color: #475569;
-}
-
-input {
-  height: 44px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  padding: 0 12px;
-}
-
-button {
-  height: 44px;
-  border: none;
-  border-radius: 10px;
-  background: #1b3a5c;
-  color: #fff;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-button:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-.footer {
-  font-size: 13px;
-  color: #64748b;
-}
-</style>

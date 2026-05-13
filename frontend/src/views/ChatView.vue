@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { CollectionTag, Paperclip, Promotion } from "@element-plus/icons-vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -473,16 +473,18 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 </script>
 
 <template>
-  <div class="chat-page">
-    <section class="chat-toolbar">
-      <div class="toolbar-block">
-        <span class="toolbar-label">知识库</span>
+  <div class="flex flex-col gap-4 min-h-[calc(100vh-136px)]">
+    <!-- Toolbar -->
+    <section class="flex items-center justify-between gap-3 px-5 py-3.5 bg-white border border-zinc-200 rounded-xl shadow-surface-sm flex-wrap">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="text-[13px] font-semibold text-zinc-700">知识库</span>
         <el-select
           :model-value="chatStore.selectedRagSpaceId || undefined"
           clearable
           filterable
           placeholder="不使用文档"
-          class="rag-select"
+          class="!w-[280px]"
+          size="small"
           @update:model-value="(value) => (value ? chatStore.selectRagSpace(value) : chatStore.clearSelectedRagSpace())"
         >
           <el-option label="不使用文档" value="" />
@@ -493,16 +495,14 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :value="space.id"
           />
         </el-select>
-        <el-tag type="info" effect="plain" class="token-tag">
-          已使用 Token：{{ totalTokenText }}
-        </el-tag>
+        <el-tag size="small" effect="plain" type="info">已使用 Token：{{ totalTokenText }}</el-tag>
       </div>
 
-      <div class="toolbar-status">
-        <el-tag v-if="chatStore.selectedRagSpace" type="success" effect="plain">
+      <div class="flex items-center gap-2 flex-wrap">
+        <el-tag v-if="chatStore.selectedRagSpace" size="small" effect="plain" type="success">
           当前使用：{{ chatStore.selectedRagSpace.name }}
         </el-tag>
-        <el-tag v-if="chatStore.pendingAttachments.length" type="warning" effect="plain">
+        <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
           待发送附件：{{ chatStore.pendingAttachments.length }}
         </el-tag>
       </div>
@@ -510,7 +510,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
     <el-alert
       v-if="chatStore.ragSpacesError"
-      class="rag-warning"
+      class="!rounded-xl"
       type="warning"
       :closable="false"
       show-icon
@@ -518,39 +518,48 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       :description="chatStore.ragSpacesError"
     />
 
-    <section class="chat-shell">
-      <div ref="messageListRef" class="chat-body">
+    <!-- Chat shell -->
+    <section class="flex flex-col flex-1 min-h-0 bg-white border border-zinc-200 rounded-2xl shadow-surface-sm overflow-hidden">
+      <!-- Message list -->
+      <div ref="messageListRef" class="flex-1 min-h-0 overflow-y-auto px-6 py-5">
         <el-empty v-if="chatStore.messages.length === 0" description="发送一条消息开始对话" />
 
-        <div v-else class="message-list">
+        <div v-else class="flex flex-col gap-5">
           <article
             v-for="message in chatStore.messages"
             :key="message.id"
-            class="message-row"
-            :class="message.role"
+            class="flex flex-col gap-2"
+            :class="message.role === 'user' ? 'items-end' : ''"
           >
-            <div class="message-meta">
-              <span class="message-role">{{ roleLabel(message.role) }}</span>
-              <span class="message-time">{{ formatTime(message.created_at) }}</span>
+            <div class="flex gap-2.5 text-[13px] text-zinc-500">
+              <span class="font-bold text-zinc-700">{{ roleLabel(message.role) }}</span>
+              <span>{{ formatTime(message.created_at) }}</span>
             </div>
 
-            <div class="message-bubble" :class="message.role">
-              <div class="message-content">{{ message.content }}</div>
+            <!-- Bubble -->
+            <div
+              class="max-w-[min(920px,88%)] px-5 py-4 rounded-2xl border border-zinc-100 bg-white shadow-surface-sm"
+              :class="message.role === 'user' ? '!bg-zinc-900 !text-white !border-zinc-900' : ''"
+            >
+              <div class="whitespace-pre-wrap leading-relaxed break-words">{{ message.content }}</div>
 
-              <div v-if="message.payload?.attachment_echo?.length" class="attachment-list">
+              <!-- Attachments -->
+              <div v-if="message.payload?.attachment_echo?.length" class="flex flex-wrap gap-2 mt-3.5">
                 <a
                   v-for="attachment in message.payload.attachment_echo"
                   :key="attachment.id"
                   :href="attachment.url"
                   target="_blank"
                   rel="noreferrer"
-                  class="attachment-chip"
+                  class="inline-flex items-center px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700 text-[13px] hover:bg-zinc-200 transition-colors"
+                  :class="message.role === 'user' ? '!bg-zinc-800 !text-zinc-200 hover:!bg-zinc-700' : ''"
                 >
                   {{ attachment.name }}
                 </a>
               </div>
 
-              <div class="message-tags">
+              <!-- Tags -->
+              <div class="flex flex-wrap gap-2 mt-3.5">
                 <el-tag v-if="message.payload?.intent" size="small" effect="plain" type="primary">
                   {{ intentLabel(message.payload.intent) }}
                 </el-tag>
@@ -565,17 +574,18 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </el-tag>
               </div>
 
-              <div v-if="message.payload?.result_card" class="result-card">
-                <div class="result-card-head">
+              <!-- Result card -->
+              <div v-if="message.payload?.result_card" class="mt-4 p-4 rounded-xl border border-zinc-200 bg-zinc-50/50">
+                <div class="flex justify-between gap-3 flex-wrap">
                   <div>
-                    <div class="result-card-title">
+                    <div class="text-base font-bold text-zinc-900">
                       {{ message.payload.result_card.product_name || message.payload.result_card.product_id }}
                     </div>
-                    <div class="result-card-subtitle">
+                    <div class="text-[13px] text-zinc-500 mt-0.5">
                       {{ message.payload.result_card.product_family || "unknown" }} · {{ message.payload.result_card.spec_code }}
                     </div>
                   </div>
-                  <div class="result-card-tags">
+                  <div class="flex gap-2">
                     <el-tag size="small" effect="dark" :type="verdictTagType(message.payload.result_card.verdict)">
                       {{ message.payload.result_card.verdict.toUpperCase() }}
                     </el-tag>
@@ -585,28 +595,28 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   </div>
                 </div>
 
-                <div class="result-card-grid">
-                  <div>
-                    <span>总体得分</span>
-                    <strong>{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong>
+                <div class="grid grid-cols-4 gap-3 mt-4 max-sm:grid-cols-2">
+                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
+                    <span class="text-xs font-bold text-zinc-500">总体得分</span>
+                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong>
                   </div>
-                  <div>
-                    <span>RAG 空间</span>
-                    <strong>{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong>
+                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
+                    <span class="text-xs font-bold text-zinc-500">RAG 空间</span>
+                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong>
                   </div>
-                  <div>
-                    <span>引用数量</span>
-                    <strong>{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong>
+                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
+                    <span class="text-xs font-bold text-zinc-500">引用数量</span>
+                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong>
                   </div>
-                  <div>
-                    <span>引用覆盖率</span>
-                    <strong>{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong>
+                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
+                    <span class="text-xs font-bold text-zinc-500">引用覆盖率</span>
+                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong>
                   </div>
                 </div>
 
-                <div v-if="message.payload.result_card.key_reasons?.length" class="result-section">
-                  <div class="result-section-label">关键原因</div>
-                  <div class="result-pill-list">
+                <div v-if="message.payload.result_card.key_reasons?.length" class="mt-4">
+                  <div class="text-xs font-bold text-zinc-500 mb-2">关键原因</div>
+                  <div class="flex flex-wrap gap-2">
                     <el-tag
                       v-for="reason in message.payload.result_card.key_reasons"
                       :key="reason"
@@ -618,9 +628,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   </div>
                 </div>
 
-                <div v-if="message.payload.result_card.failed_rules?.length" class="result-section">
-                  <div class="result-section-label">失败规则</div>
-                  <div class="result-pill-list">
+                <div v-if="message.payload.result_card.failed_rules?.length" class="mt-4">
+                  <div class="text-xs font-bold text-zinc-500 mb-2">失败规则</div>
+                  <div class="flex flex-wrap gap-2">
                     <el-tag
                       v-for="rule in message.payload.result_card.failed_rules"
                       :key="rule"
@@ -633,43 +643,35 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   </div>
                 </div>
 
-                <div class="result-footer">
-                  <div class="result-footer-block">
-                    <span class="result-section-label">预期对照</span>
+                <div class="flex justify-between gap-3 mt-4 flex-wrap">
+                  <div class="flex flex-col gap-2">
+                    <span class="text-xs font-bold text-zinc-500">预期对照</span>
                     <el-tag
                       v-if="message.payload.expectation_check"
                       size="small"
                       effect="plain"
                       :type="message.payload.expectation_check.matched ? 'success' : 'danger'"
                     >
-                      {{
-                        message.payload.expectation_check.matched
-                          ? "系统结果与样本预期一致"
-                          : "系统结果与样本预期不一致"
-                      }}
+                      {{ message.payload.expectation_check.matched ? "系统结果与样本预期一致" : "系统结果与样本预期不一致" }}
                     </el-tag>
-                    <span v-else class="result-muted">未提供样本预期</span>
+                    <span v-else class="text-[13px] text-zinc-400">未提供样本预期</span>
                   </div>
-                  <div class="result-footer-block">
-                    <span class="result-section-label">Top Sources</span>
-                    <span class="result-muted">
+                  <div class="flex flex-col gap-2 max-w-[48%]">
+                    <span class="text-xs font-bold text-zinc-500">Top Sources</span>
+                    <span class="text-[13px] text-zinc-400">
                       {{ message.payload.rag_summary?.top_sources?.join(" / ") || "暂无引用来源" }}
                     </span>
                   </div>
                 </div>
 
-                <div class="result-sync">
+                <div class="flex items-center gap-2.5 flex-wrap mt-4">
                   <el-tag
                     v-if="message.payload.materialization_status"
                     size="small"
                     effect="plain"
                     :type="materializationTagType(message.payload.materialization_status)"
                   >
-                    {{
-                      message.payload.materialization_status === "synced"
-                        ? "已同步到任务/分析统计"
-                        : "同步到后台统计失败"
-                    }}
+                    {{ message.payload.materialization_status === "synced" ? "已同步到任务/分析统计" : "同步到后台统计失败" }}
                   </el-tag>
                   <el-button
                     v-if="message.payload.materialized_task?.id"
@@ -680,38 +682,38 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   >
                     查看同步任务
                   </el-button>
-                  <span v-if="message.payload.materialization_error" class="result-muted">
+                  <span v-if="message.payload.materialization_error" class="text-[13px] text-zinc-400">
                     {{ message.payload.materialization_error }}
                   </span>
                 </div>
               </div>
 
-              <div v-if="message.payload?.created_task" class="task-card">
-                <div class="task-card-title">检测任务已创建</div>
-                <div class="task-card-grid">
-                  <span>任务 ID</span>
+              <!-- Task card -->
+              <div v-if="message.payload?.created_task" class="mt-4 p-4 rounded-xl bg-zinc-50 border border-zinc-100">
+                <div class="font-bold text-zinc-800 mb-2.5">检测任务已创建</div>
+                <div class="grid grid-cols-[96px_1fr] gap-x-3 gap-y-2 text-[13px]">
+                  <span class="text-zinc-500">任务 ID</span>
                   <span>{{ message.payload.created_task.id }}</span>
-                  <span>产品编号</span>
+                  <span class="text-zinc-500">产品编号</span>
                   <span>{{ message.payload.created_task.product_id }}</span>
-                  <span>检测标准</span>
+                  <span class="text-zinc-500">检测标准</span>
                   <span>{{ message.payload.created_task.spec_code }}</span>
-                  <span>图片数量</span>
+                  <span class="text-zinc-500">图片数量</span>
                   <span>{{ message.payload.created_task.image_count }}</span>
                 </div>
-                <div v-if="taskState(message.payload.created_task.id)" class="task-stream-inline">
+                <div v-if="taskState(message.payload.created_task.id)" class="flex items-center gap-2.5 mt-3 text-[13px] text-zinc-600">
                   <el-tag size="small" type="warning" effect="plain">
                     {{ taskState(message.payload.created_task.id)?.status || "running" }}
                   </el-tag>
-                  <span class="task-stream-text">
-                    {{ taskState(message.payload.created_task.id)?.stage || taskState(message.payload.created_task.id)?.message || "智能体执行中..." }}
-                  </span>
+                  <span>{{ taskState(message.payload.created_task.id)?.stage || taskState(message.payload.created_task.id)?.message || "智能体执行中..." }}</span>
                 </div>
-                <div class="task-action-buttons task-card-actions">
+                <div class="flex gap-2 mt-3">
                   <el-button size="small" @click="router.push(`/app/tasks/${message.payload.created_task.id}`)">查看任务详情</el-button>
                 </div>
               </div>
 
-              <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
+              <!-- Task actions -->
+              <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="mt-4 flex flex-col gap-2.5">
                 <el-alert
                   v-if="message.payload?.missing_slots?.length"
                   type="info"
@@ -719,8 +721,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   show-icon
                   title="任务信息还不完整，请补充后再提交。"
                 />
-
-                <div class="task-action-buttons">
+                <div class="flex gap-2.5 flex-wrap">
                   <el-button size="small" @click="openTaskDialog(message)">
                     {{ canConfirmTask(message) ? "编辑检测信息" : "填写检测信息" }}
                   </el-button>
@@ -740,10 +741,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         </div>
       </div>
 
-      <div class="composer">
-        <div v-if="chatStore.pendingAttachments.length" class="pending-attachments">
-          <span class="pending-label">待发送附件</span>
-          <div class="pending-list">
+      <!-- Composer -->
+      <div class="border-t border-zinc-100 px-5 py-4 bg-white">
+        <div v-if="chatStore.pendingAttachments.length" class="flex items-center justify-between gap-3 mb-3">
+          <span class="text-[13px] font-semibold text-zinc-700">待发送附件</span>
+          <div class="flex gap-2 flex-wrap">
             <el-tag
               v-for="attachment in chatStore.pendingAttachments"
               :key="attachment.id"
@@ -756,27 +758,26 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           </div>
         </div>
 
-        <div v-if="streamStatusText" class="stream-status">
+        <div v-if="streamStatusText" class="inline-flex items-center px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700 text-[13px] font-semibold mb-3">
           {{ streamStatusText }}
         </div>
 
         <el-input
           v-model="input"
           type="textarea"
-          :rows="4"
+          :rows="3"
           resize="none"
           placeholder="输入消息，Enter 发送，Shift + Enter 换行"
           @keydown="onInputKeydown"
         />
 
-        <div class="composer-actions">
-          <div class="composer-left">
-            <el-button :icon="Paperclip" @click="triggerAttachmentSelect">添加附件</el-button>
-            <el-button :icon="CollectionTag" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined">
+        <div class="flex items-center justify-between gap-3 mt-3">
+          <div class="flex gap-2 flex-wrap">
+            <el-button size="small" :icon="Paperclip" @click="triggerAttachmentSelect">添加附件</el-button>
+            <el-button size="small" :icon="CollectionTag" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined">
               {{ chatStore.selectedRagSpaceId ? "取消知识库" : "未使用知识库" }}
             </el-button>
           </div>
-
           <el-button type="primary" :icon="Promotion" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage">
             发送
           </el-button>
@@ -784,7 +785,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
         <input
           ref="attachmentInputRef"
-          class="hidden-input"
+          class="hidden"
           type="file"
           multiple
           @change="handleAttachmentSelected"
@@ -792,6 +793,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       </div>
     </section>
 
+    <!-- Task dialog -->
     <el-dialog v-model="taskDialogVisible" title="填写检测任务" width="640px" @closed="resetTaskDialog">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-position="top">
         <el-form-item label="产品编号" prop="product_id">
@@ -805,7 +807,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             allow-create
             default-first-option
             placeholder="选择或输入检测标准"
-            style="width: 100%"
+            class="!w-full"
           >
             <el-option
               v-for="spec in specOptions"
@@ -817,9 +819,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         </el-form-item>
 
         <el-form-item label="检测图片" prop="image_urls_input">
-          <div class="dialog-upload">
-            <el-button @click="triggerTaskImageSelect">上传图片</el-button>
-            <span class="dialog-tip">也可以直接粘贴图片 URL，每行一个。</span>
+          <div class="flex items-center gap-2 mb-2">
+            <el-button size="small" @click="triggerTaskImageSelect">上传图片</el-button>
+            <span class="text-xs text-zinc-400">也可以直接粘贴图片 URL，每行一个。</span>
           </div>
           <el-input
             v-model="taskForm.image_urls_input"
@@ -828,7 +830,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             resize="none"
             placeholder="https://example.com/a.jpg"
           />
-          <div v-if="taskFormAttachments.length" class="pending-list dialog-list">
+          <div v-if="taskFormAttachments.length" class="flex flex-wrap gap-2 mt-3">
             <el-tag
               v-for="attachment in taskFormAttachments"
               :key="attachment.id"
@@ -841,7 +843,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           </div>
           <input
             ref="taskImageInputRef"
-            class="hidden-input"
+            class="hidden"
             type="file"
             accept="image/*"
             multiple
@@ -855,7 +857,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       </el-form>
 
       <template #footer>
-        <div class="dialog-footer">
+        <div class="flex gap-2 justify-end">
           <el-button @click="resetTaskDialog">取消</el-button>
           <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">确认并提交任务</el-button>
         </div>
@@ -863,360 +865,3 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.chat-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: calc(100vh - 140px);
-}
-.chat-toolbar,
-.chat-shell {
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
-}
-
-.chat-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px;
-  border-radius: 20px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(232, 250, 245, 0.92)),
-    radial-gradient(circle at top right, rgba(6, 182, 212, 0.1), transparent 45%);
-}
-
-.toolbar-block,
-.toolbar-status {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.toolbar-label,
-.pending-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #0f3d4c;
-}
-
-.token-tag {
-  font-weight: 600;
-}
-
-.rag-select {
-  width: 300px;
-}
-
-.rag-warning {
-  border-radius: 16px;
-}
-
-.chat-shell {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  border-radius: 28px;
-  background:
-    radial-gradient(circle at top right, rgba(144, 238, 210, 0.18), transparent 35%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 251, 249, 0.98));
-  overflow: hidden;
-}
-
-.chat-body {
-  flex: 1;
-  min-height: 0;
-  padding: 24px 24px 8px;
-  overflow-y: auto;
-}
-
-.message-list {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.message-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.message-row.user {
-  align-items: flex-end;
-}
-
-.message-meta {
-  display: flex;
-  gap: 10px;
-  font-size: 13px;
-  color: #486170;
-}
-
-.message-role {
-  font-weight: 700;
-}
-
-.message-bubble {
-  max-width: min(920px, 88%);
-  padding: 18px 20px;
-  border-radius: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-}
-
-.message-bubble.user {
-  background: linear-gradient(135deg, #0f766e, #115e59);
-  color: #fff;
-}
-
-.message-content {
-  white-space: pre-wrap;
-  line-height: 1.9;
-  word-break: break-word;
-}
-
-.attachment-list,
-.message-tags,
-.task-action-buttons,
-.pending-list,
-.dialog-upload,
-.dialog-footer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.attachment-list,
-.message-tags,
-.result-card,
-.task-card,
-.task-actions {
-  margin-top: 14px;
-}
-
-.attachment-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
-  color: #0f766e;
-  text-decoration: none;
-  font-size: 13px;
-}
-
-.task-card {
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(15, 118, 110, 0.06);
-}
-
-.result-card {
-  padding: 16px 18px;
-  border-radius: 22px;
-  border: 1px solid rgba(14, 165, 233, 0.14);
-  background:
-    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
-    linear-gradient(145deg, rgba(240, 249, 255, 0.92), rgba(255, 255, 255, 0.98));
-}
-
-.result-card-head,
-.result-card-tags,
-.result-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.result-card-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.result-card-subtitle,
-.result-muted {
-  color: #64748b;
-  font-size: 13px;
-}
-
-.result-card-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.result-card-grid div {
-  padding: 12px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.84);
-  border: 1px solid rgba(191, 219, 254, 0.8);
-}
-
-.result-card-grid span,
-.result-section-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #64748b;
-}
-
-.result-card-grid strong {
-  display: block;
-  margin-top: 6px;
-  color: #0f172a;
-  font-size: 15px;
-}
-
-.result-section {
-  margin-top: 14px;
-}
-
-.result-pill-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.result-footer {
-  margin-top: 14px;
-  align-items: flex-start;
-}
-
-.result-sync {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 14px;
-}
-
-.result-footer-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 48%;
-}
-
-.task-card-title {
-  margin-bottom: 10px;
-  font-weight: 700;
-  color: #0f3d4c;
-}
-
-.task-card-grid {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 8px 12px;
-  font-size: 13px;
-}
-
-.task-card-grid span:nth-child(odd) {
-  color: #486170;
-}
-
-.task-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.task-stream-inline {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: #475569;
-}
-
-.task-stream-text {
-  line-height: 1.6;
-}
-
-.task-card-actions {
-  margin-top: 12px;
-}
-
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px 20px;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
-}
-
-.pending-attachments,
-.composer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.composer-left {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.stream-status {
-  display: inline-flex;
-  align-items: center;
-  width: fit-content;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.dialog-tip {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.dialog-list {
-  margin-top: 12px;
-}
-
-.hidden-input {
-  display: none;
-}
-
-@media (max-width: 900px) {
-  .chat-toolbar,
-  .pending-attachments,
-  .composer-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .rag-select,
-  .message-bubble {
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .result-card-grid,
-  .result-footer {
-    grid-template-columns: 1fr;
-    flex-direction: column;
-  }
-
-  .result-footer-block {
-    max-width: 100%;
-  }
-}
-</style>

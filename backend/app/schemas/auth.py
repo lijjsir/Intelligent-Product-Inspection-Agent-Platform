@@ -31,6 +31,7 @@ class AuthSessionResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(..., description="seconds")
     user_id: str
+    username: str
     org_id: str
     role: str
     roles: list[str] = Field(default_factory=list)

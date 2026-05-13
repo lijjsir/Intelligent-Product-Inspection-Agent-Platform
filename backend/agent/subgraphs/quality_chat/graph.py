@@ -321,7 +321,7 @@ def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str
 
 
 async def input_adapter(state: QualityChatState) -> QualityChatState:
-    runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "legacy_quality")
+    runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "quality_judgement")
     state["workflow_version"] = "quality_chat_v1"
     state["prompt_version"] = runtime_profile.active_prompt_version
     state["metadata"] = dict(state.get("metadata") or {})
@@ -352,7 +352,7 @@ async def planner(state: QualityChatState) -> QualityChatState:
     lowered_query = query.lower()
     history = list(state.get("history") or [])
     pending = _latest_pending_task(history)
-    planner_payload = _dspy_target_payload(state, "legacy_quality.planner")
+    planner_payload = _dspy_target_payload(state, "quality_judgement.planner")
     extra_task_keywords = [str(item).strip().lower() for item in list(planner_payload.get("task_keywords") or []) if str(item).strip()]
     if pending is not None:
         state["intent"] = "task_followup"
@@ -419,7 +419,7 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
     if selected_rag:
         payload_filter["rag_space_id"] = selected_rag["id"]
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-    knowledge_payload = _dspy_target_payload(state, "legacy_quality.knowledge")
+    knowledge_payload = _dspy_target_payload(state, "quality_judgement.knowledge")
     top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or 4)))
     started_at = perf_counter()
     docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
@@ -457,9 +457,9 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         prompt_section = _dspy_prompt_section(
             state,
             [
-                "legacy_quality.planner",
-                "legacy_quality.reasoning",
-                "legacy_quality.response_writer",
+                "quality_judgement.planner",
+                "quality_judgement.reasoning",
+                "quality_judgement.response_writer",
             ],
         )
         if prompt_section:
@@ -516,9 +516,9 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
     prompt_section = _dspy_prompt_section(
         state,
         [
-            "legacy_quality.knowledge",
-            "legacy_quality.reasoning",
-            "legacy_quality.response_writer",
+            "quality_judgement.knowledge",
+            "quality_judgement.reasoning",
+            "quality_judgement.response_writer",
         ],
     )
     if prompt_section:
@@ -734,7 +734,7 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
             "hit_rate": round(hit_rate, 4),
             "citation_coverage": round(coverage, 4),
             "latency_ms": int(metrics.get("latency_ms") or 0),
-            "source_graph": "legacy_quality",
+            "source_graph": "quality_judgement",
             "metadata_json": {
                 "intent": state.get("intent"),
                 "empty_recall": bool(metrics.get("empty_recall")),

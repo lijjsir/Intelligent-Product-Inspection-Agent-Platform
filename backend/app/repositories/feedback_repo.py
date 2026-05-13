@@ -52,8 +52,10 @@ class FeedbackRepository:
         start = (page - 1) * size
         return total, items[start : start + size]
 
-    async def list_by_range(self, org_id: str, start_date: date | None = None, end_date: date | None = None) -> list[ResultFeedback]:
-        stmt = select(ResultFeedback).where(ResultFeedback.org_id == org_id)
+    async def list_by_range(self, org_id: str | None, start_date: date | None = None, end_date: date | None = None) -> list[ResultFeedback]:
+        stmt = select(ResultFeedback)
+        if org_id:
+            stmt = stmt.where(ResultFeedback.org_id == org_id)
         if start_date:
             stmt = stmt.where(ResultFeedback.created_at >= datetime.combine(start_date, datetime.min.time()))
         if end_date:

@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage, type FormInstance, type FormRules } from "element-plus";
-import type { UploadFile, UploadFiles, UploadUserFile } from "element-plus";
+import {
+  ElMessage,
+  type FormInstance,
+  type FormRules,
+  type UploadFile,
+  type UploadFiles,
+  type UploadUserFile,
+} from "element-plus";
 
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
@@ -11,41 +17,43 @@ import { usePagination } from "@/composables/usePagination";
 
 const router = useRouter();
 const route = useRoute();
-const store = useTaskStore();
+const taskStore = useTaskStore();
 const inspectionSpecStore = useInspectionSpecStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
 const filters = ref({ status: "", product_id: "", ids: "" });
-
-// --- Create Task Dialog State ---
 const showCreateDialog = ref(false);
 const creating = ref(false);
+const deletingTaskId = ref("");
+const deleteDialogVisible = ref(false);
+const pendingDeleteTaskId = ref("");
 const formRef = ref<FormInstance>();
+const uploadFiles = ref<UploadUserFile[]>([]);
 const createForm = ref({
   product_id: "",
   spec_code: "",
   image_urls_input: "",
   priority: 5,
 });
-const uploadFiles = ref<UploadUserFile[]>([]);
+
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
+const isAdmin = computed(() => hasRole("admin"));
+const canCreateTask = computed(() => hasRole(["user"]));
 
 const rules: FormRules = {
   product_id: [
     { required: true, message: "产品编号不能为空", trigger: "blur" },
-    { max: 64, message: "产品编号不超过 64 个字符", trigger: "blur" },
+    { max: 64, message: "产品编号不能超过 64 个字符", trigger: "blur" },
   ],
-  spec_code: [
-    { required: true, message: "检测标准不能为空", trigger: "change" },
-  ],
+  spec_code: [{ required: true, message: "请选择检测标准", trigger: "change" }],
   image_urls_input: [
     {
       validator: (_rule, value: string, callback) => {
         const hasUrl = Boolean(value?.trim());
         const hasUpload = uploadFiles.value.length > 0;
         if (!hasUrl && !hasUpload) {
-          callback(new Error("至少提供一个图像 URL 或上传一张图片"));
+          callback(new Error("请至少提供一张图片 URL 或上传一张图片"));
           return;
         }
         callback();
@@ -55,35 +63,15 @@ const rules: FormRules = {
   ],
 };
 
-onMounted(() => {
-  syncFromRoute();
-  fetchData();
-  fetchSpecOptions();
-});
-
-watch(() => route.query, () => {
-  syncFromRoute();
-  fetchData();
-});
-
-async function fetchSpecOptions() {
-  try {
-    await inspectionSpecStore.fetchAll();
-  } catch (e) {
-    console.error(e);
-    ElMessage.warning("检测标准列表加载失败，创建任务时可能无法选择标准");
-  }
-}
-
-async function fetchData() {
-  await store.fetchTasks({
-    page: page.value,
-    size: pageSize.value,
-    status: filters.value.status || undefined,
-    product_id: filters.value.product_id || undefined,
-    ids: filters.value.ids || undefined,
-  });
-  total.value = store.total;
+function getStatusType(status: string) {
+  const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
+    pending: "info",
+    running: "primary",
+    done: "success",
+    failed: "danger",
+    reviewing: "warning",
+  };
+  return map[status] || "info";
 }
 
 function syncFromRoute() {
@@ -93,6 +81,26 @@ function syncFromRoute() {
     ids: String(route.query.ids || ""),
   };
   page.value = Number(route.query.page || 1);
+}
+
+async function fetchData() {
+  await taskStore.fetchTasks({
+    page: page.value,
+    size: pageSize.value,
+    status: filters.value.status || undefined,
+    product_id: filters.value.product_id || undefined,
+    ids: filters.value.ids || undefined,
+  });
+  total.value = taskStore.total;
+}
+
+async function fetchSpecOptions() {
+  try {
+    await inspectionSpecStore.fetchAll();
+  } catch (error) {
+    console.error(error);
+    ElMessage.warning("检测标准列表加载失败，手动创建任务时可能无法直接选择标准。");
+  }
 }
 
 function handleSearch() {
@@ -139,195 +147,196 @@ function handleUploadRemove(_file: UploadFile, files: UploadFiles) {
 
 async function handleSubmitCreate() {
   if (!formRef.value) return;
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return;
-    
-    creating.value = true;
-    try {
-      const urlsFromText = createForm.value.image_urls_input
-        .split(/[\n,]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0);
+  try {
+    await formRef.value.validate();
+  } catch {
+    return;
+  }
 
-      const dataUrls = await Promise.all(
-        uploadFiles.value
-          .map((f) => f.raw)
-          .filter((raw): raw is File => Boolean(raw))
-          .map((raw) => fileToDataUrl(raw))
-      );
-
-      const imageUrls = [...urlsFromText, ...dataUrls];
-      if (imageUrls.length === 0) {
-        ElMessage.error("请提供图像 URL 或上传图片");
-        return;
-      }
-
-      await store.createTask({
-        product_id: createForm.value.product_id,
-        spec_code: createForm.value.spec_code,
-        image_urls: imageUrls,
-        priority: createForm.value.priority,
-      });
-
-      ElMessage.success("任务创建成功");
-      showCreateDialog.value = false;
-      const hasActiveFilters = Boolean(filters.value.status || filters.value.product_id || filters.value.ids);
-      if (page.value !== 1 || hasActiveFilters) {
-        await fetchData();
-      }
-    } catch (e: any) {
-      // error handled globally by interceptor, but we catch it here just in case
-      console.error(e);
-    } finally {
-      creating.value = false;
-    }
-  });
+  creating.value = true;
+  try {
+    const urlsFromText = createForm.value.image_urls_input
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const dataUrls = await Promise.all(
+      uploadFiles.value
+        .map((item) => item.raw)
+        .filter((item): item is File => Boolean(item))
+        .map((item) => fileToDataUrl(item)),
+    );
+    await taskStore.createTask({
+      product_id: createForm.value.product_id.trim(),
+      spec_code: createForm.value.spec_code.trim(),
+      image_urls: [...urlsFromText, ...dataUrls],
+      priority: createForm.value.priority,
+      metadata: { source: "task_list" },
+    });
+    ElMessage.success("任务创建成功");
+    showCreateDialog.value = false;
+    await fetchData();
+  } catch (error) {
+    console.error(error);
+    ElMessage.error("任务创建失败，请稍后重试。");
+  } finally {
+    creating.value = false;
+  }
 }
 
-function handleSizeChange(val: number) {
-  onSizeChange(val);
-  router.push({
-    path: "/app/tasks",
-    query: {
-      ...(filters.value.status ? { status: filters.value.status } : {}),
-      ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
-      ...(filters.value.ids ? { ids: filters.value.ids } : {}),
-      page: String(page.value),
-    },
-  });
+async function handleDeleteTask(taskId: string) {
+  pendingDeleteTaskId.value = taskId;
+  deleteDialogVisible.value = true;
 }
 
-function handleCurrentChange(val: number) {
-  onPageChange(val);
-  router.push({
-    path: "/app/tasks",
-    query: {
-      ...(filters.value.status ? { status: filters.value.status } : {}),
-      ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
-      ...(filters.value.ids ? { ids: filters.value.ids } : {}),
-      page: String(val),
-    },
-  });
+function cancelDeleteTask() {
+  deleteDialogVisible.value = false;
+  pendingDeleteTaskId.value = "";
 }
 
-const getStatusType = (status: string) => {
-  const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
-    pending: "info",
-    running: "primary",
-    done: "success",
-    failed: "danger",
-    reviewing: "warning",
-  };
-  return map[status] || "info";
-};
+async function confirmDeleteTask() {
+  if (!pendingDeleteTaskId.value) return;
+  deletingTaskId.value = pendingDeleteTaskId.value;
+  try {
+    await taskStore.deleteTask(pendingDeleteTaskId.value);
+    ElMessage.success("任务已删除");
+    cancelDeleteTask();
+    await fetchData();
+  } catch (error: any) {
+    console.error(error);
+    ElMessage.error(error?.response?.data?.message || "删除任务失败，请稍后重试。");
+  } finally {
+    deletingTaskId.value = "";
+  }
+}
+
+function handleSizeChange(size: number) {
+  onSizeChange(size);
+  handleSearch();
+}
+
+function handleCurrentChange(current: number) {
+  onPageChange(current);
+  handleSearch();
+}
+
+onMounted(async () => {
+  syncFromRoute();
+  await Promise.all([fetchData(), fetchSpecOptions()]);
+});
+
+watch(
+  () => route.query,
+  async () => {
+    syncFromRoute();
+    await fetchData();
+  },
+);
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="header">
+  <div class="flex flex-col gap-5">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
-        <h2 class="title">质检任务管理</h2>
-        <p class="subtitle">查看和管理所有的产品缺陷检测任务</p>
+        <h2 class="text-2xl font-bold text-zinc-900">任务管理</h2>
+        <p class="mt-2 text-sm text-zinc-500">这里展示所有真实物化后的检测任务。聊天终态、聊天提交和手动创建都会进入同一任务主表。</p>
       </div>
-      <el-button v-if="hasRole(['org_admin', 'inspector'])" type="primary" @click="handleOpenCreate">
-        + 新增任务
-      </el-button>
+      <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
     </div>
 
-    <!-- Filters -->
-    <el-card class="mb-4" shadow="never">
-      <el-form :model="filters" inline class="filter-form">
+    <div class="card-surface p-4">
+      <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
         <el-form-item label="任务状态">
-          <el-select v-model="filters.status" placeholder="全部" clearable style="width: 160px">
-            <el-option label="待处理 (Pending)" value="pending" />
-            <el-option label="运行中 (Running)" value="running" />
-            <el-option label="已完成 (Done)" value="done" />
-            <el-option label="失败 (Failed)" value="failed" />
+          <el-select v-model="filters.status" placeholder="全部状态" clearable class="!w-[160px]" size="small">
+            <el-option label="待执行" value="pending" />
+            <el-option label="执行中" value="running" />
+            <el-option label="已完成" value="done" />
+            <el-option label="失败" value="failed" />
           </el-select>
         </el-form-item>
         <el-form-item label="产品编号">
-          <el-input v-model="filters.product_id" placeholder="输入产品ID搜索" clearable @keyup.enter="handleSearch" />
+          <el-input v-model="filters.product_id" placeholder="输入产品编号" clearable size="small" @keyup.enter="handleSearch" />
         </el-form-item>
         <el-form-item v-if="filters.ids" label="任务集合">
-          <el-input v-model="filters.ids" readonly />
+          <el-input v-model="filters.ids" readonly size="small" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">查询</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button type="primary" size="small" @click="handleSearch">查询</el-button>
+          <el-button size="small" @click="handleReset">重置</el-button>
         </el-form-item>
       </el-form>
-    </el-card>
+    </div>
 
-    <!-- Table -->
-    <el-card shadow="never" class="table-card">
-      <el-table :data="store.items" v-loading="store.loading" border stripe style="width: 100%">
-        <el-table-column prop="id" label="任务ID" width="300" show-overflow-tooltip />
-        <el-table-column prop="product_id" label="产品编号" width="180" />
+    <div class="card-surface">
+      <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
+        <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
+        <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
+        <el-table-column prop="product_id" label="产品编号" width="150" />
         <el-table-column prop="spec_code" label="检测标准" width="180" />
-        <el-table-column prop="status" label="状态" width="120">
+        <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)">{{ row.status.toUpperCase() }}</el-tag>
+            <el-tag :type="getStatusType(row.status)" size="small">{{ row.status.toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="100" align="center" />
+        <el-table-column prop="source_kind" label="来源" width="160" />
+        <el-table-column prop="source_graph" label="子图" width="150" />
+        <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString() : '-' }}
+            {{ row.created_at ? new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="router.push(`/app/tasks/${row.id}`)">详情</el-button>
+            <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
+            <el-button
+              link
+              type="danger"
+              size="small"
+              :loading="deletingTaskId === row.id"
+              @click="handleDeleteTask(row.id)"
+            >
+              删除任务
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div class="pagination-wrapper mt-4">
+      <div class="flex justify-end p-4">
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="[10, 20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
           :total="total"
+          small
           @size-change="handleSizeChange"
           @current-change="handleCurrentChange"
         />
       </div>
-    </el-card>
+    </div>
 
-    <!-- Create Dialog -->
-    <el-dialog v-model="showCreateDialog" title="新建检测任务" width="500px">
-      <el-form ref="formRef" :model="createForm" :rules="rules" label-width="100px">
+    <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
+      <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
         <el-form-item label="产品编号" prop="product_id">
-          <el-input v-model="createForm.product_id" placeholder="如: PROD-123456" />
+          <el-input v-model="createForm.product_id" placeholder="例如：P-1001" />
         </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select
-            v-model="createForm.spec_code"
-            filterable
-            clearable
-            placeholder="请选择检测标准"
-            style="width: 100%"
-          >
+          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full">
             <el-option
               v-for="spec in activeSpecOptions"
               :key="spec.id"
               :label="`${spec.spec_code} · ${spec.name}`"
               :value="spec.spec_code"
-            >
-              <div class="spec-option">
-                <span>{{ spec.spec_code }}</span>
-                <small>{{ spec.name }}{{ spec.product_id ? ` / ${spec.product_id}` : "" }}</small>
-              </div>
-            </el-option>
+            />
           </el-select>
         </el-form-item>
-        <el-form-item label="图像 URLs" prop="image_urls_input">
-          <el-input 
-            v-model="createForm.image_urls_input" 
-            type="textarea" 
-            rows="4" 
-            placeholder="可选：输入图像 URL，多个之间用逗号或换行分隔" 
+        <el-form-item label="图片 URL" prop="image_urls_input">
+          <el-input
+            v-model="createForm.image_urls_input"
+            type="textarea"
+            :rows="4"
+            resize="none"
+            placeholder="每行一个 URL，也可以同时上传本地图片"
           />
         </el-form-item>
         <el-form-item label="上传图片">
@@ -340,78 +349,48 @@ const getStatusType = (status: string) => {
             @change="handleUploadChange"
             @remove="handleUploadRemove"
           >
-            <el-button type="primary" plain>选择本地图片</el-button>
+            <el-button type="primary" plain size="small">选择本地图片</el-button>
             <template #tip>
-              <div class="el-upload__tip">支持 JPG/PNG/WebP，最多 5 张。上传后会直接参与 AI 分析。</div>
+              <div class="el-upload__tip">支持 JPG/PNG/WebP，最多 5 张。</div>
             </template>
           </el-upload>
         </el-form-item>
         <el-form-item label="优先级">
-          <el-input-number v-model="createForm.priority" :min="1" :max="10" />
+          <el-input-number v-model="createForm.priority" :min="1" :max="10" size="small" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <span class="dialog-footer">
+        <div class="flex justify-end gap-2">
           <el-button @click="showCreateDialog = false">取消</el-button>
-          <el-button type="primary" :loading="creating" @click="handleSubmitCreate">确定创建</el-button>
-        </span>
+          <el-button type="primary" :loading="creating" @click="handleSubmitCreate">确认创建</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="deleteDialogVisible"
+      title="删除任务"
+      width="420px"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="false"
+    >
+      <p class="leading-relaxed text-zinc-700">删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？</p>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <el-button @click="cancelDeleteTask">取消</el-button>
+          <el-button type="danger" :loading="Boolean(deletingTaskId)" @click="confirmDeleteTask">删除</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
+.list-table :deep(.el-table__header th) {
+  @apply text-zinc-500 font-medium text-[13px] bg-zinc-50;
 }
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-}
-
-.title {
-  margin: 0 0 8px 0;
-  font-size: 24px;
-  color: #111827;
-}
-
-.subtitle {
-  margin: 0;
-  color: #6b7280;
-  font-size: 14px;
-}
-
-.filter-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-}
-
-.spec-option {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.spec-option small {
-  color: #6b7280;
-}
-
-.mb-4 {
-  margin-bottom: 16px;
-}
-
-.mt-4 {
-  margin-top: 16px;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
+.list-table :deep(.el-table__body tr:hover > td) {
+  @apply bg-zinc-50;
 }
 </style>

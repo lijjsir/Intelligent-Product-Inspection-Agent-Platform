@@ -11,12 +11,30 @@ defineProps<Props>();
 
 <template>
   <section class="metric-grid">
-    <el-card shadow="never" class="metric-card"><div class="metric-label">总任务</div><div class="metric-value">{{ overview.total_tasks }}</div></el-card>
-    <el-card shadow="never" class="metric-card success"><div class="metric-label">通过率</div><div class="metric-value">{{ (overview.pass_rate * 100).toFixed(1) }}%</div></el-card>
-    <el-card shadow="never" class="metric-card warning"><div class="metric-label">幻觉率</div><div class="metric-value">{{ (overview.hallucination_rate * 100).toFixed(1) }}%</div></el-card>
-    <el-card shadow="never" class="metric-card amber"><div class="metric-label">平均风险分</div><div class="metric-value">{{ overview.avg_risk_score.toFixed(1) }}</div></el-card>
-    <el-card shadow="never" class="metric-card danger"><div class="metric-label">RED 级率</div><div class="metric-value">{{ (redRate * 100).toFixed(1) }}%</div></el-card>
-    <el-card shadow="never" class="metric-card slate"><div class="metric-label">平均耗时</div><div class="metric-value">{{ overview.avg_latency_ms.toFixed(0) }} ms</div></el-card>
+    <el-card shadow="never" class="metric-card">
+      <div class="metric-label">总任务</div>
+      <div class="metric-value">{{ overview.total_tasks }}</div>
+    </el-card>
+    <el-card shadow="never" class="metric-card success">
+      <div class="metric-label">通过率</div>
+      <div class="metric-value">{{ (overview.pass_rate * 100).toFixed(1) }}%</div>
+    </el-card>
+    <el-card shadow="never" class="metric-card warning">
+      <div class="metric-label">幻觉率</div>
+      <div class="metric-value">{{ (overview.hallucination_rate * 100).toFixed(1) }}%</div>
+    </el-card>
+    <el-card shadow="never" class="metric-card amber">
+      <div class="metric-label">平均风险分</div>
+      <div class="metric-value">{{ overview.avg_risk_score.toFixed(1) }}</div>
+    </el-card>
+    <el-card shadow="never" class="metric-card danger">
+      <div class="metric-label">RED 占比</div>
+      <div class="metric-value">{{ (redRate * 100).toFixed(1) }}%</div>
+    </el-card>
+    <el-card shadow="never" class="metric-card slate">
+      <div class="metric-label">平均耗时</div>
+      <div class="metric-value">{{ overview.avg_latency_ms.toFixed(0) }} ms</div>
+    </el-card>
   </section>
 </template>
 

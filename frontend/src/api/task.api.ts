@@ -1,15 +1,9 @@
 import { http } from "./http";
-import type {
-  InspectionTask,
-  TaskCreate,
-  TaskListQuery,
-  TaskRunResponse,
-  TaskStatusResponse,
-  TaskStreamEvent,
-} from "@/types/task.types";
+import { streamApi } from "./stream.api";
+import type { InspectionTask, TaskCreate, TaskListQuery, TaskRunResponse, TaskStreamEvent } from "@/types/task.types";
 import type { PagedResponse } from "@/types/common.types";
 
-const apiBase = import.meta.env.VITE_API_BASE ?? "/api";
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const taskApi = {
   list(query: TaskListQuery) {
@@ -24,16 +18,17 @@ export const taskApi = {
     return http.post<InspectionTask>("/v1/tasks", payload);
   },
 
+  delete(taskId: string) {
+    return http.delete<{ deleted: boolean; task_id: string }>(`/v1/tasks/${taskId}`);
+  },
+
   run(taskId: string) {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
   },
 
-  getStatus(taskId: string) {
-    return http.get<TaskStatusResponse>(`/v1/tasks/${taskId}/status`);
-  },
-
-  stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): EventSource {
-    const token = localStorage.getItem("piap_token") || "";
+  async stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): Promise<EventSource> {
+    const { data } = await streamApi.create("task", taskId);
+    const token = data.data.stream_token;
     const sep = apiBase.endsWith("/") ? "" : "/";
     const url = `${apiBase}${sep}v1/agent/tasks/${taskId}/stream?token=${encodeURIComponent(token)}`;
     const source = new EventSource(url);

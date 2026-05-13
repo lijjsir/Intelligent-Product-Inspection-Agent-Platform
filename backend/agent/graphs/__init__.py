@@ -1,3 +1,3 @@
-from agent.graphs.quality_root import QualityAgentRootGraph
+from agent.graphs.memory_manager import MemoryManagerGraph
 
-__all__ = ["QualityAgentRootGraph"]
+__all__ = ["MemoryManagerGraph"]

@@ -17,32 +17,83 @@ class AnalyticsRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
-    async def get_overview(self, org_id: str, start_date: date | None = None, end_date: date | None = None) -> dict:
-        summary = await self._get_overview_summary(org_id, start_date, end_date)
+    @staticmethod
+    def _normalize_risk_level(value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        mapping = {
+            "green": "low",
+            "yellow": "medium",
+            "orange": "high",
+            "red": "critical",
+            "severe": "critical",
+        }
+        return mapping.get(normalized, normalized or "unknown")
+
+    async def get_overview(self, org_id: str | None, start_date: date | None = None, end_date: date | None = None) -> dict:
+        tasks = await self._list_tasks(org_id, start_date, end_date)
+        results = await self._list_results(org_id, start_date, end_date)
+        alerts = await self._list_alerts(org_id, start_date, end_date)
+        stabilities = await self._list_stabilities(org_id, start_date, end_date)
+        ledgers = await self._list_ledgers(org_id, start_date, end_date)
+
+        total_results = len(results)
+        total_tasks = len(tasks)
+        total_alerts = sum(1 for item in alerts if str(item.status).lower() == "open")
+        total_cost = round(sum(float(item.cost_amount or 0.0) for item in ledgers), 4)
+        pass_rate = round(sum(1 for item in results if item.verdict == "pass") / total_results, 4) if total_results else 0.0
+        hallucination_rate = (
+            round(sum(1 for item in results if self._is_empty_citations(item.citations)) / total_results, 4)
+            if total_results
+            else 0.0
+        )
+        avg_latency_ms = round(
+            sum(float(item.latency_ms or 0.0) for item in results) / total_results,
+            2,
+        ) if total_results else 0.0
+        risk_yellow_rate = (
+            round(
+                sum(1 for item in stabilities if self._normalize_risk_level(item.risk_level) == "medium") / len(stabilities),
+                4,
+            )
+            if stabilities
+            else 0.0
+        )
+        avg_risk_score = round(
+            sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
+            4,
+        ) if stabilities else 0.0
 
         return {
-            "total_tasks": int(summary["total_tasks"]),
-            "total_alerts": int(summary["total_alerts"]),
-            "total_results": int(summary["total_results"]),
-            "total_cost": float(summary["total_cost"]),
-            "pass_rate": float(summary["pass_rate"]),
-            "hallucination_rate": float(summary["hallucination_rate"]),
-            "risk_yellow_rate": float(summary["risk_yellow_rate"]),
-            "avg_risk_score": float(summary["avg_risk_score"]),
-            "avg_latency_ms": float(summary["avg_latency_ms"]),
-            "task_trend": await self._get_task_trend(org_id, start_date, end_date),
-            "pass_rate_trend": await self._get_pass_rate_trend(org_id, start_date, end_date),
-            "hallucination_trend": await self._get_hallucination_trend(org_id, start_date, end_date),
-            "risk_distribution_trend": await self._get_risk_distribution_trend(org_id, start_date, end_date),
-            "risk_distribution": await self._get_risk_distribution(org_id, start_date, end_date),
-            "alert_distribution": await self._get_alert_distribution(org_id, start_date, end_date),
-            "model_metrics": await self._get_model_metrics(org_id, start_date, end_date),
-            "product_line_series": await self._get_product_line_series(org_id, start_date, end_date),
+            "total_tasks": total_tasks,
+            "total_alerts": total_alerts,
+            "total_results": total_results,
+            "total_cost": total_cost,
+            "pass_rate": pass_rate,
+            "hallucination_rate": hallucination_rate,
+            "risk_yellow_rate": risk_yellow_rate,
+            "avg_risk_score": avg_risk_score,
+            "avg_latency_ms": avg_latency_ms,
+            "task_trend": self._build_count_trend(tasks, lambda item: item.created_at),
+            "pass_rate_trend": self._build_ratio_trend(results, lambda item: item.created_at, lambda item: item.verdict == "pass"),
+            "hallucination_trend": self._build_ratio_trend(
+                results,
+                lambda item: item.created_at,
+                lambda item: self._is_empty_citations(item.citations),
+            ),
+            "risk_distribution_trend": self._build_risk_distribution_trend(stabilities, lambda item: item.created_at),
+            "risk_distribution": self._build_distribution(
+                stabilities,
+                lambda item: self._normalize_risk_level(item.risk_level),
+            ),
+            "alert_distribution": self._build_distribution(alerts, lambda item: item.severity),
+            "model_metrics": self._build_model_metrics(results, ledgers),
+            "product_line_series": self._build_product_line_series(tasks, results),
+            "scope_kind": "global" if org_id is None else "org",
         }
 
     async def get_product_line_drilldown(
         self,
-        org_id: str,
+        org_id: str | None,
         product_line: str,
         start_date: date | None = None,
         end_date: date | None = None,
@@ -50,9 +101,11 @@ class AnalyticsRepository:
         size: int = 8,
     ) -> dict:
         task_count_stmt = select(func.count()).select_from(InspectionTask).where(
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            task_count_stmt = task_count_stmt.where(InspectionTask.org_id == org_id)
         task_count_stmt = self._apply_range(task_count_stmt, InspectionTask.created_at, start_date, end_date)
         total_tasks = int((await self._session.scalar(task_count_stmt)) or 0)
 
@@ -65,17 +118,22 @@ class AnalyticsRepository:
             InspectionTask,
             InspectionTask.id == InspectionResult.task_id,
         ).where(
-            InspectionResult.org_id == org_id,
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            result_summary_stmt = result_summary_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         result_summary_stmt = self._apply_range(result_summary_stmt, InspectionResult.created_at, start_date, end_date)
         result_summary = (await self._session.execute(result_summary_stmt)).one()
 
         cost_stmt = select(func.coalesce(func.sum(TokenUsageLedger.cost_amount), 0)).where(
-            TokenUsageLedger.org_id == org_id,
             TokenUsageLedger.product_line == product_line,
         )
+        if org_id:
+            cost_stmt = cost_stmt.where(TokenUsageLedger.org_id == org_id)
         cost_stmt = self._apply_range(cost_stmt, TokenUsageLedger.created_at, start_date, end_date)
         total_cost = round(float((await self._session.scalar(cost_stmt)) or 0.0), 4)
 
@@ -83,9 +141,11 @@ class AnalyticsRepository:
             func.date(InspectionTask.created_at).label("bucket"),
             func.count().label("value"),
         ).where(
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            trend_stmt = trend_stmt.where(InspectionTask.org_id == org_id)
         trend_stmt = self._apply_range(trend_stmt, InspectionTask.created_at, start_date, end_date)
         trend_stmt = trend_stmt.group_by(func.date(InspectionTask.created_at)).order_by(func.date(InspectionTask.created_at))
         task_trend_rows = (await self._session.execute(trend_stmt)).all()
@@ -97,18 +157,24 @@ class AnalyticsRepository:
             InspectionTask,
             InspectionTask.id == InspectionResult.task_id,
         ).where(
-            InspectionResult.org_id == org_id,
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            verdict_stmt = verdict_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         verdict_stmt = self._apply_range(verdict_stmt, InspectionResult.created_at, start_date, end_date)
         verdict_stmt = verdict_stmt.group_by(InspectionResult.verdict).order_by(InspectionResult.verdict)
         verdict_rows = (await self._session.execute(verdict_stmt)).all()
 
         recent_total_stmt = select(func.count()).select_from(InspectionTask).where(
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            recent_total_stmt = recent_total_stmt.where(InspectionTask.org_id == org_id)
         recent_total_stmt = self._apply_range(recent_total_stmt, InspectionTask.created_at, start_date, end_date)
         recent_tasks_total = int((await self._session.scalar(recent_total_stmt)) or 0)
 
@@ -118,9 +184,11 @@ class AnalyticsRepository:
             InspectionTask.spec_code,
             InspectionTask.created_at,
         ).where(
-            InspectionTask.org_id == org_id,
+            InspectionTask.deleted_at.is_(None),
             InspectionTask.product_id == product_line,
         )
+        if org_id:
+            recent_stmt = recent_stmt.where(InspectionTask.org_id == org_id)
         recent_stmt = self._apply_range(recent_stmt, InspectionTask.created_at, start_date, end_date)
         recent_stmt = recent_stmt.order_by(InspectionTask.created_at.desc()).offset((page - 1) * size).limit(size)
         recent_rows = (await self._session.execute(recent_stmt)).all()
@@ -157,7 +225,7 @@ class AnalyticsRepository:
 
     async def get_model_drilldown(
         self,
-        org_id: str,
+        org_id: str | None,
         model_key: str,
         start_date: date | None = None,
         end_date: date | None = None,
@@ -168,7 +236,9 @@ class AnalyticsRepository:
             TokenUsageLedger.result_id.label("result_id"),
             func.sum(TokenUsageLedger.total_tokens).label("total_tokens"),
             func.sum(TokenUsageLedger.cost_amount).label("total_cost"),
-        ).where(TokenUsageLedger.org_id == org_id)
+        )
+        if org_id:
+            ledger_stmt = ledger_stmt.where(TokenUsageLedger.org_id == org_id)
         ledger_stmt = self._apply_range(ledger_stmt, TokenUsageLedger.created_at, start_date, end_date)
         ledger_stmt = ledger_stmt.group_by(TokenUsageLedger.result_id).subquery()
 
@@ -179,13 +249,21 @@ class AnalyticsRepository:
             func.coalesce(func.avg(func.coalesce(ledger_stmt.c.total_tokens, 0)), 0.0).label("avg_tokens"),
             func.coalesce(func.sum(func.coalesce(ledger_stmt.c.total_cost, 0)), 0.0).label("total_cost"),
             func.coalesce(func.avg(InspectionResult.latency_ms), 0.0).label("avg_latency_ms"),
-        ).select_from(InspectionResult).outerjoin(
+        ).select_from(InspectionResult).join(
+            InspectionTask,
+            InspectionTask.id == InspectionResult.task_id,
+        ).outerjoin(
             ledger_stmt,
             ledger_stmt.c.result_id == InspectionResult.id,
         ).where(
-            InspectionResult.org_id == org_id,
             InspectionResult.llm_model == model_key,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            summary_stmt = summary_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         summary_stmt = self._apply_range(summary_stmt, InspectionResult.created_at, start_date, end_date)
         summary_row = (await self._session.execute(summary_stmt)).one()
 
@@ -196,18 +274,30 @@ class AnalyticsRepository:
             InspectionTask,
             InspectionTask.id == InspectionResult.task_id,
         ).where(
-            InspectionResult.org_id == org_id,
-            InspectionTask.org_id == org_id,
             InspectionResult.llm_model == model_key,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            distribution_stmt = distribution_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         distribution_stmt = self._apply_range(distribution_stmt, InspectionResult.created_at, start_date, end_date)
         distribution_stmt = distribution_stmt.group_by(InspectionTask.product_id).order_by(InspectionTask.product_id)
         distribution_rows = (await self._session.execute(distribution_stmt)).all()
 
-        recent_total_stmt = select(func.count()).select_from(InspectionResult).where(
-            InspectionResult.org_id == org_id,
+        recent_total_stmt = select(func.count()).select_from(InspectionResult).join(
+            InspectionTask,
+            InspectionTask.id == InspectionResult.task_id,
+        ).where(
             InspectionResult.llm_model == model_key,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            recent_total_stmt = recent_total_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         recent_total_stmt = self._apply_range(recent_total_stmt, InspectionResult.created_at, start_date, end_date)
         recent_results_total = int((await self._session.scalar(recent_total_stmt)) or 0)
 
@@ -222,10 +312,14 @@ class AnalyticsRepository:
             InspectionTask,
             InspectionTask.id == InspectionResult.task_id,
         ).where(
-            InspectionResult.org_id == org_id,
-            InspectionTask.org_id == org_id,
             InspectionResult.llm_model == model_key,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            recent_stmt = recent_stmt.where(
+                InspectionResult.org_id == org_id,
+                InspectionTask.org_id == org_id,
+            )
         recent_stmt = self._apply_range(recent_stmt, InspectionResult.created_at, start_date, end_date)
         recent_stmt = recent_stmt.order_by(InspectionResult.created_at.desc()).offset((page - 1) * size).limit(size)
         recent_rows = (await self._session.execute(recent_stmt)).all()
@@ -258,40 +352,44 @@ class AnalyticsRepository:
             ],
         }
 
-    async def get_task_drilldown(self, org_id: str, task_id: str) -> dict:
+    async def get_task_drilldown(self, org_id: str | None, task_id: str) -> dict:
         task_stmt = select(InspectionTask).where(
-            InspectionTask.org_id == org_id,
             InspectionTask.id == task_id,
+            InspectionTask.deleted_at.is_(None),
         )
+        if org_id:
+            task_stmt = task_stmt.where(InspectionTask.org_id == org_id)
         task = (await self._session.execute(task_stmt)).scalar_one_or_none()
         if task is None:
             return {}
 
         result_stmt = select(InspectionResult).where(
-            InspectionResult.org_id == org_id,
             InspectionResult.task_id == task_id,
         ).order_by(InspectionResult.created_at.desc())
+        if org_id:
+            result_stmt = result_stmt.where(InspectionResult.org_id == org_id)
         result = (await self._session.execute(result_stmt)).scalars().first()
 
         stability_stmt = select(StabilityReport).where(
-            StabilityReport.org_id == org_id,
             StabilityReport.task_id == task_id,
         ).order_by(StabilityReport.created_at.desc())
+        if org_id:
+            stability_stmt = stability_stmt.where(StabilityReport.org_id == org_id)
         stability = (await self._session.execute(stability_stmt)).scalars().first()
 
-        ledger_stmt = select(TokenUsageLedger).where(
-            TokenUsageLedger.org_id == org_id,
-            TokenUsageLedger.task_id == task_id,
-        )
+        ledger_stmt = select(TokenUsageLedger).where(TokenUsageLedger.task_id == task_id)
+        if org_id:
+            ledger_stmt = ledger_stmt.where(TokenUsageLedger.org_id == org_id)
         ledgers = list((await self._session.execute(ledger_stmt)).scalars().all())
 
         alert_summaries: list[dict] = []
         open_alert_count = 0
         if stability is not None:
             alerts_stmt = select(AlertEvent).where(
-                AlertEvent.org_id == org_id,
                 AlertEvent.stability_id == str(stability.id),
             ).order_by(AlertEvent.created_at.desc())
+            if org_id:
+                alerts_stmt = alerts_stmt.where(AlertEvent.org_id == org_id)
             alerts = list((await self._session.execute(alerts_stmt)).scalars().all())
             open_alert_count = sum(1 for item in alerts if str(item.status).lower() == "open")
             alert_summaries = [
@@ -307,12 +405,14 @@ class AnalyticsRepository:
         sibling_stmt = (
             select(InspectionTask.id)
             .where(
-                InspectionTask.org_id == org_id,
+                InspectionTask.deleted_at.is_(None),
                 InspectionTask.product_id == task.product_id,
             )
             .order_by(InspectionTask.created_at.desc())
             .limit(20)
         )
+        if org_id:
+            sibling_stmt = sibling_stmt.where(InspectionTask.org_id == org_id)
         related_task_ids = [str(item) for item in (await self._session.execute(sibling_stmt)).scalars().all()]
 
         return {
@@ -334,38 +434,65 @@ class AnalyticsRepository:
             "tokens_used": sum(int(item.total_tokens or 0) for item in ledgers),
             "total_cost": round(sum(float(item.cost_amount or 0.0) for item in ledgers), 4),
             "risk_score": float(stability.risk_score or 0.0) if stability is not None else None,
-            "risk_level": str(stability.risk_level) if stability is not None else None,
+            "risk_level": self._normalize_risk_level(stability.risk_level) if stability is not None else None,
             "open_alert_count": open_alert_count,
             "alert_summaries": alert_summaries,
             "related_task_ids": related_task_ids,
         }
 
-    async def _list_tasks(self, org_id: str, start_date: date | None, end_date: date | None) -> list[InspectionTask]:
-        stmt = select(InspectionTask).where(InspectionTask.org_id == org_id)
+    async def _list_tasks(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[InspectionTask]:
+        stmt = select(InspectionTask).where(InspectionTask.deleted_at.is_(None))
+        if org_id:
+            stmt = stmt.where(InspectionTask.org_id == org_id)
         stmt = self._apply_range(stmt, InspectionTask.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _list_results(self, org_id: str, start_date: date | None, end_date: date | None) -> list[InspectionResult]:
-        stmt = select(InspectionResult).where(InspectionResult.org_id == org_id)
+    async def _list_results(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[InspectionResult]:
+        stmt = (
+            select(InspectionResult)
+            .join(InspectionTask, InspectionTask.id == InspectionResult.task_id)
+            .where(InspectionTask.deleted_at.is_(None))
+        )
+        if org_id:
+            stmt = stmt.where(InspectionResult.org_id == org_id, InspectionTask.org_id == org_id)
         stmt = self._apply_range(stmt, InspectionResult.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _list_alerts(self, org_id: str, start_date: date | None, end_date: date | None) -> list[AlertEvent]:
-        stmt = select(AlertEvent).where(AlertEvent.org_id == org_id)
+    async def _list_alerts(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[AlertEvent]:
+        stmt = (
+            select(AlertEvent)
+            .outerjoin(StabilityReport, StabilityReport.id == AlertEvent.stability_id)
+            .outerjoin(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where((InspectionTask.id.is_(None)) | (InspectionTask.deleted_at.is_(None)))
+        )
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
         stmt = self._apply_range(stmt, AlertEvent.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _list_stabilities(self, org_id: str, start_date: date | None, end_date: date | None) -> list[StabilityReport]:
-        stmt = select(StabilityReport).where(StabilityReport.org_id == org_id)
+    async def _list_stabilities(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[StabilityReport]:
+        stmt = (
+            select(StabilityReport)
+            .join(InspectionTask, InspectionTask.id == StabilityReport.task_id)
+            .where(InspectionTask.deleted_at.is_(None))
+        )
+        if org_id:
+            stmt = stmt.where(StabilityReport.org_id == org_id, InspectionTask.org_id == org_id)
         stmt = self._apply_range(stmt, StabilityReport.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _list_ledgers(self, org_id: str, start_date: date | None, end_date: date | None) -> list[TokenUsageLedger]:
-        stmt = select(TokenUsageLedger).where(TokenUsageLedger.org_id == org_id)
+    async def _list_ledgers(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[TokenUsageLedger]:
+        stmt = (
+            select(TokenUsageLedger)
+            .outerjoin(InspectionTask, InspectionTask.id == TokenUsageLedger.task_id)
+            .where((InspectionTask.id.is_(None)) | (InspectionTask.deleted_at.is_(None)))
+        )
+        if org_id:
+            stmt = stmt.where(TokenUsageLedger.org_id == org_id)
         stmt = self._apply_range(stmt, TokenUsageLedger.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -392,7 +519,18 @@ class AnalyticsRepository:
         result_stmt = self._apply_range(result_stmt, InspectionResult.created_at, start_date, end_date)
 
         stability_stmt = select(
-            func.coalesce(func.avg(case((StabilityReport.risk_level == "medium", 1.0), else_=0.0)), 0.0).label("risk_yellow_rate"),
+            func.coalesce(
+                func.avg(
+                    case(
+                        (
+                            func.lower(StabilityReport.risk_level).in_(["medium", "yellow"]),
+                            1.0,
+                        ),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ).label("risk_yellow_rate"),
             func.coalesce(func.avg(StabilityReport.risk_score), 0.0).label("avg_risk_score"),
         ).where(StabilityReport.org_id == org_id)
         stability_stmt = self._apply_range(stability_stmt, StabilityReport.created_at, start_date, end_date)
@@ -447,13 +585,16 @@ class AnalyticsRepository:
 
     async def _get_risk_distribution(self, org_id: str, start_date: date | None, end_date: date | None) -> list[dict]:
         stmt = select(
-            StabilityReport.risk_level.label("name"),
+            func.lower(StabilityReport.risk_level).label("name"),
             func.count().label("value"),
         ).where(StabilityReport.org_id == org_id)
         stmt = self._apply_range(stmt, StabilityReport.created_at, start_date, end_date)
-        stmt = stmt.group_by(StabilityReport.risk_level).order_by(StabilityReport.risk_level)
+        stmt = stmt.group_by(func.lower(StabilityReport.risk_level)).order_by(func.lower(StabilityReport.risk_level))
         rows = (await self._session.execute(stmt)).all()
-        return [{"name": str(row.name or "unknown"), "value": float(row.value)} for row in rows]
+        return [
+            {"name": self._normalize_risk_level(row.name), "value": float(row.value)}
+            for row in rows
+        ]
 
     async def _get_alert_distribution(self, org_id: str, start_date: date | None, end_date: date | None) -> list[dict]:
         stmt = select(
@@ -469,10 +610,30 @@ class AnalyticsRepository:
         bucket = func.date(StabilityReport.created_at)
         stmt = select(
             bucket.label("bucket"),
-            func.sum(case((StabilityReport.risk_level == "low", 1), else_=0)).label("low"),
-            func.sum(case((StabilityReport.risk_level == "medium", 1), else_=0)).label("medium"),
-            func.sum(case((StabilityReport.risk_level == "high", 1), else_=0)).label("high"),
-            func.sum(case((StabilityReport.risk_level == "critical", 1), else_=0)).label("critical"),
+            func.sum(
+                case(
+                    (func.lower(StabilityReport.risk_level).in_(["low", "green"]), 1),
+                    else_=0,
+                )
+            ).label("low"),
+            func.sum(
+                case(
+                    (func.lower(StabilityReport.risk_level).in_(["medium", "yellow"]), 1),
+                    else_=0,
+                )
+            ).label("medium"),
+            func.sum(
+                case(
+                    (func.lower(StabilityReport.risk_level).in_(["high", "orange"]), 1),
+                    else_=0,
+                )
+            ).label("high"),
+            func.sum(
+                case(
+                    (func.lower(StabilityReport.risk_level).in_(["critical", "red", "severe"]), 1),
+                    else_=0,
+                )
+            ).label("critical"),
         ).where(StabilityReport.org_id == org_id)
         stmt = self._apply_range(stmt, StabilityReport.created_at, start_date, end_date)
         stmt = stmt.group_by(bucket).order_by(bucket)
@@ -643,7 +804,7 @@ class AnalyticsRepository:
             key = cls._bucket(date_getter(item))
             if key is None:
                 continue
-            risk_level = str(item.risk_level or "low").lower()
+            risk_level = cls._normalize_risk_level(item.risk_level)
             if risk_level not in buckets[key]:
                 risk_level = "low"
             buckets[key][risk_level] += 1

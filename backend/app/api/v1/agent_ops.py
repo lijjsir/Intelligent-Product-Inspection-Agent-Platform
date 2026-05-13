@@ -1,7 +1,9 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.permissions import require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
     AgentDefinitionResponse,
@@ -15,7 +17,19 @@ from app.schemas.agent_ops import (
     PromptVersionResponse,
     PromptVersionUpdate,
     PromptVersionListQuery,
+    PromptDSPyConfigPayload,
+    PromptDSPyConfigResponse,
+    PromptOptimizationConfigPayload,
+    PromptOptimizationConfigResponse,
+    PromptOptimizationRunResponse,
+    PromptOptimizationTargetListQuery,
+    PromptOptimizationTargetResponse,
+    PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
+    AgentRuntimeOverviewResponse,
+    AgentRuntimeInstanceResponse,
+    AgentTopologyResponse,
+    RoutingStrategyOverviewResponse,
 )
 from app.schemas.agent_management import (
     BatchUpdateStatusRequest,
@@ -28,7 +42,7 @@ from app.schemas.agent_management import (
 )
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import CurrentUser
-from app.services.agent_ops_service import AgentOpsService
+from app.services.agent_ops_service import AgentOpsService, run_dspy_compile_job
 
 router = APIRouter(prefix="/agent-ops", tags=["Agent Operations"])
 
@@ -36,6 +50,10 @@ router = APIRouter(prefix="/agent-ops", tags=["Agent Operations"])
 def _build_service(current: CurrentUser, db) -> AgentOpsService:
     require_role("agent_ops", current.role)
     return AgentOpsService(db, current.org_id, current.user_id)
+
+
+def _use_global_scope(current: CurrentUser) -> bool:
+    return ROLE_ADMIN in current.roles
 
 
 @router.get("/agents", response_model=ResponseEnvelope[PagedResponse[AgentDefinitionResponse]])
@@ -63,6 +81,16 @@ async def create_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ResponseEnvelope(data=data)
+
+
+@router.get("/agents/topology", response_model=ResponseEnvelope[AgentTopologyResponse])
+async def get_agents_topology(
+    subgraph_key: str = Query(default="all"),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_agents_topology(subgraph_key))
 
 
 @router.get("/agents/{id}", response_model=ResponseEnvelope[AgentDefinitionResponse])
@@ -198,6 +226,88 @@ async def delete_prompt(
     return ResponseEnvelope(data={"deleted": True})
 
 
+@router.get(
+    "/prompt-optimization/targets",
+    response_model=ResponseEnvelope[PromptOptimizationTargetsResponse],
+)
+async def list_prompt_optimization_targets(
+    query: PromptOptimizationTargetListQuery = Depends(),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.list_prompt_optimization_targets(query))
+
+
+@router.put(
+    "/prompt-optimization/targets/{target_key}/config",
+    response_model=ResponseEnvelope[PromptOptimizationConfigResponse],
+)
+async def update_prompt_optimization_config(
+    target_key: str,
+    body: PromptOptimizationConfigPayload,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.update_prompt_optimization_config(target_key, body))
+
+
+@router.post(
+    "/prompt-optimization/targets/{target_key}/compile",
+    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
+)
+async def compile_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    data = await svc.compile_prompt_optimization_target(target_key, schedule_compile=False)
+    await db.commit()
+    asyncio.create_task(run_dspy_compile_job(current.org_id, current.user_id, target_key, data.id))
+    return ResponseEnvelope(data=data)
+
+
+@router.get(
+    "/prompt-optimization/targets/{target_key}/runs",
+    response_model=ResponseEnvelope[list[PromptOptimizationRunResponse]],
+)
+async def list_prompt_optimization_runs(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.list_prompt_optimization_runs(target_key))
+
+
+@router.post(
+    "/prompt-optimization/targets/{target_key}/rollback",
+    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
+)
+async def rollback_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.rollback_prompt_optimization_target(target_key))
+
+
+@router.get(
+    "/prompt-optimization/targets/{target_key}",
+    response_model=ResponseEnvelope[PromptOptimizationTargetResponse],
+)
+async def get_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_prompt_optimization_target(target_key))
+
+
 @router.get("/routes", response_model=ResponseEnvelope[PagedResponse[IntentRouteResponse]])
 async def list_routes(
     query: IntentRouteListQuery = Depends(),
@@ -209,6 +319,15 @@ async def list_routes(
     return ResponseEnvelope(
         data=PagedResponse(items=items, total=total, page=query.page, size=query.size)
     )
+
+
+@router.get("/routing/strategy", response_model=ResponseEnvelope[RoutingStrategyOverviewResponse])
+async def get_routing_strategy(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_strategy())
 
 
 @router.post("/routes", response_model=ResponseEnvelope[IntentRouteResponse], status_code=201)
@@ -272,7 +391,82 @@ async def get_rag_analysis(
     db=Depends(get_db),
 ):
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_rag_analysis())
+    return ResponseEnvelope(data=await svc.get_rag_analysis(global_scope=_use_global_scope(current)))
+
+
+@router.get("/runtime/overview", response_model=ResponseEnvelope[AgentRuntimeOverviewResponse])
+async def get_runtime_overview(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_runtime_overview())
+
+
+@router.get("/runtime/agents", response_model=ResponseEnvelope[list[AgentRuntimeInstanceResponse]])
+async def list_runtime_agents(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.list_runtime_agents())
+
+
+@router.post("/runtime/agents/{runtime_key}/start", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def start_runtime_agent(
+    runtime_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        return ResponseEnvelope(data=await svc.set_runtime_status(runtime_key, status="running"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/runtime/agents/{runtime_key}/stop", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def stop_runtime_agent(
+    runtime_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        return ResponseEnvelope(data=await svc.set_runtime_status(runtime_key, status="stopped"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/routes/{id}/graph", response_model=ResponseEnvelope[AgentTopologyResponse])
+async def get_route_graph(
+    id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_route_graph(id))
+
+
+@router.get("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse | None])
+async def get_prompt_dspy(
+    id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_prompt_dspy(id))
+
+
+@router.put("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse])
+async def upsert_prompt_dspy(
+    id: str,
+    body: PromptDSPyConfigPayload,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.upsert_prompt_dspy(id, body))
 
 
 @router.post("/agents/batch/status", response_model=ResponseEnvelope[BatchOperationResponse])

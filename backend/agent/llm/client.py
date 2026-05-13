@@ -28,11 +28,17 @@ class LLMClient:
         org_id: str | None = None,
         provider: str | None = None,
     ) -> None:
-        self._api_key = api_key or settings.volcengine_api_key
-        self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
-        self._model_id = model_id or settings.volcengine_model_id
-        self._embed_model = embed_model or settings.volcengine_embed_model
         self._provider = provider or "volcengine"
+        if self._provider == "deepseek":
+            self._api_key = api_key or settings.deepseek_api_key
+            self._base_url = (base_url or settings.deepseek_base_url).rstrip("/")
+            self._model_id = model_id or settings.deepseek_model_id
+            self._embed_model = embed_model or settings.volcengine_embed_model
+        else:
+            self._api_key = api_key or settings.volcengine_api_key
+            self._base_url = (base_url or settings.volcengine_base_url).rstrip("/")
+            self._model_id = model_id or settings.volcengine_model_id
+            self._embed_model = embed_model or settings.volcengine_embed_model
         self._task_id = None if task_id is None else str(task_id)
         self._org_id = None if org_id is None else str(org_id)
         self._request_attempts = 3
