@@ -11,7 +11,7 @@ from app.services.base import TenantAwareService
 
 
 class QualityReportService(TenantAwareService):
-    def __init__(self, session, org_id: str):
+    def __init__(self, session, org_id: str | None):
         super().__init__(session, org_id)
         self._feedback_repo = FeedbackRepository(session)
         self._result_repo = ResultRepository(session)

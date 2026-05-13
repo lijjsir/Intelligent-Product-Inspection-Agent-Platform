@@ -35,6 +35,15 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
+  async function deleteTask(id: string) {
+    await taskApi.delete(id);
+    items.value = items.value.filter((item) => item.id !== id);
+    if (current.value?.id === id) {
+      current.value = null;
+    }
+    total.value = Math.max(0, total.value - 1);
+  }
+
   async function runTask(id: string) {
     const { data } = await taskApi.run(id);
     return data.data;
@@ -46,8 +55,21 @@ export const useTaskStore = defineStore("task", () => {
   }
 
   function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
-    const source = taskApi.stream(id, onMessage);
-    return () => source.close();
+    let source: EventSource | null = null;
+    let closed = false;
+    taskApi.stream(id, onMessage)
+      .then((instance) => {
+        if (closed) {
+          instance.close();
+          return;
+        }
+        source = instance;
+      })
+      .catch(() => undefined);
+    return () => {
+      closed = true;
+      source?.close();
+    };
   }
 
   function $reset() {
@@ -65,6 +87,7 @@ export const useTaskStore = defineStore("task", () => {
     fetchTasks,
     fetchTask,
     createTask,
+    deleteTask,
     runTask,
     fetchTaskStatus,
     subscribeTaskStream,

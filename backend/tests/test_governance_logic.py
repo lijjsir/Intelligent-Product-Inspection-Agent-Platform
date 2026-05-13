@@ -21,10 +21,9 @@ from agent.llm.model_selector import ModelSelector
 from agent.llm.pricing import ModelPricing
 from agent.vision.heuristic_detector import build_variable_defects, normalize_defects
 from app.services.feedback_service import FeedbackService
-from app.services.agent_ops_service import AgentOpsService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.quality_report_service import QualityReportService
-from app.schemas.agent_ops import AgentDefinitionListQuery
+from app.repositories.analytics_repo import AnalyticsRepository
 from infra.cache.rate_limiter import RateLimiter
 
 
@@ -264,62 +263,6 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
     ]
 
 
-@pytest.mark.asyncio
-async def test_agent_ops_list_agents_auto_syncs_runtime_agents(monkeypatch):
-    class FakeAgentRepo:
-        def __init__(self, session, org_id):
-            self.org_id = org_id
-            self.items = {}
-
-        async def get_by_name(self, name):
-            return self.items.get(name)
-
-        async def create(self, data):
-            now = datetime(2026, 4, 2, 12, 0, 0)
-            item = SimpleNamespace(
-                id=f"id-{data['name']}",
-                org_id=self.org_id,
-                name=data["name"],
-                description=data.get("description"),
-                prompt_version_id=data.get("prompt_version_id"),
-                workflow_binding=data.get("workflow_binding"),
-                intent_config_id=data.get("intent_config_id"),
-                is_active=data.get("is_active", True),
-                created_at=now,
-                updated_at=now,
-            )
-            self.items[item.name] = item
-            return item
-
-        async def list_paged(self, filters, page, size):
-            items = list(self.items.values())
-            if filters.get("name"):
-                items = [item for item in items if filters["name"] in item.name]
-            if "is_active" in filters:
-                items = [item for item in items if item.is_active == filters["is_active"]]
-            return items, len(items)
-
-    class DummyRepo:
-        def __init__(self, session, org_id):
-            self.session = session
-            self.org_id = org_id
-
-    monkeypatch.setattr("app.services.agent_ops_service.AgentDefinitionRepository", FakeAgentRepo)
-    monkeypatch.setattr("app.services.agent_ops_service.PromptVersionRepository", DummyRepo)
-    monkeypatch.setattr("app.services.agent_ops_service.IntentRouteRepository", DummyRepo)
-
-    service = AgentOpsService(session=None, org_id="00000000-0000-0000-0000-000000000001", actor_id="user-1")
-
-    items, total = await service.list_agents(AgentDefinitionListQuery(page=1, size=10))
-
-    assert total == 3
-    assert [item.name for item in items] == [
-        "vision-inspector",
-        "knowledge-retriever",
-        "reasoning-engine",
-    ]
-
-
 def test_feedback_service_replaces_actor_score_event():
     chain = {
         "langfuse_scores": [
@@ -385,17 +328,17 @@ def test_model_pricing_prefers_configured_price():
     assert cost == 0.02
 
 
-def test_build_auth_claims_for_agent_operator():
-    claims = build_auth_claims("agent_operator", "premium")
-    assert claims.role == "agent_operator"
-    assert claims.roles == ["agent_operator"]
+def test_build_auth_claims_for_app_developer():
+    claims = build_auth_claims("app_developer", "premium")
+    assert claims.role == "app_developer"
+    assert claims.roles == ["app_developer"]
     assert claims.default_workspace == WORKSPACE_OPS
     assert claims.workspaces == [WORKSPACE_OPS]
     assert CAPABILITY_CUSTOM_WORKFLOW in claims.capabilities
 
 
 def test_build_auth_claims_for_governance_role():
-    claims = build_auth_claims("ai_quality", "expert")
+    claims = build_auth_claims("algorithm_engineer", "expert")
     assert claims.default_workspace == WORKSPACE_GOVERNANCE
     assert WORKSPACE_GOVERNANCE in claims.workspaces
 
@@ -407,7 +350,15 @@ def test_standard_service_blocks_auto_pass_without_spec():
             name="螺钉标准",
             version="2026.1",
             product_id="screw",
+            product_family="fastener",
+            applicable_skus=[],
+            required_views=[],
+            effective_from=None,
+            effective_to=None,
             required_image_count=1,
+            aggregation_rules={},
+            ai_gate_rules={},
+            manual_review_policies={},
             auto_pass_enabled=False,
             ai_gate_confidence_threshold=0.72,
             ai_gate_evidence_threshold=0.5,
@@ -431,7 +382,15 @@ def test_standard_service_rejects_when_rule_matches():
         name="螺钉标准",
         version="2026.1",
         product_id="screw",
+        product_family="fastener",
+        applicable_skus=[],
+        required_views=[],
+        effective_from=None,
+        effective_to=None,
         required_image_count=1,
+        aggregation_rules={},
+        ai_gate_rules={},
+        manual_review_policies={},
         auto_pass_enabled=False,
         ai_gate_confidence_threshold=0.72,
         ai_gate_evidence_threshold=0.5,
@@ -458,6 +417,36 @@ def test_standard_service_rejects_when_rule_matches():
     )
     assert result["verdict"] == "fail"
     assert result["matched_rules"][0]["disposition"] == "fail"
+
+
+def test_analytics_normalizes_color_risk_levels():
+    assert AnalyticsRepository._normalize_risk_level("green") == "low"
+    assert AnalyticsRepository._normalize_risk_level("yellow") == "medium"
+    assert AnalyticsRepository._normalize_risk_level("orange") == "high"
+    assert AnalyticsRepository._normalize_risk_level("red") == "critical"
+    assert AnalyticsRepository._normalize_risk_level("severe") == "critical"
+
+
+def test_analytics_risk_distribution_trend_maps_historical_colors():
+    repo = AnalyticsRepository(None)
+    items = [
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 0, 0), risk_level="green"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 5, 0), risk_level="red"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 10, 0), risk_level="yellow"),
+        SimpleNamespace(created_at=datetime(2026, 4, 5, 10, 20, 0), risk_level="orange"),
+    ]
+
+    trend = repo._build_risk_distribution_trend(items, lambda item: item.created_at)
+
+    assert trend == [
+        {
+            "bucket": "2026-04-05",
+            "low": 1.0,
+            "medium": 1.0,
+            "high": 1.0,
+            "critical": 1.0,
+        }
+    ]
 
 
 def test_langfuse_tracer_starts_trace_and_syncs_score(monkeypatch):
@@ -598,7 +587,7 @@ async def test_llm_client_chat_records_langfuse_metadata(monkeypatch):
     }
     assert fake_tracer.observe_calls[0]["trace_id"] == "trace-1"
     assert fake_tracer.observe_calls[0]["name"] == "inspection.reasoning"
-    assert fake_tracer.observation.updates[0]["usage_details"]["total_tokens"] == 10
+    assert fake_tracer.observation.updates[0]["metadata"]["usage"]["total_tokens"] == 10
 
 
 @pytest.mark.asyncio

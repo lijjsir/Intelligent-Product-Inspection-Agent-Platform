@@ -1,0 +1,77 @@
+{
+  "product_id": "ELEC-002",
+  "category": "electronics",
+  "product_name": "24英寸液晶显示器",
+  "brand": "海耀",
+  "model": "LM24-FHD",
+  "manufacturer": {
+    "name": "海耀显示设备有限公司",
+    "address": "安徽省合肥市高新区创新大道188号",
+    "contact": "0551-66880022"
+  },
+  "production_date": "2026-03-20",
+  "batch_no": "MON2026032008",
+  "rated_parameters": {
+    "input": "100-240V~ 50/60Hz 1.2A",
+    "screen_size_inch": 24,
+    "resolution": "1920x1080",
+    "power_w": 32
+  },
+  "marking_info": {
+    "model_marked": true,
+    "rated_input_marked": true,
+    "manufacturer_name_marked": true,
+    "manufacturer_address_marked": true,
+    "warning_marked": true,
+    "serial_number_marked": true,
+    "energy_label_present": false,
+    "environmental_use_period_marked": true
+  },
+  "appearance_check": {
+    "screen_scratches": "minor",
+    "dead_pixels": 2,
+    "color_uniformity": "good",
+    "stand_stability": "good",
+    "enclosure_gap_mm": 0.4
+  },
+  "electrical_safety": {
+    "electric_strength_kv": 2.5,
+    "leakage_current_ma": 0.22,
+    "temperature_rise_max_c": 43,
+    "ground_continuity_ohm": 0.09,
+    "abnormal_operation": "normal_shutdown"
+  },
+  "emc_test": {
+    "conducted_emission": "pass",
+    "radiated_emission": "pass",
+    "esd_immunity": "temporary_flicker_recovered",
+    "surge_immunity": "pass",
+    "eft_immunity": "pass"
+  },
+  "functional_test": {
+    "hdmi_port": "pass",
+    "dp_port": "pass",
+    "audio_output": "pass",
+    "osd_menu": "pass",
+    "brightness_nits": 248,
+    "contrast_ratio": 980
+  },
+  "documents": {
+    "user_manual": true,
+    "inspection_report": true,
+    "certificate_file": true,
+    "traceability_code": true,
+    "rohs_material_declaration": true
+  },
+  "expected_result": {
+    "is_qualified": true,
+    "risk_level": "low",
+    "failed_rules": [],
+    "key_reasons": [
+      "核心安全项目正常",
+      "EMC发射通过",
+      "ESD仅短暂闪烁且可自行恢复",
+      "功能与资料完整"
+    ]
+  }
+}

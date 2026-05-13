@@ -19,13 +19,21 @@ from app.services.auth_service import AuthService
 router = APIRouter()
 
 
-def _build_session_response(access_token: str, refresh_token: str, user_id: str, org_id: str, role: str) -> AuthSessionResponse:
+def _build_session_response(
+    access_token: str,
+    refresh_token: str,
+    user_id: str,
+    username: str,
+    org_id: str,
+    role: str,
+) -> AuthSessionResponse:
     decoded = safe_decode_token(access_token)
     return AuthSessionResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=settings.jwt_exp_minutes * 60,
         user_id=user_id,
+        username=username,
         org_id=org_id,
         role=role,
         roles=normalize_roles(role=role, roles=decoded.get("roles")),
@@ -44,7 +52,7 @@ async def login(
 ):
     service = AuthService(db)
     user, access, refresh = await service.login(x_org_id, payload.username, payload.password)
-    data = _build_session_response(access, refresh, user.id, user.org_id, user.role)
+    data = _build_session_response(access, refresh, user.id, user.username, user.org_id, user.role)
 
     return ResponseEnvelope(data=data)
 
@@ -96,5 +104,6 @@ async def register(payload: RegisterRequest, db=Depends(get_db)):
         payload.email,
         payload.password,
     )
-    data = _build_session_response(access, refresh, user.id, user.org_id, user.role)
+    await db.commit()
+    data = _build_session_response(access, refresh, user.id, user.username, user.org_id, user.role)
     return ResponseEnvelope(data=data)

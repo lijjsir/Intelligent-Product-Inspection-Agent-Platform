@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import type { InspectionSpec, InspectionSpecItemPayload, InspectionSpecPayload } from "@/types/governance.types";
-import { ROLE_ADMIN, ROLE_ANALYST, normalizeRole } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
 import { useAuthStore } from "@/stores/auth.store";
 
 interface RuleForm {
@@ -43,8 +43,8 @@ const form = reactive({
 });
 
 const canManageGlobal = computed(() => {
-  const normalizedRoles = [...auth.roles, auth.role].filter(Boolean).map(normalizeRole);
-  return normalizedRoles.includes(ROLE_ADMIN) || normalizedRoles.includes(ROLE_ANALYST);
+  const allRoles = [...auth.roles, auth.role].filter(Boolean);
+  return allRoles.includes(ROLE_ADMIN) || allRoles.includes(ROLE_ALGORITHM_ENGINEER);
 });
 const productOptions = computed(() =>
   Array.from(new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[])).sort(),
@@ -250,7 +250,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="flex flex-col gap-5">
     <section class="hero">
       <div>
         <p class="eyebrow">Inspection Governance</p>
@@ -511,10 +511,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page-container {
-  display: grid;
-  gap: 16px;
-}
 
 .hero {
   display: flex;
@@ -522,7 +518,7 @@ onMounted(() => {
   align-items: end;
   gap: 16px;
   padding: 20px 24px;
-  border-radius: 24px;
+ border-radius: 24px;
   background:
     radial-gradient(circle at top left, rgba(14, 116, 144, 0.18), transparent 34%),
     linear-gradient(135deg, #10263d 0%, #1b3a5c 52%, #2563a8 100%);
@@ -555,7 +551,7 @@ onMounted(() => {
 }
 
 .metric-card {
-  border-radius: 18px;
+ border-radius: 18px;
 }
 
 .metric-card.accent {
@@ -616,7 +612,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 20px;
-  border-radius: 20px;
+ border-radius: 20px;
   background: linear-gradient(135deg, #eff6ff 0%, #ecfeff 100%);
 }
 
@@ -646,7 +642,7 @@ onMounted(() => {
 }
 
 .preview-section {
-  border-radius: 18px;
+ border-radius: 18px;
 }
 
 .preview-grid {
@@ -657,7 +653,7 @@ onMounted(() => {
 
 .preview-stat {
   padding: 14px;
-  border-radius: 16px;
+ border-radius: 16px;
   background: #f8fafc;
 }
 
@@ -675,7 +671,7 @@ onMounted(() => {
 }
 
 .drawer-section {
-  border-radius: 18px;
+ border-radius: 18px;
 }
 
 .grid-form {
@@ -698,8 +694,8 @@ onMounted(() => {
 
 .rule-card {
   padding: 16px;
-  border: 1px solid #dbe2ea;
-  border-radius: 16px;
+ border: 1px solid #dbe2ea;
+ border-radius: 16px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
 }
 

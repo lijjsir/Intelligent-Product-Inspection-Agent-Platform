@@ -8,16 +8,17 @@ import type { TaskStreamEvent } from "@/types/task.types";
 
 const route = useRoute();
 const router = useRouter();
-const store = useTaskStore();
+const taskStore = useTaskStore();
 
 const loading = ref(true);
 const running = ref(false);
+const deleting = ref(false);
+const deleteDialogVisible = ref(false);
 const taskId = route.params.id as string;
 const timeline = ref<TaskStreamEvent[]>([]);
 let unsubscribe: (() => void) | null = null;
-let pollTimer: ReturnType<typeof window.setInterval> | null = null;
 
-const getStatusType = (status: string) => {
+function getStatusType(status: string) {
   const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
     pending: "info",
     running: "primary",
@@ -26,7 +27,7 @@ const getStatusType = (status: string) => {
     reviewing: "warning",
   };
   return map[status] || "info";
-};
+}
 
 function pushEvent(event: TaskStreamEvent) {
   timeline.value.unshift(event);
@@ -35,64 +36,54 @@ function pushEvent(event: TaskStreamEvent) {
   }
   if (event.status === "done" || event.status === "failed") {
     running.value = false;
-    stopStatusPolling();
-    store.fetchTask(taskId);
+    void taskStore.fetchTask(taskId);
   }
-}
-
-function stopStatusPolling() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-function startStatusPolling() {
-  if (pollTimer !== null) {
-    return;
-  }
-  pollTimer = window.setInterval(async () => {
-    try {
-      const status = await store.fetchTaskStatus(taskId);
-      if (store.current) {
-        store.current.status = status.status;
-      }
-      if (status.status === "done" || status.status === "failed") {
-        pushEvent({
-          type: "status_poll",
-          status: status.status,
-          message: "通过状态轮询检测到任务结束",
-          ts: new Date().toISOString(),
-        });
-      }
-    } catch {
-      // Ignore transient polling failures and rely on the next interval tick.
-    }
-  }, 3000);
 }
 
 async function startPipeline() {
   try {
     running.value = true;
-    const result = await store.runTask(taskId);
-    pushEvent({ type: "run", message: `任务已提交 (${result.mode})`, ts: new Date().toISOString() });
-    startStatusPolling();
-  } catch (err: any) {
+    const result = await taskStore.runTask(taskId);
+    pushEvent({
+      type: "run",
+      message: `任务已提交执行（${result.mode}）`,
+      status: "running",
+      ts: new Date().toISOString(),
+    });
+  } catch (error: any) {
     running.value = false;
-    stopStatusPolling();
-    ElMessage.error(err?.response?.data?.message || "启动任务失败");
+    ElMessage.error(error?.response?.data?.message || "启动任务失败");
+  }
+}
+
+function goBack() {
+  router.back();
+}
+
+async function deleteTask() {
+  deleteDialogVisible.value = true;
+}
+
+async function confirmDeleteTask() {
+  deleting.value = true;
+  try {
+    await taskStore.deleteTask(taskId);
+    ElMessage.success("任务已删除");
+    deleteDialogVisible.value = false;
+    router.push("/app/tasks");
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || "删除任务失败");
+  } finally {
+    deleting.value = false;
   }
 }
 
 onMounted(async () => {
   try {
-    const task = await store.fetchTask(taskId);
-    unsubscribe = store.subscribeTaskStream(taskId, pushEvent);
-    if (task.status === "running") {
-      running.value = true;
-      startStatusPolling();
-    }
-  } catch {
+    await taskStore.fetchTask(taskId);
+    unsubscribe = taskStore.subscribeTaskStream(taskId, pushEvent);
+  } catch (error) {
+    console.error(error);
     ElMessage.error("获取任务详情失败");
   } finally {
     loading.value = false;
@@ -100,129 +91,143 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  if (unsubscribe) {
-    unsubscribe();
-    unsubscribe = null;
-  }
-  stopStatusPolling();
+  unsubscribe?.();
+  unsubscribe = null;
 });
-
-function goBack() {
-  router.back();
-}
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
-      <el-button @click="goBack" class="mb-4">&larr; 返回列表</el-button>
-      <div v-if="store.current" class="title-area">
-        <h2 class="title">任务：{{ store.current.id }}</h2>
-        <el-tag :type="getStatusType(store.current.status)" size="large" class="ml-4">
-          {{ store.current.status.toUpperCase() }}
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
+      <el-button @click="goBack" class="back-button">&larr; 返回列表</el-button>
+      <div v-if="taskStore.current" class="title-area">
+        <h2 class="text-2xl font-bold text-zinc-900">任务：{{ taskStore.current.id }}</h2>
+        <el-tag :type="getStatusType(taskStore.current.status)" size="large">
+          {{ taskStore.current.status.toUpperCase() }}
         </el-tag>
         <el-button
-          v-if="['pending', 'failed'].includes(store.current.status)"
+          v-if="['pending', 'failed'].includes(taskStore.current.status)"
           type="primary"
-          class="ml-4"
           :loading="running"
           @click="startPipeline"
         >
           启动 AI 推演
         </el-button>
         <el-button
-          v-if="['done', 'failed', 'reviewing'].includes(store.current.status)"
+          v-if="['done', 'failed', 'reviewing'].includes(taskStore.current.status)"
           type="success"
           plain
-          class="ml-4"
-          @click="router.push(`/app/results/${store.current.id}`)"
+          @click="router.push(`/app/results/${taskStore.current.id}`)"
         >
-          查看分析结果报告
+          查看分析结果
         </el-button>
         <el-button
-          v-if="['done', 'failed', 'reviewing'].includes(store.current.status)"
+          v-if="['done', 'failed', 'reviewing'].includes(taskStore.current.status)"
           type="warning"
           plain
-          class="ml-2"
-          @click="router.push(`/app/stability/${store.current.id}`)"
+          @click="router.push(`/app/stability/${taskStore.current.id}`)"
         >
-          查看稳定性雷达
+          查看稳定性评估
+        </el-button>
+        <el-button
+          v-if="taskStore.current.status !== 'running'"
+          type="danger"
+          plain
+          :loading="deleting"
+          @click="deleteTask"
+        >
+          删除任务
         </el-button>
       </div>
     </div>
 
-    <div v-if="store.current" class="content">
-      <el-card shadow="never" class="info-card">
+    <div v-if="taskStore.current" class="content">
+      <el-card shadow="never">
         <template #header>基本信息</template>
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="任务 ID">{{ store.current.id }}</el-descriptions-item>
-          <el-descriptions-item label="组织 ID">{{ store.current.org_id }}</el-descriptions-item>
-          <el-descriptions-item label="产品编号">{{ store.current.product_id }}</el-descriptions-item>
-          <el-descriptions-item label="检测标准">{{ store.current.spec_code }}</el-descriptions-item>
-          <el-descriptions-item label="优先级">{{ store.current.priority }}</el-descriptions-item>
+        <el-descriptions :column="2">
+          <el-descriptions-item label="任务 ID">{{ taskStore.current.id }}</el-descriptions-item>
+          <el-descriptions-item label="组织 ID">{{ taskStore.current.org_id }}</el-descriptions-item>
+          <el-descriptions-item label="产品编号">{{ taskStore.current.product_id }}</el-descriptions-item>
+          <el-descriptions-item label="检测标准">{{ taskStore.current.spec_code }}</el-descriptions-item>
+          <el-descriptions-item label="优先级">{{ taskStore.current.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
-            {{ store.current.created_at ? new Date(store.current.created_at).toLocaleString() : "-" }}
+            {{ taskStore.current.created_at ? new Date(taskStore.current.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
           </el-descriptions-item>
         </el-descriptions>
       </el-card>
 
-      <el-card shadow="never" class="info-card timeline-card">
+      <el-card shadow="never" class="timeline-card">
         <template #header>AI 检测 Agent 实时流</template>
-        <el-empty v-if="timeline.length === 0" description="等待运行阶段事件..." />
+        <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
-          <el-timeline-item v-for="(item, idx) in timeline" :key="idx" :timestamp="item.ts || ''" placement="top">
+          <el-timeline-item v-for="(item, index) in timeline" :key="index" :timestamp="item.ts || ''" placement="top">
             <div class="event-line">
               <strong>{{ item.type }}</strong>
               <span v-if="item.stage"> / {{ item.stage }}</span>
               <span v-if="item.message"> - {{ item.message }}</span>
-              <span v-if="item.status"> ({{ item.status }})</span>
+              <span v-if="item.status">（{{ item.status }}）</span>
             </div>
           </el-timeline-item>
         </el-timeline>
       </el-card>
     </div>
+
+    <el-dialog
+      v-model="deleteDialogVisible"
+      title="删除任务"
+      width="420px"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="false"
+    >
+      <div class="delete-dialog-copy">删除后该任务将不再出现在任务列表中，是否继续？</div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="deleteDialogVisible = false">取消</el-button>
+          <el-button type="danger" :loading="deleting" @click="confirmDeleteTask">删除</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background-color: #f3f4f6;
-  min-height: 100vh;
-}
 
-.header {
-  margin-bottom: 24px;
+
+.back-button {
+  margin-bottom: 16px;
 }
 
 .title-area {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 12px;
 }
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
-.ml-4 {
-  margin-left: 16px;
-}
-
-.ml-2 {
-  margin-left: 8px;
-}
-
-.mb-4 {
-  margin-bottom: 16px;
+.content {
+  display: grid;
+  gap: 20px;
 }
 
 .timeline-card {
-  margin-top: 20px;
+  margin-top: 0;
 }
 
 .event-line {
   color: #111827;
+  line-height: 1.7;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.delete-dialog-copy {
+  line-height: 1.8;
+  color: #374151;
 }
 </style>

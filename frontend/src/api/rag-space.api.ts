@@ -1,19 +1,17 @@
 import { http } from "./http";
 import type { RagSpace, RagSpaceFile, RagSpaceCreateRequest } from "@/types/rag-space.types";
 
-const RAG_SPACE_BASE_PATH = "/v1/rag-spaces";
-
 export const ragSpaceApi = {
   list(limit = 200) {
-    return http.get<RagSpace[]>(RAG_SPACE_BASE_PATH, { params: { limit } });
+    return http.get<RagSpace[]>("/v1/rag-spaces", { params: { limit } });
   },
 
   listDocuments(ragSpaceId: string, limit = 1000) {
-    return http.get<RagSpaceFile[]>(`${RAG_SPACE_BASE_PATH}/${ragSpaceId}/documents`, { params: { limit } });
+    return http.get<RagSpaceFile[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, { params: { limit } });
   },
 
   create(payload: RagSpaceCreateRequest) {
-    return http.post<RagSpace>(RAG_SPACE_BASE_PATH, payload);
+    return http.post<RagSpace>("/v1/rag-spaces", payload);
   },
 
   uploadDocuments(ragSpaceId: string, files: File[]) {
@@ -21,12 +19,12 @@ export const ragSpaceApi = {
     for (const file of files) {
       form.append("files", file);
     }
-    return http.post<RagSpaceFile[]>(`${RAG_SPACE_BASE_PATH}/${ragSpaceId}/documents`, form, {
+    return http.post<RagSpaceFile[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
 
   deleteDocument(ragSpaceId: string, fileId: string) {
-    return http.delete<{ deleted: boolean }>(`${RAG_SPACE_BASE_PATH}/${ragSpaceId}/documents/${fileId}`);
+    return http.delete<{ deleted: boolean }>(`/v1/rag-spaces/${ragSpaceId}/documents/${fileId}`);
   },
 };

@@ -9,26 +9,26 @@ const loading = computed(() => store.loading);
 
 <template>
   <div class="quality-panel" v-loading="loading">
-    <el-row :gutter="16" v-if="report">
-      <el-col :span="8">
+    <div class="flex gap-4" v-if="report">
+      <div class="flex-1">
         <el-card shadow="never">
           <div class="metric-title">总结果数</div>
           <div class="metric-value">{{ report.total_results }}</div>
         </el-card>
-      </el-col>
-      <el-col :span="8">
+      </div>
+      <div class="flex-1">
         <el-card shadow="never">
           <div class="metric-title">幻觉率</div>
           <div class="metric-value warning">{{ (report.hallucination_rate * 100).toFixed(1) }}%</div>
         </el-card>
-      </el-col>
-      <el-col :span="8">
+      </div>
+      <div class="flex-1">
         <el-card shadow="never">
           <div class="metric-title">点踩率</div>
           <div class="metric-value danger">{{ (report.thumbs_down_rate * 100).toFixed(1) }}%</div>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
     <el-card shadow="never">
       <template #header>模型对比</template>
@@ -47,8 +47,8 @@ const loading = computed(() => store.loading);
       </el-table>
     </el-card>
 
-    <el-row :gutter="16">
-      <el-col :span="12">
+    <div class="flex gap-4">
+      <div class="flex-1">
         <el-card shadow="never">
           <template #header>幻觉率趋势</template>
           <el-table :data="report?.hallucination_trend || []" size="small">
@@ -58,8 +58,8 @@ const loading = computed(() => store.loading);
             </el-table-column>
           </el-table>
         </el-card>
-      </el-col>
-      <el-col :span="12">
+      </div>
+      <div class="flex-1">
         <el-card shadow="never">
           <template #header>点踩率趋势</template>
           <el-table :data="report?.thumbs_down_trend || []" size="small">
@@ -69,8 +69,8 @@ const loading = computed(() => store.loading);
             </el-table-column>
           </el-table>
         </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
   </div>
 </template>
 

@@ -74,6 +74,7 @@ class BillingBucket(BaseModel):
 
 class TokenLedgerResponse(BaseModel):
     id: str
+    user_id: str | None = None
     model_key: str
     product_line: Optional[str] = None
     total_tokens: int
@@ -90,6 +91,31 @@ class BillingSummaryResponse(BaseModel):
     total_cost: float
     buckets: list[BillingBucket]
     ledger_items: list[TokenLedgerResponse]
+    user_summaries: list["UserTokenUsageSummaryResponse"] = []
+
+
+class UserTokenUsageSummaryResponse(BaseModel):
+    user_id: str
+    org_id: str
+    username: str
+    role: str
+    total_prompt_tokens: int
+    total_completion_tokens: int
+    total_tokens: int
+    total_cost: float
+    request_count: int
+    last_ledger_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CurrentUserTokenUsageResponse(BaseModel):
+    user_id: str
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    total_cost: float = 0
+    request_count: int = 0
+    last_ledger_at: Optional[datetime] = None
 
 
 class FeedbackSubmit(BaseModel):

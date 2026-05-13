@@ -11,26 +11,26 @@ from app.models.token_ledger import TokenUsageLedger
 
 class TokenLedgerRepository:
     def __init__(self, session: AsyncSession):
-        """封装 token 使用流水的写入、筛选和聚合能力。"""
         self._session = session
 
     async def create(self, payload: dict) -> TokenUsageLedger:
-        """写入单条模型调用 token 账本记录。"""
         obj = TokenUsageLedger(**payload)
         self._session.add(obj)
         await self._session.flush()
+        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
         return obj
 
     async def list_filtered(
         self,
-        org_id: str,
+        org_id: str | None,
         start_date: date | None = None,
         end_date: date | None = None,
         model_key: str | None = None,
         product_line: str | None = None,
     ) -> list[TokenUsageLedger]:
-        """按时间、模型和产品线过滤 token 账本明细。"""
-        stmt = select(TokenUsageLedger).where(TokenUsageLedger.org_id == org_id)
+        stmt = select(TokenUsageLedger)
+        if org_id:
+            stmt = stmt.where(TokenUsageLedger.org_id == org_id)
         if start_date:
             stmt = stmt.where(TokenUsageLedger.created_at >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
@@ -45,14 +45,13 @@ class TokenLedgerRepository:
 
     async def aggregate(
         self,
-        org_id: str,
+        org_id: str | None,
         granularity: str,
         start_date: date | None = None,
         end_date: date | None = None,
         model_key: str | None = None,
         product_line: str | None = None,
     ) -> tuple[list[TokenUsageLedger], list[dict]]:
-        """按日、周或月聚合 token 消耗和成本统计。"""
         items = await self.list_filtered(org_id, start_date, end_date, model_key, product_line)
         buckets: dict[str, dict] = defaultdict(lambda: {"total_tokens": 0, "total_cost": 0.0, "request_count": 0})
         for item in items:
@@ -74,7 +73,6 @@ class TokenLedgerRepository:
 
     @staticmethod
     def _bucket_key(created_at: datetime, granularity: str) -> str:
-        """根据聚合粒度生成时间桶键。"""
         if granularity == "week":
             year, week, _ = created_at.isocalendar()
             return f"{year}-W{week:02d}"

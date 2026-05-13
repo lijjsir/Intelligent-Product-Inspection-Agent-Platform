@@ -31,11 +31,14 @@ class TaskCreate(BaseModel):
 class TaskResponse(BaseModel):
     id: str
     org_id: str
+    org_slug: str | None = None
     product_id: str
     spec_code: str
     status: str
     priority: int
     image_urls: List[str]
+    source_kind: str | None = None
+    source_graph: str | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     
@@ -45,10 +48,13 @@ class TaskResponse(BaseModel):
 class TaskListItemResponse(BaseModel):
     id: str
     org_id: str
+    org_slug: str | None = None
     product_id: str
     spec_code: str
     status: str
     priority: int
+    source_kind: str | None = None
+    source_graph: str | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

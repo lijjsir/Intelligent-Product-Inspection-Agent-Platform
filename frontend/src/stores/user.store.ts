@@ -68,6 +68,14 @@ export const useUserStore = defineStore("user", () => {
     return data.data;
   }
 
+  function $reset() {
+    items.value = [];
+    current.value = null;
+    total.value = 0;
+    loading.value = false;
+    assignableRoles.value = [];
+  }
+
   return {
     items,
     current,
@@ -82,5 +90,6 @@ export const useUserStore = defineStore("user", () => {
     updateRole,
     updateStatus,
     resetPassword,
+    $reset,
   };
 });

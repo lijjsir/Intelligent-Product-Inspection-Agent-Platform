@@ -119,6 +119,7 @@ class TaskDrilldown(BaseModel):
 
 
 class OverviewStats(BaseModel):
+    scope_kind: str = "org"
     total_tasks: int
     total_alerts: int
     total_results: int

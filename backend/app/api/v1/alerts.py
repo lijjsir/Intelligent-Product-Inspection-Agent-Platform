@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import get_db, get_current_user
-from app.core.permissions import require_role
+from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.alert import AlertResponse, AlertListQuery, AlertHandleRequest
 from app.schemas.common import ResponseEnvelope, PagedResponse
 from app.schemas.user import CurrentUser
@@ -11,6 +11,10 @@ from app.services.alert_service import AlertService
 router = APIRouter()
 
 
+def _scope_org_id(current: CurrentUser) -> str | None:
+    return None if ROLE_ADMIN in current.roles else current.org_id
+
+
 @router.get("", response_model=ResponseEnvelope[PagedResponse[AlertResponse]])
 async def list_alerts(
     query: AlertListQuery = Depends(),
@@ -18,7 +22,7 @@ async def list_alerts(
     db=Depends(get_db),
 ):
     require_role("alert", current.role)
-    service = AlertService(db, current.org_id)
+    service = AlertService(db, _scope_org_id(current))
     skip = (query.page - 1) * query.size
     total, items = await service.list_alerts(skip, query.size, query.status, query.severity)
 
@@ -38,7 +42,7 @@ async def get_alert(
     db=Depends(get_db),
 ):
     require_role("alert", current.role)
-    service = AlertService(db, current.org_id)
+    service = AlertService(db, _scope_org_id(current))
     alert = await service.get(alert_id)
     if not alert:
         from app.core.exceptions import NotFoundError
@@ -55,7 +59,7 @@ async def handle_alert(
     db=Depends(get_db),
 ):
     require_role("alert", current.role)
-    service = AlertService(db, current.org_id)
+    service = AlertService(db, _scope_org_id(current))
     alert = await service.handle_alert(
         alert_id, body.action, current.user_id, body.action_note
     )
@@ -70,6 +74,6 @@ async def resolve_alert(
 ):
     """兼容旧接口，内部转调 handle_alert"""
     require_role("alert", current.role)
-    service = AlertService(db, current.org_id)
+    service = AlertService(db, _scope_org_id(current))
     await service.resolve_alert(alert_id, current.user_id)
     return ResponseEnvelope(data=True)

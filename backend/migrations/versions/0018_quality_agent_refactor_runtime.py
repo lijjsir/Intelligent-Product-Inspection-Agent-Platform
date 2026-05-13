@@ -75,7 +75,7 @@ def upgrade() -> None:
 
     _add_column_if_missing(
         "agent_definitions",
-        sa.Column("subgraph_key", sa.String(length=64), nullable=False, server_default="legacy_quality"),
+        sa.Column("subgraph_key", sa.String(length=64), nullable=False, server_default="quality_judgement"),
     )
     _add_column_if_missing("agent_definitions", sa.Column("entry_graph", sa.String(length=128), nullable=True))
     _add_column_if_missing(
@@ -220,7 +220,7 @@ def upgrade() -> None:
             sa.Column("org_id", sa.BINARY(16), nullable=False),
             sa.Column("agent_id", sa.BINARY(16), nullable=False),
             sa.Column("runtime_key", sa.String(128), nullable=False),
-            sa.Column("subgraph_key", sa.String(64), nullable=False, server_default="legacy_quality"),
+            sa.Column("subgraph_key", sa.String(64), nullable=False, server_default="quality_judgement"),
             sa.Column("status", sa.String(32), nullable=False, server_default="stopped"),
             sa.Column("supports_start_stop", sa.Boolean(), nullable=False, server_default=sa.text("1")),
             sa.Column("metadata_json", mysql.JSON, nullable=True),
@@ -252,7 +252,7 @@ def upgrade() -> None:
             sa.Column("hit_rate", sa.Numeric(5, 4), nullable=False, server_default="0.0000"),
             sa.Column("citation_coverage", sa.Numeric(5, 4), nullable=False, server_default="0.0000"),
             sa.Column("latency_ms", sa.Integer(), nullable=False, server_default=sa.text("0")),
-            sa.Column("source_graph", sa.String(64), nullable=False, server_default="legacy_quality"),
+            sa.Column("source_graph", sa.String(64), nullable=False, server_default="quality_judgement"),
             sa.Column("metadata_json", mysql.JSON, nullable=True),
             sa.Column("created_at", mysql.DATETIME(fsp=3), nullable=False, server_default=TS_DEFAULT),
             sa.Column("updated_at", mysql.DATETIME(fsp=3), nullable=False, server_default=TS_UPDATE_DEFAULT),

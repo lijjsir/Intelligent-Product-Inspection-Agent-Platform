@@ -1,0 +1,101 @@
+{
+  "product_id": "ELEC-003",
+  "category": "electronics",
+  "product_name": "智能USB插线板",
+  "brand": "东捷",
+  "model": "SP-6U",
+  "manufacturer": {
+    "name": "东捷数码电器有限公司",
+    "address": "",
+    "contact": "0769-88776655"
+  },
+  "production_date": "2026-03-16",
+  "batch_no": "STR2026031603",
+  "rated_parameters": {
+    "input": "250V~ 10A",
+    "usb_output": "5V=3.1A",
+    "max_power_w": 2500
+  },
+  "marking_info": {
+    "model_marked": true,
+    "rated_input_marked": true,
+    "rated_output_marked": false,
+    "manufacturer_name_marked": true,
+    "manufacturer_address_marked": false,
+    "warning_marked": false,
+    "serial_number_marked": false,
+    "child_protection_marked": false
+  },
+  "structure_check": {
+    "enclosure_crack": false,
+    "socket_shutter_present": false,
+    "plug_dimension_ok": true,
+    "sharp_edge": true,
+    "wire_anchor_strength": "weak",
+    "fire_enclosure_material_grade": "unknown"
+  },
+  "electrical_safety": {
+    "ground_continuity_required": true,
+    "ground_continuity_ohm": 0.65,
+    "electric_strength_kv": 1.2,
+    "leakage_current_ma": 0.78,
+    "temperature_rise_max_c": 76,
+    "creepage_distance_mm": 2.1,
+    "clearance_mm": 1.8
+  },
+  "emc_test": {
+    "conducted_emission": "fail",
+    "radiated_emission": "fail",
+    "esd_immunity": "function_loss_manual_restart_needed",
+    "surge_immunity": "fail",
+    "eft_immunity": "fail"
+  },
+  "functional_test": {
+    "ac_socket_output": "pass",
+    "usb_output_voltage_v": 5.7,
+    "wifi_pairing": "pass",
+    "app_remote_control": "intermittent_disconnect"
+  },
+  "documents": {
+    "user_manual": true,
+    "inspection_report": false,
+    "certificate_file": false,
+    "traceability_code": false,
+    "ccc_file": false
+  },
+  "expected_result": {
+    "is_qualified": false,
+    "risk_level": "high",
+    "failed_rules": [
+      "electronics.marking.rated_output_marked",
+      "electronics.marking.manufacturer_address_marked",
+      "electronics.marking.warning_marked",
+      "electronics.structure.socket_shutter_present",
+      "electronics.structure.sharp_edge",
+      "electronics.structure.fire_enclosure_material_grade",
+      "electronics.safety.ground_continuity_ohm",
+      "electronics.safety.electric_strength_kv",
+      "electronics.safety.temperature_rise_max_c",
+      "electronics.safety.creepage_distance_mm",
+      "electronics.safety.clearance_mm",
+      "electronics.emc.conducted_emission",
+      "electronics.emc.radiated_emission",
+      "electronics.emc.esd_immunity",
+      "electronics.emc.surge_immunity",
+      "electronics.emc.eft_immunity",
+      "electronics.documents.inspection_report",
+      "electronics.documents.certificate_file",
+      "electronics.documents.traceability_code",
+      "electronics.documents.ccc_file",
+      "electronics.functional.usb_output_voltage_v"
+    ],
+    "key_reasons": [
+      "标识严重不完整",
+      "结构存在儿童防护和尖锐边缘问题",
+      "电气安全指标异常",
+      "EMC多项失败",
+      "合规文件缺失",
+      "USB输出电压异常偏高"
+    ]
+  }
+}

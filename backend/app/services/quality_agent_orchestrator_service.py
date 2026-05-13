@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
-from agent.graphs.quality_root import QualityAgentRootGraph
+from agent.graphs.memory_manager import MemoryManagerGraph
 from agent.llm.pricing import ModelPricing
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
-        self._graph = QualityAgentRootGraph()
+        self._graph = MemoryManagerGraph()
 
     async def run_chat(self, payload: dict) -> dict:
         started_at = perf_counter()
@@ -69,7 +69,7 @@ class QualityAgentOrchestratorService:
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
             request.org_id,
-            route_decision.selected_subgraph if route_decision else "legacy_quality",
+            route_decision.selected_subgraph if route_decision else "quality_judgement",
             success=success,
             latency_ms=int(round((perf_counter() - started_at) * 1000)),
         )
@@ -80,17 +80,15 @@ class QualityAgentOrchestratorService:
         request: NormalizedRequest,
         output: AgentOutput,
     ) -> bool:
-        if not self._should_materialize_chat_output(output):
-            return True
-
         emit = request.ext.get("emit")
         materialized: dict[str, Any] | None = None
         materialization_error: str | None = None
-        try:
-            materialized = await self._materialize_chat_output(request, output)
-        except Exception as exc:  # pragma: no cover - defensive runtime path
-            materialization_error = str(exc)
-            logger.exception("chat materialize failed session_id=%s", request.session_id)
+        if self._should_materialize_chat_output(output):
+            try:
+                materialized = await self._materialize_chat_output(request, output)
+            except Exception as exc:  # pragma: no cover - defensive runtime path
+                materialization_error = str(exc)
+                logger.exception("chat materialize failed session_id=%s", request.session_id)
 
         materialized_task = None
         task_form_defaults = dict(output.task_draft or {})
@@ -119,10 +117,7 @@ class QualityAgentOrchestratorService:
             materialization_error=materialization_error,
         )
 
-        is_legacy_stream = (
-            output.route_decision is not None
-            and output.route_decision.selected_subgraph == "legacy_quality"
-        )
+        is_legacy_stream = False  # Unified quality_judgement handles all paths
         if callable(emit) and not is_legacy_stream:
             answer = str(output.answer or "")
             for start in range(0, len(answer), 48):
@@ -158,7 +153,7 @@ class QualityAgentOrchestratorService:
             )
             await session_repo.touch(request.org_id, str(request.user_id or ""), str(request.session_id))
 
-            if output.route_decision and output.route_decision.selected_subgraph != "legacy_quality":
+            if output.route_decision and output.route_decision.selected_subgraph != "quality_judgement":
                 rag_repo = RagAnalysisRepository(session, request.org_id)
                 for item in list(output.persistable_output.rag_queries or []):
                     await rag_repo.create_log(
@@ -230,18 +225,18 @@ class QualityAgentOrchestratorService:
             "materialized_task": materialized_task,
             "message_type": output.message_type,
             "route_decision": output.route_decision.model_dump() if output.route_decision else None,
-            "workflow_version": "quality_agent_root_v1",
+            "workflow_version": "memory_manager_v2",
             "prompt_version": (
                 output.persistable_output.quality_trace.prompt_version
                 if output.persistable_output and output.persistable_output.quality_trace
                 else base_payload.get("prompt_version")
-                or "quality_agent_root_v1"
+                or "memory_manager_v2"
             ),
             "selected_rag_space": request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
             "source_graph": (
                 output.route_decision.selected_subgraph
                 if output.route_decision
-                else (base_payload.get("source_graph") or "legacy_quality")
+                else (base_payload.get("source_graph") or "quality_judgement")
             ),
             "materialization_status": "failed" if materialization_error else "synced",
             "materialization_error": materialization_error,
@@ -259,7 +254,7 @@ class QualityAgentOrchestratorService:
                 source_graph=(
                     output.route_decision.selected_subgraph
                     if output.route_decision
-                    else "llm_native_quality"
+                    else "quality_judgement"
                 ),
                 source_kind="chat_quality_answer",
                 persist_usage=True,
@@ -369,10 +364,10 @@ class QualityAgentOrchestratorService:
                             else {}
                         ),
                     },
-                    "llm_model": str(result_data.llm_model or "llm_native_quality"),
+                    "llm_model": str(result_data.llm_model or "quality_judgement"),
                     "prompt_version": str(
                         (persistable_output.quality_trace.prompt_version if persistable_output.quality_trace else None)
-                        or "llm_native_quality_v1"
+                        or "quality_judgement_v2"
                     ),
                     "tokens_used": sum(int(item.total_tokens or 0) for item in persistable_output.token_usage),
                     "latency_ms": int(
@@ -494,7 +489,7 @@ class QualityAgentOrchestratorService:
                         priority=5,
                         meta_data={
                             "source": "chat_quality_answer",
-                            "source_graph": "legacy_quality",
+                            "source_graph": "quality_judgement",
                             "chat_session_id": request.session_id,
                             "assistant_message_id": request.assistant_message_id,
                             "request_id": request.request_id,
@@ -511,7 +506,7 @@ class QualityAgentOrchestratorService:
                 task.meta_data = {
                     **dict(task.meta_data or {}),
                     "source": "chat_quality_answer",
-                    "source_graph": "legacy_quality",
+                    "source_graph": "quality_judgement",
                     "chat_session_id": request.session_id,
                     "assistant_message_id": request.assistant_message_id,
                     "request_id": request.request_id,
@@ -568,7 +563,7 @@ class QualityAgentOrchestratorService:
                         "faithfulness_score": float((output.quality or {}).get("faithfulness") or 0.0),
                         "hallucination_flags": list((output.quality or {}).get("hallucination_flags") or []),
                     },
-                    "sampling_results": {"route_subgraph": "legacy_quality"},
+                    "sampling_results": {"route_subgraph": "quality_judgement"},
                     "root_cause": str((output.summary or output.answer or "")[:255]),
                 }
             )
@@ -682,7 +677,7 @@ class QualityAgentOrchestratorService:
         raw_state = dict(output.raw_state or {})
         reasoning = dict(raw_state.get("reasoning") or {})
         llm_meta = dict(reasoning.get("llm_meta") or {})
-        return str(llm_meta.get("model") or "legacy_quality")
+        return str(llm_meta.get("model") or "quality_judgement")
 
     def _legacy_prompt_version(self, output: AgentOutput) -> str:
         raw_state = dict(output.raw_state or {})
@@ -697,12 +692,12 @@ class QualityAgentOrchestratorService:
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
         return {
-            "model_key": str(llm_meta.get("model") or "legacy_quality"),
+            "model_key": str(llm_meta.get("model") or "quality_judgement"),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "cost_amount": ModelPricing.estimate_cost(
-                str(llm_meta.get("model") or "legacy_quality"),
+                str(llm_meta.get("model") or "quality_judgement"),
                 prompt_tokens,
                 completion_tokens,
             ),

@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.permissions import require_role
+from app.core.permissions import require_role, ROLE_ADMIN, ROLE_USER
 from app.core.security import safe_decode_token
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import ResponseEnvelope
@@ -35,6 +35,13 @@ def get_current_user_for_sse(
         user_id=payload.get("sub", ""),
         org_id=payload.get("org_id", ""),
         role=payload.get("role", ""),
+        roles=[str(item) for item in (payload.get("roles") or [])],
+        plan_tier=str(payload.get("plan_tier") or "basic"),
+        capabilities=[str(item) for item in (payload.get("capabilities") or [])],
+        workspaces=[str(item) for item in (payload.get("workspaces") or [])],
+        default_workspace=str(payload.get("default_workspace") or "app"),
+        stream_resource=str(payload.get("resource") or ""),
+        stream_resource_id=str(payload.get("resource_id") or ""),
     )
 
 
@@ -46,7 +53,9 @@ async def run_task_pipeline(
 ):
     """启动指定任务的 AI 检测流水线，按 worker 可用性选择执行模式。"""
     require_role("task", current.role)
-    task = await TaskRepository(db).get(current.org_id, task_id)
+    owner_user_id = current.user_id if ROLE_USER in current.roles else None
+    org_scope = None if ROLE_ADMIN in current.roles else current.org_id
+    task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
 
@@ -62,7 +71,13 @@ async def stream_task_events(
 ) -> StreamingResponse:
     """通过 SSE 持续向前端推送任务状态变化和图执行阶段事件。"""
     require_role("task", current.role)
-    task = await TaskRepository(db).get(current.org_id, task_id)
+    if current.stream_resource and (
+        current.stream_resource != "task" or current.stream_resource_id != task_id
+    ):
+        raise ForbiddenError("invalid stream token")
+    owner_user_id = current.user_id if ROLE_USER in current.roles else None
+    org_scope = None if ROLE_ADMIN in current.roles else current.org_id
+    task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
 

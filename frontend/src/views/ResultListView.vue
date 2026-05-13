@@ -96,48 +96,46 @@ const getVerdictType = (verdict: string) => {
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="header">
-      <div>
-        <h2 class="title">检测结果列表</h2>
-        <p class="subtitle">支持按产品线、模型和结论筛选，用于承接分析中心钻取。</p>
-      </div>
+  <div class="flex flex-col gap-5">
+    <div>
+      <h2 class="text-2xl font-bold text-zinc-900">检测结果列表</h2>
+      <p class="mt-2 text-sm text-zinc-500">支持按产品线、模型和结论筛选，用于承接分析中心钻取。</p>
     </div>
 
-    <el-card class="mb-4" shadow="never">
-      <el-form :model="filters" inline>
+    <div class="card-surface p-4">
+      <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
         <el-form-item label="结论">
-          <el-select v-model="filters.verdict" clearable style="width: 160px">
+          <el-select v-model="filters.verdict" clearable class="!w-[160px]" size="small">
             <el-option label="PASS" value="pass" />
             <el-option label="FAIL" value="fail" />
             <el-option label="UNCERTAIN" value="uncertain" />
           </el-select>
         </el-form-item>
         <el-form-item label="产品线">
-          <el-input v-model="filters.product_id" placeholder="产品线 / 产品编号" clearable />
+          <el-input v-model="filters.product_id" placeholder="产品线 / 产品编号" clearable size="small" />
         </el-form-item>
         <el-form-item label="模型">
-          <el-input v-model="filters.model_key" placeholder="模型标识" clearable />
+          <el-input v-model="filters.model_key" placeholder="模型标识" clearable size="small" />
         </el-form-item>
         <el-form-item label="任务 ID">
-          <el-input v-model="filters.task_id" placeholder="任务 ID" clearable />
+          <el-input v-model="filters.task_id" placeholder="任务 ID" clearable size="small" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">查询</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button type="primary" size="small" @click="handleSearch">查询</el-button>
+          <el-button size="small" @click="handleReset">重置</el-button>
         </el-form-item>
       </el-form>
-    </el-card>
+    </div>
 
-    <el-card shadow="never">
-      <el-table :data="store.items" v-loading="store.loading" border stripe>
+    <div class="card-surface">
+      <el-table :data="store.items" v-loading="store.loading" size="small" class="list-table">
         <el-table-column prop="id" label="结果ID" min-width="220" show-overflow-tooltip />
         <el-table-column prop="task_id" label="任务ID" min-width="220" show-overflow-tooltip />
         <el-table-column prop="product_id" label="产品线" width="140" />
         <el-table-column prop="llm_model" label="模型" min-width="180" show-overflow-tooltip />
         <el-table-column prop="verdict" label="结论" width="120">
           <template #default="scope">
-            <el-tag :type="getVerdictType(scope.row.verdict)">{{ scope.row.verdict.toUpperCase() }}</el-tag>
+            <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{ scope.row.verdict.toUpperCase() }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="overall_score" label="分数" width="100">
@@ -148,31 +146,32 @@ const getVerdictType = (verdict: string) => {
         </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="scope">
-            <el-button link type="primary" @click="router.push(`/app/results/${scope.row.task_id}`)">详情</el-button>
+            <el-button link type="primary" size="small" @click="router.push(`/app/results/${scope.row.task_id}`)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div class="pagination-wrapper mt-4">
+      <div class="flex justify-end p-4">
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next, jumper"
           :total="total"
+          small
           @size-change="handleSizeChange"
           @current-change="handleCurrentChange"
         />
       </div>
-    </el-card>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.page-container { padding: 24px; background-color: #f3f4f6; min-height: 100vh; }
-.header { margin-bottom: 24px; }
-.title { margin: 0 0 8px 0; font-size: 24px; color: #111827; }
-.subtitle { margin: 0; color: #6b7280; font-size: 14px; }
-.mb-4 { margin-bottom: 16px; }
-.pagination-wrapper { display: flex; justify-content: flex-end; }
+.list-table :deep(.el-table__header th) {
+  @apply text-zinc-500 font-medium text-[13px] bg-zinc-50;
+}
+.list-table :deep(.el-table__body tr:hover > td) {
+  @apply bg-zinc-50;
+}
 </style>

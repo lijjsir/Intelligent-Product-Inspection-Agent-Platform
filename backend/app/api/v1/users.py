@@ -87,6 +87,7 @@ async def update_me(
         current_password=payload.current_password,
         new_password=payload.new_password,
     )
+    await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))
 
 
@@ -111,6 +112,7 @@ async def create_user(
     require_role("user", current.role)
     service = UserService(db, current.org_id)
     user = await service.create_user(payload.username, payload.email, payload.password, payload.role, current.role)
+    await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))
 
 
@@ -124,6 +126,7 @@ async def update_role(
     require_role("user", current.role)
     service = UserService(db, current.org_id)
     user = await service.update_role(user_id, payload.role, current.role, current.user_id)
+    await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))
 
 
@@ -137,6 +140,7 @@ async def update_status(
     require_role("user", current.role)
     service = UserService(db, current.org_id)
     user = await service.update_status(user_id, payload.is_active, current.user_id)
+    await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))
 
 
@@ -150,4 +154,5 @@ async def reset_password(
     require_role("user", current.role)
     service = UserService(db, current.org_id)
     user = await service.reset_password(user_id, payload.password, current.user_id)
+    await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))

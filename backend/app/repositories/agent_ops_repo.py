@@ -570,7 +570,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
         if existing:
             existing.agent_id = str(agent.id)
             existing.runtime_key = runtime_key
-            existing.subgraph_key = str(agent.subgraph_key or "legacy_quality")
+            existing.subgraph_key = str(agent.subgraph_key or "quality_judgement")
             existing.status = "running" if agent.is_active else "stopped"
             existing.supports_start_stop = bool(agent.supports_start_stop)
             existing.metadata_json = {"entry_graph": agent.entry_graph, "graph_version": agent.graph_version}
@@ -580,7 +580,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
             org_id=self._org_id,
             agent_id=str(agent.id),
             runtime_key=runtime_key,
-            subgraph_key=str(agent.subgraph_key or "legacy_quality"),
+            subgraph_key=str(agent.subgraph_key or "quality_judgement"),
             status="running" if agent.is_active else "stopped",
             supports_start_stop=bool(agent.supports_start_stop),
             metadata_json={"entry_graph": agent.entry_graph, "graph_version": agent.graph_version},

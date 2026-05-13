@@ -1,58 +1,27 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
-import { useAuthStore } from "@/stores/auth.store";
+import { onMounted, onUnmounted, ref } from "vue";
 import { ElMessage } from "element-plus";
+import { useAgentOpsStore } from "@/stores/agent-ops.store";
 
-const auth = useAuthStore();
+const store = useAgentOpsStore();
 const loading = ref(false);
-
-const runtimeStats = ref({
-  activeAgents: 0,
-  queuedTasks: 0,
-  completedToday: 0,
-  avgLatency: 0,
-  gpuUtilization: 0,
-  memoryUsage: 0,
-});
-
-const agentList = ref([
-  { id: "1", name: "vision-inspector", status: "running", tasks: 5, latency: 1.2 },
-  { id: "2", name: "knowledge-retriever", status: "idle", tasks: 0, latency: 0.8 },
-  { id: "3", name: "reasoning-engine", status: "running", tasks: 3, latency: 2.1 },
-]);
-
-const queueItems = ref([
-  { id: "1", taskId: "task-001", priority: "high", status: "pending", createdAt: new Date().toISOString() },
-  { id: "2", taskId: "task-002", priority: "normal", status: "processing", createdAt: new Date().toISOString() },
-  { id: "3", taskId: "task-003", priority: "low", status: "pending", createdAt: new Date().toISOString() },
-]);
-
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 onMounted(async () => {
   await fetchRuntimeData();
-  refreshInterval = setInterval(fetchRuntimeData, 5000);
+  refreshInterval = setInterval(fetchRuntimeData, 10000);
 });
 
 onUnmounted(() => {
-  if (refreshInterval) {
-    clearInterval(refreshInterval);
-  }
+  if (refreshInterval) clearInterval(refreshInterval);
 });
 
 async function fetchRuntimeData() {
   loading.value = true;
   try {
-    runtimeStats.value = {
-      activeAgents: 3,
-      queuedTasks: 12,
-      completedToday: 156,
-      avgLatency: 1.45,
-      gpuUtilization: 78,
-      memoryUsage: 62,
-    };
-  } catch (e) {
-    ElMessage.error("获取运行数据失败");
+    await Promise.all([store.fetchRuntimeOverview(), store.fetchRuntimeAgents()]);
+  } catch {
+    ElMessage.error("获取运行态数据失败");
   } finally {
     loading.value = false;
   }
@@ -61,164 +30,98 @@ async function fetchRuntimeData() {
 function getStatusType(status: string) {
   const map: Record<string, "success" | "warning" | "danger" | "info"> = {
     running: "success",
-    idle: "info",
-    error: "danger",
-    pending: "warning",
-    processing: "primary",
+    stopped: "info",
+    failed: "danger",
+    idle: "warning",
   };
   return map[status] || "info";
-}
-
-function getPriorityType(priority: string) {
-  const map: Record<string, "danger" | "warning" | "info"> = {
-    high: "danger",
-    normal: "warning",
-    low: "info",
-  };
-  return map[priority] || "info";
 }
 </script>
 
 <template>
-  <div class="page-container" v-loading="loading">
-    <div class="header">
-      <h2 class="title">Agent 运行中心</h2>
-      <p class="subtitle">实时监控 Agent 运行状态与任务队列</p>
+  <div class="flex flex-col gap-5" v-loading="loading">
+    <div>
+      <h2 class="text-2xl font-bold text-zinc-900">Agent 运行中心</h2>
+      <p class="mt-2 text-sm text-zinc-500">展示真实运行态接口返回的 Agent 概览和运行单元状态。</p>
     </div>
 
-    <el-row :gutter="20" class="mb-4">
-      <el-col :span="4">
+    <div class="grid grid-cols-5 gap-4">
+      <div>
         <el-card shadow="never" class="stat-card">
-          <div class="stat-value">{{ runtimeStats.activeAgents }}</div>
-          <div class="stat-label">活跃 Agent</div>
+          <div class="stat-value">{{ store.runtimeOverview?.active_agents ?? 0 }}</div>
+          <div class="stat-label">启用 Agent</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
-          <div class="stat-value text-warning">{{ runtimeStats.queuedTasks }}</div>
-          <div class="stat-label">队列任务</div>
+          <div class="stat-value">{{ store.runtimeOverview?.running_agents ?? 0 }}</div>
+          <div class="stat-label">运行中</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
-          <div class="stat-value text-success">{{ runtimeStats.completedToday }}</div>
+          <div class="stat-value">{{ store.runtimeOverview?.stopped_agents ?? 0 }}</div>
+          <div class="stat-label">已停止</div>
+        </el-card>
+      </div>
+      <div>
+        <el-card shadow="never" class="stat-card">
+          <div class="stat-value">{{ store.runtimeOverview?.completed_today ?? 0 }}</div>
           <div class="stat-label">今日完成</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
+      </div>
+      <div>
         <el-card shadow="never" class="stat-card">
-          <div class="stat-value">{{ runtimeStats.avgLatency.toFixed(2) }}s</div>
+          <div class="stat-value">{{ store.runtimeOverview?.avg_latency_ms ?? 0 }} ms</div>
           <div class="stat-label">平均延迟</div>
         </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="never" class="stat-card">
-          <div class="stat-value" :class="runtimeStats.gpuUtilization > 80 ? 'text-danger' : 'text-success'">
-            {{ runtimeStats.gpuUtilization }}%
-          </div>
-          <div class="stat-label">GPU 利用率</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="never" class="stat-card">
-          <div class="stat-value" :class="runtimeStats.memoryUsage > 80 ? 'text-danger' : 'text-success'">
-            {{ runtimeStats.memoryUsage }}%
-          </div>
-          <div class="stat-label">内存使用</div>
-        </el-card>
-      </el-col>
-    </el-row>
+      </div>
+    </div>
 
-    <el-row :gutter="20">
-      <el-col :span="12">
-        <el-card shadow="never" class="mb-4">
-          <template #header>
-            <div class="card-header">
-              <span>Agent 实例状态</span>
-              <el-button type="primary" size="small" @click="fetchRuntimeData">刷新</el-button>
-            </div>
+    <el-card shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>运行单元</span>
+          <el-button type="primary" size="small" @click="fetchRuntimeData">刷新</el-button>
+        </div>
+      </template>
+      <el-table :data="store.runtimeAgents" stripe>
+        <el-table-column prop="agent_name" label="Agent" min-width="180" />
+        <el-table-column prop="runtime_key" label="Runtime Key" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="subgraph_key" label="子图" width="150" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row.status)" size="small">
+              {{ row.status }}
+            </el-tag>
           </template>
-          <el-table :data="agentList" stripe>
-            <el-table-column prop="name" label="Agent 名称" />
-            <el-table-column prop="status" label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="getStatusType(row.status)" size="small">
-                  {{ row.status.toUpperCase() }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="tasks" label="当前任务数" width="100" />
-            <el-table-column prop="latency" label="平均延迟 (s)" width="120">
-              <template #default="{ row }">
-                {{ row.latency.toFixed(2) }}
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>任务队列</span>
-              <el-tag type="info" size="small">{{ queueItems.length }} 项</el-tag>
-            </div>
+        </el-table-column>
+        <el-table-column prop="execution_count" label="执行数" width="100" />
+        <el-table-column label="成功率" width="110">
+          <template #default="{ row }">
+            {{ (row.success_rate * 100).toFixed(1) }}%
           </template>
-          <el-table :data="queueItems" stripe>
-            <el-table-column prop="taskId" label="任务 ID" />
-            <el-table-column prop="priority" label="优先级" width="80">
-              <template #default="{ row }">
-                <el-tag :type="getPriorityType(row.priority)" size="small">
-                  {{ row.priority.toUpperCase() }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="status" label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="getStatusType(row.status)" size="small">
-                  {{ row.status.toUpperCase() }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="createdAt" label="创建时间" width="180">
-              <template #default="{ row }">
-                {{ new Date(row.createdAt).toLocaleString() }}
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+        </el-table-column>
+        <el-table-column label="平均延迟" width="120">
+          <template #default="{ row }">
+            {{ row.avg_latency_ms.toFixed(0) }} ms
+          </template>
+        </el-table-column>
+        <el-table-column label="最近执行" width="180">
+          <template #default="{ row }">
+            {{ row.last_executed_at ? new Date(row.last_executed_at).toLocaleString() : "-" }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  background: #f3f4f6;
-  min-height: 100%;
-}
 
-.header {
-  margin-bottom: 24px;
-}
 
-.title {
-  margin: 0;
-  font-size: 24px;
-  color: #111827;
-}
 
-.subtitle {
-  margin: 4px 0 0;
-  color: #6b7280;
-  font-size: 14px;
-}
 
-.mb-4 {
-  margin-bottom: 16px;
-}
 
 .stat-card {
   text-align: center;
@@ -228,25 +131,13 @@ function getPriorityType(priority: string) {
 .stat-value {
   font-size: 28px;
   font-weight: 700;
-  color: #1b3a5c;
+  color: #1d4ed8;
 }
 
 .stat-label {
   font-size: 12px;
   color: #6b7280;
   margin-top: 4px;
-}
-
-.text-success {
-  color: #16a34a;
-}
-
-.text-warning {
-  color: #d97706;
-}
-
-.text-danger {
-  color: #dc2626;
 }
 
 .card-header {
