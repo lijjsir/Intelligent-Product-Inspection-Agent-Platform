@@ -26,9 +26,11 @@ ROLE_MIGRATION_MAP = {
 
 def upgrade() -> None:
     for old_role, new_role in ROLE_MIGRATION_MAP.items():
-        op.execute(
-            sa.text("UPDATE users SET role = :new_role WHERE role = :old_role"),
-        ).bindparams(new_role=new_role, old_role=old_role)
+        stmt = sa.text("UPDATE users SET role = :new_role WHERE role = :old_role").bindparams(
+            new_role=new_role,
+            old_role=old_role,
+        )
+        op.execute(stmt)
 
 
 def downgrade() -> None:

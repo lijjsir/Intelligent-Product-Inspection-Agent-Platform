@@ -137,13 +137,36 @@ class RagAnalysisStats(BaseModel):
 
 class RagAnalysisItem(BaseModel):
     task_id: str
+    session_id: Optional[str] = None
     query: Optional[str] = Field(default=None, description="Query text if available")
+    rag_space_id: Optional[str] = None
+    rag_space_name: Optional[str] = None
+    product_family: Optional[str] = None
+    product_id: Optional[str] = None
+    verdict: Optional[str] = None
+    source_graph: Optional[str] = None
+    top_sources: list[str] = Field(default_factory=list)
+    rule_hits: list[str] = Field(default_factory=list)
     hit_rate: float
     citation_coverage: float
     latency_ms: float
     created_at: datetime
 
 
+class RagAnalysisBreakdownItem(BaseModel):
+    key: str
+    count: int = 0
+
+
+class RagEvidenceImpactItem(BaseModel):
+    rule_key: str
+    count: int = 0
+
+
 class RagAnalysisResponse(BaseModel):
     stats: RagAnalysisStats
     recent_items: list[RagAnalysisItem]
+    space_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    source_graph_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    product_family_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    evidence_impact: list[RagEvidenceImpactItem] = Field(default_factory=list)

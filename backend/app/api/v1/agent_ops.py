@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from agent.topology_catalog import get_dspy_optimization_target, get_topology
 from app.api.v1.deps import get_current_user, get_db
-from app.core.permissions import require_role
+from app.core.permissions import ROLE_ADMIN, normalize_role, require_role
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
     AgentDefinitionResponse,
@@ -38,6 +39,10 @@ def _build_service(current: CurrentUser, db) -> AgentOpsService:
     return AgentOpsService(db, current.org_id, current.user_id)
 
 
+def _use_global_scope(current: CurrentUser) -> bool:
+    return normalize_role(current.role) == ROLE_ADMIN
+
+
 @router.get("/agents", response_model=ResponseEnvelope[PagedResponse[AgentDefinitionResponse]])
 async def list_agents(
     query: AgentDefinitionListQuery = Depends(),
@@ -49,6 +54,16 @@ async def list_agents(
     return ResponseEnvelope(
         data=PagedResponse(items=items, total=total, page=query.page, size=query.size)
     )
+
+
+@router.get("/agents/topology", response_model=ResponseEnvelope[dict])
+async def get_agents_topology(
+    subgraph_key: str = Query("all"),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    _build_service(current, db)
+    return ResponseEnvelope(data=get_topology(subgraph_key, include_root=True))
 
 
 @router.post("/agents", response_model=ResponseEnvelope[AgentDefinitionResponse], status_code=201)
@@ -266,13 +281,80 @@ async def delete_route(
     return ResponseEnvelope(data={"deleted": True})
 
 
+@router.get("/routing/strategy", response_model=ResponseEnvelope[dict])
+async def get_routing_strategy(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_strategy())
+
+
+@router.get("/prompt-optimization/targets/{target_key}/runs", response_model=ResponseEnvelope[list[dict]])
+async def list_prompt_optimization_runs(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    runs = await svc._optimization_run_repo.list_for_target(target_key)
+    return ResponseEnvelope(data=[getattr(run, "__dict__", {}) for run in runs])
+
+
+@router.put("/prompt-optimization/targets/{target_key}/config", response_model=ResponseEnvelope[dict])
+async def update_prompt_optimization_config(
+    target_key: str,
+    body: dict,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    item = await svc._optimization_repo.update_config(target_key, body)
+    if not item:
+        raise HTTPException(status_code=404, detail="optimization target not found")
+    return ResponseEnvelope(data=getattr(item, "__dict__", {}))
+
+
+@router.post("/prompt-optimization/targets/{target_key}/compile", response_model=ResponseEnvelope[dict])
+async def compile_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    run = await svc.compile_prompt_optimization_target(target_key)
+    return ResponseEnvelope(data=getattr(run, "__dict__", {}))
+
+
+@router.post("/prompt-optimization/targets/{target_key}/rollback", response_model=ResponseEnvelope[dict])
+async def rollback_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    latest = await svc._optimization_run_repo.get_latest_completed(target_key)
+    return ResponseEnvelope(data=getattr(latest, "__dict__", {}) if latest else {})
+
+
+@router.get("/prompt-optimization/targets/{target_key}", response_model=ResponseEnvelope[dict])
+async def get_prompt_optimization_target(
+    target_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    target = await svc._optimization_repo.get_by_target_key(target_key)
+    return ResponseEnvelope(data=getattr(target, "__dict__", {}) if target else (get_dspy_optimization_target(target_key) or {}))
+
+
 @router.get("/rag-analysis", response_model=ResponseEnvelope[RagAnalysisResponse])
 async def get_rag_analysis(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_rag_analysis())
+    return ResponseEnvelope(data=await svc.get_rag_analysis(global_scope=_use_global_scope(current)))
 
 
 @router.post("/agents/batch/status", response_model=ResponseEnvelope[BatchOperationResponse])

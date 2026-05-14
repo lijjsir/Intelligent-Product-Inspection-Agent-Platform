@@ -26,7 +26,7 @@ def register_middleware(app: FastAPI) -> None:
         request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
         request.state.request_id = request_id
         request.state.org_id = request.headers.get("X-Org-Id")
-        cors_origin = request.headers.get("origin") or resolve_cors_origin(request.headers.get("origin"))
+        cors_origin = resolve_cors_origin(request.headers.get("origin"))
 
         if request.method == "OPTIONS" and cors_origin:
             response = Response(status_code=200)

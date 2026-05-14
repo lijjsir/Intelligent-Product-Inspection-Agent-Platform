@@ -557,7 +557,7 @@ async def quality_gate(state: QualityChatState) -> QualityChatState:
     if len(answer) < 20:
         hallucination_flags.append("thin_answer")
     passed = confidence >= 0.85 and evidence_coverage >= 1.0 and traceability >= 0.9 and faithfulness >= 0.85 and "low_evidence" not in hallucination_flags
-    risk_level = "low" if passed else ("medium" if citations else "critical")
+    risk_level = "low" if passed else ("medium" if citations else "red")
     risk_score = 0.08 if passed else (0.42 if citations else 0.78)
     state["quality"] = {
         "confidence": round(confidence, 4),

@@ -343,6 +343,7 @@ class LLMClient:
                     self._safe_update_observation(
                         observation,
                         output=data,
+                        usage_details=usage_metadata,
                         metadata={
                             "status_code": resp.status_code,
                             "response_id": data.get("id") if isinstance(data, dict) else None,

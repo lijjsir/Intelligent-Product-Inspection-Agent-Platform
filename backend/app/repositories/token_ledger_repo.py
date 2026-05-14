@@ -23,14 +23,16 @@ class TokenLedgerRepository:
 
     async def list_filtered(
         self,
-        org_id: str,
+        org_id: str | None,
         start_date: date | None = None,
         end_date: date | None = None,
         model_key: str | None = None,
         product_line: str | None = None,
     ) -> list[TokenUsageLedger]:
         """按时间、模型和产品线过滤 token 账本明细。"""
-        stmt = select(TokenUsageLedger).where(TokenUsageLedger.org_id == org_id)
+        stmt = select(TokenUsageLedger)
+        if org_id is not None:
+            stmt = stmt.where(TokenUsageLedger.org_id == org_id)
         if start_date:
             stmt = stmt.where(TokenUsageLedger.created_at >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
@@ -45,7 +47,7 @@ class TokenLedgerRepository:
 
     async def aggregate(
         self,
-        org_id: str,
+        org_id: str | None,
         granularity: str,
         start_date: date | None = None,
         end_date: date | None = None,

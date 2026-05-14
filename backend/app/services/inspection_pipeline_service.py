@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-import traceback
+import logging
 from typing import Any
 
 from agent.graph.inspection_graph import InspectionGraph
@@ -19,10 +19,91 @@ from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
+from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.file_storage_service import FileStorageService
 from app.services.model_config_service import ModelConfigService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.stream_service import stream_broker
 from infra.database.session import get_session
+
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_image_urls_for_runtime(image_urls: list[str]) -> list[str]:
+    normalized: list[str] = []
+    storage: FileStorageService | None = None
+    for item in image_urls:
+        url = str(item or "").strip()
+        if not url:
+            continue
+        if url.startswith(("http://", "https://", "data:")):
+            normalized.append(url)
+            continue
+        if storage is None:
+            storage = FileStorageService()
+        normalized.append(storage.to_data_url(url) or url)
+    return normalized
+
+
+async def _record_token_usage(
+    *,
+    token_ledger_repo: TokenLedgerRepository,
+    user_token_usage_repo: UserTokenUsageSummaryRepository,
+    task: InspectionTask,
+    result_id: str,
+    state: InspectionState,
+    usage_events: list[dict[str, Any]],
+) -> int:
+    total_tokens = 0
+    for event in usage_events:
+        prompt_tokens = int(event.get("prompt_tokens") or 0)
+        completion_tokens = int(event.get("completion_tokens") or 0)
+        event_total_tokens = int(event.get("total_tokens") or (prompt_tokens + completion_tokens))
+        if event_total_tokens <= 0:
+            continue
+
+        cost_amount = ModelPricing.estimate_cost(
+            str(event.get("model_key") or state.get("model_id") or ""),
+            prompt_tokens,
+            completion_tokens,
+            input_price_per_million=(
+                float(state.get("model_input_price_per_million"))
+                if state.get("model_input_price_per_million") is not None else None
+            ),
+            output_price_per_million=(
+                float(state.get("model_output_price_per_million"))
+                if state.get("model_output_price_per_million") is not None else None
+            ),
+        )
+        total_tokens += event_total_tokens
+        await token_ledger_repo.create(
+            {
+                "id": str(uuid7()),
+                "org_id": task.org_id,
+                "user_id": getattr(task, "created_by", None),
+                "task_id": task.id,
+                "result_id": result_id,
+                "model_config_id": state.get("model_config_id"),
+                "model_key": str(event.get("model_key") or state.get("model_id") or "unknown"),
+                "product_line": task.product_id,
+                "trace_id": state.get("trace_id"),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": event_total_tokens,
+                "cost_amount": cost_amount,
+            }
+        )
+        if getattr(task, "created_by", None):
+            await user_token_usage_repo.increment(
+                org_id=task.org_id,
+                user_id=task.created_by,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=event_total_tokens,
+                cost_amount=cost_amount,
+            )
+    return total_tokens
 
 
 def _build_runtime_state(
@@ -38,7 +119,7 @@ def _build_runtime_state(
         "org_id": task.org_id,
         "product_id": task.product_id,
         "spec_code": task.spec_code,
-        "image_urls": task.image_urls or [],
+        "image_urls": _normalize_image_urls_for_runtime(task.image_urls or []),
         "model_id": str(runtime.get("model_id") or LLMClient().model_id),
         "model_config_id": runtime.get("model_config_id"),
         "model_base_url": runtime.get("base_url"),
@@ -66,6 +147,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         stability_repo = StabilityRepository(session)
         alert_repo = AlertRepository(session)
         token_ledger_repo = TokenLedgerRepository(session)
+        user_token_usage_repo = UserTokenUsageSummaryRepository(session)
         model_config_service = ModelConfigService(session, org_id)
         standard_service = InspectionStandardService(session, org_id)
 
@@ -185,43 +267,14 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             }
             result = await result_repo.upsert_by_task(result_payload)
 
-            usage_events = state.get("usage_events") or []
-            total_tokens = 0
-            for event in usage_events:
-                prompt_tokens = int(event.get("prompt_tokens") or 0)
-                completion_tokens = int(event.get("completion_tokens") or 0)
-                event_total_tokens = int(event.get("total_tokens") or (prompt_tokens + completion_tokens))
-                if event_total_tokens <= 0:
-                    continue
-                total_tokens += event_total_tokens
-                await token_ledger_repo.create(
-                    {
-                        "id": str(uuid7()),
-                        "org_id": task.org_id,
-                        "task_id": task.id,
-                        "result_id": result.id,
-                        "model_config_id": state.get("model_config_id"),
-                        "model_key": str(event.get("model_key") or state.get("model_id") or "unknown"),
-                        "product_line": task.product_id,
-                        "trace_id": state.get("trace_id"),
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": event_total_tokens,
-                        "cost_amount": ModelPricing.estimate_cost(
-                            str(event.get("model_key") or state.get("model_id") or ""),
-                            prompt_tokens,
-                            completion_tokens,
-                            input_price_per_million=(
-                                float(state.get("model_input_price_per_million"))
-                                if state.get("model_input_price_per_million") is not None else None
-                            ),
-                            output_price_per_million=(
-                                float(state.get("model_output_price_per_million"))
-                                if state.get("model_output_price_per_million") is not None else None
-                            ),
-                        ),
-                    }
-                )
+            total_tokens = await _record_token_usage(
+                token_ledger_repo=token_ledger_repo,
+                user_token_usage_repo=user_token_usage_repo,
+                task=task,
+                result_id=result.id,
+                state=state,
+                usage_events=state.get("usage_events") or [],
+            )
 
             if total_tokens > 0:
                 result.tokens_used = total_tokens
@@ -304,6 +357,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             )
             return {"task_id": task_id, "status": "done"}
         except Exception as exc:
+            logger.exception("inspection pipeline failed task_id=%s org_id=%s", task_id, org_id)
             await task_repo.update_status(org_id, task_id, "failed")
             await session.commit()
             await emit(
@@ -311,7 +365,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     "type": "error",
                     "status": "failed",
                     "message": str(exc),
-                    "trace": traceback.format_exc(limit=2),
+                    "task_id": task_id,
                 }
             )
             raise

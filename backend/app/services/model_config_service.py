@@ -14,7 +14,7 @@ from app.services.base import TenantAwareService
 
 
 def _fernet() -> Fernet:
-    seed = getattr(settings, "governance_secret", settings.jwt_private_key or settings.jwt_public_key or "piap-governance")
+    seed = settings.governance_secret or settings.jwt_private_key or settings.jwt_public_key or "piap-governance-dev-only"
     digest = hashlib.sha256(str(seed).encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 

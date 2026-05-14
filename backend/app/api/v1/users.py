@@ -111,6 +111,9 @@ async def create_user(
     require_role("user", current.role)
     service = UserService(db, current.org_id)
     user = await service.create_user(payload.username, payload.email, payload.password, payload.role, current.role)
+    refresh = getattr(db, "refresh", None)
+    if callable(refresh):
+        await refresh(user)
     return ResponseEnvelope(data=_to_response(user))
 
 

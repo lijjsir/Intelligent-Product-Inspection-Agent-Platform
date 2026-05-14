@@ -18,7 +18,7 @@ async def get_billing_summary(
     db=Depends(get_db),
 ):
     require_role("billing", current.role)
-    service = BillingService(db, current.org_id)
+    service = BillingService(db, current.org_id, actor_role=current.role)
     data = await service.get_summary(query)
     return ResponseEnvelope(
         data=BillingSummaryResponse(
@@ -29,4 +29,3 @@ async def get_billing_summary(
             ledger_items=[TokenLedgerResponse.model_validate(item) for item in data["ledger_items"]],
         )
     )
-
