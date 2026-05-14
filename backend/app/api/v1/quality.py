@@ -19,6 +19,7 @@ def _scope_org_id(current: CurrentUser) -> str | None:
 async def get_quality_report(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
+    source: str = Query(default="all", pattern="^(all|inspection|chat)$"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -27,6 +28,7 @@ async def get_quality_report(
     data = await service.build_report(
         start_date=None if not start_date else __import__("datetime").date.fromisoformat(start_date),
         end_date=None if not end_date else __import__("datetime").date.fromisoformat(end_date),
+        source=source,
     )
     return ResponseEnvelope(data=QualityReportResponse(**data))
 
@@ -34,10 +36,11 @@ async def get_quality_report(
 @router.get("/traces", response_model=ResponseEnvelope[list[QualityTraceItem]])
 async def list_quality_traces(
     limit: int = Query(default=100, ge=1, le=500),
+    source: str = Query(default="all", pattern="^(all|inspection|chat)$"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     require_role("quality", current.role)
     service = QualityReportService(db, _scope_org_id(current))
-    data = await service.list_traces(limit=limit)
+    data = await service.list_traces(limit=limit, source=source)
     return ResponseEnvelope(data=[QualityTraceItem(**item) for item in data])

@@ -30,6 +30,27 @@ const loading = computed(() => store.loading);
       </div>
     </div>
 
+    <div class="flex gap-4" v-if="report">
+      <div class="flex-1">
+        <el-card shadow="never">
+          <div class="metric-title">聊天评分数</div>
+          <div class="metric-value">{{ report.chat_score_count }}</div>
+        </el-card>
+      </div>
+      <div class="flex-1">
+        <el-card shadow="never">
+          <div class="metric-title">平均可信度</div>
+          <div class="metric-value">{{ (report.chat_avg_trust_score * 100).toFixed(1) }}%</div>
+        </el-card>
+      </div>
+      <div class="flex-1">
+        <el-card shadow="never">
+          <div class="metric-title">聊天引用率</div>
+          <div class="metric-value warning">{{ (report.chat_citation_rate * 100).toFixed(1) }}%</div>
+        </el-card>
+      </div>
+    </div>
+
     <el-card shadow="never">
       <template #header>模型对比</template>
       <el-table :data="report?.model_metrics || []" v-loading="loading">

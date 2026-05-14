@@ -167,13 +167,23 @@ class QualityReportResponse(BaseModel):
     hallucination_trend: list[TrendPoint]
     thumbs_down_trend: list[TrendPoint]
     model_metrics: list[ModelQualityMetric]
+    chat_score_count: int = 0
+    chat_avg_trust_score: float = 0.0
+    chat_hallucination_rate: float = 0.0
+    chat_overconfidence_rate: float = 0.0
+    chat_citation_rate: float = 0.0
+    chat_trust_trend: list[TrendPoint] = []
 
 
 class QualityTraceItem(BaseModel):
+    source_type: str = "inspection"
     trace_id: str
     trace_url: Optional[str] = None
     result_id: Optional[str] = None
     task_id: Optional[str] = None
+    assistant_message_id: Optional[str] = None
+    session_id: Optional[str] = None
+    observation_id: Optional[str] = None
     verdict: Optional[str] = None
     model_key: Optional[str] = None
     total_tokens: int = 0
@@ -181,4 +191,12 @@ class QualityTraceItem(BaseModel):
     thumbs_down_count: int = 0
     last_score_value: Optional[float] = None
     last_score_at: Optional[datetime] = None
+    trust_score: Optional[float] = None
+    hallucination_risk: Optional[float] = None
+    overconfidence: Optional[float] = None
+    has_citation: Optional[bool] = None
+    score_status: Optional[str] = None
+    review_model: Optional[str] = None
+    langfuse_status: Optional[str] = None
+    langfuse_synced: Optional[bool] = None
     created_at: Optional[datetime] = None

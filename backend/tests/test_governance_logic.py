@@ -115,6 +115,23 @@ async def test_llm_gateway_returns_runtime_payload():
 
 
 @pytest.mark.asyncio
+async def test_llm_gateway_keeps_volcengine_default_unless_local_default_requested(monkeypatch):
+    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_model_id", "volc-default")
+    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_base_url", "https://volc.example/api/v3")
+    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_api_key", "volc-secret")
+    monkeypatch.setattr("agent.llm.gateway.settings.local_openai_model_id", "qwen-local")
+    monkeypatch.setattr("agent.llm.gateway.settings.local_openai_docker_base_url", "http://host.docker.internal:11434/v1")
+
+    default_runtime = await LLMGateway().select_runtime([])
+    local_runtime = await LLMGateway().select_runtime([], default_provider="local_openai")
+
+    assert default_runtime["provider"] == "volcengine"
+    assert default_runtime["model_id"] == "volc-default"
+    assert local_runtime["provider"] == "local_openai"
+    assert local_runtime["model_id"] == "qwen-local"
+
+
+@pytest.mark.asyncio
 async def test_llm_gateway_fails_over_when_first_model_hits_rpm_limit():
     RateLimiter.reset()
     gateway = LLMGateway()
@@ -247,10 +264,14 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
 
     assert traces == [
         {
+            "source_type": "inspection",
             "trace_id": "trace-1",
             "trace_url": "https://langfuse.local/trace/trace-1",
             "result_id": "result-1",
             "task_id": "task-1",
+            "assistant_message_id": None,
+            "session_id": None,
+            "observation_id": None,
             "verdict": "fail",
             "model_key": "model-a",
             "total_tokens": 150,
@@ -258,6 +279,14 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
             "thumbs_down_count": 1,
             "last_score_value": 1.0,
             "last_score_at": "2026-03-24T11:00:00",
+            "trust_score": 1.0,
+            "hallucination_risk": None,
+            "overconfidence": None,
+            "has_citation": None,
+            "score_status": None,
+            "review_model": None,
+            "langfuse_status": "synced",
+            "langfuse_synced": True,
             "created_at": datetime(2026, 3, 24, 10, 0, 0),
         }
     ]
@@ -485,6 +514,43 @@ def test_langfuse_tracer_starts_trace_and_syncs_score(monkeypatch):
     assert synced["synced"] is True
     assert fake.score_calls[0]["trace_id"] == "trace-123"
     assert fake.flushed is True
+
+
+def test_langfuse_tracer_trace_exists_uses_trace_api(monkeypatch):
+    class FakeTraceApi:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, trace_id, fields=None):
+            self.calls.append({"trace_id": trace_id, "fields": fields})
+            return {"id": trace_id}
+
+    fake_trace_api = FakeTraceApi()
+    fake = SimpleNamespace(api=SimpleNamespace(trace=fake_trace_api))
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    assert LangfuseTracer().trace_exists("trace-123") is True
+    assert fake_trace_api.calls == [{"trace_id": "trace-123", "fields": "id"}]
+
+
+def test_langfuse_tracer_trace_exists_returns_false_for_not_found(monkeypatch):
+    class NotFoundError(Exception):
+        status_code = 404
+
+    class FakeTraceApi:
+        def get(self, trace_id, fields=None):
+            raise NotFoundError("trace not found")
+
+    fake = SimpleNamespace(api=SimpleNamespace(trace=FakeTraceApi()))
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    assert LangfuseTracer().trace_exists("deleted-trace") is False
+
+
+def test_langfuse_tracer_trace_exists_returns_none_without_client(monkeypatch):
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: None)
+
+    assert LangfuseTracer().trace_exists("trace-123") is None
 
 
 @pytest.mark.asyncio

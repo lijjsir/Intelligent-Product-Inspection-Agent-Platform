@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_id: str = "deepseek-v4-flash"
+    local_openai_api_key: str = ""
+    local_openai_base_url: str = "http://127.0.0.1:11434/v1"
+    local_openai_docker_base_url: str = "http://host.docker.internal:11434/v1"
+    local_openai_model_id: str = "qwen2.5:7b-instruct"
+    trust_review_provider: str = "local_openai"
+    trust_review_model: str = "qwen2.5:7b-instruct"
+    trust_review_timeout_sec: int = 30
+    trust_scoring_enabled: bool = True
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20
@@ -57,6 +65,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "http://127.0.0.1:3000"
+    langfuse_public_host: str = "http://127.0.0.1:3000"
     langfuse_environment: str = ""
     langfuse_release: str = ""
 

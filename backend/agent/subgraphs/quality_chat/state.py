@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Awaitable, Callable, TypedDict
 
 
@@ -36,4 +37,6 @@ class QualityChatState(TypedDict, total=False):
     prompt_version: str
     workflow_version: str
     runtime_error: dict[str, Any]
+    trust_scoring_payload: dict[str, Any] | None
+    trust_scoring_task: asyncio.Task | None
     emit: Callable[[dict[str, Any]], Awaitable[None]]

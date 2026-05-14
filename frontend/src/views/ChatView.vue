@@ -81,14 +81,7 @@ function formatTime(value?: string | null) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", {
-    hour12: false,
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function roleLabel(role: ChatMessage["role"]) {
@@ -99,18 +92,12 @@ function roleLabel(role: ChatMessage["role"]) {
 
 function intentLabel(intent?: string) {
   switch (intent) {
-    case "smalltalk":
-      return "闲聊";
-    case "general_qa":
-      return "普通问答";
-    case "quality_qa":
-      return "质量问答";
-    case "task_create":
-      return "任务创建";
-    case "task_followup":
-      return "任务跟进";
-    default:
-      return "";
+    case "smalltalk": return "闲聊";
+    case "general_qa": return "普通问答";
+    case "quality_qa": return "质量问答";
+    case "task_create": return "任务创建";
+    case "task_followup": return "任务跟进";
+    default: return "";
   }
 }
 
@@ -132,26 +119,31 @@ function materializationTagType(status?: string | null) {
   return "info";
 }
 
+function trustTagType(level?: string | null) {
+  if (level === "low") return "success";
+  if (level === "medium") return "warning";
+  return "danger";
+}
+
+function trustStatusText(status?: string | null) {
+  if (status === "scored") return "已评审";
+  if (status === "rule_only") return "规则评审";
+  if (status === "reviewing") return "评审中";
+  if (status === "failed") return "评审失败";
+  return "未评审";
+}
+
 function attachmentName(url: string) {
   const last = url.split("/").pop() || url;
   return decodeURIComponent(last);
 }
 
 function buildAttachmentFromUrl(url: string): ChatAttachment {
-  return {
-    id: `task-${url}`,
-    name: attachmentName(url),
-    url,
-    size_bytes: 0,
-    kind: "image",
-  };
+  return { id: `task-${url}`, name: attachmentName(url), url, size_bytes: 0, kind: "image" };
 }
 
 function parseImageUrls(value: string) {
-  return value
-    .split(/\r?\n|,|;/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return value.split(/\r?\n|,|;/).map((item) => item.trim()).filter(Boolean);
 }
 
 function buildTaskDraft(message: ChatMessage): ChatTaskDraft | null {
@@ -170,8 +162,7 @@ function canConfirmTask(message: ChatMessage) {
 function syncTaskFormImageUrls() {
   const uploaded = taskFormAttachments.value.map((item) => item.url).filter(Boolean);
   const manual = parseImageUrls(taskForm.value.image_urls_input);
-  const merged = Array.from(new Set([...uploaded, ...manual]));
-  taskForm.value.image_urls_input = merged.join("\n");
+  taskForm.value.image_urls_input = Array.from(new Set([...uploaded, ...manual])).join("\n");
 }
 
 function fillTaskForm(message: ChatMessage) {
@@ -180,9 +171,7 @@ function fillTaskForm(message: ChatMessage) {
   const draftUrls = (draft?.image_urls || []).map((url) => buildAttachmentFromUrl(url));
   const attachmentMap = new Map<string, ChatAttachment>();
   for (const item of [...uploaded, ...draftUrls]) {
-    if (item.url) {
-      attachmentMap.set(item.url, item);
-    }
+    if (item.url) attachmentMap.set(item.url, item);
   }
   taskForm.value = {
     product_id: draft?.product_id || "",
@@ -202,12 +191,7 @@ function openTaskDialog(message: ChatMessage) {
 function resetTaskDialog() {
   taskDialogVisible.value = false;
   taskSourceMessage.value = null;
-  taskForm.value = {
-    product_id: "",
-    spec_code: "",
-    image_urls_input: "",
-    priority: 5,
-  };
+  taskForm.value = { product_id: "", spec_code: "", image_urls_input: "", priority: 5 };
   taskFormAttachments.value = [];
   taskFormRef.value?.clearValidate();
 }
@@ -217,23 +201,10 @@ function buildTaskPayload(message: ChatMessage, useDialogState: boolean): TaskCr
     const imageUrls = Array.from(
       new Set([...taskFormAttachments.value.map((item) => item.url), ...parseImageUrls(taskForm.value.image_urls_input)]),
     );
-    return {
-      product_id: taskForm.value.product_id.trim(),
-      spec_code: taskForm.value.spec_code.trim(),
-      image_urls: imageUrls,
-      priority: taskForm.value.priority,
-      metadata: { source: "chat" },
-    };
+    return { product_id: taskForm.value.product_id.trim(), spec_code: taskForm.value.spec_code.trim(), image_urls: imageUrls, priority: taskForm.value.priority, metadata: { source: "chat" } };
   }
-
   const draft = buildTaskDraft(message);
-  return {
-    product_id: String(draft?.product_id || "").trim(),
-    spec_code: String(draft?.spec_code || "").trim(),
-    image_urls: (draft?.image_urls || []).filter(Boolean),
-    priority: draft?.priority ?? 5,
-    metadata: { source: "chat" },
-  };
+  return { product_id: String(draft?.product_id || "").trim(), spec_code: String(draft?.spec_code || "").trim(), image_urls: (draft?.image_urls || []).filter(Boolean), priority: draft?.priority ?? 5, metadata: { source: "chat" } };
 }
 
 async function createTaskFromMessage(message: ChatMessage, useDialogState: boolean) {
@@ -242,41 +213,23 @@ async function createTaskFromMessage(message: ChatMessage, useDialogState: boole
     ElMessage.warning("检测任务信息还不完整，请先补全表单。");
     return;
   }
-
   taskSubmitting.value = true;
   try {
-    const createdMessage = await chatStore.submitTask({
-      source_message_id: message.id,
-      product_id: payload.product_id,
-      spec_code: payload.spec_code,
-      image_urls: payload.image_urls,
-      priority: payload.priority ?? 5,
-      metadata: payload.metadata,
-    });
-    if (createdMessage?.payload?.created_task?.id) {
-      ensureTaskStream(createdMessage.payload.created_task.id);
-    }
+    const createdMessage = await chatStore.submitTask({ source_message_id: message.id, product_id: payload.product_id, spec_code: payload.spec_code, image_urls: payload.image_urls, priority: payload.priority ?? 5, metadata: payload.metadata });
+    if (createdMessage?.payload?.created_task?.id) ensureTaskStream(createdMessage.payload.created_task.id);
     ElMessage.success("检测任务已创建并开始执行。");
-    if (useDialogState) {
-      resetTaskDialog();
-    }
+    if (useDialogState) resetTaskDialog();
   } catch (error) {
     ElMessage.error("任务创建失败，请稍后重试。");
     console.error(error);
-  } finally {
-    taskSubmitting.value = false;
-  }
+  } finally { taskSubmitting.value = false; }
 }
 
 async function submitTaskDialog() {
   if (!taskSourceMessage.value) return;
   const form = taskFormRef.value;
   if (!form) return;
-  try {
-    await form.validate();
-  } catch {
-    return;
-  }
+  try { await form.validate(); } catch { return; }
   await createTaskFromMessage(taskSourceMessage.value, true);
 }
 
@@ -299,26 +252,14 @@ const onInputKeydown = async (event: KeyboardEvent) => {
   }
 };
 
-const triggerAttachmentSelect = () => {
-  attachmentInputRef.value?.click();
-};
-
-const triggerTaskImageSelect = () => {
-  taskImageInputRef.value?.click();
-};
+const triggerAttachmentSelect = () => { attachmentInputRef.value?.click(); };
+const triggerTaskImageSelect = () => { taskImageInputRef.value?.click(); };
 
 const handleAttachmentSelected = async (event: Event) => {
   const inputElement = event.target as HTMLInputElement;
   const files = Array.from(inputElement.files || []);
   if (files.length === 0) return;
-  try {
-    await chatStore.uploadPendingAttachments(files);
-  } catch (error) {
-    ElMessage.error("附件上传失败，请稍后重试。");
-    console.error(error);
-  } finally {
-    inputElement.value = "";
-  }
+  try { await chatStore.uploadPendingAttachments(files); } catch (error) { ElMessage.error("附件上传失败，请稍后重试。"); console.error(error); } finally { inputElement.value = ""; }
 };
 
 const handleTaskImageSelected = async (event: Event) => {
@@ -328,27 +269,15 @@ const handleTaskImageSelected = async (event: Event) => {
   try {
     const { data } = await chatApi.uploadAttachments(files);
     const merged = new Map<string, ChatAttachment>();
-    for (const item of [...taskFormAttachments.value, ...data.data.items]) {
-      if (item.url) merged.set(item.url, item);
-    }
+    for (const item of [...taskFormAttachments.value, ...data.data.items]) { if (item.url) merged.set(item.url, item); }
     taskFormAttachments.value = Array.from(merged.values());
     syncTaskFormImageUrls();
-  } catch (error) {
-    ElMessage.error("任务图片上传失败，请稍后重试。");
-    console.error(error);
-  } finally {
-    inputElement.value = "";
-  }
+  } catch (error) { ElMessage.error("任务图片上传失败，请稍后重试。"); console.error(error); } finally { inputElement.value = ""; }
 };
 
-function removePendingAttachment(id: string) {
-  chatStore.removePendingAttachment(id);
-}
-
-function removeTaskAttachment(id: string) {
-  taskFormAttachments.value = taskFormAttachments.value.filter((item) => item.id !== id);
-  syncTaskFormImageUrls();
-}
+function openTraceUrl(url: string) { window.open(url, "_blank", "noopener,noreferrer"); }
+function removePendingAttachment(id: string) { chatStore.removePendingAttachment(id); }
+function removeTaskAttachment(id: string) { taskFormAttachments.value = taskFormAttachments.value.filter((item) => item.id !== id); syncTaskFormImageUrls(); }
 
 async function scrollToBottom() {
   await nextTick();
@@ -357,383 +286,208 @@ async function scrollToBottom() {
   container.scrollTop = container.scrollHeight;
 }
 
-function taskState(taskId: string) {
-  return taskStreamStates.value[taskId] || null;
-}
+function taskState(taskId: string) { return taskStreamStates.value[taskId] || null; }
 
 function disposeTaskStreams() {
-  for (const dispose of taskStreamDisposers.values()) {
-    dispose();
-  }
+  for (const dispose of taskStreamDisposers.values()) dispose();
   taskStreamDisposers.clear();
 }
 
 function ensureTaskStream(taskId: string) {
   if (!taskId || taskStreamDisposers.has(taskId)) return;
-  taskStreamStates.value = {
-    ...taskStreamStates.value,
-    [taskId]: taskStreamStates.value[taskId] || { status: "running" },
-  };
+  taskStreamStates.value = { ...taskStreamStates.value, [taskId]: taskStreamStates.value[taskId] || { status: "running" } };
   const dispose = taskStore.subscribeTaskStream(taskId, async (event) => {
-    taskStreamStates.value = {
-      ...taskStreamStates.value,
-      [taskId]: {
-        status: String(event.status || taskStreamStates.value[taskId]?.status || "running"),
-        stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage,
-        message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message,
-      },
-    };
-    if (event.status === "done" || event.status === "failed") {
-      const currentDispose = taskStreamDisposers.get(taskId);
-      currentDispose?.();
-      taskStreamDisposers.delete(taskId);
-      await chatStore.reloadCurrentSessionMessages();
-    }
+    taskStreamStates.value = { ...taskStreamStates.value, [taskId]: { status: String(event.status || taskStreamStates.value[taskId]?.status || "running"), stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage, message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message } };
+    if (event.status === "done" || event.status === "failed") { const currentDispose = taskStreamDisposers.get(taskId); currentDispose?.(); taskStreamDisposers.delete(taskId); await chatStore.reloadCurrentSessionMessages(); }
   });
   taskStreamDisposers.set(taskId, dispose);
 }
 
 function syncTaskStreamsFromMessages() {
-  const createdTaskIds = new Set(
-    chatStore.messages
-      .map((message) => message.payload?.created_task?.id)
-      .filter((value): value is string => Boolean(value)),
-  );
+  const createdTaskIds = new Set(chatStore.messages.map((message) => message.payload?.created_task?.id).filter((value): value is string => Boolean(value)));
   for (const taskId of createdTaskIds) {
     const message = chatStore.messages.find((item) => item.payload?.created_task?.id === taskId);
     const status = String(message?.payload?.created_task?.status || "");
-    if (status !== "done" && status !== "failed") {
-      ensureTaskStream(taskId);
-    }
+    if (status !== "done" && status !== "failed") ensureTaskStream(taskId);
   }
-  for (const [taskId, dispose] of taskStreamDisposers.entries()) {
-    if (!createdTaskIds.has(taskId)) {
-      dispose();
-      taskStreamDisposers.delete(taskId);
-    }
-  }
+  for (const [taskId, dispose] of taskStreamDisposers.entries()) { if (!createdTaskIds.has(taskId)) { dispose(); taskStreamDisposers.delete(taskId); } }
 }
 
 onMounted(async () => {
-  try {
-    await chatStore.initForChatPage();
-  } catch (error) {
-    ElMessage.error("聊天初始化失败，请刷新页面后重试。");
-    console.error(error);
-  }
-
-  try {
-    if (inspectionSpecStore.items.length === 0) {
-      await inspectionSpecStore.fetchAll();
-    }
-  } catch {
-    // Spec loading should not block chat usage.
-  }
-
-  try {
-    await billingStore.fetchMyUsage();
-  } catch {
-    // Token summary is informative only.
-  }
-
+  try { await chatStore.initForChatPage(); } catch (error) { ElMessage.error("聊天初始化失败，请刷新页面后重试。"); console.error(error); }
+  try { if (inspectionSpecStore.items.length === 0) await inspectionSpecStore.fetchAll(); } catch { /* non-blocking */ }
+  try { await billingStore.fetchMyUsage(); } catch { /* non-blocking */ }
   await scrollToBottom();
   syncTaskStreamsFromMessages();
 });
 
-onBeforeUnmount(() => {
-  chatStore.stopStream();
-  disposeTaskStreams();
-});
+onBeforeUnmount(() => { chatStore.stopStream(); disposeTaskStreams(); });
 
-watch(
-  () => chatStore.messages.length,
-  async () => {
-    await scrollToBottom();
-    syncTaskStreamsFromMessages();
-  },
-);
-
-watch(
-  () => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"),
-  async () => {
-    await scrollToBottom();
-    syncTaskStreamsFromMessages();
-  },
-);
-
+watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
+watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(latestTokenCountedMessageId, async (messageId) => {
   if (!messageId || messageId === syncedUsageMessageId.value) return;
   syncedUsageMessageId.value = messageId;
-  try {
-    await billingStore.fetchMyUsage();
-  } catch {
-    // Ignore refresh failures for the lightweight token badge.
-  }
+  try { await billingStore.fetchMyUsage(); } catch { /* non-blocking */ }
 });
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 min-h-[calc(100vh-136px)]">
+  <div class="chat-page">
     <!-- Toolbar -->
-    <section class="flex items-center justify-between gap-3 px-5 py-3.5 bg-white border border-zinc-200 rounded-xl shadow-surface-sm flex-wrap">
-      <div class="flex items-center gap-3 flex-wrap">
-        <span class="text-[13px] font-semibold text-zinc-700">知识库</span>
+    <div class="toolbar">
+      <div class="toolbar-left">
         <el-select
           :model-value="chatStore.selectedRagSpaceId || undefined"
-          clearable
-          filterable
-          placeholder="不使用文档"
-          class="!w-[280px]"
-          size="small"
-          @update:model-value="(value) => (value ? chatStore.selectRagSpace(value) : chatStore.clearSelectedRagSpace())"
+          clearable filterable placeholder="知识库 (可选)"
+          size="small" class="rag-select"
+          @update:model-value="(value: string) => (value ? chatStore.selectRagSpace(value) : chatStore.clearSelectedRagSpace())"
         >
-          <el-option label="不使用文档" value="" />
-          <el-option
-            v-for="space in chatStore.ragSpaces"
-            :key="space.id"
-            :label="`${space.name} (${space.file_count})`"
-            :value="space.id"
-          />
+          <el-option label="不使用知识库" value="" />
+          <el-option v-for="space in chatStore.ragSpaces" :key="space.id" :label="`${space.name} (${space.file_count})`" :value="space.id" />
         </el-select>
-        <el-tag size="small" effect="plain" type="info">已使用 Token：{{ totalTokenText }}</el-tag>
-      </div>
-
-      <div class="flex items-center gap-2 flex-wrap">
-        <el-tag v-if="chatStore.selectedRagSpace" size="small" effect="plain" type="success">
-          当前使用：{{ chatStore.selectedRagSpace.name }}
+        <span class="token-badge">Token: {{ totalTokenText }}</span>
+        <el-tag v-if="chatStore.selectedRagSpace" size="small" effect="plain" type="success" class="rag-tag">
+          {{ chatStore.selectedRagSpace.name }}
         </el-tag>
         <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
-          待发送附件：{{ chatStore.pendingAttachments.length }}
+          附件 {{ chatStore.pendingAttachments.length }}
         </el-tag>
       </div>
-    </section>
+    </div>
 
     <el-alert
       v-if="chatStore.ragSpacesError"
-      class="!rounded-xl"
-      type="warning"
-      :closable="false"
-      show-icon
-      title="知识库暂不可用"
-      :description="chatStore.ragSpacesError"
+      class="alert-bar"
+      type="warning" :closable="false" show-icon
+      title="知识库暂不可用" :description="chatStore.ragSpacesError"
     />
 
-    <!-- Chat shell -->
-    <section class="flex flex-col flex-1 min-h-0 bg-white border border-zinc-200 rounded-2xl shadow-surface-sm overflow-hidden">
-      <!-- Message list -->
-      <div ref="messageListRef" class="flex-1 min-h-0 overflow-y-auto px-6 py-5">
-        <el-empty v-if="chatStore.messages.length === 0" description="发送一条消息开始对话" />
+    <!-- Chat area -->
+    <div class="chat-shell">
+      <div ref="messageListRef" class="message-list">
+        <div v-if="chatStore.messages.length === 0" class="empty-state">
+          <div class="empty-icon">&#x1F4AC;</div>
+          <div class="empty-title">开始对话</div>
+          <div class="empty-desc">发送一条消息，智能助手将为你解答问题</div>
+        </div>
 
-        <div v-else class="flex flex-col gap-5">
+        <div v-else class="message-group">
           <article
             v-for="message in chatStore.messages"
             :key="message.id"
-            class="flex flex-col gap-2"
-            :class="message.role === 'user' ? 'items-end' : ''"
+            class="message-row"
+            :class="message.role"
           >
-            <div class="flex gap-2.5 text-[13px] text-zinc-500">
-              <span class="font-bold text-zinc-700">{{ roleLabel(message.role) }}</span>
-              <span>{{ formatTime(message.created_at) }}</span>
+            <div class="message-meta">
+              <span class="role-name">{{ roleLabel(message.role) }}</span>
+              <span class="time">{{ formatTime(message.created_at) }}</span>
             </div>
 
-            <!-- Bubble -->
-            <div
-              class="max-w-[min(920px,88%)] px-5 py-4 rounded-2xl border border-zinc-100 bg-white shadow-surface-sm"
-              :class="message.role === 'user' ? '!bg-zinc-900 !text-white !border-zinc-900' : ''"
-            >
-              <div class="whitespace-pre-wrap leading-relaxed break-words">{{ message.content }}</div>
+            <div class="bubble" :class="message.role">
+              <div class="bubble-text">
+                {{ message.content }}
+                <span v-if="message.message_type === 'streaming' && chatStore.loading" class="cursor-blink">&nbsp;</span>
+              </div>
 
               <!-- Attachments -->
-              <div v-if="message.payload?.attachment_echo?.length" class="flex flex-wrap gap-2 mt-3.5">
-                <a
-                  v-for="attachment in message.payload.attachment_echo"
-                  :key="attachment.id"
-                  :href="attachment.url"
-                  target="_blank"
-                  rel="noreferrer"
-                  class="inline-flex items-center px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700 text-[13px] hover:bg-zinc-200 transition-colors"
-                  :class="message.role === 'user' ? '!bg-zinc-800 !text-zinc-200 hover:!bg-zinc-700' : ''"
-                >
-                  {{ attachment.name }}
-                </a>
+              <div v-if="message.payload?.attachment_echo?.length" class="bubble-attachments">
+                <a v-for="att in message.payload.attachment_echo" :key="att.id" :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
               </div>
 
               <!-- Tags -->
-              <div class="flex flex-wrap gap-2 mt-3.5">
-                <el-tag v-if="message.payload?.intent" size="small" effect="plain" type="primary">
-                  {{ intentLabel(message.payload.intent) }}
+              <div v-if="message.payload?.intent || message.payload?.selected_rag_space || message.payload?.citations?.length" class="bubble-tags">
+                <el-tag v-if="message.payload?.intent" size="small" effect="plain" type="primary">{{ intentLabel(message.payload.intent) }}</el-tag>
+                <el-tag v-if="message.payload?.selected_rag_space" size="small" effect="plain" type="success">RAG: {{ message.payload.selected_rag_space.name }}</el-tag>
+                <el-tag v-if="message.payload?.citations?.length" size="small" effect="plain" type="info">引用 {{ message.payload.citations.length }}</el-tag>
+                <el-tag v-if="message.payload?.trust_scoring" size="small" effect="plain" :type="trustTagType(message.payload.trust_scoring.risk_level)">
+                  可信 {{ message.payload.trust_scoring.trust_score == null ? trustStatusText(message.payload.trust_scoring.status) : `${(message.payload.trust_scoring.trust_score * 100).toFixed(0)}%` }}
                 </el-tag>
-                <el-tag v-if="message.payload?.selected_rag_space" size="small" effect="plain" type="success">
-                  RAG：{{ message.payload.selected_rag_space.name }}
-                </el-tag>
-                <el-tag v-if="message.payload?.citations?.length" size="small" effect="plain" type="info">
-                  引用 {{ message.payload.citations.length }}
-                </el-tag>
-                <el-tag v-if="message.payload?.source_graph" size="small" effect="plain" type="warning">
-                  子图：{{ message.payload.source_graph }}
-                </el-tag>
+                <el-button
+                  v-if="message.payload?.trust_scoring?.trace_url"
+                  size="small" link type="primary"
+                  @click="openTraceUrl(message.payload.trust_scoring.trace_url)"
+                >
+                  Trace
+                </el-button>
+              </div>
+
+              <!-- Trust details -->
+              <div v-if="message.payload?.trust_scoring && message.role === 'assistant'" class="trust-detail">
+                <span>幻觉风险: {{ message.payload.trust_scoring.hallucination_risk == null ? "-" : (message.payload.trust_scoring.hallucination_risk * 100).toFixed(0) + "%" }}</span>
+                <span>过度自信: {{ message.payload.trust_scoring.overconfidence == null ? "-" : (message.payload.trust_scoring.overconfidence * 100).toFixed(0) + "%" }}</span>
+                <span>引用: {{ message.payload.trust_scoring.has_citation ? "有" : "无" }}</span>
               </div>
 
               <!-- Result card -->
-              <div v-if="message.payload?.result_card" class="mt-4 p-4 rounded-xl border border-zinc-200 bg-zinc-50/50">
-                <div class="flex justify-between gap-3 flex-wrap">
+              <div v-if="message.payload?.result_card" class="result-card">
+                <div class="rc-header">
                   <div>
-                    <div class="text-base font-bold text-zinc-900">
-                      {{ message.payload.result_card.product_name || message.payload.result_card.product_id }}
-                    </div>
-                    <div class="text-[13px] text-zinc-500 mt-0.5">
-                      {{ message.payload.result_card.product_family || "unknown" }} · {{ message.payload.result_card.spec_code }}
-                    </div>
+                    <div class="rc-title">{{ message.payload.result_card.product_name || message.payload.result_card.product_id }}</div>
+                    <div class="rc-sub">{{ message.payload.result_card.product_family || "unknown" }} &middot; {{ message.payload.result_card.spec_code }}</div>
                   </div>
-                  <div class="flex gap-2">
-                    <el-tag size="small" effect="dark" :type="verdictTagType(message.payload.result_card.verdict)">
-                      {{ message.payload.result_card.verdict.toUpperCase() }}
-                    </el-tag>
-                    <el-tag size="small" effect="plain" :type="riskTagType(message.payload.result_card.risk_level)">
-                      风险 {{ message.payload.result_card.risk_level }}
-                    </el-tag>
+                  <div class="rc-badges">
+                    <el-tag size="small" effect="dark" :type="verdictTagType(message.payload.result_card.verdict)">{{ message.payload.result_card.verdict.toUpperCase() }}</el-tag>
+                    <el-tag size="small" effect="plain" :type="riskTagType(message.payload.result_card.risk_level)">风险 {{ message.payload.result_card.risk_level }}</el-tag>
                   </div>
                 </div>
-
-                <div class="grid grid-cols-4 gap-3 mt-4 max-sm:grid-cols-2">
-                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
-                    <span class="text-xs font-bold text-zinc-500">总体得分</span>
-                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong>
-                  </div>
-                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
-                    <span class="text-xs font-bold text-zinc-500">RAG 空间</span>
-                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong>
-                  </div>
-                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
-                    <span class="text-xs font-bold text-zinc-500">引用数量</span>
-                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong>
-                  </div>
-                  <div class="p-3 rounded-xl bg-white border border-zinc-100">
-                    <span class="text-xs font-bold text-zinc-500">引用覆盖率</span>
-                    <strong class="block mt-1.5 text-zinc-900 text-[15px]">{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong>
+                <div class="rc-grid">
+                  <div class="rc-item"><span>总体得分</span><strong>{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong></div>
+                  <div class="rc-item"><span>RAG 空间</span><strong>{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong></div>
+                  <div class="rc-item"><span>引用数量</span><strong>{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong></div>
+                  <div class="rc-item"><span>引用覆盖率</span><strong>{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong></div>
+                </div>
+                <div v-if="message.payload.result_card.key_reasons?.length" class="rc-reasons">
+                  <span class="rc-label">关键原因</span>
+                  <div class="rc-tags">
+                    <el-tag v-for="reason in message.payload.result_card.key_reasons" :key="reason" size="small" effect="plain">{{ reason }}</el-tag>
                   </div>
                 </div>
-
-                <div v-if="message.payload.result_card.key_reasons?.length" class="mt-4">
-                  <div class="text-xs font-bold text-zinc-500 mb-2">关键原因</div>
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="reason in message.payload.result_card.key_reasons"
-                      :key="reason"
-                      size="small"
-                      effect="plain"
-                    >
-                      {{ reason }}
-                    </el-tag>
+                <div v-if="message.payload.result_card.failed_rules?.length" class="rc-reasons">
+                  <span class="rc-label">失败规则</span>
+                  <div class="rc-tags">
+                    <el-tag v-for="rule in message.payload.result_card.failed_rules" :key="rule" size="small" type="danger" effect="plain">{{ rule }}</el-tag>
                   </div>
                 </div>
-
-                <div v-if="message.payload.result_card.failed_rules?.length" class="mt-4">
-                  <div class="text-xs font-bold text-zinc-500 mb-2">失败规则</div>
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="rule in message.payload.result_card.failed_rules"
-                      :key="rule"
-                      size="small"
-                      type="danger"
-                      effect="plain"
-                    >
-                      {{ rule }}
-                    </el-tag>
+                <div class="rc-footer">
+                  <div>
+                    <span class="rc-label">预期对照</span>
+                    <el-tag v-if="message.payload.expectation_check" size="small" effect="plain" :type="message.payload.expectation_check.matched ? 'success' : 'danger'">{{ message.payload.expectation_check.matched ? "与样本预期一致" : "与样本预期不一致" }}</el-tag>
+                    <span v-else class="text-xs text-zinc-400">未提供样本预期</span>
+                  </div>
+                  <div class="rc-sources">
+                    <span class="rc-label">Top Sources</span>
+                    <span class="text-xs text-zinc-400">{{ message.payload.rag_summary?.top_sources?.join(" / ") || "暂无引用来源" }}</span>
                   </div>
                 </div>
-
-                <div class="flex justify-between gap-3 mt-4 flex-wrap">
-                  <div class="flex flex-col gap-2">
-                    <span class="text-xs font-bold text-zinc-500">预期对照</span>
-                    <el-tag
-                      v-if="message.payload.expectation_check"
-                      size="small"
-                      effect="plain"
-                      :type="message.payload.expectation_check.matched ? 'success' : 'danger'"
-                    >
-                      {{ message.payload.expectation_check.matched ? "系统结果与样本预期一致" : "系统结果与样本预期不一致" }}
-                    </el-tag>
-                    <span v-else class="text-[13px] text-zinc-400">未提供样本预期</span>
-                  </div>
-                  <div class="flex flex-col gap-2 max-w-[48%]">
-                    <span class="text-xs font-bold text-zinc-500">Top Sources</span>
-                    <span class="text-[13px] text-zinc-400">
-                      {{ message.payload.rag_summary?.top_sources?.join(" / ") || "暂无引用来源" }}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="flex items-center gap-2.5 flex-wrap mt-4">
-                  <el-tag
-                    v-if="message.payload.materialization_status"
-                    size="small"
-                    effect="plain"
-                    :type="materializationTagType(message.payload.materialization_status)"
-                  >
-                    {{ message.payload.materialization_status === "synced" ? "已同步到任务/分析统计" : "同步到后台统计失败" }}
-                  </el-tag>
-                  <el-button
-                    v-if="message.payload.materialized_task?.id"
-                    size="small"
-                    link
-                    type="primary"
-                    @click="router.push(`/app/tasks/${message.payload.materialized_task.id}`)"
-                  >
-                    查看同步任务
-                  </el-button>
-                  <span v-if="message.payload.materialization_error" class="text-[13px] text-zinc-400">
-                    {{ message.payload.materialization_error }}
-                  </span>
+                <div class="rc-sync">
+                  <el-tag v-if="message.payload.materialization_status" size="small" effect="plain" :type="materializationTagType(message.payload.materialization_status)">{{ message.payload.materialization_status === "synced" ? "已同步" : "同步失败" }}</el-tag>
+                  <el-button v-if="message.payload.materialized_task?.id" size="small" link type="primary" @click="router.push(`/app/tasks/${message.payload.materialized_task.id}`)">查看任务</el-button>
                 </div>
               </div>
 
               <!-- Task card -->
-              <div v-if="message.payload?.created_task" class="mt-4 p-4 rounded-xl bg-zinc-50 border border-zinc-100">
-                <div class="font-bold text-zinc-800 mb-2.5">检测任务已创建</div>
-                <div class="grid grid-cols-[96px_1fr] gap-x-3 gap-y-2 text-[13px]">
-                  <span class="text-zinc-500">任务 ID</span>
-                  <span>{{ message.payload.created_task.id }}</span>
-                  <span class="text-zinc-500">产品编号</span>
-                  <span>{{ message.payload.created_task.product_id }}</span>
-                  <span class="text-zinc-500">检测标准</span>
-                  <span>{{ message.payload.created_task.spec_code }}</span>
-                  <span class="text-zinc-500">图片数量</span>
-                  <span>{{ message.payload.created_task.image_count }}</span>
+              <div v-if="message.payload?.created_task" class="task-card">
+                <div class="task-title">检测任务已创建</div>
+                <div class="task-grid">
+                  <span>任务 ID</span><span>{{ message.payload.created_task.id }}</span>
+                  <span>产品编号</span><span>{{ message.payload.created_task.product_id }}</span>
+                  <span>检测标准</span><span>{{ message.payload.created_task.spec_code }}</span>
+                  <span>图片数量</span><span>{{ message.payload.created_task.image_count }}</span>
                 </div>
-                <div v-if="taskState(message.payload.created_task.id)" class="flex items-center gap-2.5 mt-3 text-[13px] text-zinc-600">
-                  <el-tag size="small" type="warning" effect="plain">
-                    {{ taskState(message.payload.created_task.id)?.status || "running" }}
-                  </el-tag>
-                  <span>{{ taskState(message.payload.created_task.id)?.stage || taskState(message.payload.created_task.id)?.message || "智能体执行中..." }}</span>
+                <div v-if="taskState(message.payload.created_task.id)" class="task-status">
+                  <el-tag size="small" type="warning" effect="plain">{{ taskState(message.payload.created_task.id)?.status || "running" }}</el-tag>
+                  <span>{{ taskState(message.payload.created_task.id)?.stage || taskState(message.payload.created_task.id)?.message || "执行中..." }}</span>
                 </div>
-                <div class="flex gap-2 mt-3">
-                  <el-button size="small" @click="router.push(`/app/tasks/${message.payload.created_task.id}`)">查看任务详情</el-button>
-                </div>
+                <el-button size="small" @click="router.push(`/app/tasks/${message.payload.created_task.id}`)">查看任务详情</el-button>
               </div>
 
               <!-- Task actions -->
-              <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="mt-4 flex flex-col gap-2.5">
-                <el-alert
-                  v-if="message.payload?.missing_slots?.length"
-                  type="info"
-                  :closable="false"
-                  show-icon
-                  title="任务信息还不完整，请补充后再提交。"
-                />
-                <div class="flex gap-2.5 flex-wrap">
-                  <el-button size="small" @click="openTaskDialog(message)">
-                    {{ canConfirmTask(message) ? "编辑检测信息" : "填写检测信息" }}
-                  </el-button>
-                  <el-button
-                    v-if="canConfirmTask(message)"
-                    size="small"
-                    type="primary"
-                    :loading="taskSubmitting"
-                    @click="createTaskFromMessage(message, false)"
-                  >
-                    确认并提交任务
-                  </el-button>
+              <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
+                <el-alert v-if="message.payload?.missing_slots?.length" type="info" :closable="false" show-icon title="任务信息还不完整，请补充后再提交。" />
+                <div class="task-actions-btns">
+                  <el-button size="small" @click="openTaskDialog(message)">{{ canConfirmTask(message) ? "编辑检测信息" : "填写检测信息" }}</el-button>
+                  <el-button v-if="canConfirmTask(message)" size="small" type="primary" :loading="taskSubmitting" @click="createTaskFromMessage(message, false)">确认并提交任务</el-button>
                 </div>
               </div>
             </div>
@@ -742,56 +496,22 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       </div>
 
       <!-- Composer -->
-      <div class="border-t border-zinc-100 px-5 py-4 bg-white">
-        <div v-if="chatStore.pendingAttachments.length" class="flex items-center justify-between gap-3 mb-3">
-          <span class="text-[13px] font-semibold text-zinc-700">待发送附件</span>
-          <div class="flex gap-2 flex-wrap">
-            <el-tag
-              v-for="attachment in chatStore.pendingAttachments"
-              :key="attachment.id"
-              closable
-              effect="plain"
-              @close="removePendingAttachment(attachment.id)"
-            >
-              {{ attachment.name }}
-            </el-tag>
+      <div class="composer">
+        <div v-if="chatStore.pendingAttachments.length" class="composer-attachments">
+          <el-tag v-for="att in chatStore.pendingAttachments" :key="att.id" closable effect="plain" @close="removePendingAttachment(att.id)">{{ att.name }}</el-tag>
+        </div>
+        <div v-if="streamStatusText" class="stream-status">{{ streamStatusText }}</div>
+        <div class="composer-row">
+          <el-input v-model="input" type="textarea" :rows="2" resize="none" placeholder="输入消息，Enter 发送，Shift+Enter 换行" @keydown="onInputKeydown" class="composer-input" />
+          <div class="composer-actions">
+            <el-button size="small" :icon="Paperclip" @click="triggerAttachmentSelect" />
+            <el-button size="small" :icon="CollectionTag" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined" :type="chatStore.selectedRagSpaceId ? 'warning' : 'default'" />
+            <el-button type="primary" :icon="Promotion" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage">发送</el-button>
           </div>
         </div>
-
-        <div v-if="streamStatusText" class="inline-flex items-center px-3 py-1.5 rounded-full bg-zinc-100 text-zinc-700 text-[13px] font-semibold mb-3">
-          {{ streamStatusText }}
-        </div>
-
-        <el-input
-          v-model="input"
-          type="textarea"
-          :rows="3"
-          resize="none"
-          placeholder="输入消息，Enter 发送，Shift + Enter 换行"
-          @keydown="onInputKeydown"
-        />
-
-        <div class="flex items-center justify-between gap-3 mt-3">
-          <div class="flex gap-2 flex-wrap">
-            <el-button size="small" :icon="Paperclip" @click="triggerAttachmentSelect">添加附件</el-button>
-            <el-button size="small" :icon="CollectionTag" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined">
-              {{ chatStore.selectedRagSpaceId ? "取消知识库" : "未使用知识库" }}
-            </el-button>
-          </div>
-          <el-button type="primary" :icon="Promotion" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage">
-            发送
-          </el-button>
-        </div>
-
-        <input
-          ref="attachmentInputRef"
-          class="hidden"
-          type="file"
-          multiple
-          @change="handleAttachmentSelected"
-        />
+        <input ref="attachmentInputRef" type="file" multiple hidden @change="handleAttachmentSelected" />
       </div>
-    </section>
+    </div>
 
     <!-- Task dialog -->
     <el-dialog v-model="taskDialogVisible" title="填写检测任务" width="640px" @closed="resetTaskDialog">
@@ -799,69 +519,231 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         <el-form-item label="产品编号" prop="product_id">
           <el-input v-model="taskForm.product_id" placeholder="例如：P-1001" />
         </el-form-item>
-
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select
-            v-model="taskForm.spec_code"
-            filterable
-            allow-create
-            default-first-option
-            placeholder="选择或输入检测标准"
-            class="!w-full"
-          >
-            <el-option
-              v-for="spec in specOptions"
-              :key="spec.id"
-              :label="`${spec.spec_code} · ${spec.name}`"
-              :value="spec.spec_code"
-            />
+          <el-select v-model="taskForm.spec_code" filterable allow-create default-first-option placeholder="选择或输入检测标准" class="!w-full">
+            <el-option v-for="spec in specOptions" :key="spec.id" :label="`${spec.spec_code} · ${spec.name}`" :value="spec.spec_code" />
           </el-select>
         </el-form-item>
-
         <el-form-item label="检测图片" prop="image_urls_input">
           <div class="flex items-center gap-2 mb-2">
             <el-button size="small" @click="triggerTaskImageSelect">上传图片</el-button>
             <span class="text-xs text-zinc-400">也可以直接粘贴图片 URL，每行一个。</span>
           </div>
-          <el-input
-            v-model="taskForm.image_urls_input"
-            type="textarea"
-            :rows="5"
-            resize="none"
-            placeholder="https://example.com/a.jpg"
-          />
+          <el-input v-model="taskForm.image_urls_input" type="textarea" :rows="5" resize="none" placeholder="https://example.com/a.jpg" />
           <div v-if="taskFormAttachments.length" class="flex flex-wrap gap-2 mt-3">
-            <el-tag
-              v-for="attachment in taskFormAttachments"
-              :key="attachment.id"
-              closable
-              effect="plain"
-              @close="removeTaskAttachment(attachment.id)"
-            >
-              {{ attachment.name }}
-            </el-tag>
+            <el-tag v-for="att in taskFormAttachments" :key="att.id" closable effect="plain" @close="removeTaskAttachment(att.id)">{{ att.name }}</el-tag>
           </div>
-          <input
-            ref="taskImageInputRef"
-            class="hidden"
-            type="file"
-            accept="image/*"
-            multiple
-            @change="handleTaskImageSelected"
-          />
+          <input ref="taskImageInputRef" type="file" accept="image/*" multiple hidden @change="handleTaskImageSelected" />
         </el-form-item>
-
         <el-form-item label="优先级">
           <el-slider v-model="taskForm.priority" :min="1" :max="10" show-input />
         </el-form-item>
       </el-form>
-
       <template #footer>
-        <div class="flex gap-2 justify-end">
-          <el-button @click="resetTaskDialog">取消</el-button>
-          <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">确认并提交任务</el-button>
-        </div>
+        <el-button @click="resetTaskDialog">取消</el-button>
+        <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">确认并提交任务</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+/* ── Page shell — Grid layout guarantees composer stays at bottom ── */
+.chat-page {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  height: 100%;
+  gap: 0;
+}
+
+/* ── Toolbar ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rag-select { width: 220px; }
+.token-badge { font-size: 12px; color: #6b7280; white-space: nowrap; }
+
+/* ── Alert ── */
+.alert-bar { margin: 0 12px; border-radius: 10px; }
+
+/* ── Chat shell — Grid: message list fills, composer at bottom ── */
+.chat-shell {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* ── Message list ── */
+.message-list {
+  overflow-y: auto;
+  padding: 12px 20px;
+  scroll-behavior: smooth;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  color: #9ca3af;
+}
+.empty-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-title { font-size: 18px; font-weight: 600; color: #6b7280; margin-bottom: 8px; }
+.empty-desc { font-size: 14px; }
+
+.message-group { display: flex; flex-direction: column; gap: 12px; }
+
+.message-row.user { display: flex; flex-direction: column; align-items: flex-end; }
+.message-row.assistant { display: flex; flex-direction: column; align-items: flex-start; }
+
+.message-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 4px;
+}
+.role-name { font-weight: 600; color: #374151; }
+.time { font-variant-numeric: tabular-nums; }
+
+/* ── Bubble ── */
+.bubble {
+  max-width: min(860px, 92%);
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+.bubble.user {
+  background: #1f2937;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.bubble.assistant {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-bottom-left-radius: 4px;
+}
+.bubble-text { white-space: pre-wrap; }
+
+.cursor-blink {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  background: #6b7280;
+  border-radius: 1px;
+  vertical-align: middle;
+  margin-left: 2px;
+  animation: blink 0.8s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.bubble-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.att-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  text-decoration: none;
+  border: none;
+}
+.att-link:hover { background: #d1d5db; }
+.bubble.user .att-link { background: rgba(255,255,255,0.15); color: #e5e7eb; }
+
+.bubble-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+.trust-detail {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* ── Result card ── */
+.result-card {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+.rc-header { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.rc-title { font-size: 15px; font-weight: 700; color: #111827; }
+.rc-sub { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.rc-badges { display: flex; gap: 6px; }
+.rc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+.rc-item { padding: 10px; border-radius: 8px; background: #fff; border: 1px solid #e5e7eb; }
+.rc-item span { display: block; font-size: 11px; font-weight: 600; color: #6b7280; }
+.rc-item strong { display: block; margin-top: 4px; color: #111827; font-size: 14px; }
+.rc-reasons { margin-top: 10px; }
+.rc-label { font-size: 11px; font-weight: 600; color: #6b7280; display: block; margin-bottom: 4px; }
+.rc-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.rc-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.rc-sources { max-width: 50%; }
+.rc-sync { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ── Task card ── */
+.task-card {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+.task-title { font-weight: 700; color: #1f2937; margin-bottom: 8px; }
+.task-grid { display: grid; grid-template-columns: 72px 1fr; gap: 4px 12px; font-size: 13px; color: #6b7280; }
+.task-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: #6b7280; }
+.task-actions { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.task-actions-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Composer ── */
+.composer {
+  padding: 10px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+}
+.composer-attachments { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.stream-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.composer-row { display: flex; align-items: flex-end; gap: 8px; }
+.composer-input { flex: 1; }
+.composer-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .chat-page { height: 100%; }
+  .message-list { padding: 8px 10px; }
+  .bubble { max-width: 96%; }
+  .rc-grid { grid-template-columns: repeat(2, 1fr); }
+  .composer-row { flex-wrap: wrap; }
+}
+</style>
