@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -8,13 +9,16 @@ from sqlalchemy.exc import ProgrammingError
 from agent.llm.client import LLMClient
 from app.services.rag_space_service import _is_rag_metadata_missing
 from agent.subgraphs.quality_chat.graph import (
-    _extract_named_user_from_history,
     _chat_usage_from_state,
+    _enqueue_trust_scoring,
+    _extract_named_user_from_history,
     _fallback_answer,
     _smalltalk_answer,
+    finalizer,
     knowledge,
     planner,
     quality_gate,
+    QualityChatState,
     task_extractor,
 )
 from app.core.config import settings
@@ -90,6 +94,147 @@ def test_chat_usage_from_state_extracts_llm_usage_for_general_qa():
     assert usage["model_key"] == "ep-chat"
     assert usage["total_tokens"] == 42
     assert usage["trace_id"] == "trace-llm"
+
+
+def test_chat_usage_from_state_uses_runtime_pricing_when_available():
+    usage = _chat_usage_from_state(
+        {
+            "org_id": "org-1",
+            "user_id": "user-1",
+            "workspace": "app",
+            "trace": {"trace_id": "trace-root"},
+            "reasoning": {
+                "llm_meta": {
+                    "model": "custom-chat",
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 1000,
+                        "total_tokens": 2000,
+                    },
+                    "pricing": {
+                        "input_price_per_million": 10.0,
+                        "output_price_per_million": 20.0,
+                    },
+                }
+            },
+        }
+    )
+
+    assert usage is not None
+    assert usage["cost_amount"] == 0.03
+
+
+def test_quality_chat_state_keeps_trust_scoring_runtime_fields():
+    annotations = QualityChatState.__annotations__
+
+    assert "trust_scoring_payload" in annotations
+    assert "trust_scoring_task" in annotations
+
+
+def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
+    from worker.tasks.chat_trust_scoring_task import score_chat_message
+
+    def fail_delay(_payload):
+        raise RuntimeError("redis transport unavailable")
+
+    monkeypatch.setattr(score_chat_message, "delay", fail_delay)
+
+    with caplog.at_level("WARNING", logger="agent.subgraphs.quality_chat.graph"):
+        _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
+
+    assert "trust scoring enqueue failed" in caplog.text
+    assert "msg-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_finalizer_keeps_trust_scoring_in_response_payload(monkeypatch):
+    updates: list[dict] = []
+    scores: list[dict] = []
+    events: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return None
+
+    class FakeChatMessageScoreRepository:
+        def __init__(self, _session):
+            pass
+
+        async def upsert_by_message_version(self, score):
+            scores.append(score)
+            return None
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    async def fake_persist_usage(_session, _state):
+        return None
+
+    async def fake_persist_rag(_session, _state):
+        return None
+
+    async def fake_score():
+        return {
+            "org_id": "11111111-1111-1111-1111-111111111111",
+            "session_id": "22222222-2222-2222-2222-222222222222",
+            "user_id": "33333333-3333-3333-3333-333333333333",
+            "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+            "score_version": "trust_v1",
+            "trace_id": "trace-1",
+            "observation_id": "obs-1",
+            "trace_url": "http://127.0.0.1:3000/project/p/traces/trace-1",
+            "model_key": "model-1",
+            "review_model": "deepseek-v4-flash",
+            "rule_scores": {},
+            "llm_scores": {},
+            "combined_scores": {"risk_level": "low"},
+            "trust_score": 0.9,
+            "hallucination_risk": 0.1,
+            "overconfidence": 0.2,
+            "has_citation": True,
+            "status": "scored",
+            "langfuse_synced_at": None,
+        }
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ChatMessageScoreRepository", FakeChatMessageScoreRepository)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_chat_token_usage", fake_persist_usage)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_rag_query_log", fake_persist_rag)
+
+    trust_task = asyncio.create_task(fake_score())
+    state = {
+        "org_id": "11111111-1111-1111-1111-111111111111",
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_run_id": "run-1",
+        "response_payload": {"answer": "ok", "message_type": "assistant_text"},
+        "trust_scoring_payload": {"assistant_message_id": "44444444-4444-4444-4444-444444444444"},
+        "trust_scoring_task": trust_task,
+        "emit": fake_emit,
+    }
+
+    updated = await finalizer(state)
+
+    assert updated["response_payload"]["trust_scoring"]["trust_score"] == 0.9
+    assert updates[0]["payload"]["trust_scoring"]["trace_url"].endswith("/trace-1")
+    assert scores[0]["trust_score"] == 0.9
+    assert events[-1]["payload"]["trust_scoring"]["risk_level"] == "low"
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():

@@ -17,6 +17,13 @@ services:
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
       PIAP_S3_ENDPOINT: http://minio:9000
       PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+      PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_PUBLIC_KEY: ${PIAP_LANGFUSE_PUBLIC_KEY:-}
+      PIAP_LANGFUSE_SECRET_KEY: ${PIAP_LANGFUSE_SECRET_KEY:-}
     depends_on:
       mysql:
         condition: service_healthy
@@ -47,6 +54,13 @@ services:
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
       PIAP_S3_ENDPOINT: http://minio:9000
       PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+      PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_PUBLIC_KEY: ${PIAP_LANGFUSE_PUBLIC_KEY:-}
+      PIAP_LANGFUSE_SECRET_KEY: ${PIAP_LANGFUSE_SECRET_KEY:-}
     depends_on:
       mysql:
         condition: service_healthy

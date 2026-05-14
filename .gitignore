@@ -18,11 +18,23 @@ frontend/dist/
 .vite/
 frontend/node_modules/.vite/
 
+# Local env / secrets
+.env
+*.env.local
+backend/.env
+
 # Test artifacts
 .coverage
 coverage/
 htmlcov/
 .worktrees/
+
+# Local agent/tooling state
+.agents/
+.trae/
+.claude/
+.superpowers/
+skills-lock.json
 
 # OS / editor
 .DS_Store

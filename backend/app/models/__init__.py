@@ -30,7 +30,7 @@ from app.models.agent_ops import (
     PromptVersion,
     RagQueryLog,
 )
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
 from app.models.rag_space import RagSpace, RagSpaceFile
 from app.models.memory import (
     MemoryDependencyEdge,
@@ -74,6 +74,7 @@ __all__ = [
     "RagQueryLog",
     "ChatSession",
     "ChatMessage",
+    "ChatMessageScore",
     "RagSpace",
     "RagSpaceFile",
     "MemoryItem",

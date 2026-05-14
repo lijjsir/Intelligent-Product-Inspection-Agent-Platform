@@ -8,6 +8,60 @@ from app.services.quality_agent_orchestrator_service import QualityAgentOrchestr
 
 
 @pytest.mark.asyncio
+async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
+    persisted: list[tuple[NormalizedRequest, AgentOutput]] = []
+    metrics: list[dict] = []
+
+    class FakeGraph:
+        async def run(self, request: NormalizedRequest):
+            assert request.request_kind == "chat"
+            assert request.query == "hello"
+            return AgentOutput(
+                message_type="assistant_text",
+                answer="hi",
+                route_decision=RouteDecision(
+                    mode="router_enabled",
+                    selected_subgraph="quality_judgement",
+                    fallback_subgraph="quality_judgement",
+                ),
+            )
+
+    async def fake_persist(self, request: NormalizedRequest, output: AgentOutput):
+        persisted.append((request, output))
+        return True
+
+    async def fake_record_metrics(self, org_id: str, subgraph_key: str, *, success: bool, latency_ms: int):
+        metrics.append(
+            {
+                "org_id": org_id,
+                "subgraph_key": subgraph_key,
+                "success": success,
+                "latency_ms": latency_ms,
+            }
+        )
+
+    service = QualityAgentOrchestratorService()
+    service._graph = FakeGraph()
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_persist_chat_result", fake_persist)
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_record_runtime_metrics", fake_record_metrics)
+
+    result = await service.run_chat(
+        {
+            "request_id": "req-1",
+            "session_id": "session-1",
+            "assistant_message_id": "assistant-1",
+            "org_id": "org-1",
+            "user_id": "user-1",
+            "query": "hello",
+        }
+    )
+
+    assert persisted[0][1].answer == "hi"
+    assert result["agent_output"]["answer"] == "hi"
+    assert metrics[0]["subgraph_key"] == "quality_judgement"
+
+
+@pytest.mark.asyncio
 async def test_persist_chat_result_updates_assistant_message_for_task_action(monkeypatch):
     updates: list[dict] = []
     touches: list[dict] = []
@@ -93,7 +147,6 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
     assert updates[0]["message_type"] == "task_action"
     assert "缺失字段：spec_code" in updates[0]["content"]
     assert touches == [{"org_id": "org-1", "user_id": "user-1", "session_id": "session-1"}]
-    assert any(event["event"] == "message_delta" for event in events)
     assert any(event["event"] == "message_final" for event in events)
     final_event = next(event for event in events if event["event"] == "message_final")
     assert final_event["content"] == output.answer

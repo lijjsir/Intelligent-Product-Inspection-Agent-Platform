@@ -7,6 +7,9 @@ class ModelPricing:
         "ep-20260310154131-fp54f": {"input_per_million": 2.0, "output_per_million": 8.0},
         "ep-20260311135919-gktlx": {"input_per_million": 0.7, "output_per_million": 0.0},
         "doubao-embedding-vision-251215": {"input_per_million": 0.7, "output_per_million": 0.0},
+        # USD pricing from DeepSeek official API pricing. Keep CNY-denominated
+        # custom provider prices in model_configs when available.
+        "deepseek-v4-flash": {"input_per_million": 0.14, "output_per_million": 0.28},
     }
 
     @classmethod

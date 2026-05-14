@@ -98,6 +98,7 @@ class ChatAssistantPayload(BaseModel):
     answer: str
     citations: list[dict[str, Any]] = []
     quality: dict[str, Any] = {}
+    trust_scoring: dict[str, Any] | None = None
     result_card: dict[str, Any] | None = None
     expectation_check: dict[str, Any] | None = None
     rag_summary: dict[str, Any] | None = None

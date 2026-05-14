@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_ops import AgentDefinition, IntentRoute
@@ -137,6 +137,32 @@ class ChatMessageRepository:
         )
         return list(result.scalars().all())
 
+    async def list_assistant_for_org(
+        self,
+        org_id: str | None,
+        *,
+        start_date=None,
+        end_date=None,
+        limit: int = 100,
+    ) -> list[ChatMessage]:
+        stmt = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.role == "assistant",
+                ChatMessage.deleted_at.is_(None),
+            )
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit)
+        )
+        if org_id:
+            stmt = stmt.where(ChatMessage.org_id == org_id)
+        if start_date:
+            stmt = stmt.where(ChatMessage.created_at >= start_date)
+        if end_date:
+            stmt = stmt.where(ChatMessage.created_at <= end_date)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def update_assistant_message(
         self,
         *,
@@ -164,13 +190,20 @@ class ChatOpsRepository:
 
     async def ensure_quality_chat_binding(self) -> None:
         agent_result = await self._session.execute(
-            select(AgentDefinition).where(
+            select(AgentDefinition)
+            .where(
                 AgentDefinition.org_id == self._org_id,
                 AgentDefinition.workflow_binding == "quality_chat_v1",
                 AgentDefinition.deleted_at.is_(None),
             )
+            .order_by(
+                case((AgentDefinition.subgraph_key == "quality_chat", 0), else_=1),
+                AgentDefinition.created_at.asc(),
+                AgentDefinition.id.asc(),
+            )
+            .limit(1)
         )
-        agent = agent_result.scalar_one_or_none()
+        agent = agent_result.scalars().first()
         if agent is None:
             agent = AgentDefinition(
                 org_id=self._org_id,
@@ -191,13 +224,16 @@ class ChatOpsRepository:
             agent.graph_version = str(agent.graph_version or "v1")
 
         route_result = await self._session.execute(
-            select(IntentRoute).where(
+            select(IntentRoute)
+            .where(
                 IntentRoute.org_id == self._org_id,
                 IntentRoute.intent_name == "quality_chat",
                 IntentRoute.deleted_at.is_(None),
             )
+            .order_by(IntentRoute.priority.desc(), IntentRoute.created_at.asc(), IntentRoute.id.asc())
+            .limit(1)
         )
-        route = route_result.scalar_one_or_none()
+        route = route_result.scalars().first()
         if route is None:
             route = IntentRoute(
                 org_id=self._org_id,

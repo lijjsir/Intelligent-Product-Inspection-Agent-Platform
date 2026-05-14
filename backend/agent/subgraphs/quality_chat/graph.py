@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from time import perf_counter
 from typing import Any
@@ -7,20 +9,31 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from agent.llm.client import LLMClient
+from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from agent.rag.retriever import Retriever
 from agent.subgraphs.quality_chat.state import QualityChatState
 from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
+from app.core.config import settings
 from app.repositories.chat_repo import ChatMessageRepository
 from app.repositories.agent_ops_repo import RagAnalysisRepository
+from app.repositories.chat_score_repo import ChatMessageScoreRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.chat_trust_scoring_service import (
+    ChatTrustScoringService,
+    build_pending_trust_score,
+    trust_payload_from_score,
+)
 from app.services.dspy_runtime_service import build_runtime_prompt_section, resolve_dspy_runtime_profile
+from app.services.model_config_service import ModelConfigService
 from app.services.task_execution_service import launch_task_execution
 from app.services.task_service import TaskService
 from infra.database.session import get_session
+
+logger = logging.getLogger(__name__)
 
 SMALLTALK_PATTERNS = [re.compile(p, re.I) for p in [
     r"^\s*(你是谁|介绍一下自己|你是做什么的)\s*[？?]?\s*$",
@@ -441,103 +454,149 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
 
 
 async def reasoning(state: QualityChatState) -> QualityChatState:
+    _t_reasoning = perf_counter()
     intent = state.get("intent")
-    if intent == "smalltalk":
-        state["reasoning"] = {
-            "answer": _smalltalk_answer(str(state.get("query") or ""), list(state.get("history") or [])),
-            "summary": "普通对话",
-            "citations": [],
-        }
-        state["action_state"] = "answered"
-        return state
-    if intent == "general_qa":
-        llm = LLMClient(trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-        history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
-        prompt = "你是平台内的通用聊天助手。对普通问答直接自然回答；若信息不足就简洁追问。只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        prompt_section = _dspy_prompt_section(
-            state,
-            [
-                "quality_judgement.planner",
-                "quality_judgement.reasoning",
-                "quality_judgement.response_writer",
-            ],
-        )
-        if prompt_section:
-            prompt = f"{prompt}\n\n{prompt_section}"
-        history_text = "\n".join(history_lines) if history_lines else "无"
-        user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}"
-        try:
-            response = await llm.chat([{"role": "system", "content": prompt}, {"role": "user", "content": user_message}], temperature=0.4, observation_name="quality_chat.general_reasoning", observation_metadata={"workflow_version": "quality_chat_v1"})
-            answer = str(response.get("answer") or "").strip()
-            summary = str(response.get("summary") or "").strip()
-            if not answer:
-                fallback = _general_answer_fallback(str(state["query"]))
-                answer, summary = fallback["answer"], fallback["summary"]
-            state["reasoning"] = {"answer": answer, "summary": summary or "普通问答", "citations": [], "llm_meta": dict(response.get("__meta__") or {})}
-        except Exception as exc:
-            state["reasoning"] = {**_general_answer_fallback(str(state["query"])), "llm_error": str(exc), "llm_meta": {}}
-        state["action_state"] = "answered"
-        return state
-    if intent in {"task_create", "task_followup"}:
-        action_state = str(state.get("action_state") or "answered")
-        draft = dict(state.get("task_draft") or {})
-        missing_slots = list(state.get("missing_slots") or [])
-        if action_state == "task_cancelled":
-            state["reasoning"] = {"answer": "好的，这次不创建检测任务了。之后如果你想继续创建，可以直接把产品编号、检测标准和图片发给我。", "summary": "任务创建已取消", "citations": []}
-            return state
-        if action_state == "awaiting_task_details":
-            state["reasoning"] = {
-                "answer": "我已经识别到你想发起检测任务，但还缺少必要信息。\n\n"
-                f"当前已识别信息：\n{_format_task_draft(draft)}\n\n"
-                f"还需要补充：{'、'.join(_slot_labels(missing_slots))}。\n"
-                "你可以继续发送消息补充，也可以点击“填写检测信息”直接填写表单。",
-                "summary": "等待补充任务信息",
-                "citations": [],
-            }
-            return state
-        if action_state == "awaiting_task_confirmation":
-            state["reasoning"] = {
-                "answer": "我已经整理出一份检测任务草稿，请确认是否创建并执行：\n\n"
-                f"{_format_task_draft(draft)}\n\n"
-                "如果没有问题，可以直接回复“确认”，也可以点击“确认并提交任务”。",
-                "summary": "等待用户确认任务创建",
-                "citations": [],
-            }
-            return state
-        if action_state == "task_create_requested":
-            state["reasoning"] = {"answer": "任务信息已确认，我正在为你创建并启动检测任务。", "summary": "准备创建并启动任务", "citations": []}
-            return state
+    query = str(state.get("query") or "")
+    history = list(state.get("history") or [])
     docs = list(state.get("retrieved_chunks") or [])
     citations = list(state.get("citations") or [])
-    llm = LLMClient(trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-    doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
-    history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
-    prompt = "你是质量检测聊天智能体。请严格基于检索证据回答，不足时明确说明不确定性。只返回 JSON：{\"answer\": string, \"summary\": string}。"
+    action_state = str(state.get("action_state") or "answered")
+    draft = dict(state.get("task_draft") or {})
+    missing_slots = list(state.get("missing_slots") or [])
+
+    history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in history[-6:] if item.get("content")]
+    history_text = "\n".join(history_lines) if history_lines else "无"
+
+    # ── Build system prompt per intent ──
+    if intent == "smalltalk":
+        prompt = (
+            "你是平台内的智能助手。请友好、自然地回复用户的闲聊消息，可以适当展现个性。"
+            "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+        )
+        user_message = f"用户消息:\n{query}\n\n历史对话:\n{history_text}"
+        temperature = 0.7
+
+    elif intent in {"task_create", "task_followup"}:
+        task_context = (
+            f"当前任务草稿：\n{_format_task_draft(draft)}\n"
+            f"缺失字段：{'、'.join(_slot_labels(missing_slots)) if missing_slots else '无'}\n"
+            f"当前状态：{action_state}"
+        )
+        if action_state == "task_cancelled":
+            prompt = (
+                "你是平台内的质量检测助手。用户已取消任务创建。请友好地告知用户取消成功，并说明以后可继续发起。"
+                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+            )
+        elif action_state == "awaiting_task_details":
+            label_hints = "、".join(_slot_labels(missing_slots)) if missing_slots else "无"
+            prompt = (
+                f"你是平台内的质量检测助手。用户想创建检测任务但信息不完整，还需要补充：{label_hints}。\n"
+                f"{task_context}\n"
+                "请自然地告知用户当前进展，列出还需补充的信息，引导用户继续提供，并提示可以点击“填写检测信息”按钮直接填表。"
+                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+            )
+        elif action_state == "awaiting_task_confirmation":
+            prompt = (
+                f"你是平台内的质量检测助手。任务信息已完整，等待用户确认。\n{task_context}\n"
+                "请清晰展示任务草稿，引导用户回复“确认”或点击“确认并提交任务”按钮来提交。"
+                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+            )
+        elif action_state == "task_create_requested":
+            prompt = (
+                "你是平台内的质量检测助手。任务正在创建中，请告知用户任务已接收，正在启动执行。"
+                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+            )
+        else:
+            prompt = (
+                f"你是平台内的质量检测助手。用户提到了检测任务相关的内容。\n{task_context}\n"
+                "请自然地回应用户，判断用户意图并引导用户明确任务需求。"
+                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+            )
+        user_message = f"用户消息:\n{query}\n\n历史对话:\n{history_text}"
+        temperature = 0.3
+
+    elif intent == "quality_qa":
+        doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
+        doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
+        prompt = "你是质量检测聊天智能体。请严格基于检索证据回答，不足时明确说明不确定性。只返回 JSON：{\"answer\": string, \"summary\": string}。"
+        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
+        temperature = 0.2
+
+    else:  # general_qa
+        prompt = "你是平台内的通用聊天助手。对普通问答直接自然回答；若信息不足就简洁追问。只返回 JSON：{\"answer\": string, \"summary\": string}。"
+        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}"
+        temperature = 0.4
+
+    # ── Attach DSPy runtime prompt section if available ──
     prompt_section = _dspy_prompt_section(
         state,
         [
-            "quality_judgement.knowledge",
+            "quality_judgement.planner",
             "quality_judgement.reasoning",
             "quality_judgement.response_writer",
         ],
     )
     if prompt_section:
         prompt = f"{prompt}\n\n{prompt_section}"
-    history_text = "\n".join(history_lines) if history_lines else "无"
-    doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
-    user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
+
+    # ── Unified LLM call ──
+    _t_pre_llm = perf_counter()
+    runtime_models: list[dict[str, Any]] = []
+    runtime = None
     try:
-        response = await llm.chat([{"role": "system", "content": prompt}, {"role": "user", "content": user_message}], temperature=0.2, observation_name="quality_chat.reasoning", observation_metadata={"workflow_version": "quality_chat_v1"})
+        async with get_session() as session:
+            runtime_models = await ModelConfigService(session, str(state["org_id"])).list_runtime_models()
+        runtime = await LLMGateway().select_runtime(runtime_models)
+    except Exception:
+        runtime = None
+    _t_runtime = perf_counter()
+    llm = LLMClient(
+        api_key=None if not runtime else runtime.get("api_key"),
+        base_url=None if not runtime else runtime.get("base_url"),
+        model_id=None if not runtime else runtime.get("model_id"),
+        trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None,
+        task_id=str(state["session_id"]),
+        org_id=str(state["org_id"]),
+        provider=None if not runtime else str(runtime.get("provider") or ""),
+        input_price_per_million=None if not runtime else runtime.get("input_price_per_million"),
+        output_price_per_million=None if not runtime else runtime.get("output_price_per_million"),
+    )
+    obs_name = f"quality_chat.{intent}" if intent else "quality_chat.reasoning"
+    try:
+        response = await llm.chat(
+            [{"role": "system", "content": prompt}, {"role": "user", "content": user_message}],
+            temperature=temperature,
+            observation_name=obs_name,
+            observation_metadata={"workflow_version": "quality_chat_v1", "intent": intent},
+        )
         answer = str(response.get("answer") or "").strip()
         summary = str(response.get("summary") or "").strip()
         if not answer:
-            fallback = _fallback_answer(str(state["query"]), docs, citations)
+            if intent == "quality_qa":
+                fallback = _fallback_answer(query, docs, citations)
+            else:
+                fallback = _general_answer_fallback(query)
             answer, summary = fallback["answer"], fallback["summary"]
-        state["reasoning"] = {"answer": answer, "summary": summary or "质量检测问答", "citations": citations, "llm_meta": dict(response.get("__meta__") or {})}
+        state["reasoning"] = {
+            "answer": answer,
+            "summary": summary or "对话回复",
+            "citations": citations,
+            "llm_meta": dict(response.get("__meta__") or {}),
+        }
     except Exception as exc:
-        state["reasoning"] = {**_fallback_answer(str(state["query"]), docs, citations), "llm_error": str(exc), "llm_meta": {}}
+        if intent == "quality_qa":
+            fallback = _fallback_answer(query, docs, citations)
+        else:
+            fallback = _general_answer_fallback(query)
+        state["reasoning"] = {**fallback, "llm_error": str(exc), "llm_meta": {}}
     state["action_state"] = "answered"
+    _t_end = perf_counter()
+    logger.info(
+        "reasoning intent=%s answer_len=%d runtime_ms=%d llm_ms=%d total_ms=%d",
+        intent, len(answer), round((_t_runtime - _t_pre_llm) * 1000), round((_t_end - _t_runtime) * 1000), round((_t_end - _t_reasoning) * 1000),
+    )
     return state
+
 
 
 async def quality_gate(state: QualityChatState) -> QualityChatState:
@@ -660,6 +719,7 @@ def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
     if not usage:
         return None
     model_key = str(llm_meta.get("model") or "").strip() or "unknown"
+    pricing = dict(llm_meta.get("pricing") or {})
     prompt_tokens = int(usage.get("prompt_tokens") or 0)
     completion_tokens = int(usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
@@ -676,7 +736,13 @@ def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
             or ""
         ).strip()
         or None,
-        "cost_amount": ModelPricing.estimate_cost(model_key, prompt_tokens, completion_tokens),
+        "cost_amount": ModelPricing.estimate_cost(
+            model_key,
+            prompt_tokens,
+            completion_tokens,
+            input_price_per_million=pricing.get("input_price_per_million"),
+            output_price_per_million=pricing.get("output_price_per_million"),
+        ),
     }
 
 
@@ -745,10 +811,12 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
 
 
 async def response_writer(state: QualityChatState) -> QualityChatState:
+    _t0 = perf_counter()
     answer = str((state.get("reasoning") or {}).get("answer") or "")
     emit = state["emit"]
-    for start in range(0, len(answer), 48):
-        await emit({"event": "message_delta", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "delta": answer[start : start + 48]})
+    for start in range(0, len(answer), 3):
+        await emit({"event": "message_delta", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "delta": answer[start : start + 3]})
+        await asyncio.sleep(0.025)
     selected_rag = _selected_rag_space(state.get("ext") or {})
     attachments = [item for item in list((state.get("ext") or {}).get("attachments") or []) if isinstance(item, dict) and item.get("url")]
     task_draft = dict(state.get("task_draft") or {})
@@ -777,20 +845,97 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "dspy_runtime": _dspy_runtime_meta(state),
         "message_type": _message_type_for_state(state),
     }
+    state["trust_scoring_payload"] = _build_trust_scoring_request(state, state["response_payload"])
+    state["trust_scoring_task"] = _start_trust_scoring_task(state["trust_scoring_payload"])
     if state.get("quality"):
         await emit({"event": "quality_signal", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "quality": state.get("quality") or {}})
+    logger.info(
+        "response_writer intent=%s answer_len=%d stream_ms=%d",
+        state.get("intent"), len(answer), round((perf_counter() - _t0) * 1000),
+    )
     return state
 
 
+def _build_trust_scoring_request(state: QualityChatState, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not settings.trust_scoring_enabled or not str(payload.get("answer") or "").strip():
+        return None
+    llm_meta = dict((state.get("reasoning") or {}).get("llm_meta") or {})
+    langfuse_meta = dict(llm_meta.get("langfuse") or {})
+    return {
+        "org_id": str(state["org_id"]),
+        "session_id": str(state["session_id"]),
+        "user_id": str(state["user_id"]),
+        "assistant_message_id": str(state["assistant_message_id"]),
+        "input_text": str(state.get("query") or ""),
+        "output_text": str(payload.get("answer") or ""),
+        "citations": list(payload.get("citations") or []),
+        "trace_id": str(langfuse_meta.get("trace_id") or (state.get("trace") or {}).get("trace_id") or "") or None,
+        "observation_id": str(langfuse_meta.get("observation_id") or "") or None,
+        "model_key": str(llm_meta.get("model") or "") or None,
+    }
+
+
+def _start_trust_scoring_task(payload: dict[str, Any] | None) -> asyncio.Task | None:
+    if not payload:
+        return None
+    return asyncio.create_task(ChatTrustScoringService().score_answer(**payload))
+
+
+def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
+    if not payload:
+        return
+    try:
+        from worker.tasks.chat_trust_scoring_task import score_chat_message
+
+        score_chat_message.delay(payload)
+    except Exception as exc:
+        logger.warning(
+            "trust scoring enqueue failed assistant_message_id=%s trace_id=%s: %s",
+            payload.get("assistant_message_id"),
+            payload.get("trace_id"),
+            exc,
+            exc_info=True,
+        )
+        return
+
+
 async def finalizer(state: QualityChatState) -> QualityChatState:
+    _t0 = perf_counter()
     payload = state.get("response_payload") or {}
+    trust_score: dict[str, Any] | None = None
+    trust_request = state.get("trust_scoring_payload")
+    trust_task = state.get("trust_scoring_task")
+    if trust_request and trust_task:
+        try:
+            trust_score = await asyncio.wait_for(trust_task, timeout=0.75)
+            payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
+        except asyncio.TimeoutError:
+            trust_task.cancel()
+            trust_score = build_pending_trust_score(**trust_request)
+            payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
+            _enqueue_trust_scoring(trust_request)
+        except Exception as exc:
+            payload = {
+                **payload,
+                "trust_scoring": {
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            }
+    state["response_payload"] = payload
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         await repo.update_assistant_message(org_id=str(state["org_id"]), message_id=str(state["assistant_message_id"]), content=str(payload.get("answer") or ""), message_type=str(payload.get("message_type") or "quality_answer"), payload=payload)
+        if trust_score:
+            await ChatMessageScoreRepository(session).upsert_by_message_version(trust_score)
         await _persist_chat_token_usage(session, state)
         await _persist_rag_query_log(session, state)
         await session.commit()
     await state["emit"]({"event": "message_final", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "content": str(payload.get("answer") or ""), "payload": payload, "quality": state.get("quality") or {}})
+    logger.info(
+        "finalizer intent=%s trust_status=%s db_ms=%d total_ms=%d",
+        state.get("intent"), (trust_score or {}).get("status", "none"), 0, round((perf_counter() - _t0) * 1000),
+    )
     return state
 
 
@@ -824,6 +969,12 @@ class QualityChatGraph:
         self._graph = graph.compile()
 
     async def run(self, state: QualityChatState) -> QualityChatState:
+        _t_graph = perf_counter()
         tracer = LangfuseTracer()
         state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", input={"query": state["query"], "session_id": state["session_id"]})
-        return await self._graph.ainvoke(state)
+        result = await self._graph.ainvoke(state)
+        logger.info(
+            "graph_total intent=%s query_len=%d total_ms=%d",
+            result.get("intent"), len(str(result.get("query") or "")), round((perf_counter() - _t_graph) * 1000),
+        )
+        return result

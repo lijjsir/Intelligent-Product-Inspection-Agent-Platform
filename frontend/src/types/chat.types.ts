@@ -81,6 +81,17 @@ export interface ChatMessagePayload {
     passed?: boolean;
     hallucination_flags?: string[];
   };
+  trust_scoring?: {
+    status?: "scored" | "rule_only" | "reviewing" | "failed" | string;
+    trust_score?: number | null;
+    risk_level?: string | null;
+    hallucination_risk?: number | null;
+    overconfidence?: number | null;
+    has_citation?: boolean | null;
+    trace_url?: string | null;
+    review_model?: string | null;
+    error?: string | null;
+  } | null;
   result_card?: ChatResultCard | null;
   expectation_check?: ChatExpectationCheck | null;
   rag_summary?: ChatRagSummary | null;

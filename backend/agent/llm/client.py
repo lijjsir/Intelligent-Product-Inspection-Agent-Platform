@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from typing import Any
 
@@ -12,6 +13,7 @@ except Exception:  # pragma: no cover - optional dependency at runtime
     Ark = None
 
 from agent.llm.langfuse_tracer import LangfuseTracer
+from agent.llm.pricing import ModelPricing
 from app.core.config import settings
 
 
@@ -27,9 +29,16 @@ class LLMClient:
         task_id: str | None = None,
         org_id: str | None = None,
         provider: str | None = None,
+        input_price_per_million: float | None = None,
+        output_price_per_million: float | None = None,
     ) -> None:
         self._provider = provider or "volcengine"
-        if self._provider == "deepseek":
+        if self._provider == "local_openai":
+            self._api_key = api_key if api_key is not None else settings.local_openai_api_key
+            self._base_url = (base_url or self._default_local_openai_base_url()).rstrip("/")
+            self._model_id = model_id or settings.local_openai_model_id
+            self._embed_model = embed_model or settings.volcengine_embed_model
+        elif self._provider == "deepseek":
             self._api_key = api_key or settings.deepseek_api_key
             self._base_url = (base_url or settings.deepseek_base_url).rstrip("/")
             self._model_id = model_id or settings.deepseek_model_id
@@ -42,6 +51,8 @@ class LLMClient:
         self._task_id = None if task_id is None else str(task_id)
         self._org_id = None if org_id is None else str(org_id)
         self._request_attempts = 3
+        self._input_price_per_million = input_price_per_million
+        self._output_price_per_million = output_price_per_million
         self._tracer = LangfuseTracer()
         self._trace_id = trace_id or (self._tracer.create_trace_id() if self._tracer.enabled else None)
         self._ark_client = Ark(api_key=self._api_key) if Ark and self._api_key else None
@@ -272,10 +283,11 @@ class LLMClient:
         observation_type: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if not self._api_key:
-            raise RuntimeError("VOLCENGINE_API_KEY is not configured")
+        if not self._api_key and self._provider != "local_openai":
+            env_name = "DEEPSEEK_API_KEY" if self._provider == "deepseek" else "VOLCENGINE_API_KEY"
+            raise RuntimeError(f"{env_name} is not configured")
 
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         model_name = str(payload.get("model") or self._model_id)
         model_parameters = {
             key: value
@@ -345,10 +357,13 @@ class LLMClient:
 
                     data = resp.json()
                     usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+                    cost_details = self._build_cost_details(model_name, usage_metadata)
                     observation_id = self._tracer.current_observation_id()
                     self._safe_update_observation(
                         observation,
                         output=data,
+                        usage_details=usage_metadata,
+                        cost_details=cost_details,
                         metadata={
                             "status_code": resp.status_code,
                             "response_id": data.get("id") if isinstance(data, dict) else None,
@@ -368,6 +383,9 @@ class LLMClient:
             "model": data.get("model"),
             "usage": data.get("usage"),
         }
+        pricing_meta = self._build_pricing_meta()
+        if pricing_meta:
+            meta["pricing"] = pricing_meta
         langfuse_meta = self._build_langfuse_meta(observation_id=observation_id)
         if langfuse_meta:
             meta["langfuse"] = langfuse_meta
@@ -399,6 +417,11 @@ class LLMClient:
             metadata.update({key: value for key, value in extra.items() if value is not None})
         return metadata
 
+    @staticmethod
+    def _default_local_openai_base_url() -> str:
+        running_in_container = os.path.exists("/.dockerenv")
+        return settings.local_openai_docker_base_url if running_in_container else settings.local_openai_base_url
+
     def _build_langfuse_meta(self, *, observation_id: str | None = None) -> dict[str, Any]:
         meta: dict[str, Any] = {}
         if self._trace_id:
@@ -409,6 +432,28 @@ class LLMClient:
         if observation_id:
             meta["observation_id"] = observation_id
         return meta
+
+    def _build_pricing_meta(self) -> dict[str, float]:
+        meta: dict[str, float] = {}
+        if self._input_price_per_million is not None:
+            meta["input_price_per_million"] = float(self._input_price_per_million)
+        if self._output_price_per_million is not None:
+            meta["output_price_per_million"] = float(self._output_price_per_million)
+        return meta
+
+    def _build_cost_details(self, model_key: str, usage: dict[str, int] | None) -> dict[str, float] | None:
+        if not usage:
+            return None
+        total_cost = ModelPricing.estimate_cost(
+            model_key,
+            int(usage.get("prompt_tokens") or 0),
+            int(usage.get("completion_tokens") or 0),
+            input_price_per_million=self._input_price_per_million,
+            output_price_per_million=self._output_price_per_million,
+        )
+        if total_cost <= 0:
+            return None
+        return {"total_cost": float(total_cost)}
 
     @staticmethod
     def _normalize_usage(raw_usage: Any) -> dict[str, int] | None:

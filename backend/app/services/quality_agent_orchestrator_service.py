@@ -5,8 +5,8 @@ from time import perf_counter
 from typing import Any
 
 from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
-from agent.graphs.memory_manager import MemoryManagerGraph
 from agent.llm.pricing import ModelPricing
+from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
 from app.models.task import InspectionTask
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
-        self._graph = MemoryManagerGraph()
+        self._graph = QualityJudgementSubgraph()
 
     async def run_chat(self, payload: dict) -> dict:
         started_at = perf_counter()
@@ -64,7 +64,12 @@ class QualityAgentOrchestratorService:
         )
         success = True
         result = await self._graph.run(request)
-        agent_output = AgentOutput.model_validate(result["agent_output"])
+        if isinstance(result, AgentOutput):
+            agent_output = result
+            result_payload = {"agent_output": agent_output.model_dump()}
+        else:
+            result_payload = dict(result)
+            agent_output = AgentOutput.model_validate(result_payload["agent_output"])
         route_decision = agent_output.route_decision
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
@@ -73,7 +78,7 @@ class QualityAgentOrchestratorService:
             success=success,
             latency_ms=int(round((perf_counter() - started_at) * 1000)),
         )
-        return result
+        return result_payload
 
     async def _persist_chat_result(
         self,
@@ -117,7 +122,7 @@ class QualityAgentOrchestratorService:
             materialization_error=materialization_error,
         )
 
-        is_legacy_stream = False  # Unified quality_judgement handles all paths
+        is_legacy_stream = True  # Graph handler (response_writer) already streams deltas
         if callable(emit) and not is_legacy_stream:
             answer = str(output.answer or "")
             for start in range(0, len(answer), 48):
@@ -471,6 +476,8 @@ class QualityAgentOrchestratorService:
             result_repo = ResultRepository(session)
             stability_repo = StabilityRepository(session)
             alert_repo = AlertRepository(session)
+            token_repo = TokenLedgerRepository(session)
+            user_summary_repo = UserTokenUsageSummaryRepository(session)
 
             task = await task_repo.get_by_chat_materialization_key(
                 request.org_id,

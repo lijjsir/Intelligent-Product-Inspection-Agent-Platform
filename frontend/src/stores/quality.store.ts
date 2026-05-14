@@ -8,7 +8,7 @@ export const useQualityStore = defineStore("quality", () => {
   const traces = ref<QualityTraceItem[]>([]);
   const loading = ref(false);
 
-  async function fetchReport(params?: { start_date?: string; end_date?: string }) {
+  async function fetchReport(params?: { start_date?: string; end_date?: string; source?: "all" | "inspection" | "chat" }) {
     loading.value = true;
     try {
       const { data } = await qualityApi.getReport(params);
@@ -18,10 +18,10 @@ export const useQualityStore = defineStore("quality", () => {
     }
   }
 
-  async function fetchTraces() {
+  async function fetchTraces(params?: { source?: "all" | "inspection" | "chat"; limit?: number }) {
     loading.value = true;
     try {
-      const { data } = await qualityApi.listTraces();
+      const { data } = await qualityApi.listTraces(params);
       traces.value = data.data;
     } finally {
       loading.value = false;
