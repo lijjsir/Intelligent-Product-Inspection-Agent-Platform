@@ -57,6 +57,18 @@ class ModelConfigResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class HealthCheckResult(BaseModel):
+    health_status: str
+    health_message: Optional[str] = None
+
+
+class HealthCheckAllResult(BaseModel):
+    checked: int
+    healthy: int
+    degraded: int
+    unhealthy: int
+
+
 class BillingQuery(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None

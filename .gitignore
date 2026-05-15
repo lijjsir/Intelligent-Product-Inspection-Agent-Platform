@@ -29,6 +29,18 @@ coverage/
 htmlcov/
 .worktrees/
 
+# Runtime/generated local data
+runtime/
+runtime_*/
+runtime-*/
+runtime_logs/
+runtime_uploads/
+backend/runtime/
+backend/runtime_*/
+backend/runtime-*/
+backend/runtime_logs/
+backend/runtime_uploads/
+
 # Local agent/tooling state
 .agents/
 .trae/
