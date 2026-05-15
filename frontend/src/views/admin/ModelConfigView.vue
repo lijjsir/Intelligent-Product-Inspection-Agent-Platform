@@ -188,7 +188,7 @@ onMounted(() => {
       </el-table>
     </el-card>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑模型配置' : '新增模型配置'" size="420px">
+    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑模型配置' : '新增模型配置'" size="500px">
       <el-form label-position="top">
         <el-form-item label="Provider"><el-input v-model="form.provider" /></el-form-item>
         <el-form-item label="模型标识"><el-input v-model="form.model_key" /></el-form-item>
@@ -215,4 +215,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+:deep(.el-drawer__body) {
+  overflow-y: auto;
+}
 </style>
