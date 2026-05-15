@@ -35,6 +35,21 @@ export const useModelConfigStore = defineStore("model-config", () => {
     items.value = items.value.filter((item) => item.id !== id);
   }
 
-  return { items, loading, fetchAll, createOne, updateOne, removeOne };
+  async function checkHealth(id: string) {
+    const { data } = await modelConfigApi.checkHealth(id);
+    const index = items.value.findIndex((item) => item.id === id);
+    if (index !== -1) {
+      items.value[index] = { ...items.value[index], health_status: data.data.health_status, health_message: data.data.health_message ?? null };
+    }
+    return data.data;
+  }
+
+  async function checkHealthAll() {
+    const { data } = await modelConfigApi.checkHealthAll();
+    await fetchAll();
+    return data.data;
+  }
+
+  return { items, loading, fetchAll, createOne, updateOne, removeOne, checkHealth, checkHealthAll };
 });
 

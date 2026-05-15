@@ -115,20 +115,32 @@ async def test_llm_gateway_returns_runtime_payload():
 
 
 @pytest.mark.asyncio
-async def test_llm_gateway_keeps_volcengine_default_unless_local_default_requested(monkeypatch):
-    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_model_id", "volc-default")
-    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_base_url", "https://volc.example/api/v3")
-    monkeypatch.setattr("agent.llm.gateway.settings.volcengine_api_key", "volc-secret")
-    monkeypatch.setattr("agent.llm.gateway.settings.local_openai_model_id", "qwen-local")
-    monkeypatch.setattr("agent.llm.gateway.settings.local_openai_docker_base_url", "http://host.docker.internal:11434/v1")
+async def test_llm_gateway_returns_none_when_no_models_available():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime([])
+    assert runtime is None
 
-    default_runtime = await LLMGateway().select_runtime([])
-    local_runtime = await LLMGateway().select_runtime([], default_provider="local_openai")
 
-    assert default_runtime["provider"] == "volcengine"
-    assert default_runtime["model_id"] == "volc-default"
-    assert local_runtime["provider"] == "local_openai"
-    assert local_runtime["model_id"] == "qwen-local"
+@pytest.mark.asyncio
+async def test_llm_gateway_returns_none_when_all_models_excluded():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime(
+        [
+            {
+                "id": "cfg-1",
+                "provider": "volcengine",
+                "model_key": "chat-1",
+                "endpoint": "https://example.com/api/v3",
+                "api_key": "secret",
+                "model_type": "chat",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            }
+        ],
+        excluded_runtime_ids={"cfg-1"},
+    )
+    assert runtime is None
 
 
 @pytest.mark.asyncio

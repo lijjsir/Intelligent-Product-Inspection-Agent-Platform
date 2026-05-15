@@ -31,6 +31,18 @@ export interface ModelConfigPayload {
   is_active?: boolean;
 }
 
+export interface HealthCheckResult {
+  health_status: string;
+  health_message?: string;
+}
+
+export interface HealthCheckAllResult {
+  checked: number;
+  healthy: number;
+  degraded: number;
+  unhealthy: number;
+}
+
 export interface BillingBucket {
   bucket: string;
   total_tokens: number;
