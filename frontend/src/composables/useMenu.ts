@@ -148,9 +148,6 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     { title: "实验追踪", path: "/ops/experiments", placeholder: true },
     { title: "部署记录", path: "/ops/deployments", placeholder: true },
     { title: "模型配置", path: "/governance/admin/models" },
-    { title: "检测标准", path: "/governance/admin/inspection-specs" },
-    { title: "分析中心", path: "/governance/quality/analysis-center" },
-    { title: "记忆治理", path: "/governance/memory", placeholder: true },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
