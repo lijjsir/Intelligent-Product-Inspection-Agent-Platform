@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -128,7 +127,7 @@ def test_quality_chat_state_keeps_trust_scoring_runtime_fields():
     annotations = QualityChatState.__annotations__
 
     assert "trust_scoring_payload" in annotations
-    assert "trust_scoring_task" in annotations
+    assert "trust_scoring_task" not in annotations
 
 
 def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
@@ -147,10 +146,11 @@ def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_finalizer_keeps_trust_scoring_in_response_payload(monkeypatch):
+async def test_finalizer_marks_trust_scoring_reviewing_and_enqueues_once(monkeypatch):
     updates: list[dict] = []
     scores: list[dict] = []
     events: list[dict] = []
+    queued_payloads: list[dict] = []
 
     class FakeSession:
         async def commit(self):
@@ -188,28 +188,37 @@ async def test_finalizer_keeps_trust_scoring_in_response_payload(monkeypatch):
     async def fake_persist_rag(_session, _state):
         return None
 
-    async def fake_score():
-        return {
-            "org_id": "11111111-1111-1111-1111-111111111111",
-            "session_id": "22222222-2222-2222-2222-222222222222",
-            "user_id": "33333333-3333-3333-3333-333333333333",
-            "assistant_message_id": "44444444-4444-4444-4444-444444444444",
-            "score_version": "trust_v1",
-            "trace_id": "trace-1",
-            "observation_id": "obs-1",
-            "trace_url": "http://127.0.0.1:3000/project/p/traces/trace-1",
-            "model_key": "model-1",
-            "review_model": "deepseek-v4-flash",
-            "rule_scores": {},
-            "llm_scores": {},
-            "combined_scores": {"risk_level": "low"},
-            "trust_score": 0.9,
-            "hallucination_risk": 0.1,
-            "overconfidence": 0.2,
-            "has_citation": True,
-            "status": "scored",
-            "langfuse_synced_at": None,
-        }
+    def fake_enqueue(payload: dict | None):
+        if payload:
+            queued_payloads.append(payload)
+
+    pending_score = {
+        "org_id": "11111111-1111-1111-1111-111111111111",
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "user_id": "33333333-3333-3333-3333-333333333333",
+        "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+        "score_version": "trust_v1",
+        "trace_id": "trace-1",
+        "observation_id": "obs-1",
+        "trace_url": "http://127.0.0.1:3000/project/p/traces/trace-1",
+        "model_key": "model-1",
+        "review_model": "deepseek-v4-flash",
+        "rule_scores": {},
+        "llm_scores": None,
+        "combined_scores": None,
+        "trust_score": None,
+        "hallucination_risk": 0.1,
+        "overconfidence": 0.2,
+        "has_citation": True,
+        "status": "reviewing",
+        "langfuse_synced_at": None,
+    }
+
+    def fake_build_pending_trust_score(**_kwargs):
+        return dict(pending_score)
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._enqueue_trust_scoring", fake_enqueue)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.build_pending_trust_score", fake_build_pending_trust_score)
 
     monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
     monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ChatMessageRepository", FakeChatMessageRepository)
@@ -217,24 +226,36 @@ async def test_finalizer_keeps_trust_scoring_in_response_payload(monkeypatch):
     monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_chat_token_usage", fake_persist_usage)
     monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_rag_query_log", fake_persist_rag)
 
-    trust_task = asyncio.create_task(fake_score())
     state = {
         "org_id": "11111111-1111-1111-1111-111111111111",
         "session_id": "22222222-2222-2222-2222-222222222222",
+        "user_id": "33333333-3333-3333-3333-333333333333",
         "assistant_message_id": "44444444-4444-4444-4444-444444444444",
         "workflow_run_id": "run-1",
         "response_payload": {"answer": "ok", "message_type": "assistant_text"},
-        "trust_scoring_payload": {"assistant_message_id": "44444444-4444-4444-4444-444444444444"},
-        "trust_scoring_task": trust_task,
+        "trust_scoring_payload": {
+            "org_id": "11111111-1111-1111-1111-111111111111",
+            "session_id": "22222222-2222-2222-2222-222222222222",
+            "user_id": "33333333-3333-3333-3333-333333333333",
+            "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+            "input_text": "hello",
+            "output_text": "ok",
+            "citations": [],
+            "trace_id": "trace-1",
+            "observation_id": "obs-1",
+            "model_key": "model-1",
+        },
         "emit": fake_emit,
     }
 
     updated = await finalizer(state)
 
-    assert updated["response_payload"]["trust_scoring"]["trust_score"] == 0.9
+    assert updated["response_payload"]["trust_scoring"]["status"] == "reviewing"
+    assert updated["response_payload"]["trust_scoring"]["trust_score"] is None
     assert updates[0]["payload"]["trust_scoring"]["trace_url"].endswith("/trace-1")
-    assert scores[0]["trust_score"] == 0.9
-    assert events[-1]["payload"]["trust_scoring"]["risk_level"] == "low"
+    assert scores[0]["status"] == "reviewing"
+    assert events[-1]["payload"]["trust_scoring"]["status"] == "reviewing"
+    assert queued_payloads == [state["trust_scoring_payload"]]
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():
