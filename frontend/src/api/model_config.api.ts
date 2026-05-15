@@ -1,5 +1,5 @@
 import { http } from "./http";
-import type { ModelConfig, ModelConfigPayload } from "@/types/governance.types";
+import type { HealthCheckAllResult, HealthCheckResult, ModelConfig, ModelConfigPayload } from "@/types/governance.types";
 
 export const modelConfigApi = {
   list() {
@@ -13,6 +13,12 @@ export const modelConfigApi = {
   },
   remove(id: string) {
     return http.delete<boolean>(`/v1/model-configs/${id}`);
+  },
+  checkHealth(id: string) {
+    return http.post<HealthCheckResult>(`/v1/model-configs/${id}/health-check`);
+  },
+  checkHealthAll() {
+    return http.post<HealthCheckAllResult>("/v1/model-configs/health-check-all");
   },
 };
 

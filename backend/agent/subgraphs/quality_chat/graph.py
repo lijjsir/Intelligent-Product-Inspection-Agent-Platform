@@ -540,25 +540,22 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
 
     # ── Unified LLM call ──
     _t_pre_llm = perf_counter()
-    runtime_models: list[dict[str, Any]] = []
-    runtime = None
-    try:
-        async with get_session() as session:
-            runtime_models = await ModelConfigService(session, str(state["org_id"])).list_runtime_models()
-        runtime = await LLMGateway().select_runtime(runtime_models)
-    except Exception:
-        runtime = None
+    async with get_session() as session:
+        runtime_models = await ModelConfigService(session, str(state["org_id"])).list_runtime_models()
+    runtime = await LLMGateway().select_runtime(runtime_models)
     _t_runtime = perf_counter()
+    if not runtime:
+        raise RuntimeError("no runtime model available — please configure and enable a model in the model config page")
     llm = LLMClient(
-        api_key=None if not runtime else runtime.get("api_key"),
-        base_url=None if not runtime else runtime.get("base_url"),
-        model_id=None if not runtime else runtime.get("model_id"),
+        api_key=runtime.get("api_key"),
+        base_url=runtime.get("base_url"),
+        model_id=runtime.get("model_id"),
         trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None,
         task_id=str(state["session_id"]),
         org_id=str(state["org_id"]),
-        provider=None if not runtime else str(runtime.get("provider") or ""),
-        input_price_per_million=None if not runtime else runtime.get("input_price_per_million"),
-        output_price_per_million=None if not runtime else runtime.get("output_price_per_million"),
+        provider=str(runtime.get("provider") or ""),
+        input_price_per_million=runtime.get("input_price_per_million"),
+        output_price_per_million=runtime.get("output_price_per_million"),
     )
     obs_name = f"quality_chat.{intent}" if intent else "quality_chat.reasoning"
     try:
