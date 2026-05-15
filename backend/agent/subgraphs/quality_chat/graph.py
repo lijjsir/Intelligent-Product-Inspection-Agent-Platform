@@ -23,7 +23,6 @@ from app.repositories.chat_score_repo import ChatMessageScoreRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.chat_trust_scoring_service import (
-    ChatTrustScoringService,
     build_pending_trust_score,
     trust_payload_from_score,
 )
@@ -846,7 +845,6 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "message_type": _message_type_for_state(state),
     }
     state["trust_scoring_payload"] = _build_trust_scoring_request(state, state["response_payload"])
-    state["trust_scoring_task"] = _start_trust_scoring_task(state["trust_scoring_payload"])
     if state.get("quality"):
         await emit({"event": "quality_signal", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "quality": state.get("quality") or {}})
     logger.info(
@@ -875,12 +873,6 @@ def _build_trust_scoring_request(state: QualityChatState, payload: dict[str, Any
     }
 
 
-def _start_trust_scoring_task(payload: dict[str, Any] | None) -> asyncio.Task | None:
-    if not payload:
-        return None
-    return asyncio.create_task(ChatTrustScoringService().score_answer(**payload))
-
-
 def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
     if not payload:
         return
@@ -904,24 +896,10 @@ async def finalizer(state: QualityChatState) -> QualityChatState:
     payload = state.get("response_payload") or {}
     trust_score: dict[str, Any] | None = None
     trust_request = state.get("trust_scoring_payload")
-    trust_task = state.get("trust_scoring_task")
-    if trust_request and trust_task:
-        try:
-            trust_score = await asyncio.wait_for(trust_task, timeout=0.75)
-            payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
-        except asyncio.TimeoutError:
-            trust_task.cancel()
-            trust_score = build_pending_trust_score(**trust_request)
-            payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
-            _enqueue_trust_scoring(trust_request)
-        except Exception as exc:
-            payload = {
-                **payload,
-                "trust_scoring": {
-                    "status": "failed",
-                    "error": str(exc),
-                },
-            }
+    if trust_request:
+        trust_score = build_pending_trust_score(**trust_request)
+        payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
+        _enqueue_trust_scoring(trust_request)
     state["response_payload"] = payload
     async with get_session() as session:
         repo = ChatMessageRepository(session)

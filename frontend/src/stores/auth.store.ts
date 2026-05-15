@@ -158,7 +158,7 @@ export const useAuthStore = defineStore("auth", () => {
       return "/app/chat";
     }
     if (r === ROLE_ADMIN || r === ROLE_ALGORITHM_ENGINEER) {
-      return "/governance/quality/report";
+      return "/governance/quality/analysis-center";
     }
     if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
       return "/ops/agents";
