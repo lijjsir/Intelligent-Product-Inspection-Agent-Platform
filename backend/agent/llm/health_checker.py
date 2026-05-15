@@ -39,7 +39,7 @@ class ModelHealthChecker:
             if response.status_code < 400:
                 return "healthy", "GET /models ok"
 
-            if response.status_code in {404, 405}:
+            if response.status_code in {401, 403, 404, 405}:
                 return await self._probe_chat_completion(client, headers=headers, model_key=str(item.get("model_key") or ""))
 
             return self._status_from_response(response, path="/models")
