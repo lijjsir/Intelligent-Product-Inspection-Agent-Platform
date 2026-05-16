@@ -6,7 +6,6 @@ from typing import Any
 
 from agent.graph.inspection_graph import InspectionGraph
 from agent.graph.state import InspectionState
-from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
@@ -56,7 +55,7 @@ def _build_runtime_state(
         "product_id": task.product_id,
         "spec_code": task.spec_code,
         "image_urls": _normalize_image_urls_for_runtime(task.image_urls or []),
-        "model_id": str(runtime.get("model_id") or LLMClient().model_id),
+        "model_id": str(runtime.get("model_id") or "unknown"),
         "model_config_id": runtime.get("model_config_id"),
         "model_base_url": runtime.get("base_url"),
         "model_api_key": runtime.get("api_key"),
@@ -334,6 +333,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 org_id=task.org_id,
                 model_key=runtime["model_id"],
                 name="inspection_pipeline",
+                source_type="inspection",
             )
             graph = InspectionGraph()
             while True:
@@ -413,7 +413,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "defects": state.get("defects") or [],
                 "citations": {"items": state.get("citations") or []},
                 "reasoning_chain": reasoning_chain,
-                "llm_model": state.get("model_id") or "volcengine",
+                "llm_model": state.get("model_id") or "unknown",
                 "prompt_version": "phase3-v1",
                 "tokens_used": 0,
                 "latency_ms": None,

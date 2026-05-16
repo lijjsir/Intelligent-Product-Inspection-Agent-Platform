@@ -7,6 +7,21 @@ from app.services import quality_agent_orchestrator_service as orchestrator_mod
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
 
 
+def test_orchestrator_json_sanitizer_drops_callables_from_legacy_state():
+    def emit():
+        return None
+
+    payload = QualityAgentOrchestratorService._json_safe(
+        {
+            "answer": "ok",
+            "emit": emit,
+            "nested": {"callback": emit, "count": 1},
+        }
+    )
+
+    assert payload == {"answer": "ok", "nested": {"count": 1}}
+
+
 @pytest.mark.asyncio
 async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
     persisted: list[tuple[NormalizedRequest, AgentOutput]] = []

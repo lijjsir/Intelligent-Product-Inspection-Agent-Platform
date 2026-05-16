@@ -17,6 +17,7 @@ from agent.subgraphs.quality_chat.graph import (
     knowledge,
     planner,
     quality_gate,
+    reasoning,
     QualityChatState,
     task_extractor,
 )
@@ -121,6 +122,79 @@ def test_chat_usage_from_state_uses_runtime_pricing_when_available():
 
     assert usage is not None
     assert usage["cost_amount"] == 0.03
+
+
+@pytest.mark.asyncio
+async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id):
+            return None
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "chat",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    class FakeGateway:
+        async def select_runtime(self, models, **kwargs):
+            item = list(models)[0]
+            return {
+                "model_id": item["model_key"],
+                "base_url": item["endpoint"],
+                "api_key": item["api_key"],
+                "provider": item["provider"],
+                "input_price_per_million": None,
+                "output_price_per_million": None,
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            return None
+
+        async def chat(self, *args, **kwargs):
+            raise RuntimeError("upstream unavailable")
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMClient", FakeLLMClient)
+
+    state = {
+        "org_id": "org-1",
+        "session_id": "session-1",
+        "intent": "general_qa",
+        "query": "hello",
+        "history": [],
+        "retrieved_chunks": [],
+        "citations": [],
+        "action_state": "answered",
+        "task_draft": {},
+        "missing_slots": [],
+        "trace": {"trace_id": "trace-1"},
+    }
+
+    updated = await reasoning(state)
+
+    assert updated["action_state"] == "answered"
+    assert updated["reasoning"]["answer"]
+    assert updated["reasoning"]["llm_error"] == "upstream unavailable"
 
 
 def test_quality_chat_state_keeps_trust_scoring_runtime_fields():

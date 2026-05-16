@@ -48,6 +48,22 @@ class ChatMessageScoreRepository:
         )
         return result.scalar_one_or_none()
 
+    async def find_by_trace_id(self, trace_id: str) -> list[ChatMessageScore]:
+        result = await self._session.execute(
+            select(ChatMessageScore).where(
+                ChatMessageScore.trace_id == trace_id,
+                ChatMessageScore.deleted_at.is_(None),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def soft_delete(self, score_id: str) -> None:
+        from datetime import datetime as dt
+        obj = await self._session.get(ChatMessageScore, score_id)
+        if obj:
+            obj.deleted_at = dt.utcnow()
+            await self._session.flush()
+
     async def list_by_range(
         self,
         org_id: str | None,

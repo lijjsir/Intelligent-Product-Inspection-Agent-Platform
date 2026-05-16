@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from app.repositories.chat_repo import ChatMessageRepository
 from app.repositories.chat_score_repo import ChatMessageScoreRepository
@@ -8,10 +9,26 @@ from app.services.chat_trust_scoring_service import ChatTrustScoringService, tru
 from infra.database.session import get_session
 from worker.celery_app import celery_app
 
+logger = logging.getLogger(__name__)
+
 
 @celery_app.task(name="worker.tasks.chat_trust_scoring_task")
 def score_chat_message(payload: dict | None = None) -> dict:
     return asyncio.run(_score_chat_message(payload or {}))
+
+
+async def _resolve_review_config(org_id: str) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with get_session() as resolve_session:
+                return await ChatTrustScoringService.resolve_review_model(resolve_session, org_id)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("review model resolution failed attempt=%s org_id=%s: %s", attempt + 1, org_id, exc)
+    if last_error:
+        logger.warning("review model resolution disabled org_id=%s: %s", org_id, last_error)
+    return {}
 
 
 async def _score_chat_message(payload: dict) -> dict:
@@ -20,7 +37,9 @@ async def _score_chat_message(payload: dict) -> dict:
     if not org_id or not message_id:
         return {"status": "skipped", "reason": "missing org_id or assistant_message_id"}
 
-    score = await ChatTrustScoringService().score_answer(
+    review_config = await _resolve_review_config(org_id)
+
+    score = await ChatTrustScoringService(**review_config).score_answer(
         org_id=org_id,
         session_id=str(payload.get("session_id") or ""),
         user_id=str(payload.get("user_id") or "") or None,

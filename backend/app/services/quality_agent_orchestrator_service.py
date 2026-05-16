@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 import logging
 from time import perf_counter
 from typing import Any
@@ -32,6 +33,39 @@ logger = logging.getLogger(__name__)
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
         self._graph = QualityJudgementSubgraph()
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        dropped = object()
+
+        def convert(item: Any) -> Any:
+            if callable(item):
+                return dropped
+            if isinstance(item, dict):
+                result: dict[str, Any] = {}
+                for key, raw_value in item.items():
+                    converted = convert(raw_value)
+                    if converted is not dropped:
+                        result[str(key)] = converted
+                return result
+            if isinstance(item, (list, tuple, set)):
+                result = []
+                for raw_value in item:
+                    converted = convert(raw_value)
+                    if converted is not dropped:
+                        result.append(converted)
+                return result
+            if isinstance(item, (str, int, float, bool)) or item is None:
+                return item
+            if isinstance(item, (datetime, date)):
+                return item.isoformat()
+            model_dump = getattr(item, "model_dump", None)
+            if callable(model_dump):
+                return convert(model_dump())
+            return str(item)
+
+        converted = convert(value)
+        return None if converted is dropped else converted
 
     async def run_chat(self, payload: dict) -> dict:
         started_at = perf_counter()
@@ -534,8 +568,8 @@ class QualityAgentOrchestratorService:
                     },
                     "citations": {"items": list(output.citations or [])},
                     "reasoning_chain": {
-                        "legacy_state": dict(output.raw_state or {}),
-                        "quality": dict(output.quality or {}),
+                        "legacy_state": self._json_safe(output.raw_state or {}),
+                        "quality": self._json_safe(output.quality or {}),
                         "route_decision": (
                             output.route_decision.model_dump() if output.route_decision else None
                         ),

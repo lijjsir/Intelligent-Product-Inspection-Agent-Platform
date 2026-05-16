@@ -75,6 +75,27 @@ class ResultRepository:
         )
         return list(rows.all()), int(total or 0)
 
+    async def list_by_task_ids(self, org_id: str, task_ids: list[str]) -> list[InspectionResult]:
+        if not task_ids:
+            return []
+        result = await self._session.execute(
+            select(InspectionResult).where(
+                InspectionResult.org_id == org_id,
+                InspectionResult.task_id.in_(task_ids),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def soft_delete(self, result_id: str) -> None:
+        from datetime import datetime as dt
+        result = await self._session.execute(
+            select(InspectionResult).where(InspectionResult.id == result_id)
+        )
+        obj = result.scalar_one_or_none()
+        if obj:
+            obj.deleted_at = dt.utcnow()
+            await self._session.flush()
+
     async def upsert_by_task(self, payload: dict) -> InspectionResult:
         existing = await self.get_by_task(payload["org_id"], payload["task_id"])
         if existing:

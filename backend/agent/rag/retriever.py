@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from agent.rag.embedder import Embedder
+from agent.rag.embedder import Embedder, EmbeddingModelNotConfigured
 from app.core.config import settings
 
 
@@ -21,7 +21,10 @@ class Retriever:
         top_k: int = 5,
         payload_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        vector = await self._embedder.embed(query)
+        try:
+            vector = await self._embedder.embed(query)
+        except EmbeddingModelNotConfigured:
+            return []
         if not vector:
             raise RuntimeError("embedding returned empty vector")
 

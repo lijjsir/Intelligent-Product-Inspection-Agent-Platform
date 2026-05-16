@@ -52,7 +52,7 @@ class RagSpaceService:
         self._spaces = RagSpaceRepository(session)
         self._files = RagSpaceFileRepository(session)
         self._storage = FileStorageService()
-        self._indexer = KnowledgeIndexer()
+        self._indexer = KnowledgeIndexer(org_id=self._org_id)
 
     async def create_space(self, *, name: str, description: str | None) -> RagSpaceResponse:
         try:

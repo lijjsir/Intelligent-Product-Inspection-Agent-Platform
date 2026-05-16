@@ -152,6 +152,7 @@ class LangfuseTracer:
 
     def start_trace(self, **kwargs):
         trace_id = str(kwargs.get("trace_id") or self.create_trace_id())
+        source_type = kwargs.get("source_type") or "inspection"
         payload = {
             "trace_id": trace_id,
             "task_id": kwargs.get("task_id"),
@@ -160,20 +161,24 @@ class LangfuseTracer:
             "name": kwargs.get("name") or "inspection_pipeline",
             "started_at": kwargs.get("started_at") or datetime.utcnow().isoformat(),
             "trace_url": self.get_trace_url(trace_id),
+            "source_type": source_type,
         }
 
         if self._client is not None:
             trace_factory = getattr(self._client, "trace", None)
+            metadata = {
+                key: value
+                for key, value in {
+                    "task_id": payload["task_id"],
+                    "org_id": payload["org_id"],
+                    "model_key": payload["model_key"],
+                    "source_type": source_type,
+                    "verdict": kwargs.get("verdict"),
+                }.items()
+                if value is not None
+            }
+            tags = [t for t in [f"source_type:{source_type}", f"org_id:{payload['org_id']}" if payload.get("org_id") else None] if t is not None]
             if callable(trace_factory):
-                metadata = {
-                    key: value
-                    for key, value in {
-                        "task_id": payload["task_id"],
-                        "org_id": payload["org_id"],
-                        "model_key": payload["model_key"],
-                    }.items()
-                    if value is not None
-                }
                 try:
                     trace_factory(
                         id=trace_id,
@@ -181,11 +186,69 @@ class LangfuseTracer:
                         session_id=str(payload["task_id"]) if payload["task_id"] else None,
                         user_id=str(payload["org_id"]) if payload["org_id"] else None,
                         metadata=metadata or None,
+                        tags=tags or None,
                         input=kwargs.get("input"),
                     )
+                except TypeError:
+                    try:
+                        trace_factory(
+                            id=trace_id,
+                            name=payload["name"],
+                            session_id=str(payload["task_id"]) if payload["task_id"] else None,
+                            user_id=str(payload["org_id"]) if payload["org_id"] else None,
+                            metadata=metadata or None,
+                            input=kwargs.get("input"),
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        logger.warning("Langfuse trace creation failed: %s", exc)
                 except Exception as exc:  # pragma: no cover - defensive runtime guard
                     logger.warning("Langfuse trace creation failed: %s", exc)
+            else:
+                self._start_trace_event_v4(
+                    trace_id=trace_id,
+                    name=payload["name"],
+                    input=kwargs.get("input"),
+                    metadata=metadata or None,
+                )
         return payload
+
+    def _start_trace_event_v4(
+        self,
+        *,
+        trace_id: str,
+        name: str,
+        input: Any,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        starter = getattr(self._client, "start_as_current_observation", None)
+        if not callable(starter):
+            return
+
+        kwargs: dict[str, Any] = {
+            "name": name,
+            "as_type": "span",
+            "trace_context": {"trace_id": str(trace_id)},
+            "input": input,
+            "metadata": metadata,
+        }
+        try:
+            with starter(**kwargs):
+                pass
+            flusher = getattr(self._client, "flush", None)
+            if callable(flusher):
+                flusher()
+        except TypeError:
+            kwargs.pop("input", None)
+            try:
+                with starter(**kwargs):
+                    pass
+                flusher = getattr(self._client, "flush", None)
+                if callable(flusher):
+                    flusher()
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                logger.warning("Langfuse trace event creation failed: %s", exc)
+        except Exception as exc:  # pragma: no cover - defensive runtime guard
+            logger.warning("Langfuse trace event creation failed: %s", exc)
 
     def observe(
         self,

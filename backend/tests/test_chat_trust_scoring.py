@@ -16,6 +16,9 @@ from app.services.chat_trust_scoring_service import (
     score_output_rule,
     trust_payload_from_score,
 )
+from worker.tasks.chat_trust_scoring_task import _resolve_review_config
+from app.services.langfuse_api_client import LangfuseApiError
+from app.services.analytics_service import AnalyticsService
 from app.services.quality_report_service import QualityReportService
 
 
@@ -150,6 +153,158 @@ async def test_trust_scoring_service_falls_back_to_rule_only_when_reviewer_fails
         "has_citation",
         "trust_score",
     }
+
+
+@pytest.mark.asyncio
+async def test_trust_scoring_service_passes_runtime_model_config_to_reviewer(monkeypatch):
+    created_clients: list[dict] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            created_clients.append(kwargs)
+
+        async def chat(self, *_args, **_kwargs):
+            return {
+                "hallucination_risk_llm": 0.2,
+                "overconfidence_llm": 0.3,
+                "has_citation_llm": 1,
+                "reasons": ["configured reviewer used"],
+            }
+
+    class FakeTracer:
+        def score(self, **kwargs):
+            return dict(kwargs, ok=True, synced=False)
+
+        def sync_score(self, payload):
+            return dict(payload, synced=False)
+
+    monkeypatch.setattr("app.services.chat_trust_scoring_service.LLMClient", FakeLLMClient)
+    monkeypatch.setattr("app.services.chat_trust_scoring_service.LangfuseTracer", lambda: FakeTracer())
+
+    result = await ChatTrustScoringService(
+        review_provider="deepseek",
+        review_model="deepseek-v4-flash",
+        review_base_url="https://api.deepseek.com",
+        review_api_key="sk-test",
+        input_price_per_million=1.0,
+        output_price_per_million=2.0,
+    ).score_answer(
+        org_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        user_id="33333333-3333-3333-3333-333333333333",
+        assistant_message_id="44444444-4444-4444-4444-444444444444",
+        input_text="Question",
+        output_text="Answer with source: test.",
+        citations=[],
+        trace_id="trace-1",
+        observation_id="obs-1",
+        model_key="answer-model",
+    )
+
+    assert result["status"] == "scored"
+    assert result["review_model"] == "deepseek-v4-flash"
+    assert created_clients == [
+        {
+            "provider": "deepseek",
+            "model_id": "deepseek-v4-flash",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-test",
+            "input_price_per_million": 1.0,
+            "output_price_per_million": 2.0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_trust_scoring_resolves_reviewer_from_tenant_model_config(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id):
+            seen["org_id"] = org_id
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "chat",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                    "input_price_per_million": 0.8,
+                    "output_price_per_million": 1.6,
+                }
+            ]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types=None, reserve=True, excluded_runtime_ids=None):
+            seen["model_types"] = set(model_types or [])
+            seen["reserve"] = reserve
+            item = list(models)[0]
+            return {
+                "runtime_key": item["id"],
+                "model_config_id": item["id"],
+                "model_id": item["model_key"],
+                "base_url": item["endpoint"],
+                "api_key": item["api_key"],
+                "provider": item["provider"],
+                "input_price_per_million": item["input_price_per_million"],
+                "output_price_per_million": item["output_price_per_million"],
+                "rpm_limit": None,
+                "failover_depth": 0,
+            }
+
+    monkeypatch.setattr("app.services.chat_trust_scoring_service.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("app.services.chat_trust_scoring_service.LLMGateway", lambda: FakeGateway())
+
+    resolved = await ChatTrustScoringService.resolve_review_model(object(), "org-1")
+
+    assert seen == {"org_id": "org-1", "model_types": {"chat", "llm"}, "reserve": False}
+    assert resolved == {
+        "review_provider": "deepseek",
+        "review_model": "deepseek-v4-flash",
+        "review_base_url": "https://api.deepseek.com",
+        "review_api_key": "sk-db",
+        "input_price_per_million": 0.8,
+        "output_price_per_million": 1.6,
+    }
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_review_model_resolution_after_transient_session_failure(monkeypatch):
+    attempts = 0
+
+    class FailingSessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            raise RuntimeError("Event loop is closed")
+
+    class WorkingSessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_get_session():
+        nonlocal attempts
+        attempts += 1
+        return FailingSessionContext() if attempts == 1 else WorkingSessionContext()
+
+    async def fake_resolve(_session, org_id):
+        return {"review_model": f"resolved-for-{org_id}"}
+
+    monkeypatch.setattr("worker.tasks.chat_trust_scoring_task.get_session", fake_get_session)
+    monkeypatch.setattr(ChatTrustScoringService, "resolve_review_model", fake_resolve)
+
+    assert await _resolve_review_config("org-1") == {"review_model": "resolved-for-org-1"}
+    assert attempts == 2
 
 
 @pytest.mark.asyncio
@@ -412,59 +567,258 @@ def test_quality_trace_builder_attaches_chat_token_ledger_by_trace():
 
 
 @pytest.mark.asyncio
-async def test_quality_trace_list_keeps_chat_token_ledger_when_filtered_to_chat():
-    class ResultRepo:
-        async def list_by_range(self, *_args, **_kwargs):
-            return [SimpleNamespace(id="result-1", created_at=datetime(2026, 5, 14, 8, 0, 0))]
+async def test_quality_trace_list_uses_langfuse_api_for_chat_source(monkeypatch):
+    class FakeApiClient:
+        enabled = True
 
-    class FeedbackRepo:
-        async def list_by_range(self, *_args, **_kwargs):
-            return []
+        async def list_traces(self, *, page=1, limit=50, tags=None):
+            return {
+                "data": [
+                    {
+                        "id": "trace-chat",
+                        "timestamp": "2026-05-14T08:00:00Z",
+                        "sessionId": "session-1",
+                        "metadata": {"source_type": "chat", "model_key": "doubao-seed-2-0-pro-260215"},
+                        "scores": [
+                            {"name": "trust_score", "value": 0.355},
+                            {"name": "hallucination_risk", "value": 0.725},
+                            {"name": "overconfidence", "value": 0.21},
+                        ],
+                        "observations": [
+                            {"id": "obs-1", "type": "GENERATION", "model": "doubao-seed-2-0-pro-260215", "usage": {"total": 327}}
+                        ],
+                    }
+                ],
+                "meta": {"page": 1, "limit": 50, "totalItems": 1, "totalPages": 1},
+            }
 
-    class TokenLedgerRepo:
-        async def list_filtered(self, *_args, **_kwargs):
-            return [
-                SimpleNamespace(result_id=None, trace_id="trace-chat", total_tokens=327),
-                SimpleNamespace(result_id="result-1", trace_id="trace-inspection", total_tokens=999),
-            ]
+        def build_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/p/traces/{trace_id}"
 
-    class ChatScoreRepo:
-        async def list_by_range(self, *_args, **_kwargs):
-            return [
-                SimpleNamespace(
-                    assistant_message_id="msg-1",
-                    session_id="session-1",
-                    observation_id="obs-1",
-                    trace_id="trace-chat",
-                    trace_url="http://127.0.0.1:3000/project/p/traces/trace-chat",
-                    model_key="doubao-seed-2-0-pro-260215",
-                    trust_score=0.355,
-                    hallucination_risk=0.725,
-                    overconfidence=0.21,
-                    has_citation=False,
-                    status="scored",
-                    review_model="deepseek-v4-flash",
-                    langfuse_synced_at=datetime(2026, 5, 14, 8, 1, 0),
-                    created_at=datetime(2026, 5, 14, 8, 0, 0),
-                )
-            ]
-
-    class ChatMessageRepo:
-        async def list_assistant_for_org(self, *_args, **_kwargs):
-            return []
+    monkeypatch.setattr(
+        "app.services.quality_report_service.LangfuseApiClient",
+        lambda: FakeApiClient(),
+    )
 
     service = QualityReportService(session=object(), org_id="org-1")
-    service._result_repo = ResultRepo()
-    service._feedback_repo = FeedbackRepo()
-    service._token_ledger_repo = TokenLedgerRepo()
-    service._chat_score_repo = ChatScoreRepo()
-    service._chat_message_repo = ChatMessageRepo()
-
     traces = await service.list_traces(source="chat")
 
     assert len(traces) == 1
     assert traces[0]["source_type"] == "chat"
     assert traces[0]["total_tokens"] == 327
+    assert traces[0]["trust_score"] == 0.355
+
+
+@pytest.mark.asyncio
+async def test_quality_trace_list_hydrates_score_ids_from_langfuse_api(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        async def list_traces(self, *, page=1, limit=50, tags=None):
+            return {
+                "data": [
+                    {
+                        "id": "trace-chat",
+                        "timestamp": "2026-05-14T08:00:00Z",
+                        "sessionId": "session-1",
+                        "metadata": {"source_type": "chat", "model_key": "chat-model"},
+                        "scores": ["score-trust", "score-risk"],
+                        "observations": ["obs-1"],
+                    }
+                ],
+                "meta": {"page": 1, "limit": 50, "totalItems": 1, "totalPages": 1},
+            }
+
+        async def get_trace(self, trace_id):
+            return {
+                "id": trace_id,
+                "timestamp": "2026-05-14T08:00:00Z",
+                "sessionId": "session-1",
+                "metadata": {"source_type": "chat", "model_key": "chat-model"},
+                "scores": [
+                    {"name": "trust_score", "value": 0.72, "timestamp": "2026-05-14T08:01:00Z"},
+                    {"name": "hallucination_risk", "value": 0.22, "timestamp": "2026-05-14T08:01:00Z"},
+                ],
+                "observations": [
+                    {"id": "obs-1", "type": "GENERATION", "model": "chat-model", "usage": {"total": 321}},
+                ],
+            }
+
+        async def list_scores(self, *, trace_id=None, page=1, limit=50, **_kwargs):
+            assert trace_id == "trace-chat"
+            return {
+                "data": [
+                    {"traceId": "other-trace", "name": "trust_score", "value": 0.11},
+                ],
+                "meta": {"page": 1, "limit": 50, "totalItems": 1, "totalPages": 1},
+            }
+
+        async def list_observations(self, *, trace_id=None, page=1, limit=50, **_kwargs):
+            raise AssertionError("trace detail should hydrate observations")
+
+        def build_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/p/traces/{trace_id}"
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    traces = await service.list_traces(source="chat")
+
+    assert traces[0]["trust_score"] == 0.72
+    assert traces[0]["hallucination_risk"] == 0.22
+    assert traces[0]["total_tokens"] == 321
+
+
+@pytest.mark.asyncio
+async def test_quality_trace_list_does_not_fallback_to_local_rows_when_langfuse_is_ok_but_empty(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        async def list_traces(self, *, page=1, limit=50, tags=None):
+            return {
+                "data": [],
+                "meta": {"page": 1, "limit": 50, "totalItems": 0, "totalPages": 1},
+            }
+
+    class ChatScoreRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return [
+                SimpleNamespace(
+                    org_id="org-1",
+                    assistant_message_id="msg-1",
+                    session_id="session-1",
+                    user_id="user-1",
+                    trace_id="deleted-langfuse-trace",
+                    observation_id="obs-chat",
+                    trace_url="http://127.0.0.1:3000/project/p/traces/deleted-langfuse-trace",
+                    model_key="deepseek-v4-flash",
+                    review_model="deepseek-v4-flash",
+                    trust_score=0.82,
+                    hallucination_risk=0.2,
+                    overconfidence=0.1,
+                    has_citation=True,
+                    status="scored",
+                    langfuse_synced_at=datetime(2026, 5, 13, 12, 0, 0),
+                    created_at=datetime(2026, 5, 13, 11, 0, 0),
+                )
+            ]
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._chat_score_repo = ChatScoreRepo()
+    result = await service.list_traces_with_meta(source="chat")
+
+    assert result["meta"]["langfuse_status"] == "ok"
+    assert result["meta"]["canonical_source"] == "langfuse"
+    assert result["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_quality_trace_list_returns_error_meta_without_local_rows_when_langfuse_api_fails(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        async def list_traces(self, *, page=1, limit=50, tags=None):
+            raise LangfuseApiError("Langfuse API error 401: unauthorized")
+
+        def build_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/piap-local-project/traces/{trace_id}"
+
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class ChatScoreRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return [
+                SimpleNamespace(
+                    org_id="org-1",
+                    assistant_message_id="msg-1",
+                    session_id="session-1",
+                    user_id="user-1",
+                    trace_id="trace-chat",
+                    observation_id="obs-chat",
+                    trace_url="http://127.0.0.1:3000/project/piap-local-project/traces/trace-chat",
+                    model_key="qwen2.5:7b-instruct",
+                    review_model="qwen2.5:7b-instruct",
+                    trust_score=0.82,
+                    hallucination_risk=0.2,
+                    overconfidence=0.1,
+                    has_citation=True,
+                    status="scored",
+                    langfuse_synced_at=datetime(2026, 5, 13, 12, 0, 0),
+                    created_at=datetime(2026, 5, 13, 11, 0, 0),
+                )
+            ]
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
+    class FakeTracer:
+        def trace_exists(self, trace_id):
+            return None
+
+        def get_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/piap-local-project/traces/{trace_id}"
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseTracer", lambda: FakeTracer())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = ChatScoreRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
+
+    result = await service.list_traces_with_meta(source="chat")
+
+    assert result["meta"]["langfuse_status"] == "error"
+    assert "401" in result["meta"]["langfuse_error"]
+    assert result["meta"]["canonical_source"] == "langfuse"
+    assert result["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_quality_trace_delete_reports_langfuse_failure_without_claiming_deleted(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        async def delete_trace(self, trace_id):
+            raise LangfuseApiError("Langfuse API error 401: unauthorized")
+
+    class EmptyLedgerRepo:
+        async def find_by_trace_id(self, trace_id):
+            return []
+
+    class EmptyScoreRepo:
+        async def find_by_trace_id(self, trace_id):
+            return []
+
+    class ResultRepo:
+        async def soft_delete(self, result_id):
+            raise AssertionError("no result should be deleted for this trace")
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = EmptyScoreRepo()
+    service._result_repo = ResultRepo()
+
+    result = await service.delete_trace("trace-chat")
+
+    assert result["deleted"] is False
+    assert result["langfuse_deleted"] is False
+    assert result["local_cleaned"] is False
+    assert result["status"] == "langfuse_failed"
+    assert "401" in result["message"]
 
 
 @pytest.mark.asyncio
@@ -535,3 +889,110 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
     ]
     assert report["chat_score_count"] == 1
     assert report["chat_avg_trust_score"] == 0.4
+
+
+@pytest.mark.asyncio
+async def test_quality_report_uses_langfuse_trace_items_when_enabled(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        async def list_traces(self, **_kwargs):
+            return {
+                "data": [
+                    {
+                        "id": "trace-chat",
+                        "timestamp": "2026-05-14T09:00:00Z",
+                        "metadata": {"source_type": "chat", "model_key": "chat-model"},
+                        "scores": [
+                            {"name": "trust_score", "value": 0.6},
+                            {"name": "hallucination_risk", "value": 0.7},
+                            {"name": "overconfidence", "value": 0.4},
+                            {"name": "has_citation", "value": 1},
+                        ],
+                        "observations": [],
+                    }
+                ],
+                "meta": {"page": 1, "limit": 50, "totalItems": 1, "totalPages": 1},
+            }
+
+        def build_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/p/traces/{trace_id}"
+
+    class ResultRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            raise AssertionError("local results should not drive Langfuse-first report")
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = ResultRepo()
+    report = await service.build_report(source="chat")
+
+    assert report["total_results"] == 1
+    assert report["chat_score_count"] == 1
+    assert report["chat_avg_trust_score"] == 0.6
+    assert report["chat_hallucination_rate"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_analytics_overview_overlays_quality_metrics_from_langfuse(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+    class FakeRepo:
+        async def get_overview(self, *_args, **_kwargs):
+            return {
+                "total_tasks": 5,
+                "total_alerts": 1,
+                "total_results": 99,
+                "total_cost": 123.0,
+                "pass_rate": 0.99,
+                "hallucination_rate": 0.99,
+                "risk_yellow_rate": 0.0,
+                "avg_risk_score": 0.0,
+                "avg_latency_ms": 0.0,
+                "task_trend": [],
+                "pass_rate_trend": [],
+                "hallucination_trend": [],
+                "risk_distribution_trend": [],
+                "risk_distribution": [],
+                "alert_distribution": [],
+                "model_metrics": [],
+                "product_line_series": [],
+                "scope_kind": "org",
+            }
+
+    async def fake_fetch(self, **_kwargs):
+        return (
+            [
+                {
+                    "source_type": "chat",
+                    "trace_id": "trace-1",
+                    "verdict": "pass",
+                    "model_key": "chat-model",
+                    "total_tokens": 200,
+                    "total_cost": 0.03,
+                    "trust_score": 0.8,
+                    "hallucination_risk": 0.2,
+                    "overconfidence": 0.1,
+                    "has_citation": True,
+                    "thumbs_down_count": 0,
+                    "created_at": "2026-05-14T09:00:00Z",
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr("app.services.analytics_service.LangfuseApiClient", lambda: FakeApiClient())
+    monkeypatch.setattr(QualityReportService, "_fetch_traces_from_langfuse", fake_fetch)
+
+    service = AnalyticsService(session=object(), org_id="org-1")
+    service._repo = FakeRepo()
+    overview = await service.overview()
+
+    assert overview["total_tasks"] == 5
+    assert overview["total_results"] == 1
+    assert overview["total_cost"] == 0.03
+    assert overview["pass_rate"] == 1.0
+    assert overview["hallucination_rate"] == 0.0
+    assert overview["model_metrics"][0]["avg_tokens"] == 200.0

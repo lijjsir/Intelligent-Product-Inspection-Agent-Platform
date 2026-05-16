@@ -13,10 +13,15 @@ class LLMGateway:
         models: list[dict] | None = None,
         *,
         excluded_runtime_ids: set[str] | None = None,
+        model_types: set[str] | None = None,
         reserve: bool = True,
     ) -> dict[str, str | int | float | None] | None:
         excluded_runtime_ids = excluded_runtime_ids or set()
-        candidates = self._selector.ordered_candidates(models or [], excluded_runtime_ids=excluded_runtime_ids)
+        candidates = self._selector.ordered_candidates(
+            models or [],
+            excluded_runtime_ids=excluded_runtime_ids,
+            model_types=model_types,
+        )
         for failover_depth, item in enumerate(candidates):
             if await self._within_rate_limit(item, reserve=reserve):
                 return self._build_runtime_payload(item, failover_depth=failover_depth)
@@ -27,10 +32,12 @@ class LLMGateway:
         models: list[dict] | None = None,
         *,
         excluded_runtime_ids: set[str] | None = None,
+        model_types: set[str] | None = None,
     ) -> bool:
         runtime = await self.select_runtime(
             models=models,
             excluded_runtime_ids=excluded_runtime_ids,
+            model_types=model_types,
             reserve=False,
         )
         return runtime is not None

@@ -186,6 +186,31 @@ export interface QualityTraceItem {
   created_at: string | null;
 }
 
+export interface QualityTraceMeta {
+  langfuse_enabled: boolean;
+  langfuse_status: "ok" | "error" | "disabled" | "unknown" | string;
+  langfuse_error: string | null;
+  source: "all" | "inspection" | "chat" | string;
+  canonical_source: "langfuse" | "local" | string;
+  item_count: number;
+}
+
+export interface QualityTraceListResponse {
+  items: QualityTraceItem[];
+  meta: QualityTraceMeta;
+}
+
+export interface QualityTraceDeleteResult {
+  trace_id: string;
+  deleted: boolean;
+  status: "deleted" | "not_found" | "langfuse_failed" | "langfuse_disabled" | string;
+  message: string;
+  langfuse_deleted: boolean;
+  local_cleaned: boolean;
+  local_results_removed?: number;
+  local_scores_removed?: number;
+}
+
 export interface InspectionSpecItem {
   id: string;
   defect_type: string;

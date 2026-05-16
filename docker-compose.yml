@@ -21,9 +21,10 @@ services:
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_PROJECT_ID: piap-local-project
       PIAP_LANGFUSE_ENABLED: "true"
-      PIAP_LANGFUSE_PUBLIC_KEY: ${PIAP_LANGFUSE_PUBLIC_KEY:-}
-      PIAP_LANGFUSE_SECRET_KEY: ${PIAP_LANGFUSE_SECRET_KEY:-}
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-local-piap-dev-key
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-local-piap-dev-secret-key-123456
     depends_on:
       mysql:
         condition: service_healthy
@@ -58,9 +59,10 @@ services:
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_PROJECT_ID: piap-local-project
       PIAP_LANGFUSE_ENABLED: "true"
-      PIAP_LANGFUSE_PUBLIC_KEY: ${PIAP_LANGFUSE_PUBLIC_KEY:-}
-      PIAP_LANGFUSE_SECRET_KEY: ${PIAP_LANGFUSE_SECRET_KEY:-}
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-local-piap-dev-key
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-local-piap-dev-secret-key-123456
     depends_on:
       mysql:
         condition: service_healthy

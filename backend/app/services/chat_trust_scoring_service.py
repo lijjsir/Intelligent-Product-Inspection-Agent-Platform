@@ -10,8 +10,10 @@ from typing import Any
 import httpx
 
 from agent.llm.client import LLMClient
+from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.config import settings
+from app.services.model_config_service import ModelConfigService
 
 CERTAINTY_PATTERNS = [
     r"\b(always|never|definitely|absolutely|certainly|guaranteed|100%|undoubtedly)\b",
@@ -197,7 +199,7 @@ def build_pending_trust_score(
         "observation_id": observation_id,
         "trace_url": trace_url,
         "model_key": model_key,
-        "review_model": settings.trust_review_model,
+        "review_model": None,
         "rule_scores": rule_score,
         "llm_scores": None,
         "combined_scores": None,
@@ -211,6 +213,52 @@ def build_pending_trust_score(
 
 
 class ChatTrustScoringService:
+    def __init__(
+        self,
+        *,
+        review_provider: str | None = None,
+        review_model: str | None = None,
+        review_base_url: str | None = None,
+        review_api_key: str | None = None,
+        input_price_per_million: float | None = None,
+        output_price_per_million: float | None = None,
+        review_disabled_reason: str | None = None,
+    ) -> None:
+        self._review_provider = review_provider
+        self._review_model = review_model
+        self._review_base_url = review_base_url
+        self._review_api_key = review_api_key
+        self._input_price_per_million = input_price_per_million
+        self._output_price_per_million = output_price_per_million
+        self._review_disabled_reason = review_disabled_reason
+
+    @staticmethod
+    async def resolve_review_model(db_session, org_id: str) -> dict[str, Any]:
+        runtime_models = await ModelConfigService(db_session, org_id).list_runtime_models()
+        runtime = await LLMGateway().select_runtime(
+            runtime_models,
+            model_types={"chat", "llm"},
+            reserve=False,
+        )
+        if runtime:
+            return {
+                "review_provider": str(runtime.get("provider") or ""),
+                "review_model": str(runtime.get("model_id") or ""),
+                "review_base_url": str(runtime.get("base_url") or ""),
+                "review_api_key": runtime.get("api_key"),
+                "input_price_per_million": runtime.get("input_price_per_million"),
+                "output_price_per_million": runtime.get("output_price_per_million"),
+            }
+        return {
+            "review_provider": None,
+            "review_model": None,
+            "review_base_url": None,
+            "review_api_key": None,
+            "input_price_per_million": None,
+            "output_price_per_million": None,
+            "review_disabled_reason": "no active chat model configured in model config page",
+        }
+
     async def score_answer(
         self,
         *,
@@ -264,7 +312,7 @@ class ChatTrustScoringService:
             "observation_id": observation_id,
             "trace_url": trace_url,
             "model_key": model_key,
-            "review_model": settings.trust_review_model,
+            "review_model": self._review_model,
             "rule_scores": rule_score,
             "llm_scores": llm_score,
             "combined_scores": combined,
@@ -277,10 +325,18 @@ class ChatTrustScoringService:
         }
 
     async def _call_reviewer(self, *, input_text: str, output_text: str) -> dict[str, Any]:
+        if self._review_disabled_reason:
+            raise RuntimeError(self._review_disabled_reason)
+        if not self._review_provider or not self._review_model:
+            raise RuntimeError("no active chat model configured in model config page")
         prompt = self._build_rubric_prompt(input_text=input_text, output_text=output_text)
         client = LLMClient(
-            provider=settings.trust_review_provider,
-            model_id=settings.trust_review_model,
+            provider=self._review_provider,
+            model_id=self._review_model,
+            base_url=self._review_base_url,
+            api_key=self._review_api_key,
+            input_price_per_million=self._input_price_per_million,
+            output_price_per_million=self._output_price_per_million,
         )
         try:
             response = await client.chat(
