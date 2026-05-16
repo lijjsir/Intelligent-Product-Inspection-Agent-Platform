@@ -48,6 +48,15 @@ backend/runtime_uploads/
 .superpowers/
 skills-lock.json
 
+# Logs
+*.log
+*.err.log
+*.out.log
+logs/
+
+# Codex
+.codex/
+
 # OS / editor
 .DS_Store
 Thumbs.db
