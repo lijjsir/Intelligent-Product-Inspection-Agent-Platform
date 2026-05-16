@@ -296,6 +296,7 @@ async def _run_structured_inspection(request: NormalizedRequest) -> AgentOutput:
             rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
             query=retrieval_query,
             top_k=int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4,
+            scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
         )
 
     file_citations = _build_file_citations(request, parsed_files)

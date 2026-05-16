@@ -38,6 +38,7 @@ class RagDocumentResponse(BaseModel):
     size_bytes: int
     checksum_sha256: str
     storage_backend: str
+    bucket: str
     object_key: str
     parse_status: str
     index_status: str

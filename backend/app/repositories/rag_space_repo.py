@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.rag_space import RagDocument, RagNode, RagSpace
+from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 
 
 class RagSpaceRepository:
@@ -286,6 +286,7 @@ class RagDocumentRepository:
         size_bytes: int,
         checksum_sha256: str,
         storage_backend: str,
+        bucket: str,
         object_key: str,
         parse_status: str = "parsed",
         index_status: str = "ready",
@@ -303,6 +304,7 @@ class RagDocumentRepository:
             size_bytes=size_bytes,
             checksum_sha256=checksum_sha256,
             storage_backend=storage_backend,
+            bucket=bucket,
             object_key=object_key,
             parse_status=parse_status,
             index_status=index_status,
@@ -418,6 +420,55 @@ class RagDocumentRepository:
         now = datetime.utcnow()
         result = await self._session.execute(
             select(RagDocument).where(RagDocument.id.in_(document_ids), RagDocument.deleted_at.is_(None))
+        )
+        for row in result.scalars().all():
+            row.deleted_at = now
+        await self._session.flush()
+
+
+class RagDocumentChunkRepository:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def create_many(self, rows: list[dict[str, object]]) -> None:
+        for row in rows:
+            self._session.add(RagDocumentChunk(**row))
+        await self._session.flush()
+
+    async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
+        if not document_ids:
+            return
+        now = datetime.utcnow()
+        result = await self._session.execute(
+            select(RagDocumentChunk).where(RagDocumentChunk.document_id.in_(document_ids), RagDocumentChunk.deleted_at.is_(None))
+        )
+        for row in result.scalars().all():
+            row.deleted_at = now
+        await self._session.flush()
+
+
+class RagIndexJobRepository:
+    def __init__(self, session: AsyncSession):
+        self._session = session
+
+    async def create(self, *, org_id: str, rag_space_id: str, document_id: str, status: str = "pending") -> RagIndexJob:
+        obj = RagIndexJob(
+            org_id=org_id,
+            rag_space_id=rag_space_id,
+            document_id=document_id,
+            status=status,
+        )
+        self._session.add(obj)
+        await self._session.flush()
+        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
+        return obj
+
+    async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
+        if not document_ids:
+            return
+        now = datetime.utcnow()
+        result = await self._session.execute(
+            select(RagIndexJob).where(RagIndexJob.document_id.in_(document_ids), RagIndexJob.deleted_at.is_(None))
         )
         for row in result.scalars().all():
             row.deleted_at = now

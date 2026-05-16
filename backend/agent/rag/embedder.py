@@ -62,7 +62,7 @@ class Embedder:
         runtime_models = self._runtime_models
         if runtime_models is None:
             async with get_session() as session:
-                runtime_models = await ModelConfigService(session, self._org_id or "").list_runtime_models()
+                runtime_models = await ModelConfigService(session, self._org_id).list_runtime_models()
 
         runtime = await LLMGateway().select_runtime(
             runtime_models,

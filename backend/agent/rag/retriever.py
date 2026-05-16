@@ -67,8 +67,14 @@ class Retriever:
                     "title": item_payload.get("title") or "标准文档",
                     "text": item_payload.get("text") or "",
                     "source": item_payload.get("source") or "",
+                    "full_path": item_payload.get("full_path") or item_payload.get("source") or "",
                     "rag_space_id": item_payload.get("rag_space_id"),
                     "file_name": item_payload.get("file_name"),
+                    "document_id": item_payload.get("document_id"),
+                    "node_id": item_payload.get("node_id"),
+                    "chunk_index": item_payload.get("chunk_index"),
+                    "page_number": item_payload.get("page_number"),
+                    "ancestor_node_ids": item_payload.get("ancestor_node_ids") or [],
                 }
             )
         return docs

@@ -293,6 +293,14 @@ def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"id": rag_space_id, "name": str(ext.get("selected_rag_space_name") or ""), "description": str(ext.get("selected_rag_space_description") or "") or None}
 
 
+def _selected_rag_scope_node_ids(ext: dict[str, Any] | None) -> list[str]:
+    ext = ext or {}
+    raw = ext.get("selected_rag_scope_node_ids") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
 def _dspy_runtime_meta(state: QualityChatState) -> dict[str, Any]:
     return dict((state.get("metadata") or {}).get("dspy_runtime") or {})
 
@@ -430,13 +438,16 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
     payload_filter: dict[str, Any] = {"org_id": str(state["org_id"]), "user_id": str(state["user_id"])}
     if selected_rag:
         payload_filter["rag_space_id"] = selected_rag["id"]
+    scope_node_ids = _selected_rag_scope_node_ids(state.get("ext") or {})
+    if scope_node_ids:
+        payload_filter["ancestor_node_ids"] = scope_node_ids
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
     knowledge_payload = _dspy_target_payload(state, "quality_judgement.knowledge")
     top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or 4)))
     started_at = perf_counter()
     docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
     latency_ms = round((perf_counter() - started_at) * 1000)
-    citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("text") or "")[:180]} for doc in docs]
+    citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("quote") or doc.get("text") or "")[:180]} for doc in docs]
     state["retrieved_chunks"] = docs
     state["citations"] = citations
     state["retrieval_metrics"] = {

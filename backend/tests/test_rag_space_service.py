@@ -60,6 +60,7 @@ class FakeDocument:
     size_bytes: int = 128
     checksum_sha256: str = "abc"
     storage_backend: str = "local"
+    bucket: str = "local-dev"
     object_key: str = "rag/spec.txt"
     parse_status: str = "parsed"
     index_status: str = "ready"
@@ -268,6 +269,27 @@ class FakeStorageService:
         self.deleted_urls.append(url)
 
 
+class FakeObjectStorageService:
+    backend_name = "minio"
+
+    def __init__(self):
+        self.put_calls: list[dict[str, object]] = []
+        self.deleted_objects: list[dict[str, str]] = []
+
+    def put_bytes(self, **kwargs):
+        self.put_calls.append(kwargs)
+        return {
+            "bucket": str(kwargs["bucket"]),
+            "object_key": str(kwargs["object_key"]),
+            "url": f"https://minio.example.com/{kwargs['bucket']}/{kwargs['object_key']}",
+            "content_type": kwargs.get("content_type"),
+            "size_bytes": len(kwargs.get("data") or b""),
+        }
+
+    def delete_object(self, *, bucket: str, object_key: str):
+        self.deleted_objects.append({"bucket": bucket, "object_key": object_key})
+
+
 class FakeIndexer:
     def __init__(self):
         self.last_docs = []
@@ -279,6 +301,39 @@ class FakeIndexer:
 
     async def delete_by_filter(self, payload_filter):
         self.deleted_filters.append(payload_filter)
+
+
+class FakeChunkRepo:
+    def __init__(self):
+        self.rows: list[dict[str, object]] = []
+        self.deleted_document_ids: list[str] = []
+
+    async def create_many(self, rows: list[dict[str, object]]) -> None:
+        self.rows.extend(rows)
+
+    async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
+        self.deleted_document_ids.extend(document_ids)
+
+
+class FakeJob:
+    def __init__(self, document_id: str, status: str):
+        self.document_id = document_id
+        self.status = status
+        self.error_message = None
+
+
+class FakeJobRepo:
+    def __init__(self):
+        self.jobs: list[FakeJob] = []
+        self.deleted_document_ids: list[str] = []
+
+    async def create(self, *, org_id: str, rag_space_id: str, document_id: str, status: str = "pending"):
+        job = FakeJob(document_id=document_id, status=status)
+        self.jobs.append(job)
+        return job
+
+    async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
+        self.deleted_document_ids.extend(document_ids)
 
 
 class FakeSession:
@@ -295,16 +350,22 @@ def build_service(monkeypatch):
     node_repo = FakeNodeRepo()
     document_repo = FakeDocumentRepo()
     storage = FakeStorageService()
+    object_storage = FakeObjectStorageService()
     indexer = FakeIndexer()
+    chunk_repo = FakeChunkRepo()
+    job_repo = FakeJobRepo()
 
     monkeypatch.setattr("app.services.rag_space_service.RagSpaceRepository", lambda session: space_repo)
     monkeypatch.setattr("app.services.rag_space_service.RagNodeRepository", lambda session: node_repo)
     monkeypatch.setattr("app.services.rag_space_service.RagDocumentRepository", lambda session: document_repo)
+    monkeypatch.setattr("app.services.rag_space_service.RagDocumentChunkRepository", lambda session: chunk_repo)
+    monkeypatch.setattr("app.services.rag_space_service.RagIndexJobRepository", lambda session: job_repo)
     monkeypatch.setattr("app.services.rag_space_service.FileStorageService", lambda: storage)
+    monkeypatch.setattr("app.services.rag_space_service.build_object_storage", lambda: object_storage)
     monkeypatch.setattr("app.services.rag_space_service.KnowledgeIndexer", lambda org_id=None: indexer)
     monkeypatch.setattr("app.services.rag_space_service.parse_file_content", lambda *_args, **_kwargs: {"text": "hello world"})
     service = RagSpaceService(session, org_id="org-1", user_id="user-1")
-    return service, session, space_repo, node_repo, document_repo, storage, indexer
+    return service, session, space_repo, node_repo, document_repo, storage, indexer, object_storage, chunk_repo, job_repo
 
 
 @pytest.mark.asyncio
@@ -346,7 +407,7 @@ async def test_create_node_creates_root_folder(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_upload_documents_creates_file_node_and_document(monkeypatch):
-    service, session, space_repo, node_repo, document_repo, _storage, indexer = build_service(monkeypatch)
+    service, session, space_repo, node_repo, document_repo, _storage, indexer, _object_storage, chunk_repo, job_repo = build_service(monkeypatch)
 
     class FakeUpload:
         def __init__(self, filename: str):
@@ -366,14 +427,42 @@ async def test_upload_documents_creates_file_node_and_document(monkeypatch):
     assert rows[0].full_path == "机械/manual.txt"
     assert document_repo.created_documents[-1].file_name == "manual.txt"
     assert indexer.last_docs[0]["payload"]["node_id"] == rows[0].id
+    assert chunk_repo.rows[0]["document_id"] == document_repo.created_documents[-1].id
+    assert job_repo.jobs[0].status == "ready"
     assert node_repo.children_recalculated == 1
     assert space_repo.recalculate_calls[-1]["rag_space_id"] == "space-1"
     assert session.commit_count == 1
 
 
 @pytest.mark.asyncio
+async def test_upload_documents_persists_object_storage_bucket_and_backend(monkeypatch):
+    service, _session, _space_repo, _node_repo, _document_repo, _storage, _indexer, _default_object_storage, _chunk_repo, _job_repo = build_service(monkeypatch)
+    object_storage = FakeObjectStorageService()
+    monkeypatch.setattr("app.services.rag_space_service.build_object_storage", lambda: object_storage)
+
+    class FakeUpload:
+        def __init__(self, filename: str):
+            self.filename = filename
+            self.content_type = "text/plain"
+
+        async def read(self):
+            return b"phase-two"
+
+    rows = await service.upload_documents(
+        rag_space_id="space-1",
+        files=[FakeUpload("phase-two.txt")],
+        parent_node_id=None,
+    )
+
+    assert rows[0].document is not None
+    assert rows[0].document.storage_backend == "minio"
+    assert rows[0].document.bucket == "rag-docs"
+    assert rows[0].document.object_key.startswith("rag/")
+
+
+@pytest.mark.asyncio
 async def test_upload_documents_returns_validation_error_when_embedding_model_missing(monkeypatch):
-    service, _session, _space_repo, _node_repo, document_repo, _storage, indexer = build_service(monkeypatch)
+    service, _session, _space_repo, _node_repo, document_repo, _storage, indexer, _object_storage, _chunk_repo, job_repo = build_service(monkeypatch)
 
     class FakeUpload:
         def __init__(self, filename: str):
@@ -395,18 +484,21 @@ async def test_upload_documents_returns_validation_error_when_embedding_model_mi
             files=[FakeUpload("manual.txt")],
         )
 
-    assert document_repo.created_documents[-1].index_status == "indexing"
+    assert document_repo.created_documents[-1].index_status == "failed"
+    assert job_repo.jobs[-1].status == "failed"
 
 
 @pytest.mark.asyncio
 async def test_delete_node_cascades_documents_and_index(monkeypatch):
-    service, session, space_repo, node_repo, document_repo, storage, indexer = build_service(monkeypatch)
+    service, session, space_repo, node_repo, document_repo, _storage, indexer, object_storage, chunk_repo, job_repo = build_service(monkeypatch)
 
     await service.delete_node(rag_space_id="space-1", node_id="folder-1")
 
     assert set(node_repo.deleted_node_ids) == {"folder-1", "file-node-1"}
     assert document_repo.deleted_document_ids == ["doc-1"]
-    assert storage.deleted_urls == ["https://example.com/spec.txt"]
+    assert object_storage.deleted_objects == [{"bucket": "local-dev", "object_key": "rag/spec.txt"}]
+    assert chunk_repo.deleted_document_ids == ["doc-1"]
+    assert job_repo.deleted_document_ids == ["doc-1"]
     assert indexer.deleted_filters == [
         {
             "org_id": "org-1",
@@ -422,7 +514,7 @@ async def test_delete_node_cascades_documents_and_index(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_document_resolves_document_id_to_node(monkeypatch):
-    service, _session, _space_repo, node_repo, document_repo, _storage, _indexer = build_service(monkeypatch)
+    service, _session, _space_repo, node_repo, document_repo, _storage, _indexer, _object_storage, _chunk_repo, _job_repo = build_service(monkeypatch)
 
     await service.delete_document(rag_space_id="space-1", file_id="doc-1")
 
@@ -448,7 +540,7 @@ async def test_update_space_renames_space_and_description(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_space_cascades_nodes_documents_and_soft_deletes_space(monkeypatch):
-    service, session, space_repo, node_repo, document_repo, storage, indexer = build_service(monkeypatch)
+    service, session, space_repo, node_repo, document_repo, _storage, indexer, object_storage, chunk_repo, job_repo = build_service(monkeypatch)
 
     await service.delete_space(rag_space_id="space-1")
 
@@ -456,7 +548,9 @@ async def test_delete_space_cascades_nodes_documents_and_soft_deletes_space(monk
     assert space_repo.spaces["space-1"].deleted_at is not None
     assert set(node_repo.deleted_node_ids) == {"folder-1", "file-node-1"}
     assert document_repo.deleted_document_ids == ["doc-1"]
-    assert storage.deleted_urls == ["https://example.com/spec.txt"]
+    assert object_storage.deleted_objects == [{"bucket": "local-dev", "object_key": "rag/spec.txt"}]
+    assert chunk_repo.deleted_document_ids == ["doc-1"]
+    assert job_repo.deleted_document_ids == ["doc-1"]
     assert indexer.deleted_filters == [
         {
             "org_id": "org-1",

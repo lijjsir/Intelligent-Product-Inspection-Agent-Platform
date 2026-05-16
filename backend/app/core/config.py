@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     s3_access_key: str = "piap"
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
+    object_storage_backend: str = "local"
+    rag_storage_bucket: str = "rag-docs"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
 

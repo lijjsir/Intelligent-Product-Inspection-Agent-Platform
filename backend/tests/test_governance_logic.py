@@ -63,9 +63,9 @@ def test_model_selector_prefers_healthy_then_priority():
     selector = ModelSelector()
     selected = selector.select(
         [
-            {"model_key": "slow", "is_active": True, "health_status": "degraded", "priority": 1},
-            {"model_key": "fast", "is_active": True, "health_status": "healthy", "priority": 10},
-            {"model_key": "best", "is_active": True, "health_status": "healthy", "priority": 2},
+            {"model_key": "slow", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "degraded", "priority": 1},
+            {"model_key": "fast", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "healthy", "priority": 10},
+            {"model_key": "best", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "healthy", "priority": 2},
         ]
     )
     assert selected["model_key"] == "best"
@@ -75,8 +75,8 @@ def test_model_selector_skips_embedding_models_for_inference():
     selector = ModelSelector()
     selected = selector.select(
         [
-            {"model_key": "embed-1", "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 1},
-            {"model_key": "chat-1", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 10},
+            {"model_key": "embed-1", "provider": "volcengine", "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "secret", "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 1},
+            {"model_key": "chat-1", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 10},
         ]
     )
     assert selected["model_key"] == "chat-1"
@@ -86,12 +86,41 @@ def test_model_selector_can_select_embedding_models_for_embedding_runtime():
     selector = ModelSelector()
     selected = selector.select(
         [
-            {"model_key": "chat-1", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 1},
-            {"model_key": "embed-1", "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 10},
+            {"model_key": "chat-1", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 1},
+            {"model_key": "embed-1", "provider": "local_openai", "endpoint": "http://localhost:11434/v1", "api_key": None, "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 10},
         ],
         model_types={"embedding"},
     )
     assert selected["model_key"] == "embed-1"
+
+
+def test_model_selector_skips_remote_models_missing_api_key():
+    selector = ModelSelector()
+    selected = selector.select(
+        [
+            {
+                "model_key": "embed-seed",
+                "provider": "volcengine",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+                "api_key": None,
+            },
+            {
+                "model_key": "embed-live",
+                "provider": "volcengine",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 10,
+                "api_key": "secret",
+                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+            },
+        ],
+        model_types={"embedding"},
+    )
+    assert selected["model_key"] == "embed-live"
 
 
 @pytest.mark.asyncio
