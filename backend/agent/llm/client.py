@@ -284,8 +284,7 @@ class LLMClient:
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self._api_key and self._provider != "local_openai":
-            env_name = "DEEPSEEK_API_KEY" if self._provider == "deepseek" else "VOLCENGINE_API_KEY"
-            raise RuntimeError(f"{env_name} is not configured")
+            raise RuntimeError(f"api key is not configured for provider '{self._provider}' in model config page")
 
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         model_name = str(payload.get("model") or self._model_id)

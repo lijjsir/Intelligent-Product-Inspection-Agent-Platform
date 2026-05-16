@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     jwt_public_key: str = ""
     jwt_issuer: str = "piap"
     jwt_audience: str = "piap-users"
-    jwt_exp_minutes: int = 15
+    jwt_exp_minutes: int = 120
     jwt_refresh_days: int = 7
 
     db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     langfuse_host: str = "http://127.0.0.1:3000"
     langfuse_public_host: str = "http://127.0.0.1:3000"
+    langfuse_project_id: str = ""
     langfuse_environment: str = ""
     langfuse_release: str = ""
 

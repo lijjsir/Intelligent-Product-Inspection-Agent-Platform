@@ -40,6 +40,8 @@ class ModelHealthChecker:
                 return "healthy", "GET /models ok"
 
             if response.status_code in {401, 403, 404, 405}:
+                if self._is_embedding_model(item):
+                    return await self._probe_embedding(client, headers=headers, model_key=str(item.get("model_key") or ""))
                 return await self._probe_chat_completion(client, headers=headers, model_key=str(item.get("model_key") or ""))
 
             return self._status_from_response(response, path="/models")
@@ -70,6 +72,31 @@ class ModelHealthChecker:
             return "healthy", "POST /chat/completions ok"
         return self._status_from_response(response, path="/chat/completions")
 
+    async def _probe_embedding(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        headers: dict[str, str],
+        model_key: str,
+    ) -> tuple[str, str | None]:
+        try:
+            response = await client.post(
+                "/embeddings",
+                json={
+                    "model": model_key,
+                    "input": ["ping"],
+                },
+                headers=headers,
+            )
+        except httpx.TimeoutException:
+            return "degraded", "embedding probe timeout"
+        except httpx.HTTPError as exc:
+            return "degraded", self._trim_message(f"embedding probe failed: {exc}")
+
+        if response.status_code < 400:
+            return "healthy", "POST /embeddings ok"
+        return self._status_from_response(response, path="/embeddings")
+
     def _status_from_response(self, response: httpx.Response, *, path: str) -> tuple[str, str | None]:
         status_code = response.status_code
         detail = self._trim_message(response.text)
@@ -86,3 +113,8 @@ class ModelHealthChecker:
         if not message:
             return None
         return message.strip()[:256]
+
+    @staticmethod
+    def _is_embedding_model(item: dict[str, Any]) -> bool:
+        model_type = str(item.get("model_type") or "").strip().lower()
+        return model_type in {"embedding", "embed", "text_embedding"}

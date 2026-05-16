@@ -558,6 +558,8 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         output_price_per_million=runtime.get("output_price_per_million"),
     )
     obs_name = f"quality_chat.{intent}" if intent else "quality_chat.reasoning"
+    answer = ""
+    summary = ""
     try:
         response = await llm.chat(
             [{"role": "system", "content": prompt}, {"role": "user", "content": user_message}],
@@ -584,6 +586,8 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
             fallback = _fallback_answer(query, docs, citations)
         else:
             fallback = _general_answer_fallback(query)
+        answer = str(fallback.get("answer") or "")
+        summary = str(fallback.get("summary") or "")
         state["reasoning"] = {**fallback, "llm_error": str(exc), "llm_meta": {}}
     state["action_state"] = "answered"
     _t_end = perf_counter()
@@ -946,7 +950,7 @@ class QualityChatGraph:
     async def run(self, state: QualityChatState) -> QualityChatState:
         _t_graph = perf_counter()
         tracer = LangfuseTracer()
-        state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", input={"query": state["query"], "session_id": state["session_id"]})
+        state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", source_type="chat", input={"query": state["query"], "session_id": state["session_id"]})
         result = await self._graph.ainvoke(state)
         logger.info(
             "graph_total intent=%s query_len=%d total_ms=%d",

@@ -187,6 +187,15 @@ class QualityReportResponse(BaseModel):
     chat_trust_trend: list[TrendPoint] = []
 
 
+class QualityTraceMeta(BaseModel):
+    langfuse_enabled: bool = False
+    langfuse_status: str = "unknown"
+    langfuse_error: Optional[str] = None
+    source: str = "all"
+    canonical_source: str = "local"
+    item_count: int = 0
+
+
 class QualityTraceItem(BaseModel):
     source_type: str = "inspection"
     trace_id: str
@@ -212,3 +221,8 @@ class QualityTraceItem(BaseModel):
     langfuse_status: Optional[str] = None
     langfuse_synced: Optional[bool] = None
     created_at: Optional[datetime] = None
+
+
+class QualityTraceListResponse(BaseModel):
+    items: list[QualityTraceItem]
+    meta: QualityTraceMeta
