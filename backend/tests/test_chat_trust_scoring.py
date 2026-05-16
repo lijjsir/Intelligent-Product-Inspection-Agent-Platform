@@ -121,6 +121,9 @@ async def test_trust_scoring_service_falls_back_to_rule_only_when_reviewer_fails
     synced_scores: list[dict] = []
 
     class FakeTracer:
+        def get_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/x/traces/{trace_id}"
+
         def score(self, **kwargs):
             return dict(kwargs, ok=True, synced=False)
 
@@ -145,14 +148,12 @@ async def test_trust_scoring_service_falls_back_to_rule_only_when_reviewer_fails
     )
 
     assert result["status"] == "rule_only"
-    assert result["trust_score"] < 1.0
+    assert result["trust_score"] is None
+    assert result["hallucination_risk"] is None
+    assert result["overconfidence"] is None
+    assert result["has_citation"] is None
     assert result["trace_url"] == "http://127.0.0.1:3000/project/x/traces/trace-1"
-    assert {item["name"] for item in synced_scores} >= {
-        "hallucination_risk",
-        "overconfidence",
-        "has_citation",
-        "trust_score",
-    }
+    assert synced_scores == []
 
 
 @pytest.mark.asyncio

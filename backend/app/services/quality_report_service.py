@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import date, datetime
+import json
 
 import logging
 
@@ -325,8 +326,16 @@ class QualityReportService(TenantAwareService):
         for s in score_dicts:
             name = s.get("name", "")
             value = float(s.get("value", 0))
+            comment = s.get("comment")
             if name == "trust_score":
                 trust_score = value
+                if isinstance(comment, str):
+                    try:
+                        comment_payload = json.loads(comment)
+                    except json.JSONDecodeError:
+                        comment_payload = None
+                    if isinstance(comment_payload, dict):
+                        review_model = str(comment_payload.get("review_model") or "").strip() or review_model
             elif name == "hallucination_risk":
                 hallucination_risk = value
             elif name == "overconfidence":
@@ -344,11 +353,17 @@ class QualityReportService(TenantAwareService):
             int((o.get("usage") or {}).get("total", 0))
             for o in observation_dicts if o.get("type") == "GENERATION"
         )
-        model_key = metadata.get("model_key", "")
+        model_key = ""
+        for o in observation_dicts:
+            if o.get("type") == "GENERATION" and o.get("model"):
+                model_key = str(o["model"])
+                break
+        if not model_key:
+            model_key = str(metadata.get("model_key", "") or "")
         if not model_key and observation_dicts:
             for o in observation_dicts:
                 if o.get("model"):
-                    model_key = o["model"]
+                    model_key = str(o["model"])
                     break
 
         trace_url = None

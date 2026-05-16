@@ -1069,19 +1069,28 @@ def test_langfuse_trace_to_item_parses_chat_trace():
         "id": "trace-2",
         "timestamp": "2026-05-16T11:00:00Z",
         "sessionId": "session-1",
-        "metadata": {"source_type": "chat", "model_key": "chat-model-b"},
+        "metadata": {"source_type": "chat", "model_key": "quality_chat_v1"},
         "scores": [
+            {
+                "name": "trust_score",
+                "value": 0.61,
+                "timestamp": "2026-05-16T11:01:00Z",
+                "comment": '{"review_model":"doubao-seed-2-0-mini-260428"}',
+            },
             {"name": "has_citation", "value": 1, "timestamp": "2026-05-16T11:01:00Z"},
         ],
-        "observations": [],
+        "observations": [
+            {"id": "obs-1", "type": "GENERATION", "model": "doubao-seed-2-0-mini-260428", "usage": {"total": 88}}
+        ],
     }
     item = QualityReportService._langfuse_trace_to_item(trace, api_client=None)
     assert item is not None
     assert item["source_type"] == "chat"
-    assert item["model_key"] == "chat-model-b"
+    assert item["model_key"] == "doubao-seed-2-0-mini-260428"
     assert item["has_citation"] is True
-    assert item["total_tokens"] == 0
-    assert item["trust_score"] is None
+    assert item["total_tokens"] == 88
+    assert item["trust_score"] == 0.61
+    assert item["review_model"] == "doubao-seed-2-0-mini-260428"
 
 
 def test_langfuse_trace_to_item_accepts_observation_ids_from_list_api():
