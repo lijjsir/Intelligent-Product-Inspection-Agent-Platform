@@ -476,6 +476,43 @@ async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_knowledge_includes_scope_node_filters_when_present(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["payload_filter"] = payload_filter
+            return []
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "quality_qa",
+        "query": "quality question",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {
+            "selected_rag_space_id": "space-1",
+            "selected_rag_scope_node_ids": ["folder-1", "folder-2"],
+        },
+    }
+
+    await knowledge(state)
+
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+        "ancestor_node_ids": ["folder-1", "folder-2"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_task_extractor_marks_missing_slots_for_incomplete_task_request():
     state = {
         "intent": "task_create",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.rag.knowledge_indexer import KnowledgeIndexer
 from agent.tools.file_parsers import parse_file_content
+from app.core.config import settings
 from app.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
 from app.models.rag_space import RagDocument, RagNode, RagSpace
-from app.repositories.rag_space_repo import RagDocumentRepository, RagNodeRepository, RagSpaceRepository
+from app.repositories.rag_space_repo import (
+    RagDocumentChunkRepository,
+    RagDocumentRepository,
+    RagIndexJobRepository,
+    RagNodeRepository,
+    RagSpaceRepository,
+)
 from app.schemas.rag_space import (
     RagDocumentResponse,
     RagNodeResponse,
@@ -22,6 +30,7 @@ from app.schemas.rag_space import (
     RagSpaceResponse,
 )
 from app.services.file_storage_service import FileStorageService
+from app.services.object_storage.factory import build_object_storage
 
 
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".txt", ".md", ".jsonl", ".json", ".docx", ".csv", ".xlsx"}
@@ -52,6 +61,40 @@ def _is_rag_metadata_missing(exc: Exception) -> bool:
     return any(name in message for name in ("rag_spaces", "rag_nodes", "rag_documents"))
 
 
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+")
+
+
+def _chunk_text(text: str, chunk_size: int = 380) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", raw) if part.strip()]
+    if not paragraphs:
+        paragraphs = [raw]
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        if len(paragraph) <= chunk_size:
+            current = paragraph
+            continue
+        for start in range(0, len(paragraph), chunk_size):
+            chunks.append(paragraph[start : start + chunk_size].strip())
+        current = ""
+    if current:
+        chunks.append(current)
+    return chunks[:24]
+
+
+def _token_count(text: str) -> int:
+    return len(TOKEN_PATTERN.findall(str(text or "")))
+
+
 class RagSpaceService:
     def __init__(self, session: AsyncSession, *, org_id: str, user_id: str):
         self._session = session
@@ -60,7 +103,10 @@ class RagSpaceService:
         self._spaces = RagSpaceRepository(session)
         self._nodes = RagNodeRepository(session)
         self._documents = RagDocumentRepository(session)
+        self._chunks = RagDocumentChunkRepository(session)
+        self._jobs = RagIndexJobRepository(session)
         self._storage = FileStorageService()
+        self._rag_storage_bucket = settings.rag_storage_bucket
         self._indexer = KnowledgeIndexer(org_id=self._org_id)
 
     async def create_space(self, *, name: str, description: str | None) -> RagSpaceResponse:
@@ -288,6 +334,12 @@ class RagSpaceService:
             if not files:
                 raise ValidationError("no files uploaded")
             parent = await self._get_valid_parent(rag_space_id=rag_space_id, parent_id=parent_node_id)
+            space_nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            ancestor_node_ids = self._resolve_ancestor_node_ids(nodes=space_nodes, parent_id=parent_node_id)
 
             saved_rows: list[RagNodeResponse] = []
             for upload in files:
@@ -302,9 +354,11 @@ class RagSpaceService:
                 if not content:
                     raise ValidationError(f"empty document: {normalized_name}")
                 checksum = hashlib.sha256(content).hexdigest()
-                stored = self._storage.save_bytes(
-                    category=f"rag_spaces/{rag_space_id}",
-                    file_name=normalized_name,
+                rag_storage = build_object_storage()
+                object_key = f"rag/{self._org_id}/{rag_space_id}/{checksum[:12]}-{normalized_name}"
+                stored = rag_storage.put_bytes(
+                    bucket=self._rag_storage_bucket,
+                    object_key=object_key,
                     data=content,
                     content_type=upload.content_type,
                 )
@@ -331,11 +385,18 @@ class RagSpaceService:
                     file_url=stored["url"],
                     size_bytes=int(stored["size_bytes"] or 0),
                     checksum_sha256=checksum,
-                    storage_backend="local",
-                    object_key=str(stored.get("relative_path") or stored["url"]),
+                    storage_backend=str(stored.get("backend") or getattr(rag_storage, "backend_name", "local")),
+                    bucket=str(stored.get("bucket") or self._rag_storage_bucket),
+                    object_key=str(stored.get("object_key") or object_key),
                     parse_status="pending",
                     index_status="indexing",
                     chunk_count=0,
+                )
+                job = await self._jobs.create(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    document_id=str(document.id),
+                    status="indexing",
                 )
                 docs = self._build_docs_from_file(
                     document_id=str(document.id),
@@ -346,16 +407,36 @@ class RagSpaceService:
                     suffix=suffix,
                     content=content,
                     rag_space_id=rag_space_id,
+                    ancestor_node_ids=ancestor_node_ids,
                 )
                 try:
                     result = await self._indexer.index(docs)
                 except EmbeddingModelNotConfigured as exc:
+                    document.parse_status = "failed"
+                    document.index_status = "failed"
+                    document.error_message = str(exc)
+                    job.status = "failed"
+                    job.error_message = str(exc)
                     raise ValidationError("未配置 embedding 模型，请先在模型配置页启用 embedding 模型后再上传文件。") from exc
                 if int(result.get("accepted") or 0) <= 0:
+                    document.parse_status = "failed"
+                    document.index_status = "failed"
+                    document.error_message = f"failed to index document: {normalized_name}"
+                    job.status = "failed"
+                    job.error_message = document.error_message
                     raise ValidationError(f"failed to index document: {normalized_name}")
+                await self._persist_chunk_rows(
+                    rag_space_id=rag_space_id,
+                    node_id=str(node.id),
+                    document_id=str(document.id),
+                    docs=docs,
+                )
                 document.parse_status = "parsed"
                 document.index_status = "ready"
                 document.chunk_count = int(result.get("accepted") or 0)
+                document.error_message = None
+                job.status = "ready"
+                job.error_message = None
                 saved_rows.append(self._serialize_node(node, document))
 
             await self._nodes.recalculate_children_counts(
@@ -483,6 +564,7 @@ class RagSpaceService:
         suffix: str,
         content: bytes,
         rag_space_id: str,
+        ancestor_node_ids: list[str],
     ) -> list[dict[str, Any]]:
         payload = {
             "rag_space_id": rag_space_id,
@@ -493,6 +575,7 @@ class RagSpaceService:
             "file_name": file_name,
             "file_url": file_url,
             "full_path": full_path,
+            "ancestor_node_ids": list(ancestor_node_ids),
         }
         if suffix == ".jsonl":
             docs: list[dict[str, Any]] = []
@@ -510,8 +593,8 @@ class RagSpaceService:
                         "id": f"{document_id}:{index}",
                         "title": str(item.get("title") or file_name),
                         "text": body,
-                        "source": str(item.get("source") or file_name),
-                        "payload": payload,
+                        "source": str(item.get("source") or full_path),
+                        "payload": {**payload, "chunk_index": index, "page_number": None},
                     }
                 )
             if docs:
@@ -521,14 +604,16 @@ class RagSpaceService:
         text = self._extract_text(file_name=file_name, suffix=suffix, content=content)
         if not text.strip():
             raise ValidationError(f"document has no indexable text: {file_name}")
+        chunks = _chunk_text(text.strip())
         return [
             {
-                "id": document_id,
+                "id": f"{document_id}:{index}",
                 "title": file_name,
-                "text": text.strip(),
-                "source": file_name,
-                "payload": payload,
+                "text": chunk,
+                "source": full_path,
+                "payload": {**payload, "chunk_index": index, "page_number": None},
             }
+            for index, chunk in enumerate(chunks, start=1)
         ]
 
     def _extract_text(self, *, file_name: str, suffix: str, content: bytes) -> str:
@@ -660,8 +745,13 @@ class RagSpaceService:
         return result
 
     async def _remove_documents(self, *, rag_space_id: str, documents: list[RagDocument]) -> None:
+        document_ids = [str(document.id) for document in documents]
         for document in documents:
-            self._storage.delete_by_url(str(document.file_url))
+            bucket = str(getattr(document, "bucket", "") or self._rag_storage_bucket)
+            build_object_storage().delete_object(
+                bucket=bucket,
+                object_key=str(document.object_key),
+            )
             await self._indexer.delete_by_filter(
                 {
                     "org_id": self._org_id,
@@ -671,6 +761,50 @@ class RagSpaceService:
                     "node_id": str(document.node_id),
                 }
             )
+        await self._chunks.soft_delete_by_document_ids(document_ids=document_ids)
+        await self._jobs.soft_delete_by_document_ids(document_ids=document_ids)
+
+    def _resolve_ancestor_node_ids(self, *, nodes: list[RagNode], parent_id: str | None) -> list[str]:
+        if not parent_id:
+            return []
+        node_map = {str(node.id): node for node in nodes}
+        ordered: list[str] = []
+        current_id = parent_id
+        while current_id:
+            ordered.insert(0, current_id)
+            current = node_map.get(current_id)
+            if current is None or not current.parent_id:
+                break
+            current_id = str(current.parent_id)
+        return ordered
+
+    async def _persist_chunk_rows(
+        self,
+        *,
+        rag_space_id: str,
+        node_id: str,
+        document_id: str,
+        docs: list[dict[str, Any]],
+    ) -> None:
+        rows = []
+        for item in docs:
+            text = str(item.get("text") or "").strip()
+            payload = dict(item.get("payload") or {})
+            rows.append(
+                {
+                    "org_id": self._org_id,
+                    "rag_space_id": rag_space_id,
+                    "document_id": document_id,
+                    "node_id": node_id,
+                    "chunk_index": int(payload.get("chunk_index") or 1),
+                    "content_text": text,
+                    "content_preview": text[:220],
+                    "page_number": payload.get("page_number"),
+                    "token_count": _token_count(text),
+                    "qdrant_point_id": str(item.get("id") or ""),
+                }
+            )
+        await self._chunks.create_many(rows)
 
     def _raise_if_rag_metadata_missing(self, exc: Exception) -> None:
         if _is_rag_metadata_missing(exc):

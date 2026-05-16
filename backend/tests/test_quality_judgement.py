@@ -302,8 +302,16 @@ async def test_quality_judgement_supports_food_records_and_real_rag_summary(monk
             },
         }
 
-    async def fake_search(self, *, rag_space_id: str | None, query: str, top_k: int = 4):
+    async def fake_search(
+        self,
+        *,
+        rag_space_id: str | None,
+        query: str,
+        top_k: int = 4,
+        scope_node_ids: list[str] | None = None,
+    ):
         assert rag_space_id == "rag-food"
+        assert scope_node_ids == ["folder-food"]
         assert "FOOD-001" in query
         return {
             "rag_space_id": "rag-food",
@@ -336,7 +344,7 @@ async def test_quality_judgement_supports_food_records_and_real_rag_summary(monk
             org_id="org-1",
             user_id="user-1",
             query="Inspect this structured food sample.",
-            ext={"selected_rag_space_id": "rag-food"},
+            ext={"selected_rag_space_id": "rag-food", "selected_rag_scope_node_ids": ["folder-food"]},
             attachments=[
                 NormalizedAttachment(
                     id="file-food-1",
@@ -429,8 +437,16 @@ async def test_quality_judgement_supports_electronics_records_with_default_spec(
             },
         }
 
-    async def fake_search(self, *, rag_space_id: str | None, query: str, top_k: int = 4):
+    async def fake_search(
+        self,
+        *,
+        rag_space_id: str | None,
+        query: str,
+        top_k: int = 4,
+        scope_node_ids: list[str] | None = None,
+    ):
         assert "ELEC-001" in query
+        assert scope_node_ids == []
         return {
             "rag_space_id": None,
             "rag_space_name": None,

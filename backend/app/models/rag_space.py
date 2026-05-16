@@ -54,8 +54,36 @@ class RagDocument(Base, TimestampMixin):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     storage_backend: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
+    bucket: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     object_key: Mapped[str] = mapped_column(Text, nullable=False)
     parse_status: Mapped[str] = mapped_column(String(32), nullable=False, default="parsed")
     index_status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RagDocumentChunk(Base, TimestampMixin):
+    __tablename__ = "rag_document_chunks"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    rag_space_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    document_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    node_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_preview: Mapped[str] = mapped_column(Text, nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    qdrant_point_id: Mapped[str] = mapped_column(String(191), nullable=False, default="")
+
+
+class RagIndexJob(Base, TimestampMixin):
+    __tablename__ = "rag_index_jobs"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    rag_space_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    document_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

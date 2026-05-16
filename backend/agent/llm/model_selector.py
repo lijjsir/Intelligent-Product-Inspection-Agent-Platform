@@ -19,6 +19,7 @@ class ModelSelector:
             for item in models
             if item.get("is_active")
             and self._supports_model_type(item, supported_model_types)
+            and self._is_configured_runtime(item)
             and self.runtime_id(item) not in excluded_runtime_ids
         ]
         return sorted(active, key=self._sort_key)
@@ -73,3 +74,13 @@ class ModelSelector:
             "unhealthy": 3,
         }
         return mapping.get(str(health_status or "unknown").lower(), 3)
+
+    @staticmethod
+    def _is_configured_runtime(item: dict) -> bool:
+        endpoint = str(item.get("endpoint") or "").strip()
+        if not endpoint:
+            return False
+        provider = str(item.get("provider") or "").strip().lower()
+        if provider == "local_openai":
+            return True
+        return bool(str(item.get("api_key") or "").strip())
