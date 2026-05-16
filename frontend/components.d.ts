@@ -50,6 +50,7 @@ declare module 'vue' {
     ElTimeline: typeof import('element-plus/es')['ElTimeline']
     ElTimelineItem: typeof import('element-plus/es')['ElTimelineItem']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
+    ElTree: typeof import('element-plus/es')['ElTree']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     FeedbackWidget: typeof import('./src/components/business/result/FeedbackWidget.vue')['default']
     HallucinationChart: typeof import('./src/components/business/analytics/HallucinationChart.vue')['default']

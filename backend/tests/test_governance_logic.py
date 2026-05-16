@@ -318,6 +318,92 @@ async def test_health_checker_probes_embeddings_for_embedding_models(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_health_checker_still_probes_embeddings_when_models_endpoint_is_available(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            calls.append({"method": "GET", "path": path})
+            return FakeResponse(200, "ok")
+
+        async def post(self, path, json=None, headers=None):
+            calls.append({"method": "POST", "path": path, "json": json})
+            if path == "/embeddings":
+                return FakeResponse(200, "ok")
+            return FakeResponse(400, "wrong probe")
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "embed-cfg",
+                "endpoint": "https://example.com/v1",
+                "model_key": "embedding-model",
+                "api_key": "secret",
+                "model_type": "embedding",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert [call["path"] for call in calls] == ["/models", "/embeddings"]
+
+
+@pytest.mark.asyncio
+async def test_health_checker_uses_sdk_probe_for_volcengine_embedding_models(monkeypatch):
+    created_clients: list[dict] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            created_clients.append(kwargs)
+
+        async def embed(self, text, **kwargs):
+            assert text == "ping"
+            return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("agent.llm.health_checker.LLMClient", FakeLLMClient)
+
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "embed-cfg",
+                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+                "model_key": "doubao-embedding-vision-251215",
+                "api_key": "secret",
+                "provider": "volcengine",
+                "model_type": "embedding",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert checked[0]["health_message"] == "embedding runtime ok"
+    assert created_clients == [
+        {
+            "api_key": "secret",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model_id": "doubao-embedding-vision-251215",
+            "embed_model": "doubao-embedding-vision-251215",
+            "provider": "volcengine",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_embedder_uses_embedding_runtime_from_model_config(monkeypatch):
     created_clients: list[dict] = []
 

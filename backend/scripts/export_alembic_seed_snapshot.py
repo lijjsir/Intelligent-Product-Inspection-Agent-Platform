@@ -26,7 +26,8 @@ DEMO_TABLE_ORDER = [
     "inspection_specs",
     "inspection_spec_items",
     "rag_spaces",
-    "rag_space_files",
+    "rag_nodes",
+    "rag_documents",
     "prompt_versions",
     "prompt_dspy_configs",
     "dspy_optimization_configs",
@@ -54,7 +55,8 @@ FULL_TABLE_ORDER = [
     "spec_aggregation_rules",
     "spec_change_logs",
     "rag_spaces",
-    "rag_space_files",
+    "rag_nodes",
+    "rag_documents",
     "prompt_versions",
     "prompt_dspy_configs",
     "dspy_optimization_configs",
@@ -180,12 +182,19 @@ async def _export_demo_snapshot(session, tables: dict[str, sa.Table]) -> dict[st
     data["rag_spaces"] = _serialize_rows(rag_spaces)
     rag_space_ids = {row["id"] for row in rag_spaces}
 
-    rag_space_files = await _fetch_rows(
+    rag_nodes = await _fetch_rows(
         session,
-        tables["rag_space_files"],
-        _active_filters(tables["rag_space_files"]) + [tables["rag_space_files"].c.rag_space_id.in_(rag_space_ids)],
+        tables["rag_nodes"],
+        _active_filters(tables["rag_nodes"]) + [tables["rag_nodes"].c.rag_space_id.in_(rag_space_ids)],
     )
-    data["rag_space_files"] = _serialize_rows(rag_space_files)
+    data["rag_nodes"] = _serialize_rows(rag_nodes)
+
+    rag_documents = await _fetch_rows(
+        session,
+        tables["rag_documents"],
+        _active_filters(tables["rag_documents"]) + [tables["rag_documents"].c.rag_space_id.in_(rag_space_ids)],
+    )
+    data["rag_documents"] = _serialize_rows(rag_documents)
 
     prompt_versions = await _fetch_rows(
         session,
