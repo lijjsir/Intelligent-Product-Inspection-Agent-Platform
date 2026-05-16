@@ -54,10 +54,15 @@ class RouteSignals(BaseModel):
 
 
 class RouteDecision(BaseModel):
-    mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "legacy_only"
-    selected_subgraph: Literal["quality_judgement"] = "quality_judgement"
-    fallback_subgraph: Literal["quality_judgement"] = "quality_judgement"
+    mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "router_enabled"
+    selected_subgraph: Literal["quality_judgement", "quality_chat", "inspection_task"] = "quality_chat"
+    fallback_subgraph: Literal["quality_judgement", "quality_chat", "inspection_task"] = "quality_chat"
     reason: str = ""
+    intent: str = ""
+    confidence: float = 1.0
+    requires_confirmation: bool = False
+    route_source: str = "rule"
+    fallback_agent: str | None = None
     signals: RouteSignals = Field(default_factory=RouteSignals)
 
 
