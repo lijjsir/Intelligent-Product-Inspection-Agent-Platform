@@ -204,9 +204,9 @@ def build_pending_trust_score(
         "llm_scores": None,
         "combined_scores": None,
         "trust_score": None,
-        "hallucination_risk": float(rule_score["hallucination_risk"]),
-        "overconfidence": float(rule_score["overconfidence"]),
-        "has_citation": bool(rule_score["has_citation"]),
+        "hallucination_risk": None,
+        "overconfidence": None,
+        "has_citation": None,
         "status": "reviewing",
         "langfuse_synced_at": None,
     }
@@ -297,11 +297,14 @@ class ChatTrustScoringService:
         trace_url, synced_at = self._sync_langfuse_scores(
             trace_id=trace_id,
             observation_id=observation_id,
+            model_key=model_key,
+            review_model=self._review_model,
             rule_score=rule_score,
             llm_score=llm_score,
             combined=combined,
             status=status,
         )
+        scored = status == "scored"
         return {
             "org_id": org_id,
             "session_id": session_id,
@@ -315,11 +318,11 @@ class ChatTrustScoringService:
             "review_model": self._review_model,
             "rule_scores": rule_score,
             "llm_scores": llm_score,
-            "combined_scores": combined,
-            "trust_score": combined["trust_score"],
-            "hallucination_risk": combined["hallucination_risk"],
-            "overconfidence": combined["overconfidence"],
-            "has_citation": bool(combined["has_citation"]),
+            "combined_scores": combined if scored else None,
+            "trust_score": combined["trust_score"] if scored else None,
+            "hallucination_risk": combined["hallucination_risk"] if scored else None,
+            "overconfidence": combined["overconfidence"] if scored else None,
+            "has_citation": bool(combined["has_citation"]) if scored else None,
             "status": status,
             "langfuse_synced_at": synced_at,
         }
@@ -373,6 +376,8 @@ class ChatTrustScoringService:
         *,
         trace_id: str | None,
         observation_id: str | None,
+        model_key: str | None,
+        review_model: str | None,
         rule_score: dict[str, Any],
         llm_score: dict[str, Any],
         combined: dict[str, Any],
@@ -381,11 +386,17 @@ class ChatTrustScoringService:
         tracer = LangfuseTracer()
         if not trace_id:
             return None, None
+        trace_url_getter = getattr(tracer, "get_trace_url", None)
+        trace_url = trace_url_getter(trace_id) if callable(trace_url_getter) else None
+        if status != "scored":
+            return trace_url, None
         comment = json.dumps(
             {
                 "source": "piap-chat-trust-scoring",
                 "score_version": SCORE_VERSION,
                 "status": status,
+                "answer_model": model_key,
+                "review_model": review_model,
                 "rule_debug": rule_score.get("debug", {}),
                 "llm_reasons": llm_score.get("reasons", []),
                 "combined": combined,
@@ -394,16 +405,11 @@ class ChatTrustScoringService:
             default=str,
         )
         score_defs = [
-            ("hallucination_risk", rule_score["hallucination_risk"], "NUMERIC"),
-            ("overconfidence", rule_score["overconfidence"], "NUMERIC"),
-            ("has_citation", float(rule_score["has_citation"]), "BOOLEAN"),
-            ("hallucination_risk_llm", llm_score["hallucination_risk_llm"], "NUMERIC"),
-            ("overconfidence_llm", llm_score["overconfidence_llm"], "NUMERIC"),
-            ("has_citation_llm", float(llm_score["has_citation_llm"]), "BOOLEAN"),
+            ("hallucination_risk", combined["hallucination_risk"], "NUMERIC"),
+            ("overconfidence", combined["overconfidence"], "NUMERIC"),
+            ("has_citation", float(combined["has_citation"]), "BOOLEAN"),
             ("trust_score", combined["trust_score"], "NUMERIC"),
         ]
-        trace_url_getter = getattr(tracer, "get_trace_url", None)
-        trace_url = trace_url_getter(trace_id) if callable(trace_url_getter) else None
         synced = False
         for name, value, data_type in score_defs:
             payload = tracer.score(
