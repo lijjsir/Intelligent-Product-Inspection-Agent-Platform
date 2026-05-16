@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from agent.tools.file_parsers import parse_file_content
-from app.repositories.rag_space_repo import RagSpaceFileRepository, RagSpaceRepository
+from app.repositories.rag_space_repo import RagDocumentRepository, RagNodeRepository, RagSpaceRepository
 from app.services.file_storage_service import FileStorageService
 
 
@@ -64,7 +64,8 @@ class RagRetrievalService:
         self._org_id = org_id
         self._user_id = user_id
         self._spaces = RagSpaceRepository(session)
-        self._files = RagSpaceFileRepository(session)
+        self._nodes = RagNodeRepository(session)
+        self._documents = RagDocumentRepository(session)
         self._storage = FileStorageService()
 
     async def search(self, *, rag_space_id: str | None, query: str, top_k: int = 4) -> dict[str, Any]:
@@ -92,33 +93,40 @@ class RagRetrievalService:
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             }
 
-        files = await self._files.list_for_space(
+        documents = await self._documents.list_for_space(
             org_id=self._org_id,
             rag_space_id=rag_space_id,
             owner_user_id=self._user_id,
             limit=20,
         )
+        nodes = await self._nodes.list_for_space(
+            org_id=self._org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=self._user_id,
+        )
+        node_map = {str(node.id): node for node in nodes}
         query_tokens = _tokenize(query)
         hits: list[dict[str, Any]] = []
-        for file in files:
-            payload = self._storage.file_bytes_from_url(str(file.file_url))
+        for document in documents:
+            payload = self._storage.file_bytes_from_url(str(document.file_url))
             if payload is None:
                 continue
             content, _content_type = payload
-            parsed = parse_file_content(str(file.file_name), content)
+            parsed = parse_file_content(str(document.file_name), content)
             text = str(parsed.get("text") or "").strip()
+            node = node_map.get(str(document.node_id))
             for index, chunk in enumerate(_chunk_text(text), start=1):
                 score = _score_chunk(query_tokens, chunk)
                 if score <= 0:
                     continue
                 hits.append(
                     {
-                        "id": f"{file.id}:{index}",
-                        "title": str(file.file_name),
-                        "source": str(file.file_name),
+                        "id": f"{document.id}:{index}",
+                        "title": str(document.file_name),
+                        "source": node.full_path if node is not None else str(document.file_name),
                         "quote": chunk[:220],
                         "score": score,
-                        "file_url": str(file.file_url),
+                        "file_url": str(document.file_url),
                     }
                 )
 

@@ -31,7 +31,7 @@ from app.models.agent_ops import (
     RagQueryLog,
 )
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
-from app.models.rag_space import RagSpace, RagSpaceFile
+from app.models.rag_space import RagDocument, RagNode, RagSpace
 from app.models.memory import (
     MemoryDependencyEdge,
     MemoryEvaluation,
@@ -76,7 +76,8 @@ __all__ = [
     "ChatMessage",
     "ChatMessageScore",
     "RagSpace",
-    "RagSpaceFile",
+    "RagNode",
+    "RagDocument",
     "MemoryItem",
     "MemoryEvent",
     "MemoryDependencyEdge",

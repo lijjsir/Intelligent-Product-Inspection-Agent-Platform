@@ -352,9 +352,8 @@ export const useChatStore = defineStore("chat", () => {
   async function createRagSpace(payload: { name: string; description?: string }, files: File[]) {
     const { data } = await ragSpaceApi.create(payload);
     const created = data.data;
-    const selectedFiles = files.slice(0, 1);
-    if (selectedFiles.length > 0) {
-      await ragSpaceApi.uploadDocuments(created.id, selectedFiles);
+    if (files.length > 0) {
+      await ragSpaceApi.uploadDocuments(created.id, files);
     }
     await fetchRagSpaces();
     return ragSpaces.value.find((item) => item.id === created.id) || created;
@@ -434,6 +433,7 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     initPromise.value = (async () => {
+      clearSelectedRagSpace();
       await fetchSessions();
       try {
         await fetchRagSpaces();
@@ -757,4 +757,3 @@ export const useChatStore = defineStore("chat", () => {
     stopStream,
   };
 });
-

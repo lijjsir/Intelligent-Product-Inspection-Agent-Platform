@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
+from agent.rag.embedder import EmbeddingModelNotConfigured
 from fastapi import UploadFile
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agent.tools.file_parsers import parse_file_content
 from agent.rag.knowledge_indexer import KnowledgeIndexer
+from agent.tools.file_parsers import parse_file_content
 from app.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
-from app.repositories.rag_space_repo import RagSpaceFileRepository, RagSpaceRepository
-from app.schemas.rag_space import RagSpaceFileResponse, RagSpaceResponse
+from app.models.rag_space import RagDocument, RagNode, RagSpace
+from app.repositories.rag_space_repo import RagDocumentRepository, RagNodeRepository, RagSpaceRepository
+from app.schemas.rag_space import (
+    RagDocumentResponse,
+    RagNodeResponse,
+    RagSpaceDocumentListItem,
+    RagSpaceResponse,
+)
 from app.services.file_storage_service import FileStorageService
 
 
@@ -41,7 +49,7 @@ def _is_rag_metadata_missing(exc: Exception) -> bool:
     message = str(exc).lower()
     if "doesn't exist" not in message and "does not exist" not in message:
         return False
-    return "rag_spaces" in message or "rag_space_files" in message
+    return any(name in message for name in ("rag_spaces", "rag_nodes", "rag_documents"))
 
 
 class RagSpaceService:
@@ -50,7 +58,8 @@ class RagSpaceService:
         self._org_id = org_id
         self._user_id = user_id
         self._spaces = RagSpaceRepository(session)
-        self._files = RagSpaceFileRepository(session)
+        self._nodes = RagNodeRepository(session)
+        self._documents = RagDocumentRepository(session)
         self._storage = FileStorageService()
         self._indexer = KnowledgeIndexer(org_id=self._org_id)
 
@@ -59,7 +68,7 @@ class RagSpaceService:
             obj = await self._spaces.create(
                 org_id=self._org_id,
                 created_by=self._user_id,
-                name=name.strip(),
+                name=self._normalize_node_name(name, label="space"),
                 description=(description or "").strip() or None,
             )
             await self._session.commit()
@@ -76,75 +85,285 @@ class RagSpaceService:
             self._raise_if_rag_metadata_missing(exc)
             raise
 
-    async def list_documents(self, *, rag_space_id: str, limit: int = 1000) -> list[RagSpaceFileResponse]:
+    async def update_space(self, *, rag_space_id: str, name: str, description: str | None) -> RagSpaceResponse:
+        try:
+            space = await self._get_owned_space(rag_space_id)
+            space.name = self._normalize_node_name(name, label="space")
+            space.description = (description or "").strip() or None
+            await self._session.commit()
+            return RagSpaceResponse.model_validate(space)
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def delete_space(self, *, rag_space_id: str) -> None:
         try:
             await self._get_owned_space(rag_space_id)
-            rows = await self._files.list_for_space(
+            nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            node_ids = [str(node.id) for node in nodes]
+            documents = await self._documents.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+                limit=5000,
+            )
+            await self._remove_documents(rag_space_id=rag_space_id, documents=documents)
+            await self._documents.soft_delete_many(document_ids=[str(item.id) for item in documents])
+            await self._nodes.soft_delete_many(node_ids=node_ids)
+            await self._spaces.soft_delete(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._session.commit()
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def get_tree(self, *, rag_space_id: str) -> list[RagNodeResponse]:
+        try:
+            await self._get_owned_space(rag_space_id)
+            nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            documents = await self._documents.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+                limit=5000,
+            )
+            return self._build_tree(nodes=nodes, documents=documents)
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def create_node(self, *, rag_space_id: str, parent_id: str | None, node_type: str, name: str) -> RagNodeResponse:
+        try:
+            await self._get_owned_space(rag_space_id)
+            if node_type != "folder":
+                raise ValidationError("only folder nodes can be created explicitly")
+            parent = await self._get_valid_parent(rag_space_id=rag_space_id, parent_id=parent_id)
+            normalized_name = self._normalize_node_name(name)
+            await self._ensure_unique_name(rag_space_id=rag_space_id, parent_id=parent_id, name=normalized_name)
+
+            created = await self._nodes.create(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                created_by=self._user_id,
+                parent_id=parent_id,
+                node_type="folder",
+                name=normalized_name,
+                full_path=self._build_full_path(parent=parent, name=normalized_name),
+                depth=(parent.depth + 1) if parent else 0,
+                sort_order=0,
+                status="ready",
+            )
+            await self._nodes.recalculate_children_counts(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._spaces.recalculate_counters(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._session.commit()
+            return self._serialize_node(created, None)
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def update_node(self, *, rag_space_id: str, node_id: str, parent_id: str | None, name: str) -> RagNodeResponse:
+        try:
+            await self._get_owned_space(rag_space_id)
+            nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            target = next((node for node in nodes if str(node.id) == node_id), None)
+            if target is None:
+                raise NotFoundError("rag node not found")
+
+            normalized_name = self._normalize_node_name(name)
+            new_parent = await self._get_valid_parent(rag_space_id=rag_space_id, parent_id=parent_id)
+            self._ensure_not_moving_into_descendant(target=target, new_parent=new_parent, nodes=nodes)
+            await self._ensure_unique_name(
+                rag_space_id=rag_space_id,
+                parent_id=parent_id,
+                name=normalized_name,
+                exclude_node_id=str(target.id),
+            )
+
+            target.parent_id = parent_id
+            target.name = normalized_name
+            target.full_path = self._build_full_path(parent=new_parent, name=normalized_name)
+            target.depth = (new_parent.depth + 1) if new_parent else 0
+            self._refresh_subtree_paths(nodes=nodes, root_id=str(target.id))
+
+            if target.node_type == "file":
+                document = await self._documents.get_by_node_id(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    node_id=str(target.id),
+                    owner_user_id=self._user_id,
+                )
+                if document is not None:
+                    document.file_name = normalized_name
+            else:
+                document = await self._documents.get_by_node_id(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    node_id=str(target.id),
+                    owner_user_id=self._user_id,
+                )
+
+            await self._nodes.recalculate_children_counts(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._spaces.recalculate_counters(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._session.commit()
+            return self._serialize_node(target, document)
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
+    async def list_documents(self, *, rag_space_id: str, limit: int = 1000) -> list[RagSpaceDocumentListItem]:
+        try:
+            await self._get_owned_space(rag_space_id)
+            nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            node_map = {node.id: node for node in nodes}
+            rows = await self._documents.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
                 limit=limit,
             )
-            return [RagSpaceFileResponse.model_validate(item) for item in rows]
+            rows.sort(key=lambda item: (node_map.get(item.node_id).full_path if node_map.get(item.node_id) else item.file_name))
+            return [
+                RagSpaceDocumentListItem(
+                    id=str(item.id),
+                    rag_space_id=str(item.rag_space_id),
+                    org_id=str(item.org_id),
+                    node_id=str(item.node_id),
+                    file_name=str(item.file_name),
+                    content_type=item.content_type,
+                    file_url=str(item.file_url),
+                    size_bytes=int(item.size_bytes or 0),
+                    status=str(item.index_status or item.parse_status or "ready"),
+                    created_at=item.created_at,
+                )
+                for item in rows
+            ]
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise
 
-    async def upload_documents(self, *, rag_space_id: str, files: list[UploadFile]) -> list[RagSpaceFileResponse]:
+    async def upload_documents(
+        self,
+        *,
+        rag_space_id: str,
+        files: list[UploadFile],
+        parent_node_id: str | None = None,
+    ) -> list[RagNodeResponse]:
         try:
             await self._get_owned_space(rag_space_id)
             if not files:
                 raise ValidationError("no files uploaded")
-            if len(files) != 1:
-                raise ValidationError("每个 RAG 空间只允许上传一个文档")
-            existing_rows = await self._files.list_for_space(
-                org_id=self._org_id,
-                rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
-                limit=2,
-            )
-            if existing_rows:
-                raise ValidationError("每个 RAG 空间只允许保留一个文档，请先删除原文档")
+            parent = await self._get_valid_parent(rag_space_id=rag_space_id, parent_id=parent_node_id)
 
-            saved_rows: list[RagSpaceFileResponse] = []
+            saved_rows: list[RagNodeResponse] = []
             for upload in files:
-                suffix = Path(upload.filename or "").suffix.lower()
+                raw_name = upload.filename or "document.bin"
+                normalized_name = self._normalize_node_name(raw_name)
+                suffix = Path(normalized_name).suffix.lower()
                 if suffix not in ALLOWED_DOCUMENT_EXTENSIONS:
                     raise ValidationError(f"unsupported document type: {suffix or 'unknown'}")
+                await self._ensure_unique_name(rag_space_id=rag_space_id, parent_id=parent_node_id, name=normalized_name)
 
                 content = await upload.read()
                 if not content:
-                    raise ValidationError(f"empty document: {upload.filename or 'unnamed'}")
-
+                    raise ValidationError(f"empty document: {normalized_name}")
+                checksum = hashlib.sha256(content).hexdigest()
                 stored = self._storage.save_bytes(
                     category=f"rag_spaces/{rag_space_id}",
-                    file_name=upload.filename or "document.bin",
+                    file_name=normalized_name,
                     data=content,
                     content_type=upload.content_type,
                 )
-                docs = self._build_docs_from_file(
-                    file_name=upload.filename or "document.bin",
+                full_path = self._build_full_path(parent=parent, name=normalized_name)
+                node = await self._nodes.create(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    created_by=self._user_id,
+                    parent_id=parent_node_id,
+                    node_type="file",
+                    name=normalized_name,
+                    full_path=full_path,
+                    depth=(parent.depth + 1) if parent else 0,
+                    sort_order=0,
+                    status="ready",
+                )
+                document = await self._documents.create(
+                    org_id=self._org_id,
+                    rag_space_id=rag_space_id,
+                    node_id=str(node.id),
+                    uploaded_by=self._user_id,
+                    file_name=normalized_name,
+                    content_type=upload.content_type,
                     file_url=stored["url"],
+                    size_bytes=int(stored["size_bytes"] or 0),
+                    checksum_sha256=checksum,
+                    storage_backend="local",
+                    object_key=str(stored.get("relative_path") or stored["url"]),
+                    parse_status="pending",
+                    index_status="indexing",
+                    chunk_count=0,
+                )
+                docs = self._build_docs_from_file(
+                    document_id=str(document.id),
+                    node_id=str(node.id),
+                    file_name=normalized_name,
+                    file_url=stored["url"],
+                    full_path=full_path,
                     suffix=suffix,
                     content=content,
                     rag_space_id=rag_space_id,
                 )
-                result = await self._indexer.index(docs)
+                try:
+                    result = await self._indexer.index(docs)
+                except EmbeddingModelNotConfigured as exc:
+                    raise ValidationError("未配置 embedding 模型，请先在模型配置页启用 embedding 模型后再上传文件。") from exc
                 if int(result.get("accepted") or 0) <= 0:
-                    raise ValidationError(f"failed to index document: {upload.filename or 'unnamed'}")
-                row = await self._files.create(
-                    rag_space_id=rag_space_id,
-                    org_id=self._org_id,
-                    uploaded_by=self._user_id,
-                    file_name=upload.filename or "document.bin",
-                    content_type=upload.content_type,
-                    file_url=stored["url"],
-                    size_bytes=int(stored["size_bytes"] or 0),
-                    status="ready",
-                )
-                saved_rows.append(RagSpaceFileResponse.model_validate(row))
+                    raise ValidationError(f"failed to index document: {normalized_name}")
+                document.parse_status = "parsed"
+                document.index_status = "ready"
+                document.chunk_count = int(result.get("accepted") or 0)
+                saved_rows.append(self._serialize_node(node, document))
 
-            await self._spaces.recalculate_file_count(
+            await self._nodes.recalculate_children_counts(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._spaces.recalculate_counters(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
@@ -155,39 +374,56 @@ class RagSpaceService:
             self._raise_if_rag_metadata_missing(exc)
             raise
 
+    async def delete_node(self, *, rag_space_id: str, node_id: str) -> None:
+        try:
+            await self._get_owned_space(rag_space_id)
+            nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            target = next((node for node in nodes if node.id == node_id), None)
+            if target is None:
+                raise NotFoundError("rag node not found")
+
+            subtree = self._collect_subtree(nodes=nodes, root_id=node_id)
+            subtree_ids = [str(node.id) for node in subtree]
+            documents = await self._documents.list_for_node_ids(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                node_ids=subtree_ids,
+                owner_user_id=self._user_id,
+            )
+            await self._remove_documents(rag_space_id=rag_space_id, documents=documents)
+            await self._documents.soft_delete_many(document_ids=[str(item.id) for item in documents])
+            await self._nodes.soft_delete_many(node_ids=subtree_ids)
+            await self._nodes.recalculate_children_counts(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._spaces.recalculate_counters(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._session.commit()
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
     async def delete_document(self, *, rag_space_id: str, file_id: str) -> None:
         try:
             await self._get_owned_space(rag_space_id)
-            row = await self._files.soft_delete(
+            document = await self._documents.get(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
-                file_id=file_id,
+                document_id=file_id,
                 owner_user_id=self._user_id,
             )
-            if row is None:
+            if document is None:
                 raise NotFoundError("rag document not found")
-            self._storage.delete_by_url(str(row.file_url))
-            await self._indexer.delete_by_filter(
-                {
-                    "org_id": self._org_id,
-                    "user_id": self._user_id,
-                    "rag_space_id": rag_space_id,
-                    "file_name": str(row.file_name),
-                }
-            )
-            await self._spaces.recalculate_file_count(
-                org_id=self._org_id,
-                rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
-            )
-            refreshed_space = await self._get_owned_space(rag_space_id)
-            if int(refreshed_space.file_count or 0) <= 0:
-                await self._spaces.soft_delete(
-                    org_id=self._org_id,
-                    rag_space_id=rag_space_id,
-                    owner_user_id=self._user_id,
-                )
-            await self._session.commit()
+            await self.delete_node(rag_space_id=rag_space_id, node_id=str(document.node_id))
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise
@@ -239,8 +475,11 @@ class RagSpaceService:
     def _build_docs_from_file(
         self,
         *,
+        document_id: str,
+        node_id: str,
         file_name: str,
         file_url: str,
+        full_path: str,
         suffix: str,
         content: bytes,
         rag_space_id: str,
@@ -249,8 +488,11 @@ class RagSpaceService:
             "rag_space_id": rag_space_id,
             "org_id": self._org_id,
             "user_id": self._user_id,
+            "node_id": node_id,
+            "document_id": document_id,
             "file_name": file_name,
             "file_url": file_url,
+            "full_path": full_path,
         }
         if suffix == ".jsonl":
             docs: list[dict[str, Any]] = []
@@ -265,7 +507,7 @@ class RagSpaceService:
                     continue
                 docs.append(
                     {
-                        "id": f"{rag_space_id}:{file_name}:{index}",
+                        "id": f"{document_id}:{index}",
                         "title": str(item.get("title") or file_name),
                         "text": body,
                         "source": str(item.get("source") or file_name),
@@ -281,7 +523,7 @@ class RagSpaceService:
             raise ValidationError(f"document has no indexable text: {file_name}")
         return [
             {
-                "id": f"{rag_space_id}:{file_name}",
+                "id": document_id,
                 "title": file_name,
                 "text": text.strip(),
                 "source": file_name,
@@ -298,11 +540,143 @@ class RagSpaceService:
             raise ValidationError(f"unsupported document type: {file_name}")
         return str(parsed.get("text") or "")
 
+    async def _get_valid_parent(self, *, rag_space_id: str, parent_id: str | None) -> RagNode | None:
+        if not parent_id:
+            return None
+        parent = await self._nodes.get(
+            org_id=self._org_id,
+            rag_space_id=rag_space_id,
+            node_id=parent_id,
+            owner_user_id=self._user_id,
+        )
+        if parent is None:
+            raise NotFoundError("parent node not found")
+        if parent.node_type != "folder":
+            raise ValidationError("files cannot contain child nodes")
+        return parent
+
+    async def _ensure_unique_name(
+        self,
+        *,
+        rag_space_id: str,
+        parent_id: str | None,
+        name: str,
+        exclude_node_id: str | None = None,
+    ) -> None:
+        sibling = await self._nodes.find_sibling(
+            org_id=self._org_id,
+            rag_space_id=rag_space_id,
+            parent_id=parent_id,
+            name=name,
+            owner_user_id=self._user_id,
+        )
+        if sibling is not None and str(sibling.id) != exclude_node_id:
+            raise ValidationError("a node with the same name already exists in this folder")
+
+    def _normalize_node_name(self, value: str, *, label: str = "node") -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValidationError(f"{label} name is required")
+        if "/" in normalized or "\\" in normalized:
+            raise ValidationError(f"{label} name cannot contain path separators")
+        return normalized
+
+    def _build_full_path(self, *, parent: RagNode | None, name: str) -> str:
+        return f"{parent.full_path}/{name}" if parent else name
+
+    def _refresh_subtree_paths(self, *, nodes: list[RagNode], root_id: str) -> None:
+        node_map = {str(node.id): node for node in nodes}
+        children_by_parent: dict[str, list[RagNode]] = {}
+        for node in nodes:
+            if node.parent_id:
+                children_by_parent.setdefault(str(node.parent_id), []).append(node)
+
+        root = node_map[root_id]
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            for child in children_by_parent.get(str(current.id), []):
+                child.full_path = f"{current.full_path}/{child.name}"
+                child.depth = int(current.depth or 0) + 1
+                stack.append(child)
+
+    def _ensure_not_moving_into_descendant(self, *, target: RagNode, new_parent: RagNode | None, nodes: list[RagNode]) -> None:
+        if new_parent is None or target.node_type != "folder":
+            return
+        subtree_ids = {str(node.id) for node in self._collect_subtree(nodes=nodes, root_id=str(target.id))}
+        if str(new_parent.id) in subtree_ids:
+            raise ValidationError("cannot move a folder into its own descendant")
+
+    def _build_tree(self, *, nodes: list[RagNode], documents: list[RagDocument]) -> list[RagNodeResponse]:
+        document_map = {str(item.node_id): item for item in documents}
+        serialized: dict[str, RagNodeResponse] = {
+            str(node.id): self._serialize_node(node, document_map.get(str(node.id))) for node in nodes
+        }
+        roots: list[RagNodeResponse] = []
+        for node in nodes:
+            current = serialized[str(node.id)]
+            if node.parent_id and str(node.parent_id) in serialized:
+                serialized[str(node.parent_id)].children.append(current)
+            else:
+                roots.append(current)
+        return roots
+
+    def _serialize_node(self, node: RagNode, document: RagDocument | None) -> RagNodeResponse:
+        return RagNodeResponse(
+            id=str(node.id),
+            org_id=str(node.org_id),
+            rag_space_id=str(node.rag_space_id),
+            parent_id=str(node.parent_id) if node.parent_id else None,
+            created_by=str(node.created_by) if node.created_by else None,
+            node_type=str(node.node_type),
+            name=str(node.name),
+            full_path=str(node.full_path),
+            depth=int(node.depth or 0),
+            sort_order=int(node.sort_order or 0),
+            status=str(node.status or "ready"),
+            children_count=int(node.children_count or 0),
+            created_at=node.created_at,
+            updated_at=node.updated_at,
+            document=RagDocumentResponse.model_validate(document) if document is not None else None,
+            children=[],
+        )
+
+    def _collect_subtree(self, *, nodes: list[RagNode], root_id: str) -> list[RagNode]:
+        children_by_parent: dict[str | None, list[RagNode]] = {}
+        for node in nodes:
+            children_by_parent.setdefault(str(node.parent_id) if node.parent_id else None, []).append(node)
+
+        result: list[RagNode] = []
+        stack = [root_id]
+        node_map = {str(node.id): node for node in nodes}
+        while stack:
+            current_id = stack.pop()
+            current = node_map.get(current_id)
+            if current is None:
+                continue
+            result.append(current)
+            for child in children_by_parent.get(current_id, []):
+                stack.append(str(child.id))
+        return result
+
+    async def _remove_documents(self, *, rag_space_id: str, documents: list[RagDocument]) -> None:
+        for document in documents:
+            self._storage.delete_by_url(str(document.file_url))
+            await self._indexer.delete_by_filter(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "rag_space_id": rag_space_id,
+                    "document_id": str(document.id),
+                    "node_id": str(document.node_id),
+                }
+            )
+
     def _raise_if_rag_metadata_missing(self, exc: Exception) -> None:
         if _is_rag_metadata_missing(exc):
             raise ServiceUnavailableError(RAG_METADATA_MISSING_MESSAGE) from exc
 
-    async def _get_owned_space(self, rag_space_id: str):
+    async def _get_owned_space(self, rag_space_id: str) -> RagSpace:
         space = await self._spaces.get(
             org_id=self._org_id,
             rag_space_id=rag_space_id,
