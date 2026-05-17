@@ -156,15 +156,23 @@ class LangfuseTracer:
     def start_trace(self, **kwargs):
         trace_id = str(kwargs.get("trace_id") or self.create_trace_id())
         source_type = kwargs.get("source_type") or "inspection"
+        agent = kwargs.get("agent", "")
+        sub_route = kwargs.get("sub_route", "")
+        if agent and sub_route:
+            trace_name = f"{agent}.{sub_route}"
+        else:
+            trace_name = kwargs.get("name") or "chat.general_chat"
         payload = {
             "trace_id": trace_id,
             "task_id": kwargs.get("task_id"),
             "org_id": kwargs.get("org_id"),
             "model_key": kwargs.get("model_key"),
-            "name": kwargs.get("name") or "inspection_pipeline",
+            "name": trace_name,
             "started_at": kwargs.get("started_at") or datetime.utcnow().isoformat(),
             "trace_url": self.get_trace_url(trace_id),
             "source_type": source_type,
+            "agent": agent,
+            "sub_route": sub_route,
         }
 
         if self._client is not None:
@@ -177,10 +185,23 @@ class LangfuseTracer:
                     "model_key": payload["model_key"],
                     "source_type": source_type,
                     "verdict": kwargs.get("verdict"),
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "intent": kwargs.get("intent", ""),
+                    "prompt_version": kwargs.get("prompt_version", ""),
+                    "workflow_version": kwargs.get("workflow_version", ""),
+                    "session_id": kwargs.get("session_id", ""),
+                    "route_source": kwargs.get("route_source", ""),
+                    "route_confidence": kwargs.get("route_confidence", 0.0),
                 }.items()
                 if value is not None
             }
-            tags = [t for t in [f"source_type:{source_type}", f"org_id:{payload['org_id']}" if payload.get("org_id") else None] if t is not None]
+            tags = [t for t in [
+                f"source_type:{source_type}",
+                f"org_id:{payload['org_id']}" if payload.get("org_id") else None,
+                f"agent:{agent}" if agent else None,
+                f"sub_route:{sub_route}" if sub_route else None,
+            ] if t is not None]
             if callable(trace_factory):
                 try:
                     trace_factory(

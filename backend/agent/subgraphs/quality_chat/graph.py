@@ -459,22 +459,33 @@ async def task_extractor(state: QualityChatState) -> QualityChatState:
 
 
 async def knowledge(state: QualityChatState) -> QualityChatState:
-    if state.get("intent") not in {"quality_qa", "rag_qa"}:
+    from agent.rag.rag_policy import RagPolicy
+    rag_policy = RagPolicy()
+    sub_route = state.get("sub_route", state.get("intent", "general_chat"))
+    selected_rag = state.get("selected_rag_space") or {}
+
+    policy_decision = rag_policy.decide(
+        sub_route=sub_route,
+        selected_rag_space=selected_rag if selected_rag.get("id") else None,
+        spec_code=state.get("spec_code"),
+    )
+
+    if not policy_decision.should_retrieve:
         state["retrieved_chunks"] = []
         state["citations"] = []
-        state["retrieval_metrics"] = {"query": state.get("query"), "hit_count": 0, "empty_recall": True, "top_score": 0.0, "skipped": True}
+        state["retrieval_metrics"] = {"skipped": True, "reason": policy_decision.reason}
         return state
+
     trace_id = str((state.get("trace") or {}).get("trace_id") or "")
-    selected_rag = _selected_rag_space(state.get("ext") or {})
     payload_filter: dict[str, Any] = {"org_id": str(state["org_id"]), "user_id": str(state["user_id"])}
-    if selected_rag:
-        payload_filter["rag_space_id"] = selected_rag["id"]
+    if policy_decision.rag_space_id:
+        payload_filter["rag_space_id"] = policy_decision.rag_space_id
     scope_node_ids = _selected_rag_scope_node_ids(state.get("ext") or {})
     if scope_node_ids:
         payload_filter["ancestor_node_ids"] = scope_node_ids
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
     knowledge_payload = _dspy_target_payload(state, "quality_judgement.knowledge")
-    top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or 4)))
+    top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or policy_decision.top_k)))
     started_at = perf_counter()
     docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
     latency_ms = round((perf_counter() - started_at) * 1000)
@@ -488,7 +499,7 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
         "top_score": float(docs[0]["score"]) if docs else 0.0,
         "skipped": False,
         "latency_ms": latency_ms,
-        "rag_space_id": selected_rag["id"] if selected_rag else None,
+        "rag_space_id": policy_decision.rag_space_id,
         "top_k": top_k,
     }
     return state
@@ -505,92 +516,46 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
     draft = dict(state.get("task_draft") or {})
     missing_slots = list(state.get("missing_slots") or [])
 
-    history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in history[-6:] if item.get("content")]
-    history_text = "\n".join(history_lines) if history_lines else "无"
+    # ── Build system prompt via PromptBuilder ──
+    from agent.prompts.prompt_builder import PromptBuilder
 
-    # ── Build system prompt per intent ──
-    if intent == "smalltalk":
-        prompt = (
-            "你是平台内的智能助手。请友好、自然地回复用户的闲聊消息，可以适当展现个性。"
-            "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        )
-        user_message = f"用户消息:\n{query}\n\n历史对话:\n{history_text}"
-        temperature = 0.7
+    agent_name = state.get("agent", "chat")
+    sub_route = state.get("sub_route", intent or "general_chat")
 
-    elif intent in {"task_create", "task_followup"}:
-        task_context = (
-            f"当前任务草稿：\n{_format_task_draft(draft)}\n"
-            f"缺失字段：{'、'.join(_slot_labels(missing_slots)) if missing_slots else '无'}\n"
-            f"当前状态：{action_state}"
-        )
-        if action_state == "task_cancelled":
-            prompt = (
-                "你是平台内的质量检测助手。用户已取消任务创建。请友好地告知用户取消成功，并说明以后可继续发起。"
-                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-            )
-        elif action_state == "awaiting_task_details":
-            label_hints = "、".join(_slot_labels(missing_slots)) if missing_slots else "无"
-            prompt = (
-                f"你是平台内的质量检测助手。用户想创建检测任务但信息不完整，还需要补充：{label_hints}。\n"
-                f"{task_context}\n"
-                "请自然地告知用户当前进展，列出还需补充的信息，引导用户继续提供，并提示可以点击“填写检测信息”按钮直接填表。"
-                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-            )
-        elif action_state == "awaiting_task_confirmation":
-            prompt = (
-                f"你是平台内的质量检测助手。任务信息已完整，等待用户确认。\n{task_context}\n"
-                "请清晰展示任务草稿，引导用户回复“确认”或点击“确认并提交任务”按钮来提交。"
-                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-            )
-        elif action_state == "task_create_requested":
-            prompt = (
-                "你是平台内的质量检测助手。任务正在创建中，请告知用户任务已接收，正在启动执行。"
-                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-            )
+    # Map old intents to new sub_routes for backward compat
+    if not state.get("sub_route"):
+        if intent == "smalltalk":
+            sub_route = "general_chat"
+        elif intent in {"task_create", "task_followup"}:
+            sub_route = "task_create"
+        elif intent == "rag_qa":
+            sub_route = "rag_qa"
+        elif intent == "quality_qa":
+            sub_route = "quality_qa"
         else:
-            prompt = (
-                f"你是平台内的质量检测助手。用户提到了检测任务相关的内容。\n{task_context}\n"
-                "请自然地回应用户，判断用户意图并引导用户明确任务需求。"
-                "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-            )
-        user_message = f"用户消息:\n{query}\n\n历史对话:\n{history_text}"
-        temperature = 0.3
+            sub_route = "general_chat"
 
-    elif intent == "rag_qa":
-        doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
-        doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
-        prompt = (
-            "你是平台内的知识库问答助手。请基于检索证据直接回答用户的普通问题；"
-            "不要套用质量检测、任务检测、标准编号、产品型号、缺陷位置或工艺上下文等话术。"
-            "如果证据不足，请只说明知识库没有足够相关内容。"
-            "只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        )
-        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
-        temperature = 0.2
-
-    elif intent == "quality_qa":
-        doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
-        doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
-        prompt = "你是质量检测聊天智能体。请严格基于检索证据回答，不足时明确说明不确定性。只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
-        temperature = 0.2
-
-    else:  # general_qa
-        prompt = "你是平台内的通用聊天助手。对普通问答直接自然回答；若信息不足就简洁追问。只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}"
-        temperature = 0.4
-
-    # ── Attach DSPy runtime prompt section if available ──
-    prompt_section = _dspy_prompt_section(
-        state,
-        [
-            "quality_judgement.planner",
-            "quality_judgement.reasoning",
-            "quality_judgement.response_writer",
-        ],
+    prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        agent=agent_name,
+        sub_route=sub_route,
+        query=query,
+        history=history,
+        retrieved_docs=docs if sub_route in {"rag_qa", "quality_qa", "inspection_execute"} else None,
+        task_draft=draft if sub_route in {"task_create"} else None,
+        action_state=action_state,
+        runtime_prompt_section=_dspy_prompt_section(
+            state,
+            [
+                "quality_judgement.planner",
+                "quality_judgement.reasoning",
+                "quality_judgement.response_writer",
+            ],
+        ),
     )
-    if prompt_section:
-        prompt = f"{prompt}\n\n{prompt_section}"
+
+    state["prompt_version"] = prompt_meta["prompt_version"]
+    state["sub_route"] = sub_route
+    state["agent"] = agent_name
 
     # ── Unified LLM call ──
     _t_pre_llm = perf_counter()
@@ -1011,6 +976,8 @@ class QualityChatGraph:
             return await self._run_state(state)
         from agent.contracts.quality_contracts import NormalizedRequest, AgentOutput
         if isinstance(state, NormalizedRequest):
+            agent = getattr(route_decision, "selected_agent", "chat") if route_decision else "chat"
+            sub_route = getattr(route_decision, "sub_route", "general_chat") if route_decision else "general_chat"
             state_dict = {
                 "schema_version": "1.0.0",
                 "request_id": state.request_id,
@@ -1026,6 +993,8 @@ class QualityChatGraph:
                 "metadata": dict(state.metadata),
                 "ext": dict(state.ext),
                 "emit": state.ext.get("emit"),
+                "agent": agent,
+                "sub_route": sub_route,
             }
             graph_result = await self._run_state(state_dict)
             payload = dict(graph_result.get("response_payload") or {})
@@ -1045,7 +1014,23 @@ class QualityChatGraph:
     async def _run_state(self, state: QualityChatState) -> QualityChatState:
         _t_graph = perf_counter()
         tracer = LangfuseTracer()
-        state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", source_type="chat", input={"query": state["query"], "session_id": state["session_id"]})
+        state["trace"] = tracer.start_trace(
+            trace_id=state.get("trace", {}).get("trace_id"),
+            task_id=state["session_id"],
+            agent=state.get("agent", "chat"),
+            sub_route=state.get("sub_route", "general_chat"),
+            intent=state.get("intent"),
+            prompt_version=state.get("prompt_version"),
+            workflow_version="chat_router_v2",
+            route_source=state.get("route_source", ""),
+            route_confidence=state.get("route_confidence", 0.0),
+            session_id=state.get("session_id"),
+            source_type="chat",
+            org_id=state.get("org_id"),
+            model_key=state.get("model_key"),
+            name="quality_chat_v1",
+            input={"query": state.get("query", ""), "session_id": state.get("session_id", "")},
+        )
         result = await self._graph.ainvoke(state)
         logger.info(
             "graph_total intent=%s query_len=%d total_ms=%d",
