@@ -123,8 +123,8 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
         async def run_chat(self, payload: dict):
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
-                    selected_agent="quality_chat",
-                    intent="general_qa",
+                    selected_agent="chat",
+                    intent="general_chat",
                     reason="test",
                 ),
                 agent_output={
