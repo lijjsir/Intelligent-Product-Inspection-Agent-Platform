@@ -7,12 +7,19 @@ from pydantic import BaseModel, Field
 
 class AgentRouteDecision(BaseModel):
     """AgentManager 路由决策结果"""
-    selected_agent: Literal["quality_chat", "inspection_task"] = "quality_chat"
-    intent: str = ""
+    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    sub_route: Literal[
+        "general_chat",
+        "rag_qa",
+        "quality_qa",
+        "task_create",
+        "inspection_execute",
+    ] = "general_chat"
+    intent: str = "general_chat"
     confidence: float = 1.0
     reason: str = ""
     requires_confirmation: bool = False
-    route_source: str = "rule"
+    route_source: Literal["manual", "rule", "model", "fallback"] = "rule"
     fallback_agent: str | None = None
 
 
