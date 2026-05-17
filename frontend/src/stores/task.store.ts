@@ -46,7 +46,23 @@ export const useTaskStore = defineStore("task", () => {
 
   async function runTask(id: string) {
     const { data } = await taskApi.run(id);
+    if (current.value?.id === id) {
+      current.value = { ...current.value, status: data.data.status || "queued" };
+    }
+    await fetchTask(id);
     return data.data;
+  }
+
+  async function fetchTaskEvents(id: string) {
+    const { data } = await taskApi.events(id);
+    return data.data.map((item: TaskStreamEvent & { event_type?: string; payload_json?: TaskStreamEvent }) => ({
+      ...(item.payload_json || item),
+      type: String(item.type || item.event_type || item.payload_json?.type || "event"),
+      status: item.status || item.payload_json?.status,
+      stage: item.stage || item.payload_json?.stage,
+      message: item.message || item.payload_json?.message,
+      ts: item.ts || item.payload_json?.ts,
+    }));
   }
 
   function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
@@ -84,6 +100,7 @@ export const useTaskStore = defineStore("task", () => {
     createTask,
     deleteTask,
     runTask,
+    fetchTaskEvents,
     subscribeTaskStream,
     $reset,
   };

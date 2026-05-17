@@ -19,6 +19,11 @@ class FakeTask:
         self.image_urls = ["https://example.com/a.png"]
         self.created_at = datetime(2026, 3, 25, 12, 0, 0)
         self.updated_at = datetime(2026, 3, 25, 12, 0, 1)
+        self.has_result = False
+        self.has_stability = False
+        self.result_id = None
+        self.stability_id = None
+        self.execution = None
 
 
 class FakeSession:
@@ -75,6 +80,30 @@ class FakeSpecRepo:
 
     async def get_active_spec(self, org_id: str, spec_code: str):
         return self.active_specs.get(spec_code)
+
+
+class FakeResult:
+    id = "result-1"
+
+
+class FakeStability:
+    id = "stability-1"
+
+
+class FakeResultRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def get_by_task(self, org_id: str, task_id: str):
+        return FakeResult()
+
+
+class FakeStabilityRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def get_by_task(self, org_id: str, task_id: str):
+        return FakeStability()
 
 
 class FakeAuditService:
@@ -199,6 +228,26 @@ async def test_get_task_ignores_org_scope_for_admin_role(monkeypatch):
             "owner_user_id": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_task_annotates_report_availability(monkeypatch):
+    repo = FakeTaskRepo(None)
+    monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
+    monkeypatch.setattr("app.services.task_service.ResultRepository", FakeResultRepo)
+    monkeypatch.setattr("app.services.task_service.StabilityRepository", FakeStabilityRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1", actor_user_id="user-1", actor_role="user")
+
+    task = await service.get_task("task-with-reports")
+    response = TaskResponse.model_validate(task)
+
+    assert response.has_result is True
+    assert response.result_id == "result-1"
+    assert response.has_stability is True
+    assert response.stability_id == "stability-1"
 
 
 @pytest.mark.asyncio

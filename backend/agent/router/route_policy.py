@@ -38,6 +38,26 @@ class AgentRoutePolicy:
         query = str(input_data.query or "").strip()
         attachments = list(input_data.attachments or [])
         image_urls = list(input_data.image_urls or [])
+        route_hints = {
+            **dict(input_data.route_hints or {}),
+            **dict((input_data.ext or {}).get("route_hints") or {}),
+        }
+
+        if route_hints.get("force_agent") == "inspection_task":
+            return AgentRouteDecision(
+                selected_agent="inspection_task",
+                intent="task_create",
+                reason="前端模式指定任务检测 Agent",
+                route_source="manual",
+            )
+        if route_hints.get("force_agent") == "quality_chat":
+            return AgentRouteDecision(
+                selected_agent="quality_chat",
+                intent="general_qa",
+                confidence=1.0,
+                reason="前端模式指定智能问答 Agent",
+                route_source="manual",
+            )
 
         has_non_pdf = False
         has_image_attachment = False

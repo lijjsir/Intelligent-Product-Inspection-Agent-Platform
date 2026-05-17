@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from app.repositories.chat_repo import ChatMessageRepository
@@ -8,13 +7,14 @@ from app.repositories.chat_score_repo import ChatMessageScoreRepository
 from app.services.chat_trust_scoring_service import ChatTrustScoringService, trust_payload_from_score
 from infra.database.session import get_session
 from worker.celery_app import celery_app
+from worker.asyncio_runner import run_celery_async
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="worker.tasks.chat_trust_scoring_task")
 def score_chat_message(payload: dict | None = None) -> dict:
-    return asyncio.run(_score_chat_message(payload or {}))
+    return run_celery_async(_score_chat_message(payload or {}))
 
 
 async def _resolve_review_config(org_id: str) -> dict:

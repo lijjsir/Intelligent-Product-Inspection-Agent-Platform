@@ -142,6 +142,34 @@ def _build_retrieval_query(
     return " ".join(part.strip() for part in parts if str(part or "").strip())
 
 
+def _task_draft_from_request(
+    *,
+    request: NormalizedRequest,
+    product_id: str,
+    spec_code: str,
+    image_urls: list[str],
+    priority: int,
+    product_family: str,
+    product_name: str,
+    product_model: str,
+    structured_record: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "product_id": product_id,
+        "spec_code": spec_code,
+        "image_urls": image_urls,
+        "priority": priority,
+        "metadata": {
+            "source": "inspection_task",
+            "chat_request_id": request.request_id,
+            "product_family": product_family,
+            "product_name": product_name,
+            "product_model": product_model,
+            "structured_record": structured_record,
+        },
+    }
+
+
 def _build_file_citations(request: NormalizedRequest, parsed_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     file_citations = [
         {"id": f"file-{index + 1}", "title": item["name"], "source": item.get("url") or item["name"],
@@ -251,6 +279,8 @@ class InspectionTaskGraph:
         image_urls = list(request.image_urls or request.ext.get("image_urls") or [])
         if not image_urls:
             image_urls = list_value(structured_record.get("image_urls"))
+        planner_default_priority = int_value(planner_target.config_payload.get("default_priority") if planner_target else 5) or 5
+        priority = int_value(structured_record.get("priority") or planner_default_priority) or planner_default_priority
 
         structured_evidence = bool(structured_record or any(item.get("text") for item in parsed_files))
         required_fields = list((contract_target.config_payload.get("required_fields") if contract_target else []) or [])
@@ -269,6 +299,17 @@ class InspectionTaskGraph:
             missing_fields.append("image_urls")
 
         if missing_fields:
+            task_draft = _task_draft_from_request(
+                request=request,
+                product_id=product_id,
+                spec_code=spec_code,
+                image_urls=image_urls,
+                priority=priority,
+                product_family=product_family,
+                product_name=product_name,
+                product_model=product_model,
+                structured_record=structured_record,
+            )
             clarification = ClarificationRequest(
                 missing_fields=missing_fields,
                 reason="当前用户输入、解析后的文件内容以及 RAG 上下文，仍不足以提供可信的判定依据。",
@@ -283,10 +324,11 @@ class InspectionTaskGraph:
             return AgentOutput(
                 message_type="task_action", answer=answer, summary="等待补充必要信息",
                 action_state="awaiting_clarification", clarification=clarification,
+                task_draft=task_draft,
                 quality={"passed": False, "risk_level": "critical", "risk_score": 0.92,
                          "hallucination_flags": ["missing_required_inputs"]},
                 persistable_output=PersistableOutput(),
-                raw_state={"parsed_files": parsed_files, "structured_record": structured_record},
+                raw_state={"parsed_files": parsed_files, "structured_record": structured_record, "task_draft": task_draft},
             )
 
         defects = build_defects(structured_record, product_family)
@@ -366,8 +408,6 @@ class InspectionTaskGraph:
         rag_hits = list(rag_result.get("hits") or [])
         quality = _quality_payload(verdict, ai_gate, citations)
         task_status = _status_from_verdict(verdict)
-        planner_default_priority = int_value(planner_target.config_payload.get("default_priority") if planner_target else 5) or 5
-        priority = int_value(structured_record.get("priority") or planner_default_priority) or planner_default_priority
         risk_level, risk_score = _verdict_risk(verdict)
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
         expectation_check = _build_expectation_check(expected_verdict, verdict)
@@ -462,15 +502,19 @@ class InspectionTaskGraph:
             )],
         )
 
-        task_draft = {
-            "product_id": product_id, "spec_code": spec_code, "image_urls": image_urls,
-            "priority": priority,
-            "metadata": {"source": "inspection_task", "product_family": product_family,
-                        "product_name": product_name, "product_model": product_model,
-                        "structured_record": structured_record},
-        }
+        task_draft = _task_draft_from_request(
+            request=request,
+            product_id=product_id,
+            spec_code=spec_code,
+            image_urls=image_urls,
+            priority=priority,
+            product_family=product_family,
+            product_name=product_name,
+            product_model=product_model,
+            structured_record=structured_record,
+        )
         return AgentOutput(
-            message_type="quality_answer", answer=answer,
+            message_type="task_result", answer=answer,
             summary=str(evaluation.get("summary") or "结构化质量检测已完成。"),
             action_state=task_status, task_draft=task_draft, quality=quality,
             citations=citations, result_card=result_card,

@@ -316,7 +316,7 @@ class ChatService:
                     "action_state": "task_started",
                     "created_task": {
                         "id": str(task.id),
-                        "status": "running",
+                        "status": str(launch.get("status") or "queued"),
                         "product_id": str(task.product_id),
                         "spec_code": str(task.spec_code),
                         "priority": int(task.priority),

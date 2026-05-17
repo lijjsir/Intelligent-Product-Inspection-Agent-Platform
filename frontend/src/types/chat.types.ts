@@ -113,7 +113,9 @@ export interface ChatMessagePayload {
   materialized_task?: ChatCreatedTask | null;
   materialization_status?: "synced" | "failed" | string;
   materialization_error?: string | null;
+  agent_name?: string | null;
   source_graph?: string | null;
+  route_decision?: Record<string, unknown> | null;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   message_type?: string;
