@@ -199,3 +199,19 @@ class AgentRoutePolicy:
             reason="默认普通聊天",
             route_source="rule",
         )
+
+    async def decide_with_model(
+        self,
+        input_data: AgentRouterInput,
+        llm_client=None,
+    ) -> AgentRouteDecision:
+        decision = self.decide(input_data)
+        if decision.fallback_agent == "model_classifier" and llm_client is not None:
+            from agent.router.model_classifier import ModelClassifier
+            classifier = ModelClassifier()
+            return await classifier.classify(
+                query=input_data.query,
+                llm_client=llm_client,
+                ext=input_data.ext,
+            )
+        return decision
