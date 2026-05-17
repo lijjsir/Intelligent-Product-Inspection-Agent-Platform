@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     langfuse_environment: str | None = None
     langfuse_release: str | None = None
 
+    langfuse_init_org_id: str | None = None
+    langfuse_init_org_name: str | None = None
+    langfuse_init_project_id: str | None = None
+    langfuse_init_project_name: str | None = None
+    langfuse_init_user_email: str | None = None
+    langfuse_init_user_name: str | None = None
+    langfuse_init_user_password: str | None = None
+
     @field_validator(
         "langfuse_public_key",
         "langfuse_secret_key",
@@ -82,6 +90,13 @@ class Settings(BaseSettings):
         "langfuse_project_id",
         "langfuse_environment",
         "langfuse_release",
+        "langfuse_init_org_id",
+        "langfuse_init_org_name",
+        "langfuse_init_project_id",
+        "langfuse_init_project_name",
+        "langfuse_init_user_email",
+        "langfuse_init_user_name",
+        "langfuse_init_user_password",
         mode="before",
     )
     @classmethod
