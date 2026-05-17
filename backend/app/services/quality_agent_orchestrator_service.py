@@ -312,65 +312,56 @@ class QualityAgentOrchestratorService:
         if isinstance(output.raw_state, dict):
             base_payload = dict(output.raw_state.get("response_payload") or {})
 
-        return {
-            **base_payload,
-            "answer": output.answer,
-            "summary": output.summary,
-            "citations": list(output.citations or []),
-            "quality": dict(output.quality or {}),
-            "result_card": dict(output.result_card) if output.result_card else None,
-            "expectation_check": dict(output.expectation_check or {}) if output.expectation_check else None,
-            "rag_summary": dict(output.rag_summary) if output.rag_summary else None,
-            "agent_name": (
+        agent = (
+            base_payload.get("agent")
+            or (output.route_decision.selected_subgraph if output.route_decision else None)
+            or "chat"
+        )
+        sub_route = (
+            base_payload.get("sub_route")
+            or base_payload.get("intent")
+            or "general_chat"
+        )
+        trace_id = base_payload.get("trace_id") or (
+            output.persistable_output.quality_trace.trace_id
+            if output.persistable_output and output.persistable_output.quality_trace
+            else None
+        )
+
+        from agent.response.response_builder import ResponseBuilder
+
+        return ResponseBuilder.build(
+            agent=agent,
+            sub_route=sub_route,
+            answer=output.answer,
+            summary=output.summary,
+            message_type=output.message_type,
+            citations=list(output.citations or []),
+            quality=dict(output.quality or {}),
+            rag_summary=dict(output.rag_summary) if output.rag_summary else None,
+            retrieval_metrics=base_payload.get("retrieval_metrics"),
+            task_draft=task_form_defaults or None,
+            missing_slots=list((output.clarification.missing_fields if output.clarification else []) or []),
+            awaiting_confirmation=bool(base_payload.get("awaiting_confirmation") or False),
+            action_state=output.action_state,
+            created_task=base_payload.get("created_task") or materialized_task,
+            result_card=dict(output.result_card) if output.result_card else None,
+            route_decision=output.route_decision.model_dump() if output.route_decision else None,
+            trace_id=trace_id,
+            trace_url=base_payload.get("trace_url"),
+            prompt_version=base_payload.get("prompt_version", ""),
+            selected_rag_space=request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
+            agent_name_compat=(
                 output.route_decision.selected_subgraph
                 if output.route_decision
-                else (base_payload.get("agent_name") or base_payload.get("source_graph") or "quality_judgement")
+                else base_payload.get("agent_name") or "quality_judgement"
             ),
-            "intent": (
-                base_payload.get("intent")
-                or (
-                    output.route_decision.intent
-                    if output.route_decision and output.route_decision.intent
-                    else None
-                )
-                or "quality_chat"
-            ),
-            "status": output.action_state or base_payload.get("status"),
-            "action_state": output.action_state,
-            "task_draft": task_form_defaults or None,
-            "task_form_defaults": task_form_defaults or None,
-            "task_submit_mode": (
-                base_payload.get("task_submit_mode")
-                or (
-                    "direct_create"
-                    if output.action_state in {"awaiting_clarification", "awaiting_task_details", "awaiting_task_confirmation"}
-                    else None
-                )
-            ),
-            "missing_slots": list((output.clarification.missing_fields if output.clarification else []) or []),
-            "clarification": output.clarification.model_dump() if output.clarification else None,
-            "pending_action": base_payload.get("pending_action"),
-            "awaiting_confirmation": bool(base_payload.get("awaiting_confirmation") or False),
-            "created_task": base_payload.get("created_task"),
-            "materialized_task": materialized_task,
-            "message_type": output.message_type,
-            "route_decision": output.route_decision.model_dump() if output.route_decision else None,
-            "workflow_version": "memory_manager_v2",
-            "prompt_version": (
-                output.persistable_output.quality_trace.prompt_version
-                if output.persistable_output and output.persistable_output.quality_trace
-                else base_payload.get("prompt_version")
-                or "memory_manager_v2"
-            ),
-            "selected_rag_space": request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
-            "source_graph": (
+            source_graph_compat=(
                 output.route_decision.selected_subgraph
                 if output.route_decision
-                else (base_payload.get("source_graph") or "quality_judgement")
+                else base_payload.get("source_graph") or "quality_judgement"
             ),
-            "materialization_status": "failed" if materialization_error else "synced",
-            "materialization_error": materialization_error,
-        }
+        )
 
     async def _materialize_chat_output(
         self,

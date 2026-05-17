@@ -8,7 +8,7 @@ import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
-import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
+import type { ChatAttachment, ChatMessage, ChatMessagePayload, ChatTaskDraft, ChatMode, ChatUiSchema } from "@/types/chat.types";
 import type { TaskCreate } from "@/types/task.types";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
@@ -22,7 +22,7 @@ const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
 const taskImageInputRef = ref<HTMLInputElement | null>(null);
-const chatMode = ref<"auto" | "qa" | "inspection">("auto");
+const chatMode = ref<ChatMode>("auto");
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -111,6 +111,23 @@ function agentLabel(message: ChatMessage) {
   if (agentName === "inspection_task") return "InspectionTaskAgent";
   if (agentName === "quality_judgement") return "Legacy QualityJudgementSubgraph";
   return agentName || "";
+}
+
+function resolveUiSchema(message: ChatMessage): ChatUiSchema {
+  if (message.payload?.ui_schema) return message.payload.ui_schema as ChatUiSchema;
+  if (message.message_type === "task_result") return "task_result_v1";
+  if (message.message_type === "task_action") return "task_action_v1";
+  if (message.message_type === "quality_answer") return "quality_answer_v1";
+  if (message.payload?.citations?.length) return "rag_answer_v1";
+  return "chat_text_v1";
+}
+
+function resolveAgent(payload: ChatMessagePayload | null | undefined): string {
+  return payload?.agent || payload?.agent_name || payload?.source_graph || "";
+}
+
+function resolveSubRoute(payload: ChatMessagePayload | null | undefined): string {
+  return payload?.sub_route || payload?.intent || "";
 }
 
 function verdictTagType(verdict?: string | null) {
@@ -245,8 +262,8 @@ async function sendMessage() {
   const message = input.value.trim();
   const routeHints = chatMode.value === "inspection"
     ? { force_agent: "inspection_task" }
-    : chatMode.value === "qa"
-      ? { force_agent: "quality_chat" }
+    : chatMode.value === "chat"
+      ? { force_agent: "chat" }
       : undefined;
   try {
     await chatStore.sendMessage({
@@ -360,8 +377,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           size="small"
           :options="[
             { label: '自动识别', value: 'auto' },
-            { label: '智能问答', value: 'qa' },
-            { label: '任务检测', value: 'inspection' },
+            { label: '聊天/知识库', value: 'chat' },
+            { label: '质检/任务', value: 'inspection' },
           ]"
         />
         <el-select

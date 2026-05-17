@@ -54,7 +54,7 @@ class AgentManager:
             else:
                 agent_output = await self.chat_agent.run(request, decision)
         except Exception as exc:
-            logger.exception("Agent execution failed: agent=%s", decision.selected_agent)
+            logger.exception("Agent execution failed: agent=%s sub_route=%s", decision.selected_agent, decision.sub_route)
             return AgentRouterOutput(
                 route_decision=decision,
                 agent_output={

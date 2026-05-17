@@ -465,12 +465,13 @@ export const useChatStore = defineStore("chat", () => {
 
     const clientSeqStart = allocateClientSeq(2);
     const selected = getSelectedRagSpaceSnapshot();
-    const ext = {
+    const ext: Record<string, unknown> = {
       ...(payload.ext || {}),
+      ui_mode: ((payload.ext as Record<string, unknown>)?.ui_mode as string) ?? "auto",
+      route_hints: (payload.ext as Record<string, unknown>)?.route_hints ?? undefined,
       attachments: [...pendingAttachments.value],
       selected_rag_space_id: selected?.id || undefined,
       selected_rag_space_name: selected?.name || undefined,
-      selected_rag_space_description: selected?.description || undefined,
       selected_rag_space: selected
         ? {
             id: selected.id,
@@ -660,6 +661,13 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     if (event.event === "message_final" || event.event === "run_failed") {
+      // Resolve agent, sub_route, ui_schema, trace_url with fallback chains
+      if (event.payload) {
+        basePayload.agent = event.payload.agent || event.payload.agent_name || event.payload.source_graph;
+        basePayload.sub_route = event.payload.sub_route || event.payload.intent;
+        basePayload.ui_schema = event.payload.ui_schema;
+        basePayload.trace_url = event.payload.trace_url || event.payload.trust_scoring?.trace_url;
+      }
       upsertMessage({
         id: event.message_id,
         session_id: event.session_id,
