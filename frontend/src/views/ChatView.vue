@@ -10,6 +10,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { TaskCreate } from "@/types/task.types";
+import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
 const billingStore = useBillingStore();
@@ -21,6 +22,7 @@ const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
 const taskImageInputRef = ref<HTMLInputElement | null>(null);
+const chatMode = ref<"auto" | "qa" | "inspection">("auto");
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -97,8 +99,18 @@ function intentLabel(intent?: string) {
     case "quality_qa": return "质量问答";
     case "task_create": return "任务创建";
     case "task_followup": return "任务跟进";
+    case "structured_inspection": return "结构化检测";
+    case "rag_qa": return "RAG 问答";
     default: return "";
   }
+}
+
+function agentLabel(message: ChatMessage) {
+  const agentName = message.payload?.agent_name || message.payload?.source_graph;
+  if (agentName === "quality_chat") return "QualityChatAgent";
+  if (agentName === "inspection_task") return "InspectionTaskAgent";
+  if (agentName === "quality_judgement") return "Legacy QualityJudgementSubgraph";
+  return agentName || "";
 }
 
 function verdictTagType(verdict?: string | null) {
@@ -150,13 +162,8 @@ function buildTaskDraft(message: ChatMessage): ChatTaskDraft | null {
   return message.payload?.task_form_defaults || message.payload?.task_draft || null;
 }
 
-function hasTaskAction(message: ChatMessage) {
-  const state = message.payload?.action_state;
-  return state === "awaiting_task_details" || state === "awaiting_task_confirmation";
-}
-
 function canConfirmTask(message: ChatMessage) {
-  return message.payload?.action_state === "awaiting_task_confirmation";
+  return canConfirmTaskAction(message);
 }
 
 function syncTaskFormImageUrls() {
@@ -236,8 +243,19 @@ async function submitTaskDialog() {
 async function sendMessage() {
   if (!canSend.value) return;
   const message = input.value.trim();
+  const routeHints = chatMode.value === "inspection"
+    ? { force_agent: "inspection_task" }
+    : chatMode.value === "qa"
+      ? { force_agent: "quality_chat" }
+      : undefined;
   try {
-    await chatStore.sendMessage({ message });
+    await chatStore.sendMessage({
+      message,
+      ext: {
+        ui_mode: chatMode.value,
+        route_hints: routeHints,
+      },
+    });
     input.value = "";
   } catch (error) {
     ElMessage.error("消息发送失败，请稍后重试。");
@@ -337,6 +355,15 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
+        <el-segmented
+          v-model="chatMode"
+          size="small"
+          :options="[
+            { label: '自动识别', value: 'auto' },
+            { label: '智能问答', value: 'qa' },
+            { label: '任务检测', value: 'inspection' },
+          ]"
+        />
         <el-select
           :model-value="chatStore.selectedRagSpaceId || undefined"
           clearable filterable placeholder="知识库 (可选)"
@@ -396,7 +423,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               </div>
 
               <!-- Tags -->
-              <div v-if="message.payload?.intent || message.payload?.selected_rag_space || message.payload?.citations?.length" class="bubble-tags">
+              <div v-if="agentLabel(message) || message.payload?.intent || message.payload?.selected_rag_space || message.payload?.citations?.length" class="bubble-tags">
+                <el-tag v-if="agentLabel(message)" size="small" effect="plain" type="info">Agent: {{ agentLabel(message) }}</el-tag>
                 <el-tag v-if="message.payload?.intent" size="small" effect="plain" type="primary">{{ intentLabel(message.payload.intent) }}</el-tag>
                 <el-tag v-if="message.payload?.selected_rag_space" size="small" effect="plain" type="success">RAG: {{ message.payload.selected_rag_space.name }}</el-tag>
                 <el-tag v-if="message.payload?.citations?.length" size="small" effect="plain" type="info">引用 {{ message.payload.citations.length }}</el-tag>
@@ -486,7 +514,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
                 <el-alert v-if="message.payload?.missing_slots?.length" type="info" :closable="false" show-icon title="任务信息还不完整，请补充后再提交。" />
                 <div class="task-actions-btns">
-                  <el-button size="small" @click="openTaskDialog(message)">{{ canConfirmTask(message) ? "编辑检测信息" : "填写检测信息" }}</el-button>
+                  <el-button size="small" @click="openTaskDialog(message)">{{ canConfirmTask(message) ? "编辑检测信息" : "填写并提交检测任务" }}</el-button>
                   <el-button v-if="canConfirmTask(message)" size="small" type="primary" :loading="taskSubmitting" @click="createTaskFromMessage(message, false)">确认并提交任务</el-button>
                 </div>
               </div>

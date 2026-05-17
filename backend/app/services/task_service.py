@@ -5,6 +5,8 @@ from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER
 from app.models.task import InspectionTask
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.repositories.organization_repo import OrganizationRepository
+from app.repositories.result_repo import ResultRepository
+from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
 from app.services.audit_service import AuditService
 
@@ -25,6 +27,8 @@ class TaskService:
         self._repo = TaskRepository(session)
         self._spec_repo = InspectionSpecRepository(session)
         self._org_repo = OrganizationRepository(session)
+        self._result_repo = ResultRepository(session)
+        self._stability_repo = StabilityRepository(session)
 
     async def create_task(
         self,
@@ -137,3 +141,15 @@ class TaskService:
             setattr(task, "org_slug", getattr(org, "slug", None))
             setattr(task, "source_kind", str(meta.get("source") or "unknown"))
             setattr(task, "source_graph", str(meta.get("source_graph") or meta.get("source_subgraph") or ""))
+            execution = meta.get("execution") if isinstance(meta.get("execution"), dict) else None
+            setattr(task, "execution", execution)
+            try:
+                result = await self._result_repo.get_by_task(str(task.org_id), str(task.id))
+                stability = await self._stability_repo.get_by_task(str(task.org_id), str(task.id))
+            except AttributeError:
+                result = None
+                stability = None
+            setattr(task, "has_result", result is not None)
+            setattr(task, "has_stability", stability is not None)
+            setattr(task, "result_id", str(result.id) if result is not None else None)
+            setattr(task, "stability_id", str(stability.id) if stability is not None else None)

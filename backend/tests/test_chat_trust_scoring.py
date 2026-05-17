@@ -724,7 +724,7 @@ async def test_quality_trace_list_returns_error_meta_without_local_rows_when_lan
             raise LangfuseApiError("Langfuse API error 401: unauthorized")
 
         def build_trace_url(self, trace_id):
-            return f"http://127.0.0.1:3000/project/piap-local-project/traces/{trace_id}"
+            return f"http://127.0.0.1:3000/project/project-test/traces/{trace_id}"
 
     class EmptyRepo:
         async def list_by_range(self, *_args, **_kwargs):
@@ -744,7 +744,7 @@ async def test_quality_trace_list_returns_error_meta_without_local_rows_when_lan
                     user_id="user-1",
                     trace_id="trace-chat",
                     observation_id="obs-chat",
-                    trace_url="http://127.0.0.1:3000/project/piap-local-project/traces/trace-chat",
+                    trace_url="http://127.0.0.1:3000/project/project-test/traces/trace-chat",
                     model_key="qwen2.5:7b-instruct",
                     review_model="qwen2.5:7b-instruct",
                     trust_score=0.82,
@@ -766,7 +766,7 @@ async def test_quality_trace_list_returns_error_meta_without_local_rows_when_lan
             return None
 
         def get_trace_url(self, trace_id):
-            return f"http://127.0.0.1:3000/project/piap-local-project/traces/{trace_id}"
+            return f"http://127.0.0.1:3000/project/project-test/traces/{trace_id}"
 
     monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
     monkeypatch.setattr("app.services.quality_report_service.LangfuseTracer", lambda: FakeTracer())

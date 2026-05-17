@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +56,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "piap_standard_book"
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
+    enable_legacy_agent_fallback: bool = False
     cors_allowed_origins: list[str] = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -64,13 +66,30 @@ class Settings(BaseSettings):
     cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
     langfuse_enabled: bool = False
-    langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
-    langfuse_host: str = "http://127.0.0.1:3000"
-    langfuse_public_host: str = "http://127.0.0.1:3000"
-    langfuse_project_id: str = ""
-    langfuse_environment: str = ""
-    langfuse_release: str = ""
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+    langfuse_public_host: str | None = None
+    langfuse_project_id: str | None = None
+    langfuse_environment: str | None = None
+    langfuse_release: str | None = None
+
+    @field_validator(
+        "langfuse_public_key",
+        "langfuse_secret_key",
+        "langfuse_host",
+        "langfuse_public_host",
+        "langfuse_project_id",
+        "langfuse_environment",
+        "langfuse_release",
+        mode="before",
+    )
+    @classmethod
+    def _blank_langfuse_values_to_none(cls, value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text and text.lower() not in {"none", "null", "undefined"} else None
 
 
 settings = Settings()

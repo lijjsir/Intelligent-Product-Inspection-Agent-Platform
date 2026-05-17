@@ -433,7 +433,6 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     initPromise.value = (async () => {
-      clearSelectedRagSpace();
       await fetchSessions();
       try {
         await fetchRagSpaces();
@@ -479,6 +478,14 @@ export const useChatStore = defineStore("chat", () => {
             description: selected.description,
           }
         : undefined,
+      rag_scope: selected
+        ? {
+            enabled: true,
+            rag_space_id: selected.id,
+            scope_node_ids: [],
+            scope_mode: "space",
+          }
+        : { enabled: false, scope_node_ids: [] },
     };
     const tempUserId = `temp-user-${crypto.randomUUID()}`;
     const tempAssistantId = `temp-assistant-${crypto.randomUUID()}`;

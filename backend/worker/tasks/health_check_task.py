@@ -1,15 +1,14 @@
-import asyncio
-
 from agent.llm.health_checker import ModelHealthChecker
 from app.repositories.model_config_repo import ModelConfigRepository
 from app.services.model_config_service import ModelConfigService
 from infra.database.session import get_session
 from worker.celery_app import celery_app
+from worker.asyncio_runner import run_celery_async
 
 
 @celery_app.task(name="worker.tasks.health_check_task")
 def run_model_health_check():
-    return asyncio.run(_run_model_health_check())
+    return run_celery_async(_run_model_health_check())
 
 
 async def _run_model_health_check() -> dict[str, int]:

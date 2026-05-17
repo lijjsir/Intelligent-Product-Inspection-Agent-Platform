@@ -42,6 +42,23 @@ def test_fallback_answer_uses_first_doc_excerpt():
     assert data["citations"] == [{"id": "doc-1"}]
 
 
+@pytest.mark.asyncio
+async def test_planner_uses_rag_qa_when_space_is_selected():
+    state = {
+        "query": "我叫什么名字",
+        "metadata": {},
+        "ext": {
+            "selected_rag_space": {"id": "space-1", "name": "食物"},
+        },
+        "history": [],
+    }
+
+    updated = await planner(state)
+
+    assert updated["intent"] == "rag_qa"
+    assert updated["metadata"]["rag_forced_by_selection"] is True
+
+
 def test_normalize_usage_keeps_only_stable_token_counts():
     raw_usage = {
         "prompt_tokens": 24,
@@ -377,6 +394,22 @@ async def test_quality_gate_downgrades_when_evidence_is_missing():
 
 
 @pytest.mark.asyncio
+async def test_quality_gate_does_not_rewrite_plain_rag_answers():
+    original_answer = "tgg"
+    state = {
+        "intent": "rag_qa",
+        "reasoning": {"answer": original_answer},
+        "citations": [{"id": "doc-1"}],
+        "retrieval_metrics": {"hit_count": 1},
+    }
+
+    updated = await quality_gate(state)
+
+    assert updated["quality"] == {}
+    assert updated["reasoning"]["answer"] == original_answer
+
+
+@pytest.mark.asyncio
 async def test_planner_routes_smalltalk_without_task_state():
     state = {
         "query": "who are you?",
@@ -434,6 +467,43 @@ async def test_knowledge_skips_retrieval_for_non_quality_qa():
     updated = await knowledge(state)
     assert updated["retrieval_metrics"]["skipped"] is True
     assert updated["citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_knowledge_retrieves_for_plain_rag_qa(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["query"] = query
+            captured["payload_filter"] = payload_filter
+            return [{"id": "doc-1", "title": "1.txt", "text": "我的名字叫tgg", "score": 0.9}]
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "rag_qa",
+        "query": "我叫什么名字",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {"selected_rag_space_id": "space-1"},
+    }
+
+    updated = await knowledge(state)
+
+    assert captured["query"] == "我叫什么名字"
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+    }
+    assert updated["retrieval_metrics"]["skipped"] is False
+    assert updated["citations"][0]["quote"] == "我的名字叫tgg"
 
 
 @pytest.mark.asyncio
@@ -509,6 +579,47 @@ async def test_knowledge_includes_scope_node_filters_when_present(monkeypatch):
         "user_id": "user-1",
         "rag_space_id": "space-1",
         "ancestor_node_ids": ["folder-1", "folder-2"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_knowledge_accepts_rag_scope_payload(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["payload_filter"] = payload_filter
+            return []
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "quality_qa",
+        "query": "我叫什么名字",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {
+            "rag_scope": {
+                "enabled": True,
+                "rag_space_id": "space-1",
+                "scope_node_ids": ["folder-1"],
+                "scope_mode": "folder",
+            },
+        },
+    }
+
+    await knowledge(state)
+
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+        "ancestor_node_ids": ["folder-1"],
     }
 
 

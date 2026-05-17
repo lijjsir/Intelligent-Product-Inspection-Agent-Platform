@@ -51,7 +51,7 @@ TASK_CREATE_PATTERNS = [re.compile(p, re.I) for p in [
     r"(帮我|给我).{0,8}(创建|发起|提交).{0,8}(任务|检测|质检)",
     r"(帮我|给我).{0,8}(进行|做).{0,8}(质量检测|质检|检测任务)",
     r"(需要|想要).{0,8}(创建|发起).{0,8}(任务|检测)",
-    r"^\s*(质量检测|质检|检测任务|开始检测|启动检测|quality inspection|inspection task|start inspection)\s*[!！?.]?\s*$",
+    r"^\s*(质量检测|质检|任务检测|检测任务|开始检测|启动检测|quality inspection|inspection task|start inspection)\s*[!！?.]?\s*$",
 ]]
 CONFIRM_PATTERNS = [re.compile(r"^\s*(确认|确定|可以创建|开始创建|提交吧|创建吧|ok|okay|yes|confirm)\s*[!！。.]?\s*$", re.I)]
 CANCEL_PATTERNS = [re.compile(r"^\s*(取消|不用了|算了|先不要|停止创建|别创建了|no)\s*[!！。.]?\s*$", re.I)]
@@ -281,11 +281,34 @@ def _fallback_answer(query: str, docs: list[dict[str, Any]], citations: list[dic
     }
 
 
+def _rag_answer_fallback(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
+    if not docs:
+        return {"answer": "当前知识库没有检索到足够相关的内容。", "summary": "RAG 未检索到依据", "citations": citations}
+    top = docs[0]
+    excerpt = str(top.get("text") or "").strip()
+    if len(excerpt) > 220:
+        excerpt = f"{excerpt[:220]}..."
+    return {
+        "answer": excerpt,
+        "summary": "基于知识库回答",
+        "citations": citations,
+    }
+
+
 def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
     ext = ext or {}
     selected = ext.get("selected_rag_space")
     if isinstance(selected, dict) and selected.get("id"):
         return {"id": str(selected.get("id")), "name": str(selected.get("name") or ""), "description": str(selected.get("description") or "") or None}
+    rag_scope = ext.get("rag_scope")
+    if isinstance(rag_scope, dict) and rag_scope.get("enabled", True):
+        scoped_rag_space_id = str(rag_scope.get("rag_space_id") or "").strip()
+        if scoped_rag_space_id:
+            return {
+                "id": scoped_rag_space_id,
+                "name": str(rag_scope.get("rag_space_name") or ext.get("selected_rag_space_name") or ""),
+                "description": str(rag_scope.get("rag_space_description") or ext.get("selected_rag_space_description") or "") or None,
+            }
     rag_space_id = str(ext.get("selected_rag_space_id") or "").strip()
     if not rag_space_id:
         return None
@@ -294,7 +317,11 @@ def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def _selected_rag_scope_node_ids(ext: dict[str, Any] | None) -> list[str]:
     ext = ext or {}
-    raw = ext.get("selected_rag_scope_node_ids") or []
+    rag_scope = ext.get("rag_scope")
+    if isinstance(rag_scope, dict) and rag_scope.get("enabled", True):
+        raw = rag_scope.get("scope_node_ids") or []
+    else:
+        raw = ext.get("selected_rag_scope_node_ids") or []
     if not isinstance(raw, list):
         return []
     return [str(item).strip() for item in raw if str(item).strip()]
@@ -371,6 +398,7 @@ async def planner(state: QualityChatState) -> QualityChatState:
     lowered_query = query.lower()
     history = list(state.get("history") or [])
     pending = _latest_pending_task(history)
+    selected_rag = _selected_rag_space(state.get("ext") or {})
     planner_payload = _dspy_target_payload(state, "quality_judgement.planner")
     extra_task_keywords = [str(item).strip().lower() for item in list(planner_payload.get("task_keywords") or []) if str(item).strip()]
     if pending is not None:
@@ -380,13 +408,17 @@ async def planner(state: QualityChatState) -> QualityChatState:
         state["missing_slots"] = list(pending.get("missing_slots") or [])
         state["awaiting_confirmation"] = bool(pending.get("awaiting_confirmation"))
         state["pending_action"] = str(pending.get("pending_action") or "create_task")
-    elif _is_smalltalk(query):
-        state["intent"] = "smalltalk"
-        state["intent_confidence"] = 0.98
     elif _is_task_create_candidate(query, state.get("ext") or {}) or any(keyword in lowered_query for keyword in extra_task_keywords):
         state["intent"] = "task_create"
         state["intent_confidence"] = 0.92
         state["pending_action"] = "create_task"
+    elif selected_rag is not None:
+        state["intent"] = "rag_qa"
+        state["intent_confidence"] = 0.9
+        state["metadata"]["rag_forced_by_selection"] = True
+    elif _is_smalltalk(query):
+        state["intent"] = "smalltalk"
+        state["intent_confidence"] = 0.98
     elif _is_quality_qa_candidate(query, history):
         state["intent"] = "quality_qa"
         state["intent_confidence"] = 0.86
@@ -427,7 +459,7 @@ async def task_extractor(state: QualityChatState) -> QualityChatState:
 
 
 async def knowledge(state: QualityChatState) -> QualityChatState:
-    if state.get("intent") != "quality_qa":
+    if state.get("intent") not in {"quality_qa", "rag_qa"}:
         state["retrieved_chunks"] = []
         state["citations"] = []
         state["retrieval_metrics"] = {"query": state.get("query"), "hit_count": 0, "empty_recall": True, "top_score": 0.0, "skipped": True}
@@ -524,6 +556,18 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         user_message = f"用户消息:\n{query}\n\n历史对话:\n{history_text}"
         temperature = 0.3
 
+    elif intent == "rag_qa":
+        doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
+        doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
+        prompt = (
+            "你是平台内的知识库问答助手。请基于检索证据直接回答用户的普通问题；"
+            "不要套用质量检测、任务检测、标准编号、产品型号、缺陷位置或工艺上下文等话术。"
+            "如果证据不足，请只说明知识库没有足够相关内容。"
+            "只返回 JSON：{\"answer\": string, \"summary\": string}。"
+        )
+        user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
+        temperature = 0.2
+
     elif intent == "quality_qa":
         doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
         doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
@@ -582,6 +626,8 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         if not answer:
             if intent == "quality_qa":
                 fallback = _fallback_answer(query, docs, citations)
+            elif intent == "rag_qa":
+                fallback = _rag_answer_fallback(query, docs, citations)
             else:
                 fallback = _general_answer_fallback(query)
             answer, summary = fallback["answer"], fallback["summary"]
@@ -594,6 +640,8 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
     except Exception as exc:
         if intent == "quality_qa":
             fallback = _fallback_answer(query, docs, citations)
+        elif intent == "rag_qa":
+            fallback = _rag_answer_fallback(query, docs, citations)
         else:
             fallback = _general_answer_fallback(query)
         answer = str(fallback.get("answer") or "")
@@ -719,7 +767,7 @@ def _message_type_for_state(state: QualityChatState) -> str:
         return "task_result"
     if action_state in {"awaiting_task_confirmation", "awaiting_task_details", "task_cancelled", "task_create_failed"}:
         return "task_action"
-    if state.get("intent") in {"smalltalk", "general_qa"}:
+    if state.get("intent") in {"smalltalk", "general_qa", "rag_qa"}:
         return "assistant_text"
     return "quality_answer"
 
@@ -846,7 +894,7 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "action_state": action_state,
         "task_draft": task_draft or None,
         "task_form_defaults": task_draft or None,
-        "task_submit_mode": "direct_create" if action_state in {"awaiting_task_details", "awaiting_task_confirmation"} else None,
+        "task_submit_mode": "direct_create" if action_state in {"awaiting_clarification", "awaiting_task_details", "awaiting_task_confirmation"} else None,
         "missing_slots": list(state.get("missing_slots") or []),
         "pending_action": state.get("pending_action"),
         "awaiting_confirmation": bool(state.get("awaiting_confirmation") or False),

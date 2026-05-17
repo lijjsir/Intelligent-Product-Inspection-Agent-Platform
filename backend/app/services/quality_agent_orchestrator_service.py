@@ -10,6 +10,7 @@ from agent.llm.pricing import ModelPricing
 from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
+from app.core.config import settings
 from app.models.task import InspectionTask
 from app.repositories.agent_management_repo import AgentExecutionMetricsRepository
 from app.repositories.agent_ops_repo import (
@@ -119,6 +120,8 @@ class QualityAgentOrchestratorService:
             )
             result_payload = {"agent_output": agent_output.model_dump()}
         except Exception as exc:
+            if not settings.enable_legacy_agent_fallback:
+                raise RuntimeError(f"AgentManager failed: {exc}") from exc
             logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
             result = await self._graph.run(request)
             if isinstance(result, AgentOutput):
@@ -234,25 +237,10 @@ class QualityAgentOrchestratorService:
                         }
                     )
 
-                # Write route decision log for audit trail (best-effort)
-                if output.route_decision:
-                    try:
-                        from app.repositories.agent_ops_repo import AgentRouteLogRepository
-                        route_log_repo = AgentRouteLogRepository(session, request.org_id)
-                        await route_log_repo.create({
-                            "user_id": request.user_id or None,
-                            "session_id": request.session_id,
-                            "request_id": request.request_id,
-                            "selected_agent": output.route_decision.selected_subgraph,
-                            "intent_name": output.route_decision.intent or "general_qa",
-                            "confidence": output.route_decision.confidence,
-                            "route_source": output.route_decision.route_source,
-                            "reason": output.route_decision.reason,
-                        })
-                    except Exception:
-                        logger.debug("route log write skipped (non-persistent session or table missing)")
-
             await session.commit()
+
+        if output.route_decision:
+            await self._record_route_decision_log(request, output)
 
         if callable(emit):
             await emit(
@@ -268,8 +256,48 @@ class QualityAgentOrchestratorService:
             )
         return materialization_error is None
 
+    async def _record_route_decision_log(
+        self,
+        request: NormalizedRequest,
+        output: AgentOutput,
+    ) -> None:
+        if not output.route_decision:
+            return
+        try:
+            from app.repositories.agent_ops_repo import AgentRouteLogRepository
+
+            async with get_session() as session:
+                route_log_repo = AgentRouteLogRepository(session, request.org_id)
+                await route_log_repo.create(
+                    {
+                        "user_id": request.user_id or None,
+                        "session_id": request.session_id,
+                        "request_id": request.request_id,
+                        "selected_agent": output.route_decision.selected_subgraph,
+                        "intent_name": output.route_decision.intent or "general_qa",
+                        "confidence": output.route_decision.confidence,
+                        "route_source": output.route_decision.route_source,
+                        "reason": output.route_decision.reason,
+                    }
+                )
+                await session.commit()
+        except Exception:
+            logger.debug("route log write skipped", exc_info=True)
+
     def _should_materialize_chat_output(self, output: AgentOutput) -> bool:
-        return str(output.message_type or "") == "quality_answer"
+        route = ""
+        if output.route_decision:
+            route = str(output.route_decision.selected_subgraph or "")
+
+        persistable = output.persistable_output
+        has_structured_output = bool(
+            persistable
+            and persistable.task
+            and persistable.result
+            and persistable.stability
+        )
+
+        return route == "inspection_task" and has_structured_output
 
     def _build_response_payload(
         self,
@@ -293,11 +321,32 @@ class QualityAgentOrchestratorService:
             "result_card": dict(output.result_card) if output.result_card else None,
             "expectation_check": dict(output.expectation_check or {}) if output.expectation_check else None,
             "rag_summary": dict(output.rag_summary) if output.rag_summary else None,
-            "intent": "quality_chat",
+            "agent_name": (
+                output.route_decision.selected_subgraph
+                if output.route_decision
+                else (base_payload.get("agent_name") or base_payload.get("source_graph") or "quality_judgement")
+            ),
+            "intent": (
+                base_payload.get("intent")
+                or (
+                    output.route_decision.intent
+                    if output.route_decision and output.route_decision.intent
+                    else None
+                )
+                or "quality_chat"
+            ),
+            "status": output.action_state or base_payload.get("status"),
             "action_state": output.action_state,
             "task_draft": task_form_defaults or None,
             "task_form_defaults": task_form_defaults or None,
-            "task_submit_mode": base_payload.get("task_submit_mode"),
+            "task_submit_mode": (
+                base_payload.get("task_submit_mode")
+                or (
+                    "direct_create"
+                    if output.action_state in {"awaiting_clarification", "awaiting_task_details", "awaiting_task_confirmation"}
+                    else None
+                )
+            ),
             "missing_slots": list((output.clarification.missing_fields if output.clarification else []) or []),
             "clarification": output.clarification.model_dump() if output.clarification else None,
             "pending_action": base_payload.get("pending_action"),
@@ -788,7 +837,7 @@ class QualityAgentOrchestratorService:
 
     def _normalize_task_status(self, status: str | None) -> str:
         normalized = str(status or "").strip().lower()
-        if normalized in {"pending", "running", "done", "failed", "reviewing"}:
+        if normalized in {"pending", "queued", "running", "done", "failed", "reviewing", "archived"}:
             return normalized
         if normalized in {"completed", "complete", "success", "succeeded"}:
             return "done"

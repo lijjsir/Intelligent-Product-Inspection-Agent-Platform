@@ -58,6 +58,14 @@ class TaskRepository:
         )
         return bool(res.rowcount and res.rowcount > 0)
 
+    async def patch_metadata(self, org_id: str, task_id: str, patch: dict) -> bool:
+        task = await self.get(org_id, task_id)
+        if task is None:
+            return False
+        task.meta_data = {**dict(task.meta_data or {}), **patch}
+        await self._session.flush()
+        return True
+
     async def list_paged(
         self,
         org_id: str | None,
@@ -88,6 +96,10 @@ class TaskRepository:
             base = base.where(InspectionTask.org_id == org_id)
         if owner_user_id:
             base = base.where(InspectionTask.created_by == owner_user_id)
+        base = base.where(
+            InspectionTask.product_id != "chat_quality",
+            InspectionTask.spec_code != "CHAT-QUALITY-QA",
+        )
         if "status" in filters:
             base = base.where(InspectionTask.status == filters["status"])
         if "product_id" in filters:

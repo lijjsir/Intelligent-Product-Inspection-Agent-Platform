@@ -25,6 +25,9 @@ def _get_langfuse_client():
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         logger.warning("Langfuse is enabled but public/secret key is missing")
         return None
+    if not settings.langfuse_host:
+        logger.warning("Langfuse is enabled but host is missing")
+        return None
     if any(marker in str(settings.langfuse_public_key) for marker in ["replace-me", "your_"]) or any(
         marker in str(settings.langfuse_secret_key) for marker in ["replace-me", "your_"]
     ):
