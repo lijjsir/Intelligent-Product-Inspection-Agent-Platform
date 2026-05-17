@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from agent.graph.state import InspectionState
 from agent.rag.citation_tracker import attach_citations
 from agent.rag.reranker import Reranker
 from agent.rag.retriever import Retriever
+from agent.subgraphs.inspection_task.state import InspectionState
 
 
 async def run_knowledge(state: InspectionState) -> InspectionState:

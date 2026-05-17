@@ -28,7 +28,6 @@ from app.services.chat_trust_scoring_service import (
 )
 from app.services.dspy_runtime_service import build_runtime_prompt_section, resolve_dspy_runtime_profile
 from app.services.model_config_service import ModelConfigService
-from app.services.task_execution_service import launch_task_execution
 from app.services.task_service import TaskService
 from infra.database.session import get_session
 
@@ -661,6 +660,7 @@ async def task_executor(state: QualityChatState) -> QualityChatState:
                 metadata=metadata,
             )
             await session.commit()
+        from app.services.task_execution_service import launch_task_execution
         launch = await launch_task_execution(task_id=str(task.id), org_id=str(state["org_id"]))
         state["created_task"] = {
             "id": str(task.id),
@@ -958,7 +958,43 @@ class QualityChatGraph:
         graph.add_edge("finalizer", END)
         self._graph = graph.compile()
 
-    async def run(self, state: QualityChatState) -> QualityChatState:
+    async def run(self, state, route_decision=None):
+        if isinstance(state, dict):
+            return await self._run_state(state)
+        from agent.contracts.quality_contracts import NormalizedRequest, AgentOutput
+        if isinstance(state, NormalizedRequest):
+            state_dict = {
+                "schema_version": "1.0.0",
+                "request_id": state.request_id,
+                "workflow_run_id": state.workflow_run_id or state.request_id,
+                "session_id": state.session_id or state.request_id,
+                "assistant_message_id": state.assistant_message_id or "",
+                "org_id": state.org_id,
+                "user_id": state.user_id or "",
+                "plan_tier": state.plan_tier,
+                "capabilities": list(state.capabilities),
+                "workspace": state.workspace,
+                "query": state.query,
+                "metadata": dict(state.metadata),
+                "ext": dict(state.ext),
+                "emit": state.ext.get("emit"),
+            }
+            graph_result = await self._run_state(state_dict)
+            payload = dict(graph_result.get("response_payload") or {})
+            return AgentOutput(
+                message_type=str(payload.get("message_type") or "assistant_text"),
+                answer=str(payload.get("answer") or ""),
+                summary=str(payload.get("summary") or ""),
+                citations=list(payload.get("citations") or []),
+                quality=dict(payload.get("quality") or {}),
+                action_state=str(payload.get("action_state") or "") or None,
+                task_draft=dict(payload.get("task_draft") or {}) or None,
+                created_task=dict(payload.get("created_task") or {}) or None,
+                raw_state=graph_result,
+            )
+        raise TypeError(f"QualityChatGraph.run() expects dict or NormalizedRequest, got {type(state)}")
+
+    async def _run_state(self, state: QualityChatState) -> QualityChatState:
         _t_graph = perf_counter()
         tracer = LangfuseTracer()
         state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", source_type="chat", input={"query": state["query"], "session_id": state["session_id"]})

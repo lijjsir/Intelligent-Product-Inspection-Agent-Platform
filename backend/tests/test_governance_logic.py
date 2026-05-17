@@ -11,8 +11,8 @@ from app.core.claims import (
     WORKSPACE_OPS,
     build_auth_claims,
 )
-from agent.graph.inspection_graph import InspectionGraph
-from agent.graph.nodes.vision import run_vision
+from agent.subgraphs.inspection_task import InspectionGraph
+from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.health_checker import ModelHealthChecker
@@ -1082,7 +1082,7 @@ async def test_run_vision_records_runtime_error_on_invalid_payload(monkeypatch):
         async def chat(self, *args, **kwargs):
             return {"text": "not a structured defect payload"}
 
-    monkeypatch.setattr("agent.graph.nodes.vision.LLMClient", FakeClient)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient", FakeClient)
 
     state = await run_vision(
         {
@@ -1130,11 +1130,11 @@ async def test_inspection_graph_stops_after_runtime_error(monkeypatch):
         calls.append("finalizer")
         return state
 
-    monkeypatch.setattr("agent.graph.inspection_graph.plan", fake_plan)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_vision", fake_vision)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_knowledge", fake_knowledge)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_reasoning", fake_reasoning)
-    monkeypatch.setattr("agent.graph.inspection_graph.finalize", fake_finalize)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", fake_plan)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", fake_vision)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", fake_knowledge)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", fake_reasoning)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", fake_finalize)
 
     state = await InspectionGraph().run({"timeline": [], "runtime_errors": []})
 

@@ -27,6 +27,32 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
     persisted: list[tuple[NormalizedRequest, AgentOutput]] = []
     metrics: list[dict] = []
 
+    from agent.router.contracts import AgentRouteDecision, AgentRouterOutput
+
+    class FakeAgentManagerService:
+        async def run_chat(self, payload: dict):
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="quality_chat",
+                    intent="general_qa",
+                    reason="test",
+                ),
+                agent_output={
+                    "message_type": "assistant_text",
+                    "answer": "hi",
+                    "summary": "",
+                    "citations": [],
+                    "quality": {},
+                    "action_state": None,
+                    "task_draft": None,
+                    "created_task": None,
+                    "clarification": None,
+                    "persistable_output": {},
+                    "raw_state": {},
+                },
+                status="completed",
+            )
+
     class FakeGraph:
         async def run(self, request: NormalizedRequest):
             assert request.request_kind == "chat"
@@ -56,6 +82,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
         )
 
     service = QualityAgentOrchestratorService()
+    service._agent_manager = FakeAgentManagerService()
     service._graph = FakeGraph()
     monkeypatch.setattr(QualityAgentOrchestratorService, "_persist_chat_result", fake_persist)
     monkeypatch.setattr(QualityAgentOrchestratorService, "_record_runtime_metrics", fake_record_metrics)
@@ -73,7 +100,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
 
     assert persisted[0][1].answer == "hi"
     assert result["agent_output"]["answer"] == "hi"
-    assert metrics[0]["subgraph_key"] == "quality_judgement"
+    assert metrics[0]["subgraph_key"] == "quality_chat"
 
 
 @pytest.mark.asyncio

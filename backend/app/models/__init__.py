@@ -22,6 +22,7 @@ from app.models.inspection_spec import (
 )
 from app.models.agent_ops import (
     AgentDefinition,
+    AgentRouteLog,
     AgentRuntimeInstance,
     DSPyOptimizationConfig,
     DSPyOptimizationRun,

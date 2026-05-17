@@ -204,11 +204,19 @@ expected_decision=PASS
         "agent.subgraphs.quality_judgement.graph.InspectionStandardService.evaluate",
         fake_evaluate,
     )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.InspectionStandardService.evaluate",
+        fake_evaluate,
+    )
     async def fake_runtime_profile(org_id: str, subgraph_key: str):
         return FakeProfile()
 
     monkeypatch.setattr(
         "agent.subgraphs.quality_judgement.graph.resolve_dspy_runtime_profile",
+        fake_runtime_profile,
+    )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.resolve_dspy_runtime_profile",
         fake_runtime_profile,
     )
 

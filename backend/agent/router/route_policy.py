@@ -23,9 +23,10 @@ IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
 TASK_INTENT_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
-        r"(帮我|给我).{0,8}(进行|做).{0,8}(质量检测|质检|检测任务)",
+        r"(创建|新建|发起|提交|开始|启动|帮我|给我).{0,12}(任务|检测|质检)",
         r"(需要|想要).{0,8}(创建|发起).{0,8}(任务|检测)",
-        r"^\s*(质量检测|质检|检测任务|开始检测|启动检测)\s*[!！?.]?\s*$",
+        r"^\s*(质量检测|质检|检测任务|开始检测|启动检测|quality inspection|inspection task)\s*[!！?.]?\s*$",
+        r"(检测|质检).{0,6}(图片|照片|文件|这个|这份)",
     ]
 ]
 
@@ -51,12 +52,12 @@ class AgentRoutePolicy:
         has_task_keyword = any(p.search(query) for p in TASK_KEYWORD_PATTERNS)
         has_task_intent = any(p.search(query) for p in TASK_INTENT_PATTERNS)
 
-        # 1. 结构化文件 + 非任务关键词 → 结构化检测
-        if has_non_pdf and not has_task_keyword:
+        # 1. 结构化文件 → InspectionTaskAgent
+        if has_non_pdf:
             return AgentRouteDecision(
                 selected_agent="inspection_task",
-                intent="structured_inspection",
-                reason="用户上传了结构化文件（xlsx/csv/json等），且未使用任务创建关键词",
+                intent="task_create" if has_task_keyword else "structured_inspection",
+                reason="用户上传了结构化文件（xlsx/csv/json等）",
                 route_source="rule",
             )
 
@@ -69,7 +70,7 @@ class AgentRoutePolicy:
                 route_source="rule",
             )
 
-        # 3. 明确任务创建意图 → InspectionTaskAgent
+        # 3. 明确任务创建意图关键词 → InspectionTaskAgent
         if has_task_intent:
             return AgentRouteDecision(
                 selected_agent="inspection_task",

@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from agent.graph.state import InspectionState
 from agent.llm.client import LLMClient
+from agent.subgraphs.inspection_task.state import InspectionState
 from agent.vision.detector_client import VisionDetectorClient
 from agent.vision.heuristic_detector import extract_defects
 

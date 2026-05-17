@@ -4,8 +4,7 @@ from datetime import datetime
 import traceback
 from typing import Any
 
-from agent.graph.inspection_graph import InspectionGraph
-from agent.graph.state import InspectionState
+from agent.subgraphs.inspection_task import InspectionGraph, InspectionState
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
