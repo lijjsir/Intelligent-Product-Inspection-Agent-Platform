@@ -50,10 +50,10 @@ class AgentRoutePolicy:
                 reason="前端模式指定任务检测 Agent",
                 route_source="manual",
             )
-        if route_hints.get("force_agent") == "quality_chat":
+        if route_hints.get("force_agent") in {"quality_chat", "chat"}:
             return AgentRouteDecision(
-                selected_agent="quality_chat",
-                intent="general_qa",
+                selected_agent="chat",
+                intent="general_chat",
                 confidence=1.0,
                 reason="前端模式指定智能问答 Agent",
                 route_source="manual",
@@ -99,10 +99,11 @@ class AgentRoutePolicy:
                 route_source="rule",
             )
 
-        # 4. 默认走 QualityChatAgent
+        # 4. 默认走 ChatAgent
         return AgentRouteDecision(
-            selected_agent="quality_chat",
-            intent="general_qa",
+            selected_agent="chat",
+            sub_route="general_chat",
+            intent="general_chat",
             confidence=0.85,
             reason="未匹配到检测/任务信号，路由到聊天 Agent",
             route_source="rule",
