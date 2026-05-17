@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -18,7 +18,7 @@ from agent.subgraphs.quality_chat.graph import (
     planner,
     quality_gate,
     reasoning,
-    QualityChatState,
+    ChatState,
     task_extractor,
 )
 from app.core.config import settings
@@ -214,8 +214,8 @@ async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
     assert updated["reasoning"]["llm_error"] == "upstream unavailable"
 
 
-def test_quality_chat_state_keeps_trust_scoring_runtime_fields():
-    annotations = QualityChatState.__annotations__
+def test_chat_state_keeps_trust_scoring_runtime_fields():
+    annotations = ChatState.__annotations__
 
     assert "trust_scoring_payload" in annotations
     assert "trust_scoring_task" not in annotations
@@ -679,3 +679,4 @@ def test_get_current_user_for_stream_reads_resource_claims():
     assert current.user_id == "user-1"
     assert current.stream_resource == "chat"
     assert current.stream_resource_id == "session-1"
+

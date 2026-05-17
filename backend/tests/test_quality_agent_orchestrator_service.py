@@ -1,4 +1,4 @@
-from contextlib import asynccontextmanager
+﻿from contextlib import asynccontextmanager
 
 import pytest
 
@@ -32,11 +32,12 @@ def test_orchestrator_json_sanitizer_drops_callables_from_legacy_state():
     assert payload == {"answer": "ok", "nested": {"count": 1}}
 
 
-def test_quality_chat_answer_is_not_materialized_as_task():
+def test_chat_answer_is_not_materialized_as_task():
     output = AgentOutput(
         message_type="quality_answer",
         route_decision=RouteDecision(
-            selected_subgraph="quality_chat",
+            selected_agent="chat",
+            sub_route="rag_qa",
             intent="rag_qa",
             reason="ordinary RAG answer",
         ),
@@ -49,8 +50,9 @@ def test_inspection_task_result_with_structured_output_is_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_subgraph="inspection_task",
-            intent="structured_inspection",
+            selected_agent="inspection_task",
+            sub_route="inspection_execute",
+            intent="inspection_execute",
             reason="inspection task completed",
         ),
         persistable_output=PersistableOutput(
@@ -67,7 +69,8 @@ def test_inspection_task_without_full_structured_output_is_not_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_subgraph="inspection_task",
+            selected_agent="inspection_task",
+            sub_route="task_create",
             intent="task_create",
             reason="task accepted but no result yet",
         ),
@@ -94,7 +97,8 @@ def test_response_payload_prefers_subgraph_intent_over_router_default():
         summary="RAG answer",
         raw_state={"response_payload": {"intent": "rag_qa", "message_type": "assistant_text"}},
         route_decision=RouteDecision(
-            selected_subgraph="quality_chat",
+            selected_agent="chat",
+            sub_route="general_chat",
             intent="general_qa",
             reason="default chat route",
             signals=RouteSignals(),
@@ -152,8 +156,8 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
                 answer="hi",
                 route_decision=RouteDecision(
                     mode="router_enabled",
-                    selected_subgraph="quality_judgement",
-                    fallback_subgraph="quality_judgement",
+                    selected_agent="inspection_task",
+                    sub_route="inspection_execute",
                 ),
             )
 
@@ -161,11 +165,11 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
         persisted.append((request, output))
         return True
 
-    async def fake_record_metrics(self, org_id: str, subgraph_key: str, *, success: bool, latency_ms: int):
+    async def fake_record_metrics(self, org_id: str, agent_key: str, *, success: bool, latency_ms: int):
         metrics.append(
             {
                 "org_id": org_id,
-                "subgraph_key": subgraph_key,
+                "agent_key": agent_key,
                 "success": success,
                 "latency_ms": latency_ms,
             }
@@ -190,7 +194,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
 
     assert persisted[0][1].answer == "hi"
     assert result["agent_output"]["answer"] == "hi"
-    assert metrics[0]["subgraph_key"] == "quality_chat"
+    assert metrics[0]["agent_key"] == "chat"
 
 
 @pytest.mark.asyncio
@@ -263,8 +267,8 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
         quality={"passed": False, "risk_level": "critical", "risk_score": 0.92},
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_subgraph="quality_judgement",
-            fallback_subgraph="quality_judgement",
+            selected_agent="inspection_task",
+            sub_route="inspection_execute",
             reason="file attachment detected",
             signals=RouteSignals(has_file_attachments=True, attachment_types=["txt"]),
         ),
@@ -345,8 +349,8 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
         answer="hello",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_subgraph="quality_chat",
-            fallback_subgraph="quality_chat",
+            selected_agent="chat",
+            sub_route="general_chat",
             intent="general_qa",
             reason="test",
         ),
@@ -356,3 +360,4 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
 
     assert success is True
     assert updates[0]["content"] == "hello"
+

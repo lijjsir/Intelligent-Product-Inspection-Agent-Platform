@@ -1,3 +1,5 @@
-from agent.subgraphs.quality_chat.graph import QualityChatGraph
+from agent.subgraphs.quality_chat.graph import ChatGraph
 
-__all__ = ["QualityChatGraph"]
+QualityChatGraph = ChatGraph
+
+__all__ = ["ChatGraph", "QualityChatGraph"]

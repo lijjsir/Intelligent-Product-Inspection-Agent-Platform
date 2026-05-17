@@ -1184,7 +1184,7 @@ def test_langfuse_trace_to_item_parses_chat_trace():
         "id": "trace-2",
         "timestamp": "2026-05-16T11:00:00Z",
         "sessionId": "session-1",
-        "metadata": {"source_type": "chat", "model_key": "quality_chat_v1"},
+        "metadata": {"source_type": "chat", "model_key": "quality_chat_v2"},
         "scores": [
             {
                 "name": "trust_score",
@@ -1313,8 +1313,8 @@ def test_start_trace_creates_v4_observation_when_trace_factory_missing(monkeypat
     trace = LangfuseTracer().start_trace(
         task_id="session-1",
         org_id="org-1",
-        model_key="quality_chat_v1",
-        name="quality_chat_v1",
+        model_key="quality_chat_v2",
+        name="quality_chat_v2",
         source_type="chat",
         input={"query": "hello"},
     )
@@ -1323,15 +1323,23 @@ def test_start_trace_creates_v4_observation_when_trace_factory_missing(monkeypat
     assert fake.flushed is True
     assert fake.observation_calls == [
         {
-            "name": "quality_chat_v1",
+            "name": "quality_chat_v2",
             "as_type": "span",
             "trace_context": {"trace_id": "trace-v4"},
             "input": {"query": "hello"},
             "metadata": {
                 "task_id": "session-1",
                 "org_id": "org-1",
-                "model_key": "quality_chat_v1",
+                "model_key": "quality_chat_v2",
                 "source_type": "chat",
+                "agent": "",
+                "sub_route": "",
+                "intent": "",
+                "prompt_version": "",
+                "workflow_version": "",
+                "session_id": "",
+                "route_source": "",
+                "route_confidence": 0.0,
             },
         }
     ]

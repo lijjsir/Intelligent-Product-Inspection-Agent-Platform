@@ -55,7 +55,7 @@ GENERAL_RAG_PATTERNS = [
 
 
 class AgentRoutePolicy:
-    """基于规则的路由策略。规则无法确定时走 QualityChatAgent 兜底。"""
+    """Rule-based route policy. Ambiguous inputs can fall back to the model classifier."""
 
     def _has_quality_signal(self, query: str) -> bool:
         return any(p.search(query) for p in QUALITY_QA_PATTERNS)
@@ -101,7 +101,7 @@ class AgentRoutePolicy:
                 reason="前端强制指定检测 Agent",
                 route_source="manual",
             )
-        if route_hints.get("force_agent") in {"chat", "quality_chat"}:
+        if route_hints.get("force_agent") == "chat":
             forced_sub = route_hints.get("force_sub_route") or "general_chat"
             return AgentRouteDecision(
                 selected_agent="chat",

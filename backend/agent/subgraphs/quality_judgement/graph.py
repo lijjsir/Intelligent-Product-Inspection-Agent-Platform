@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -206,6 +206,7 @@ async def _run_structured_inspection(request: NormalizedRequest) -> AgentOutput:
     graph = InspectionTaskGraph()
     decision = AgentRouteDecision(
         selected_agent="inspection_task",
+        sub_route="inspection_execute",
         intent="structured_inspection",
         reason="legacy quality_judgement compatibility wrapper",
     )
@@ -232,14 +233,32 @@ class QualityJudgementSubgraph:
         from agent.router.contracts import AgentRouteDecision
         from agent.contracts.quality_contracts import RouteDecision, RouteSignals
 
+        if request.attachments or request.image_urls or request.request_kind == "task":
+            output = await _run_structured_inspection(request)
+            output.route_decision = RouteDecision(
+                mode="router_enabled",
+                selected_agent="inspection_task",
+                sub_route="inspection_execute",
+                intent="inspection_execute",
+                reason="quality_judgement internal structured inspection",
+                route_source="rule",
+                signals=RouteSignals(
+                    has_file_attachments=bool(request.attachments),
+                    has_images=bool(request.image_urls),
+                    has_task_keyword=request.request_kind == "task",
+                    request_kind=request.request_kind,
+                ),
+            )
+            return output
+
         manager = AgentManager()
         result = await manager.run(request)
 
         rd = result.route_decision
         route_decision = RouteDecision(
             mode="router_enabled",
-            selected_subgraph=rd.selected_agent,  # type: ignore[arg-type]
-            fallback_subgraph=rd.fallback_agent or "quality_chat",  # type: ignore[arg-type]
+            selected_agent=rd.selected_agent,
+            sub_route=rd.sub_route,
             reason=rd.reason,
             intent=rd.intent,
             confidence=rd.confidence,
@@ -275,3 +294,4 @@ class QualityJudgementSubgraph:
             raw_state=dict(ao.get("raw_state") or {}),
         )
         return output
+

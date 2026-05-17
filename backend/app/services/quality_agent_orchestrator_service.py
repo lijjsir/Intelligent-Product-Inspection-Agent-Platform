@@ -108,8 +108,8 @@ class QualityAgentOrchestratorService:
             rd = router_output.route_decision
             agent_output.route_decision = RD(
                 mode="router_enabled",
-                selected_subgraph=rd.selected_agent,  # type: ignore[arg-type]
-                fallback_subgraph=rd.fallback_agent or "quality_chat",  # type: ignore[arg-type]
+                selected_agent=rd.selected_agent,
+                sub_route=rd.sub_route,
                 reason=rd.reason,
                 intent=rd.intent,
                 confidence=rd.confidence,
@@ -134,7 +134,7 @@ class QualityAgentOrchestratorService:
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
             request.org_id,
-            route_decision.selected_subgraph if route_decision else "quality_judgement",
+            route_decision.selected_agent if route_decision else "chat",
             success=success,
             latency_ms=int(round((perf_counter() - started_at) * 1000)),
         )
@@ -218,9 +218,12 @@ class QualityAgentOrchestratorService:
             )
             await session_repo.touch(request.org_id, str(request.user_id or ""), str(request.session_id))
 
-            if output.route_decision and output.route_decision.selected_subgraph in ("quality_chat", "inspection_task", "quality_judgement"):
+            if output.route_decision:
                 rag_repo = RagAnalysisRepository(session, request.org_id)
                 for item in list(output.persistable_output.rag_queries or []):
+                    metadata = dict(item.metadata or {})
+                    metadata.setdefault("agent", output.route_decision.selected_agent)
+                    metadata.setdefault("sub_route", output.route_decision.sub_route)
                     await rag_repo.create_log(
                         {
                             "task_id": None if not materialized else materialized["task_id"],
@@ -233,7 +236,18 @@ class QualityAgentOrchestratorService:
                             "citation_coverage": item.citation_coverage,
                             "latency_ms": int(item.latency_ms or 0),
                             "source_graph": item.source_graph,
-                            "metadata_json": dict(item.metadata or {}),
+                            "agent_name": item.agent_name or output.route_decision.selected_agent,
+                            "sub_route": item.sub_route or output.route_decision.sub_route,
+                            "trace_id": item.trace_id
+                            or (
+                                output.persistable_output.quality_trace.trace_id
+                                if output.persistable_output and output.persistable_output.quality_trace
+                                else None
+                            )
+                            or request.workflow_run_id
+                            or request.request_id,
+                            "top_score": float(item.top_score or metadata.get("top_score") or 0.0),
+                            "metadata_json": metadata,
                         }
                     )
 
@@ -273,11 +287,16 @@ class QualityAgentOrchestratorService:
                         "user_id": request.user_id or None,
                         "session_id": request.session_id,
                         "request_id": request.request_id,
-                        "selected_agent": output.route_decision.selected_subgraph,
-                        "intent_name": output.route_decision.intent or "general_qa",
+                        "selected_agent": output.route_decision.selected_agent,
+                        "sub_route": output.route_decision.sub_route,
+                        "intent_name": output.route_decision.intent or output.route_decision.sub_route,
                         "confidence": output.route_decision.confidence,
                         "route_source": output.route_decision.route_source,
                         "reason": output.route_decision.reason,
+                        "fallback_agent": output.route_decision.fallback_agent,
+                        "requires_confirmation": output.route_decision.requires_confirmation,
+                        "signals_json": output.route_decision.signals.model_dump(),
+                        "latency_ms": 0,
                     }
                 )
                 await session.commit()
@@ -286,8 +305,10 @@ class QualityAgentOrchestratorService:
 
     def _should_materialize_chat_output(self, output: AgentOutput) -> bool:
         route = ""
+        sub_route = ""
         if output.route_decision:
-            route = str(output.route_decision.selected_subgraph or "")
+            route = str(output.route_decision.selected_agent or "")
+            sub_route = str(output.route_decision.sub_route or "")
 
         persistable = output.persistable_output
         has_structured_output = bool(
@@ -297,7 +318,7 @@ class QualityAgentOrchestratorService:
             and persistable.stability
         )
 
-        return route == "inspection_task" and has_structured_output
+        return route == "inspection_task" and sub_route == "inspection_execute" and has_structured_output
 
     def _build_response_payload(
         self,
@@ -314,12 +335,13 @@ class QualityAgentOrchestratorService:
 
         agent = (
             base_payload.get("agent")
-            or (output.route_decision.selected_subgraph if output.route_decision else None)
+            or (output.route_decision.selected_agent if output.route_decision else None)
             or "chat"
         )
         sub_route = (
             base_payload.get("sub_route")
             or base_payload.get("intent")
+            or (output.route_decision.sub_route if output.route_decision else None)
             or "general_chat"
         )
         trace_id = base_payload.get("trace_id") or (
@@ -351,16 +373,6 @@ class QualityAgentOrchestratorService:
             trace_url=base_payload.get("trace_url"),
             prompt_version=base_payload.get("prompt_version", ""),
             selected_rag_space=request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
-            agent_name_compat=(
-                output.route_decision.selected_subgraph
-                if output.route_decision
-                else base_payload.get("agent_name") or "quality_judgement"
-            ),
-            source_graph_compat=(
-                output.route_decision.selected_subgraph
-                if output.route_decision
-                else base_payload.get("source_graph") or "quality_judgement"
-            ),
         )
 
     async def _materialize_chat_output(
@@ -373,9 +385,9 @@ class QualityAgentOrchestratorService:
                 request,
                 output.persistable_output,
                 source_graph=(
-                    output.route_decision.selected_subgraph
+                    output.route_decision.selected_agent
                     if output.route_decision
-                    else "quality_judgement"
+                    else "inspection_task"
                 ),
                 source_kind="chat_quality_answer",
                 persist_usage=True,
@@ -839,7 +851,7 @@ class QualityAgentOrchestratorService:
     async def _record_runtime_metrics(
         self,
         org_id: str,
-        subgraph_key: str,
+        agent_key: str,
         *,
         success: bool,
         latency_ms: int,
@@ -849,12 +861,12 @@ class QualityAgentOrchestratorService:
             runtime_repo = AgentRuntimeRepository(session, org_id)
             metrics_repo = AgentExecutionMetricsRepository(session, org_id)
             registry_entry = next(
-                (item for item in get_registered_subgraphs() if item["subgraph_key"] == subgraph_key),
+                (item for item in get_registered_subgraphs() if item["subgraph_key"] == agent_key),
                 None,
             )
             if not registry_entry:
                 return
-            agent = await agent_repo.get_by_subgraph_key(subgraph_key)
+            agent = await agent_repo.get_by_subgraph_key(agent_key)
             if not agent:
                 agent = await agent_repo.create(dict(registry_entry))
             await runtime_repo.ensure_for_agent(agent)

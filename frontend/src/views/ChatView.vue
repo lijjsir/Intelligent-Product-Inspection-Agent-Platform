@@ -10,6 +10,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatMessagePayload, ChatTaskDraft, ChatMode, ChatUiSchema } from "@/types/chat.types";
 import type { TaskCreate } from "@/types/task.types";
+import { agentLabel as payloadAgentLabel } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -106,11 +107,7 @@ function intentLabel(intent?: string) {
 }
 
 function agentLabel(message: ChatMessage) {
-  const agentName = message.payload?.agent_name || message.payload?.source_graph;
-  if (agentName === "quality_chat") return "QualityChatAgent";
-  if (agentName === "inspection_task") return "InspectionTaskAgent";
-  if (agentName === "quality_judgement") return "Legacy QualityJudgementSubgraph";
-  return agentName || "";
+  return payloadAgentLabel(message.payload);
 }
 
 function resolveUiSchema(message: ChatMessage): ChatUiSchema {
@@ -123,7 +120,7 @@ function resolveUiSchema(message: ChatMessage): ChatUiSchema {
 }
 
 function resolveAgent(payload: ChatMessagePayload | null | undefined): string {
-  return payload?.agent || payload?.agent_name || payload?.source_graph || "";
+  return payload?.agent || "";
 }
 
 function resolveSubRoute(payload: ChatMessagePayload | null | undefined): string {

@@ -36,10 +36,8 @@ class ResponseBuilder:
         trace_id: str | None = None,
         trace_url: str | None = None,
         prompt_version: str = "",
-        workflow_version: str = "chat_router_v2",
+        workflow_version: str = "quality_chat_v2",
         selected_rag_space: dict[str, Any] | None = None,
-        agent_name_compat: str = "",
-        source_graph_compat: str = "",
     ) -> dict[str, Any]:
         ui_schema = UI_SCHEMA_MAP.get((agent, sub_route), "chat_text_v1")
 
@@ -70,8 +68,6 @@ class ResponseBuilder:
             "workflow_version": workflow_version,
             "prompt_version": prompt_version,
             "selected_rag_space": selected_rag_space,
-            "agent_name": agent_name_compat or agent,
-            "source_graph": source_graph_compat or agent,
             "status": "completed",
             "error": None,
         }

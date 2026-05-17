@@ -43,10 +43,15 @@ from agent.subgraphs.quality_judgement.product_adapters import (
     resolve_spec_code,
     score_from_record,
 )
+from agent.llm.client import LLMClient
+from agent.llm.gateway import LLMGateway
+from agent.prompts.prompt_builder import PromptBuilder
+from agent.rag.rag_policy import RagPolicy
 from agent.tools.file_parsers import parse_file_content
 from app.services.dspy_runtime_service import resolve_dspy_runtime_profile
 from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
+from app.services.model_config_service import ModelConfigService
 from app.services.rag_retrieval_service import RagRetrievalService
 from infra.database.session import get_session
 
@@ -236,7 +241,292 @@ class InspectionTaskGraph:
         self._storage = FileStorageService()
 
     async def run(self, request: NormalizedRequest, route_decision: AgentRouteDecision) -> AgentOutput:
+        if route_decision.sub_route == "quality_qa":
+            return await self._run_quality_qa(request, route_decision)
+        if route_decision.sub_route == "task_create":
+            return await self._run_task_create(request, route_decision)
         return await self._run_structured_inspection(request)
+
+    def _base_task_context(self, request: NormalizedRequest) -> dict[str, Any]:
+        product_id = str(request.product_id or request.metadata.get("product_id") or request.ext.get("product_id") or "").strip()
+        spec_code = str(request.spec_code or request.metadata.get("spec_code") or request.ext.get("spec_code") or "").strip()
+        image_urls = [
+            str(item).strip()
+            for item in list(request.image_urls or request.ext.get("image_urls") or [])
+            if str(item).strip()
+        ]
+        priority = int_value(request.metadata.get("priority") or request.ext.get("priority") or 5) or 5
+        product_name = str(request.metadata.get("product_name") or request.ext.get("product_name") or "").strip()
+        product_model = str(request.metadata.get("model") or request.ext.get("model") or "").strip()
+        product_family = detect_product_family({}, product_id)
+        task_draft = _task_draft_from_request(
+            request=request,
+            product_id=product_id,
+            spec_code=spec_code,
+            image_urls=image_urls,
+            priority=priority,
+            product_family=product_family,
+            product_name=product_name,
+            product_model=product_model,
+            structured_record={},
+        )
+        return {
+            "product_id": product_id,
+            "spec_code": spec_code,
+            "image_urls": image_urls,
+            "priority": priority,
+            "product_family": product_family,
+            "product_name": product_name,
+            "product_model": product_model,
+            "task_draft": task_draft,
+        }
+
+    async def _run_quality_qa(self, request: NormalizedRequest, route_decision: AgentRouteDecision) -> AgentOutput:
+        context = self._base_task_context(request)
+        sub_route = "quality_qa"
+        agent = "inspection_task"
+
+        # ── RagPolicy: decide retrieval ──
+        rag_policy = RagPolicy()
+        selected_rag = request.ext.get("selected_rag_space") or {}
+        policy_decision = rag_policy.decide(
+            sub_route=sub_route,
+            selected_rag_space=selected_rag if selected_rag.get("id") else None,
+            spec_code=context.get("spec_code"),
+        )
+
+        # ── RAG retrieval ──
+        retrieved_docs: list[dict[str, Any]] = []
+        rag_hits: list[dict[str, Any]] = []
+        rag_summary: dict[str, Any] | None = None
+        if policy_decision.should_retrieve:
+            retrieval_query = f"{request.query} {context.get('product_id') or ''} {context.get('spec_code') or ''}"
+            async with get_session() as session:
+                rag_service = RagRetrievalService(session, org_id=request.org_id, user_id=request.user_id)
+                rag_result = await rag_service.search(
+                    rag_space_id=policy_decision.rag_space_id,
+                    query=retrieval_query,
+                    top_k=policy_decision.top_k,
+                    scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
+                )
+            rag_hits = list(rag_result.get("hits") or [])
+            retrieved_docs = [
+                {"title": h.get("title", ""), "source": h.get("source", ""), "text": h.get("quote", "")}
+                for h in rag_hits
+            ]
+            rag_summary = {
+                "rag_space_id": rag_result.get("rag_space_id"),
+                "rag_space_name": rag_result.get("rag_space_name"),
+                "hit_count": len(rag_hits),
+                "top_score": float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
+                "citation_coverage": 1.0 if rag_hits else 0.0,
+                "top_sources": list(dict.fromkeys(h.get("source", "") for h in rag_hits if h.get("source")))[:5],
+            }
+
+        # ── PromptBuilder ──
+        history = list(request.ext.get("history") or [])
+        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+            agent=agent,
+            sub_route=sub_route,
+            query=request.query,
+            history=history,
+            retrieved_docs=retrieved_docs if retrieved_docs else None,
+        )
+
+        # ── LLM call ──
+        async with get_session() as session:
+            runtime_models = await ModelConfigService(session, str(request.org_id)).list_runtime_models()
+        runtime = await LLMGateway().select_runtime(runtime_models)
+        if not runtime:
+            return AgentOutput(
+                message_type="quality_answer",
+                answer="当前没有可用的模型，请联系管理员配置模型后再试。",
+                summary="模型不可用",
+                action_state="answered",
+                task_draft=None,
+                quality={"passed": False, "risk_level": "medium", "risk_score": 0.5},
+                citations=[],
+                persistable_output=PersistableOutput(),
+                raw_state={"response_payload": {"agent": agent, "sub_route": sub_route,
+                    "ui_schema": "quality_answer_v1", "prompt_version": prompt_meta["prompt_version"]}},
+            )
+
+        llm = LLMClient(
+            api_key=runtime.get("api_key"),
+            base_url=runtime.get("base_url"),
+            model_id=runtime.get("model_id"),
+            trace_id=request.workflow_run_id or request.request_id,
+            task_id=str(request.session_id),
+            org_id=str(request.org_id),
+            provider=str(runtime.get("provider") or ""),
+            input_price_per_million=runtime.get("input_price_per_million"),
+            output_price_per_million=runtime.get("output_price_per_million"),
+        )
+
+        citations: list[dict[str, Any]] = []
+        try:
+            response = await llm.chat(
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
+                temperature=temperature,
+                observation_name="inspection.quality_qa",
+                observation_metadata={
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "intent": "quality_qa",
+                    "prompt_version": prompt_meta["prompt_version"],
+                },
+            )
+            answer = str(response.get("answer") or "").strip()
+            summary = str(response.get("summary") or "质检问答").strip()
+            if not answer:
+                answer = f"基于当前信息，我暂时无法给出确定的质检判定。\n\n问题：{request.query}"
+                summary = "证据不足"
+            citations = [
+                {"id": f"rag-{i}", "title": h.get("title", ""), "source": h.get("source", ""),
+                 "quote": str(h.get("quote", ""))[:180], "score": float(h.get("score") or 0.0), "kind": "rag"}
+                for i, h in enumerate(rag_hits, start=1)
+            ]
+        except Exception:
+            answer = f"质检问答服务暂时不可用。\n\n问题：{request.query}\n\n请稍后重试或联系管理员。"
+            summary = "服务异常"
+
+        return AgentOutput(
+            message_type="quality_answer",
+            answer=answer,
+            summary=summary,
+            action_state="answered",
+            task_draft=None,
+            quality={
+                "passed": False,
+                "risk_level": "medium",
+                "risk_score": 0.5,
+                "confidence": float(route_decision.confidence or 0.0),
+            },
+            citations=citations,
+            rag_summary=rag_summary,
+            persistable_output=PersistableOutput(),
+            raw_state={
+                "task_context": context,
+                "response_payload": {
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "ui_schema": "quality_answer_v1",
+                    "prompt_version": prompt_meta["prompt_version"],
+                    "awaiting_confirmation": False,
+                },
+            },
+        )
+
+    async def _run_task_create(self, request: NormalizedRequest, route_decision: AgentRouteDecision) -> AgentOutput:
+        context = self._base_task_context(request)
+        sub_route = "task_create"
+        agent = "inspection_task"
+
+        # ── PromptBuilder ──
+        history = list(request.ext.get("history") or [])
+        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+            agent=agent,
+            sub_route=sub_route,
+            query=request.query,
+            history=history,
+            task_draft=context["task_draft"],
+            action_state="awaiting_task_details",
+        )
+
+        # ── LLM call ──
+        async with get_session() as session:
+            runtime_models = await ModelConfigService(session, str(request.org_id)).list_runtime_models()
+        runtime = await LLMGateway().select_runtime(runtime_models)
+        if not runtime:
+            return AgentOutput(
+                message_type="task_action",
+                answer="当前没有可用的模型，请稍后重试。",
+                summary="模型不可用",
+                action_state="awaiting_task_details",
+                task_draft=context["task_draft"],
+                quality={"passed": False, "risk_level": "low", "risk_score": 0.2},
+                persistable_output=PersistableOutput(),
+                raw_state={"response_payload": {"agent": agent, "sub_route": sub_route,
+                    "ui_schema": "task_action_v1", "prompt_version": prompt_meta["prompt_version"]}},
+            )
+
+        llm = LLMClient(
+            api_key=runtime.get("api_key"),
+            base_url=runtime.get("base_url"),
+            model_id=runtime.get("model_id"),
+            trace_id=request.workflow_run_id or request.request_id,
+            task_id=str(request.session_id),
+            org_id=str(request.org_id),
+            provider=str(runtime.get("provider") or ""),
+            input_price_per_million=runtime.get("input_price_per_million"),
+            output_price_per_million=runtime.get("output_price_per_million"),
+        )
+
+        try:
+            response = await llm.chat(
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
+                temperature=temperature,
+                observation_name="inspection.task_create",
+                observation_metadata={
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "intent": "task_create",
+                    "prompt_version": prompt_meta["prompt_version"],
+                },
+            )
+            answer = str(response.get("answer") or "").strip()
+            summary = str(response.get("summary") or "检测任务草稿").strip()
+        except Exception:
+            answer = "任务创建服务暂时不可用，请稍后重试或通过任务页面手动创建。"
+            summary = "服务异常"
+
+        # ── Slot extraction from context ──
+        missing_fields: list[str] = []
+        if not context["product_id"]:
+            missing_fields.append("product_id")
+        if not context["spec_code"]:
+            missing_fields.append("spec_code")
+        if not context["image_urls"]:
+            missing_fields.append("image_urls")
+
+        clarification = None
+        if missing_fields:
+            clarification = ClarificationRequest(
+                missing_fields=missing_fields,
+                reason="创建检测任务前需要补齐必要字段。",
+                suggestions=[QUALITY_MISSING_FIELD_HINTS.get(item, item) for item in missing_fields],
+                examples={item: QUALITY_MISSING_FIELD_HINTS.get(item, item) for item in missing_fields},
+            )
+        awaiting_confirmation = not missing_fields
+        action_state = "awaiting_task_confirmation" if awaiting_confirmation else "awaiting_task_details"
+
+        if not answer:
+            answer = (
+                "已整理检测任务草稿，请确认后再创建正式任务。"
+                if awaiting_confirmation
+                else "我先整理了检测任务草稿，但还需要补齐必要信息后才能创建正式任务。"
+            )
+
+        return AgentOutput(
+            message_type="task_action",
+            answer=answer,
+            summary=summary,
+            action_state=action_state,
+            task_draft=context["task_draft"],
+            clarification=clarification,
+            quality={"passed": False, "risk_level": "low", "risk_score": 0.2},
+            persistable_output=PersistableOutput(),
+            raw_state={
+                "task_draft": context["task_draft"],
+                "response_payload": {
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "ui_schema": "task_action_v1",
+                    "prompt_version": prompt_meta["prompt_version"],
+                    "awaiting_confirmation": awaiting_confirmation,
+                },
+            },
+        )
 
     async def _run_structured_inspection(self, request: NormalizedRequest) -> AgentOutput:
         started_at = perf_counter()
@@ -491,9 +781,14 @@ class InspectionTaskGraph:
                 hit_count=len(rag_hits), hit_rate=1.0 if rag_hits else 0.0,
                 citation_coverage=float(ai_gate.get("evidence_score") or 0.0),
                 latency_ms=latency_ms, source_graph="inspection_task",
+                agent_name="inspection_task",
+                sub_route="inspection_execute",
+                trace_id=request.workflow_run_id or request.request_id,
+                top_score=float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
                 metadata={"parsed_file_count": len(parsed_files), "structured_record": structured_record,
                          "product_family": product_family, "product_id": product_id,
                          "product_name": product_name, "spec_code": spec_code, "verdict": verdict,
+                         "top_score": float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
                          "expectation_matched": None if not expectation_check else expectation_check["matched"],
                          "rag_space_name": rag_result.get("rag_space_name"),
                          "top_sources": rag_summary["top_sources"],
