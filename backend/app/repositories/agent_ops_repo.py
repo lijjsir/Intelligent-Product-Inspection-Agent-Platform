@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_ops import (
     AgentDefinition,
+    AgentRouteLog,
     AgentRuntimeInstance,
     DSPyOptimizationConfig,
     DSPyOptimizationRun,
@@ -614,3 +615,43 @@ class AgentRuntimeRepository(AgentOpsRepository):
             obj.last_stopped_at = datetime.utcnow()
         await self._session.flush()
         return obj
+
+
+class AgentRouteLogRepository(AgentOpsRepository):
+    """Repository for agent_route_logs — audit trail of routing decisions."""
+
+    async def create(self, data: dict) -> AgentRouteLog:
+        obj = AgentRouteLog(**data, org_id=self._org_id)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_by_session(
+        self, session_id: str, *, limit: int = 50
+    ) -> list[AgentRouteLog]:
+        result = await self._session.execute(
+            select(AgentRouteLog)
+            .where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.session_id == session_id,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+            .order_by(AgentRouteLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_by_agent(
+        self, selected_agent: str, *, limit: int = 50
+    ) -> list[AgentRouteLog]:
+        result = await self._session.execute(
+            select(AgentRouteLog)
+            .where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.selected_agent == selected_agent,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+            .order_by(AgentRouteLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())

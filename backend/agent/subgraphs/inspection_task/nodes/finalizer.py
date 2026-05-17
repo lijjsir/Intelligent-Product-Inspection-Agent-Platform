@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from agent.graph.state import InspectionState
+from agent.subgraphs.inspection_task.state import InspectionState
 
 
 async def finalize(state: InspectionState) -> InspectionState:

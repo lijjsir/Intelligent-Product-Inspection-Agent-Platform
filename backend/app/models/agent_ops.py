@@ -165,3 +165,24 @@ class RagQueryLog(Base, TimestampMixin):
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     source_graph: Mapped[str] = mapped_column(String(64), nullable=False, default="quality_judgement")
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class AgentRouteLog(Base, TimestampMixin):
+    """Agent routing audit log — tracks every route decision made by AgentManager.
+    Indexes:
+      - PRIMARY KEY (id)
+      - idx_route_logs_session (org_id, session_id, created_at)
+      - idx_route_logs_agent (org_id, selected_agent, created_at)
+    """
+    __tablename__ = "agent_route_logs"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    session_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    selected_agent: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    intent_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
+    route_source: Mapped[str] = mapped_column(String(32), nullable=False, default="rule")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)

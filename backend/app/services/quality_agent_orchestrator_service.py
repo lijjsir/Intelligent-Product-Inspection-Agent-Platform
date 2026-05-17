@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
         self._graph = QualityJudgementSubgraph()
+        from app.services.agent_manager_service import AgentManagerService
+        self._agent_manager = AgentManagerService()
 
     @staticmethod
     def _json_safe(value: Any) -> Any:
@@ -97,13 +99,34 @@ class QualityAgentOrchestratorService:
             route_hints=dict(payload.get("route_hints") or {}),
         )
         success = True
-        result = await self._graph.run(request)
-        if isinstance(result, AgentOutput):
-            agent_output = result
+        try:
+            router_output = await self._agent_manager.run_chat(payload)
+            agent_output = AgentOutput.model_validate(router_output.agent_output)
+            # Inject route_decision from router output
+            from agent.contracts.quality_contracts import RouteDecision as RD, RouteSignals
+            rd = router_output.route_decision
+            agent_output.route_decision = RD(
+                mode="router_enabled",
+                selected_subgraph=rd.selected_agent,  # type: ignore[arg-type]
+                fallback_subgraph=rd.fallback_agent or "quality_chat",  # type: ignore[arg-type]
+                reason=rd.reason,
+                intent=rd.intent,
+                confidence=rd.confidence,
+                requires_confirmation=rd.requires_confirmation,
+                route_source=rd.route_source,
+                fallback_agent=rd.fallback_agent,
+                signals=RouteSignals(),
+            )
             result_payload = {"agent_output": agent_output.model_dump()}
-        else:
-            result_payload = dict(result)
-            agent_output = AgentOutput.model_validate(result_payload["agent_output"])
+        except Exception as exc:
+            logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
+            result = await self._graph.run(request)
+            if isinstance(result, AgentOutput):
+                agent_output = result
+                result_payload = {"agent_output": agent_output.model_dump()}
+            else:
+                result_payload = dict(result)
+                agent_output = AgentOutput.model_validate(result_payload["agent_output"])
         route_decision = agent_output.route_decision
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
@@ -192,7 +215,7 @@ class QualityAgentOrchestratorService:
             )
             await session_repo.touch(request.org_id, str(request.user_id or ""), str(request.session_id))
 
-            if output.route_decision and output.route_decision.selected_subgraph != "quality_judgement":
+            if output.route_decision and output.route_decision.selected_subgraph in ("quality_chat", "inspection_task", "quality_judgement"):
                 rag_repo = RagAnalysisRepository(session, request.org_id)
                 for item in list(output.persistable_output.rag_queries or []):
                     await rag_repo.create_log(
@@ -210,6 +233,25 @@ class QualityAgentOrchestratorService:
                             "metadata_json": dict(item.metadata or {}),
                         }
                     )
+
+                # Write route decision log for audit trail (best-effort)
+                if output.route_decision:
+                    try:
+                        from app.repositories.agent_ops_repo import AgentRouteLogRepository
+                        route_log_repo = AgentRouteLogRepository(session, request.org_id)
+                        await route_log_repo.create({
+                            "user_id": request.user_id or None,
+                            "session_id": request.session_id,
+                            "request_id": request.request_id,
+                            "selected_agent": output.route_decision.selected_subgraph,
+                            "intent_name": output.route_decision.intent or "general_qa",
+                            "confidence": output.route_decision.confidence,
+                            "route_source": output.route_decision.route_source,
+                            "reason": output.route_decision.reason,
+                        })
+                    except Exception:
+                        logger.debug("route log write skipped (non-persistent session or table missing)")
+
             await session.commit()
 
         if callable(emit):
