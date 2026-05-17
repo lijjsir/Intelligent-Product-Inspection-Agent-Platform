@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from typing import Any
@@ -47,6 +47,11 @@ class AgentManager:
         )
 
         decision = self._route_policy.decide(router_input)
+        if decision.fallback_agent == "model_classifier":
+            decision = await self._route_policy.decide_with_model(
+                router_input,
+                llm_client=await self._build_model_classifier_client(request),
+            )
 
         try:
             if decision.selected_agent == "inspection_task":
@@ -71,3 +76,31 @@ class AgentManager:
             agent_output=agent_output if isinstance(agent_output, dict) else agent_output.model_dump(),
             status="completed",
         )
+
+    async def _build_model_classifier_client(self, request: NormalizedRequest):
+        try:
+            from agent.llm.client import LLMClient
+            from agent.llm.gateway import LLMGateway
+            from app.services.model_config_service import ModelConfigService
+            from infra.database.session import get_session
+
+            async with get_session() as session:
+                runtime_models = await ModelConfigService(session, str(request.org_id)).list_runtime_models()
+            runtime = await LLMGateway().select_runtime(runtime_models)
+            if not runtime:
+                return None
+            return LLMClient(
+                api_key=runtime.get("api_key"),
+                base_url=runtime.get("base_url"),
+                model_id=runtime.get("model_id"),
+                trace_id=str(request.workflow_run_id or request.request_id),
+                task_id=str(request.session_id or request.request_id),
+                org_id=str(request.org_id),
+                provider=str(runtime.get("provider") or ""),
+                input_price_per_million=runtime.get("input_price_per_million"),
+                output_price_per_million=runtime.get("output_price_per_million"),
+            )
+        except Exception:
+            logger.debug("model classifier client unavailable; using rule fallback", exc_info=True)
+            return None
+

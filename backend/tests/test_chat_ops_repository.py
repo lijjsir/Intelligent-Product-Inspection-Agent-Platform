@@ -56,11 +56,11 @@ class CaptureSession:
 
 
 @pytest.mark.asyncio
-async def test_quality_chat_binding_tolerates_duplicate_existing_agents_and_routes():
+async def test_chat_binding_tolerates_duplicate_existing_agents_and_routes():
     agents = [
         SimpleNamespace(
             id="agent-old",
-            subgraph_key="quality_chat",
+            subgraph_key="chat",
             entry_graph="MemoryManagerGraph",
             graph_version="v1",
         ),
@@ -77,7 +77,7 @@ async def test_quality_chat_binding_tolerates_duplicate_existing_agents_and_rout
     ]
     session = FakeSession([FakeResult(agents), FakeResult(routes)])
 
-    await ChatOpsRepository(session, "org-1").ensure_quality_chat_binding()
+    await ChatOpsRepository(session, "org-1").ensure_chat_binding()
 
     assert session.added == []
     assert routes[0].agent_id == "agent-old"

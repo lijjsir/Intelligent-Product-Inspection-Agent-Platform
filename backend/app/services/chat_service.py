@@ -156,7 +156,7 @@ class ChatService:
             chat_session = await session_repo.get(self._org_id, self._user_id, session_id)
             if not chat_session:
                 raise NotFoundError("chat session not found")
-            await ops_repo.ensure_quality_chat_binding()
+            await ops_repo.ensure_chat_binding()
 
             rag_space_id = str(ext_payload.get("selected_rag_space_id") or "").strip()
             if rag_space_id:

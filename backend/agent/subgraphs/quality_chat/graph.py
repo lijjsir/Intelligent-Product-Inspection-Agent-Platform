@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import logging
@@ -13,7 +13,7 @@ from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from agent.rag.retriever import Retriever
-from agent.subgraphs.quality_chat.state import QualityChatState
+from agent.subgraphs.quality_chat.state import ChatState
 from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
 from app.core.config import settings
@@ -327,15 +327,15 @@ def _selected_rag_scope_node_ids(ext: dict[str, Any] | None) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def _dspy_runtime_meta(state: QualityChatState) -> dict[str, Any]:
+def _dspy_runtime_meta(state: ChatState) -> dict[str, Any]:
     return dict((state.get("metadata") or {}).get("dspy_runtime") or {})
 
 
-def _dspy_target_payload(state: QualityChatState, target_key: str) -> dict[str, Any]:
+def _dspy_target_payload(state: ChatState, target_key: str) -> dict[str, Any]:
     return dict(_dspy_runtime_meta(state).get("targets", {}).get(target_key, {}).get("config_payload") or {})
 
 
-def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str:
+def _dspy_prompt_section(state: ChatState, target_keys: list[str]) -> str:
     runtime_meta = _dspy_runtime_meta(state)
     targets = {}
     for key in target_keys:
@@ -366,9 +366,9 @@ def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str
     return build_runtime_prompt_section(profile_like, [key for key in target_keys if key in targets])
 
 
-async def input_adapter(state: QualityChatState) -> QualityChatState:
+async def input_adapter(state: ChatState) -> ChatState:
     runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "quality_judgement")
-    state["workflow_version"] = "quality_chat_v1"
+    state["workflow_version"] = "quality_chat_v2"
     state["prompt_version"] = runtime_profile.active_prompt_version
     state["metadata"] = dict(state.get("metadata") or {})
     state["metadata"]["dspy_runtime"] = runtime_profile.as_metadata()
@@ -385,7 +385,7 @@ async def input_adapter(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def history_loader(state: QualityChatState) -> QualityChatState:
+async def history_loader(state: ChatState) -> ChatState:
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         rows = await repo.list_for_session(org_id=str(state["org_id"]), session_id=str(state["session_id"]), after_seq=0, limit=20)
@@ -393,7 +393,7 @@ async def history_loader(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def planner(state: QualityChatState) -> QualityChatState:
+async def planner(state: ChatState) -> ChatState:
     query = str(state.get("query") or "")
     lowered_query = query.lower()
     history = list(state.get("history") or [])
@@ -430,7 +430,7 @@ async def planner(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def task_extractor(state: QualityChatState) -> QualityChatState:
+async def task_extractor(state: ChatState) -> ChatState:
     if state.get("intent") not in {"task_create", "task_followup"}:
         return state
     query = str(state.get("query") or "")
@@ -458,11 +458,11 @@ async def task_extractor(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def knowledge(state: QualityChatState) -> QualityChatState:
+async def knowledge(state: ChatState) -> ChatState:
     from agent.rag.rag_policy import RagPolicy
     rag_policy = RagPolicy()
     sub_route = state.get("sub_route", state.get("intent", "general_chat"))
-    selected_rag = state.get("selected_rag_space") or {}
+    selected_rag = _selected_rag_space(state.get("ext") or {}) or {}
 
     policy_decision = rag_policy.decide(
         sub_route=sub_route,
@@ -505,7 +505,7 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def reasoning(state: QualityChatState) -> QualityChatState:
+async def reasoning(state: ChatState) -> ChatState:
     _t_reasoning = perf_counter()
     intent = state.get("intent")
     query = str(state.get("query") or "")
@@ -576,7 +576,7 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
         input_price_per_million=runtime.get("input_price_per_million"),
         output_price_per_million=runtime.get("output_price_per_million"),
     )
-    obs_name = f"quality_chat.{intent}" if intent else "quality_chat.reasoning"
+    obs_name = f"chat.{sub_route}" if sub_route else "chat.reasoning"
     answer = ""
     summary = ""
     try:
@@ -584,7 +584,13 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
             [{"role": "system", "content": prompt}, {"role": "user", "content": user_message}],
             temperature=temperature,
             observation_name=obs_name,
-            observation_metadata={"workflow_version": "quality_chat_v1", "intent": intent},
+            observation_metadata={
+                "workflow_version": "quality_chat_v2",
+                "agent": agent_name,
+                "sub_route": sub_route,
+                "intent": intent,
+                "prompt_version": state.get("prompt_version"),
+            },
         )
         answer = str(response.get("answer") or "").strip()
         summary = str(response.get("summary") or "").strip()
@@ -622,7 +628,7 @@ async def reasoning(state: QualityChatState) -> QualityChatState:
 
 
 
-async def quality_gate(state: QualityChatState) -> QualityChatState:
+async def quality_gate(state: ChatState) -> ChatState:
     if state.get("intent") != "quality_qa":
         state["quality"] = {}
         return state
@@ -656,7 +662,7 @@ async def quality_gate(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def task_executor(state: QualityChatState) -> QualityChatState:
+async def task_executor(state: ChatState) -> ChatState:
     if state.get("action_state") != "task_create_requested":
         return state
     draft = dict(state.get("task_draft") or {})
@@ -726,7 +732,7 @@ async def task_executor(state: QualityChatState) -> QualityChatState:
         return state
 
 
-def _message_type_for_state(state: QualityChatState) -> str:
+def _message_type_for_state(state: ChatState) -> str:
     action_state = str(state.get("action_state") or "answered")
     if action_state in {"task_started", "task_finished"}:
         return "task_result"
@@ -737,7 +743,7 @@ def _message_type_for_state(state: QualityChatState) -> str:
     return "quality_answer"
 
 
-def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
+def _chat_usage_from_state(state: ChatState) -> dict[str, Any] | None:
     llm_meta = dict((state.get("reasoning") or {}).get("llm_meta") or {})
     usage = LLMClient._normalize_usage(llm_meta.get("usage"))
     if not usage:
@@ -770,7 +776,7 @@ def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
     }
 
 
-async def _persist_chat_token_usage(session, state: QualityChatState) -> None:
+async def _persist_chat_token_usage(session, state: ChatState) -> None:
     usage = _chat_usage_from_state(state)
     if not usage:
         return
@@ -803,7 +809,7 @@ async def _persist_chat_token_usage(session, state: QualityChatState) -> None:
     )
 
 
-async def _persist_rag_query_log(session, state: QualityChatState) -> None:
+async def _persist_rag_query_log(session, state: ChatState) -> None:
     metrics = dict(state.get("retrieval_metrics") or {})
     if bool(metrics.get("skipped")):
         return
@@ -824,7 +830,11 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
             "hit_rate": round(hit_rate, 4),
             "citation_coverage": round(coverage, 4),
             "latency_ms": int(metrics.get("latency_ms") or 0),
-            "source_graph": "quality_judgement",
+            "source_graph": "chat",
+            "agent_name": "chat",
+            "sub_route": str(state.get("sub_route") or state.get("intent") or "general_chat"),
+            "trace_id": str((state.get("trace") or {}).get("trace_id") or state.get("workflow_run_id") or ""),
+            "top_score": float(metrics.get("top_score") or 0.0),
             "metadata_json": {
                 "intent": state.get("intent"),
                 "empty_recall": bool(metrics.get("empty_recall")),
@@ -834,7 +844,7 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
     )
 
 
-async def response_writer(state: QualityChatState) -> QualityChatState:
+async def response_writer(state: ChatState) -> ChatState:
     _t0 = perf_counter()
     answer = str((state.get("reasoning") or {}).get("answer") or "")
     emit = state["emit"]
@@ -850,8 +860,8 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "citations": list(state.get("citations") or []),
         "quality": dict(state.get("quality") or {}),
         "trace_id": (state.get("trace") or {}).get("trace_id"),
-        "workflow_version": state.get("workflow_version") or "quality_chat_v1",
-        "prompt_version": state.get("prompt_version") or "builtin-quality-chat-v1",
+        "workflow_version": state.get("workflow_version") or "quality_chat_v2",
+        "prompt_version": state.get("prompt_version") or "chat_general_v1",
         "retrieval_metrics": state.get("retrieval_metrics") or {},
         "summary": (state.get("reasoning") or {}).get("summary"),
         "intent": state.get("intent"),
@@ -879,7 +889,7 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
     return state
 
 
-def _build_trust_scoring_request(state: QualityChatState, payload: dict[str, Any]) -> dict[str, Any] | None:
+def _build_trust_scoring_request(state: ChatState, payload: dict[str, Any]) -> dict[str, Any] | None:
     if not settings.trust_scoring_enabled or not str(payload.get("answer") or "").strip():
         return None
     llm_meta = dict((state.get("reasoning") or {}).get("llm_meta") or {})
@@ -916,7 +926,7 @@ def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
         return
 
 
-async def finalizer(state: QualityChatState) -> QualityChatState:
+async def finalizer(state: ChatState) -> ChatState:
     _t0 = perf_counter()
     payload = state.get("response_payload") or {}
     trust_score: dict[str, Any] | None = None
@@ -942,9 +952,9 @@ async def finalizer(state: QualityChatState) -> QualityChatState:
     return state
 
 
-class QualityChatGraph:
+class ChatGraph:
     def __init__(self) -> None:
-        graph = StateGraph(QualityChatState)
+        graph = StateGraph(ChatState)
         for name, node in [
             ("input_adapter", input_adapter),
             ("history_loader", history_loader),
@@ -1009,9 +1019,9 @@ class QualityChatGraph:
                 created_task=dict(payload.get("created_task") or {}) or None,
                 raw_state=graph_result,
             )
-        raise TypeError(f"QualityChatGraph.run() expects dict or NormalizedRequest, got {type(state)}")
+        raise TypeError(f"ChatGraph.run() expects dict or NormalizedRequest, got {type(state)}")
 
-    async def _run_state(self, state: QualityChatState) -> QualityChatState:
+    async def _run_state(self, state: ChatState) -> ChatState:
         _t_graph = perf_counter()
         tracer = LangfuseTracer()
         state["trace"] = tracer.start_trace(
@@ -1021,14 +1031,14 @@ class QualityChatGraph:
             sub_route=state.get("sub_route", "general_chat"),
             intent=state.get("intent"),
             prompt_version=state.get("prompt_version"),
-            workflow_version="chat_router_v2",
+            workflow_version="quality_chat_v2",
             route_source=state.get("route_source", ""),
             route_confidence=state.get("route_confidence", 0.0),
             session_id=state.get("session_id"),
             source_type="chat",
             org_id=state.get("org_id"),
             model_key=state.get("model_key"),
-            name="quality_chat_v1",
+            name="quality_chat_v2",
             input={"query": state.get("query", ""), "session_id": state.get("session_id", "")},
         )
         result = await self._graph.ainvoke(state)
@@ -1037,3 +1047,4 @@ class QualityChatGraph:
             result.get("intent"), len(str(result.get("query") or "")), round((perf_counter() - _t_graph) * 1000),
         )
         return result
+

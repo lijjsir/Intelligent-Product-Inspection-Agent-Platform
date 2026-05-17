@@ -348,7 +348,7 @@ class ChatTrustScoringService:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.0,
-                observation_name="quality_chat.trust_review",
+                observation_name="chat.trust_review",
                 observation_metadata={"pipeline": SCORE_VERSION},
             )
             if {"hallucination_risk_llm", "overconfidence_llm", "has_citation_llm"} <= set(response):

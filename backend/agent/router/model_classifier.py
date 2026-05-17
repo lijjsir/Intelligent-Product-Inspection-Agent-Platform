@@ -49,12 +49,20 @@ class ModelClassifier:
 
         try:
             result = await llm_client.chat(
-                system_prompt=CLASSIFIER_SYSTEM_PROMPT,
-                user_message=user_context,
+                [
+                    {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_context},
+                ],
                 temperature=0.0,
-                response_format={"type": "json_object"},
+                observation_name="agent_router.model_classifier",
+                observation_metadata={"router": "quality_chat_v2"},
             )
-            data = json.loads(result.get("content", "{}"))
+            if isinstance(result, dict) and "content" in result:
+                data = json.loads(str(result.get("content") or "{}"))
+            elif isinstance(result, dict) and "text" in result:
+                data = json.loads(str(result.get("text") or "{}"))
+            else:
+                data = dict(result or {})
             return AgentRouteDecision(
                 selected_agent=data.get("selected_agent", "chat"),
                 sub_route=data.get("sub_route", "general_chat"),

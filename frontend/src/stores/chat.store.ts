@@ -661,10 +661,10 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     if (event.event === "message_final" || event.event === "run_failed") {
-      // Resolve agent, sub_route, ui_schema, trace_url with fallback chains
+      // Resolve new chat router payload fields only.
       if (event.payload) {
-        basePayload.agent = event.payload.agent || event.payload.agent_name || event.payload.source_graph;
-        basePayload.sub_route = event.payload.sub_route || event.payload.intent;
+        basePayload.agent = event.payload.agent;
+        basePayload.sub_route = event.payload.sub_route;
         basePayload.ui_schema = event.payload.ui_schema;
         basePayload.trace_url = event.payload.trace_url || event.payload.trust_scoring?.trace_url;
       }

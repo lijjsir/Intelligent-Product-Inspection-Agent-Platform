@@ -240,7 +240,7 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
             assert page == 1
             assert size == 6
             return [
-                SimpleNamespace(intent_name="quality_chat"),
+                SimpleNamespace(intent_name="chat"),
                 SimpleNamespace(intent_name="quality_task_create"),
             ], 2
 
@@ -270,7 +270,7 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
     assert data.decision_cards[2].matched_signals == ["has_file_attachments", "request_kind"]
     assert {item.subgraph_key for item in data.subgraphs} == {"quality_judgement", "quality_judgement"}
     assert data.registered_route_count == 2
-    assert data.registered_intents == ["quality_chat", "quality_task_create"]
+    assert data.registered_intents == ["chat", "quality_task_create"]
 
 
 @pytest.mark.asyncio

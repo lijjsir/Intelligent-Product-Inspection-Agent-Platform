@@ -40,7 +40,11 @@ function pushEvent(event: TaskStreamEvent) {
   }
   if (event.status === "done" || event.status === "failed") {
     running.value = false;
-    void taskStore.fetchTask(taskId);
+    taskStore.fetchTask(taskId).catch((err) => {
+      console.error("Failed to refresh task after completion:", err);
+      // Retry once after 2s in case of transient failure
+      setTimeout(() => taskStore.fetchTask(taskId).catch(() => {}), 2000);
+    });
   }
 }
 

@@ -164,6 +164,10 @@ class RagQueryLog(Base, TimestampMixin):
     citation_coverage: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     source_graph: Mapped[str] = mapped_column(String(64), nullable=False, default="quality_judgement")
+    agent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sub_route: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    top_score: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
@@ -186,3 +190,9 @@ class AgentRouteLog(Base, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
     route_source: Mapped[str] = mapped_column(String(32), nullable=False, default="rule")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sub_route: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    fallback_agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    signals_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    model_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

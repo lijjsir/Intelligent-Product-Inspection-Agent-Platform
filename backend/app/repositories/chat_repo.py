@@ -188,16 +188,16 @@ class ChatOpsRepository:
         self._session = session
         self._org_id = org_id
 
-    async def ensure_quality_chat_binding(self) -> None:
+    async def ensure_chat_binding(self) -> None:
         agent_result = await self._session.execute(
             select(AgentDefinition)
             .where(
                 AgentDefinition.org_id == self._org_id,
-                AgentDefinition.workflow_binding == "quality_chat_v1",
+                AgentDefinition.workflow_binding == "quality_chat_v2",
                 AgentDefinition.deleted_at.is_(None),
             )
             .order_by(
-                case((AgentDefinition.subgraph_key == "quality_chat", 0), else_=1),
+                case((AgentDefinition.subgraph_key == "chat", 0), else_=1),
                 AgentDefinition.created_at.asc(),
                 AgentDefinition.id.asc(),
             )
@@ -209,25 +209,29 @@ class ChatOpsRepository:
                 org_id=self._org_id,
                 name="质量检测聊天智能体",
                 description="面向质量检测问答场景的聊天子图",
-                workflow_binding="quality_chat_v1",
-                subgraph_key="quality_judgement",
+                workflow_binding="quality_chat_v2",
+                subgraph_key="chat",
                 entry_graph="MemoryManagerGraph",
                 supports_start_stop=True,
-                graph_version="v1",
+                graph_version="v2",
                 is_active=True,
             )
+            agent.name = "QualityChatAgent"
+            agent.description = "QualityChat agent for general chat and RAG QA."
             self._session.add(agent)
             await self._session.flush()
         else:
-            agent.subgraph_key = str(agent.subgraph_key or "quality_judgement")
+            agent.name = "QualityChatAgent"
+            agent.description = getattr(agent, "description", None) or "QualityChat agent for general chat and RAG QA."
+            agent.subgraph_key = "chat"
             agent.entry_graph = str(agent.entry_graph or "MemoryManagerGraph")
-            agent.graph_version = str(agent.graph_version or "v1")
+            agent.graph_version = str(agent.graph_version or "v2")
 
         route_result = await self._session.execute(
             select(IntentRoute)
             .where(
                 IntentRoute.org_id == self._org_id,
-                IntentRoute.intent_name == "quality_chat",
+                IntentRoute.intent_name == "chat",
                 IntentRoute.deleted_at.is_(None),
             )
             .order_by(IntentRoute.priority.desc(), IntentRoute.created_at.asc(), IntentRoute.id.asc())
@@ -237,7 +241,7 @@ class ChatOpsRepository:
         if route is None:
             route = IntentRoute(
                 org_id=self._org_id,
-                intent_name="quality_chat",
+                intent_name="chat",
                 agent_id=agent.id,
                 priority=100,
                 sample_count=0,

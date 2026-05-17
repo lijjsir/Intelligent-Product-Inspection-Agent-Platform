@@ -466,6 +466,10 @@ class RagAnalysisRepository(AgentOpsRepository):
             RagQueryLog.citation_coverage,
             RagQueryLog.latency_ms,
             RagQueryLog.source_graph,
+            RagQueryLog.agent_name,
+            RagQueryLog.sub_route,
+            RagQueryLog.trace_id,
+            RagQueryLog.top_score,
             RagQueryLog.metadata_json,
             RagQueryLog.created_at,
         ).where(*filters).order_by(
@@ -485,6 +489,10 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "citation_coverage": float(row.citation_coverage or 0.0),
                 "latency_ms": row.latency_ms or 0,
                 "source_graph": str(row.source_graph or ""),
+                "agent_name": str(row.agent_name or ""),
+                "sub_route": str(row.sub_route or ""),
+                "trace_id": str(row.trace_id or "") or None,
+                "top_score": float(row.top_score or 0.0),
                 "metadata": dict(row.metadata_json or {}),
                 "created_at": row.created_at,
             })

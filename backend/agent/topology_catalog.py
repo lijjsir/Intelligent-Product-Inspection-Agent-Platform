@@ -16,11 +16,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
     {
         "name": "Quality Chat",
         "description": "轻量级智能问答入口，支持附件上传和 RAG 空间选择。",
-        "workflow_binding": "quality_chat_v1",
-        "subgraph_key": "quality_chat",
+        "workflow_binding": "quality_chat_v2",
+        "subgraph_key": "chat",
         "entry_graph": "MemoryManagerGraph",
         "supports_start_stop": True,
-        "graph_version": "v1",
+        "graph_version": "v2",
         "is_active": True,
     },
     {
