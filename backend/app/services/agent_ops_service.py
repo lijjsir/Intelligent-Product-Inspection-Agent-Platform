@@ -34,6 +34,8 @@ from app.schemas.agent_ops import (
     AgentDefinitionResponse,
     AgentDefinitionUpdate,
     AgentDefinitionListQuery,
+    AgentDetailResponse,
+    AgentRuntimeEventResponse,
     IntentRouteCreate,
     IntentRouteResponse,
     IntentRouteUpdate,
@@ -95,6 +97,8 @@ class AgentOpsService:
         )
 
     async def _sync_registered_agents(self) -> None:
+        catalog_subgraph_keys = {str(item["subgraph_key"]) for item in get_registered_subgraphs()}
+
         for item in get_registered_subgraphs():
             existing = await self._agent_repo.dedupe_by_subgraph_key(str(item["subgraph_key"]))
             payload = dict(item)
@@ -106,6 +110,18 @@ class AgentOpsService:
                 continue
             created = await self._agent_repo.create(payload)
             await self._runtime_repo.ensure_for_agent(created)
+
+        # Mark agents not in catalog as deprecated
+        all_db_agents = await self._agent_repo.list_all_active()
+        for db_agent in all_db_agents:
+            if db_agent.subgraph_key not in catalog_subgraph_keys:
+                db_agent.lifecycle_status = "deprecated"
+                db_agent.route_enabled = False
+                db_agent.is_active = False
+                runtime = await self._runtime_repo.dedupe_by_agent_id(str(db_agent.id))
+                if runtime:
+                    runtime.runtime_status = "stopped"
+        await self._session.flush()
 
     async def _sync_prompt_optimization_targets(self) -> None:
         catalog = get_dspy_optimization_targets()
@@ -857,6 +873,32 @@ class AgentOpsService:
             recent_items=recent_items[:30],
         )
 
+    async def _build_runtime_response(self, runtime, agent) -> AgentRuntimeInstanceResponse:
+        metrics = await AgentExecutionMetricsRepository(self._session, self._org_id).get_metrics(str(agent.id)) or {}
+        return AgentRuntimeInstanceResponse(
+            runtime_key=runtime.runtime_key,
+            agent_id=str(agent.id),
+            agent_name=agent.name,
+            subgraph_key=runtime.subgraph_key,
+            status=runtime.status,
+            runtime_status=runtime.runtime_status or runtime.status,
+            supports_start_stop=runtime.supports_start_stop,
+            is_active=agent.is_active,
+            lifecycle_status=agent.lifecycle_status,
+            group_key=agent.group_key,
+            route_enabled=agent.route_enabled,
+            supports_route_toggle=agent.supports_route_toggle,
+            customer_visible_description=agent.customer_visible_description,
+            execution_count=int(metrics.get("execution_count") or 0),
+            success_rate=float(metrics.get("success_rate") or 0.0),
+            avg_latency_ms=float(metrics.get("avg_latency_ms") or 0.0),
+            last_executed_at=metrics.get("last_executed_at"),
+            last_started_at=runtime.last_started_at,
+            last_stopped_at=runtime.last_stopped_at,
+            last_error_message=runtime.last_error_message,
+            maintenance_reason=runtime.maintenance_reason,
+        )
+
     async def get_runtime_overview(self) -> AgentRuntimeOverviewResponse:
         await self._sync_registered_agents()
         runtime_rows = await self._runtime_repo.list_with_agents()
@@ -893,27 +935,9 @@ class AgentOpsService:
     async def list_runtime_agents(self) -> list[AgentRuntimeInstanceResponse]:
         await self._sync_registered_agents()
         runtime_rows = await self._runtime_repo.list_with_agents()
-        metrics_repo = AgentExecutionMetricsRepository(self._session, self._org_id)
         items: list[AgentRuntimeInstanceResponse] = []
         for runtime, agent in runtime_rows:
-            metrics = await metrics_repo.get_metrics(str(agent.id)) or {}
-            items.append(
-                AgentRuntimeInstanceResponse(
-                    runtime_key=runtime.runtime_key,
-                    agent_id=str(agent.id),
-                    agent_name=agent.name,
-                    subgraph_key=runtime.subgraph_key,
-                    status=runtime.status,
-                    supports_start_stop=runtime.supports_start_stop,
-                    is_active=agent.is_active,
-                    execution_count=int(metrics.get("execution_count") or 0),
-                    success_rate=float(metrics.get("success_rate") or 0.0),
-                    avg_latency_ms=float(metrics.get("avg_latency_ms") or 0.0),
-                    last_executed_at=metrics.get("last_executed_at"),
-                    last_started_at=runtime.last_started_at,
-                    last_stopped_at=runtime.last_stopped_at,
-                )
-            )
+            items.append(await self._build_runtime_response(runtime, agent))
         return items
 
     async def set_runtime_status(self, runtime_key: str, *, status: str) -> AgentRuntimeInstanceResponse:
@@ -923,28 +947,73 @@ class AgentOpsService:
             raise NotFoundError(f"Runtime {runtime_key} not found")
         if not bool(runtime.supports_start_stop):
             raise ValidationError(f"Runtime {runtime_key} does not support start/stop")
-        runtime = await self._runtime_repo.set_status(runtime_key, status)
+
+        before_status = runtime.runtime_status
+        runtime = await self._runtime_repo.set_runtime_status(runtime_key, status, updated_by=self._actor_id)
+        if not runtime:
+            raise NotFoundError(f"Runtime {runtime_key} not found")
+
+        # Write audit event
+        await self._runtime_repo.create_event({
+            "agent_id": str(runtime.agent_id),
+            "runtime_key": runtime_key,
+            "event_type": "start" if status == "running" else "stop",
+            "before_status": before_status,
+            "after_status": status,
+            "operator_id": self._actor_id,
+        })
+
+        agent = await self._agent_repo.get(str(runtime.agent_id))
+        if not agent:
+            raise NotFoundError(f"Agent {runtime.agent_id} not found")
+        return await self._build_runtime_response(runtime, agent)
+
+    async def pause_route(self, runtime_key: str, reason: str) -> AgentRuntimeInstanceResponse:
+        await self._sync_registered_agents()
+        runtime = await self._runtime_repo.dedupe_by_runtime_key(runtime_key)
         if not runtime:
             raise NotFoundError(f"Runtime {runtime_key} not found")
         agent = await self._agent_repo.get(str(runtime.agent_id))
         if not agent:
             raise NotFoundError(f"Agent {runtime.agent_id} not found")
-        metrics = await AgentExecutionMetricsRepository(self._session, self._org_id).get_metrics(str(agent.id)) or {}
-        return AgentRuntimeInstanceResponse(
-            runtime_key=runtime.runtime_key,
-            agent_id=str(agent.id),
-            agent_name=agent.name,
-            subgraph_key=runtime.subgraph_key,
-            status=runtime.status,
-            supports_start_stop=runtime.supports_start_stop,
-            is_active=agent.is_active,
-            execution_count=int(metrics.get("execution_count") or 0),
-            success_rate=float(metrics.get("success_rate") or 0.0),
-            avg_latency_ms=float(metrics.get("avg_latency_ms") or 0.0),
-            last_executed_at=metrics.get("last_executed_at"),
-            last_started_at=runtime.last_started_at,
-            last_stopped_at=runtime.last_stopped_at,
-        )
+        if not agent.supports_route_toggle:
+            raise ValidationError(f"Agent {agent.name} does not support route toggle")
+
+        agent.route_enabled = False
+        await self._runtime_repo.create_event({
+            "agent_id": str(agent.id),
+            "runtime_key": runtime_key,
+            "event_type": "pause_route",
+            "before_status": "route_enabled",
+            "after_status": "route_paused",
+            "reason": reason,
+            "operator_id": self._actor_id,
+        })
+        await self._session.flush()
+
+        return await self._build_runtime_response(runtime, agent)
+
+    async def resume_route(self, runtime_key: str) -> AgentRuntimeInstanceResponse:
+        await self._sync_registered_agents()
+        runtime = await self._runtime_repo.dedupe_by_runtime_key(runtime_key)
+        if not runtime:
+            raise NotFoundError(f"Runtime {runtime_key} not found")
+        agent = await self._agent_repo.get(str(runtime.agent_id))
+        if not agent:
+            raise NotFoundError(f"Agent {runtime.agent_id} not found")
+
+        agent.route_enabled = True
+        await self._runtime_repo.create_event({
+            "agent_id": str(agent.id),
+            "runtime_key": runtime_key,
+            "event_type": "resume_route",
+            "before_status": "route_paused",
+            "after_status": "route_enabled",
+            "operator_id": self._actor_id,
+        })
+        await self._session.flush()
+
+        return await self._build_runtime_response(runtime, agent)
 
     async def get_agents_topology(self, subgraph_key: str = "all") -> AgentTopologyResponse:
         topology = get_topology(subgraph_key=subgraph_key, include_root=True)
@@ -1156,6 +1225,29 @@ class AgentOpsService:
             "failed_count": len(agent_ids) - success_count,
             "total_count": len(agent_ids),
         }
+
+    async def get_agent_detail(self, agent_id: str) -> AgentDetailResponse:
+        agent = await self.get_agent(agent_id)
+        bound_prompt = None
+        if agent.prompt_version_id:
+            try:
+                bound_prompt = await self.get_prompt(agent.prompt_version_id)
+            except Exception:
+                pass
+        routes, _ = await self._route_repo.list_paged(filters={}, page=1, size=10)
+        agent_routes = [r for r in routes if str(r.agent_id) == agent_id]
+        events = await self._runtime_repo.list_events(agent_id, limit=20)
+
+        return AgentDetailResponse(
+            **agent.model_dump(),
+            bound_prompt_version=bound_prompt,
+            bound_routes=[IntentRouteResponse.model_validate(r) for r in agent_routes],
+            runtime_events=[AgentRuntimeEventResponse.model_validate(e) for e in events],
+        )
+
+    async def list_runtime_events(self, agent_id: str, limit: int = 20) -> list[AgentRuntimeEventResponse]:
+        events = await self._runtime_repo.list_events(agent_id, limit=limit)
+        return [AgentRuntimeEventResponse.model_validate(e) for e in events]
 
     async def get_agent_metrics(self, agent_id: str) -> dict:
         metrics_repo = AgentExecutionMetricsRepository(self._session, self._org_id)
