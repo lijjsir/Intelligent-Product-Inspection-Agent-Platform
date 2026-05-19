@@ -354,6 +354,14 @@ class TopologyNode(BaseModel):
     id: str
     label: str
     kind: str
+    subgraph_key: Optional[str] = None
+    agent_name: Optional[str] = None
+    status: Optional[str] = None
+    lifecycle_status: Optional[str] = None
+    route_enabled: Optional[bool] = None
+    execution_count: Optional[int] = None
+    avg_latency_ms: Optional[float] = None
+    last_started_at: Optional[datetime] = None
 
 
 class TopologyEdge(BaseModel):
@@ -441,3 +449,84 @@ class AgentDetailResponse(AgentDefinitionResponse):
 
 class PauseRouteRequest(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500, description="暂停原因")
+
+
+# === Routing Strategy Viewer schemas (non-config version) ===
+
+class RouteAgentDescriptor(BaseModel):
+    key: str  # "chat" | "inspection_task"
+    label: str  # "Quality Chat" | "Inspection Task Agent"
+    sub_routes: list[str] = Field(default_factory=list)  # ["general_chat", "rag_qa"]
+
+
+class RouteRuleDescriptor(BaseModel):
+    priority: int  # 1-7
+    name: str  # "图片检测意图"
+    condition_summary: str  # "图片附件 + 检测/质检意图"
+    target_agent: str  # "chat" | "inspection_task"
+    target_sub_route: str  # "inspection_execute"
+    route_source: str = "builtin"  # "builtin" | "manual"
+    examples: list[str] = Field(default_factory=list)
+
+
+class RouteSignalInfo(BaseModel):
+    key: str
+    label: str
+    description: str
+    detected: bool = False
+
+
+class RoutingCurrentResponse(BaseModel):
+    mode: str = "rule_first_with_model_fallback"
+    mode_label: str = "规则优先，模型兜底"
+    default_agent: str = "chat"
+    default_sub_route: str = "general_chat"
+    agents: list[RouteAgentDescriptor] = Field(default_factory=list)
+    rules: list[RouteRuleDescriptor] = Field(default_factory=list)
+    signals: list[RouteSignalInfo] = Field(default_factory=list)
+    rule_count: int = 0
+    active_agent_count: int = 0
+
+
+class RouteSimulateRequest(BaseModel):
+    query: str = Field(default="", description="用户输入文本")
+    has_image: bool = Field(default=False)
+    has_structured_file: bool = Field(default=False)
+    has_rag_space: bool = Field(default=False)
+    force_agent: Optional[str] = Field(default=None, description="手动强制指定 agent")
+
+
+class RouteSimulateResponse(BaseModel):
+    matched_rule_name: str = ""
+    matched_priority: int = 0
+    selected_agent: str = ""
+    selected_sub_route: str = ""
+    route_source: str = ""
+    reason: str = ""
+    signals: dict = Field(default_factory=dict)
+    is_fallback: bool = False
+
+
+class RouteEventItem(BaseModel):
+    id: str
+    created_at: datetime
+    selected_agent: str
+    sub_route: Optional[str] = None
+    route_source: str
+    reason: Optional[str] = None
+    intent_name: Optional[str] = None
+    confidence: float = 0.0
+    latency_ms: int = 0
+    blocked: bool = False
+    blocked_reason: Optional[str] = None
+    request_summary: Optional[str] = None
+
+
+class RoutingMetricsResponse(BaseModel):
+    total_24h: int = 0
+    rule_hit_count: int = 0
+    model_fallback_count: int = 0
+    blocked_count: int = 0
+    avg_latency_ms: float = 0.0
+    by_agent: dict = Field(default_factory=dict)
+    by_rule: dict = Field(default_factory=dict)

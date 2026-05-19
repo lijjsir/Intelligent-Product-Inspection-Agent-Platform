@@ -26,6 +26,11 @@ import type {
   AgentRuntimeEvent,
   RagAnalysisResponse,
   RoutingStrategyOverview,
+  RoutingCurrent,
+  RouteSimulateRequest,
+  RouteSimulateResult,
+  RouteEventItem,
+  RoutingMetrics,
 } from "@/types/agent-ops.types";
 import type { PagedResponse } from "@/types/common.types";
 
@@ -163,19 +168,23 @@ export const agentOpsApi = {
     );
   },
 
-  getAgentsTopology(subgraphKey = "all") {
+  getAgentsTopology(
+    subgraphKey = "all",
+    mode: "design" | "runtime" = "design",
+    includePlanned = true,
+  ) {
     return http.get<AgentTopology>("/v1/agent-ops/agents/topology", {
-      params: { subgraph_key: subgraphKey },
+      params: { subgraph_key: subgraphKey, mode, include_planned: includePlanned },
     });
   },
 
   /** 暂停 Agent 路由 */
   pauseAgentRoute: (runtimeKey: string, data: { reason: string }) =>
-    http.post(`/v1/agent-ops/runtime/agents/${runtimeKey}/pause-route`, data),
+    http.post<AgentRuntimeInstance>(`/v1/agent-ops/runtime/agents/${runtimeKey}/pause-route`, data),
 
   /** 恢复 Agent 路由 */
   resumeAgentRoute: (runtimeKey: string) =>
-    http.post(`/v1/agent-ops/runtime/agents/${runtimeKey}/resume-route`),
+    http.post<AgentRuntimeInstance>(`/v1/agent-ops/runtime/agents/${runtimeKey}/resume-route`),
 
   /** 获取 Agent 完整详情 */
   getAgentDetail: (agentId: string) =>
@@ -184,4 +193,11 @@ export const agentOpsApi = {
   /** 查询 Agent 运行态事件 */
   getRuntimeEvents: (agentId: string, limit?: number) =>
     http.get<AgentRuntimeEvent[]>(`/v1/agent-ops/runtime/events`, { params: { agent_id: agentId, limit } }),
+
+  /** ── Routing Strategy Viewer ── */
+
+  getRoutingCurrent: () => http.get<RoutingCurrent>("/v1/agent-ops/routing/current"),
+  simulateRoute: (data: RouteSimulateRequest) => http.post<RouteSimulateResult>("/v1/agent-ops/routing/simulate", data),
+  getRoutingEvents: (limit?: number) => http.get<RouteEventItem[]>("/v1/agent-ops/routing/events", { params: { limit } }),
+  getRoutingMetrics: () => http.get<RoutingMetrics>("/v1/agent-ops/routing/metrics"),
 };

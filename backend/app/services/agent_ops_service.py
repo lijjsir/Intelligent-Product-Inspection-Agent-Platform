@@ -7,6 +7,7 @@ from typing import cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.topology_catalog import (
+    get_agent_overview_root,
     get_dspy_graph_context,
     get_dspy_optimization_target,
     get_dspy_optimization_targets,
@@ -66,6 +67,14 @@ from app.schemas.agent_ops import (
     RoutingSignalDescriptor,
     RoutingStrategyOverviewResponse,
     RoutingSubgraphDescriptor,
+    RoutingCurrentResponse,
+    RouteAgentDescriptor,
+    RouteRuleDescriptor,
+    RouteSignalInfo,
+    RouteSimulateRequest,
+    RouteSimulateResponse,
+    RouteEventItem,
+    RoutingMetricsResponse,
 )
 from app.services.audit_service import AuditService
 from infra.database.session import create_session
@@ -103,7 +112,23 @@ class AgentOpsService:
             existing = await self._agent_repo.dedupe_by_subgraph_key(str(item["subgraph_key"]))
             payload = dict(item)
             if existing:
+                mutable_catalog_keys = {
+                    "name",
+                    "description",
+                    "workflow_binding",
+                    "subgraph_key",
+                    "entry_graph",
+                    "supports_start_stop",
+                    "graph_version",
+                    "is_active",
+                    "lifecycle_status",
+                    "group_key",
+                    "supports_route_toggle",
+                    "customer_visible_description",
+                }
                 for key, value in payload.items():
+                    if key not in mutable_catalog_keys:
+                        continue
                     setattr(existing, key, value)
                 await self._session.flush()
                 await self._runtime_repo.ensure_for_agent(existing)
@@ -131,6 +156,53 @@ class AgentOpsService:
             config = await self._optimization_repo.upsert_from_catalog(target, updated_by=self._actor_id)
             await self._migrate_legacy_prompt_dspy_config(config)
         await self._optimization_repo.mark_inactive_missing(active_keys, updated_by=self._actor_id)
+
+    @staticmethod
+    def _runtime_status_value(runtime) -> str:
+        return str(getattr(runtime, "runtime_status", None) or getattr(runtime, "status", None) or "stopped")
+
+    async def _build_agent_topology_nodes(
+        self,
+        *,
+        runtime_rows: list[tuple[object, object]],
+        visible_subgraphs: set[str],
+        selected_subgraph: str,
+    ) -> list[dict[str, object]]:
+        blueprint = get_agent_overview_root()
+        metrics_repo = AgentExecutionMetricsRepository(self._session, self._org_id)
+        nodes: list[dict[str, object]] = [dict(node) for node in blueprint["nodes"]]
+        for runtime, agent in sorted(runtime_rows, key=lambda item: str(getattr(item[1], "name", "") or "")):
+            subgraph = str(getattr(agent, "subgraph_key", "") or "")
+            if subgraph not in visible_subgraphs:
+                continue
+            metrics = await metrics_repo.get_metrics(str(getattr(agent, "id"))) or {}
+            nodes.append(
+                {
+                    "id": f"agent:{subgraph}",
+                    "label": str(getattr(agent, "name", subgraph) or subgraph),
+                    "kind": "agent",
+                    "subgraph_key": subgraph,
+                    "agent_name": str(getattr(agent, "name", subgraph) or subgraph),
+                    "status": self._runtime_status_value(runtime),
+                    "lifecycle_status": str(getattr(agent, "lifecycle_status", "") or "") or None,
+                    "route_enabled": bool(getattr(agent, "route_enabled", False)),
+                    "execution_count": int(metrics.get("execution_count") or 0),
+                    "avg_latency_ms": float(metrics.get("avg_latency_ms") or 0.0),
+                    "last_started_at": getattr(runtime, "last_started_at", None),
+                    "focused": selected_subgraph not in {"all", "*"} and subgraph == selected_subgraph,
+                }
+            )
+        return nodes
+
+    @staticmethod
+    def _build_agent_topology_edges(visible_subgraphs: set[str]) -> list[dict[str, object]]:
+        blueprint = get_agent_overview_root()
+        edges: list[dict[str, object]] = [dict(edge) for edge in blueprint["edges"]]
+        for subgraph in sorted(visible_subgraphs):
+            node_id = f"agent:{subgraph}"
+            edges.append({"source": "subgraph_runner", "target": node_id})
+            edges.append({"source": node_id, "target": "result_synthesizer"})
+        return edges
 
     async def _migrate_legacy_prompt_dspy_config(self, config: PromptOptimizationConfigResponse | object) -> None:
         target_key = str(getattr(config, "target_key", "") or "")
@@ -272,7 +344,7 @@ class AgentOpsService:
             runtime = await self._runtime_repo.ensure_for_agent(item)
             metrics = await metrics_repo.get_metrics(str(item.id))
             data = AgentDefinitionResponse.model_validate(item).model_dump()
-            data["runtime_status"] = runtime.status
+            data["runtime_status"] = self._runtime_status_value(runtime)
             data["metrics_summary"] = metrics
             enriched.append(AgentDefinitionResponse(**data))
         return enriched, total
@@ -285,7 +357,7 @@ class AgentOpsService:
         runtime = await self._runtime_repo.ensure_for_agent(obj)
         metrics = await AgentExecutionMetricsRepository(self._session, self._org_id).get_metrics(id)
         data = AgentDefinitionResponse.model_validate(obj).model_dump()
-        data["runtime_status"] = runtime.status
+        data["runtime_status"] = self._runtime_status_value(runtime)
         data["metrics_summary"] = metrics
         return AgentDefinitionResponse(**data)
 
@@ -875,14 +947,15 @@ class AgentOpsService:
 
     async def _build_runtime_response(self, runtime, agent) -> AgentRuntimeInstanceResponse:
         metrics = await AgentExecutionMetricsRepository(self._session, self._org_id).get_metrics(str(agent.id)) or {}
+        runtime_status = self._runtime_status_value(runtime)
         return AgentRuntimeInstanceResponse(
             runtime_key=runtime.runtime_key,
             agent_id=str(agent.id),
             agent_name=agent.name,
             subgraph_key=runtime.subgraph_key,
-            status=runtime.status,
-            runtime_status=runtime.runtime_status or runtime.status,
-            supports_start_stop=runtime.supports_start_stop,
+            status=runtime_status,
+            runtime_status=runtime_status,
+            supports_start_stop=bool(getattr(runtime, "supports_start_stop", False)),
             is_active=agent.is_active,
             lifecycle_status=agent.lifecycle_status,
             group_key=agent.group_key,
@@ -893,24 +966,33 @@ class AgentOpsService:
             success_rate=float(metrics.get("success_rate") or 0.0),
             avg_latency_ms=float(metrics.get("avg_latency_ms") or 0.0),
             last_executed_at=metrics.get("last_executed_at"),
-            last_started_at=runtime.last_started_at,
-            last_stopped_at=runtime.last_stopped_at,
-            last_error_message=runtime.last_error_message,
-            maintenance_reason=runtime.maintenance_reason,
+            last_started_at=getattr(runtime, "last_started_at", None),
+            last_stopped_at=getattr(runtime, "last_stopped_at", None),
+            last_error_message=getattr(runtime, "last_error_message", None),
+            maintenance_reason=getattr(runtime, "maintenance_reason", None),
         )
 
     async def get_runtime_overview(self) -> AgentRuntimeOverviewResponse:
         await self._sync_registered_agents()
         runtime_rows = await self._runtime_repo.list_with_agents()
+        visible_runtime_rows = [
+            (runtime, agent)
+            for runtime, agent in runtime_rows
+            if str(agent.lifecycle_status or "") not in {"planned", "deprecated"}
+        ]
         metrics_repo = AgentExecutionMetricsRepository(self._session, self._org_id)
         metrics_rows = []
-        for runtime, _agent in runtime_rows:
+        for runtime, _agent in visible_runtime_rows:
             metrics = await metrics_repo.get_metrics(str(runtime.agent_id))
             if metrics:
                 metrics_rows.append(metrics)
-        active_agents = sum(1 for _runtime, agent in runtime_rows if agent.is_active)
-        running_agents = sum(1 for runtime, _agent in runtime_rows if runtime.status == "running")
-        stopped_agents = sum(1 for runtime, _agent in runtime_rows if runtime.status == "stopped")
+        active_agents = len(visible_runtime_rows)
+        running_agents = sum(
+            1 for runtime, _agent in visible_runtime_rows if self._runtime_status_value(runtime) == "running"
+        )
+        stopped_agents = sum(
+            1 for runtime, _agent in visible_runtime_rows if self._runtime_status_value(runtime) == "stopped"
+        )
         total_executions = sum(int(item.get("execution_count") or 0) for item in metrics_rows)
         avg_latency_ms = (
             round(sum(float(item.get("avg_latency_ms") or 0.0) for item in metrics_rows) / len(metrics_rows), 2)
@@ -937,6 +1019,8 @@ class AgentOpsService:
         runtime_rows = await self._runtime_repo.list_with_agents()
         items: list[AgentRuntimeInstanceResponse] = []
         for runtime, agent in runtime_rows:
+            if str(agent.lifecycle_status or "") in {"planned", "deprecated"}:
+                continue
             items.append(await self._build_runtime_response(runtime, agent))
         return items
 
@@ -979,13 +1063,18 @@ class AgentOpsService:
         if not agent.supports_route_toggle:
             raise ValidationError(f"Agent {agent.name} does not support route toggle")
 
+        before_runtime_status = self._runtime_status_value(runtime)
         agent.route_enabled = False
+        if bool(getattr(runtime, "supports_start_stop", False)) and before_runtime_status != "stopped":
+            runtime = await self._runtime_repo.set_runtime_status(runtime_key, "stopped", updated_by=self._actor_id)
+            if not runtime:
+                raise NotFoundError(f"Runtime {runtime_key} not found")
         await self._runtime_repo.create_event({
             "agent_id": str(agent.id),
             "runtime_key": runtime_key,
             "event_type": "pause_route",
-            "before_status": "route_enabled",
-            "after_status": "route_paused",
+            "before_status": f"route_enabled:{before_runtime_status}",
+            "after_status": "route_paused:stopped",
             "reason": reason,
             "operator_id": self._actor_id,
         })
@@ -1002,25 +1091,61 @@ class AgentOpsService:
         if not agent:
             raise NotFoundError(f"Agent {runtime.agent_id} not found")
 
+        before_runtime_status = self._runtime_status_value(runtime)
         agent.route_enabled = True
+        if bool(getattr(runtime, "supports_start_stop", False)) and before_runtime_status != "running":
+            runtime = await self._runtime_repo.set_runtime_status(runtime_key, "running", updated_by=self._actor_id)
+            if not runtime:
+                raise NotFoundError(f"Runtime {runtime_key} not found")
         await self._runtime_repo.create_event({
             "agent_id": str(agent.id),
             "runtime_key": runtime_key,
             "event_type": "resume_route",
-            "before_status": "route_paused",
-            "after_status": "route_enabled",
+            "before_status": f"route_paused:{before_runtime_status}",
+            "after_status": "route_enabled:running",
             "operator_id": self._actor_id,
         })
         await self._session.flush()
 
         return await self._build_runtime_response(runtime, agent)
 
-    async def get_agents_topology(self, subgraph_key: str = "all") -> AgentTopologyResponse:
-        topology = get_topology(subgraph_key=subgraph_key, include_root=True)
+    async def get_agents_topology(
+        self,
+        subgraph_key: str = "all",
+        *,
+        mode: str = "design",
+        include_planned: bool = True,
+    ) -> AgentTopologyResponse:
+        await self._sync_registered_agents()
+        runtime_rows = await self._runtime_repo.list_with_agents()
+
+        visible_subgraphs: set[str] = set()
+        for runtime, agent in runtime_rows:
+            agent_subgraph_key = str(agent.subgraph_key or "")
+            lifecycle_status = str(agent.lifecycle_status or "")
+            if lifecycle_status == "deprecated":
+                continue
+            if lifecycle_status == "planned" and not include_planned:
+                continue
+            if subgraph_key not in {"all", "*"} and agent_subgraph_key != subgraph_key:
+                continue
+            if mode == "runtime":
+                if not agent.route_enabled:
+                    continue
+                if self._runtime_status_value(runtime) not in {"running", "degraded"}:
+                    continue
+            visible_subgraphs.add(agent_subgraph_key)
+
+        nodes = await self._build_agent_topology_nodes(
+            runtime_rows=runtime_rows,
+            visible_subgraphs=visible_subgraphs,
+            selected_subgraph=subgraph_key,
+        )
+        edges = self._build_agent_topology_edges(visible_subgraphs)
         return AgentTopologyResponse(
             selected_subgraph=subgraph_key,
-            nodes=topology["nodes"],
-            edges=topology["edges"],
+            nodes=nodes,
+            edges=edges,
         )
 
     async def get_route_graph(self, route_id: str) -> AgentTopologyResponse:
@@ -1306,6 +1431,190 @@ class AgentOpsService:
             "rolled_back_from": target_version,
             "created_at": new_version.created_at,
         }
+
+    # ============================================================
+    # Routing Strategy Viewer (non-config, view-only)
+    # ============================================================
+
+    async def get_routing_current(self) -> RoutingCurrentResponse:
+        """返回当前系统真实路由策略视图 — 基于 route_policy.py 的真实现有逻辑"""
+        return RoutingCurrentResponse(
+            mode="rule_first_with_model_fallback",
+            mode_label="规则优先，模型兜底",
+            default_agent="chat",
+            default_sub_route="general_chat",
+            agents=[
+                RouteAgentDescriptor(key="chat", label="Quality Chat", sub_routes=["general_chat", "rag_qa"]),
+                RouteAgentDescriptor(key="inspection_task", label="Inspection Task Agent", sub_routes=["task_create", "inspection_execute", "quality_qa"]),
+            ],
+            rules=[
+                RouteRuleDescriptor(priority=1, name="手动指定检测Agent", condition_summary="前端 force_agent=inspection_task", target_agent="inspection_task", target_sub_route="task_create", route_source="manual", examples=["force_agent=inspection_task"]),
+                RouteRuleDescriptor(priority=2, name="手动指定聊天Agent", condition_summary="前端 force_agent=chat", target_agent="chat", target_sub_route="general_chat", route_source="manual", examples=["force_agent=chat"]),
+                RouteRuleDescriptor(priority=3, name="结构化文件+检测意图", condition_summary="xlsx/csv/json/txt/docx 等文件 + 检测/质检关键词", target_agent="inspection_task", target_sub_route="inspection_execute", examples=["上传Excel+创建检测任务"]),
+                RouteRuleDescriptor(priority=4, name="图片+检测意图", condition_summary="图片附件/URL + 检测/质检关键词", target_agent="inspection_task", target_sub_route="inspection_execute", examples=["图片+帮我检测是否合格"]),
+                RouteRuleDescriptor(priority=5, name="任务创建意图", condition_summary="纯文本含任务创建关键词（创建/新建/发起+任务/检测）", target_agent="inspection_task", target_sub_route="task_create", examples=["创建任务", "帮我检测这个产品"]),
+                RouteRuleDescriptor(priority=6, name="质检问答意图", condition_summary="含质量、质检、缺陷、合格、标准等语义关键词", target_agent="inspection_task", target_sub_route="quality_qa", examples=["这个算不算缺陷", "按照GB/T标准判定"]),
+                RouteRuleDescriptor(priority=7, name="RAG知识库问答", condition_summary="选中RAG空间 或 知识库检索意图", target_agent="chat", target_sub_route="rag_qa", examples=["根据知识库回答", "查一下文档里的标准"]),
+                RouteRuleDescriptor(priority=8, name="模糊输入兜底", condition_summary="短句/代词/无法明确分类的输入", target_agent="chat", target_sub_route="general_chat", examples=["这个呢", "看看"]),
+                RouteRuleDescriptor(priority=9, name="默认普通聊天", condition_summary="未命中以上规则的默认兜底", target_agent="chat", target_sub_route="general_chat", examples=["你好", "今天天气怎么样"]),
+            ],
+            signals=[
+                RouteSignalInfo(key="has_task_keyword", label="任务意图关键词", description="用户文本中包含创建任务、提交任务等关键词"),
+                RouteSignalInfo(key="has_images", label="图片附件", description="请求包含图片附件或图片URL"),
+                RouteSignalInfo(key="has_structured_file", label="结构化文件", description="请求包含xlsx/csv/json/txt/docx等文件"),
+                RouteSignalInfo(key="has_quality_signal", label="质检语义", description="文本包含质量、质检、缺陷、合格、标准等关键词"),
+                RouteSignalInfo(key="has_rag_space", label="RAG空间", description="用户选择了RAG知识空间"),
+                RouteSignalInfo(key="is_ambiguous", label="模糊输入", description="短句、代词多、无明确意图信号的输入"),
+            ],
+            rule_count=9,
+            active_agent_count=2,
+        )
+
+    async def simulate_route(self, body: RouteSimulateRequest) -> RouteSimulateResponse:
+        """调用真实路由决策逻辑，但不执行 Agent"""
+        from agent.router.route_policy import AgentRoutePolicy
+        from agent.router.contracts import AgentRouterInput
+
+        # Build route hints
+        route_hints = {}
+        if body.force_agent:
+            route_hints["force_agent"] = body.force_agent
+
+        # Build attachments for signal detection
+        attachments = []
+        if body.has_image:
+            attachments.append({"kind": "image", "name": "test.png"})
+        if body.has_structured_file:
+            attachments.append({"kind": "file", "name": "test.xlsx"})
+
+        # Build ext
+        ext = {}
+        if body.has_rag_space:
+            ext["selected_rag_space"] = {"id": "test-space"}
+
+        # Call real routing logic
+        policy = AgentRoutePolicy()
+        router_input = AgentRouterInput(
+            query=body.query,
+            request_kind="chat",
+            attachments=attachments,
+            image_urls=[],
+            route_hints=route_hints,
+            ext=ext,
+        )
+        decision = policy.decide(router_input)
+
+        # Map to rule name
+        rule_map = {
+            ("inspection_task", "inspection_execute"): ("结构化文件/图片 + 检测意图", 3),
+            ("inspection_task", "task_create"): ("任务创建意图", 5),
+            ("inspection_task", "quality_qa"): ("质检问答意图", 6),
+            ("chat", "rag_qa"): ("RAG知识库问答", 7),
+            ("chat", "general_chat"): ("默认普通聊天", 9),
+        }
+        rule_name, priority = rule_map.get(
+            (decision.selected_agent, decision.sub_route),
+            (decision.reason, 0),
+        )
+
+        return RouteSimulateResponse(
+            matched_rule_name=rule_name,
+            matched_priority=priority,
+            selected_agent=decision.selected_agent,
+            selected_sub_route=decision.sub_route,
+            route_source=decision.route_source,
+            reason=decision.reason,
+            signals={
+                "has_task_keyword": bool(body.query and any(kw in body.query for kw in ["任务", "检测", "创建", "提交"])),
+                "has_images": body.has_image,
+                "has_structured_file": body.has_structured_file,
+                "has_quality_signal": bool(body.query and any(kw in body.query for kw in ["质量", "缺陷", "合格", "标准"])),
+                "has_rag_space": body.has_rag_space,
+            },
+            is_fallback=decision.fallback_agent == "model_classifier",
+        )
+
+    async def get_routing_events(self, limit: int = 20) -> list[RouteEventItem]:
+        """读取最近路由事件"""
+        from app.models.agent_ops import AgentRouteLog
+        from sqlalchemy import select
+
+        result = await self._session.execute(
+            select(AgentRouteLog)
+            .where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+            .order_by(AgentRouteLog.created_at.desc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+        items = []
+        for row in rows:
+            request_summary = None
+            sig = row.signals_json or {}
+            if isinstance(sig, dict):
+                parts = [k for k, v in sig.items() if v]
+                request_summary = f"signals: {', '.join(parts)}" if parts else None
+
+            items.append(RouteEventItem(
+                id=str(row.id),
+                created_at=row.created_at,
+                selected_agent=row.selected_agent,
+                sub_route=row.sub_route,
+                route_source=row.route_source or "rule",
+                reason=row.reason,
+                intent_name=row.intent_name,
+                confidence=float(row.confidence or 0.0),
+                latency_ms=row.latency_ms or 0,
+                blocked=bool(row.blocked),
+                blocked_reason=row.blocked_reason,
+                request_summary=request_summary,
+            ))
+        return items
+
+    async def get_routing_metrics(self) -> RoutingMetricsResponse:
+        """路由统计指标"""
+        from app.models.agent_ops import AgentRouteLog
+        from sqlalchemy import select
+        from datetime import datetime, timedelta
+
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+
+        result = await self._session.execute(
+            select(AgentRouteLog).where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.created_at >= cutoff,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+        )
+        rows = list(result.scalars().all())
+
+        total = len(rows)
+        rule_hit = sum(1 for r in rows if r.route_source == "rule")
+        model_fb = sum(1 for r in rows if r.route_source == "model")
+        blocked = sum(1 for r in rows if r.blocked)
+
+        avg_lat = round(sum(r.latency_ms or 0 for r in rows) / max(total, 1), 2)
+
+        by_agent: dict = {}
+        by_rule: dict = {}
+        for r in rows:
+            agent = r.selected_agent or "unknown"
+            by_agent[agent] = by_agent.get(agent, 0) + 1
+            sub = r.sub_route or "unknown"
+            key = f"{agent}/{sub}"
+            by_rule[key] = by_rule.get(key, 0) + 1
+
+        return RoutingMetricsResponse(
+            total_24h=total,
+            rule_hit_count=rule_hit,
+            model_fallback_count=model_fb,
+            blocked_count=blocked,
+            avg_latency_ms=avg_lat,
+            by_agent=by_agent,
+            by_rule=by_rule,
+        )
 
 
 async def run_dspy_compile_job(org_id: str, actor_id: str, target_key: str, run_id: str) -> None:

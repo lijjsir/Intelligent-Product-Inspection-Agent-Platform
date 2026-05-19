@@ -85,6 +85,8 @@ export interface AgentDefinitionListQuery {
   size?: number;
   name?: string;
   is_active?: boolean;
+  group_key?: string;
+  lifecycle_status?: string;
 }
 
 export interface PromptDSPyConfig {
@@ -373,14 +375,20 @@ export interface TopologyNode {
   id: string;
   label: string;
   kind: string;
+  subgraph_key?: string;
+  agent_name?: string;
   /** 运行时状态（用于着色） */
   status?: AgentRuntimeStatus;
   /** 产品状态 */
   lifecycle_status?: AgentLifecycleStatus;
+  /** 是否参与路由 */
+  route_enabled?: boolean;
   /** 执行次数 */
   execution_count?: number;
   /** 平均延迟 */
   avg_latency_ms?: number;
+  /** 最近启动时间 */
+  last_started_at?: string | null;
   /** 错误率 */
   error_rate?: number;
 }
@@ -469,4 +477,85 @@ export interface AgentDetail extends AgentDefinition {
 /** 暂停路由请求 */
 export interface PauseRouteRequest {
   reason: string;
+}
+
+/** ── Routing Strategy Viewer types ── */
+
+export interface RouteAgentDescriptor {
+  key: string;
+  label: string;
+  sub_routes: string[];
+}
+
+export interface RouteRuleDescriptor {
+  priority: number;
+  name: string;
+  condition_summary: string;
+  target_agent: string;
+  target_sub_route: string;
+  route_source: string;
+  examples: string[];
+}
+
+export interface RouteSignalInfo {
+  key: string;
+  label: string;
+  description: string;
+  detected: boolean;
+}
+
+export interface RoutingCurrent {
+  mode: string;
+  mode_label: string;
+  default_agent: string;
+  default_sub_route: string;
+  agents: RouteAgentDescriptor[];
+  rules: RouteRuleDescriptor[];
+  signals: RouteSignalInfo[];
+  rule_count: number;
+  active_agent_count: number;
+}
+
+export interface RouteSimulateRequest {
+  query: string;
+  has_image: boolean;
+  has_structured_file: boolean;
+  has_rag_space: boolean;
+  force_agent?: string;
+}
+
+export interface RouteSimulateResult {
+  matched_rule_name: string;
+  matched_priority: number;
+  selected_agent: string;
+  selected_sub_route: string;
+  route_source: string;
+  reason: string;
+  signals: Record<string, boolean>;
+  is_fallback: boolean;
+}
+
+export interface RouteEventItem {
+  id: string;
+  created_at: string;
+  selected_agent: string;
+  sub_route?: string;
+  route_source: string;
+  reason?: string;
+  intent_name?: string;
+  confidence: number;
+  latency_ms: number;
+  blocked: boolean;
+  blocked_reason?: string;
+  request_summary?: string;
+}
+
+export interface RoutingMetrics {
+  total_24h: number;
+  rule_hit_count: number;
+  model_fallback_count: number;
+  blocked_count: number;
+  avg_latency_ms: number;
+  by_agent: Record<string, number>;
+  by_rule: Record<string, number>;
 }

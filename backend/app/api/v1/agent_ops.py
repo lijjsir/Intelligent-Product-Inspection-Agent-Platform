@@ -33,6 +33,11 @@ from app.schemas.agent_ops import (
     AgentRuntimeInstanceResponse,
     AgentTopologyResponse,
     RoutingStrategyOverviewResponse,
+    RoutingCurrentResponse,
+    RouteSimulateRequest,
+    RouteSimulateResponse,
+    RouteEventItem,
+    RoutingMetricsResponse,
 )
 from app.schemas.agent_management import (
     BatchUpdateStatusRequest,
@@ -90,23 +95,16 @@ async def create_agent(
 async def get_agents_topology(
     subgraph_key: str = Query(default="all"),
     mode: str = Query(default="design", description="design / runtime"),
+    include_planned: bool = Query(default=True, description="whether planned subgraphs should be included"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     svc = _build_service(current, db)
-    topology = await svc.get_agents_topology(subgraph_key=subgraph_key)
-    # For runtime mode: filter nodes to only active/running agents
-    if mode == "runtime":
-        runtime_agents = await svc.list_runtime_agents()
-        active_keys = {
-            ra.subgraph_key
-            for ra in runtime_agents
-            if ra.route_enabled and ra.runtime_status == "running"
-        }
-        topology.nodes = [
-            n for n in topology.nodes
-            if n.id in active_keys or (hasattr(n, "kind") and getattr(n, "kind", None) == "root")
-        ]
+    topology = await svc.get_agents_topology(
+        subgraph_key=subgraph_key,
+        mode=mode,
+        include_planned=include_planned,
+    )
     return ResponseEnvelope(data=topology)
 
 
@@ -318,6 +316,48 @@ async def get_routing_strategy(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.get_routing_strategy())
+
+
+@router.get("/routing/current", response_model=ResponseEnvelope[RoutingCurrentResponse])
+async def get_routing_current(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取当前系统真实路由策略视图（非配置版，展示真实路由结构）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_current())
+
+
+@router.post("/routing/simulate", response_model=ResponseEnvelope[RouteSimulateResponse])
+async def simulate_route(
+    body: RouteSimulateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """模拟路由 — 调用真实路由决策逻辑，展示路由结果，不执行Agent"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.simulate_route(body))
+
+
+@router.get("/routing/events", response_model=ResponseEnvelope[list[RouteEventItem]])
+async def get_routing_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取最近路由事件"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_events(limit=limit))
+
+
+@router.get("/routing/metrics", response_model=ResponseEnvelope[RoutingMetricsResponse])
+async def get_routing_metrics(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取路由统计指标（最近24h）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_metrics())
 
 
 @router.post("/routes", response_model=ResponseEnvelope[IntentRouteResponse], status_code=201)

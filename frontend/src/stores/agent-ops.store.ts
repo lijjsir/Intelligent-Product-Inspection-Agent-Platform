@@ -28,6 +28,11 @@ import type {
   PauseRouteRequest,
   RagAnalysisResponse,
   RoutingStrategyOverview,
+  RoutingCurrent,
+  RouteSimulateRequest,
+  RouteSimulateResult,
+  RouteEventItem,
+  RoutingMetrics,
 } from "@/types/agent-ops.types";
 
 export const useAgentOpsStore = defineStore("agentOps", () => {
@@ -52,6 +57,12 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   const agentDetail = ref<AgentDetail | null>(null);
   /** 运行态事件列表 */
   const runtimeEvents = ref<AgentRuntimeEvent[]>([]);
+
+  /** ── Routing Strategy Viewer state ── */
+  const routingCurrent = ref<RoutingCurrent | null>(null);
+  const simulateResult = ref<RouteSimulateResult | null>(null);
+  const routingEvents = ref<RouteEventItem[]>([]);
+  const routingMetrics = ref<RoutingMetrics | null>(null);
 
   const loading = ref(false);
 
@@ -272,6 +283,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     const { data } = await agentOpsApi.startRuntimeAgent(runtimeKey);
     const idx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
     if (idx !== -1) runtimeAgents.value[idx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = { ...agents.value[agentIdx], runtime_status: data.data.runtime_status };
+    }
     return data.data;
   }
 
@@ -279,23 +294,67 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     const { data } = await agentOpsApi.stopRuntimeAgent(runtimeKey);
     const idx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
     if (idx !== -1) runtimeAgents.value[idx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = { ...agents.value[agentIdx], runtime_status: data.data.runtime_status };
+    }
     return data.data;
   }
 
-  async function fetchAgentsTopology(subgraphKey = "all") {
-    const { data } = await agentOpsApi.getAgentsTopology(subgraphKey);
+  async function fetchAgentsTopology(
+    subgraphKey = "all",
+    mode: "design" | "runtime" = "design",
+    includePlanned = true,
+  ) {
+    const { data } = await agentOpsApi.getAgentsTopology(subgraphKey, mode, includePlanned);
     topology.value = data.data;
     return data.data;
   }
 
   /** 暂停路由 */
   async function pauseRoute(runtimeKey: string, reason: string) {
-    await agentOpsApi.pauseAgentRoute(runtimeKey, { reason });
+    const { data } = await agentOpsApi.pauseAgentRoute(runtimeKey, { reason });
+    const runtimeIdx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
+    if (runtimeIdx !== -1) runtimeAgents.value[runtimeIdx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = {
+        ...agents.value[agentIdx],
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    if (agentDetail.value?.id === data.data.agent_id) {
+      agentDetail.value = {
+        ...agentDetail.value,
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    return data.data;
   }
 
   /** 恢复路由 */
   async function resumeRoute(runtimeKey: string) {
-    await agentOpsApi.resumeAgentRoute(runtimeKey);
+    const { data } = await agentOpsApi.resumeAgentRoute(runtimeKey);
+    const runtimeIdx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
+    if (runtimeIdx !== -1) runtimeAgents.value[runtimeIdx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = {
+        ...agents.value[agentIdx],
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    if (agentDetail.value?.id === data.data.agent_id) {
+      agentDetail.value = {
+        ...agentDetail.value,
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    return data.data;
   }
 
   /** 获取 Agent 详情 */
@@ -308,6 +367,28 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   async function fetchRuntimeEvents(agentId: string, limit = 20) {
     const { data } = await agentOpsApi.getRuntimeEvents(agentId, limit);
     runtimeEvents.value = data.data;
+  }
+
+  /** ── Routing Strategy Viewer actions ── */
+
+  async function fetchRoutingCurrent() {
+    const { data } = await agentOpsApi.getRoutingCurrent();
+    routingCurrent.value = data.data;
+  }
+
+  async function simulateRoute(simData: RouteSimulateRequest) {
+    const { data } = await agentOpsApi.simulateRoute(simData);
+    simulateResult.value = data.data;
+  }
+
+  async function fetchRoutingEvents(limit = 20) {
+    const { data } = await agentOpsApi.getRoutingEvents(limit);
+    routingEvents.value = data.data;
+  }
+
+  async function fetchRoutingMetrics() {
+    const { data } = await agentOpsApi.getRoutingMetrics();
+    routingMetrics.value = data.data;
   }
 
   function $reset() {
@@ -325,6 +406,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     promptOptimizationRuns.value = [];
     agentDetail.value = null;
     runtimeEvents.value = [];
+    routingCurrent.value = null;
+    simulateResult.value = null;
+    routingEvents.value = [];
+    routingMetrics.value = null;
     agentsTotal.value = 0;
     promptsTotal.value = 0;
     routesTotal.value = 0;
@@ -345,6 +430,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     promptOptimizationRuns,
     agentDetail,
     runtimeEvents,
+    routingCurrent,
+    simulateResult,
+    routingEvents,
+    routingMetrics,
     agentsTotal,
     promptsTotal,
     routesTotal,
@@ -384,6 +473,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     resumeRoute,
     fetchAgentDetail,
     fetchRuntimeEvents,
+    fetchRoutingCurrent,
+    simulateRoute,
+    fetchRoutingEvents,
+    fetchRoutingMetrics,
     $reset,
   };
 });
