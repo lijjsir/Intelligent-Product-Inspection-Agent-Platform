@@ -29,9 +29,9 @@ def upgrade() -> None:
 
     # --- agent_runtime_instances 新增字段 ---
     op.add_column("agent_runtime_instances", sa.Column("runtime_status", sa.String(32), nullable=False, server_default="stopped", comment="running/stopped/degraded/maintenance/readonly"))
-    op.add_column("agent_runtime_instances", sa.Column("last_health_check_at", sa.DateTime(), nullable=True))
+    op.add_column("agent_runtime_instances", sa.Column("last_health_check_at", mysql.DATETIME(fsp=3), nullable=True))
     op.add_column("agent_runtime_instances", sa.Column("last_error_message", sa.Text(), nullable=True))
-    op.add_column("agent_runtime_instances", sa.Column("last_error_at", sa.DateTime(), nullable=True))
+    op.add_column("agent_runtime_instances", sa.Column("last_error_at", mysql.DATETIME(fsp=3), nullable=True))
     op.add_column("agent_runtime_instances", sa.Column("maintenance_reason", sa.Text(), nullable=True))
     op.add_column("agent_runtime_instances", sa.Column("updated_by", sa.dialects.mysql.BINARY(16), nullable=True))
 
@@ -50,10 +50,16 @@ def upgrade() -> None:
         sa.Column("after_status", sa.String(32), nullable=True),
         sa.Column("reason", sa.Text(), nullable=True),
         sa.Column("operator_id", sa.dialects.mysql.BINARY(16), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")),
-        sa.Column("deleted_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3)")),
+        sa.Column("updated_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
+        sa.Column("deleted_at", mysql.DATETIME(fsp=3), nullable=True),
+        mysql_engine="InnoDB",
+        mysql_charset="utf8mb4",
+        mysql_collate="utf8mb4_unicode_ci",
     )
+
+    # --- agent_runtime_events 复合索引 ---
+    op.create_index("idx_runtime_events_agent_time", "agent_runtime_events", ["agent_id", "created_at"])
 
     # --- agent_route_logs 新增字段 ---
     op.add_column("agent_route_logs", sa.Column("blocked", sa.Boolean(), nullable=False, server_default=sa.text("FALSE"), comment="是否被运行态阻止"))
@@ -63,6 +69,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("agent_route_logs", "blocked_reason")
     op.drop_column("agent_route_logs", "blocked")
+    op.drop_index("idx_runtime_events_agent_time", table_name="agent_runtime_events")
     op.drop_table("agent_runtime_events")
     op.drop_column("agent_runtime_instances", "updated_by")
     op.drop_column("agent_runtime_instances", "maintenance_reason")
