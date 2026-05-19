@@ -1,3 +1,22 @@
+/** Agent 产品接入状态 */
+export type AgentLifecycleStatus =
+  | "active"
+  | "partial"
+  | "planned"
+  | "legacy"
+  | "deprecated";
+
+/** Agent 运行状态 */
+export type AgentRuntimeStatus =
+  | "running"
+  | "stopped"
+  | "degraded"
+  | "maintenance"
+  | "readonly";
+
+/** Agent 分组 */
+export type AgentGroup = "core" | "memory" | "planned" | "legacy";
+
 export interface AgentMetricsSummary {
   execution_count?: number;
   success_count?: number;
@@ -21,6 +40,16 @@ export interface AgentDefinition {
   is_active: boolean;
   runtime_status?: string | null;
   metrics_summary?: AgentMetricsSummary | null;
+  /** 产品接入状态 */
+  lifecycle_status: AgentLifecycleStatus;
+  /** 分组 */
+  group_key: AgentGroup;
+  /** 是否参与路由 */
+  route_enabled: boolean;
+  /** 是否允许暂停恢复路由 */
+  supports_route_toggle: boolean;
+  /** 给客户看的能力说明 */
+  customer_visible_description?: string;
   created_at: string;
   updated_at: string;
 }
@@ -302,6 +331,10 @@ export interface AgentRuntimeOverview {
   avg_latency_ms: number;
   queued_tasks: number;
   completed_today: number;
+  /** 成功率 */
+  success_rate: number;
+  /** 最近错误数 */
+  recent_errors: number;
 }
 
 export interface AgentRuntimeInstance {
@@ -318,12 +351,38 @@ export interface AgentRuntimeInstance {
   last_executed_at?: string | null;
   last_started_at?: string | null;
   last_stopped_at?: string | null;
+  /** 运行时状态 */
+  runtime_status: AgentRuntimeStatus;
+  /** 产品接入状态 */
+  lifecycle_status?: AgentLifecycleStatus;
+  /** 分组 */
+  group_key?: AgentGroup;
+  /** 是否参与路由 */
+  route_enabled: boolean;
+  /** 是否允许暂停恢复路由 */
+  supports_route_toggle: boolean;
+  /** 客户能力说明 */
+  customer_visible_description?: string;
+  /** 最近错误信息 */
+  last_error_message?: string;
+  /** 维护原因 */
+  maintenance_reason?: string;
 }
 
 export interface TopologyNode {
   id: string;
   label: string;
   kind: string;
+  /** 运行时状态（用于着色） */
+  status?: AgentRuntimeStatus;
+  /** 产品状态 */
+  lifecycle_status?: AgentLifecycleStatus;
+  /** 执行次数 */
+  execution_count?: number;
+  /** 平均延迟 */
+  avg_latency_ms?: number;
+  /** 错误率 */
+  error_rate?: number;
 }
 
 export interface TopologyEdge {
@@ -385,4 +444,29 @@ export interface RoutingStrategyOverview {
   decision_cards: RoutingDecisionCard[];
   registered_route_count: number;
   registered_intents: string[];
+}
+
+/** Agent 运行态事件 */
+export interface AgentRuntimeEvent {
+  id: string;
+  agent_id: string;
+  runtime_key: string;
+  event_type: "pause_route" | "resume_route" | "start" | "stop" | "maintenance";
+  before_status?: string;
+  after_status?: string;
+  reason?: string;
+  operator_id?: string;
+  created_at: string;
+}
+
+/** Agent 详情（含绑定资源和操作记录） */
+export interface AgentDetail extends AgentDefinition {
+  bound_prompt_version?: PromptVersion;
+  bound_routes: IntentRoute[];
+  runtime_events: AgentRuntimeEvent[];
+}
+
+/** 暂停路由请求 */
+export interface PauseRouteRequest {
+  reason: string;
 }
