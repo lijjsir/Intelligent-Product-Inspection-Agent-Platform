@@ -9,10 +9,13 @@ from app.schemas.agent_ops import (
     AgentDefinitionResponse,
     AgentDefinitionUpdate,
     AgentDefinitionListQuery,
+    AgentDetailResponse,
+    AgentRuntimeEventResponse,
     IntentRouteCreate,
     IntentRouteResponse,
     IntentRouteUpdate,
     IntentRouteListQuery,
+    PauseRouteRequest,
     PromptVersionCreate,
     PromptVersionResponse,
     PromptVersionUpdate,
@@ -86,11 +89,25 @@ async def create_agent(
 @router.get("/agents/topology", response_model=ResponseEnvelope[AgentTopologyResponse])
 async def get_agents_topology(
     subgraph_key: str = Query(default="all"),
+    mode: str = Query(default="design", description="design / runtime"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_agents_topology(subgraph_key))
+    topology = await svc.get_agents_topology(subgraph_key=subgraph_key)
+    # For runtime mode: filter nodes to only active/running agents
+    if mode == "runtime":
+        runtime_agents = await svc.list_runtime_agents()
+        active_keys = {
+            ra.subgraph_key
+            for ra in runtime_agents
+            if ra.route_enabled and ra.runtime_status == "running"
+        }
+        topology.nodes = [
+            n for n in topology.nodes
+            if n.id in active_keys or (hasattr(n, "kind") and getattr(n, "kind", None) == "root")
+        ]
+    return ResponseEnvelope(data=topology)
 
 
 @router.get("/agents/{id}", response_model=ResponseEnvelope[AgentDefinitionResponse])
@@ -440,6 +457,52 @@ async def upsert_prompt_dspy(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.upsert_prompt_dspy(id, body))
+
+
+@router.post("/runtime/agents/{runtime_key}/pause-route", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def pause_agent_route(
+    runtime_key: str,
+    body: PauseRouteRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """暂停 Agent 路由 — 该 Agent 不再接收新请求"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.pause_route(runtime_key, body.reason))
+
+
+@router.post("/runtime/agents/{runtime_key}/resume-route", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def resume_agent_route(
+    runtime_key: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """恢复 Agent 路由 — 该 Agent 重新接收请求"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.resume_route(runtime_key))
+
+
+@router.get("/agents/{agent_id}/detail", response_model=ResponseEnvelope[AgentDetailResponse])
+async def get_agent_detail(
+    agent_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取 Agent 完整详情（含绑定资源、操作记录）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_agent_detail(agent_id))
+
+
+@router.get("/runtime/events", response_model=ResponseEnvelope[list[AgentRuntimeEventResponse]])
+async def list_runtime_events(
+    agent_id: str = Query(..., description="Agent ID"),
+    limit: int = Query(default=20, ge=1, le=100),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """查询 Agent 运行态操作事件日志"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.list_runtime_events(agent_id, limit=limit))
 
 
 @router.post("/agents/batch/status", response_model=ResponseEnvelope[BatchOperationResponse])
