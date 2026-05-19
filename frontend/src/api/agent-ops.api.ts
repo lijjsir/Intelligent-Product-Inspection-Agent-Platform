@@ -22,6 +22,8 @@ import type {
   PromptVersionCreate,
   PromptVersionListQuery,
   PromptVersionUpdate,
+  AgentDetail,
+  AgentRuntimeEvent,
   RagAnalysisResponse,
   RoutingStrategyOverview,
 } from "@/types/agent-ops.types";
@@ -166,4 +168,20 @@ export const agentOpsApi = {
       params: { subgraph_key: subgraphKey },
     });
   },
+
+  /** 暂停 Agent 路由 */
+  pauseAgentRoute: (runtimeKey: string, data: { reason: string }) =>
+    http.post(`/v1/agent-ops/runtime/agents/${runtimeKey}/pause-route`, data),
+
+  /** 恢复 Agent 路由 */
+  resumeAgentRoute: (runtimeKey: string) =>
+    http.post(`/v1/agent-ops/runtime/agents/${runtimeKey}/resume-route`),
+
+  /** 获取 Agent 完整详情 */
+  getAgentDetail: (agentId: string) =>
+    http.get<AgentDetail>(`/v1/agent-ops/agents/${agentId}/detail`),
+
+  /** 查询 Agent 运行态事件 */
+  getRuntimeEvents: (agentId: string, limit?: number) =>
+    http.get<AgentRuntimeEvent[]>(`/v1/agent-ops/runtime/events`, { params: { agent_id: agentId, limit } }),
 };

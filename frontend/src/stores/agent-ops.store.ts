@@ -23,6 +23,9 @@ import type {
   PromptVersionCreate,
   PromptVersionListQuery,
   PromptVersionUpdate,
+  AgentDetail,
+  AgentRuntimeEvent,
+  PauseRouteRequest,
   RagAnalysisResponse,
   RoutingStrategyOverview,
 } from "@/types/agent-ops.types";
@@ -44,6 +47,11 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   const agentsTotal = ref(0);
   const promptsTotal = ref(0);
   const routesTotal = ref(0);
+
+  /** Agent 详情 */
+  const agentDetail = ref<AgentDetail | null>(null);
+  /** 运行态事件列表 */
+  const runtimeEvents = ref<AgentRuntimeEvent[]>([]);
 
   const loading = ref(false);
 
@@ -280,6 +288,28 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     return data.data;
   }
 
+  /** 暂停路由 */
+  async function pauseRoute(runtimeKey: string, reason: string) {
+    await agentOpsApi.pauseAgentRoute(runtimeKey, { reason });
+  }
+
+  /** 恢复路由 */
+  async function resumeRoute(runtimeKey: string) {
+    await agentOpsApi.resumeAgentRoute(runtimeKey);
+  }
+
+  /** 获取 Agent 详情 */
+  async function fetchAgentDetail(agentId: string) {
+    const { data } = await agentOpsApi.getAgentDetail(agentId);
+    agentDetail.value = data.data;
+  }
+
+  /** 获取运行态事件 */
+  async function fetchRuntimeEvents(agentId: string, limit = 20) {
+    const { data } = await agentOpsApi.getRuntimeEvents(agentId, limit);
+    runtimeEvents.value = data.data;
+  }
+
   function $reset() {
     agents.value = [];
     prompts.value = [];
@@ -293,6 +323,8 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     promptOptimization.value = null;
     promptOptimizationCurrent.value = null;
     promptOptimizationRuns.value = [];
+    agentDetail.value = null;
+    runtimeEvents.value = [];
     agentsTotal.value = 0;
     promptsTotal.value = 0;
     routesTotal.value = 0;
@@ -311,6 +343,8 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     promptOptimization,
     promptOptimizationCurrent,
     promptOptimizationRuns,
+    agentDetail,
+    runtimeEvents,
     agentsTotal,
     promptsTotal,
     routesTotal,
@@ -346,6 +380,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     startRuntimeAgent,
     stopRuntimeAgent,
     fetchAgentsTopology,
+    pauseRoute,
+    resumeRoute,
+    fetchAgentDetail,
+    fetchRuntimeEvents,
     $reset,
   };
 });
