@@ -1,437 +1,524 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { Connection, RefreshRight, VideoPause, VideoPlay } from "@element-plus/icons-vue";
 import { useAgentOpsStore } from "@/stores/agent-ops.store";
 import { usePagination } from "@/composables/usePagination";
 import { useECharts } from "@/composables/useECharts";
-import type { AgentRuntimeInstance, AgentLifecycleStatus, AgentRuntimeStatus, AgentGroup } from "@/types/agent-ops.types";
+import type { AgentDefinition, AgentRuntimeInstance } from "@/types/agent-ops.types";
+import {
+  buildDefinitionCards,
+  buildRuntimeCards,
+  filterTopologyOptions,
+  groupLabel,
+  groupTagType,
+  lifecycleLabel,
+  lifecycleTagType,
+  runtimeModeHint,
+  runtimeStatusTagType,
+  topologyHasNodes,
+  topologyLegend,
+  topologyNodeColor,
+  visibleDefinitionAgents,
+  visibleRuntimeAgents,
+} from "@/views/ops/agent-manage.utils";
 
 const store = useAgentOpsStore();
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination();
 const loading = computed(() => store.loading);
-const activeTab = ref("definitions");
-const filters = reactive({ name: "", lifecycle_status: "", group_key: "" });
 
-// ——— 定义 Tab ———
-const definitionCards = computed(() => {
-  const agents = store.agents;
-  return [
-    { label: "核心 Agent", value: agents.filter(a => a.group_key === "core").length, color: "#0d9488" },
-    { label: "规划中 Agent", value: agents.filter(a => a.group_key === "planned").length, color: "#d97706" },
-    { label: "可控制 Agent", value: agents.filter(a => a.supports_route_toggle).length, color: "#2563eb" },
-    { label: "异常 Agent", value: agents.filter(a => a.runtime_status === "degraded").length, color: "#dc2626" },
-  ];
+const activeTab = ref<"definitions" | "runtime" | "topology">("definitions");
+const filters = reactive({
+  name: "",
+  group_key: "",
 });
 
-function groupTagType(g: AgentGroup): string {
-  const map: Record<string, string> = { core: "", memory: "warning", planned: "info", legacy: "info" };
-  return map[g] || "info";
-}
-function groupLabel(g: AgentGroup): string {
-  const map: Record<string, string> = { core: "核心", memory: "记忆治理", planned: "规划中", legacy: "历史" };
-  return map[g] || g;
-}
-function lifecycleTagType(s: AgentLifecycleStatus): string {
-  const map: Record<string, string> = { active: "success", partial: "warning", planned: "info", legacy: "info", deprecated: "danger" };
-  return map[s] || "info";
-}
-function lifecycleLabel(s: AgentLifecycleStatus): string {
-  const map: Record<string, string> = { active: "已接入", partial: "部分接入", planned: "规划中", legacy: "历史兼容", deprecated: "已废弃" };
-  return map[s] || s;
-}
-function runtimeStatusTagType(s: AgentRuntimeStatus): string {
-  const map: Record<string, string> = { running: "success", stopped: "info", degraded: "warning", maintenance: "danger", readonly: "info" };
-  return map[s] || "info";
-}
-function eventLabel(type: string): string {
+const topologySubgraph = ref("all");
+const topologyMode = ref<"design" | "runtime">("design");
+const showPlannedInTopo = ref(false);
+let topologyRefreshTimer: number | null = null;
+
+const detailDrawer = reactive({ visible: false });
+const pauseDialog = reactive({
+  visible: false,
+  runtimeKey: "",
+  agentName: "",
+  reason: "",
+});
+
+const definitionCards = computed(() => buildDefinitionCards(store.agents));
+const runtimeCards = computed(() => buildRuntimeCards(store.runtimeOverview, store.runtimeAgents));
+const topologyOptions = computed(() => filterTopologyOptions(store.agents));
+const topologyLegendRows = computed(() => topologyLegend(topologyMode.value));
+const hasTopologyNodes = computed(() => topologyHasNodes(store.topology));
+
+const definitionRows = computed(() =>
+  visibleDefinitionAgents(store.agents).filter((item) => {
+    const nameKeyword = filters.name.trim().toLowerCase();
+    if (nameKeyword && !item.name.toLowerCase().includes(nameKeyword)) return false;
+    if (filters.group_key && item.group_key !== filters.group_key) return false;
+    return true;
+  }),
+);
+
+const runtimeRows = computed(() => visibleRuntimeAgents(store.runtimeAgents));
+
+const { chartRef, setOption, resize } = useECharts();
+
+function eventLabel(type: string) {
   const map: Record<string, string> = {
-    pause_route: "暂停路由", resume_route: "恢复路由",
-    start: "启动", stop: "停止", maintenance: "进入维护",
+    pause_route: "暂停路由",
+    resume_route: "恢复路由",
+    start: "启动运行态",
+    stop: "停止运行态",
+    maintenance: "进入维护",
   };
   return map[type] || type;
 }
 
-// ——— 详情抽屉 ———
-const detailDrawer = reactive({ visible: false });
-async function openDetailDrawer(row: any) {
+function formatPercent(value?: number | null) {
+  return `${(((value ?? 0) as number) * 100).toFixed(1)}%`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString();
+}
+
+function runtimeActionSummary(row: AgentRuntimeInstance) {
+  if (row.runtime_status === "running" && row.route_enabled) return "接收新请求";
+  if (!row.route_enabled) return "已暂停路由，不再接收新请求";
+  if (row.runtime_status === "degraded") return "运行中，处于降级状态";
+  return "当前不接收请求";
+}
+
+async function fetchAgents() {
+  await store.fetchAgents({
+    page: page.value,
+    size: pageSize.value,
+    name: filters.name || undefined,
+  });
+  total.value = store.agentsTotal;
+}
+
+async function refreshRuntime() {
+  await Promise.all([store.fetchRuntimeOverview(), store.fetchRuntimeAgents()]);
+}
+
+async function fetchTopology() {
+  await store.fetchAgentsTopology(topologySubgraph.value, topologyMode.value, showPlannedInTopo.value);
+  await renderTopology();
+}
+
+async function refreshTopologyLive() {
+  await refreshRuntime();
+  await fetchTopology();
+}
+
+async function refreshAll() {
+  await Promise.all([fetchAgents(), refreshRuntime()]);
+  if (activeTab.value === "topology") {
+    await fetchTopology();
+  }
+}
+
+async function openDetailDrawer(row: AgentDefinition) {
   detailDrawer.visible = true;
-  await Promise.all([
-    store.fetchAgentDetail(row.id),
-    store.fetchRuntimeEvents(row.id),
-  ]);
+  await Promise.all([store.fetchAgentDetail(row.id), store.fetchRuntimeEvents(row.id)]);
 }
 
-// ——— 运行态 Tab ———
-const runtimeCards = computed(() => {
-  const o = store.runtimeOverview;
-  return [
-    { label: "运行中", value: o?.running_agents ?? 0, color: "#0d9488" },
-    { label: "已暂停", value: (o?.active_agents ?? 0) - (o?.running_agents ?? 0), color: "#d97706" },
-    { label: "今日执行", value: o?.completed_today ?? 0, color: "#2563eb" },
-    { label: "成功率", value: ((o?.success_rate ?? 0) * 100).toFixed(1) + "%", color: "#059669" },
-    { label: "平均延迟", value: (o?.avg_latency_ms ?? 0) + " ms", color: "#7c3aed" },
-    { label: "最近错误", value: o?.recent_errors ?? 0, color: (o?.recent_errors ?? 0) > 0 ? "#dc2626" : "#6b7280" },
-  ];
-});
-
-const pauseDialog = reactive({ visible: false, agentName: "", runtimeKey: "", reason: "" });
 function openPauseDialog(row: AgentRuntimeInstance) {
-  pauseDialog.agentName = row.agent_name;
-  pauseDialog.runtimeKey = row.runtime_key;
-  pauseDialog.reason = "";
   pauseDialog.visible = true;
+  pauseDialog.runtimeKey = row.runtime_key;
+  pauseDialog.agentName = row.agent_name;
+  pauseDialog.reason = "";
 }
+
 async function confirmPauseRoute() {
   try {
-    await store.pauseRoute(pauseDialog.runtimeKey, pauseDialog.reason);
-    ElMessage.success(`已暂停 ${pauseDialog.agentName} 的路由`);
+    await store.pauseRoute(pauseDialog.runtimeKey, pauseDialog.reason.trim());
     pauseDialog.visible = false;
-    await refreshRuntime();
-  } catch { ElMessage.error("暂停路由失败"); }
+    ElMessage.success(`已暂停 ${pauseDialog.agentName} 的路由`);
+    await refreshAll();
+  } catch {
+    ElMessage.error("暂停路由失败");
+  }
 }
 
 async function handleResumeRoute(row: AgentRuntimeInstance) {
   try {
     await store.resumeRoute(row.runtime_key);
     ElMessage.success(`已恢复 ${row.agent_name} 的路由`);
-    await refreshRuntime();
-  } catch { ElMessage.error("恢复路由失败"); }
-}
-
-async function handleRuntimeToggle(row: AgentRuntimeInstance) {
-  try {
-    if (row.status === "running") {
-      await store.stopRuntimeAgent(row.runtime_key);
-      ElMessage.success("Agent 已停止");
-    } else {
-      await store.startRuntimeAgent(row.runtime_key);
-      ElMessage.success("Agent 已启动");
-    }
-    await refreshRuntime();
-  } catch { ElMessage.error("运行状态切换失败"); }
-}
-
-// ——— 拓扑 Tab ———
-const topologySubgraph = ref("all");
-const topologyMode = ref<"design" | "runtime">("design");
-const showPlannedInTopo = ref(true);
-const showLegacyInTopo = ref(false);
-
-const topologyOptions = computed(() => {
-  const discovered = store.agents.map((item) => ({ label: item.name, value: item.subgraph_key }));
-  return [{ label: "全部子图", value: "all" }, ...discovered];
-});
-
-const { chartRef, setOption, resize } = useECharts();
-
-function topoNodeColor(node: any) {
-  const status = node.status || node.itemStyle?.status;
-  const lifecycle = node.lifecycle_status;
-  if (lifecycle === "planned") return "#d1d5db";
-  if (lifecycle === "legacy" || lifecycle === "deprecated") return "#f97316";
-  if (status === "running") return "#0d9488";
-  if (status === "degraded") return "#eab308";
-  if (status === "stopped") return "#94a3b8";
-  if (node.kind === "root") return "#6366f1";
-  if (node.kind === "subgraph") return "#2563eb";
-  return "#475569";
+    await refreshAll();
+  } catch {
+    ElMessage.error("恢复路由失败");
+  }
 }
 
 async function renderTopology() {
-  const value = store.topology;
-  if (!value) return;
+  if (!store.topology) return;
   await nextTick();
   setOption({
-    tooltip: { trigger: "item", formatter: (p: any) => `${p.name}<br/>${p.data?.kind || ""} ${p.data?.status || ""}` },
-    series: [{
-      type: "graph", layout: "force", roam: true, draggable: true,
-      force: { repulsion: 280, edgeLength: 130, gravity: 0.08 },
-      label: { show: true, fontSize: 11, color: "#334155" },
-      lineStyle: { color: "#cbd5e1", width: 1.5, curveness: 0.12 },
-      emphasis: { focus: "adjacency" },
-      data: value.nodes.map((node: any) => ({
-        id: node.id, name: node.label, value: node.kind,
-        symbolSize: node.kind === "root" ? 72 : node.kind === "subgraph" ? 56 : 40,
-        itemStyle: { color: topoNodeColor(node) },
-        status: node.status, kind: node.kind, lifecycle_status: node.lifecycle_status,
-      })),
-      links: value.edges.map((edge: any) => ({ source: edge.source, target: edge.target })),
-    }],
+    tooltip: {
+      trigger: "item",
+      formatter: (params: { data?: { kind?: string; status?: string; lifecycle_status?: string; route_enabled?: boolean; execution_count?: number; avg_latency_ms?: number; last_started_at?: string | null }[] | any; name: string }) => {
+        const data = params.data || {};
+        const lines = [params.name];
+        if (data.kind === "system") lines.push("类型: 系统路由骨架");
+        if (data.kind === "agent") lines.push("类型: Agent");
+        if (data.lifecycle_status) lines.push(`生命周期: ${lifecycleLabel(data.lifecycle_status)}`);
+        if (data.status) lines.push(`运行态: ${data.status}`);
+        if (typeof data.route_enabled === "boolean") lines.push(`参与路由: ${data.route_enabled ? "是" : "否"}`);
+        if (typeof data.execution_count === "number") lines.push(`执行数: ${data.execution_count}`);
+        if (typeof data.avg_latency_ms === "number") lines.push(`平均延迟: ${Math.round(data.avg_latency_ms)} ms`);
+        if (data.last_started_at) lines.push(`最近启动: ${formatDateTime(data.last_started_at)}`);
+        return lines.join("<br/>");
+      },
+    },
+    series: [
+      {
+        type: "graph",
+        layout: "force",
+        roam: true,
+        draggable: true,
+        force: { repulsion: 260, edgeLength: 120, gravity: 0.06 },
+        label: { show: true, fontSize: 11, color: "#334155" },
+        lineStyle: { color: "#cbd5e1", width: 1.4, curveness: 0.1 },
+        emphasis: { focus: "adjacency" },
+        data: store.topology.nodes.map((node) => ({
+          id: node.id,
+          name: node.label,
+          kind: node.kind,
+          status: node.status,
+          lifecycle_status: node.lifecycle_status,
+          route_enabled: node.route_enabled,
+          execution_count: node.execution_count,
+          avg_latency_ms: node.avg_latency_ms,
+          last_started_at: node.last_started_at,
+          symbolSize: node.kind === "system" ? 62 : store.topology?.selected_subgraph === node.subgraph_key ? 56 : 46,
+          itemStyle: {
+            color: topologyNodeColor(node),
+            borderColor: store.topology?.selected_subgraph === node.subgraph_key ? "#0f172a" : "#ffffff",
+            borderWidth: store.topology?.selected_subgraph === node.subgraph_key ? 2 : 0,
+          },
+        })),
+        links: store.topology.edges.map((edge) => ({ source: edge.source, target: edge.target })),
+      },
+    ],
   });
   resize();
 }
 
-// ——— Data fetching ———
-async function fetchAgents() {
-  await store.fetchAgents({ page: page.value, size: pageSize.value, name: filters.name || undefined });
-  total.value = store.agentsTotal;
-}
-async function refreshRuntime() {
-  await Promise.all([store.fetchRuntimeOverview(), store.fetchRuntimeAgents()]);
-}
-async function fetchTopology() {
-  await store.fetchAgentsTopology(topologySubgraph.value, topologyMode.value);
-  await renderTopology();
+function startTopologyPolling() {
+  stopTopologyPolling();
+  if (activeTab.value !== "topology") return;
+  topologyRefreshTimer = window.setInterval(() => {
+    void refreshTopologyLive();
+  }, 10000);
 }
 
-watch(() => [page.value, pageSize.value], async () => { await fetchAgents(); });
-watch(activeTab, async (value) => {
-  if (value === "topology" && !store.topology) await fetchTopology();
-  else if (value === "topology") await renderTopology();
+function stopTopologyPolling() {
+  if (topologyRefreshTimer !== null) {
+    window.clearInterval(topologyRefreshTimer);
+    topologyRefreshTimer = null;
+  }
+}
+
+watch(() => [page.value, pageSize.value], async () => {
+  await fetchAgents();
 });
+
+watch(activeTab, async (tab) => {
+  if (tab === "topology") {
+    await refreshTopologyLive();
+    startTopologyPolling();
+    return;
+  }
+  stopTopologyPolling();
+});
+
 onMounted(async () => {
   await Promise.all([fetchAgents(), refreshRuntime()]);
-  await fetchTopology();
+});
+
+onUnmounted(() => {
+  stopTopologyPolling();
 });
 </script>
 
 <template>
-  <div class="flex flex-col gap-5">
-    <div class="page-header">
-      <h1>Agent 管理</h1>
-      <p class="mt-2 text-sm text-zinc-500">Agent 控制中心 — 定义、运行态、拓扑一站式管理。</p>
-    </div>
+  <div class="agent-manage-page">
+    <section class="page-head">
+      <div>
+        <h1>Agent 管理</h1>
+        <p>围绕 Agent 定义、运行态和拓扑的统一运营视图。拓扑页展示的是 Agent 总体结构与当前真实状态，不再默认展开子 Agent 内部节点。</p>
+      </div>
+      <el-button :icon="RefreshRight" @click="refreshAll">刷新数据</el-button>
+    </section>
 
-    <el-tabs v-model="activeTab">
-      <!-- ===== 定义 Tab ===== -->
+    <el-tabs v-model="activeTab" class="agent-tabs">
       <el-tab-pane label="定义" name="definitions">
-        <!-- Overview cards -->
-        <div class="flex gap-4 mb-4">
-          <div class="flex-1" v-for="card in definitionCards" :key="card.label">
-            <el-card shadow="never" class="stat-card">
-              <div class="stat-value" :style="{ color: card.color }">{{ card.value }}</div>
-              <div class="stat-label">{{ card.label }}</div>
-            </el-card>
-          </div>
-        </div>
+        <section class="metric-grid">
+          <article v-for="card in definitionCards" :key="card.key" class="metric-tile">
+            <div class="metric-value" :style="{ color: card.tone }">{{ card.value }}</div>
+            <div class="metric-label">{{ card.label }}</div>
+          </article>
+        </section>
 
-        <!-- Filters -->
-        <el-card class="mb-4" shadow="never">
-          <el-form :model="filters" inline>
-            <el-form-item label="名称">
-              <el-input v-model="filters.name" placeholder="搜索 Agent 名称" clearable />
-            </el-form-item>
-            <el-form-item label="类型">
-              <el-select v-model="filters.group_key" placeholder="全部" clearable>
-                <el-option label="核心" value="core" />
-                <el-option label="规划中" value="planned" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="fetchAgents">查询</el-button>
-              <el-button @click="filters.name = ''; filters.group_key = ''">重置</el-button>
-            </el-form-item>
-          </el-form>
+        <el-card shadow="never" class="panel-card filter-card">
+          <div class="filter-row">
+            <el-input v-model="filters.name" clearable placeholder="搜索 Agent 名称" class="filter-input" />
+            <el-select v-model="filters.group_key" clearable placeholder="全部类型" class="filter-select">
+              <el-option label="核心" value="core" />
+              <el-option label="记忆治理" value="memory" />
+              <el-option label="规划中" value="planned" />
+              <el-option label="历史兼容" value="legacy" />
+            </el-select>
+            <el-button type="primary" @click="fetchAgents">查询</el-button>
+            <el-button @click="filters.name = ''; filters.group_key = ''">重置</el-button>
+          </div>
         </el-card>
 
-        <!-- Agent table -->
-        <el-card shadow="never">
+        <el-card shadow="never" class="panel-card">
           <template #header>
-            <div class="card-header">
-              <span>Agent 列表</span>
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Agent 列表</div>
+                <div class="panel-note">已废弃的 Agent 已从列表移除，保留当前仍有运营意义的定义数据。</div>
+              </div>
               <el-tag type="info" size="small">系统自动注册</el-tag>
             </div>
           </template>
-          <el-table :data="store.agents" v-loading="loading" stripe @row-click="openDetailDrawer" style="cursor: pointer">
-            <el-table-column prop="name" label="名称" min-width="140" />
-            <el-table-column label="类型" width="90">
+
+          <el-table :data="definitionRows" stripe v-loading="loading" @row-click="openDetailDrawer" style="cursor: pointer">
+            <el-table-column prop="name" label="名称" min-width="180" />
+            <el-table-column label="类型" width="110">
               <template #default="{ row }">
                 <el-tag :type="groupTagType(row.group_key)" size="small">{{ groupLabel(row.group_key) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="customer_visible_description" label="能力说明" min-width="220" show-overflow-tooltip />
-            <el-table-column label="接入状态" width="90">
+            <el-table-column label="接入状态" width="110">
               <template #default="{ row }">
                 <el-tag :type="lifecycleTagType(row.lifecycle_status)" size="small">{{ lifecycleLabel(row.lifecycle_status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="参与路由" width="80">
+            <el-table-column label="参与路由" width="100">
               <template #default="{ row }">
-                <el-tag :type="row.route_enabled ? 'success' : 'info'" size="small">{{ row.route_enabled ? '是' : '否' }}</el-tag>
+                <el-tag :type="row.route_enabled ? 'success' : 'info'" size="small">{{ row.route_enabled ? "是" : "否" }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="运行态" width="100">
+            <el-table-column label="运行态" width="120">
               <template #default="{ row }">
-                <el-tag :type="runtimeStatusTagType(row.runtime_status)" size="small">{{ row.runtime_status || 'unknown' }}</el-tag>
+                <el-tag :type="runtimeStatusTagType(row.runtime_status || 'stopped')" size="small">
+                  {{ row.runtime_status || "stopped" }}
+                </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="指标" min-width="160">
+            <el-table-column prop="customer_visible_description" label="能力说明" min-width="260" show-overflow-tooltip />
+            <el-table-column label="指标" min-width="190">
               <template #default="{ row }">
-                <div class="text-xs text-zinc-600">执行 {{ row.metrics_summary?.execution_count ?? 0 }} | 成功率 {{ ((row.metrics_summary?.success_rate ?? 0) * 100).toFixed(1) }}%</div>
-                <div class="text-xs text-zinc-400">延迟 {{ row.metrics_summary?.avg_latency_ms ?? 0 }} ms</div>
+                <div class="metric-stack">
+                  <span>执行 {{ row.metrics_summary?.execution_count ?? 0 }}</span>
+                  <span>成功率 {{ formatPercent(row.metrics_summary?.success_rate) }}</span>
+                  <span>平均延迟 {{ Math.round(row.metrics_summary?.avg_latency_ms ?? 0) }} ms</span>
+                </div>
               </template>
             </el-table-column>
           </el-table>
-          <div class="pagination-wrapper">
+
+          <div class="pagination-wrap">
             <el-pagination
-              v-model:current-page="page" v-model:page-size="pageSize" :total="total"
-              :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next"
-              @current-change="onPageChange" @size-change="onSizeChange"
+              v-model:current-page="page"
+              v-model:page-size="pageSize"
+              :total="total"
+              :page-sizes="[10, 20, 50, 100]"
+              layout="total, sizes, prev, pager, next"
+              @current-change="onPageChange"
+              @size-change="onSizeChange"
             />
           </div>
         </el-card>
       </el-tab-pane>
 
-      <!-- ===== 运行态 Tab ===== -->
       <el-tab-pane label="运行态" name="runtime">
-        <div class="flex gap-4 mb-4">
-          <div class="flex-1" v-for="card in runtimeCards" :key="card.label">
-            <el-card shadow="never" class="stat-card">
-              <div class="stat-value" :style="{ color: card.color }">{{ card.value }}</div>
-              <div class="stat-label">{{ card.label }}</div>
-            </el-card>
-          </div>
-        </div>
-        <el-card shadow="never">
+        <section class="metric-grid compact-grid">
+          <article v-for="card in runtimeCards" :key="card.key" class="metric-tile">
+            <div class="metric-value" :style="{ color: card.tone }">{{ card.value }}</div>
+            <div class="metric-label">{{ card.label }}</div>
+          </article>
+        </section>
+
+        <el-card shadow="never" class="panel-card runtime-card">
           <template #header>
-            <div class="card-header">
-              <span>运行单元</span>
-              <el-button @click="refreshRuntime">刷新</el-button>
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">运行态控制</div>
+                <div class="panel-note">暂停路由会同时停止该 Agent 的运行态；恢复路由会同步恢复为可接收请求的状态。</div>
+              </div>
+              <el-tag type="warning" size="small">{{ runtimeModeHint() }}</el-tag>
             </div>
           </template>
-          <el-table :data="store.runtimeAgents" stripe>
-            <el-table-column prop="agent_name" label="Agent" min-width="150" />
-            <el-table-column label="状态" width="100">
+
+          <el-table :data="runtimeRows" stripe>
+            <el-table-column prop="agent_name" label="Agent" min-width="180" />
+            <el-table-column label="运行态" width="120">
               <template #default="{ row }">
                 <el-tag :type="runtimeStatusTagType(row.runtime_status)" size="small">{{ row.runtime_status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="execution_count" label="执行数" width="80" />
-            <el-table-column label="成功率" width="100">
-              <template #default="{ row }">{{ (row.success_rate * 100).toFixed(1) }}%</template>
-            </el-table-column>
-            <el-table-column label="平均延迟" width="100">
-              <template #default="{ row }">{{ row.avg_latency_ms.toFixed(0) }} ms</template>
-            </el-table-column>
-            <el-table-column label="最近启动" width="160">
-              <template #default="{ row }">{{ row.last_started_at ? new Date(row.last_started_at).toLocaleString() : "-" }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="路由状态" width="120">
               <template #default="{ row }">
-                <template v-if="row.lifecycle_status === 'planned'">
-                  <span class="text-zinc-400 text-sm">仅展示</span>
-                </template>
-                <template v-else-if="row.lifecycle_status === 'legacy' || row.lifecycle_status === 'deprecated'">
-                  <span class="text-red-400 text-sm">已废弃</span>
-                </template>
-                <template v-else>
-                  <el-button v-if="row.supports_route_toggle" link :type="row.route_enabled ? 'warning' : 'success'" @click="row.route_enabled ? openPauseDialog(row) : handleResumeRoute(row)">
-                    {{ row.route_enabled ? "暂停路由" : "恢复路由" }}
+                <el-tag :type="row.route_enabled ? 'success' : 'warning'" size="small">
+                  {{ row.route_enabled ? "接收流量" : "已暂停路由" }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前说明" min-width="180">
+              <template #default="{ row }">
+                <span class="text-zinc-600">{{ runtimeActionSummary(row) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="execution_count" label="执行数" width="90" />
+            <el-table-column label="成功率" width="100">
+              <template #default="{ row }">{{ formatPercent(row.success_rate) }}</template>
+            </el-table-column>
+            <el-table-column label="平均延迟" width="110">
+              <template #default="{ row }">{{ Math.round(row.avg_latency_ms) }} ms</template>
+            </el-table-column>
+            <el-table-column label="最近启动" width="180">
+              <template #default="{ row }">{{ formatDateTime(row.last_started_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" min-width="180" fixed="right">
+              <template #default="{ row }">
+                <div class="action-row">
+                  <el-button
+                    v-if="row.supports_route_toggle"
+                    link
+                    :type="row.route_enabled ? 'warning' : 'success'"
+                    @click="row.route_enabled ? openPauseDialog(row) : handleResumeRoute(row)"
+                  >
+                    <el-icon><component :is="row.route_enabled ? VideoPause : VideoPlay" /></el-icon>
+                    <span>{{ row.route_enabled ? "暂停路由" : "恢复路由" }}</span>
                   </el-button>
-                  <el-button v-if="row.supports_start_stop" link type="primary" @click="handleRuntimeToggle(row)">
-                    {{ row.status === "running" ? "停止" : "启动" }}
-                  </el-button>
-                </template>
+                </div>
               </template>
             </el-table-column>
           </el-table>
         </el-card>
       </el-tab-pane>
 
-      <!-- ===== 拓扑 Tab ===== -->
       <el-tab-pane label="拓扑" name="topology">
-        <el-card shadow="never">
+        <el-card shadow="never" class="panel-card">
           <template #header>
-            <div class="card-header">
-              <span>Agent 拓扑</span>
-              <div class="toolbar">
+            <div class="panel-head topology-head">
+              <div>
+                <div class="panel-title">Agent 拓扑</div>
+                <div class="panel-note">当前展示 Agent 总览拓扑：系统路由骨架 + Agent 节点。内部子节点默认隐藏，节点状态会按当前注册、路由和运行态实时刷新。</div>
+              </div>
+              <div class="topology-toolbar">
                 <el-radio-group v-model="topologyMode" size="small" @change="fetchTopology">
                   <el-radio-button value="design">设计拓扑</el-radio-button>
                   <el-radio-button value="runtime">运行拓扑</el-radio-button>
                 </el-radio-group>
-                <el-select v-model="topologySubgraph" style="width: 200px" size="small" @change="fetchTopology">
-                  <el-option v-for="o in topologyOptions" :key="o.value" :label="o.label" :value="o.value" />
+                <el-select v-model="topologySubgraph" class="topology-select" size="small" @change="fetchTopology">
+                  <el-option v-for="option in topologyOptions" :key="option.value" :label="option.label" :value="option.value" />
                 </el-select>
-                <el-checkbox v-model="showPlannedInTopo" size="small" @change="fetchTopology">规划中</el-checkbox>
-                <el-checkbox v-model="showLegacyInTopo" size="small" @change="fetchTopology">历史</el-checkbox>
+                <el-checkbox v-model="showPlannedInTopo" size="small" @change="fetchTopology">显示规划中</el-checkbox>
               </div>
             </div>
           </template>
+
           <div class="topology-grid">
-            <div class="graph-panel-wrap">
-              <div ref="chartRef" class="graph-panel" />
+            <div class="graph-shell">
+              <div v-if="hasTopologyNodes" ref="chartRef" class="graph-panel" />
+              <el-empty v-else description="当前筛选下没有可展示的拓扑节点" :image-size="90" />
             </div>
-            <div class="topology-side">
-              <div class="topology-section">
-                <div class="section-title">图例</div>
-                <div class="flex flex-col gap-2 text-sm">
-                  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full inline-block" style="background:#6366f1" /> 根路由</div>
-                  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full inline-block" style="background:#0d9488" /> 运行中</div>
-                  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full inline-block" style="background:#eab308" /> 降级</div>
-                  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full inline-block" style="background:#d1d5db" /> 规划中</div>
-                  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full inline-block" style="background:#f97316" /> 历史</div>
+
+            <aside class="legend-panel">
+              <div class="legend-title">
+                <el-icon><Connection /></el-icon>
+                <span>图例与说明</span>
+              </div>
+              <div class="legend-list">
+                <div v-for="item in topologyLegendRows" :key="item.label" class="legend-item">
+                  <span class="legend-dot" :style="{ background: item.color }" />
+                  <span>{{ item.label }}</span>
                 </div>
               </div>
-            </div>
+              <p class="legend-note">绿色节点表示当前处于运行中的 Agent。切到“运行拓扑”后，只保留当前可实际接收请求的 Agent。</p>
+            </aside>
           </div>
         </el-card>
       </el-tab-pane>
     </el-tabs>
 
-    <!-- ===== Detail Drawer ===== -->
     <el-drawer v-model="detailDrawer.visible" title="Agent 详情" size="520px">
       <template v-if="store.agentDetail">
-        <div class="detail-section">
-          <h4 class="text-sm font-semibold text-zinc-900 mb-2">基础信息</h4>
+        <section class="detail-block">
+          <h4>基础信息</h4>
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="名称">{{ store.agentDetail.name }}</el-descriptions-item>
             <el-descriptions-item label="类型">
-              <el-tag :type="groupTagType(store.agentDetail.group_key)" size="small">{{ groupLabel(store.agentDetail.group_key) }}</el-tag>
+              <el-tag :type="groupTagType(store.agentDetail.group_key)" size="small">
+                {{ groupLabel(store.agentDetail.group_key) }}
+              </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="子图 Key">{{ store.agentDetail.subgraph_key }}</el-descriptions-item>
-            <el-descriptions-item label="入口图">{{ store.agentDetail.entry_graph }}</el-descriptions-item>
-            <el-descriptions-item label="工作流绑定">{{ store.agentDetail.workflow_binding }}</el-descriptions-item>
-            <el-descriptions-item label="版本">{{ store.agentDetail.graph_version }}</el-descriptions-item>
+            <el-descriptions-item label="入口图">{{ store.agentDetail.entry_graph || "-" }}</el-descriptions-item>
+            <el-descriptions-item label="路由状态">
+              <el-tag :type="store.agentDetail.route_enabled ? 'success' : 'info'" size="small">
+                {{ store.agentDetail.route_enabled ? "参与路由" : "已暂停路由" }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="运行态">
+              <el-tag :type="runtimeStatusTagType(store.agentDetail.runtime_status || 'stopped')" size="small">
+                {{ store.agentDetail.runtime_status || "stopped" }}
+              </el-tag>
+            </el-descriptions-item>
           </el-descriptions>
-        </div>
+        </section>
 
-        <div class="detail-section">
-          <h4 class="text-sm font-semibold text-zinc-900 mb-2">能力说明</h4>
-          <p class="text-sm text-zinc-600">{{ store.agentDetail.customer_visible_description || store.agentDetail.description }}</p>
-        </div>
+        <section class="detail-block">
+          <h4>能力说明</h4>
+          <p class="detail-copy">{{ store.agentDetail.customer_visible_description || store.agentDetail.description || "-" }}</p>
+        </section>
 
-        <div class="detail-section">
-          <h4 class="text-sm font-semibold text-zinc-900 mb-2">路由信息</h4>
-          <div class="text-sm text-zinc-600">
-            <p>参与路由：<el-tag :type="store.agentDetail.route_enabled ? 'success' : 'info'" size="small">{{ store.agentDetail.route_enabled ? '是' : '否' }}</el-tag></p>
-            <p class="mt-1">绑定路由规则：{{ store.agentDetail.bound_routes?.length || 0 }} 条</p>
-          </div>
-        </div>
-
-        <div class="detail-section">
-          <h4 class="text-sm font-semibold text-zinc-900 mb-2">运行指标</h4>
-          <div class="text-sm text-zinc-600 space-y-1">
+        <section class="detail-block">
+          <h4>运行指标</h4>
+          <div class="detail-metrics">
             <p>执行次数：{{ store.agentDetail.metrics_summary?.execution_count ?? 0 }}</p>
-            <p>成功率：{{ ((store.agentDetail.metrics_summary?.success_rate ?? 0) * 100).toFixed(1) }}%</p>
-            <p>平均延迟：{{ store.agentDetail.metrics_summary?.avg_latency_ms ?? 0 }} ms</p>
+            <p>成功率：{{ formatPercent(store.agentDetail.metrics_summary?.success_rate) }}</p>
+            <p>平均延迟：{{ Math.round(store.agentDetail.metrics_summary?.avg_latency_ms ?? 0) }} ms</p>
           </div>
-        </div>
+        </section>
 
-        <div class="detail-section">
-          <h4 class="text-sm font-semibold text-zinc-900 mb-2">操作记录</h4>
+        <section class="detail-block">
+          <h4>操作记录</h4>
           <el-timeline v-if="store.runtimeEvents.length">
-            <el-timeline-item v-for="event in store.runtimeEvents.slice(0, 8)" :key="event.id" :timestamp="new Date(event.created_at).toLocaleString()" size="small">
+            <el-timeline-item
+              v-for="event in store.runtimeEvents.slice(0, 8)"
+              :key="event.id"
+              :timestamp="formatDateTime(event.created_at)"
+              size="small"
+            >
               {{ eventLabel(event.event_type) }}
-              <span v-if="event.reason" class="text-zinc-400 text-xs"> — {{ event.reason }}</span>
+              <span v-if="event.reason" class="timeline-note">{{ event.reason }}</span>
             </el-timeline-item>
           </el-timeline>
-          <el-empty v-else description="暂无操作记录" :image-size="40" />
-        </div>
+          <el-empty v-else description="暂无操作记录" :image-size="48" />
+        </section>
       </template>
     </el-drawer>
 
-    <!-- ===== Pause Route Dialog ===== -->
-    <el-dialog v-model="pauseDialog.visible" title="确认暂停路由" width="480px">
-      <div>
-        <p class="mb-3">你正在暂停 <strong>{{ pauseDialog.agentName }}</strong> 的路由。</p>
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-          <div class="text-sm font-semibold text-amber-800 mb-1">影响范围：</div>
-          <ul class="text-sm text-amber-700 m-0 pl-4 space-y-0.5">
-            <li>该 Agent 将不再接收新请求。</li>
-            <li>已在执行中的请求不会被中断。</li>
-          </ul>
-        </div>
-        <el-input v-model="pauseDialog.reason" type="textarea" :rows="2" placeholder="请输入暂停原因（必填）" />
+    <el-dialog v-model="pauseDialog.visible" title="确认暂停路由" width="460px">
+      <div class="pause-copy">
+        <p>暂停 <strong>{{ pauseDialog.agentName }}</strong> 的路由后，新请求将不会再分发到该 Agent，运行态也会同步停用。</p>
+        <el-input
+          v-model="pauseDialog.reason"
+          type="textarea"
+          :rows="3"
+          placeholder="请输入暂停原因，用于后续审计和排查"
+        />
       </div>
       <template #footer>
         <el-button @click="pauseDialog.visible = false">取消</el-button>
@@ -442,169 +529,277 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-
-.page-header {
-  margin-bottom: 20px;
-}
-
-.page-header h1 {
-  margin: 0 0 8px;
-  font-size: 26px;
-}
-
-
-.card-header,
-.toolbar {
+.agent-manage-page {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
 }
 
-.toolbar {
-  justify-content: flex-end;
-}
-
-
-
-.stat-card {
-  text-align: center;
-}
-
-.stat-value {
+.page-head h1 {
+  margin: 0;
   font-size: 28px;
-  font-weight: 700;
-  color: #1d4ed8;
+  color: #0f172a;
 }
 
-.stat-label {
-  margin-top: 6px;
+.page-head p {
+  max-width: 840px;
+  margin: 8px 0 0;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.agent-tabs :deep(.el-tabs__header) {
+  margin-bottom: 18px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.compact-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.metric-tile,
+.panel-card,
+.graph-shell,
+.legend-panel {
+  border: 1px solid #dbe4f0;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.metric-tile {
+  padding: 18px 20px;
+}
+
+.metric-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.metric-label {
+  margin-top: 10px;
   color: #64748b;
   font-size: 13px;
 }
 
-.metric-line {
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.5;
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
 }
 
-.topology-meta {
+.panel-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.panel-note {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 18px 20px;
+}
+
+.filter-row {
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  align-items: center;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.filter-input {
+  width: 260px;
+}
+
+.filter-select {
+  width: 180px;
+}
+
+.metric-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.runtime-card :deep(.el-card__body) {
+  padding-top: 8px;
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topology-head {
+  align-items: flex-start;
+}
+
+.topology-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.topology-select {
+  width: 200px;
 }
 
 .topology-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(0, 1.9fr) minmax(280px, 0.8fr);
   gap: 16px;
 }
 
-.graph-panel-wrap {
+.graph-shell {
   min-height: 560px;
- border: 1px solid #dbe4f0;
- border-radius: 16px;
   background:
-    radial-gradient(circle at top right, rgba(191, 219, 254, 0.45), transparent 28%),
+    radial-gradient(circle at top right, rgba(191, 219, 254, 0.36), transparent 28%),
     linear-gradient(180deg, #f8fbff 0%, #f1f5f9 100%);
   overflow: hidden;
 }
 
+.graph-shell :deep(.el-empty) {
+  min-height: 560px;
+}
+
 .graph-panel {
-  height: 560px;
   width: 100%;
+  height: 560px;
 }
 
-.topology-side {
+.legend-panel {
+  padding: 16px;
+}
+
+.legend-title {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.topology-section {
- border: 1px solid #dbe4f0;
- border-radius: 16px;
-  background: #fff;
-  padding: 14px;
-}
-
-.section-title {
-  font-size: 14px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: #0f172a;
-  margin-bottom: 10px;
 }
 
-.legend-list,
-.topology-list {
+.legend-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  color: #334155;
+  font-size: 14px;
 }
 
-.legend-item,
-.topology-list-item {
+.legend-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
-  color: #475569;
+}
+
+.legend-note {
+  margin: 16px 0 0;
+  color: #64748b;
   font-size: 13px;
+  line-height: 1.7;
 }
 
 .legend-dot {
   width: 10px;
   height: 10px;
- border-radius: 999px;
-  flex: 0 0 auto;
+  border-radius: 999px;
 }
 
-.mono {
-  font-family: "Consolas", "SFMono-Regular", monospace;
-  color: #1e293b;
-  background: #f8fafc;
- border-radius: 8px;
-  padding: 2px 6px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.detail-block {
+  margin-bottom: 22px;
 }
 
-.edge-item {
-  align-items: flex-start;
-}
-
-.arrow {
-  color: #94a3b8;
-  font-weight: 700;
-}
-
-.muted {
-  color: #94a3b8;
-}
-
-.pagination-wrapper {
-  margin-top: 16px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.detail-section {
-  margin-bottom: 20px;
-}
-.detail-section h4 {
+.detail-block h4 {
+  margin: 0 0 10px;
   font-size: 14px;
   font-weight: 600;
-  margin-bottom: 8px;
-  color: #1e293b;
+  color: #0f172a;
 }
 
-@media (max-width: 1200px) {
+.detail-copy,
+.detail-metrics {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.timeline-note {
+  margin-left: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.pause-copy {
+  display: grid;
+  gap: 12px;
+  color: #475569;
+  line-height: 1.7;
+}
+
+@media (max-width: 1280px) {
+  .metric-grid,
+  .compact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .topology-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .page-head,
+  .panel-head,
+  .topology-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .metric-grid,
+  .compact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-row,
+  .topology-toolbar {
+    align-items: stretch;
+  }
+
+  .filter-input,
+  .filter-select,
+  .topology-select {
+    width: 100%;
   }
 }
 </style>

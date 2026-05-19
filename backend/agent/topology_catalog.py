@@ -219,6 +219,19 @@ ROOT_EDGES: list[dict[str, Any]] = [
     {"source": "subgraph_runner", "target": "result_synthesizer"},
 ]
 
+AGENT_OVERVIEW_ROOT_NODES: list[dict[str, Any]] = [
+    {"id": "request_intake", "label": "Request Intake", "kind": "system"},
+    {"id": "memory_context_loader", "label": "Memory Context Loader", "kind": "system"},
+    {"id": "manager_route_policy", "label": "Manager Route Policy", "kind": "system"},
+    {"id": "subgraph_runner", "label": "Subgraph Runner", "kind": "system"},
+    {"id": "result_synthesizer", "label": "Result Synthesizer", "kind": "system"},
+]
+AGENT_OVERVIEW_ROOT_EDGES: list[dict[str, Any]] = [
+    {"source": "request_intake", "target": "memory_context_loader"},
+    {"source": "memory_context_loader", "target": "manager_route_policy"},
+    {"source": "manager_route_policy", "target": "subgraph_runner"},
+]
+
 QUALITY_JUDGEMENT_NODES: list[dict[str, Any]] = [
     {"id": "quality_judgement", "label": "Quality Judgement Subgraph", "kind": "subgraph"},
     {"id": "quality_judgement.intake_normalizer", "label": "Intake Normalizer", "kind": "quality"},
@@ -333,6 +346,13 @@ def get_route_topology(*, intent_name: str, agent_name: str | None, subgraph_key
 
 def get_registered_subgraphs() -> list[dict[str, Any]]:
     return [dict(item) for item in REGISTERED_SUBGRAPHS]
+
+
+def get_agent_overview_root() -> dict[str, Any]:
+    return {
+        "nodes": [dict(item) for item in AGENT_OVERVIEW_ROOT_NODES],
+        "edges": [dict(item) for item in AGENT_OVERVIEW_ROOT_EDGES],
+    }
 
 
 def get_dspy_optimization_targets() -> list[dict[str, Any]]:

@@ -73,15 +73,18 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
     class FakeRuntimeRepo:
         def __init__(self):
             self.dedupe_calls = []
-            self.set_status_calls = []
+            self.set_runtime_status_calls = []
             self.runtime = SimpleNamespace(
                 runtime_key="Legacy Quality:quality_judgement",
                 agent_id="agent-1",
                 subgraph_key="quality_judgement",
                 status="running",
+                runtime_status="running",
                 supports_start_stop=True,
                 last_started_at=None,
                 last_stopped_at=None,
+                last_error_message=None,
+                maintenance_reason=None,
             )
 
         async def dedupe_by_runtime_key(self, runtime_key: str):
@@ -91,10 +94,13 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
         async def get_by_runtime_key(self, runtime_key: str):
             raise AssertionError("set_runtime_status should not call get_by_runtime_key directly")
 
-        async def set_status(self, runtime_key: str, status: str):
-            self.set_status_calls.append((runtime_key, status))
-            self.runtime.status = status
+        async def set_runtime_status(self, runtime_key: str, status: str, *, updated_by: str | None = None):
+            self.set_runtime_status_calls.append((runtime_key, status, updated_by))
+            self.runtime.runtime_status = status
             return self.runtime
+
+        async def create_event(self, _payload: dict):
+            return None
 
     class FakeAgentRepo:
         async def get(self, agent_id: str):
@@ -102,6 +108,11 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
                 id=agent_id,
                 name="Legacy Quality",
                 is_active=True,
+                lifecycle_status="active",
+                group_key="core",
+                route_enabled=True,
+                supports_route_toggle=True,
+                customer_visible_description="",
             )
 
     class FakeMetricsRepo:
@@ -135,9 +146,359 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
 
     assert sync_calls == [True]
     assert svc._runtime_repo.dedupe_calls == ["Legacy Quality:quality_judgement"]
-    assert svc._runtime_repo.set_status_calls == [("Legacy Quality:quality_judgement", "stopped")]
+    assert svc._runtime_repo.set_runtime_status_calls == [
+        ("Legacy Quality:quality_judgement", "stopped", "user-1")
+    ]
     assert data.runtime_key == "Legacy Quality:quality_judgement"
     assert data.status == "stopped"
+    assert data.runtime_status == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_list_runtime_agents_excludes_planned_and_deprecated():
+    class FakeRuntimeRepo:
+        async def list_with_agents(self):
+            return [
+                (
+                    SimpleNamespace(
+                        runtime_key="active:chat",
+                        agent_id="agent-1",
+                        subgraph_key="chat",
+                        status="running",
+                        runtime_status="running",
+                        supports_start_stop=True,
+                        last_started_at=None,
+                        last_stopped_at=None,
+                        last_error_message=None,
+                        maintenance_reason=None,
+                    ),
+                    SimpleNamespace(
+                        id="agent-1",
+                        name="Quality Chat",
+                        is_active=True,
+                        lifecycle_status="active",
+                        group_key="core",
+                        route_enabled=True,
+                        supports_route_toggle=True,
+                        customer_visible_description="chat",
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        runtime_key="planned:market_monitor",
+                        agent_id="agent-2",
+                        subgraph_key="market_monitor",
+                        status="stopped",
+                        runtime_status="stopped",
+                        supports_start_stop=False,
+                        last_started_at=None,
+                        last_stopped_at=None,
+                        last_error_message=None,
+                        maintenance_reason=None,
+                    ),
+                    SimpleNamespace(
+                        id="agent-2",
+                        name="Market Monitor",
+                        is_active=False,
+                        lifecycle_status="planned",
+                        group_key="planned",
+                        route_enabled=False,
+                        supports_route_toggle=False,
+                        customer_visible_description="planned",
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        runtime_key="deprecated:legacy",
+                        agent_id="agent-3",
+                        subgraph_key="legacy",
+                        status="stopped",
+                        runtime_status="stopped",
+                        supports_start_stop=False,
+                        last_started_at=None,
+                        last_stopped_at=None,
+                        last_error_message=None,
+                        maintenance_reason=None,
+                    ),
+                    SimpleNamespace(
+                        id="agent-3",
+                        name="Legacy Agent",
+                        is_active=False,
+                        lifecycle_status="deprecated",
+                        group_key="legacy",
+                        route_enabled=False,
+                        supports_route_toggle=False,
+                        customer_visible_description="deprecated",
+                    ),
+                ),
+            ]
+
+    class FakeMetricsRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def get_metrics(self, agent_id: str):
+            return {"execution_count": 1, "success_rate": 1.0, "avg_latency_ms": 10.0, "last_executed_at": None}
+
+    svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+    svc._runtime_repo = FakeRuntimeRepo()
+
+    async def fake_sync():
+        return None
+
+    svc._sync_registered_agents = fake_sync
+    original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
+    agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
+    try:
+        items = await svc.list_runtime_agents()
+    finally:
+        agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
+
+    assert [item.agent_name for item in items] == ["Quality Chat"]
+
+
+@pytest.mark.asyncio
+async def test_get_agents_topology_runtime_hides_planned_and_deprecated_nodes():
+    class FakeRuntimeRepo:
+        async def list_with_agents(self):
+            return [
+                (
+                    SimpleNamespace(
+                        runtime_key="quality:quality_judgement",
+                        agent_id="agent-1",
+                        subgraph_key="quality_judgement",
+                        status="running",
+                        runtime_status="running",
+                    ),
+                    SimpleNamespace(
+                        id="agent-1",
+                        name="Quality Judgement",
+                        subgraph_key="quality_judgement",
+                        lifecycle_status="active",
+                        route_enabled=True,
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        runtime_key="market_monitor:market_monitor",
+                        agent_id="agent-2",
+                        subgraph_key="market_monitor",
+                        status="stopped",
+                        runtime_status="stopped",
+                    ),
+                    SimpleNamespace(
+                        id="agent-2",
+                        name="Market Monitor",
+                        subgraph_key="market_monitor",
+                        lifecycle_status="planned",
+                        route_enabled=False,
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        runtime_key="legacy:legacy",
+                        agent_id="agent-3",
+                        subgraph_key="legacy_quality",
+                        status="stopped",
+                        runtime_status="stopped",
+                    ),
+                    SimpleNamespace(
+                        id="agent-3",
+                        name="Legacy Agent",
+                        subgraph_key="legacy_quality",
+                        lifecycle_status="deprecated",
+                        route_enabled=False,
+                    ),
+                ),
+            ]
+
+    class FakeMetricsRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def get_metrics(self, agent_id: str):
+            return {"execution_count": 2, "success_rate": 1.0, "avg_latency_ms": 20.0, "last_executed_at": None}
+
+    svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+    svc._runtime_repo = FakeRuntimeRepo()
+
+    async def fake_sync():
+        return None
+
+    svc._sync_registered_agents = fake_sync
+    original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
+    agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
+    try:
+        topology = await svc.get_agents_topology("all", mode="runtime", include_planned=False)
+    finally:
+        agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
+
+    node_ids = {node.id for node in topology.nodes}
+    assert "request_intake" in node_ids
+    assert "agent:quality_judgement" in node_ids
+    assert "agent:market_monitor" not in node_ids
+    assert "agent:legacy_quality" not in node_ids
+
+
+@pytest.mark.asyncio
+async def test_pause_and_resume_route_also_updates_runtime_status():
+    class FakeRuntimeRepo:
+        def __init__(self):
+            self.runtime = SimpleNamespace(
+                runtime_key="quality:quality_judgement",
+                agent_id="agent-1",
+                subgraph_key="quality_judgement",
+                status="running",
+                runtime_status="running",
+                supports_start_stop=True,
+                last_started_at=None,
+                last_stopped_at=None,
+                last_error_message=None,
+                maintenance_reason=None,
+            )
+            self.runtime_status_calls = []
+            self.events = []
+
+        async def dedupe_by_runtime_key(self, runtime_key: str):
+            assert runtime_key == "quality:quality_judgement"
+            return self.runtime
+
+        async def set_runtime_status(self, runtime_key: str, status: str, *, updated_by: str | None = None):
+            self.runtime_status_calls.append((runtime_key, status, updated_by))
+            self.runtime.status = status
+            self.runtime.runtime_status = status
+            return self.runtime
+
+        async def create_event(self, payload: dict):
+            self.events.append(payload)
+            return None
+
+    class FakeAgentRepo:
+        def __init__(self):
+            self.agent = SimpleNamespace(
+                id="agent-1",
+                name="Quality Judgement",
+                is_active=True,
+                lifecycle_status="active",
+                group_key="core",
+                route_enabled=True,
+                supports_route_toggle=True,
+                customer_visible_description="quality",
+            )
+
+        async def get(self, agent_id: str):
+            assert agent_id == "agent-1"
+            return self.agent
+
+    class FakeMetricsRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def get_metrics(self, agent_id: str):
+            return {"execution_count": 0, "success_rate": 0.0, "avg_latency_ms": 0.0, "last_executed_at": None}
+
+    class FakeSession:
+        async def flush(self):
+            return None
+
+    svc = agent_ops_mod.AgentOpsService(session=FakeSession(), org_id="org-1", actor_id="user-1")
+    svc._runtime_repo = FakeRuntimeRepo()
+    svc._agent_repo = FakeAgentRepo()
+
+    async def fake_sync():
+        return None
+
+    svc._sync_registered_agents = fake_sync
+    original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
+    agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
+    try:
+        paused = await svc.pause_route("quality:quality_judgement", "maintenance")
+        resumed = await svc.resume_route("quality:quality_judgement")
+    finally:
+        agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
+
+    assert svc._runtime_repo.runtime_status_calls == [
+        ("quality:quality_judgement", "stopped", "user-1"),
+        ("quality:quality_judgement", "running", "user-1"),
+    ]
+    assert paused.route_enabled is False
+    assert paused.runtime_status == "stopped"
+    assert resumed.route_enabled is True
+    assert resumed.runtime_status == "running"
+
+
+@pytest.mark.asyncio
+async def test_get_agents_topology_specific_agent_returns_agent_overview_slice():
+    class FakeRuntimeRepo:
+        async def list_with_agents(self):
+            return [
+                (
+                    SimpleNamespace(
+                        runtime_key="chat:chat",
+                        agent_id="agent-1",
+                        subgraph_key="chat",
+                        status="running",
+                        runtime_status="running",
+                        last_started_at=None,
+                    ),
+                    SimpleNamespace(
+                        id="agent-1",
+                        name="Quality Chat",
+                        subgraph_key="chat",
+                        lifecycle_status="active",
+                        route_enabled=True,
+                    ),
+                ),
+                (
+                    SimpleNamespace(
+                        runtime_key="quality:quality_judgement",
+                        agent_id="agent-2",
+                        subgraph_key="quality_judgement",
+                        status="running",
+                        runtime_status="running",
+                        last_started_at=None,
+                    ),
+                    SimpleNamespace(
+                        id="agent-2",
+                        name="Quality Judgement",
+                        subgraph_key="quality_judgement",
+                        lifecycle_status="active",
+                        route_enabled=True,
+                    ),
+                ),
+            ]
+
+    class FakeMetricsRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def get_metrics(self, agent_id: str):
+            return {"execution_count": 1, "success_rate": 1.0, "avg_latency_ms": 8.0, "last_executed_at": None}
+
+    svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+    svc._runtime_repo = FakeRuntimeRepo()
+
+    async def fake_sync():
+        return None
+
+    svc._sync_registered_agents = fake_sync
+    original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
+    agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
+    try:
+        topology = await svc.get_agents_topology("chat", mode="design", include_planned=False)
+    finally:
+        agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
+
+    node_ids = {node.id for node in topology.nodes}
+    assert node_ids >= {
+        "request_intake",
+        "memory_context_loader",
+        "manager_route_policy",
+        "subgraph_runner",
+        "result_synthesizer",
+        "agent:chat",
+    }
+    assert "agent:quality_judgement" not in node_ids
 
 
 def test_dspy_optimization_catalog_exposes_expected_targets_and_graph_context():
