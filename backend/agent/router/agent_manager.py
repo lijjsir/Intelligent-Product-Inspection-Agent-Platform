@@ -36,7 +36,7 @@ class AgentManager:
             self._task_agent = InspectionTaskGraph()
         return self._task_agent
 
-    async def run(self, request: NormalizedRequest) -> AgentRouterOutput:
+    async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
         router_input = AgentRouterInput(
             query=request.query,
             request_kind=request.request_kind,
@@ -52,6 +52,27 @@ class AgentManager:
                 router_input,
                 llm_client=await self._build_model_classifier_client(request),
             )
+
+        # ===== 运行时守卫检查 =====
+        if db_session is not None:
+            from agent.router.runtime_guard import AgentRuntimeGuard
+            guard_result = await AgentRuntimeGuard.check(
+                org_id=str(request.org_id),
+                selected_agent=decision.selected_agent,
+                sub_route=decision.sub_route,
+                session=db_session,
+            )
+            if not guard_result.allowed:
+                return AgentRouterOutput(
+                    route_decision=decision,
+                    agent_output={
+                        "message_type": "agent_unavailable",
+                        "answer": guard_result.customer_message,
+                    },
+                    status="blocked",
+                    degrade_reason=guard_result.reason,
+                )
+        # ===== 守卫结束 =====
 
         try:
             if decision.selected_agent == "inspection_task":

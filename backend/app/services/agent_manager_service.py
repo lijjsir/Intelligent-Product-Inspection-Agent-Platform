@@ -19,7 +19,7 @@ class AgentManagerService:
     def __init__(self) -> None:
         self._manager = AgentManager()
 
-    async def run_chat(self, payload: dict) -> AgentRouterOutput:
+    async def run_chat(self, payload: dict, db_session=None) -> AgentRouterOutput:
         request = NormalizedRequest(
             request_kind="chat",
             request_id=str(payload["request_id"]),
@@ -47,4 +47,4 @@ class AgentManagerService:
             spec_code=str(payload.get("spec_code") or "") or None,
             route_hints=dict(payload.get("route_hints") or {}),
         )
-        return await self._manager.run(request)
+        return await self._manager.run(request, db_session=db_session)
