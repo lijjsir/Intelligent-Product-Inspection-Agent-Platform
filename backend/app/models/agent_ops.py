@@ -31,6 +31,12 @@ class AgentDefinition(Base, TimestampMixin):
     graph_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 新增：产品化字段
+    lifecycle_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", comment="active/partial/planned/legacy/deprecated")
+    group_key: Mapped[str] = mapped_column(String(32), nullable=False, default="core", comment="core/memory/planned/legacy")
+    route_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否参与路由")
+    supports_route_toggle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否允许暂停恢复路由")
+    customer_visible_description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="给客户看的能力说明")
 
 
 class PromptVersion(Base, TimestampMixin):
@@ -147,6 +153,13 @@ class AgentRuntimeInstance(Base, TimestampMixin):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_started_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_stopped_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # 新增：增强运行态字段
+    runtime_status: Mapped[str] = mapped_column(String(32), nullable=False, default="stopped", comment="running/stopped/degraded/maintenance/readonly")
+    last_health_check_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    maintenance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
 
 
 class RagQueryLog(Base, TimestampMixin):
@@ -196,3 +209,21 @@ class AgentRouteLog(Base, TimestampMixin):
     signals_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     model_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 新增：运行态阻止
+    blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否被运行态阻止")
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="阻止原因")
+
+
+class AgentRuntimeEvent(Base, TimestampMixin):
+    """Agent 运行态操作事件日志 — pause_route/resume_route/start/stop/maintenance"""
+    __tablename__ = "agent_runtime_events"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    agent_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    runtime_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="pause_route/resume_route/start/stop/maintenance")
+    before_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    after_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operator_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
