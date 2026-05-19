@@ -25,6 +25,9 @@ def _get_langfuse_client():
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         logger.warning("Langfuse is enabled but public/secret key is missing")
         return None
+    if not settings.langfuse_host:
+        logger.warning("Langfuse is enabled but host is missing")
+        return None
     if any(marker in str(settings.langfuse_public_key) for marker in ["replace-me", "your_"]) or any(
         marker in str(settings.langfuse_secret_key) for marker in ["replace-me", "your_"]
     ):
@@ -76,45 +79,130 @@ class LangfuseTracer:
         return str(uuid7())
 
     def get_trace_url(self, trace_id: str | None) -> str | None:
-        if not trace_id or self._client is None:
+        if not trace_id:
             return None
+        if self._client is None:
+            public_host = str(getattr(settings, "langfuse_public_host", "") or "").rstrip("/")
+            return f"{public_host}/project/traces/{trace_id}" if public_host else None
         getter = getattr(self._client, "get_trace_url", None)
         if not callable(getter):
-            return None
+            public_host = str(getattr(settings, "langfuse_public_host", "") or "").rstrip("/")
+            return f"{public_host}/project/traces/{trace_id}" if public_host else None
         try:
-            return str(getter(trace_id=trace_id))
+            return self._public_trace_url(str(getter(trace_id=trace_id)))
         except TypeError:
             try:
-                return str(getter(trace_id))
+                return self._public_trace_url(str(getter(trace_id)))
             except Exception:
                 return None
         except Exception:
             return None
 
+    @staticmethod
+    def _public_trace_url(trace_url: str | None) -> str | None:
+        if not trace_url:
+            return None
+        internal_host = str(settings.langfuse_host or "").rstrip("/")
+        public_host = str(getattr(settings, "langfuse_public_host", "") or "").rstrip("/")
+        if public_host and internal_host and trace_url.startswith(internal_host):
+            return public_host + trace_url[len(internal_host):]
+        return trace_url
+
+    def trace_exists(self, trace_id: str | None) -> bool | None:
+        if not trace_id or self._client is None:
+            return None
+
+        trace_api = getattr(getattr(self._client, "api", None), "trace", None)
+        getter = getattr(trace_api, "get", None)
+        if not callable(getter):
+            return None
+
+        try:
+            getter(str(trace_id), fields="id")
+            return True
+        except TypeError:
+            try:
+                getter(str(trace_id))
+                return True
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                return self._handle_trace_lookup_error(trace_id, exc)
+        except Exception as exc:  # pragma: no cover - defensive runtime guard
+            return self._handle_trace_lookup_error(trace_id, exc)
+
+    def _handle_trace_lookup_error(self, trace_id: str, exc: Exception) -> bool | None:
+        if self._is_not_found_error(exc):
+            return False
+        logger.warning("Langfuse trace lookup failed for %s: %s", trace_id, exc)
+        return None
+
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        if getattr(exc, "status_code", None) == 404:
+            return True
+
+        response = getattr(exc, "response", None)
+        if getattr(response, "status_code", None) == 404:
+            return True
+
+        detail_parts = [str(exc)]
+        for attr in ("body", "message"):
+            value = getattr(exc, attr, None)
+            if value:
+                detail_parts.append(str(value))
+
+        detail = " ".join(part for part in detail_parts if part).lower()
+        return "not found" in detail or "not_found" in detail or "404" in detail
+
     def start_trace(self, **kwargs):
         trace_id = str(kwargs.get("trace_id") or self.create_trace_id())
+        source_type = kwargs.get("source_type") or "inspection"
+        agent = kwargs.get("agent", "")
+        sub_route = kwargs.get("sub_route", "")
+        if agent and sub_route:
+            trace_name = f"{agent}.{sub_route}"
+        else:
+            trace_name = kwargs.get("name") or "chat.general_chat"
         payload = {
             "trace_id": trace_id,
             "task_id": kwargs.get("task_id"),
             "org_id": kwargs.get("org_id"),
             "model_key": kwargs.get("model_key"),
-            "name": kwargs.get("name") or "inspection_pipeline",
+            "name": trace_name,
             "started_at": kwargs.get("started_at") or datetime.utcnow().isoformat(),
             "trace_url": self.get_trace_url(trace_id),
+            "source_type": source_type,
+            "agent": agent,
+            "sub_route": sub_route,
         }
 
         if self._client is not None:
             trace_factory = getattr(self._client, "trace", None)
+            metadata = {
+                key: value
+                for key, value in {
+                    "task_id": payload["task_id"],
+                    "org_id": payload["org_id"],
+                    "model_key": payload["model_key"],
+                    "source_type": source_type,
+                    "verdict": kwargs.get("verdict"),
+                    "agent": agent,
+                    "sub_route": sub_route,
+                    "intent": kwargs.get("intent", ""),
+                    "prompt_version": kwargs.get("prompt_version", ""),
+                    "workflow_version": kwargs.get("workflow_version", ""),
+                    "session_id": kwargs.get("session_id", ""),
+                    "route_source": kwargs.get("route_source", ""),
+                    "route_confidence": kwargs.get("route_confidence", 0.0),
+                }.items()
+                if value is not None
+            }
+            tags = [t for t in [
+                f"source_type:{source_type}",
+                f"org_id:{payload['org_id']}" if payload.get("org_id") else None,
+                f"agent:{agent}" if agent else None,
+                f"sub_route:{sub_route}" if sub_route else None,
+            ] if t is not None]
             if callable(trace_factory):
-                metadata = {
-                    key: value
-                    for key, value in {
-                        "task_id": payload["task_id"],
-                        "org_id": payload["org_id"],
-                        "model_key": payload["model_key"],
-                    }.items()
-                    if value is not None
-                }
                 try:
                     trace_factory(
                         id=trace_id,
@@ -122,11 +210,69 @@ class LangfuseTracer:
                         session_id=str(payload["task_id"]) if payload["task_id"] else None,
                         user_id=str(payload["org_id"]) if payload["org_id"] else None,
                         metadata=metadata or None,
+                        tags=tags or None,
                         input=kwargs.get("input"),
                     )
+                except TypeError:
+                    try:
+                        trace_factory(
+                            id=trace_id,
+                            name=payload["name"],
+                            session_id=str(payload["task_id"]) if payload["task_id"] else None,
+                            user_id=str(payload["org_id"]) if payload["org_id"] else None,
+                            metadata=metadata or None,
+                            input=kwargs.get("input"),
+                        )
+                    except Exception as exc:  # pragma: no cover
+                        logger.warning("Langfuse trace creation failed: %s", exc)
                 except Exception as exc:  # pragma: no cover - defensive runtime guard
                     logger.warning("Langfuse trace creation failed: %s", exc)
+            else:
+                self._start_trace_event_v4(
+                    trace_id=trace_id,
+                    name=payload["name"],
+                    input=kwargs.get("input"),
+                    metadata=metadata or None,
+                )
         return payload
+
+    def _start_trace_event_v4(
+        self,
+        *,
+        trace_id: str,
+        name: str,
+        input: Any,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        starter = getattr(self._client, "start_as_current_observation", None)
+        if not callable(starter):
+            return
+
+        kwargs: dict[str, Any] = {
+            "name": name,
+            "as_type": "span",
+            "trace_context": {"trace_id": str(trace_id)},
+            "input": input,
+            "metadata": metadata,
+        }
+        try:
+            with starter(**kwargs):
+                pass
+            flusher = getattr(self._client, "flush", None)
+            if callable(flusher):
+                flusher()
+        except TypeError:
+            kwargs.pop("input", None)
+            try:
+                with starter(**kwargs):
+                    pass
+                flusher = getattr(self._client, "flush", None)
+                if callable(flusher):
+                    flusher()
+            except Exception as exc:  # pragma: no cover - defensive runtime guard
+                logger.warning("Langfuse trace event creation failed: %s", exc)
+        except Exception as exc:  # pragma: no cover - defensive runtime guard
+            logger.warning("Langfuse trace event creation failed: %s", exc)
 
     def observe(
         self,
@@ -189,6 +335,7 @@ class LangfuseTracer:
             "observation_id": kwargs.get("observation_id"),
             "name": kwargs.get("name") or "user_feedback",
             "value": float(kwargs.get("value") or 0.0),
+            "data_type": kwargs.get("data_type") or "NUMERIC",
             "comment": kwargs.get("comment"),
             "metadata": kwargs.get("metadata") or {},
             "scored_at": kwargs.get("scored_at") or datetime.utcnow().isoformat(),
@@ -219,7 +366,7 @@ class LangfuseTracer:
             kwargs["observation_id"] = str(observation_id)
 
         try:
-            kwargs.setdefault("data_type", "NUMERIC")
+            kwargs.setdefault("data_type", str(score_payload.get("data_type") or "NUMERIC"))
             creator(**kwargs)
             flusher = getattr(self._client, "flush", None)
             if callable(flusher):
@@ -230,7 +377,7 @@ class LangfuseTracer:
         except TypeError:
             kwargs.pop("metadata", None)
             kwargs.pop("comment", None)
-            kwargs.setdefault("data_type", "NUMERIC")
+            kwargs.setdefault("data_type", str(score_payload.get("data_type") or "NUMERIC"))
             creator(**kwargs)
             score_payload["synced"] = True
             score_payload["trace_url"] = score_payload.get("trace_url") or self.get_trace_url(str(trace_id))

@@ -90,8 +90,7 @@ function getAdminMenu(): MenuStructure {
         { title: "存储/基础设施", path: "/governance/admin/infrastructure", placeholder: true },
         { title: "GPU 调度", path: "/governance/admin/gpu" },
         { title: "检测标准", path: "/governance/admin/inspection-specs" },
-        { title: "质量报告", path: "/governance/quality/report" },
-        { title: "质量追踪", path: "/governance/quality/tracing" },
+        { title: "分析中心", path: "/governance/quality/analysis-center" },
         { title: "记忆治理", path: "/governance/memory", placeholder: true },
         { title: "登录日志", path: "/governance/admin/auth-logs", placeholder: true },
         { title: "审计日志", path: "/governance/admin/audit-logs", placeholder: true },
@@ -131,8 +130,7 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "用户行为分析", path: "/ops/analytics/behavior", placeholder: true },
     { title: "业务报表", path: "/ops/analytics/reports", placeholder: true },
     { title: "成本分析", path: "/ops/analytics/cost", placeholder: true },
-    { title: "质量报告", path: "/governance/quality/report" },
-    { title: "质量追踪", path: "/governance/quality/tracing" },
+    { title: "分析中心", path: "/governance/quality/analysis-center" },
     { title: "记忆治理", path: "/governance/memory", placeholder: true },
     { title: "个人设置", path: "/app/profile" },
   ];
@@ -150,10 +148,6 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     { title: "实验追踪", path: "/ops/experiments", placeholder: true },
     { title: "部署记录", path: "/ops/deployments", placeholder: true },
     { title: "模型配置", path: "/governance/admin/models" },
-    { title: "检测标准", path: "/governance/admin/inspection-specs" },
-    { title: "质量报告", path: "/governance/quality/report" },
-    { title: "质量追踪", path: "/governance/quality/tracing" },
-    { title: "记忆治理", path: "/governance/memory", placeholder: true },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

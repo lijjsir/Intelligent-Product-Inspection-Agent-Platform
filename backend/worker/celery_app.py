@@ -10,15 +10,24 @@ celery_app.conf.result_serializer = "json"
 celery_app.conf.imports = (
     "worker.tasks.alert_dispatch_task",
     "worker.tasks.health_check_task",
+    "worker.tasks.chat_trust_scoring_task",
     "worker.tasks.inspection_task",
     "worker.tasks.langfuse_sync_task",
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
 )
 
+celery_app.conf.beat_schedule = {
+    "model-health-check": {
+        "task": "worker.tasks.health_check_task.run_model_health_check",
+        "schedule": 300.0,
+    },
+}
+
 # Import task modules eagerly so the worker always registers named tasks.
 from worker.tasks import (  # noqa: E402,F401
     alert_dispatch_task,
+    chat_trust_scoring_task,
     health_check_task,
     inspection_task,
     langfuse_sync_task,

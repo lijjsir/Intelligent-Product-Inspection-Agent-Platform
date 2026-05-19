@@ -2,6 +2,7 @@ from app.models.base import Base
 from app.models.organization import Organization
 from app.models.user import User
 from app.models.task import InspectionTask
+from app.models.task_execution_event import TaskExecutionEvent
 from app.models.result import InspectionResult
 from app.models.stability import StabilityReport
 from app.models.alert import AlertEvent
@@ -22,6 +23,7 @@ from app.models.inspection_spec import (
 )
 from app.models.agent_ops import (
     AgentDefinition,
+    AgentRouteLog,
     AgentRuntimeInstance,
     DSPyOptimizationConfig,
     DSPyOptimizationRun,
@@ -30,8 +32,8 @@ from app.models.agent_ops import (
     PromptVersion,
     RagQueryLog,
 )
-from app.models.chat import ChatMessage, ChatSession
-from app.models.rag_space import RagSpace, RagSpaceFile
+from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
+from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.memory import (
     MemoryDependencyEdge,
     MemoryEvaluation,
@@ -46,6 +48,7 @@ __all__ = [
     "Organization",
     "User",
     "InspectionTask",
+    "TaskExecutionEvent",
     "InspectionResult",
     "StabilityReport",
     "AlertEvent",
@@ -74,8 +77,12 @@ __all__ = [
     "RagQueryLog",
     "ChatSession",
     "ChatMessage",
+    "ChatMessageScore",
     "RagSpace",
-    "RagSpaceFile",
+    "RagNode",
+    "RagDocument",
+    "RagDocumentChunk",
+    "RagIndexJob",
     "MemoryItem",
     "MemoryEvent",
     "MemoryDependencyEdge",

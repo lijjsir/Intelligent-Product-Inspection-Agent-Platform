@@ -4,9 +4,7 @@ from datetime import datetime
 import traceback
 from typing import Any
 
-from agent.graph.inspection_graph import InspectionGraph
-from agent.graph.state import InspectionState
-from agent.llm.client import LLMClient
+from agent.subgraphs.inspection_task import InspectionGraph, InspectionState
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
@@ -19,6 +17,7 @@ from app.repositories.chat_repo import ChatMessageRepository, ChatSessionReposit
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
+from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.file_storage_service import FileStorageService
@@ -57,7 +56,7 @@ def _build_runtime_state(
         "product_id": task.product_id,
         "spec_code": task.spec_code,
         "image_urls": _normalize_image_urls_for_runtime(task.image_urls or []),
-        "model_id": str(runtime.get("model_id") or LLMClient().model_id),
+        "model_id": str(runtime.get("model_id") or "unknown"),
         "model_config_id": runtime.get("model_config_id"),
         "model_base_url": runtime.get("base_url"),
         "model_api_key": runtime.get("api_key"),
@@ -313,13 +312,34 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         linked_chat_session_id = _linked_chat_session_id(task)
 
         await task_repo.update_status(org_id, task_id, "running")
+        running_metadata = dict(task.meta_data or {})
+        running_metadata["execution"] = {
+            **dict(running_metadata.get("execution") or {}),
+            "started_at": datetime.utcnow().isoformat(),
+        }
+        await task_repo.patch_metadata(org_id, task_id, running_metadata)
         await session.commit()
-        await stream_broker.publish(task_id, {"type": "status", "status": "running", "ts": datetime.utcnow().isoformat()})
 
         async def emit(event: dict) -> None:
             """为流水线事件补齐服务端时间戳并发布到任务事件流。"""
             event.setdefault("ts", datetime.utcnow().isoformat())
+            async with get_session() as event_session:
+                event_repo = TaskExecutionEventRepository(event_session)
+                await event_repo.create(
+                    {
+                        "org_id": org_id,
+                        "task_id": task_id,
+                        "event_type": str(event.get("type") or "event"),
+                        "stage": event.get("stage"),
+                        "status": event.get("status"),
+                        "message": event.get("message"),
+                        "payload_json": event,
+                    }
+                )
+                await event_session.commit()
             await stream_broker.publish(task_id, event)
+
+        await emit({"type": "status", "status": "running", "message": "任务开始执行"})
 
         try:
             runtime_models = await model_config_service.list_runtime_models()
@@ -338,6 +358,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 org_id=task.org_id,
                 model_key=runtime["model_id"],
                 name="inspection_pipeline",
+                source_type="inspection",
             )
             graph = InspectionGraph()
             while True:
@@ -417,7 +438,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "defects": state.get("defects") or [],
                 "citations": {"items": state.get("citations") or []},
                 "reasoning_chain": reasoning_chain,
-                "llm_model": state.get("model_id") or "volcengine",
+                "llm_model": state.get("model_id") or "unknown",
                 "prompt_version": "phase3-v1",
                 "tokens_used": 0,
                 "latency_ms": None,
@@ -486,6 +507,12 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 await emit({"type": "alert", "message": "stability risk alert triggered"})
 
             await task_repo.update_status(org_id, task_id, "done")
+            done_metadata = dict(task.meta_data or {})
+            done_metadata["execution"] = {
+                **dict(done_metadata.get("execution") or {}),
+                "finished_at": datetime.utcnow().isoformat(),
+            }
+            await task_repo.patch_metadata(org_id, task_id, done_metadata)
             await session.commit()
 
 
@@ -526,6 +553,13 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             return {"task_id": task_id, "status": "done"}
         except Exception as exc:
             await task_repo.update_status(org_id, task_id, "failed")
+            failed_metadata = dict(task.meta_data or {})
+            failed_metadata["execution"] = {
+                **dict(failed_metadata.get("execution") or {}),
+                "finished_at": datetime.utcnow().isoformat(),
+                "error": str(exc),
+            }
+            await task_repo.patch_metadata(org_id, task_id, failed_metadata)
             await session.commit()
             await emit(
                 {

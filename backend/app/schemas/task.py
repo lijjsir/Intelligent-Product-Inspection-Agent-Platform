@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +39,11 @@ class TaskResponse(BaseModel):
     image_urls: List[str]
     source_kind: str | None = None
     source_graph: str | None = None
+    has_result: bool = False
+    has_stability: bool = False
+    result_id: str | None = None
+    stability_id: str | None = None
+    execution: dict[str, Any] | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     
@@ -64,5 +69,18 @@ class TaskListItemResponse(BaseModel):
 class TaskStatusResponse(BaseModel):
     id: str
     status: str
+
+    model_config = {"from_attributes": True}
+
+
+class TaskExecutionEventResponse(BaseModel):
+    id: str
+    task_id: str
+    event_type: str
+    stage: str | None = None
+    status: str | None = None
+    message: str | None = None
+    payload_json: dict[str, Any] | None = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}

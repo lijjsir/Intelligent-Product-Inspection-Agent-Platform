@@ -21,6 +21,7 @@ let unsubscribe: (() => void) | null = null;
 function getStatusType(status: string) {
   const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
     pending: "info",
+    queued: "warning",
     running: "primary",
     done: "success",
     failed: "danger",
@@ -30,13 +31,20 @@ function getStatusType(status: string) {
 }
 
 function pushEvent(event: TaskStreamEvent) {
+  if (event.type === "ready" || event.message === "stream_connected") {
+    return;
+  }
   timeline.value.unshift(event);
   if (timeline.value.length > 100) {
     timeline.value = timeline.value.slice(0, 100);
   }
   if (event.status === "done" || event.status === "failed") {
     running.value = false;
-    void taskStore.fetchTask(taskId);
+    taskStore.fetchTask(taskId).catch((err) => {
+      console.error("Failed to refresh task after completion:", err);
+      // Retry once after 2s in case of transient failure
+      setTimeout(() => taskStore.fetchTask(taskId).catch(() => {}), 2000);
+    });
   }
 }
 
@@ -44,12 +52,16 @@ async function startPipeline() {
   try {
     running.value = true;
     const result = await taskStore.runTask(taskId);
+    if (taskStore.current) {
+      taskStore.current.status = result.status || "queued";
+    }
     pushEvent({
       type: "run",
       message: `任务已提交执行（${result.mode}）`,
-      status: "running",
+      status: result.status || "queued",
       ts: new Date().toISOString(),
     });
+    await taskStore.fetchTask(taskId);
   } catch (error: any) {
     running.value = false;
     ElMessage.error(error?.response?.data?.message || "启动任务失败");
@@ -81,6 +93,7 @@ async function confirmDeleteTask() {
 onMounted(async () => {
   try {
     await taskStore.fetchTask(taskId);
+    timeline.value = await taskStore.fetchTaskEvents(taskId);
     unsubscribe = taskStore.subscribeTaskStream(taskId, pushEvent);
   } catch (error) {
     console.error(error);
@@ -114,7 +127,7 @@ onUnmounted(() => {
           启动 AI 推演
         </el-button>
         <el-button
-          v-if="['done', 'failed', 'reviewing'].includes(taskStore.current.status)"
+          v-if="taskStore.current.has_result"
           type="success"
           plain
           @click="router.push(`/app/results/${taskStore.current.id}`)"
@@ -122,7 +135,7 @@ onUnmounted(() => {
           查看分析结果
         </el-button>
         <el-button
-          v-if="['done', 'failed', 'reviewing'].includes(taskStore.current.status)"
+          v-if="taskStore.current.has_stability"
           type="warning"
           plain
           @click="router.push(`/app/stability/${taskStore.current.id}`)"
@@ -153,7 +166,17 @@ onUnmounted(() => {
           <el-descriptions-item label="创建时间">
             {{ taskStore.current.created_at ? new Date(taskStore.current.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
           </el-descriptions-item>
+          <el-descriptions-item label="执行模式">{{ taskStore.current.execution?.mode || "-" }}</el-descriptions-item>
+          <el-descriptions-item label="执行 Job">{{ taskStore.current.execution?.job_id || "-" }}</el-descriptions-item>
         </el-descriptions>
+        <el-alert
+          v-if="taskStore.current.status === 'done' && !taskStore.current.has_result"
+          class="missing-result-alert"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="任务已完成，但结果记录缺失，请查看执行日志或重新生成报告。"
+        />
       </el-card>
 
       <el-card shadow="never" class="timeline-card">
@@ -213,6 +236,10 @@ onUnmounted(() => {
 
 .timeline-card {
   margin-top: 0;
+}
+
+.missing-result-alert {
+  margin-top: 14px;
 }
 
 .event-line {

@@ -22,6 +22,25 @@ export interface ChatAttachment {
   kind: "image" | "file" | string;
 }
 
+export type ChatAgentName = "chat" | "inspection_task";
+
+export type ChatSubRoute =
+  | "general_chat"
+  | "rag_qa"
+  | "quality_qa"
+  | "task_create"
+  | "inspection_execute";
+
+export type ChatUiSchema =
+  | "chat_text_v1"
+  | "rag_answer_v1"
+  | "quality_answer_v1"
+  | "task_action_v1"
+  | "task_result_v1"
+  | "error_v1";
+
+export type ChatMode = "auto" | "chat" | "inspection";
+
 export interface ChatTaskDraft {
   product_id?: string | null;
   spec_code?: string | null;
@@ -81,10 +100,25 @@ export interface ChatMessagePayload {
     passed?: boolean;
     hallucination_flags?: string[];
   };
+  trust_scoring?: {
+    status?: "scored" | "rule_only" | "reviewing" | "failed" | string;
+    trust_score?: number | null;
+    risk_level?: string | null;
+    hallucination_risk?: number | null;
+    overconfidence?: number | null;
+    has_citation?: boolean | null;
+    trace_url?: string | null;
+    review_model?: string | null;
+    error?: string | null;
+  } | null;
   result_card?: ChatResultCard | null;
   expectation_check?: ChatExpectationCheck | null;
   rag_summary?: ChatRagSummary | null;
   trace_id?: string | null;
+  agent?: ChatAgentName | string | null;
+  sub_route?: ChatSubRoute | string | null;
+  ui_schema?: ChatUiSchema | string | null;
+  trace_url?: string | null;
   workflow_version?: string;
   prompt_version?: string;
   retrieval_metrics?: Record<string, unknown>;
@@ -102,7 +136,7 @@ export interface ChatMessagePayload {
   materialized_task?: ChatCreatedTask | null;
   materialization_status?: "synced" | "failed" | string;
   materialization_error?: string | null;
-  source_graph?: string | null;
+  route_decision?: Record<string, unknown> | null;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   message_type?: string;

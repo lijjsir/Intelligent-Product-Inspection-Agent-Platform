@@ -98,11 +98,12 @@ class ChatAssistantPayload(BaseModel):
     answer: str
     citations: list[dict[str, Any]] = []
     quality: dict[str, Any] = {}
+    trust_scoring: dict[str, Any] | None = None
     result_card: dict[str, Any] | None = None
     expectation_check: dict[str, Any] | None = None
     rag_summary: dict[str, Any] | None = None
     trace_id: str | None = None
-    workflow_version: str = "quality_chat_v1"
+    workflow_version: str = "quality_chat_v2"
     prompt_version: str = "builtin-quality-chat-v1"
     intent: str | None = None
     intent_confidence: float | None = None

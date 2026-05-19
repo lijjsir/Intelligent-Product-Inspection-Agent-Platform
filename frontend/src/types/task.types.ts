@@ -1,6 +1,6 @@
 import type { PageParams } from "./common.types";
 
-export type TaskStatus = "pending" | "running" | "done" | "failed" | "reviewing";
+export type TaskStatus = "pending" | "queued" | "running" | "done" | "failed" | "reviewing" | "archived";
 
 export interface InspectionTask {
   id: string;
@@ -13,6 +13,11 @@ export interface InspectionTask {
   image_urls?: string[];
   source_kind?: string | null;
   source_graph?: string | null;
+  has_result?: boolean;
+  has_stability?: boolean;
+  result_id?: string | null;
+  stability_id?: string | null;
+  execution?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -34,6 +39,7 @@ export interface TaskListQuery extends PageParams {
 export interface TaskRunResponse {
   mode: "celery" | "local_background";
   job_id: string | null;
+  status?: TaskStatus;
 }
 
 export interface TaskStatusResponse {

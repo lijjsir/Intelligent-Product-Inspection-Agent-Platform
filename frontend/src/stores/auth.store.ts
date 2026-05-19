@@ -157,8 +157,11 @@ export const useAuthStore = defineStore("auth", () => {
     if (r === ROLE_USER || r === ROLE_EXPERT) {
       return "/app/chat";
     }
-    if (r === ROLE_ADMIN || r === ROLE_ALGORITHM_ENGINEER) {
-      return "/governance/quality/report";
+    if (r === ROLE_ADMIN) {
+      return "/governance/quality/analysis-center";
+    }
+    if (r === ROLE_ALGORITHM_ENGINEER) {
+      return "/governance/admin/models";
     }
     if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
       return "/ops/agents";

@@ -1,5 +1,5 @@
 from worker.celery_app import celery_app
-import asyncio
+from worker.asyncio_runner import run_celery_async
 
 from app.services.inspection_pipeline_service import run_inspection_pipeline
 
@@ -11,4 +11,4 @@ def run_inspection(task_payload: dict) -> dict:
     org_id = str(task_payload.get("org_id") or "")
     if not task_id or not org_id:
         raise ValueError("task_id and org_id are required")
-    return asyncio.run(run_inspection_pipeline(task_id=task_id, org_id=org_id))
+    return run_celery_async(run_inspection_pipeline(task_id=task_id, org_id=org_id))

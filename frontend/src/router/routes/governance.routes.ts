@@ -18,8 +18,9 @@ export const governanceRoutes = [
   { path: "admin/approvals", name: "governance-admin-approvals", component: Placeholder, meta: { title: "高风险审批", roles: [ROLE_ADMIN] } },
 
   // Quality section
-  { path: "quality/report", name: "governance-quality-report", component: () => import("@/views/quality/QualityReportView.vue"), meta: { title: "质量报告", roles: GOVERNANCE_ROLES } },
-  { path: "quality/tracing", name: "governance-quality-tracing", component: () => import("@/views/quality/QualityTracingView.vue"), meta: { title: "质量追踪", roles: GOVERNANCE_ROLES } },
+  { path: "quality/analysis-center", name: "governance-analysis-center", component: () => import("@/views/quality/AnalysisCenterView.vue"), meta: { title: "分析中心", roles: GOVERNANCE_ROLES } },
+  { path: "quality/report", name: "governance-quality-report", redirect: { name: "governance-analysis-center", query: { tab: "quality" } }, meta: { title: "质量报告", roles: GOVERNANCE_ROLES } },
+  { path: "quality/tracing", name: "governance-quality-tracing", redirect: { name: "governance-analysis-center", query: { tab: "tracing" } }, meta: { title: "质量追踪", roles: GOVERNANCE_ROLES } },
 
   // Memory governance
   { path: "memory", name: "governance-memory", component: Placeholder, meta: { title: "记忆治理", roles: GOVERNANCE_ROLES } },

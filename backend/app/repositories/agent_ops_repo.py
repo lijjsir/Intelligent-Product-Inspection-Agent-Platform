@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_ops import (
     AgentDefinition,
+    AgentRouteLog,
     AgentRuntimeInstance,
     DSPyOptimizationConfig,
     DSPyOptimizationRun,
@@ -465,6 +466,10 @@ class RagAnalysisRepository(AgentOpsRepository):
             RagQueryLog.citation_coverage,
             RagQueryLog.latency_ms,
             RagQueryLog.source_graph,
+            RagQueryLog.agent_name,
+            RagQueryLog.sub_route,
+            RagQueryLog.trace_id,
+            RagQueryLog.top_score,
             RagQueryLog.metadata_json,
             RagQueryLog.created_at,
         ).where(*filters).order_by(
@@ -484,6 +489,10 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "citation_coverage": float(row.citation_coverage or 0.0),
                 "latency_ms": row.latency_ms or 0,
                 "source_graph": str(row.source_graph or ""),
+                "agent_name": str(row.agent_name or ""),
+                "sub_route": str(row.sub_route or ""),
+                "trace_id": str(row.trace_id or "") or None,
+                "top_score": float(row.top_score or 0.0),
                 "metadata": dict(row.metadata_json or {}),
                 "created_at": row.created_at,
             })
@@ -614,3 +623,43 @@ class AgentRuntimeRepository(AgentOpsRepository):
             obj.last_stopped_at = datetime.utcnow()
         await self._session.flush()
         return obj
+
+
+class AgentRouteLogRepository(AgentOpsRepository):
+    """Repository for agent_route_logs — audit trail of routing decisions."""
+
+    async def create(self, data: dict) -> AgentRouteLog:
+        obj = AgentRouteLog(**data, org_id=self._org_id)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_by_session(
+        self, session_id: str, *, limit: int = 50
+    ) -> list[AgentRouteLog]:
+        result = await self._session.execute(
+            select(AgentRouteLog)
+            .where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.session_id == session_id,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+            .order_by(AgentRouteLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_by_agent(
+        self, selected_agent: str, *, limit: int = 50
+    ) -> list[AgentRouteLog]:
+        result = await self._session.execute(
+            select(AgentRouteLog)
+            .where(
+                AgentRouteLog.org_id == self._org_id,
+                AgentRouteLog.selected_agent == selected_agent,
+                AgentRouteLog.deleted_at.is_(None),
+            )
+            .order_by(AgentRouteLog.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())

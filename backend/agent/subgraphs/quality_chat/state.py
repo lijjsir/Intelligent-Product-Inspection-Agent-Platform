@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, TypedDict
 
 
-class QualityChatState(TypedDict, total=False):
+class ChatState(TypedDict, total=False):
     schema_version: str
     request_id: str
     workflow_run_id: str
@@ -36,4 +36,8 @@ class QualityChatState(TypedDict, total=False):
     prompt_version: str
     workflow_version: str
     runtime_error: dict[str, Any]
+    trust_scoring_payload: dict[str, Any] | None
     emit: Callable[[dict[str, Any]], Awaitable[None]]
+    agent: str  # "chat" | "inspection_task"
+    sub_route: str  # "general_chat" | "rag_qa" | "quality_qa" | "task_create" | "inspection_execute"
+

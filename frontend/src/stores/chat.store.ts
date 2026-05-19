@@ -16,6 +16,8 @@ import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
+const TRUST_POLL_INTERVAL_MS = 2500;
+const TRUST_POLL_TIMEOUT_MS = 35000;
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -96,6 +98,9 @@ export const useChatStore = defineStore("chat", () => {
   const pollTimer = ref<number | null>(null);
   const pollDeadline = ref<number>(0);
   const pollInFlight = ref(false);
+  const trustPollTimer = ref<number | null>(null);
+  const trustPollDeadline = ref<number>(0);
+  const trustPollInFlight = ref(false);
   const ragSpaces = ref<RagSpace[]>([]);
   const ragSpacesError = ref("");
   const pendingAttachments = ref<ChatAttachment[]>([]);
@@ -196,6 +201,15 @@ export const useChatStore = defineStore("chat", () => {
     pollInFlight.value = false;
   }
 
+  function stopTrustPolling() {
+    if (trustPollTimer.value != null) {
+      window.clearTimeout(trustPollTimer.value);
+      trustPollTimer.value = null;
+    }
+    trustPollDeadline.value = 0;
+    trustPollInFlight.value = false;
+  }
+
   function closeStreamConnection() {
     if (eventSource.value) {
       eventSource.value.close();
@@ -213,6 +227,7 @@ export const useChatStore = defineStore("chat", () => {
   function stopStreamForIdle() {
     streamPromise.value = null;
     stopPolling();
+    stopTrustPolling();
     closeStreamConnection();
     finishActiveSend();
   }
@@ -271,6 +286,44 @@ export const useChatStore = defineStore("chat", () => {
     pollTimer.value = window.setTimeout(tick, POLL_INTERVAL_MS);
   }
 
+  function hasReviewingTrustScore(messageId: string) {
+    const target = messages.value.find((item) => item.id === messageId);
+    return target?.payload?.trust_scoring?.status === "reviewing";
+  }
+
+  function startTrustScorePolling(sessionId: string, messageId: string) {
+    if (!messageId || trustPollTimer.value != null || !hasReviewingTrustScore(messageId)) return;
+    trustPollDeadline.value = Date.now() + TRUST_POLL_TIMEOUT_MS;
+
+    const tick = async () => {
+      if (!session.value || session.value.id !== sessionId || !hasReviewingTrustScore(messageId)) {
+        stopTrustPolling();
+        return;
+      }
+      if (Date.now() > trustPollDeadline.value) {
+        stopTrustPolling();
+        return;
+      }
+      if (trustPollInFlight.value) {
+        trustPollTimer.value = window.setTimeout(tick, TRUST_POLL_INTERVAL_MS);
+        return;
+      }
+      trustPollInFlight.value = true;
+      try {
+        const rows = await chatApi.listMessages(sessionId, 0, 500);
+        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        sortMessages();
+      } catch {
+        // Keep score refresh quiet; the answer is already visible.
+      } finally {
+        trustPollInFlight.value = false;
+      }
+      trustPollTimer.value = window.setTimeout(tick, TRUST_POLL_INTERVAL_MS);
+    };
+
+    trustPollTimer.value = window.setTimeout(tick, TRUST_POLL_INTERVAL_MS);
+  }
+
   async function fetchSessions() {
     const { data } = await chatApi.listSessions(200);
     sessions.value = data.data;
@@ -299,9 +352,8 @@ export const useChatStore = defineStore("chat", () => {
   async function createRagSpace(payload: { name: string; description?: string }, files: File[]) {
     const { data } = await ragSpaceApi.create(payload);
     const created = data.data;
-    const selectedFiles = files.slice(0, 1);
-    if (selectedFiles.length > 0) {
-      await ragSpaceApi.uploadDocuments(created.id, selectedFiles);
+    if (files.length > 0) {
+      await ragSpaceApi.uploadDocuments(created.id, files);
     }
     await fetchRagSpaces();
     return ragSpaces.value.find((item) => item.id === created.id) || created;
@@ -355,6 +407,10 @@ export const useChatStore = defineStore("chat", () => {
     const rows = await chatApi.listMessages(session.value.id, 0, 500);
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
+    const reviewing = messages.value.find((item) => item.payload?.trust_scoring?.status === "reviewing");
+    if (reviewing) {
+      startTrustScorePolling(session.value.id, reviewing.id);
+    }
     return session.value;
   }
 
@@ -363,6 +419,10 @@ export const useChatStore = defineStore("chat", () => {
     const rows = await chatApi.listMessages(session.value.id, 0, 500);
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
+    const reviewing = messages.value.find((item) => item.payload?.trust_scoring?.status === "reviewing");
+    if (reviewing) {
+      startTrustScorePolling(session.value.id, reviewing.id);
+    }
     await fetchSessions();
     return messages.value;
   }
@@ -405,12 +465,13 @@ export const useChatStore = defineStore("chat", () => {
 
     const clientSeqStart = allocateClientSeq(2);
     const selected = getSelectedRagSpaceSnapshot();
-    const ext = {
+    const ext: Record<string, unknown> = {
       ...(payload.ext || {}),
+      ui_mode: ((payload.ext as Record<string, unknown>)?.ui_mode as string) ?? "auto",
+      route_hints: (payload.ext as Record<string, unknown>)?.route_hints ?? undefined,
       attachments: [...pendingAttachments.value],
       selected_rag_space_id: selected?.id || undefined,
       selected_rag_space_name: selected?.name || undefined,
-      selected_rag_space_description: selected?.description || undefined,
       selected_rag_space: selected
         ? {
             id: selected.id,
@@ -418,6 +479,14 @@ export const useChatStore = defineStore("chat", () => {
             description: selected.description,
           }
         : undefined,
+      rag_scope: selected
+        ? {
+            enabled: true,
+            rag_space_id: selected.id,
+            scope_node_ids: [],
+            scope_mode: "space",
+          }
+        : { enabled: false, scope_node_ids: [] },
     };
     const tempUserId = `temp-user-${crypto.randomUUID()}`;
     const tempAssistantId = `temp-assistant-${crypto.randomUUID()}`;
@@ -592,6 +661,13 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     if (event.event === "message_final" || event.event === "run_failed") {
+      // Resolve new chat router payload fields only.
+      if (event.payload) {
+        basePayload.agent = event.payload.agent;
+        basePayload.sub_route = event.payload.sub_route;
+        basePayload.ui_schema = event.payload.ui_schema;
+        basePayload.trace_url = event.payload.trace_url || event.payload.trust_scoring?.trace_url;
+      }
       upsertMessage({
         id: event.message_id,
         session_id: event.session_id,
@@ -609,6 +685,9 @@ export const useChatStore = defineStore("chat", () => {
       sortMessages();
       if (event.message_id && activeAssistantMessageId.value === event.message_id) {
         finalizeStreaming();
+      }
+      if (event.message_id && basePayload.trust_scoring?.status === "reviewing") {
+        startTrustScorePolling(event.session_id, event.message_id);
       }
       return;
     }
@@ -693,4 +772,3 @@ export const useChatStore = defineStore("chat", () => {
     stopStream,
   };
 });
-

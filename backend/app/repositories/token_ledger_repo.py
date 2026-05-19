@@ -13,6 +13,11 @@ class TokenLedgerRepository:
     def __init__(self, session: AsyncSession):
         self._session = session
 
+    async def find_by_trace_id(self, trace_id: str) -> list[TokenUsageLedger]:
+        stmt = select(TokenUsageLedger).where(TokenUsageLedger.trace_id == trace_id)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def create(self, payload: dict) -> TokenUsageLedger:
         obj = TokenUsageLedger(**payload)
         self._session.add(obj)

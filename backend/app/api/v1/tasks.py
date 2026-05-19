@@ -3,8 +3,16 @@ from fastapi import APIRouter, Depends
 from app.api.v1.deps import get_db, get_current_user
 from app.core.exceptions import NotFoundError
 from app.core.permissions import require_role
+from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.schemas.common import PagedResponse, ResponseEnvelope
-from app.schemas.task import TaskCreate, TaskListItemResponse, TaskListQuery, TaskResponse, TaskStatusResponse
+from app.schemas.task import (
+    TaskCreate,
+    TaskExecutionEventResponse,
+    TaskListItemResponse,
+    TaskListQuery,
+    TaskResponse,
+    TaskStatusResponse,
+)
 from app.schemas.user import CurrentUser
 from app.services.task_service import TaskService
 
@@ -96,6 +104,28 @@ async def get_status(
         raise NotFoundError(f"Task {task_id} not found")
 
     return ResponseEnvelope(data=TaskStatusResponse(id=task.id, status=task.status))
+
+
+@router.get("/{task_id}/events", response_model=ResponseEnvelope[list[TaskExecutionEventResponse]])
+async def get_task_events(
+    task_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("task", current.role)
+    service = TaskService(
+        db,
+        current.org_id,
+        actor_user_id=current.user_id,
+        actor_role=current.role,
+    )
+    task = await service.get_task(task_id)
+    if not task:
+        raise NotFoundError(f"Task {task_id} not found")
+
+    repo = TaskExecutionEventRepository(db)
+    events = await repo.list_by_task(str(task.org_id), task_id)
+    return ResponseEnvelope(data=[TaskExecutionEventResponse.model_validate(item) for item in events])
 
 
 @router.delete("/{task_id}", response_model=ResponseEnvelope[dict])

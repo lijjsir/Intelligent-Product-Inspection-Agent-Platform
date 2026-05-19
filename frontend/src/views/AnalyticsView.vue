@@ -53,6 +53,7 @@ async function fetchAll() {
   await Promise.all([
     analyticsStore.fetchOverview(params).then(() => { loaded.value.overview = true; }),
     qualityStore.fetchReport(params).then(() => { loaded.value.quality = true; }),
+    qualityStore.fetchTraces({ source: "all", limit: 100 }).then(() => { loaded.value.tracing = true; }),
   ]);
 }
 

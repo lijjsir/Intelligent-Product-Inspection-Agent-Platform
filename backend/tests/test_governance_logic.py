@@ -11,14 +11,15 @@ from app.core.claims import (
     WORKSPACE_OPS,
     build_auth_claims,
 )
-from agent.graph.inspection_graph import InspectionGraph
-from agent.graph.nodes.vision import run_vision
+from agent.subgraphs.inspection_task import InspectionGraph
+from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.health_checker import ModelHealthChecker
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.model_selector import ModelSelector
 from agent.llm.pricing import ModelPricing
+from agent.rag.embedder import Embedder
 from agent.vision.heuristic_detector import build_variable_defects, normalize_defects
 from app.services.feedback_service import FeedbackService
 from app.services.inspection_standard_service import InspectionStandardService
@@ -62,9 +63,9 @@ def test_model_selector_prefers_healthy_then_priority():
     selector = ModelSelector()
     selected = selector.select(
         [
-            {"model_key": "slow", "is_active": True, "health_status": "degraded", "priority": 1},
-            {"model_key": "fast", "is_active": True, "health_status": "healthy", "priority": 10},
-            {"model_key": "best", "is_active": True, "health_status": "healthy", "priority": 2},
+            {"model_key": "slow", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "degraded", "priority": 1},
+            {"model_key": "fast", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "healthy", "priority": 10},
+            {"model_key": "best", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "is_active": True, "health_status": "healthy", "priority": 2},
         ]
     )
     assert selected["model_key"] == "best"
@@ -74,11 +75,53 @@ def test_model_selector_skips_embedding_models_for_inference():
     selector = ModelSelector()
     selected = selector.select(
         [
-            {"model_key": "embed-1", "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 1},
-            {"model_key": "chat-1", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 10},
+            {"model_key": "embed-1", "provider": "volcengine", "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "api_key": "secret", "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 1},
+            {"model_key": "chat-1", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 10},
         ]
     )
     assert selected["model_key"] == "chat-1"
+
+
+def test_model_selector_can_select_embedding_models_for_embedding_runtime():
+    selector = ModelSelector()
+    selected = selector.select(
+        [
+            {"model_key": "chat-1", "provider": "deepseek", "endpoint": "https://api.deepseek.com", "api_key": "secret", "model_type": "chat", "is_active": True, "health_status": "healthy", "priority": 1},
+            {"model_key": "embed-1", "provider": "local_openai", "endpoint": "http://localhost:11434/v1", "api_key": None, "model_type": "embedding", "is_active": True, "health_status": "healthy", "priority": 10},
+        ],
+        model_types={"embedding"},
+    )
+    assert selected["model_key"] == "embed-1"
+
+
+def test_model_selector_skips_remote_models_missing_api_key():
+    selector = ModelSelector()
+    selected = selector.select(
+        [
+            {
+                "model_key": "embed-seed",
+                "provider": "volcengine",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+                "api_key": None,
+            },
+            {
+                "model_key": "embed-live",
+                "provider": "volcengine",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 10,
+                "api_key": "secret",
+                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+            },
+        ],
+        model_types={"embedding"},
+    )
+    assert selected["model_key"] == "embed-live"
+
 
 @pytest.mark.asyncio
 async def test_llm_gateway_returns_runtime_payload():
@@ -112,6 +155,71 @@ async def test_llm_gateway_returns_runtime_payload():
         "rpm_limit": None,
         "failover_depth": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_returns_embedding_runtime_payload():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime(
+        [
+            {
+                "id": "chat-cfg",
+                "provider": "deepseek",
+                "model_key": "deepseek-v4-flash",
+                "endpoint": "https://api.deepseek.com",
+                "api_key": "chat-key",
+                "model_type": "chat",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            },
+            {
+                "id": "embed-cfg",
+                "provider": "local_openai",
+                "model_key": "bge-m3",
+                "endpoint": "http://localhost:11434/v1",
+                "api_key": None,
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 20,
+            },
+        ],
+        model_types={"embedding"},
+    )
+
+    assert runtime["model_config_id"] == "embed-cfg"
+    assert runtime["model_id"] == "bge-m3"
+    assert runtime["provider"] == "local_openai"
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_returns_none_when_no_models_available():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime([])
+    assert runtime is None
+
+
+@pytest.mark.asyncio
+async def test_llm_gateway_returns_none_when_all_models_excluded():
+    RateLimiter.reset()
+    runtime = await LLMGateway().select_runtime(
+        [
+            {
+                "id": "cfg-1",
+                "provider": "volcengine",
+                "model_key": "chat-1",
+                "endpoint": "https://example.com/api/v3",
+                "api_key": "secret",
+                "model_type": "chat",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            }
+        ],
+        excluded_runtime_ids={"cfg-1"},
+    )
+    assert runtime is None
 
 
 @pytest.mark.asyncio
@@ -173,6 +281,9 @@ async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
         async def get(self, path, headers=None):
             return FakeResponse(401, "unauthorized")
 
+        async def post(self, path, json=None, headers=None):
+            return FakeResponse(401, "unauthorized")
+
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
     checked = await ModelHealthChecker().check(
         [
@@ -186,7 +297,204 @@ async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
     )
 
     assert checked[0]["health_status"] == "unhealthy"
-    assert checked[0]["health_message"] == "/models auth failed: 401"
+    assert checked[0]["health_message"] == "/chat/completions auth failed: 401"
+
+
+@pytest.mark.asyncio
+async def test_health_checker_probes_embeddings_for_embedding_models(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            calls.append({"method": "GET", "path": path})
+            return FakeResponse(404, "models listing disabled")
+
+        async def post(self, path, json=None, headers=None):
+            calls.append({"method": "POST", "path": path, "json": json})
+            if path == "/embeddings":
+                return FakeResponse(200, "ok")
+            return FakeResponse(400, "wrong probe")
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "embed-cfg",
+                "endpoint": "http://localhost:11434/v1",
+                "model_key": "bge-m3",
+                "api_key": None,
+                "model_type": "embedding",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert calls[-1]["path"] == "/embeddings"
+
+
+@pytest.mark.asyncio
+async def test_health_checker_still_probes_embeddings_when_models_endpoint_is_available(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str = ""):
+            self.status_code = status_code
+            self.text = text
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            calls.append({"method": "GET", "path": path})
+            return FakeResponse(200, "ok")
+
+        async def post(self, path, json=None, headers=None):
+            calls.append({"method": "POST", "path": path, "json": json})
+            if path == "/embeddings":
+                return FakeResponse(200, "ok")
+            return FakeResponse(400, "wrong probe")
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "embed-cfg",
+                "endpoint": "https://example.com/v1",
+                "model_key": "embedding-model",
+                "api_key": "secret",
+                "model_type": "embedding",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert [call["path"] for call in calls] == ["/models", "/embeddings"]
+
+
+@pytest.mark.asyncio
+async def test_health_checker_uses_sdk_probe_for_volcengine_embedding_models(monkeypatch):
+    created_clients: list[dict] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            created_clients.append(kwargs)
+
+        async def embed(self, text, **kwargs):
+            assert text == "ping"
+            return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("agent.llm.health_checker.LLMClient", FakeLLMClient)
+
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "embed-cfg",
+                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+                "model_key": "doubao-embedding-vision-251215",
+                "api_key": "secret",
+                "provider": "volcengine",
+                "model_type": "embedding",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert checked[0]["health_message"] == "embedding runtime ok"
+    assert created_clients == [
+        {
+            "api_key": "secret",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model_id": "doubao-embedding-vision-251215",
+            "embed_model": "doubao-embedding-vision-251215",
+            "provider": "volcengine",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_embedder_uses_embedding_runtime_from_model_config(monkeypatch):
+    created_clients: list[dict] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            created_clients.append(kwargs)
+
+        async def embed(self, text, **kwargs):
+            return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("agent.rag.embedder.LLMClient", FakeLLMClient)
+
+    embedder = Embedder(
+        org_id="org-1",
+        runtime_models=[
+            {
+                "id": "chat-cfg",
+                "provider": "deepseek",
+                "model_key": "deepseek-v4-flash",
+                "endpoint": "https://api.deepseek.com",
+                "api_key": "chat-key",
+                "model_type": "chat",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            },
+            {
+                "id": "embed-cfg",
+                "provider": "local_openai",
+                "model_key": "bge-m3",
+                "endpoint": "http://localhost:11434/v1",
+                "api_key": None,
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 2,
+            },
+        ],
+    )
+
+    assert await embedder.embed("hello") == [0.1, 0.2, 0.3]
+    assert created_clients == [
+        {
+            "api_key": None,
+            "base_url": "http://localhost:11434/v1",
+            "model_id": "bge-m3",
+            "embed_model": "bge-m3",
+            "trace_id": None,
+            "task_id": None,
+            "org_id": "org-1",
+            "provider": "local_openai",
+            "input_price_per_million": None,
+            "output_price_per_million": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_embedder_reports_missing_model_config_page_embedding_model():
+    embedder = Embedder(org_id="org-1", runtime_models=[])
+    with pytest.raises(RuntimeError, match="embedding model.*model config page"):
+        await embedder.embed("hello")
 
 
 def test_quality_report_result_trend_handles_empty_citations():
@@ -247,10 +555,14 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
 
     assert traces == [
         {
+            "source_type": "inspection",
             "trace_id": "trace-1",
             "trace_url": "https://langfuse.local/trace/trace-1",
             "result_id": "result-1",
             "task_id": "task-1",
+            "assistant_message_id": None,
+            "session_id": None,
+            "observation_id": None,
             "verdict": "fail",
             "model_key": "model-a",
             "total_tokens": 150,
@@ -258,6 +570,14 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
             "thumbs_down_count": 1,
             "last_score_value": 1.0,
             "last_score_at": "2026-03-24T11:00:00",
+            "trust_score": 1.0,
+            "hallucination_risk": None,
+            "overconfidence": None,
+            "has_citation": None,
+            "score_status": None,
+            "review_model": None,
+            "langfuse_status": "synced",
+            "langfuse_synced": True,
             "created_at": datetime(2026, 3, 24, 10, 0, 0),
         }
     ]
@@ -485,6 +805,43 @@ def test_langfuse_tracer_starts_trace_and_syncs_score(monkeypatch):
     assert synced["synced"] is True
     assert fake.score_calls[0]["trace_id"] == "trace-123"
     assert fake.flushed is True
+
+
+def test_langfuse_tracer_trace_exists_uses_trace_api(monkeypatch):
+    class FakeTraceApi:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, trace_id, fields=None):
+            self.calls.append({"trace_id": trace_id, "fields": fields})
+            return {"id": trace_id}
+
+    fake_trace_api = FakeTraceApi()
+    fake = SimpleNamespace(api=SimpleNamespace(trace=fake_trace_api))
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    assert LangfuseTracer().trace_exists("trace-123") is True
+    assert fake_trace_api.calls == [{"trace_id": "trace-123", "fields": "id"}]
+
+
+def test_langfuse_tracer_trace_exists_returns_false_for_not_found(monkeypatch):
+    class NotFoundError(Exception):
+        status_code = 404
+
+    class FakeTraceApi:
+        def get(self, trace_id, fields=None):
+            raise NotFoundError("trace not found")
+
+    fake = SimpleNamespace(api=SimpleNamespace(trace=FakeTraceApi()))
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    assert LangfuseTracer().trace_exists("deleted-trace") is False
+
+
+def test_langfuse_tracer_trace_exists_returns_none_without_client(monkeypatch):
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: None)
+
+    assert LangfuseTracer().trace_exists("trace-123") is None
 
 
 @pytest.mark.asyncio
@@ -725,7 +1082,7 @@ async def test_run_vision_records_runtime_error_on_invalid_payload(monkeypatch):
         async def chat(self, *args, **kwargs):
             return {"text": "not a structured defect payload"}
 
-    monkeypatch.setattr("agent.graph.nodes.vision.LLMClient", FakeClient)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient", FakeClient)
 
     state = await run_vision(
         {
@@ -773,13 +1130,216 @@ async def test_inspection_graph_stops_after_runtime_error(monkeypatch):
         calls.append("finalizer")
         return state
 
-    monkeypatch.setattr("agent.graph.inspection_graph.plan", fake_plan)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_vision", fake_vision)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_knowledge", fake_knowledge)
-    monkeypatch.setattr("agent.graph.inspection_graph.run_reasoning", fake_reasoning)
-    monkeypatch.setattr("agent.graph.inspection_graph.finalize", fake_finalize)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", fake_plan)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", fake_vision)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", fake_knowledge)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", fake_reasoning)
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", fake_finalize)
 
     state = await InspectionGraph().run({"timeline": [], "runtime_errors": []})
 
     assert state["runtime_errors"][0]["message"] == "boom"
     assert calls == ["planner", "vision"]
+
+
+def test_langfuse_trace_to_item_parses_inspection_trace():
+    trace = {
+        "id": "trace-1",
+        "timestamp": "2026-05-16T10:00:00Z",
+        "sessionId": "task-1",
+        "metadata": {
+            "source_type": "inspection",
+            "verdict": "fail",
+            "model_key": "model-a",
+            "task_id": "task-1",
+            "org_id": "org-1",
+        },
+        "scores": [
+            {"name": "trust_score", "value": 0.85, "timestamp": "2026-05-16T10:01:00Z"},
+            {"name": "hallucination_risk", "value": 0.1, "timestamp": "2026-05-16T10:01:00Z"},
+            {"name": "overconfidence", "value": 0.15, "timestamp": "2026-05-16T10:01:00Z"},
+            {"name": "user_feedback", "value": 0.8, "timestamp": "2026-05-16T10:02:00Z"},
+        ],
+        "observations": [
+            {"id": "obs-1", "type": "GENERATION", "model": "model-a", "usage": {"total": 150}}
+        ],
+    }
+    item = QualityReportService._langfuse_trace_to_item(trace, api_client=None)
+    assert item is not None
+    assert item["trace_id"] == "trace-1"
+    assert item["source_type"] == "inspection"
+    assert item["verdict"] == "fail"
+    assert item["model_key"] == "model-a"
+    assert item["trust_score"] == 0.85
+    assert item["hallucination_risk"] == 0.1
+    assert item["overconfidence"] == 0.15
+    assert item["total_tokens"] == 150
+    assert item["feedback_count"] == 1
+    assert item["langfuse_status"] == "synced"
+    assert item["langfuse_synced"] is True
+
+
+def test_langfuse_trace_to_item_parses_chat_trace():
+    trace = {
+        "id": "trace-2",
+        "timestamp": "2026-05-16T11:00:00Z",
+        "sessionId": "session-1",
+        "metadata": {"source_type": "chat", "model_key": "quality_chat_v2"},
+        "scores": [
+            {
+                "name": "trust_score",
+                "value": 0.61,
+                "timestamp": "2026-05-16T11:01:00Z",
+                "comment": '{"review_model":"doubao-seed-2-0-mini-260428"}',
+            },
+            {"name": "has_citation", "value": 1, "timestamp": "2026-05-16T11:01:00Z"},
+        ],
+        "observations": [
+            {"id": "obs-1", "type": "GENERATION", "model": "doubao-seed-2-0-mini-260428", "usage": {"total": 88}}
+        ],
+    }
+    item = QualityReportService._langfuse_trace_to_item(trace, api_client=None)
+    assert item is not None
+    assert item["source_type"] == "chat"
+    assert item["model_key"] == "doubao-seed-2-0-mini-260428"
+    assert item["has_citation"] is True
+    assert item["total_tokens"] == 88
+    assert item["trust_score"] == 0.61
+    assert item["review_model"] == "doubao-seed-2-0-mini-260428"
+
+
+def test_langfuse_trace_to_item_accepts_observation_ids_from_list_api():
+    trace = {
+        "id": "trace-ids",
+        "timestamp": "2026-05-16T11:30:00Z",
+        "metadata": {"source_type": "chat", "model_key": "chat-model-c"},
+        "scores": [],
+        "observations": ["obs-id-1"],
+    }
+
+    item = QualityReportService._langfuse_trace_to_item(trace, api_client=None)
+
+    assert item is not None
+    assert item["trace_id"] == "trace-ids"
+    assert item["observation_id"] == "obs-id-1"
+    assert item["total_tokens"] == 0
+
+
+def test_langfuse_trace_to_item_accepts_score_ids_from_list_api():
+    trace = {
+        "id": "trace-score-ids",
+        "timestamp": "2026-05-16T11:40:00Z",
+        "metadata": {"source_type": "chat", "model_key": "chat-model-d"},
+        "scores": ["score-id-1"],
+        "observations": ["obs-id-1"],
+    }
+
+    item = QualityReportService._langfuse_trace_to_item(trace, api_client=None)
+
+    assert item is not None
+    assert item["trace_id"] == "trace-score-ids"
+    assert item["observation_id"] == "obs-id-1"
+    assert item["trust_score"] is None
+    assert item["score_status"] is None
+
+
+def test_start_trace_includes_source_type_and_tags(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.trace_calls = []
+
+        def create_trace_id(self, seed=None):
+            return "trace-t1"
+
+        def get_trace_url(self, trace_id=None):
+            return f"https://langfuse.local/trace/{trace_id}"
+
+        def trace(self, **kwargs):
+            self.trace_calls.append(kwargs)
+
+    fake = FakeClient()
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    tracer = LangfuseTracer()
+    trace = tracer.start_trace(
+        task_id="task-1", org_id="org-1", model_key="model-a",
+        source_type="inspection", verdict="pass",
+    )
+    assert trace["source_type"] == "inspection"
+    call = fake.trace_calls[0]
+    assert call["metadata"]["source_type"] == "inspection"
+    assert call["metadata"]["verdict"] == "pass"
+    assert "source_type:inspection" in call["tags"]
+    assert "org_id:org-1" in call["tags"]
+
+
+def test_start_trace_creates_v4_observation_when_trace_factory_missing(monkeypatch):
+    class FakeObservation:
+        def update(self, **kwargs):
+            self.updated = kwargs
+
+    class FakeObservationContext:
+        def __init__(self, owner, kwargs):
+            self.owner = owner
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            self.owner.observation_calls.append(self.kwargs)
+            return FakeObservation()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClient:
+        def __init__(self):
+            self.observation_calls = []
+            self.flushed = False
+
+        def create_trace_id(self, seed=None):
+            return "trace-v4"
+
+        def get_trace_url(self, trace_id=None):
+            return f"https://langfuse.local/trace/{trace_id}"
+
+        def start_as_current_observation(self, **kwargs):
+            return FakeObservationContext(self, kwargs)
+
+        def flush(self):
+            self.flushed = True
+
+    fake = FakeClient()
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    trace = LangfuseTracer().start_trace(
+        task_id="session-1",
+        org_id="org-1",
+        model_key="quality_chat_v2",
+        name="quality_chat_v2",
+        source_type="chat",
+        input={"query": "hello"},
+    )
+
+    assert trace["trace_id"] == "trace-v4"
+    assert fake.flushed is True
+    assert fake.observation_calls == [
+        {
+            "name": "quality_chat_v2",
+            "as_type": "span",
+            "trace_context": {"trace_id": "trace-v4"},
+            "input": {"query": "hello"},
+            "metadata": {
+                "task_id": "session-1",
+                "org_id": "org-1",
+                "model_key": "quality_chat_v2",
+                "source_type": "chat",
+                "agent": "",
+                "sub_route": "",
+                "intent": "",
+                "prompt_version": "",
+                "workflow_version": "",
+                "session_id": "",
+                "route_source": "",
+                "route_confidence": 0.0,
+            },
+        }
+    ]
