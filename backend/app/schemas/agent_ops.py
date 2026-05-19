@@ -21,6 +21,11 @@ class AgentDefinitionBase(BaseModel):
     supports_start_stop: bool = Field(default=True, description="Whether runtime supports start/stop")
     graph_version: str = Field(default="v1", max_length=32, description="Graph version")
     is_active: bool = Field(default=True, description="Whether agent is active")
+    lifecycle_status: str = Field(default="active", max_length=32, description="active/partial/planned/legacy/deprecated")
+    group_key: str = Field(default="core", max_length=32, description="core/memory/planned/legacy")
+    route_enabled: bool = Field(default=True, description="是否参与路由")
+    supports_route_toggle: bool = Field(default=True, description="是否允许暂停恢复路由")
+    customer_visible_description: Optional[str] = Field(default=None, description="给客户看的能力说明")
 
     @field_validator(
         "description",
@@ -317,6 +322,8 @@ class AgentRuntimeOverviewResponse(BaseModel):
     avg_latency_ms: float = 0.0
     queued_tasks: int = 0
     completed_today: int = 0
+    success_rate: float = 0.0
+    recent_errors: int = 0
 
 
 class AgentRuntimeInstanceResponse(BaseModel):
@@ -333,6 +340,14 @@ class AgentRuntimeInstanceResponse(BaseModel):
     last_executed_at: Optional[datetime] = None
     last_started_at: Optional[datetime] = None
     last_stopped_at: Optional[datetime] = None
+    runtime_status: str = "stopped"
+    lifecycle_status: Optional[str] = None
+    group_key: Optional[str] = None
+    route_enabled: bool = True
+    supports_route_toggle: bool = True
+    customer_visible_description: Optional[str] = None
+    last_error_message: Optional[str] = None
+    maintenance_reason: Optional[str] = None
 
 
 class TopologyNode(BaseModel):
@@ -400,3 +415,29 @@ class RoutingStrategyOverviewResponse(BaseModel):
     decision_cards: list[RoutingDecisionCard] = Field(default_factory=list)
     registered_route_count: int = 0
     registered_intents: list[str] = Field(default_factory=list)
+
+
+class AgentRuntimeEventResponse(BaseModel):
+    id: str
+    org_id: str
+    agent_id: str
+    runtime_key: str
+    event_type: str
+    before_status: Optional[str] = None
+    after_status: Optional[str] = None
+    reason: Optional[str] = None
+    operator_id: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AgentDetailResponse(AgentDefinitionResponse):
+    """Agent 详情 — 包含绑定资源和操作记录"""
+    bound_prompt_version: Optional[PromptVersionResponse] = None
+    bound_routes: list[IntentRouteResponse] = Field(default_factory=list)
+    runtime_events: list[AgentRuntimeEventResponse] = Field(default_factory=list)
+
+
+class PauseRouteRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500, description="暂停原因")
