@@ -2,6 +2,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.repositories.analytics_repo import AnalyticsRepository
+from app.services.langfuse_api_client import LangfuseApiClient
+from app.services.quality_report_service import QualityReportService
 
 
 class AnalyticsService:
@@ -11,7 +13,22 @@ class AnalyticsService:
         self._repo = AnalyticsRepository(session)
 
     async def overview(self, start_date=None, end_date=None) -> dict:
-        return await self._repo.get_overview(self._org_id, start_date=start_date, end_date=end_date)
+        overview = await self._repo.get_overview(self._org_id, start_date=start_date, end_date=end_date)
+        api_client = LangfuseApiClient()
+        if not api_client.enabled:
+            return overview
+
+        quality_service = QualityReportService(self._session, self._org_id)
+        traces, error = await quality_service._fetch_traces_from_langfuse(
+            source="all",
+            limit=1000,
+            api_client=api_client,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        quality = QualityReportService.build_overview_quality_from_trace_items([] if error else traces)
+        overview.update(quality)
+        return overview
 
     async def product_line_drilldown(self, product_line: str, start_date=None, end_date=None, page: int = 1, size: int = 8) -> dict:
         return await self._repo.get_product_line_drilldown(

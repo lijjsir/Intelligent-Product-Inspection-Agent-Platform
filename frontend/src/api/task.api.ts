@@ -14,6 +14,10 @@ export const taskApi = {
     return http.get<InspectionTask>(`/v1/tasks/${id}`);
   },
 
+  events(id: string) {
+    return http.get<TaskStreamEvent[]>(`/v1/tasks/${id}/events`);
+  },
+
   create(payload: TaskCreate) {
     return http.post<InspectionTask>("/v1/tasks", payload);
   },

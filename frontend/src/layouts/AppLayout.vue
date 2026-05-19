@@ -1,7 +1,7 @@
 <template>
-  <div class="flex min-h-screen bg-zinc-50">
+  <div class="flex h-screen overflow-hidden bg-zinc-50">
     <!-- Sidebar -->
-    <aside class="flex flex-col w-52 bg-white border-r border-zinc-200">
+    <aside class="flex h-screen w-52 shrink-0 flex-col border-r border-zinc-200 bg-white">
       <div class="px-4 py-4">
         <div class="text-lg font-bold tracking-wider text-zinc-900">PIAP</div>
         <div class="text-2xs text-zinc-400 tracking-widest uppercase mt-0.5">智能检测平台</div>
@@ -60,7 +60,7 @@
     </aside>
 
     <!-- Main content -->
-    <div class="flex flex-col flex-1 min-w-0">
+    <div class="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
       <!-- Topbar -->
       <header class="h-12 flex items-center justify-between px-5 bg-white border-b border-zinc-200 shrink-0 gap-4">
         <div class="flex items-center gap-4 min-w-0 flex-wrap">
@@ -99,7 +99,7 @@
       </header>
 
       <!-- Page content -->
-      <main class="flex-1 overflow-auto p-5">
+      <main class="flex-1 overflow-y-auto overflow-x-hidden p-4">
         <RouterView />
       </main>
     </div>

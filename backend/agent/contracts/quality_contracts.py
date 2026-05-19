@@ -54,10 +54,21 @@ class RouteSignals(BaseModel):
 
 
 class RouteDecision(BaseModel):
-    mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "legacy_only"
-    selected_subgraph: Literal["quality_judgement"] = "quality_judgement"
-    fallback_subgraph: Literal["quality_judgement"] = "quality_judgement"
+    mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "router_enabled"
+    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    sub_route: Literal[
+        "general_chat",
+        "rag_qa",
+        "quality_qa",
+        "task_create",
+        "inspection_execute",
+    ] = "general_chat"
     reason: str = ""
+    intent: str = ""
+    confidence: float = 1.0
+    requires_confirmation: bool = False
+    route_source: str = "rule"
+    fallback_agent: str | None = None
     signals: RouteSignals = Field(default_factory=RouteSignals)
 
 
@@ -122,6 +133,10 @@ class RagQueryLog(BaseModel):
     citation_coverage: float = 0.0
     latency_ms: float = 0.0
     source_graph: str = "quality_judgement"
+    agent_name: str | None = None
+    sub_route: str | None = None
+    trace_id: str | None = None
+    top_score: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

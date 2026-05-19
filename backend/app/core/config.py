@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,7 +10,7 @@ class Settings(BaseSettings):
     jwt_public_key: str = ""
     jwt_issuer: str = "piap"
     jwt_audience: str = "piap-users"
-    jwt_exp_minutes: int = 15
+    jwt_exp_minutes: int = 120
     jwt_refresh_days: int = 7
 
     db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     s3_access_key: str = "piap"
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
+    object_storage_backend: str = "local"
+    rag_storage_bucket: str = "rag-docs"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
 
@@ -36,6 +39,14 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_id: str = "deepseek-v4-flash"
+    local_openai_api_key: str = ""
+    local_openai_base_url: str = "http://127.0.0.1:11434/v1"
+    local_openai_docker_base_url: str = "http://host.docker.internal:11434/v1"
+    local_openai_model_id: str = "qwen2.5:7b-instruct"
+    trust_review_provider: str = "local_openai"
+    trust_review_model: str = "qwen2.5:7b-instruct"
+    trust_review_timeout_sec: int = 30
+    trust_scoring_enabled: bool = True
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20
@@ -45,6 +56,7 @@ class Settings(BaseSettings):
     qdrant_collection: str = "piap_standard_book"
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
+    enable_legacy_agent_fallback: bool = False
     cors_allowed_origins: list[str] = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",
@@ -54,11 +66,45 @@ class Settings(BaseSettings):
     cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
     langfuse_enabled: bool = False
-    langfuse_public_key: str = "pk-lf-810db81f-0a13-43f8-9d4e-66266d58f85f"
-    langfuse_secret_key: str = "sk-lf-0009d713-228b-4aec-8abc-739fa1a8605f"
-    langfuse_host: str = "http://127.0.0.1:3000"
-    langfuse_environment: str = "local"
-    langfuse_release: str = "backend-env"
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+    langfuse_public_host: str | None = None
+    langfuse_project_id: str | None = None
+    langfuse_environment: str | None = None
+    langfuse_release: str | None = None
+
+    langfuse_init_org_id: str | None = None
+    langfuse_init_org_name: str | None = None
+    langfuse_init_project_id: str | None = None
+    langfuse_init_project_name: str | None = None
+    langfuse_init_user_email: str | None = None
+    langfuse_init_user_name: str | None = None
+    langfuse_init_user_password: str | None = None
+
+    @field_validator(
+        "langfuse_public_key",
+        "langfuse_secret_key",
+        "langfuse_host",
+        "langfuse_public_host",
+        "langfuse_project_id",
+        "langfuse_environment",
+        "langfuse_release",
+        "langfuse_init_org_id",
+        "langfuse_init_org_name",
+        "langfuse_init_project_id",
+        "langfuse_init_project_name",
+        "langfuse_init_user_email",
+        "langfuse_init_user_name",
+        "langfuse_init_user_password",
+        mode="before",
+    )
+    @classmethod
+    def _blank_langfuse_values_to_none(cls, value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text if text and text.lower() not in {"none", "null", "undefined"} else None
 
 
 settings = Settings()

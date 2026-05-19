@@ -19,16 +19,45 @@ frontend/dist/
 frontend/node_modules/.vite/
 frontend/logs/
 
+# Local env / secrets
+.env
+*.env.local
+backend/.env
+
 # Test artifacts
 .coverage
 coverage/
 htmlcov/
 .worktrees/
 
-# Runtime artifacts
+# Runtime/generated local data
+runtime/
+runtime_*/
+runtime-*/
+runtime_logs/
+runtime_uploads/
 backend/logs/
+backend/runtime/
+backend/runtime_*/
+backend/runtime-*/
+backend/runtime_logs/
 backend/runtime_uploads/
 
+# Local agent/tooling state
+.agents/
+.trae/
+.claude/
+.superpowers/
+skills-lock.json
+
+# Logs
+*.log
+*.err.log
+*.out.log
+logs/
+
+# Codex
+.codex/
 # OS / editor
 .DS_Store
 Thumbs.db

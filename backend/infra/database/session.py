@@ -13,6 +13,16 @@ def create_session() -> AsyncSession:
     return _async_session_factory()
 
 
+async def reset_async_engine_pool(*, close: bool = True) -> None:
+    """Reset pooled async DB connections.
+
+    Celery tasks use asyncio.run per invocation. aiomysql connections are bound to
+    the event loop where they were created, so worker tasks must not reuse pooled
+    connections from a previous loop.
+    """
+    await _engine.dispose(close=close)
+
+
 @asynccontextmanager
 async def get_session() -> AsyncSession:
     session: AsyncSession = _async_session_factory()

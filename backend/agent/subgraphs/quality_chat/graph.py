@@ -1,5 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from time import perf_counter
 from typing import Any
@@ -7,20 +9,29 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from agent.llm.client import LLMClient
+from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from agent.rag.retriever import Retriever
-from agent.subgraphs.quality_chat.state import QualityChatState
+from agent.subgraphs.quality_chat.state import ChatState
 from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
+from app.core.config import settings
 from app.repositories.chat_repo import ChatMessageRepository
 from app.repositories.agent_ops_repo import RagAnalysisRepository
+from app.repositories.chat_score_repo import ChatMessageScoreRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.chat_trust_scoring_service import (
+    build_pending_trust_score,
+    trust_payload_from_score,
+)
 from app.services.dspy_runtime_service import build_runtime_prompt_section, resolve_dspy_runtime_profile
-from app.services.task_execution_service import launch_task_execution
+from app.services.model_config_service import ModelConfigService
 from app.services.task_service import TaskService
 from infra.database.session import get_session
+
+logger = logging.getLogger(__name__)
 
 SMALLTALK_PATTERNS = [re.compile(p, re.I) for p in [
     r"^\s*(你是谁|介绍一下自己|你是做什么的)\s*[？?]?\s*$",
@@ -40,7 +51,7 @@ TASK_CREATE_PATTERNS = [re.compile(p, re.I) for p in [
     r"(帮我|给我).{0,8}(创建|发起|提交).{0,8}(任务|检测|质检)",
     r"(帮我|给我).{0,8}(进行|做).{0,8}(质量检测|质检|检测任务)",
     r"(需要|想要).{0,8}(创建|发起).{0,8}(任务|检测)",
-    r"^\s*(质量检测|质检|检测任务|开始检测|启动检测|quality inspection|inspection task|start inspection)\s*[!！?.]?\s*$",
+    r"^\s*(质量检测|质检|任务检测|检测任务|开始检测|启动检测|quality inspection|inspection task|start inspection)\s*[!！?.]?\s*$",
 ]]
 CONFIRM_PATTERNS = [re.compile(r"^\s*(确认|确定|可以创建|开始创建|提交吧|创建吧|ok|okay|yes|confirm)\s*[!！。.]?\s*$", re.I)]
 CANCEL_PATTERNS = [re.compile(r"^\s*(取消|不用了|算了|先不要|停止创建|别创建了|no)\s*[!！。.]?\s*$", re.I)]
@@ -270,26 +281,61 @@ def _fallback_answer(query: str, docs: list[dict[str, Any]], citations: list[dic
     }
 
 
+def _rag_answer_fallback(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
+    if not docs:
+        return {"answer": "当前知识库没有检索到足够相关的内容。", "summary": "RAG 未检索到依据", "citations": citations}
+    top = docs[0]
+    excerpt = str(top.get("text") or "").strip()
+    if len(excerpt) > 220:
+        excerpt = f"{excerpt[:220]}..."
+    return {
+        "answer": excerpt,
+        "summary": "基于知识库回答",
+        "citations": citations,
+    }
+
+
 def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
     ext = ext or {}
     selected = ext.get("selected_rag_space")
     if isinstance(selected, dict) and selected.get("id"):
         return {"id": str(selected.get("id")), "name": str(selected.get("name") or ""), "description": str(selected.get("description") or "") or None}
+    rag_scope = ext.get("rag_scope")
+    if isinstance(rag_scope, dict) and rag_scope.get("enabled", True):
+        scoped_rag_space_id = str(rag_scope.get("rag_space_id") or "").strip()
+        if scoped_rag_space_id:
+            return {
+                "id": scoped_rag_space_id,
+                "name": str(rag_scope.get("rag_space_name") or ext.get("selected_rag_space_name") or ""),
+                "description": str(rag_scope.get("rag_space_description") or ext.get("selected_rag_space_description") or "") or None,
+            }
     rag_space_id = str(ext.get("selected_rag_space_id") or "").strip()
     if not rag_space_id:
         return None
     return {"id": rag_space_id, "name": str(ext.get("selected_rag_space_name") or ""), "description": str(ext.get("selected_rag_space_description") or "") or None}
 
 
-def _dspy_runtime_meta(state: QualityChatState) -> dict[str, Any]:
+def _selected_rag_scope_node_ids(ext: dict[str, Any] | None) -> list[str]:
+    ext = ext or {}
+    rag_scope = ext.get("rag_scope")
+    if isinstance(rag_scope, dict) and rag_scope.get("enabled", True):
+        raw = rag_scope.get("scope_node_ids") or []
+    else:
+        raw = ext.get("selected_rag_scope_node_ids") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _dspy_runtime_meta(state: ChatState) -> dict[str, Any]:
     return dict((state.get("metadata") or {}).get("dspy_runtime") or {})
 
 
-def _dspy_target_payload(state: QualityChatState, target_key: str) -> dict[str, Any]:
+def _dspy_target_payload(state: ChatState, target_key: str) -> dict[str, Any]:
     return dict(_dspy_runtime_meta(state).get("targets", {}).get(target_key, {}).get("config_payload") or {})
 
 
-def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str:
+def _dspy_prompt_section(state: ChatState, target_keys: list[str]) -> str:
     runtime_meta = _dspy_runtime_meta(state)
     targets = {}
     for key in target_keys:
@@ -320,9 +366,9 @@ def _dspy_prompt_section(state: QualityChatState, target_keys: list[str]) -> str
     return build_runtime_prompt_section(profile_like, [key for key in target_keys if key in targets])
 
 
-async def input_adapter(state: QualityChatState) -> QualityChatState:
+async def input_adapter(state: ChatState) -> ChatState:
     runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "quality_judgement")
-    state["workflow_version"] = "quality_chat_v1"
+    state["workflow_version"] = "quality_chat_v2"
     state["prompt_version"] = runtime_profile.active_prompt_version
     state["metadata"] = dict(state.get("metadata") or {})
     state["metadata"]["dspy_runtime"] = runtime_profile.as_metadata()
@@ -339,7 +385,7 @@ async def input_adapter(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def history_loader(state: QualityChatState) -> QualityChatState:
+async def history_loader(state: ChatState) -> ChatState:
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         rows = await repo.list_for_session(org_id=str(state["org_id"]), session_id=str(state["session_id"]), after_seq=0, limit=20)
@@ -347,11 +393,12 @@ async def history_loader(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def planner(state: QualityChatState) -> QualityChatState:
+async def planner(state: ChatState) -> ChatState:
     query = str(state.get("query") or "")
     lowered_query = query.lower()
     history = list(state.get("history") or [])
     pending = _latest_pending_task(history)
+    selected_rag = _selected_rag_space(state.get("ext") or {})
     planner_payload = _dspy_target_payload(state, "quality_judgement.planner")
     extra_task_keywords = [str(item).strip().lower() for item in list(planner_payload.get("task_keywords") or []) if str(item).strip()]
     if pending is not None:
@@ -361,13 +408,17 @@ async def planner(state: QualityChatState) -> QualityChatState:
         state["missing_slots"] = list(pending.get("missing_slots") or [])
         state["awaiting_confirmation"] = bool(pending.get("awaiting_confirmation"))
         state["pending_action"] = str(pending.get("pending_action") or "create_task")
-    elif _is_smalltalk(query):
-        state["intent"] = "smalltalk"
-        state["intent_confidence"] = 0.98
     elif _is_task_create_candidate(query, state.get("ext") or {}) or any(keyword in lowered_query for keyword in extra_task_keywords):
         state["intent"] = "task_create"
         state["intent_confidence"] = 0.92
         state["pending_action"] = "create_task"
+    elif selected_rag is not None:
+        state["intent"] = "rag_qa"
+        state["intent_confidence"] = 0.9
+        state["metadata"]["rag_forced_by_selection"] = True
+    elif _is_smalltalk(query):
+        state["intent"] = "smalltalk"
+        state["intent_confidence"] = 0.98
     elif _is_quality_qa_candidate(query, history):
         state["intent"] = "quality_qa"
         state["intent_confidence"] = 0.86
@@ -379,7 +430,7 @@ async def planner(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def task_extractor(state: QualityChatState) -> QualityChatState:
+async def task_extractor(state: ChatState) -> ChatState:
     if state.get("intent") not in {"task_create", "task_followup"}:
         return state
     query = str(state.get("query") or "")
@@ -407,24 +458,38 @@ async def task_extractor(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def knowledge(state: QualityChatState) -> QualityChatState:
-    if state.get("intent") != "quality_qa":
+async def knowledge(state: ChatState) -> ChatState:
+    from agent.rag.rag_policy import RagPolicy
+    rag_policy = RagPolicy()
+    sub_route = state.get("sub_route", state.get("intent", "general_chat"))
+    selected_rag = _selected_rag_space(state.get("ext") or {}) or {}
+
+    policy_decision = rag_policy.decide(
+        sub_route=sub_route,
+        selected_rag_space=selected_rag if selected_rag.get("id") else None,
+        spec_code=state.get("spec_code"),
+    )
+
+    if not policy_decision.should_retrieve:
         state["retrieved_chunks"] = []
         state["citations"] = []
-        state["retrieval_metrics"] = {"query": state.get("query"), "hit_count": 0, "empty_recall": True, "top_score": 0.0, "skipped": True}
+        state["retrieval_metrics"] = {"skipped": True, "reason": policy_decision.reason}
         return state
+
     trace_id = str((state.get("trace") or {}).get("trace_id") or "")
-    selected_rag = _selected_rag_space(state.get("ext") or {})
     payload_filter: dict[str, Any] = {"org_id": str(state["org_id"]), "user_id": str(state["user_id"])}
-    if selected_rag:
-        payload_filter["rag_space_id"] = selected_rag["id"]
+    if policy_decision.rag_space_id:
+        payload_filter["rag_space_id"] = policy_decision.rag_space_id
+    scope_node_ids = _selected_rag_scope_node_ids(state.get("ext") or {})
+    if scope_node_ids:
+        payload_filter["ancestor_node_ids"] = scope_node_ids
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
     knowledge_payload = _dspy_target_payload(state, "quality_judgement.knowledge")
-    top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or 4)))
+    top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or policy_decision.top_k)))
     started_at = perf_counter()
     docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
     latency_ms = round((perf_counter() - started_at) * 1000)
-    citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("text") or "")[:180]} for doc in docs]
+    citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("quote") or doc.get("text") or "")[:180]} for doc in docs]
     state["retrieved_chunks"] = docs
     state["citations"] = citations
     state["retrieval_metrics"] = {
@@ -434,113 +499,136 @@ async def knowledge(state: QualityChatState) -> QualityChatState:
         "top_score": float(docs[0]["score"]) if docs else 0.0,
         "skipped": False,
         "latency_ms": latency_ms,
-        "rag_space_id": selected_rag["id"] if selected_rag else None,
+        "rag_space_id": policy_decision.rag_space_id,
         "top_k": top_k,
     }
     return state
 
 
-async def reasoning(state: QualityChatState) -> QualityChatState:
+async def reasoning(state: ChatState) -> ChatState:
+    _t_reasoning = perf_counter()
     intent = state.get("intent")
-    if intent == "smalltalk":
-        state["reasoning"] = {
-            "answer": _smalltalk_answer(str(state.get("query") or ""), list(state.get("history") or [])),
-            "summary": "普通对话",
-            "citations": [],
-        }
-        state["action_state"] = "answered"
-        return state
-    if intent == "general_qa":
-        llm = LLMClient(trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-        history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
-        prompt = "你是平台内的通用聊天助手。对普通问答直接自然回答；若信息不足就简洁追问。只返回 JSON：{\"answer\": string, \"summary\": string}。"
-        prompt_section = _dspy_prompt_section(
+    query = str(state.get("query") or "")
+    history = list(state.get("history") or [])
+    docs = list(state.get("retrieved_chunks") or [])
+    citations = list(state.get("citations") or [])
+    action_state = str(state.get("action_state") or "answered")
+    draft = dict(state.get("task_draft") or {})
+    missing_slots = list(state.get("missing_slots") or [])
+
+    # ── Build system prompt via PromptBuilder ──
+    from agent.prompts.prompt_builder import PromptBuilder
+
+    agent_name = state.get("agent", "chat")
+    sub_route = state.get("sub_route", intent or "general_chat")
+
+    # Map old intents to new sub_routes for backward compat
+    if not state.get("sub_route"):
+        if intent == "smalltalk":
+            sub_route = "general_chat"
+        elif intent in {"task_create", "task_followup"}:
+            sub_route = "task_create"
+        elif intent == "rag_qa":
+            sub_route = "rag_qa"
+        elif intent == "quality_qa":
+            sub_route = "quality_qa"
+        else:
+            sub_route = "general_chat"
+
+    prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        agent=agent_name,
+        sub_route=sub_route,
+        query=query,
+        history=history,
+        retrieved_docs=docs if sub_route in {"rag_qa", "quality_qa", "inspection_execute"} else None,
+        task_draft=draft if sub_route in {"task_create"} else None,
+        action_state=action_state,
+        runtime_prompt_section=_dspy_prompt_section(
             state,
             [
                 "quality_judgement.planner",
                 "quality_judgement.reasoning",
                 "quality_judgement.response_writer",
             ],
-        )
-        if prompt_section:
-            prompt = f"{prompt}\n\n{prompt_section}"
-        history_text = "\n".join(history_lines) if history_lines else "无"
-        user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}"
-        try:
-            response = await llm.chat([{"role": "system", "content": prompt}, {"role": "user", "content": user_message}], temperature=0.4, observation_name="quality_chat.general_reasoning", observation_metadata={"workflow_version": "quality_chat_v1"})
-            answer = str(response.get("answer") or "").strip()
-            summary = str(response.get("summary") or "").strip()
-            if not answer:
-                fallback = _general_answer_fallback(str(state["query"]))
-                answer, summary = fallback["answer"], fallback["summary"]
-            state["reasoning"] = {"answer": answer, "summary": summary or "普通问答", "citations": [], "llm_meta": dict(response.get("__meta__") or {})}
-        except Exception as exc:
-            state["reasoning"] = {**_general_answer_fallback(str(state["query"])), "llm_error": str(exc), "llm_meta": {}}
-        state["action_state"] = "answered"
-        return state
-    if intent in {"task_create", "task_followup"}:
-        action_state = str(state.get("action_state") or "answered")
-        draft = dict(state.get("task_draft") or {})
-        missing_slots = list(state.get("missing_slots") or [])
-        if action_state == "task_cancelled":
-            state["reasoning"] = {"answer": "好的，这次不创建检测任务了。之后如果你想继续创建，可以直接把产品编号、检测标准和图片发给我。", "summary": "任务创建已取消", "citations": []}
-            return state
-        if action_state == "awaiting_task_details":
-            state["reasoning"] = {
-                "answer": "我已经识别到你想发起检测任务，但还缺少必要信息。\n\n"
-                f"当前已识别信息：\n{_format_task_draft(draft)}\n\n"
-                f"还需要补充：{'、'.join(_slot_labels(missing_slots))}。\n"
-                "你可以继续发送消息补充，也可以点击“填写检测信息”直接填写表单。",
-                "summary": "等待补充任务信息",
-                "citations": [],
-            }
-            return state
-        if action_state == "awaiting_task_confirmation":
-            state["reasoning"] = {
-                "answer": "我已经整理出一份检测任务草稿，请确认是否创建并执行：\n\n"
-                f"{_format_task_draft(draft)}\n\n"
-                "如果没有问题，可以直接回复“确认”，也可以点击“确认并提交任务”。",
-                "summary": "等待用户确认任务创建",
-                "citations": [],
-            }
-            return state
-        if action_state == "task_create_requested":
-            state["reasoning"] = {"answer": "任务信息已确认，我正在为你创建并启动检测任务。", "summary": "准备创建并启动任务", "citations": []}
-            return state
-    docs = list(state.get("retrieved_chunks") or [])
-    citations = list(state.get("citations") or [])
-    llm = LLMClient(trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-    doc_lines = ["\n".join([f"[{index}] 标题: {doc.get('title')}", f"来源: {doc.get('source')}", f"内容: {str(doc.get('text') or '')[:600]}"]) for index, doc in enumerate(docs, start=1)]
-    history_lines = [f"{item.get('role', 'user')}: {item.get('content', '')}" for item in list(state.get("history") or [])[-6:] if item.get("content")]
-    prompt = "你是质量检测聊天智能体。请严格基于检索证据回答，不足时明确说明不确定性。只返回 JSON：{\"answer\": string, \"summary\": string}。"
-    prompt_section = _dspy_prompt_section(
-        state,
-        [
-            "quality_judgement.knowledge",
-            "quality_judgement.reasoning",
-            "quality_judgement.response_writer",
-        ],
+        ),
     )
-    if prompt_section:
-        prompt = f"{prompt}\n\n{prompt_section}"
-    history_text = "\n".join(history_lines) if history_lines else "无"
-    doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
-    user_message = f"问题:\n{state['query']}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
+
+    state["prompt_version"] = prompt_meta["prompt_version"]
+    state["sub_route"] = sub_route
+    state["agent"] = agent_name
+
+    # ── Unified LLM call ──
+    _t_pre_llm = perf_counter()
+    async with get_session() as session:
+        runtime_models = await ModelConfigService(session, str(state["org_id"])).list_runtime_models()
+    runtime = await LLMGateway().select_runtime(runtime_models)
+    _t_runtime = perf_counter()
+    if not runtime:
+        raise RuntimeError("no runtime model available — please configure and enable a model in the model config page")
+    llm = LLMClient(
+        api_key=runtime.get("api_key"),
+        base_url=runtime.get("base_url"),
+        model_id=runtime.get("model_id"),
+        trace_id=str((state.get("trace") or {}).get("trace_id") or "") or None,
+        task_id=str(state["session_id"]),
+        org_id=str(state["org_id"]),
+        provider=str(runtime.get("provider") or ""),
+        input_price_per_million=runtime.get("input_price_per_million"),
+        output_price_per_million=runtime.get("output_price_per_million"),
+    )
+    obs_name = f"chat.{sub_route}" if sub_route else "chat.reasoning"
+    answer = ""
+    summary = ""
     try:
-        response = await llm.chat([{"role": "system", "content": prompt}, {"role": "user", "content": user_message}], temperature=0.2, observation_name="quality_chat.reasoning", observation_metadata={"workflow_version": "quality_chat_v1"})
+        response = await llm.chat(
+            [{"role": "system", "content": prompt}, {"role": "user", "content": user_message}],
+            temperature=temperature,
+            observation_name=obs_name,
+            observation_metadata={
+                "workflow_version": "quality_chat_v2",
+                "agent": agent_name,
+                "sub_route": sub_route,
+                "intent": intent,
+                "prompt_version": state.get("prompt_version"),
+            },
+        )
         answer = str(response.get("answer") or "").strip()
         summary = str(response.get("summary") or "").strip()
         if not answer:
-            fallback = _fallback_answer(str(state["query"]), docs, citations)
+            if intent == "quality_qa":
+                fallback = _fallback_answer(query, docs, citations)
+            elif intent == "rag_qa":
+                fallback = _rag_answer_fallback(query, docs, citations)
+            else:
+                fallback = _general_answer_fallback(query)
             answer, summary = fallback["answer"], fallback["summary"]
-        state["reasoning"] = {"answer": answer, "summary": summary or "质量检测问答", "citations": citations, "llm_meta": dict(response.get("__meta__") or {})}
+        state["reasoning"] = {
+            "answer": answer,
+            "summary": summary or "对话回复",
+            "citations": citations,
+            "llm_meta": dict(response.get("__meta__") or {}),
+        }
     except Exception as exc:
-        state["reasoning"] = {**_fallback_answer(str(state["query"]), docs, citations), "llm_error": str(exc), "llm_meta": {}}
+        if intent == "quality_qa":
+            fallback = _fallback_answer(query, docs, citations)
+        elif intent == "rag_qa":
+            fallback = _rag_answer_fallback(query, docs, citations)
+        else:
+            fallback = _general_answer_fallback(query)
+        answer = str(fallback.get("answer") or "")
+        summary = str(fallback.get("summary") or "")
+        state["reasoning"] = {**fallback, "llm_error": str(exc), "llm_meta": {}}
     state["action_state"] = "answered"
+    _t_end = perf_counter()
+    logger.info(
+        "reasoning intent=%s answer_len=%d runtime_ms=%d llm_ms=%d total_ms=%d",
+        intent, len(answer), round((_t_runtime - _t_pre_llm) * 1000), round((_t_end - _t_runtime) * 1000), round((_t_end - _t_reasoning) * 1000),
+    )
     return state
 
 
-async def quality_gate(state: QualityChatState) -> QualityChatState:
+
+async def quality_gate(state: ChatState) -> ChatState:
     if state.get("intent") != "quality_qa":
         state["quality"] = {}
         return state
@@ -574,7 +662,7 @@ async def quality_gate(state: QualityChatState) -> QualityChatState:
     return state
 
 
-async def task_executor(state: QualityChatState) -> QualityChatState:
+async def task_executor(state: ChatState) -> ChatState:
     if state.get("action_state") != "task_create_requested":
         return state
     draft = dict(state.get("task_draft") or {})
@@ -591,6 +679,7 @@ async def task_executor(state: QualityChatState) -> QualityChatState:
                 metadata=metadata,
             )
             await session.commit()
+        from app.services.task_execution_service import launch_task_execution
         launch = await launch_task_execution(task_id=str(task.id), org_id=str(state["org_id"]))
         state["created_task"] = {
             "id": str(task.id),
@@ -643,23 +732,24 @@ async def task_executor(state: QualityChatState) -> QualityChatState:
         return state
 
 
-def _message_type_for_state(state: QualityChatState) -> str:
+def _message_type_for_state(state: ChatState) -> str:
     action_state = str(state.get("action_state") or "answered")
     if action_state in {"task_started", "task_finished"}:
         return "task_result"
     if action_state in {"awaiting_task_confirmation", "awaiting_task_details", "task_cancelled", "task_create_failed"}:
         return "task_action"
-    if state.get("intent") in {"smalltalk", "general_qa"}:
+    if state.get("intent") in {"smalltalk", "general_qa", "rag_qa"}:
         return "assistant_text"
     return "quality_answer"
 
 
-def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
+def _chat_usage_from_state(state: ChatState) -> dict[str, Any] | None:
     llm_meta = dict((state.get("reasoning") or {}).get("llm_meta") or {})
     usage = LLMClient._normalize_usage(llm_meta.get("usage"))
     if not usage:
         return None
     model_key = str(llm_meta.get("model") or "").strip() or "unknown"
+    pricing = dict(llm_meta.get("pricing") or {})
     prompt_tokens = int(usage.get("prompt_tokens") or 0)
     completion_tokens = int(usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
@@ -676,11 +766,17 @@ def _chat_usage_from_state(state: QualityChatState) -> dict[str, Any] | None:
             or ""
         ).strip()
         or None,
-        "cost_amount": ModelPricing.estimate_cost(model_key, prompt_tokens, completion_tokens),
+        "cost_amount": ModelPricing.estimate_cost(
+            model_key,
+            prompt_tokens,
+            completion_tokens,
+            input_price_per_million=pricing.get("input_price_per_million"),
+            output_price_per_million=pricing.get("output_price_per_million"),
+        ),
     }
 
 
-async def _persist_chat_token_usage(session, state: QualityChatState) -> None:
+async def _persist_chat_token_usage(session, state: ChatState) -> None:
     usage = _chat_usage_from_state(state)
     if not usage:
         return
@@ -713,7 +809,7 @@ async def _persist_chat_token_usage(session, state: QualityChatState) -> None:
     )
 
 
-async def _persist_rag_query_log(session, state: QualityChatState) -> None:
+async def _persist_rag_query_log(session, state: ChatState) -> None:
     metrics = dict(state.get("retrieval_metrics") or {})
     if bool(metrics.get("skipped")):
         return
@@ -734,7 +830,11 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
             "hit_rate": round(hit_rate, 4),
             "citation_coverage": round(coverage, 4),
             "latency_ms": int(metrics.get("latency_ms") or 0),
-            "source_graph": "quality_judgement",
+            "source_graph": "chat",
+            "agent_name": "chat",
+            "sub_route": str(state.get("sub_route") or state.get("intent") or "general_chat"),
+            "trace_id": str((state.get("trace") or {}).get("trace_id") or state.get("workflow_run_id") or ""),
+            "top_score": float(metrics.get("top_score") or 0.0),
             "metadata_json": {
                 "intent": state.get("intent"),
                 "empty_recall": bool(metrics.get("empty_recall")),
@@ -744,11 +844,13 @@ async def _persist_rag_query_log(session, state: QualityChatState) -> None:
     )
 
 
-async def response_writer(state: QualityChatState) -> QualityChatState:
+async def response_writer(state: ChatState) -> ChatState:
+    _t0 = perf_counter()
     answer = str((state.get("reasoning") or {}).get("answer") or "")
     emit = state["emit"]
-    for start in range(0, len(answer), 48):
-        await emit({"event": "message_delta", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "delta": answer[start : start + 48]})
+    for start in range(0, len(answer), 3):
+        await emit({"event": "message_delta", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "delta": answer[start : start + 3]})
+        await asyncio.sleep(0.025)
     selected_rag = _selected_rag_space(state.get("ext") or {})
     attachments = [item for item in list((state.get("ext") or {}).get("attachments") or []) if isinstance(item, dict) and item.get("url")]
     task_draft = dict(state.get("task_draft") or {})
@@ -758,8 +860,8 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "citations": list(state.get("citations") or []),
         "quality": dict(state.get("quality") or {}),
         "trace_id": (state.get("trace") or {}).get("trace_id"),
-        "workflow_version": state.get("workflow_version") or "quality_chat_v1",
-        "prompt_version": state.get("prompt_version") or "builtin-quality-chat-v1",
+        "workflow_version": state.get("workflow_version") or "quality_chat_v2",
+        "prompt_version": state.get("prompt_version") or "chat_general_v1",
         "retrieval_metrics": state.get("retrieval_metrics") or {},
         "summary": (state.get("reasoning") or {}).get("summary"),
         "intent": state.get("intent"),
@@ -767,7 +869,7 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "action_state": action_state,
         "task_draft": task_draft or None,
         "task_form_defaults": task_draft or None,
-        "task_submit_mode": "direct_create" if action_state in {"awaiting_task_details", "awaiting_task_confirmation"} else None,
+        "task_submit_mode": "direct_create" if action_state in {"awaiting_clarification", "awaiting_task_details", "awaiting_task_confirmation"} else None,
         "missing_slots": list(state.get("missing_slots") or []),
         "pending_action": state.get("pending_action"),
         "awaiting_confirmation": bool(state.get("awaiting_confirmation") or False),
@@ -777,26 +879,82 @@ async def response_writer(state: QualityChatState) -> QualityChatState:
         "dspy_runtime": _dspy_runtime_meta(state),
         "message_type": _message_type_for_state(state),
     }
+    state["trust_scoring_payload"] = _build_trust_scoring_request(state, state["response_payload"])
     if state.get("quality"):
         await emit({"event": "quality_signal", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "quality": state.get("quality") or {}})
+    logger.info(
+        "response_writer intent=%s answer_len=%d stream_ms=%d",
+        state.get("intent"), len(answer), round((perf_counter() - _t0) * 1000),
+    )
     return state
 
 
-async def finalizer(state: QualityChatState) -> QualityChatState:
+def _build_trust_scoring_request(state: ChatState, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if not settings.trust_scoring_enabled or not str(payload.get("answer") or "").strip():
+        return None
+    llm_meta = dict((state.get("reasoning") or {}).get("llm_meta") or {})
+    langfuse_meta = dict(llm_meta.get("langfuse") or {})
+    return {
+        "org_id": str(state["org_id"]),
+        "session_id": str(state["session_id"]),
+        "user_id": str(state["user_id"]),
+        "assistant_message_id": str(state["assistant_message_id"]),
+        "input_text": str(state.get("query") or ""),
+        "output_text": str(payload.get("answer") or ""),
+        "citations": list(payload.get("citations") or []),
+        "trace_id": str(langfuse_meta.get("trace_id") or (state.get("trace") or {}).get("trace_id") or "") or None,
+        "observation_id": str(langfuse_meta.get("observation_id") or "") or None,
+        "model_key": str(llm_meta.get("model") or "") or None,
+    }
+
+
+def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
+    if not payload:
+        return
+    try:
+        from worker.tasks.chat_trust_scoring_task import score_chat_message
+
+        score_chat_message.delay(payload)
+    except Exception as exc:
+        logger.warning(
+            "trust scoring enqueue failed assistant_message_id=%s trace_id=%s: %s",
+            payload.get("assistant_message_id"),
+            payload.get("trace_id"),
+            exc,
+            exc_info=True,
+        )
+        return
+
+
+async def finalizer(state: ChatState) -> ChatState:
+    _t0 = perf_counter()
     payload = state.get("response_payload") or {}
+    trust_score: dict[str, Any] | None = None
+    trust_request = state.get("trust_scoring_payload")
+    if trust_request:
+        trust_score = build_pending_trust_score(**trust_request)
+        payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
+        _enqueue_trust_scoring(trust_request)
+    state["response_payload"] = payload
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         await repo.update_assistant_message(org_id=str(state["org_id"]), message_id=str(state["assistant_message_id"]), content=str(payload.get("answer") or ""), message_type=str(payload.get("message_type") or "quality_answer"), payload=payload)
+        if trust_score:
+            await ChatMessageScoreRepository(session).upsert_by_message_version(trust_score)
         await _persist_chat_token_usage(session, state)
         await _persist_rag_query_log(session, state)
         await session.commit()
     await state["emit"]({"event": "message_final", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "content": str(payload.get("answer") or ""), "payload": payload, "quality": state.get("quality") or {}})
+    logger.info(
+        "finalizer intent=%s trust_status=%s db_ms=%d total_ms=%d",
+        state.get("intent"), (trust_score or {}).get("status", "none"), 0, round((perf_counter() - _t0) * 1000),
+    )
     return state
 
 
-class QualityChatGraph:
+class ChatGraph:
     def __init__(self) -> None:
-        graph = StateGraph(QualityChatState)
+        graph = StateGraph(ChatState)
         for name, node in [
             ("input_adapter", input_adapter),
             ("history_loader", history_loader),
@@ -823,7 +981,70 @@ class QualityChatGraph:
         graph.add_edge("finalizer", END)
         self._graph = graph.compile()
 
-    async def run(self, state: QualityChatState) -> QualityChatState:
+    async def run(self, state, route_decision=None):
+        if isinstance(state, dict):
+            return await self._run_state(state)
+        from agent.contracts.quality_contracts import NormalizedRequest, AgentOutput
+        if isinstance(state, NormalizedRequest):
+            agent = getattr(route_decision, "selected_agent", "chat") if route_decision else "chat"
+            sub_route = getattr(route_decision, "sub_route", "general_chat") if route_decision else "general_chat"
+            state_dict = {
+                "schema_version": "1.0.0",
+                "request_id": state.request_id,
+                "workflow_run_id": state.workflow_run_id or state.request_id,
+                "session_id": state.session_id or state.request_id,
+                "assistant_message_id": state.assistant_message_id or "",
+                "org_id": state.org_id,
+                "user_id": state.user_id or "",
+                "plan_tier": state.plan_tier,
+                "capabilities": list(state.capabilities),
+                "workspace": state.workspace,
+                "query": state.query,
+                "metadata": dict(state.metadata),
+                "ext": dict(state.ext),
+                "emit": state.ext.get("emit"),
+                "agent": agent,
+                "sub_route": sub_route,
+            }
+            graph_result = await self._run_state(state_dict)
+            payload = dict(graph_result.get("response_payload") or {})
+            return AgentOutput(
+                message_type=str(payload.get("message_type") or "assistant_text"),
+                answer=str(payload.get("answer") or ""),
+                summary=str(payload.get("summary") or ""),
+                citations=list(payload.get("citations") or []),
+                quality=dict(payload.get("quality") or {}),
+                action_state=str(payload.get("action_state") or "") or None,
+                task_draft=dict(payload.get("task_draft") or {}) or None,
+                created_task=dict(payload.get("created_task") or {}) or None,
+                raw_state=graph_result,
+            )
+        raise TypeError(f"ChatGraph.run() expects dict or NormalizedRequest, got {type(state)}")
+
+    async def _run_state(self, state: ChatState) -> ChatState:
+        _t_graph = perf_counter()
         tracer = LangfuseTracer()
-        state["trace"] = tracer.start_trace(task_id=state["session_id"], org_id=state["org_id"], model_key="quality_chat_v1", name="quality_chat_v1", input={"query": state["query"], "session_id": state["session_id"]})
-        return await self._graph.ainvoke(state)
+        state["trace"] = tracer.start_trace(
+            trace_id=state.get("trace", {}).get("trace_id"),
+            task_id=state["session_id"],
+            agent=state.get("agent", "chat"),
+            sub_route=state.get("sub_route", "general_chat"),
+            intent=state.get("intent"),
+            prompt_version=state.get("prompt_version"),
+            workflow_version="quality_chat_v2",
+            route_source=state.get("route_source", ""),
+            route_confidence=state.get("route_confidence", 0.0),
+            session_id=state.get("session_id"),
+            source_type="chat",
+            org_id=state.get("org_id"),
+            model_key=state.get("model_key"),
+            name="quality_chat_v2",
+            input={"query": state.get("query", ""), "session_id": state.get("session_id", "")},
+        )
+        result = await self._graph.ainvoke(state)
+        logger.info(
+            "graph_total intent=%s query_len=%d total_ms=%d",
+            result.get("intent"), len(str(result.get("query") or "")), round((perf_counter() - _t_graph) * 1000),
+        )
+        return result
+

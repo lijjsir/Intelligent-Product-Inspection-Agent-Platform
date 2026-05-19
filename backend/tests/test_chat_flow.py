@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -8,13 +8,17 @@ from sqlalchemy.exc import ProgrammingError
 from agent.llm.client import LLMClient
 from app.services.rag_space_service import _is_rag_metadata_missing
 from agent.subgraphs.quality_chat.graph import (
-    _extract_named_user_from_history,
     _chat_usage_from_state,
+    _enqueue_trust_scoring,
+    _extract_named_user_from_history,
     _fallback_answer,
     _smalltalk_answer,
+    finalizer,
     knowledge,
     planner,
     quality_gate,
+    reasoning,
+    ChatState,
     task_extractor,
 )
 from app.core.config import settings
@@ -36,6 +40,23 @@ def test_fallback_answer_uses_first_doc_excerpt():
     )
     assert "Surface Defect Standard" in data["answer"]
     assert data["citations"] == [{"id": "doc-1"}]
+
+
+@pytest.mark.asyncio
+async def test_planner_uses_rag_qa_when_space_is_selected():
+    state = {
+        "query": "我叫什么名字",
+        "metadata": {},
+        "ext": {
+            "selected_rag_space": {"id": "space-1", "name": "食物"},
+        },
+        "history": [],
+    }
+
+    updated = await planner(state)
+
+    assert updated["intent"] == "rag_qa"
+    assert updated["metadata"]["rag_forced_by_selection"] is True
 
 
 def test_normalize_usage_keeps_only_stable_token_counts():
@@ -92,6 +113,242 @@ def test_chat_usage_from_state_extracts_llm_usage_for_general_qa():
     assert usage["trace_id"] == "trace-llm"
 
 
+def test_chat_usage_from_state_uses_runtime_pricing_when_available():
+    usage = _chat_usage_from_state(
+        {
+            "org_id": "org-1",
+            "user_id": "user-1",
+            "workspace": "app",
+            "trace": {"trace_id": "trace-root"},
+            "reasoning": {
+                "llm_meta": {
+                    "model": "custom-chat",
+                    "usage": {
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 1000,
+                        "total_tokens": 2000,
+                    },
+                    "pricing": {
+                        "input_price_per_million": 10.0,
+                        "output_price_per_million": 20.0,
+                    },
+                }
+            },
+        }
+    )
+
+    assert usage is not None
+    assert usage["cost_amount"] == 0.03
+
+
+@pytest.mark.asyncio
+async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id):
+            return None
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "chat",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    class FakeGateway:
+        async def select_runtime(self, models, **kwargs):
+            item = list(models)[0]
+            return {
+                "model_id": item["model_key"],
+                "base_url": item["endpoint"],
+                "api_key": item["api_key"],
+                "provider": item["provider"],
+                "input_price_per_million": None,
+                "output_price_per_million": None,
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            return None
+
+        async def chat(self, *args, **kwargs):
+            raise RuntimeError("upstream unavailable")
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMClient", FakeLLMClient)
+
+    state = {
+        "org_id": "org-1",
+        "session_id": "session-1",
+        "intent": "general_qa",
+        "query": "hello",
+        "history": [],
+        "retrieved_chunks": [],
+        "citations": [],
+        "action_state": "answered",
+        "task_draft": {},
+        "missing_slots": [],
+        "trace": {"trace_id": "trace-1"},
+    }
+
+    updated = await reasoning(state)
+
+    assert updated["action_state"] == "answered"
+    assert updated["reasoning"]["answer"]
+    assert updated["reasoning"]["llm_error"] == "upstream unavailable"
+
+
+def test_chat_state_keeps_trust_scoring_runtime_fields():
+    annotations = ChatState.__annotations__
+
+    assert "trust_scoring_payload" in annotations
+    assert "trust_scoring_task" not in annotations
+
+
+def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
+    from worker.tasks.chat_trust_scoring_task import score_chat_message
+
+    def fail_delay(_payload):
+        raise RuntimeError("redis transport unavailable")
+
+    monkeypatch.setattr(score_chat_message, "delay", fail_delay)
+
+    with caplog.at_level("WARNING", logger="agent.subgraphs.quality_chat.graph"):
+        _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
+
+    assert "trust scoring enqueue failed" in caplog.text
+    assert "msg-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_finalizer_marks_trust_scoring_reviewing_and_enqueues_once(monkeypatch):
+    updates: list[dict] = []
+    scores: list[dict] = []
+    events: list[dict] = []
+    queued_payloads: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return None
+
+    class FakeChatMessageScoreRepository:
+        def __init__(self, _session):
+            pass
+
+        async def upsert_by_message_version(self, score):
+            scores.append(score)
+            return None
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    async def fake_persist_usage(_session, _state):
+        return None
+
+    async def fake_persist_rag(_session, _state):
+        return None
+
+    def fake_enqueue(payload: dict | None):
+        if payload:
+            queued_payloads.append(payload)
+
+    pending_score = {
+        "org_id": "11111111-1111-1111-1111-111111111111",
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "user_id": "33333333-3333-3333-3333-333333333333",
+        "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+        "score_version": "trust_v1",
+        "trace_id": "trace-1",
+        "observation_id": "obs-1",
+        "trace_url": "http://127.0.0.1:3000/project/p/traces/trace-1",
+        "model_key": "model-1",
+        "review_model": "deepseek-v4-flash",
+        "rule_scores": {},
+        "llm_scores": None,
+        "combined_scores": None,
+        "trust_score": None,
+        "hallucination_risk": 0.1,
+        "overconfidence": 0.2,
+        "has_citation": True,
+        "status": "reviewing",
+        "langfuse_synced_at": None,
+    }
+
+    def fake_build_pending_trust_score(**_kwargs):
+        return dict(pending_score)
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._enqueue_trust_scoring", fake_enqueue)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.build_pending_trust_score", fake_build_pending_trust_score)
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ChatMessageScoreRepository", FakeChatMessageScoreRepository)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_chat_token_usage", fake_persist_usage)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph._persist_rag_query_log", fake_persist_rag)
+
+    state = {
+        "org_id": "11111111-1111-1111-1111-111111111111",
+        "session_id": "22222222-2222-2222-2222-222222222222",
+        "user_id": "33333333-3333-3333-3333-333333333333",
+        "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_run_id": "run-1",
+        "response_payload": {"answer": "ok", "message_type": "assistant_text"},
+        "trust_scoring_payload": {
+            "org_id": "11111111-1111-1111-1111-111111111111",
+            "session_id": "22222222-2222-2222-2222-222222222222",
+            "user_id": "33333333-3333-3333-3333-333333333333",
+            "assistant_message_id": "44444444-4444-4444-4444-444444444444",
+            "input_text": "hello",
+            "output_text": "ok",
+            "citations": [],
+            "trace_id": "trace-1",
+            "observation_id": "obs-1",
+            "model_key": "model-1",
+        },
+        "emit": fake_emit,
+    }
+
+    updated = await finalizer(state)
+
+    assert updated["response_payload"]["trust_scoring"]["status"] == "reviewing"
+    assert updated["response_payload"]["trust_scoring"]["trust_score"] is None
+    assert updates[0]["payload"]["trust_scoring"]["trace_url"].endswith("/trace-1")
+    assert scores[0]["status"] == "reviewing"
+    assert events[-1]["payload"]["trust_scoring"]["status"] == "reviewing"
+    assert queued_payloads == [state["trust_scoring_payload"]]
+
+
 def test_smalltalk_answer_remembers_user_name_from_history():
     answer = _smalltalk_answer(
         "我叫什么名字",
@@ -134,6 +391,22 @@ async def test_quality_gate_downgrades_when_evidence_is_missing():
     assert updated["quality"]["passed"] is False
     assert updated["quality"]["risk_level"] == "critical"
     assert len(updated["reasoning"]["answer"]) > len(original_answer)
+
+
+@pytest.mark.asyncio
+async def test_quality_gate_does_not_rewrite_plain_rag_answers():
+    original_answer = "tgg"
+    state = {
+        "intent": "rag_qa",
+        "reasoning": {"answer": original_answer},
+        "citations": [{"id": "doc-1"}],
+        "retrieval_metrics": {"hit_count": 1},
+    }
+
+    updated = await quality_gate(state)
+
+    assert updated["quality"] == {}
+    assert updated["reasoning"]["answer"] == original_answer
 
 
 @pytest.mark.asyncio
@@ -197,6 +470,43 @@ async def test_knowledge_skips_retrieval_for_non_quality_qa():
 
 
 @pytest.mark.asyncio
+async def test_knowledge_retrieves_for_plain_rag_qa(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["query"] = query
+            captured["payload_filter"] = payload_filter
+            return [{"id": "doc-1", "title": "1.txt", "text": "我的名字叫tgg", "score": 0.9}]
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "rag_qa",
+        "query": "我叫什么名字",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {"selected_rag_space_id": "space-1"},
+    }
+
+    updated = await knowledge(state)
+
+    assert captured["query"] == "我叫什么名字"
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+    }
+    assert updated["retrieval_metrics"]["skipped"] is False
+    assert updated["citations"][0]["quote"] == "我的名字叫tgg"
+
+
+@pytest.mark.asyncio
 async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -233,6 +543,84 @@ async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
         "rag_space_id": "space-1",
     }
     assert updated["retrieval_metrics"]["rag_space_id"] == "space-1"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_includes_scope_node_filters_when_present(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["payload_filter"] = payload_filter
+            return []
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "quality_qa",
+        "query": "quality question",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {
+            "selected_rag_space_id": "space-1",
+            "selected_rag_scope_node_ids": ["folder-1", "folder-2"],
+        },
+    }
+
+    await knowledge(state)
+
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+        "ancestor_node_ids": ["folder-1", "folder-2"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_knowledge_accepts_rag_scope_payload(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeRetriever:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            captured["payload_filter"] = payload_filter
+            return []
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+
+    state = {
+        "intent": "quality_qa",
+        "query": "我叫什么名字",
+        "session_id": "session-1",
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "trace": {},
+        "ext": {
+            "rag_scope": {
+                "enabled": True,
+                "rag_space_id": "space-1",
+                "scope_node_ids": ["folder-1"],
+                "scope_mode": "folder",
+            },
+        },
+    }
+
+    await knowledge(state)
+
+    assert captured["payload_filter"] == {
+        "org_id": "org-1",
+        "user_id": "user-1",
+        "rag_space_id": "space-1",
+        "ancestor_node_ids": ["folder-1"],
+    }
 
 
 @pytest.mark.asyncio
@@ -291,3 +679,4 @@ def test_get_current_user_for_stream_reads_resource_claims():
     assert current.user_id == "user-1"
     assert current.stream_resource == "chat"
     assert current.stream_resource_id == "session-1"
+

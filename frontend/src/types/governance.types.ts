@@ -31,6 +31,18 @@ export interface ModelConfigPayload {
   is_active?: boolean;
 }
 
+export interface HealthCheckResult {
+  health_status: string;
+  health_message?: string;
+}
+
+export interface HealthCheckAllResult {
+  checked: number;
+  healthy: number;
+  degraded: number;
+  unhealthy: number;
+}
+
 export interface BillingBucket {
   bucket: string;
   total_tokens: number;
@@ -139,13 +151,23 @@ export interface QualityReport {
   hallucination_trend: TrendPoint[];
   thumbs_down_trend: TrendPoint[];
   model_metrics: ModelQualityMetric[];
+  chat_score_count: number;
+  chat_avg_trust_score: number;
+  chat_hallucination_rate: number;
+  chat_overconfidence_rate: number;
+  chat_citation_rate: number;
+  chat_trust_trend: TrendPoint[];
 }
 
 export interface QualityTraceItem {
+  source_type: "inspection" | "chat" | string;
   trace_id: string;
   trace_url: string | null;
   result_id: string | null;
   task_id: string | null;
+  assistant_message_id: string | null;
+  session_id: string | null;
+  observation_id: string | null;
   verdict: string | null;
   model_key: string | null;
   total_tokens: number;
@@ -153,7 +175,40 @@ export interface QualityTraceItem {
   thumbs_down_count: number;
   last_score_value: number | null;
   last_score_at: string | null;
+  trust_score: number | null;
+  hallucination_risk: number | null;
+  overconfidence: number | null;
+  has_citation: boolean | null;
+  score_status: string | null;
+  review_model: string | null;
+  langfuse_status: "synced" | "missing" | "local_only" | "unknown" | string | null;
+  langfuse_synced: boolean | null;
   created_at: string | null;
+}
+
+export interface QualityTraceMeta {
+  langfuse_enabled: boolean;
+  langfuse_status: "ok" | "error" | "disabled" | "unknown" | string;
+  langfuse_error: string | null;
+  source: "all" | "inspection" | "chat" | string;
+  canonical_source: "langfuse" | "local" | string;
+  item_count: number;
+}
+
+export interface QualityTraceListResponse {
+  items: QualityTraceItem[];
+  meta: QualityTraceMeta;
+}
+
+export interface QualityTraceDeleteResult {
+  trace_id: string;
+  deleted: boolean;
+  status: "deleted" | "not_found" | "langfuse_failed" | "langfuse_disabled" | string;
+  message: string;
+  langfuse_deleted: boolean;
+  local_cleaned: boolean;
+  local_results_removed?: number;
+  local_scores_removed?: number;
 }
 
 export interface InspectionSpecItem {
