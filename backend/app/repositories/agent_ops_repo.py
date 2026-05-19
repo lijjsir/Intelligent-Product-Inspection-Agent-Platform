@@ -581,6 +581,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
             existing.runtime_key = runtime_key
             existing.subgraph_key = str(agent.subgraph_key or "quality_judgement")
             existing.status = "running" if agent.is_active else "stopped"
+            existing.runtime_status = "running" if agent.is_active else "stopped"
             existing.supports_start_stop = bool(agent.supports_start_stop)
             existing.metadata_json = {"entry_graph": agent.entry_graph, "graph_version": agent.graph_version}
             await self._session.flush()
@@ -591,6 +592,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
             runtime_key=runtime_key,
             subgraph_key=str(agent.subgraph_key or "quality_judgement"),
             status="running" if agent.is_active else "stopped",
+            runtime_status="running" if agent.is_active else "stopped",
             supports_start_stop=bool(agent.supports_start_stop),
             metadata_json={"entry_graph": agent.entry_graph, "graph_version": agent.graph_version},
         )
@@ -620,6 +622,37 @@ class AgentRuntimeRepository(AgentOpsRepository):
         if status == "running":
             obj.last_started_at = datetime.utcnow()
         if status == "stopped":
+            obj.last_stopped_at = datetime.utcnow()
+        await self._session.flush()
+        return obj
+
+    async def create_event(self, data: dict):
+        from app.models.agent_ops import AgentRuntimeEvent
+        obj = AgentRuntimeEvent(org_id=self._org_id, **data)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_events(self, agent_id: str, limit: int = 20):
+        from app.models.agent_ops import AgentRuntimeEvent
+        result = await self._session.execute(
+            select(AgentRuntimeEvent).where(
+                AgentRuntimeEvent.org_id == self._org_id,
+                AgentRuntimeEvent.agent_id == agent_id,
+                AgentRuntimeEvent.deleted_at.is_(None),
+            ).order_by(AgentRuntimeEvent.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def set_runtime_status(self, runtime_key: str, runtime_status: str, *, updated_by: str | None = None):
+        obj = await self.dedupe_by_runtime_key(runtime_key)
+        if not obj:
+            return None
+        obj.runtime_status = runtime_status
+        obj.updated_by = updated_by
+        if runtime_status == "running":
+            obj.last_started_at = datetime.utcnow()
+        if runtime_status == "stopped":
             obj.last_stopped_at = datetime.utcnow()
         await self._session.flush()
         return obj
@@ -661,5 +694,25 @@ class AgentRouteLogRepository(AgentOpsRepository):
             )
             .order_by(AgentRouteLog.created_at.desc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
+class AgentRuntimeEventRepository(AgentOpsRepository):
+    async def create(self, data: dict):
+        from app.models.agent_ops import AgentRuntimeEvent
+        obj = AgentRuntimeEvent(org_id=self._org_id, **data)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_by_agent(self, agent_id: str, limit: int = 20):
+        from app.models.agent_ops import AgentRuntimeEvent
+        result = await self._session.execute(
+            select(AgentRuntimeEvent).where(
+                AgentRuntimeEvent.org_id == self._org_id,
+                AgentRuntimeEvent.agent_id == agent_id,
+                AgentRuntimeEvent.deleted_at.is_(None),
+            ).order_by(AgentRuntimeEvent.created_at.desc()).limit(limit)
         )
         return list(result.scalars().all())
