@@ -580,10 +580,12 @@ class AgentRuntimeRepository(AgentOpsRepository):
             existing.agent_id = str(agent.id)
             existing.runtime_key = runtime_key
             existing.subgraph_key = str(agent.subgraph_key or "quality_judgement")
-            existing.status = "running" if agent.is_active else "stopped"
-            existing.runtime_status = "running" if agent.is_active else "stopped"
             existing.supports_start_stop = bool(agent.supports_start_stop)
             existing.metadata_json = {"entry_graph": agent.entry_graph, "graph_version": agent.graph_version}
+            if not getattr(existing, "status", None):
+                existing.status = "running" if agent.is_active else "stopped"
+            if not getattr(existing, "runtime_status", None):
+                existing.runtime_status = "running" if agent.is_active else "stopped"
             await self._session.flush()
             return existing
         obj = AgentRuntimeInstance(
@@ -648,6 +650,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
         obj = await self.dedupe_by_runtime_key(runtime_key)
         if not obj:
             return None
+        obj.status = runtime_status
         obj.runtime_status = runtime_status
         obj.updated_by = updated_by
         if runtime_status == "running":
