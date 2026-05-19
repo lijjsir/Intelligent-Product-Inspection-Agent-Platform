@@ -108,7 +108,7 @@ function renderFlowGraph() {
     animationDuration: 400,
     tooltip: { trigger: "item", formatter: (p: any) => `${p.name}` },
     series: [{
-      type: "graph", layout: "none", left: 10, top: 10, right: 10, bottom: 10, roam: false,
+      type: "graph", layout: "none", left: 10, top: 10, right: 10, bottom: 10, roam: true,
       label: { show: true, position: "right", fontSize: 11, color: "#334155" },
       edgeSymbol: ["none", "arrow"], edgeSymbolSize: [0, 8],
       data: nodes,
@@ -339,5 +339,52 @@ watch(() => store.simulateResult, () => { if (store.simulateResult) renderFlowGr
 </template>
 
 <style scoped>
-/* Clean, minimal styles matching the zinc neutral design system */
+/* Route strategy viewer — restrained zinc neutral design */
+
+/* Loading state overlay */
+:deep(.el-loading-mask) {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(2px);
+}
+
+/* Table row click affordance */
+:deep(.el-table__row) {
+  cursor: pointer;
+}
+
+/* Metric card hover subtle lift */
+.grid > .bg-white {
+  transition: box-shadow 160ms ease, border-color 160ms ease;
+}
+.grid > .bg-white:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* Simulator result transition */
+.sim-result-enter-active {
+  transition: opacity 200ms ease;
+}
+.sim-result-enter-from {
+  opacity: 0;
+}
+
+/* Responsive: stack on narrow screens */
+@media (max-width: 1400px) {
+  .grid.grid-cols-6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .grid.grid-cols-\[220px_1fr_280px\] {
+    grid-template-columns: 1fr;
+  }
+  .grid.grid-cols-\[1fr_380px\] {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .grid.grid-cols-6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>
