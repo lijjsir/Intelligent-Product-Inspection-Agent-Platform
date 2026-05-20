@@ -6,7 +6,6 @@ import pytest
 
 from app.api.v1.agent_ops import router
 from app.services import agent_ops_service as agent_ops_mod
-from agent.topology_catalog import get_dspy_graph_context, get_dspy_optimization_targets
 from app.api.v1 import agent_ops as agent_ops_api_mod
 
 
@@ -20,31 +19,6 @@ def test_agents_topology_route_is_registered_before_dynamic_agent_route():
     assert "/agent-ops/agents/topology" in route_paths
     assert "/agent-ops/agents/{id}" in route_paths
     assert route_paths.index("/agent-ops/agents/topology") < route_paths.index("/agent-ops/agents/{id}")
-
-
-def test_prompt_optimization_routes_are_registered_before_dynamic_target_route():
-    route_entries = [
-        (route.path, route.methods)
-        for route in router.routes
-        if isinstance(route, APIRoute)
-    ]
-    route_paths = [path for path, _methods in route_entries]
-    route_methods = {path: methods for path, methods in route_entries}
-
-    assert "/agent-ops/prompt-optimization/targets/{target_key}/runs" in route_paths
-    assert "/agent-ops/prompt-optimization/targets/{target_key}/config" in route_paths
-    assert "/agent-ops/prompt-optimization/targets/{target_key}/compile" in route_paths
-    assert "/agent-ops/prompt-optimization/targets/{target_key}/rollback" in route_paths
-    assert "/agent-ops/prompt-optimization/targets/{target_key}" in route_paths
-    assert route_methods["/agent-ops/prompt-optimization/targets/{target_key}/config"] == {"PUT"}
-    assert route_methods["/agent-ops/prompt-optimization/targets/{target_key}/runs"] == {"GET"}
-    assert route_methods["/agent-ops/prompt-optimization/targets/{target_key}/compile"] == {"POST"}
-    assert route_methods["/agent-ops/prompt-optimization/targets/{target_key}/rollback"] == {"POST"}
-    assert route_methods["/agent-ops/prompt-optimization/targets/{target_key}"] == {"GET"}
-    assert route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}/runs") < route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}")
-    assert route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}/config") < route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}")
-    assert route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}/compile") < route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}")
-    assert route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}/rollback") < route_paths.index("/agent-ops/prompt-optimization/targets/{target_key}")
 
 
 def test_routing_strategy_route_is_registered():
@@ -512,98 +486,6 @@ async def test_get_agents_topology_specific_agent_returns_agent_overview_slice()
         "agent:chat",
     }
     assert "agent:quality_judgement" not in node_ids
-
-
-def test_dspy_optimization_catalog_exposes_expected_targets_and_graph_context():
-    targets = get_dspy_optimization_targets()
-    target_keys = {item["target_key"] for item in targets}
-
-    assert len(targets) == 5
-    assert "quality_judgement.planner" in target_keys
-    assert "quality_judgement.contract_inferencer" in target_keys
-
-    graph = get_dspy_graph_context("quality_judgement.review_gate")
-    assert graph is not None
-    assert graph["focus_node_id"] == "quality_judgement.review_gate"
-    assert "quality_judgement.evidence_synthesizer" in graph["upstream_nodes"]
-    assert "quality_judgement.task_executor" in graph["downstream_nodes"]
-
-
-@pytest.mark.asyncio
-async def test_compile_prompt_optimization_target_creates_pending_run_and_schedules_job(monkeypatch):
-    class FakeOptimizationRepo:
-        async def get_by_target_key(self, target_key: str):
-            return SimpleNamespace(
-                id="cfg-1",
-                target_key=target_key,
-                supports_compile=True,
-                compiler_version="dspy-2.0",
-                module_name="ReviewGateModule",
-                optimizer_strategy="bootstrap-fewshot",
-                metric_names=["faithfulness", "traceability"],
-            )
-
-    class FakeRunRepo:
-        def __init__(self):
-            self.created_payload = None
-
-        async def create(self, payload: dict):
-            now = datetime.now(timezone.utc)
-            self.created_payload = payload
-            return SimpleNamespace(
-                id="run-1",
-                target_key=payload["target_key"],
-                run_type=payload["run_type"],
-                status=payload["status"],
-                compiler_version=payload["compiler_version"],
-                artifact_version=None,
-                prompt_version_id=None,
-                metrics_snapshot=None,
-                error_message=None,
-                started_at=None,
-                finished_at=None,
-                created_at=now,
-                updated_at=now,
-            )
-
-    scheduled = {}
-
-    def fake_create_task(coro):
-        scheduled["created"] = True
-        coro.close()
-        return SimpleNamespace(cancel=lambda: None)
-
-    svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
-    svc._optimization_repo = FakeOptimizationRepo()
-    svc._optimization_run_repo = FakeRunRepo()
-
-    async def fake_sync():
-        return None
-
-    async def fake_log(*_args, **_kwargs):
-        return None
-
-    svc._sync_prompt_optimization_targets = fake_sync
-    svc._log_audit = fake_log
-
-    monkeypatch.setattr(agent_ops_mod.asyncio, "create_task", fake_create_task)
-
-    run = await svc.compile_prompt_optimization_target("quality_judgement.review_gate")
-
-    assert svc._optimization_run_repo.created_payload == {
-        "target_key": "quality_judgement.review_gate",
-        "run_type": "compile",
-        "status": "pending",
-        "compiler_version": "dspy-2.0",
-        "payload_json": {
-            "module_name": "ReviewGateModule",
-            "optimizer_strategy": "bootstrap-fewshot",
-            "metric_names": ["faithfulness", "traceability"],
-        },
-    }
-    assert scheduled == {"created": True}
-    assert run.id == "run-1"
-    assert run.status == "pending"
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,10 @@ async def test_inspection_task_quality_qa_does_not_run_formal_inspection(monkeyp
         fake_get_session,
     )
     monkeypatch.setattr(
+        "agent.prompts.prompt_builder.get_session",
+        fake_get_session,
+    )
+    monkeypatch.setattr(
         "agent.subgraphs.inspection_task.graph.ModelConfigService",
         lambda session, org_id: MagicMock(list_runtime_models=AsyncMock(return_value=[])),
     )
@@ -129,6 +133,86 @@ async def test_inspection_task_quality_qa_does_not_run_formal_inspection(monkeyp
 
     assert output.message_type == "quality_answer"
     assert output.persistable_output.task is None
+
+
+@pytest.mark.asyncio
+async def test_inspection_task_quality_qa_uses_prompt_admin_override(monkeypatch):
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock, MagicMock
+
+    captured_messages: list[list[dict[str, str]]] = []
+
+    class FakeSession:
+        async def commit(self): pass
+        async def rollback(self): pass
+        async def close(self): pass
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            return None
+
+        async def chat(self, messages, *args, **kwargs):
+            captured_messages.append(messages)
+            return {"answer": "ok", "summary": "override used"}
+
+    async def fake_prompt_get(self, prompt_key: str, *, org_id: str):
+        assert prompt_key == "inspection.quality_qa.system"
+        assert org_id == "org-1"
+        return "INSPECTION_OVERRIDE_FROM_DB"
+
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.get_session",
+        fake_get_session,
+    )
+    monkeypatch.setattr(
+        "agent.prompts.prompt_builder.get_session",
+        fake_get_session,
+    )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.ModelConfigService",
+        lambda session, org_id: MagicMock(list_runtime_models=AsyncMock(return_value=[{
+            "provider": "deepseek",
+            "model_key": "deepseek-v4-flash",
+            "endpoint": "https://api.deepseek.com",
+            "api_key": "sk-db",
+        }])),
+    )
+    fake_gateway = MagicMock()
+    fake_gateway.select_runtime = AsyncMock(return_value={
+        "model_id": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-db",
+        "provider": "deepseek",
+        "input_price_per_million": None,
+        "output_price_per_million": None,
+    })
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.LLMGateway",
+        lambda: fake_gateway,
+    )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.LLMClient",
+        FakeLLMClient,
+    )
+    monkeypatch.setattr("app.services.prompt_admin_service.PromptResolver.get", fake_prompt_get)
+
+    output = await InspectionTaskGraph().run(
+        NormalizedRequest(
+            request_id="req-override",
+            workflow_run_id="wf-override",
+            org_id="org-1",
+            user_id="user-1",
+            query="这个划痕算不算不合格？",
+        ),
+        AgentRouteDecision(selected_agent="inspection_task", sub_route="quality_qa", intent="quality_qa"),
+    )
+
+    assert output.message_type == "quality_answer"
+    assert captured_messages[0][0]["content"] == "INSPECTION_OVERRIDE_FROM_DB"
 
 
 @pytest.mark.asyncio
@@ -160,4 +244,3 @@ async def test_inspection_task_inspection_execute_runs_formal_inspection(monkeyp
 
     assert calls == ["req-2"]
     assert output.message_type == "task_result"
-

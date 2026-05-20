@@ -2,10 +2,10 @@ import { computed } from "vue";
 import { useAuthStore } from "@/stores/auth.store";
 import {
   ROLE_ADMIN,
-  ROLE_APP_DEVELOPER,
-  ROLE_PLATFORM_OPERATOR,
   ROLE_ALGORITHM_ENGINEER,
+  ROLE_APP_DEVELOPER,
   ROLE_EXPERT,
+  ROLE_PLATFORM_OPERATOR,
 } from "@/constants/roles";
 
 export interface MenuItem {
@@ -23,32 +23,42 @@ export interface MenuGroup {
 
 export type MenuStructure = (MenuItem | MenuGroup)[];
 
+const SHARED_AGENT_OPS_ITEMS: MenuItem[] = [
+  { title: "Agent 管理", path: "/ops/agents" },
+  { title: "路由策略", path: "/ops/agents/intent-routes" },
+  { title: "Prompt 管理", path: "/ops/prompts" },
+  { title: "RAG 分析", path: "/ops/rag" },
+];
+
+function appendProfile(items: MenuItem[]): MenuStructure {
+  return [...items, { title: "个人设置", path: "/app/profile" }];
+}
+
+function prependSharedAgentOps(items: MenuItem[]): MenuStructure {
+  const merged = [...SHARED_AGENT_OPS_ITEMS];
+  const existing = new Set(merged.map((item) => item.path));
+  for (const item of items) {
+    if (!existing.has(item.path)) {
+      merged.push(item);
+    }
+  }
+  return appendProfile(merged);
+}
+
 export function useMenu() {
   const auth = useAuthStore();
 
   const primaryRole = computed(() => auth.primaryRole || auth.roles[0] || "");
-
   const showWorkspaceGroups = computed(() => primaryRole.value === ROLE_ADMIN);
 
   const menu = computed<MenuStructure>(() => {
     const role = primaryRole.value;
 
-    if (role === ROLE_ADMIN) {
-      return getAdminMenu();
-    }
-    if (role === ROLE_APP_DEVELOPER) {
-      return getAppDeveloperMenu();
-    }
-    if (role === ROLE_PLATFORM_OPERATOR) {
-      return getPlatformOperatorMenu();
-    }
-    if (role === ROLE_ALGORITHM_ENGINEER) {
-      return getAlgorithmEngineerMenu();
-    }
-    if (role === ROLE_EXPERT) {
-      return getExpertMenu();
-    }
-    // user (default)
+    if (role === ROLE_ADMIN) return getAdminMenu();
+    if (role === ROLE_APP_DEVELOPER) return appendProfile([...SHARED_AGENT_OPS_ITEMS]);
+    if (role === ROLE_PLATFORM_OPERATOR) return getPlatformOperatorMenu();
+    if (role === ROLE_ALGORITHM_ENGINEER) return getAlgorithmEngineerMenu();
+    if (role === ROLE_EXPERT) return getExpertMenu();
     return getUserMenu();
   });
 
@@ -71,9 +81,7 @@ function getAdminMenu(): MenuStructure {
       title: "运维工作台",
       icon: "Setting",
       items: [
-        { title: "Agent 管理", path: "/ops/agents" },
-        { title: "Prompt 管理", path: "/ops/prompts" },
-        { title: "RAG 分析", path: "/ops/rag" },
+        ...SHARED_AGENT_OPS_ITEMS,
         { title: "分析看板", path: "/ops/analytics" },
         { title: "计费管理", path: "/ops/billing" },
       ],
@@ -100,21 +108,8 @@ function getAdminMenu(): MenuStructure {
   ];
 }
 
-function getAppDeveloperMenu(): MenuStructure {
-  return [
-    { title: "Agent 管理", path: "/ops/agents" },
-    { title: "路由策略", path: "/ops/agents/intent-routes" },
-    { title: "Prompt 管理", path: "/ops/prompts" },
-    { title: "DSPy 优化", path: "/ops/prompts/dspy", placeholder: true },
-    { title: "RAG 分析", path: "/ops/rag" },
-    { title: "召回策略", path: "/ops/rag/policies", placeholder: true },
-    { title: "个人设置", path: "/app/profile" },
-  ];
-}
-
 function getPlatformOperatorMenu(): MenuStructure {
-  return [
-    { title: "Agent 管理", path: "/ops/agents" },
+  return prependSharedAgentOps([
     { title: "模板审核", path: "/ops/templates/review", placeholder: true },
     { title: "发布协同", path: "/ops/releases", placeholder: true },
     { title: "模型版本", path: "/ops/models/versions", placeholder: true },
@@ -127,12 +122,11 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "成本分析", path: "/ops/analytics/cost", placeholder: true },
     { title: "分析中心", path: "/governance/quality/analysis-center" },
     { title: "记忆治理", path: "/governance/memory", placeholder: true },
-    { title: "个人设置", path: "/app/profile" },
-  ];
+  ]);
 }
 
 function getAlgorithmEngineerMenu(): MenuStructure {
-  return [
+  return prependSharedAgentOps([
     { title: "数据接入", path: "/ops/data/import", placeholder: true },
     { title: "数据处理", path: "/ops/data/processing", placeholder: true },
     { title: "测试集管理", path: "/ops/data/eval-sets", placeholder: true },
@@ -143,24 +137,22 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     { title: "实验追踪", path: "/ops/experiments", placeholder: true },
     { title: "部署记录", path: "/ops/deployments", placeholder: true },
     { title: "模型配置", path: "/governance/admin/models" },
-    { title: "个人设置", path: "/app/profile" },
-  ];
+  ]);
 }
 
 function getUserMenu(): MenuStructure {
-  return [
+  return prependSharedAgentOps([
     { title: "AI 检测对话", path: "/app/chat" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
     { title: "证据溯源", path: "/app/results/:id", placeholder: true },
     { title: "异常反馈", path: "/app/feedbacks" },
     { title: "报告导出", path: "/app/export", placeholder: true },
-    { title: "个人设置", path: "/app/profile" },
-  ];
+  ]);
 }
 
 function getExpertMenu(): MenuStructure {
-  return [
+  return prependSharedAgentOps([
     { title: "AI 检测对话", path: "/app/chat" },
     { title: "RAG 空间", path: "/app/rag-spaces" },
     { title: "任务管理", path: "/app/tasks" },
@@ -168,6 +160,5 @@ function getExpertMenu(): MenuStructure {
     { title: "证据溯源", path: "/app/results/:id", placeholder: true },
     { title: "异常反馈", path: "/app/feedbacks" },
     { title: "报告导出", path: "/app/export", placeholder: true },
-    { title: "个人设置", path: "/app/profile" },
-  ];
+  ]);
 }

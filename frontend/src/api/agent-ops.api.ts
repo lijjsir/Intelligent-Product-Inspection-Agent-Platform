@@ -11,13 +11,6 @@ import type {
   IntentRouteCreate,
   IntentRouteListQuery,
   IntentRouteUpdate,
-  PromptDSPyConfig,
-  PromptOptimizationConfig,
-  PromptOptimizationConfigPayload,
-  PromptOptimizationRun,
-  PromptOptimizationTarget,
-  PromptOptimizationTargetListQuery,
-  PromptOptimizationTargetsResponse,
   PromptVersion,
   PromptVersionCreate,
   PromptVersionListQuery,
@@ -74,47 +67,6 @@ export const agentOpsApi = {
 
   deletePrompt(id: string) {
     return http.delete<{ deleted: boolean }>(`/v1/agent-ops/prompts/${id}`);
-  },
-
-  getPromptDspy(id: string) {
-    return http.get<PromptDSPyConfig | null>(`/v1/agent-ops/prompts/${id}/dspy`);
-  },
-
-  updatePromptDspy(id: string, payload: PromptDSPyConfig) {
-    return http.put<PromptDSPyConfig>(`/v1/agent-ops/prompts/${id}/dspy`, payload);
-  },
-
-  listPromptOptimizationTargets(query: PromptOptimizationTargetListQuery) {
-    return http.get<PromptOptimizationTargetsResponse>("/v1/agent-ops/prompt-optimization/targets", { params: query });
-  },
-
-  getPromptOptimizationTarget(targetKey: string) {
-    return http.get<PromptOptimizationTarget>(`/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}`);
-  },
-
-  updatePromptOptimizationConfig(targetKey: string, payload: PromptOptimizationConfigPayload) {
-    return http.put<PromptOptimizationConfig>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/config`,
-      payload,
-    );
-  },
-
-  compilePromptOptimizationTarget(targetKey: string) {
-    return http.post<PromptOptimizationRun>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/compile`,
-    );
-  },
-
-  listPromptOptimizationRuns(targetKey: string) {
-    return http.get<PromptOptimizationRun[]>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/runs`,
-    );
-  },
-
-  rollbackPromptOptimizationTarget(targetKey: string) {
-    return http.post<PromptOptimizationRun>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/rollback`,
-    );
   },
 
   listRoutes(query: IntentRouteListQuery) {

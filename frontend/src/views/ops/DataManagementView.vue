@@ -13,28 +13,28 @@ const router = useRouter();
 const modules = [
   {
     title: "Agent 管理",
-    description: "自动发现当前 LangGraph 子图，查看运行状态、拓扑结构和可启停能力。",
+    description: "自动发现当前 LangGraph Agent，查看运行状态、拓扑结构和路由控制能力。",
     icon: Monitor,
     route: "governance-agents",
     color: "#2563eb",
   },
   {
-    title: "DSPy 优化工作台",
-    description: "自动发现需要优化的提示词位点，集中管理 DSPy 配置、编译运行和版本回退。",
+    title: "Prompt 管理",
+    description: "集中管理各 Agent 与流程阶段的提示词，支持代码默认、数据库版本、差异对比与回滚。",
     icon: EditPen,
     route: "governance-prompts",
     color: "#0f766e",
   },
   {
-    title: "意图路由配置",
-    description: "查看意图到智能体的流程图和路由优先级，理解请求如何被分发。",
+    title: "路由策略",
+    description: "查看请求如何从入口被识别、分流到目标 Agent，并核对规则优先级和命中路径。",
     icon: Guide,
     route: "governance-intent-routes",
     color: "#d97706",
   },
   {
     title: "检测标准",
-    description: "维护产品检测标准、缺陷分类和质量阈值，是 RAG 与判定的业务基线。",
+    description: "维护检测标准、缺陷分类和质量阈值，作为 RAG 与判定流程的业务基线。",
     icon: DocumentChecked,
     route: "governance-inspection-specs",
     color: "#dc2626",
@@ -51,7 +51,7 @@ function navigateTo(routeName: string) {
     <div class="page-header">
       <h1>治理工作台</h1>
       <p class="mt-2 text-sm text-zinc-500">
-        围绕智能体、DSPy 优化、意图路由和标准治理的核心配置入口。
+        围绕 Agent、Prompt、路由策略和检测标准的统一治理入口。
       </p>
     </div>
 
@@ -64,7 +64,10 @@ function navigateTo(routeName: string) {
         @click="navigateTo(item.route)"
       >
         <div class="module-card-body">
-          <div class="module-icon" :style="{ backgroundColor: `${item.color}18`, color: item.color }">
+          <div
+            class="module-icon"
+            :style="{ backgroundColor: `${item.color}18`, color: item.color }"
+          >
             <el-icon :size="28"><component :is="item.icon" /></el-icon>
           </div>
           <div class="module-info">
@@ -81,7 +84,6 @@ function navigateTo(routeName: string) {
 </template>
 
 <style scoped>
-
 .page-header {
   margin-bottom: 24px;
 }
@@ -92,7 +94,6 @@ function navigateTo(routeName: string) {
   color: #0f172a;
 }
 
-
 .module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
@@ -101,8 +102,8 @@ function navigateTo(routeName: string) {
 
 .module-card {
   cursor: pointer;
- border-radius: 20px;
- border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 20px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -126,7 +127,7 @@ function navigateTo(routeName: string) {
 .module-icon {
   width: 56px;
   height: 56px;
- border-radius: 16px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;

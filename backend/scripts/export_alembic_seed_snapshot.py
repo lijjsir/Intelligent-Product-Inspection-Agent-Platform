@@ -29,9 +29,6 @@ DEMO_TABLE_ORDER = [
     "rag_nodes",
     "rag_documents",
     "prompt_versions",
-    "prompt_dspy_configs",
-    "dspy_optimization_configs",
-    "dspy_optimization_runs",
     "agent_definitions",
     "agent_runtime_instances",
     "intent_routes",
@@ -58,9 +55,6 @@ FULL_TABLE_ORDER = [
     "rag_nodes",
     "rag_documents",
     "prompt_versions",
-    "prompt_dspy_configs",
-    "dspy_optimization_configs",
-    "dspy_optimization_runs",
     "agent_definitions",
     "agent_runtime_instances",
     "agent_execution_metrics",
@@ -202,28 +196,6 @@ async def _export_demo_snapshot(session, tables: dict[str, sa.Table]) -> dict[st
         _active_filters(tables["prompt_versions"]) + [tables["prompt_versions"].c.org_id.in_(org_ids)],
     )
     data["prompt_versions"] = _serialize_rows(prompt_versions)
-    prompt_ids = {row["id"] for row in prompt_versions}
-
-    prompt_dspy_configs = await _fetch_rows(
-        session,
-        tables["prompt_dspy_configs"],
-        _active_filters(tables["prompt_dspy_configs"]) + [tables["prompt_dspy_configs"].c.prompt_version_id.in_(prompt_ids)],
-    )
-    data["prompt_dspy_configs"] = _serialize_rows(prompt_dspy_configs)
-
-    dspy_optimization_configs = await _fetch_rows(
-        session,
-        tables["dspy_optimization_configs"],
-        _active_filters(tables["dspy_optimization_configs"]) + [tables["dspy_optimization_configs"].c.org_id.in_(org_ids)],
-    )
-    data["dspy_optimization_configs"] = _serialize_rows(dspy_optimization_configs)
-
-    dspy_optimization_runs = await _fetch_rows(
-        session,
-        tables["dspy_optimization_runs"],
-        _active_filters(tables["dspy_optimization_runs"]) + [tables["dspy_optimization_runs"].c.org_id.in_(org_ids)],
-    )
-    data["dspy_optimization_runs"] = _serialize_rows(dspy_optimization_runs)
 
     agent_definitions = await _fetch_rows(
         session,

@@ -13,19 +13,12 @@ import type {
   IntentRouteCreate,
   IntentRouteListQuery,
   IntentRouteUpdate,
-  PromptDSPyConfig,
-  PromptOptimizationConfigPayload,
-  PromptOptimizationRun,
-  PromptOptimizationTarget,
-  PromptOptimizationTargetListQuery,
-  PromptOptimizationTargetsResponse,
   PromptVersion,
   PromptVersionCreate,
   PromptVersionListQuery,
   PromptVersionUpdate,
   AgentDetail,
   AgentRuntimeEvent,
-  PauseRouteRequest,
   RagAnalysisResponse,
   RagTraceDetailResponse,
   RoutingStrategyOverview,
@@ -48,10 +41,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   const topology = ref<AgentTopology | null>(null);
   const routeTopology = ref<AgentTopology | null>(null);
   const routingStrategy = ref<RoutingStrategyOverview | null>(null);
-  const promptOptimization = ref<PromptOptimizationTargetsResponse | null>(null);
-  const promptOptimizationCurrent = ref<PromptOptimizationTarget | null>(null);
-  const promptOptimizationRuns = ref<PromptOptimizationRun[]>([]);
-
   const agentsTotal = ref(0);
   const promptsTotal = ref(0);
   const routesTotal = ref(0);
@@ -139,72 +128,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     await agentOpsApi.deletePrompt(id);
     prompts.value = prompts.value.filter((item) => item.id !== id);
     promptsTotal.value = Math.max(0, promptsTotal.value - 1);
-  }
-
-  async function fetchPromptDspy(id: string) {
-    const { data } = await agentOpsApi.getPromptDspy(id);
-    return data.data;
-  }
-
-  async function savePromptDspy(id: string, payload: PromptDSPyConfig) {
-    const { data } = await agentOpsApi.updatePromptDspy(id, payload);
-    const idx = prompts.value.findIndex((item) => item.id === id);
-    if (idx !== -1) {
-      prompts.value[idx] = {
-        ...prompts.value[idx],
-        dspy_config: data.data,
-      };
-    }
-    return data.data;
-  }
-
-  async function fetchPromptOptimizationTargets(query: PromptOptimizationTargetListQuery = {}) {
-    loading.value = true;
-    try {
-      const { data } = await agentOpsApi.listPromptOptimizationTargets(query);
-      promptOptimization.value = data.data;
-      return data.data;
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function fetchPromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.getPromptOptimizationTarget(targetKey);
-    promptOptimizationCurrent.value = data.data;
-    return data.data;
-  }
-
-  async function updatePromptOptimizationConfig(targetKey: string, payload: PromptOptimizationConfigPayload) {
-    const { data } = await agentOpsApi.updatePromptOptimizationConfig(targetKey, payload);
-    if (promptOptimizationCurrent.value?.target_key === targetKey) {
-      promptOptimizationCurrent.value = {
-        ...promptOptimizationCurrent.value,
-        config: data.data,
-      };
-    }
-    if (promptOptimization.value) {
-      promptOptimization.value.items = promptOptimization.value.items.map((item) =>
-        item.target_key === targetKey ? { ...item, config: data.data } : item,
-      );
-    }
-    return data.data;
-  }
-
-  async function compilePromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.compilePromptOptimizationTarget(targetKey);
-    return data.data;
-  }
-
-  async function fetchPromptOptimizationRuns(targetKey: string) {
-    const { data } = await agentOpsApi.listPromptOptimizationRuns(targetKey);
-    promptOptimizationRuns.value = data.data;
-    return data.data;
-  }
-
-  async function rollbackPromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.rollbackPromptOptimizationTarget(targetKey);
-    return data.data;
   }
 
   async function fetchRoutes(query: IntentRouteListQuery) {
@@ -421,9 +344,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     topology.value = null;
     routeTopology.value = null;
     routingStrategy.value = null;
-    promptOptimization.value = null;
-    promptOptimizationCurrent.value = null;
-    promptOptimizationRuns.value = [];
     agentDetail.value = null;
     runtimeEvents.value = [];
     routingCurrent.value = null;
@@ -433,6 +353,7 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     agentsTotal.value = 0;
     promptsTotal.value = 0;
     routesTotal.value = 0;
+    loading.value = false;
   }
 
   return {
@@ -447,9 +368,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     topology,
     routeTopology,
     routingStrategy,
-    promptOptimization,
-    promptOptimizationCurrent,
-    promptOptimizationRuns,
     agentDetail,
     runtimeEvents,
     routingCurrent,
@@ -470,14 +388,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     createPrompt,
     updatePrompt,
     deletePrompt,
-    fetchPromptDspy,
-    savePromptDspy,
-    fetchPromptOptimizationTargets,
-    fetchPromptOptimizationTarget,
-    updatePromptOptimizationConfig,
-    compilePromptOptimizationTarget,
-    fetchPromptOptimizationRuns,
-    rollbackPromptOptimizationTarget,
     fetchRoutes,
     fetchRoutingStrategy,
     fetchRoute,
