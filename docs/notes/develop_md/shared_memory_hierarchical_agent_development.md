@@ -19,7 +19,7 @@
 
 本文档整合以下材料：
 
-- `develop_md/memorystate.md` 中关于“共享记忆 vs LangGraph State”的定位。
+- `docs/notes/develop_md/memorystate.md` 中关于“共享记忆 vs LangGraph State”的定位。
 - `memory_agent/DEVELOPMENT_PLAN.md` 与 `memory_agent/rule/MEMORY_AGENT_INTEGRATION_RULES.md` 中的原型规则。
 - `memory_agent/docx/source_report.docx` 综述报告中的来源追踪、传播子图、局部回滚和恢复验证思想。
 - 功能图、角色图、架构图中的四层架构、五类角色和十步治理闭环。

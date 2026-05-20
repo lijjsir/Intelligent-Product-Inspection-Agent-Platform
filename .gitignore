@@ -29,6 +29,7 @@ backend/.env
 coverage/
 htmlcov/
 .worktrees/
+*.log
 
 # Runtime/generated local data
 runtime/
@@ -63,3 +64,4 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+*:Zone.Identifier

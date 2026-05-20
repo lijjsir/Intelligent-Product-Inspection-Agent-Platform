@@ -5,7 +5,8 @@
 - MySQL 8.0+
 - Redis 7+
 - Qdrant
-- 可选：RabbitMQ / MinIO（项目根目录 `docker-compose.yml` 已提供默认编排）
+- MinIO
+- Langfuse（项目根目录 `docker-compose.yml` 已提供本地自托管编排）
 
 ## 依赖安装
 - 使用 requirements：`pip install -r requirements.txt`
@@ -28,16 +29,16 @@ python main.py
 
 当前默认本地依赖端口：
 - MySQL：`127.0.0.1:3306`
-- Redis：`127.0.0.1:16379`
-- MinIO API：`http://127.0.0.1:19000`
-- MinIO Console：`http://127.0.0.1:19001`
+- Redis：`127.0.0.1:6379`
+- MinIO API：`http://127.0.0.1:9000`
+- MinIO Console：`http://127.0.0.1:9001`
 - Qdrant：`http://127.0.0.1:6333`
 - Langfuse Web：`http://127.0.0.1:3000`
-- Langfuse MinIO Console：`http://127.0.0.1:19091`
 
 说明：
 
 - 当前 Celery 默认 broker / result backend 使用 Redis
+- 默认本地栈不启动独立 `celery-worker`，任务会自动降级到应用内 `local_background`
 - `backend/.env.example` 已对齐宿主机本地开发端口
 - Langfuse 默认改为本地自托管，初始化项目 key 与 `backend/.env.example` 保持一致
 - 任务表字段当前使用 `spec_code`，迁移需执行到 `0010_task_spec_id_to_spec_code`

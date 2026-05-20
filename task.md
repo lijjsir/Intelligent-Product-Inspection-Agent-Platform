@@ -1,7 +1,7 @@
 # PIAP 功能实现推进状态
 
 说明：
-- 本文件已按当前代码实现、`PIAP_SDD_v1.0.0`、`PIAP_SYS_002_MySQL`、`PIAP_BAD_003_Architecture`、`PIAP_FED_004_Frontend`、`PIAP_CHG_006` 重新校准。
+- 本文件已按当前代码实现、`docs/project_docx/PIAP_SDD_v1.0.0.docx`、`docs/project_docx/PIAP_SYS_002_MySQL.docx`、`docs/project_docx/PIAP_BAD_003_Architecture.docx`、`docs/project_docx/PIAP_FED_004_Frontend.docx`、`docs/project_docx/PIAP_CHG_006.docx` 重新校准。
 - `已完成` 表示前后端或后端主链路已可用；`部分完成` 表示已有入口/数据结构，但未完全闭环；`待实现` 表示当前仓库尚未真正落地。
 - 旧文档中部分设计与现状不一致的内容已在本任务表中按“当前真实实现”修正，例如当前模型接入以火山引擎 Ark / OpenAI-compatible 接口为主，而非 Ollama 主链路。
 

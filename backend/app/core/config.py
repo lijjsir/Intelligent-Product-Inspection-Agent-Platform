@@ -16,11 +16,11 @@ class Settings(BaseSettings):
     db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
     db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
 
-    redis_url: str = "redis://localhost:16379/0"
+    redis_url: str = "redis://localhost:6379/0"
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 
-    s3_endpoint: str = "http://localhost:19000"
+    s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "piap"
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
@@ -29,12 +29,12 @@ class Settings(BaseSettings):
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
 
-    celery_broker_url: str = "redis://localhost:16379/0"
-    celery_result_backend: str = "redis://localhost:16379/0"
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
 
-    volcengine_api_key: str = "88b788ed-5070-42c3-85e7-2641472d2f57"
-    volcengine_model_id: str = "ep-20260325082100-v7vs6"
-    volcengine_embed_model: str = "ep-20260311135919-gktlx"
+    volcengine_api_key: str = ""
+    volcengine_model_id: str = ""
+    volcengine_embed_model: str = ""
     volcengine_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -65,13 +65,13 @@ class Settings(BaseSettings):
     ]
     cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
-    langfuse_enabled: bool = False
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
-    langfuse_host: str | None = None
-    langfuse_public_host: str | None = None
-    langfuse_project_id: str | None = None
-    langfuse_environment: str | None = None
+    langfuse_enabled: bool = True
+    langfuse_public_key: str | None = "pk-lf-piap-local"
+    langfuse_secret_key: str | None = "sk-lf-piap-local-secret"
+    langfuse_host: str | None = "http://127.0.0.1:3000"
+    langfuse_public_host: str | None = "http://127.0.0.1:3000"
+    langfuse_project_id: str | None = "piap-local"
+    langfuse_environment: str | None = "local-self-hosted"
     langfuse_release: str | None = None
 
     langfuse_init_org_id: str | None = None
