@@ -12,7 +12,7 @@ export const opsRoutes = [
   { path: "prompts/dspy", name: "ops-prompts-dspy", component: Placeholder, meta: { title: "DSPy 优化", roles: [ROLE_APP_DEVELOPER] } },
 
   // RAG section
-  { path: "rag", name: "ops-rag", component: () => import("@/views/ops/RagAnalysisView.vue"), meta: { title: "RAG 配置", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "rag", name: "ops-rag", component: () => import("@/views/ops/RagAnalysisView.vue"), meta: { title: "RAG 分析", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "rag/policies", name: "ops-rag-policies", component: Placeholder, meta: { title: "召回策略", roles: [ROLE_APP_DEVELOPER] } },
 
   // Developer tools

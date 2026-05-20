@@ -60,6 +60,19 @@ def test_routing_strategy_route_is_registered():
     assert route_methods["/agent-ops/routing/strategy"] == {"GET"}
 
 
+def test_rag_trace_detail_route_is_registered():
+    route_entries = [
+        (route.path, route.methods)
+        for route in router.routes
+        if isinstance(route, APIRoute)
+    ]
+    route_paths = [path for path, _methods in route_entries]
+    route_methods = {path: methods for path, methods in route_entries}
+
+    assert "/agent-ops/rag-analysis/traces/{trace_id}" in route_paths
+    assert route_methods["/agent-ops/rag-analysis/traces/{trace_id}"] == {"GET"}
+
+
 def test_agent_ops_admin_scope_is_global_for_rag_analysis():
     admin = SimpleNamespace(role="admin", roles=["admin"], org_id="org-admin")
     user = SimpleNamespace(role="user", roles=["user"], org_id="org-user")
@@ -661,10 +674,12 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "citation_coverage": 1.0,
                     "latency_ms": 12,
                     "source_graph": "quality_judgement",
+                    "agent_name": "Inspection Task Agent",
+                    "sub_route": "task_create",
+                    "trace_id": "trace-1",
+                    "top_score": 0.93,
                     "created_at": now,
                     "metadata": {
-                        "rag_space_name": "food",
-                        "product_family": "food",
                         "product_id": "FOOD-001",
                         "verdict": "pass",
                         "expectation_matched": True,
@@ -682,10 +697,13 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "citation_coverage": 0.4,
                     "latency_ms": 24,
                     "source_graph": "quality_judgement",
+                    "agent_name": "",
+                    "sub_route": "task_review",
+                    "trace_id": "trace-2",
+                    "top_score": 0.67,
                     "created_at": now,
                     "metadata": {
                         "rag_space_name": "food",
-                        "product_family": "food",
                         "product_id": "FOOD-003",
                         "verdict": "fail",
                         "expectation_matched": True,
@@ -693,22 +711,78 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                         "rule_hits": ["food.packaging.seal_integrity"],
                     },
                 },
+                {
+                    "task_id": "task-3",
+                    "session_id": "session-3",
+                    "query": "stale unknown row",
+                    "rag_space_id": "unknown",
+                    "hit_count": 0,
+                    "hit_rate": 0.0,
+                    "citation_coverage": 0.0,
+                    "latency_ms": 32,
+                    "source_graph": "quality_judgement",
+                    "agent_name": "Inspection Task Agent",
+                    "sub_route": "task_create",
+                    "trace_id": "trace-3",
+                    "top_score": 0.0,
+                    "created_at": now,
+                    "metadata": {
+                        "rag_space_name": "unknown",
+                        "verdict": "warning",
+                        "expectation_matched": False,
+                        "top_sources": [],
+                        "rule_hits": [],
+                    },
+                },
+            ]
+
+    class FakeSpaceRepo:
+        def __init__(self, _session):
+            pass
+
+        async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200):
+            assert org_id == "org-1"
+            assert owner_user_id is None
+            assert limit == 500
+            return [
+                SimpleNamespace(id="rag-food", name="食品知识库"),
+                SimpleNamespace(id="rag-drink", name="饮料知识库"),
+            ]
+
+    class FakeAgentRepo:
+        async def list_all_active(self):
+            return [
+                SimpleNamespace(name="Inspection Task Agent", subgraph_key="quality_judgement"),
+                SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
             ]
 
     original_repo = agent_ops_mod.RagAnalysisRepository
+    original_space_repo = agent_ops_mod.RagSpaceRepository
     agent_ops_mod.RagAnalysisRepository = lambda session, org_id: FakeRagRepo()
+    agent_ops_mod.RagSpaceRepository = FakeSpaceRepo
     try:
         svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+        svc._agent_repo = FakeAgentRepo()
         data = await svc.get_rag_analysis()
     finally:
         agent_ops_mod.RagAnalysisRepository = original_repo
+        agent_ops_mod.RagSpaceRepository = original_space_repo
 
     assert data.stats.total_queries == 3
-    assert data.recent_items[0].rag_space_name == "food"
-    assert data.recent_items[0].product_family == "food"
+    assert [(item.key, item.label) for item in data.space_options] == [("rag-food", "食品知识库"), ("rag-drink", "饮料知识库")]
+    assert [(item.key, item.label) for item in data.source_agent_options] == [
+        ("Inspection Task Agent", "Inspection Task Agent"),
+        ("Quality Chat", "Quality Chat"),
+    ]
+    assert data.recent_items[0].rag_space_name == "食品知识库"
+    assert data.recent_items[0].source_agent == "Inspection Task Agent"
+    assert data.recent_items[1].source_agent == "Inspection Task Agent"
+    assert data.recent_items[1].sub_route == "task_review"
+    assert data.recent_items[1].trace_id == "trace-2"
     assert data.space_breakdown[0].key == "rag-food"
-    assert data.source_graph_breakdown[0].key == "quality_judgement"
-    assert data.product_family_breakdown[0].key == "food"
+    assert data.space_breakdown[0].label == "食品知识库"
+    assert [item.key for item in data.space_breakdown] == ["rag-food"]
+    assert data.source_agent_breakdown[0].key == "Inspection Task Agent"
     assert {item.rule_key for item in data.evidence_impact} == {
         "food.traceability.qr_code_required",
         "food.packaging.seal_integrity",
@@ -735,13 +809,195 @@ async def test_get_rag_analysis_uses_global_scope_when_requested():
         async def get_recent_rag_items(self, limit: int = 200):
             return []
 
+    class FakeSpaceRepo:
+        def __init__(self, _session):
+            pass
+
+        async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200):
+            assert org_id == "org-1"
+            assert owner_user_id is None
+            assert limit == 500
+            return []
+
+    class FakeAgentRepo:
+        async def list_all_active(self):
+            return []
+
     original_repo = agent_ops_mod.RagAnalysisRepository
+    original_space_repo = agent_ops_mod.RagSpaceRepository
     agent_ops_mod.RagAnalysisRepository = FakeRagRepo
+    agent_ops_mod.RagSpaceRepository = FakeSpaceRepo
     try:
         svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+        svc._agent_repo = FakeAgentRepo()
         await svc.get_rag_analysis(global_scope=True)
         await svc.get_rag_analysis(global_scope=False)
     finally:
         agent_ops_mod.RagAnalysisRepository = original_repo
+        agent_ops_mod.RagSpaceRepository = original_space_repo
 
     assert captured_org_ids == [None, "org-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_rag_analysis_normalizes_legacy_quality_rows_to_chat_agent():
+    class FakeRagRepo:
+        async def get_rag_stats(self, days: int = 7):
+            return {
+                "total_queries": 1,
+                "avg_hit_rate": 0.25,
+                "citation_coverage": 1.0,
+                "empty_recall_count": 0,
+                "avg_latency_ms": 18.0,
+            }
+
+        async def get_recent_rag_items(self, limit: int = 200):
+            now = datetime.now(timezone.utc)
+            return [
+                {
+                    "task_id": "",
+                    "session_id": "session-1",
+                    "query": "legacy rag question",
+                    "rag_space_id": "rag-food",
+                    "top_k": 4,
+                    "hit_count": 1,
+                    "hit_rate": 0.25,
+                    "citation_coverage": 1.0,
+                    "latency_ms": 18,
+                    "source_graph": "quality_judgement",
+                    "agent_name": "",
+                    "sub_route": "",
+                    "trace_id": None,
+                    "top_score": 0.69,
+                    "created_at": now,
+                    "metadata": {
+                        "intent": "rag_qa",
+                        "retrieved_chunks": [{"chunk_id": "chunk-1"}],
+                        "used_citations": [{"id": "rag-1"}],
+                        "rule_hits": [],
+                    },
+                }
+            ]
+
+    class FakeSpaceRepo:
+        def __init__(self, _session):
+            pass
+
+        async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200):
+            return [SimpleNamespace(id="rag-food", name="食品知识库")]
+
+    class FakeAgentRepo:
+        async def list_all_active(self):
+            return [
+                SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
+                SimpleNamespace(name="Inspection Task Agent", subgraph_key="inspection_task"),
+                SimpleNamespace(name="Quality Judgement", subgraph_key="quality_judgement"),
+            ]
+
+    original_repo = agent_ops_mod.RagAnalysisRepository
+    original_space_repo = agent_ops_mod.RagSpaceRepository
+    agent_ops_mod.RagAnalysisRepository = lambda session, org_id: FakeRagRepo()
+    agent_ops_mod.RagSpaceRepository = FakeSpaceRepo
+    try:
+        svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+        svc._agent_repo = FakeAgentRepo()
+        data = await svc.get_rag_analysis()
+    finally:
+        agent_ops_mod.RagAnalysisRepository = original_repo
+        agent_ops_mod.RagSpaceRepository = original_space_repo
+
+    assert data.recent_items[0].source_graph == "chat"
+    assert data.recent_items[0].source_agent == "Quality Chat"
+    assert data.recent_items[0].sub_route == "rag_qa"
+    assert data.recent_items[0].evidence_found is True
+    assert data.recent_items[0].evidence_used is True
+    assert data.recent_items[0].verdict_impacted is False
+
+
+@pytest.mark.asyncio
+async def test_get_rag_trace_detail_returns_database_backed_payload():
+    captured_org_ids: list[str | None] = []
+
+    class FakeRagRepo:
+        def __init__(self, _session, org_id):
+            captured_org_ids.append(org_id)
+
+        async def get_trace_detail(self, trace_id: str):
+            assert trace_id == "trace-1"
+            now = datetime.now(timezone.utc)
+            return {
+                "query": "苹果划痕怎么判定",
+                "rag_space_id": "rag-food",
+                "source_graph": "quality_judgement",
+                "agent_name": "Inspection Task Agent",
+                "sub_route": "inspection_execute",
+                "top_k": 4,
+                "hit_count": 2,
+                "hit_rate": 0.5,
+                "citation_coverage": 1.0,
+                "latency_ms": 126,
+                "trace_id": "trace-1",
+                "top_score": 0.91,
+                "metadata": {
+                    "rag_space_name": "食品知识库",
+                    "top_sources": ["apple-spec.pdf"],
+                    "rule_hits": ["apple.surface.scratch_limit"],
+                    "verdict": "pass",
+                    "product_family": "food",
+                    "expectation_matched": True,
+                    "evidence_found": True,
+                    "evidence_used": True,
+                    "verdict_impacted": True,
+                    "retrieval_config": {"top_k": 4, "scope_node_ids": ["n-1"]},
+                    "retrieved_chunks": [{"chunk_id": "chunk-1", "source": "apple-spec.pdf"}],
+                    "used_citations": [{"id": "rag-1"}],
+                    "answer": "超过 3mm 的划痕通常判定为不合格。",
+                    "result": {"verdict": "pass"},
+                },
+                "created_at": now,
+            }
+
+    class FakeSpaceRepo:
+        def __init__(self, _session):
+            pass
+
+        async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200):
+            assert org_id == "org-1"
+            assert owner_user_id is None
+            assert limit == 500
+            return [SimpleNamespace(id="rag-food", name="食品知识库")]
+
+    class FakeAgentRepo:
+        async def list_all_active(self):
+            return [
+                SimpleNamespace(name="Inspection Task Agent", subgraph_key="quality_judgement"),
+                SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
+            ]
+
+    original_repo = agent_ops_mod.RagAnalysisRepository
+    original_space_repo = agent_ops_mod.RagSpaceRepository
+    agent_ops_mod.RagAnalysisRepository = FakeRagRepo
+    agent_ops_mod.RagSpaceRepository = FakeSpaceRepo
+    try:
+        svc = agent_ops_mod.AgentOpsService(session=None, org_id="org-1", actor_id="user-1")
+        svc._agent_repo = FakeAgentRepo()
+        data = await svc.get_rag_trace_detail("trace-1")
+    finally:
+        agent_ops_mod.RagAnalysisRepository = original_repo
+        agent_ops_mod.RagSpaceRepository = original_space_repo
+
+    assert captured_org_ids == ["org-1"]
+    assert data.query == "苹果划痕怎么判定"
+    assert data.rag_space_name == "食品知识库"
+    assert data.source_agent == "Inspection Task Agent"
+    assert data.top_k == 4
+    assert data.retrieval_config["scope_node_ids"] == ["n-1"]
+    assert data.retrieved_chunks[0]["chunk_id"] == "chunk-1"
+    assert data.used_citations[0]["id"] == "rag-1"
+    assert data.rule_hits == ["apple.surface.scratch_limit"]
+    assert data.verdict == "pass"
+    assert data.evidence_found is True
+    assert data.evidence_used is True
+    assert data.verdict_impacted is True
+    assert data.answer == "超过 3mm 的划痕通常判定为不合格。"
+    assert data.result == {"verdict": "pass"}

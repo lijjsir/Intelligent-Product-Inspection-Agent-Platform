@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.exceptions import NotFoundError
 from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
@@ -29,6 +30,7 @@ from app.schemas.agent_ops import (
     PromptOptimizationTargetResponse,
     PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
+    RagTraceDetailResponse,
     AgentRuntimeOverviewResponse,
     AgentRuntimeInstanceResponse,
     AgentTopologyResponse,
@@ -422,6 +424,20 @@ async def get_rag_analysis(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.get_rag_analysis(global_scope=_use_global_scope(current)))
+
+
+@router.get("/rag-analysis/traces/{trace_id}", response_model=ResponseEnvelope[RagTraceDetailResponse])
+async def get_rag_trace_detail(
+    trace_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        data = await svc.get_rag_trace_detail(trace_id, global_scope=_use_global_scope(current))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/runtime/overview", response_model=ResponseEnvelope[AgentRuntimeOverviewResponse])

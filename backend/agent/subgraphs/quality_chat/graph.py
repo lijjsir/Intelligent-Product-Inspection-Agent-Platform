@@ -814,18 +814,41 @@ async def _persist_rag_query_log(session, state: ChatState) -> None:
     if bool(metrics.get("skipped")):
         return
     rag_repo = RagAnalysisRepository(session, str(state["org_id"]))
-    citation_count = len(list(state.get("citations") or []))
+    citations = [dict(item) for item in list(state.get("citations") or []) if isinstance(item, dict)]
+    retrieved_chunks = [dict(item) for item in list(state.get("retrieved_chunks") or []) if isinstance(item, dict)]
+    response_payload = dict(state.get("response_payload") or {})
+    citation_count = len(citations)
     hit_count = int(metrics.get("hit_count") or 0)
-    hit_rate = min(1.0, hit_count / 4) if hit_count else 0.0
+    top_k = max(int(metrics.get("top_k") or 0), 0)
+    hit_rate = min(1.0, hit_count / top_k) if hit_count and top_k else 0.0
     coverage = 0.0
     if hit_count > 0:
         coverage = min(1.0, citation_count / hit_count)
+    top_sources: list[str] = []
+    for item in [*retrieved_chunks, *citations]:
+        source = str(item.get("source") or "").strip()
+        if source and source not in top_sources:
+            top_sources.append(source)
+    expectation_check = response_payload.get("expectation_check")
+    expectation_matched = None
+    if isinstance(expectation_check, dict):
+        expectation_matched = expectation_check.get("matched")
+    verdict = response_payload.get("verdict")
+    if verdict is None:
+        result_card = response_payload.get("result_card")
+        if isinstance(result_card, dict):
+            verdict = result_card.get("verdict")
+    normalized_verdict = str(verdict).strip() if verdict is not None else ""
+    evidence_found = bool(hit_count > 0 or retrieved_chunks or top_sources)
+    evidence_used = bool(citations)
+    verdict_impacted = bool(normalized_verdict and response_payload.get("rule_hits"))
     await rag_repo.create_log(
         {
             "session_id": str(state["session_id"]),
             "user_id": str(state["user_id"]),
             "query": str(metrics.get("query") or state.get("query") or ""),
             "rag_space_id": metrics.get("rag_space_id"),
+            "top_k": top_k,
             "hit_count": hit_count,
             "hit_rate": round(hit_rate, 4),
             "citation_coverage": round(coverage, 4),
@@ -839,6 +862,24 @@ async def _persist_rag_query_log(session, state: ChatState) -> None:
                 "intent": state.get("intent"),
                 "empty_recall": bool(metrics.get("empty_recall")),
                 "top_score": float(metrics.get("top_score") or 0.0),
+                "top_sources": top_sources[:5],
+                "rule_hits": [str(item) for item in list(response_payload.get("rule_hits") or []) if str(item).strip()],
+                "verdict": normalized_verdict or None,
+                "product_family": str((state.get("metadata") or {}).get("product_family") or "").strip() or None,
+                "expectation_matched": expectation_matched,
+                "evidence_found": evidence_found,
+                "evidence_used": evidence_used,
+                "verdict_impacted": verdict_impacted,
+                "retrieval_config": {
+                    "rag_space_id": metrics.get("rag_space_id"),
+                    "rag_space_name": str((((state.get("ext") or {}).get("selected_rag_space") or {}).get("name") or "")).strip() or None,
+                    "top_k": top_k,
+                    "scope_node_ids": _selected_rag_scope_node_ids(state.get("ext") or {}),
+                },
+                "retrieved_chunks": retrieved_chunks,
+                "used_citations": citations,
+                "answer": str(response_payload.get("answer") or "").strip() or None,
+                "result": response_payload.get("result") or response_payload.get("result_card"),
             },
         }
     )

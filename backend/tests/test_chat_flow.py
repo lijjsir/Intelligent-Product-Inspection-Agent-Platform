@@ -12,6 +12,7 @@ from agent.subgraphs.quality_chat.graph import (
     _enqueue_trust_scoring,
     _extract_named_user_from_history,
     _fallback_answer,
+    _persist_rag_query_log,
     _smalltalk_answer,
     finalizer,
     knowledge,
@@ -376,6 +377,98 @@ def test_rag_metadata_missing_detection_matches_missing_table_error():
         Exception("Table 'piap_main.rag_spaces' doesn't exist"),
     )
     assert _is_rag_metadata_missing(exc) is True
+
+
+@pytest.mark.asyncio
+async def test_persist_rag_query_log_writes_trace_detail_payload(monkeypatch):
+    payloads: list[dict] = []
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_log(self, data: dict):
+            payloads.append(data)
+            return None
+
+    monkeypatch.setattr(
+        "agent.subgraphs.quality_chat.graph.RagAnalysisRepository",
+        FakeRagAnalysisRepository,
+    )
+
+    state = {
+        "org_id": "org-1",
+        "session_id": "session-1",
+        "user_id": "user-1",
+        "query": "苹果划痕怎么判定",
+        "intent": "rag_qa",
+        "sub_route": "rag_qa",
+        "trace": {"trace_id": "trace-rag-1"},
+        "retrieval_metrics": {
+            "query": "苹果划痕怎么判定",
+            "rag_space_id": "rag-food",
+            "hit_count": 2,
+            "latency_ms": 320,
+            "top_score": 0.87,
+            "top_k": 5,
+        },
+        "retrieved_chunks": [
+            {
+                "chunk_id": "chunk-1",
+                "title": "苹果外观标准",
+                "source": "apple-spec.pdf",
+                "quote": "划痕长度超过 3mm 判定为不合格",
+                "score": 0.87,
+            },
+            {
+                "chunk_id": "chunk-2",
+                "title": "苹果包装规范",
+                "source": "packaging.docx",
+                "quote": "轻微擦痕可接受",
+                "score": 0.73,
+            },
+        ],
+        "citations": [
+            {
+                "id": "rag-1",
+                "title": "苹果外观标准",
+                "source": "apple-spec.pdf",
+                "quote": "划痕长度超过 3mm 判定为不合格",
+                "score": 0.87,
+                "kind": "rag",
+            }
+        ],
+        "response_payload": {
+            "answer": "超过 3mm 的划痕通常判定为不合格。",
+            "summary": "基于知识库回答",
+        },
+        "ext": {
+            "selected_rag_space": {
+                "id": "rag-food",
+                "name": "食品知识库",
+            }
+        },
+    }
+
+    await _persist_rag_query_log(object(), state)
+
+    assert len(payloads) == 1
+    log = payloads[0]
+    assert log["query"] == "苹果划痕怎么判定"
+    assert log["rag_space_id"] == "rag-food"
+    assert log["top_k"] == 5
+    assert log["hit_count"] == 2
+    assert log["hit_rate"] == 0.4
+    assert log["trace_id"] == "trace-rag-1"
+    assert log["metadata_json"]["top_sources"] == ["apple-spec.pdf", "packaging.docx"]
+    assert log["metadata_json"]["rule_hits"] == []
+    assert log["metadata_json"]["verdict"] is None
+    assert log["metadata_json"]["product_family"] is None
+    assert log["metadata_json"]["expectation_matched"] is None
+    assert log["metadata_json"]["retrieval_config"]["top_k"] == 5
+    assert log["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
+    assert log["metadata_json"]["used_citations"][0]["id"] == "rag-1"
+    assert log["metadata_json"]["answer"] == "超过 3mm 的划痕通常判定为不合格。"
 
 
 @pytest.mark.asyncio

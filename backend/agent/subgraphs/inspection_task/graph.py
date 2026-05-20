@@ -632,17 +632,19 @@ class InspectionTaskGraph:
             request=request, product_id=product_id, product_family=product_family,
             product_name=product_name, spec_code=spec_code, structured_record=structured_record,
         )
+        retrieval_top_k = int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4
         async with get_session() as session:
             rag_retrieval_service = RagRetrievalService(session, org_id=request.org_id, user_id=request.user_id)
             rag_result = await rag_retrieval_service.search(
                 rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
                 query=retrieval_query,
-                top_k=int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4,
+                top_k=retrieval_top_k,
                 scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
             )
 
         file_citations = _build_file_citations(request, parsed_files)
         citations = _merge_citations(file_citations, list(rag_result.get("hits") or []))
+        rag_used_citations = [dict(item) for item in citations if str(item.get("kind") or "") == "rag"]
 
         reasoning_chain = {
             "summary": "已基于结构化文件、产品类别解析结果和 RAG 证据完成检验标准评估。",
@@ -712,6 +714,7 @@ class InspectionTaskGraph:
             spec_code=spec_code, verdict=verdict, overall_score=overall_score, risk_level=risk_level,
             evaluation=evaluation, rag_summary=rag_summary, expectation_check=expectation_check,
         )
+        verdict_rule_hits = list(dict.fromkeys(result_card["failed_rules"]))
 
         answer_lines = [
             _build_answer_title(product_family=product_family, product_id=product_id,
@@ -778,7 +781,8 @@ class InspectionTaskGraph:
             rag_queries=[RagQueryLog(
                 query=retrieval_query,
                 rag_space_id=str(rag_result.get("rag_space_id") or "") or None,
-                hit_count=len(rag_hits), hit_rate=1.0 if rag_hits else 0.0,
+                top_k=retrieval_top_k,
+                hit_count=len(rag_hits), hit_rate=round(min(1.0, len(rag_hits) / max(retrieval_top_k, 1)), 4),
                 citation_coverage=float(ai_gate.get("evidence_score") or 0.0),
                 latency_ms=latency_ms, source_graph="inspection_task",
                 agent_name="inspection_task",
@@ -790,9 +794,22 @@ class InspectionTaskGraph:
                          "product_name": product_name, "spec_code": spec_code, "verdict": verdict,
                          "top_score": float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
                          "expectation_matched": None if not expectation_check else expectation_check["matched"],
+                         "evidence_found": bool(rag_hits),
+                         "evidence_used": bool(rag_used_citations),
+                         "verdict_impacted": bool(verdict_rule_hits),
                          "rag_space_name": rag_result.get("rag_space_name"),
                          "top_sources": rag_summary["top_sources"],
-                         "rule_hits": list(dict.fromkeys(result_card["failed_rules"])),
+                         "rule_hits": verdict_rule_hits,
+                         "retrieval_config": {
+                             "rag_space_id": str(rag_result.get("rag_space_id") or "") or None,
+                             "rag_space_name": str(rag_result.get("rag_space_name") or "") or None,
+                             "top_k": retrieval_top_k,
+                             "scope_node_ids": list(request.ext.get("selected_rag_scope_node_ids") or []),
+                         },
+                         "retrieved_chunks": rag_hits,
+                         "used_citations": rag_used_citations,
+                         "answer": answer,
+                         "result": result_card,
                          "dspy_runtime": runtime_profile.as_metadata()},
             )],
         )

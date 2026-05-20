@@ -73,7 +73,7 @@ function getAdminMenu(): MenuStructure {
       items: [
         { title: "Agent 管理", path: "/ops/agents" },
         { title: "Prompt 管理", path: "/ops/prompts" },
-        { title: "RAG 配置", path: "/ops/rag" },
+        { title: "RAG 分析", path: "/ops/rag" },
         { title: "分析看板", path: "/ops/analytics" },
         { title: "计费管理", path: "/ops/billing" },
       ],
@@ -106,7 +106,7 @@ function getAppDeveloperMenu(): MenuStructure {
     { title: "路由策略", path: "/ops/agents/intent-routes" },
     { title: "Prompt 管理", path: "/ops/prompts" },
     { title: "DSPy 优化", path: "/ops/prompts/dspy", placeholder: true },
-    { title: "RAG 配置", path: "/ops/rag" },
+    { title: "RAG 分析", path: "/ops/rag" },
     { title: "召回策略", path: "/ops/rag/policies", placeholder: true },
     { title: "个人设置", path: "/app/profile" },
   ];
