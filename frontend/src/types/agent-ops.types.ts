@@ -288,6 +288,11 @@ export interface RagAnalysisBreakdownItem {
   avg_citation_coverage: number;
 }
 
+export interface RagAnalysisOption {
+  key: string;
+  label: string;
+}
+
 export interface RagEvidenceImpactItem {
   rule_key: string;
   verdicts: string[];
@@ -306,21 +311,58 @@ export interface RagAnalysisItem {
   hit_rate: number;
   citation_coverage: number;
   latency_ms: number;
+  source_agent?: string | null;
   source_graph?: string | null;
-  product_family?: string | null;
+  sub_route?: string | null;
+  trace_id?: string | null;
+  top_score?: number | null;
   product_id?: string | null;
   verdict?: string | null;
   expectation_matched?: boolean | null;
+  evidence_found: boolean;
+  evidence_used: boolean;
+  verdict_impacted: boolean;
   top_sources: string[];
   rule_hits: string[];
   created_at: string;
 }
 
+export interface RagTraceDetailResponse {
+  trace_id: string;
+  query?: string | null;
+  rag_space_id?: string | null;
+  rag_space_name?: string | null;
+  source_agent?: string | null;
+  source_graph?: string | null;
+  sub_route?: string | null;
+  top_k: number;
+  hit_count: number;
+  hit_rate: number;
+  citation_coverage: number;
+  latency_ms: number;
+  top_score?: number | null;
+  product_family?: string | null;
+  expectation_matched?: boolean | null;
+  evidence_found: boolean;
+  evidence_used: boolean;
+  verdict_impacted: boolean;
+  retrieval_config: Record<string, unknown>;
+  retrieved_chunks: Record<string, unknown>[];
+  used_citations: Record<string, unknown>[];
+  rule_hits: string[];
+  verdict?: string | null;
+  answer?: string | null;
+  result?: unknown;
+  top_sources: string[];
+  created_at?: string | null;
+}
+
 export interface RagAnalysisResponse {
   stats: RagAnalysisStats;
+  space_options: RagAnalysisOption[];
+  source_agent_options: RagAnalysisOption[];
   space_breakdown: RagAnalysisBreakdownItem[];
-  source_graph_breakdown: RagAnalysisBreakdownItem[];
-  product_family_breakdown: RagAnalysisBreakdownItem[];
+  source_agent_breakdown: RagAnalysisBreakdownItem[];
   evidence_impact: RagEvidenceImpactItem[];
   recent_items: RagAnalysisItem[];
 }

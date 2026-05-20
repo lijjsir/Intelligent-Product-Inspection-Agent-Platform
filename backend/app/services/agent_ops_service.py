@@ -30,6 +30,7 @@ from app.repositories.agent_management_repo import (
     AgentConfigVersionRepository,
     AgentBatchOperationRepository,
 )
+from app.repositories.rag_space_repo import RagSpaceRepository
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
     AgentDefinitionResponse,
@@ -55,10 +56,12 @@ from app.schemas.agent_ops import (
     PromptOptimizationTargetResponse,
     PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
+    RagAnalysisOption,
     RagAnalysisBreakdownItem,
     RagEvidenceImpactItem,
     RagAnalysisStats,
     RagAnalysisItem,
+    RagTraceDetailResponse,
     AgentRuntimeOverviewResponse,
     AgentRuntimeInstanceResponse,
     AgentTopologyResponse,
@@ -104,6 +107,84 @@ class AgentOpsService:
                 "action": action,
             }
         )
+
+    @staticmethod
+    def _clean_rag_text(value: object | None) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.lower() in {"unknown", "null", "none", "nan"}:
+            return None
+        return text
+
+    @classmethod
+    def _normalize_rag_sub_route(cls, raw_value: object | None) -> str | None:
+        value = cls._clean_rag_text(raw_value)
+        if value == "general_qa":
+            return "general_chat"
+        return value
+
+    @classmethod
+    def _derive_rag_source_key(cls, item: dict) -> str | None:
+        metadata = dict(item.get("metadata") or {})
+        raw_agent = cls._clean_rag_text(item.get("agent_name")) or cls._clean_rag_text(metadata.get("agent"))
+        if raw_agent in {"chat", "inspection_task"}:
+            return raw_agent
+        raw_graph = cls._clean_rag_text(item.get("source_graph")) or cls._clean_rag_text(metadata.get("source_graph"))
+        if raw_graph in {"chat", "inspection_task"}:
+            return raw_graph
+        normalized_sub_route = cls._normalize_rag_sub_route(
+            item.get("sub_route") or metadata.get("sub_route") or metadata.get("intent")
+        )
+        if raw_graph in {"quality_judgement", "llm_native_quality", "legacy_quality"}:
+            if normalized_sub_route in {"task_create", "inspection_execute"}:
+                return "inspection_task"
+            if normalized_sub_route in {"general_chat", "rag_qa", "quality_qa"}:
+                return "chat"
+            if item.get("task_id"):
+                return "inspection_task"
+            if item.get("session_id"):
+                return "chat"
+        return raw_agent or raw_graph
+
+    @classmethod
+    def _resolve_rag_source_agent(
+        cls,
+        item: dict,
+        *,
+        source_display_map: dict[str, str],
+    ) -> tuple[str | None, str | None, str | None]:
+        metadata = dict(item.get("metadata") or {})
+        normalized_key = cls._derive_rag_source_key(item)
+        raw_agent = cls._clean_rag_text(item.get("agent_name")) or cls._clean_rag_text(metadata.get("agent"))
+        source_graph = normalized_key or cls._clean_rag_text(item.get("source_graph"))
+        source_agent = source_display_map.get(normalized_key or "") if normalized_key else None
+        if source_agent is None and raw_agent and raw_agent not in {"chat", "inspection_task", "quality_judgement", "llm_native_quality", "legacy_quality"}:
+            source_agent = raw_agent
+        if source_agent is None and source_graph:
+            source_agent = source_display_map.get(source_graph) or source_graph
+        sub_route = cls._normalize_rag_sub_route(
+            item.get("sub_route") or metadata.get("sub_route") or metadata.get("intent")
+        )
+        return source_agent, source_graph, sub_route
+
+    @classmethod
+    def _derive_rag_effectiveness(cls, item: dict) -> tuple[bool, bool, bool]:
+        metadata = dict(item.get("metadata") or {})
+        top_sources = [str(source) for source in list(metadata.get("top_sources") or []) if str(source).strip()]
+        retrieved_chunks = [chunk for chunk in list(metadata.get("retrieved_chunks") or []) if isinstance(chunk, dict)]
+        used_citations = [citation for citation in list(metadata.get("used_citations") or []) if isinstance(citation, dict)]
+        rule_hits = [str(rule) for rule in list(metadata.get("rule_hits") or []) if str(rule).strip()]
+        evidence_found = metadata.get("evidence_found")
+        if evidence_found is None:
+            evidence_found = bool(int(item.get("hit_count") or 0) > 0 or retrieved_chunks or top_sources)
+        evidence_used = metadata.get("evidence_used")
+        if evidence_used is None:
+            evidence_used = bool(used_citations)
+        verdict_impacted = metadata.get("verdict_impacted")
+        if verdict_impacted is None:
+            verdict_impacted = bool(rule_hits)
+        return bool(evidence_found), bool(evidence_used), bool(verdict_impacted)
 
     async def _sync_registered_agents(self) -> None:
         catalog_subgraph_keys = {str(item["subgraph_key"]) for item in get_registered_subgraphs()}
@@ -846,6 +927,40 @@ class AgentOpsService:
         stats_data = await rag_repo.get_rag_stats()
         recent_items_data = await rag_repo.get_recent_rag_items(limit=200)
 
+        rag_space_name_map: dict[str, str] = {}
+        if not global_scope:
+            rag_spaces = await RagSpaceRepository(self._session).list_for_org(
+                org_id=self._org_id,
+                owner_user_id=None,
+                limit=500,
+            )
+            rag_space_name_map = {
+                str(space.id): str(space.name).strip()
+                for space in rag_spaces
+                if getattr(space, "id", None) and str(getattr(space, "name", "")).strip()
+            }
+
+        agent_name_map: dict[str, str] = {}
+        try:
+            registered_agents = await self._agent_repo.list_all_active()
+            agent_name_map = {
+                str(item.subgraph_key): str(item.name).strip()
+                for item in registered_agents
+                if getattr(item, "subgraph_key", None) and str(getattr(item, "name", "")).strip()
+            }
+        except Exception:
+            agent_name_map = {}
+        source_display_map = {
+            "chat": agent_name_map.get("chat") or "Quality Chat",
+            "inspection_task": agent_name_map.get("inspection_task") or "Inspection Task Agent",
+            "quality_judgement": agent_name_map.get("quality_judgement") or "Quality Judgement",
+        }
+
+        space_options = [
+            RagAnalysisOption(key=space_id, label=space_name)
+            for space_id, space_name in sorted(rag_space_name_map.items(), key=lambda entry: entry[1])
+        ]
+
         stats = RagAnalysisStats(
             total_queries=stats_data["total_queries"],
             avg_hit_rate=stats_data["avg_hit_rate"],
@@ -854,22 +969,39 @@ class AgentOpsService:
             avg_latency_ms=stats_data["avg_latency_ms"],
         )
 
+        def resolve_rag_space(item: dict) -> tuple[str | None, str | None]:
+            rag_space_id = self._clean_rag_text(item.get("rag_space_id"))
+            metadata = item.get("metadata") or {}
+            rag_space_name = (
+                rag_space_name_map.get(rag_space_id or "")
+                or self._clean_rag_text(metadata.get("rag_space_name"))
+            )
+            if rag_space_id and rag_space_id not in rag_space_name_map and rag_space_name is None:
+                rag_space_id = None
+            return rag_space_id, rag_space_name
+
         recent_items = [
             RagAnalysisItem(
                 task_id=item["task_id"],
                 session_id=item.get("session_id"),
                 query=item.get("query"),
-                rag_space_id=item.get("rag_space_id"),
-                rag_space_name=str((item.get("metadata") or {}).get("rag_space_name") or "") or None,
+                rag_space_id=resolve_rag_space(item)[0],
+                rag_space_name=resolve_rag_space(item)[1],
                 hit_count=item.get("hit_count", 0),
                 hit_rate=item["hit_rate"],
                 citation_coverage=item["citation_coverage"],
                 latency_ms=item["latency_ms"],
-                source_graph=item.get("source_graph"),
-                product_family=str((item.get("metadata") or {}).get("product_family") or "") or None,
+                source_agent=self._resolve_rag_source_agent(item, source_display_map=source_display_map)[0],
+                source_graph=self._resolve_rag_source_agent(item, source_display_map=source_display_map)[1],
+                sub_route=self._resolve_rag_source_agent(item, source_display_map=source_display_map)[2],
+                trace_id=self._clean_rag_text(item.get("trace_id")),
+                top_score=float(item.get("top_score")) if item.get("top_score") is not None else None,
                 product_id=str((item.get("metadata") or {}).get("product_id") or "") or None,
                 verdict=str((item.get("metadata") or {}).get("verdict") or "") or None,
                 expectation_matched=(item.get("metadata") or {}).get("expectation_matched"),
+                evidence_found=self._derive_rag_effectiveness(item)[0],
+                evidence_used=self._derive_rag_effectiveness(item)[1],
+                verdict_impacted=self._derive_rag_effectiveness(item)[2],
                 top_sources=[str(source) for source in list((item.get("metadata") or {}).get("top_sources") or []) if str(source)],
                 rule_hits=[str(rule) for rule in list((item.get("metadata") or {}).get("rule_hits") or []) if str(rule)],
                 created_at=item["created_at"],
@@ -877,13 +1009,25 @@ class AgentOpsService:
             for item in recent_items_data
         ]
 
+        source_agent_option_names = {
+            name for name in agent_name_map.values() if name
+        } | {
+            item.source_agent for item in recent_items if item.source_agent
+        }
+        source_agent_options = [
+            RagAnalysisOption(key=agent_name, label=agent_name)
+            for agent_name in sorted(source_agent_option_names)
+        ]
+
         def build_breakdown(values: dict[str, dict[str, float]]) -> list[RagAnalysisBreakdownItem]:
             rows: list[RagAnalysisBreakdownItem] = []
             for key, aggregate in sorted(values.items(), key=lambda entry: (-entry[1]["value"], entry[0])):
-                label = str(aggregate.get("label") or key or "unknown")
+                label = self._clean_rag_text(aggregate.get("label")) or self._clean_rag_text(key)
+                if label is None:
+                    continue
                 rows.append(
                     RagAnalysisBreakdownItem(
-                        key=key or "unknown",
+                        key=key,
                         label=label,
                         value=int(aggregate["value"]),
                         avg_hit_rate=round(float(aggregate["hit_sum"]) / max(int(aggregate["value"]), 1), 4),
@@ -893,16 +1037,16 @@ class AgentOpsService:
             return rows[:8]
 
         space_map: dict[str, dict[str, float]] = {}
-        source_graph_map: dict[str, dict[str, float]] = {}
-        product_family_map: dict[str, dict[str, float]] = {}
+        source_agent_map: dict[str, dict[str, float]] = {}
         evidence_map: dict[str, dict[str, object]] = {}
 
         for item in recent_items:
             for key, value_map, label in (
-                (item.rag_space_id or "unknown", space_map, item.rag_space_name or item.rag_space_id or "unknown"),
-                (item.source_graph or "unknown", source_graph_map, item.source_graph or "unknown"),
-                (item.product_family or "unknown", product_family_map, item.product_family or "unknown"),
+                (item.rag_space_id, space_map, item.rag_space_name or item.rag_space_id),
+                (item.source_agent, source_agent_map, item.source_agent),
             ):
+                if not key or not self._clean_rag_text(label):
+                    continue
                 aggregate = value_map.setdefault(
                     key,
                     {"value": 0, "hit_sum": 0.0, "citation_sum": 0.0, "label": label},
@@ -938,11 +1082,98 @@ class AgentOpsService:
 
         return RagAnalysisResponse(
             stats=stats,
+            space_options=space_options,
+            source_agent_options=source_agent_options,
             space_breakdown=build_breakdown(space_map),
-            source_graph_breakdown=build_breakdown(source_graph_map),
-            product_family_breakdown=build_breakdown(product_family_map),
+            source_agent_breakdown=build_breakdown(source_agent_map),
             evidence_impact=evidence_impact,
             recent_items=recent_items[:30],
+        )
+
+    async def get_rag_trace_detail(
+        self,
+        trace_id: str,
+        *,
+        global_scope: bool = False,
+    ) -> RagTraceDetailResponse:
+        rag_repo = RagAnalysisRepository(self._session, None if global_scope else self._org_id)
+        item = await rag_repo.get_trace_detail(trace_id)
+        if item is None:
+            raise NotFoundError(f"RAG trace {trace_id} not found")
+
+        rag_space_name_map: dict[str, str] = {}
+        if not global_scope:
+            rag_spaces = await RagSpaceRepository(self._session).list_for_org(
+                org_id=self._org_id,
+                owner_user_id=None,
+                limit=500,
+            )
+            rag_space_name_map = {
+                str(space.id): str(space.name).strip()
+                for space in rag_spaces
+                if getattr(space, "id", None) and str(getattr(space, "name", "")).strip()
+            }
+
+        agent_name_map: dict[str, str] = {}
+        try:
+            registered_agents = await self._agent_repo.list_all_active()
+            agent_name_map = {
+                str(item.subgraph_key): str(item.name).strip()
+                for item in registered_agents
+                if getattr(item, "subgraph_key", None) and str(getattr(item, "name", "")).strip()
+            }
+        except Exception:
+            agent_name_map = {}
+        source_display_map = {
+            "chat": agent_name_map.get("chat") or "Quality Chat",
+            "inspection_task": agent_name_map.get("inspection_task") or "Inspection Task Agent",
+            "quality_judgement": agent_name_map.get("quality_judgement") or "Quality Judgement",
+        }
+
+        metadata = dict(item.get("metadata") or {})
+        rag_space_id = self._clean_rag_text(item.get("rag_space_id"))
+        rag_space_name = rag_space_name_map.get(rag_space_id or "") or self._clean_rag_text(metadata.get("rag_space_name"))
+        if rag_space_id and rag_space_id not in rag_space_name_map and rag_space_name is None:
+            rag_space_id = None
+
+        source_agent, source_graph, sub_route = self._resolve_rag_source_agent(
+            item,
+            source_display_map=source_display_map,
+        )
+        evidence_found, evidence_used, verdict_impacted = self._derive_rag_effectiveness(item)
+
+        return RagTraceDetailResponse(
+            trace_id=self._clean_rag_text(item.get("trace_id")) or trace_id,
+            query=self._clean_rag_text(item.get("query")),
+            rag_space_id=rag_space_id,
+            rag_space_name=rag_space_name,
+            source_agent=source_agent,
+            source_graph=source_graph,
+            sub_route=sub_route,
+            top_k=int(item.get("top_k") or 0),
+            hit_count=int(item.get("hit_count") or 0),
+            hit_rate=float(item.get("hit_rate") or 0.0),
+            citation_coverage=float(item.get("citation_coverage") or 0.0),
+            latency_ms=float(item.get("latency_ms") or 0.0),
+            top_score=float(item.get("top_score")) if item.get("top_score") is not None else None,
+            product_family=self._clean_rag_text(metadata.get("product_family")),
+            expectation_matched=metadata.get("expectation_matched"),
+            evidence_found=evidence_found,
+            evidence_used=evidence_used,
+            verdict_impacted=verdict_impacted,
+            retrieval_config=dict(metadata.get("retrieval_config") or {}),
+            retrieved_chunks=[
+                dict(chunk) for chunk in list(metadata.get("retrieved_chunks") or []) if isinstance(chunk, dict)
+            ],
+            used_citations=[
+                dict(citation) for citation in list(metadata.get("used_citations") or []) if isinstance(citation, dict)
+            ],
+            rule_hits=[str(rule) for rule in list(metadata.get("rule_hits") or []) if str(rule).strip()],
+            verdict=self._clean_rag_text(metadata.get("verdict")),
+            answer=self._clean_rag_text(metadata.get("answer")),
+            result=metadata.get("result"),
+            top_sources=[str(source) for source in list(metadata.get("top_sources") or []) if str(source).strip()],
+            created_at=item.get("created_at"),
         )
 
     async def _build_runtime_response(self, runtime, agent) -> AgentRuntimeInstanceResponse:

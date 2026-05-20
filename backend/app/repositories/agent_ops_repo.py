@@ -461,6 +461,7 @@ class RagAnalysisRepository(AgentOpsRepository):
             RagQueryLog.session_id,
             RagQueryLog.query,
             RagQueryLog.rag_space_id,
+            RagQueryLog.top_k,
             RagQueryLog.hit_count,
             RagQueryLog.hit_rate,
             RagQueryLog.citation_coverage,
@@ -484,6 +485,7 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "session_id": str(row.session_id or "") or None,
                 "query": str(row.query or ""),
                 "rag_space_id": str(row.rag_space_id or "") or None,
+                "top_k": int(row.top_k or 0),
                 "hit_count": int(row.hit_count or 0),
                 "hit_rate": float(row.hit_rate or 0.0),
                 "citation_coverage": float(row.citation_coverage or 0.0),
@@ -497,6 +499,59 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "created_at": row.created_at,
             })
         return items
+
+    async def get_trace_detail(self, trace_id: str) -> dict | None:
+        filters = [
+            RagQueryLog.trace_id == trace_id,
+            RagQueryLog.deleted_at.is_(None),
+        ]
+        if self._org_id is not None:
+            filters.insert(0, RagQueryLog.org_id == self._org_id)
+
+        stmt = (
+            select(
+                RagQueryLog.task_id,
+                RagQueryLog.session_id,
+                RagQueryLog.query,
+                RagQueryLog.rag_space_id,
+                RagQueryLog.top_k,
+                RagQueryLog.hit_count,
+                RagQueryLog.hit_rate,
+                RagQueryLog.citation_coverage,
+                RagQueryLog.latency_ms,
+                RagQueryLog.source_graph,
+                RagQueryLog.agent_name,
+                RagQueryLog.sub_route,
+                RagQueryLog.trace_id,
+                RagQueryLog.top_score,
+                RagQueryLog.metadata_json,
+                RagQueryLog.created_at,
+            )
+            .where(*filters)
+            .order_by(RagQueryLog.created_at.desc(), RagQueryLog.id.desc())
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return None
+        return {
+            "task_id": str(row.task_id or ""),
+            "session_id": str(row.session_id or "") or None,
+            "query": str(row.query or ""),
+            "rag_space_id": str(row.rag_space_id or "") or None,
+            "top_k": int(row.top_k or 0),
+            "hit_count": int(row.hit_count or 0),
+            "hit_rate": float(row.hit_rate or 0.0),
+            "citation_coverage": float(row.citation_coverage or 0.0),
+            "latency_ms": int(row.latency_ms or 0),
+            "source_graph": str(row.source_graph or ""),
+            "agent_name": str(row.agent_name or ""),
+            "sub_route": str(row.sub_route or ""),
+            "trace_id": str(row.trace_id or "") or None,
+            "top_score": float(row.top_score or 0.0) if row.top_score is not None else None,
+            "metadata": dict(row.metadata_json or {}),
+            "created_at": row.created_at,
+        }
 
     async def create_log(self, data: dict) -> RagQueryLog:
         obj = RagQueryLog(org_id=self._org_id, **data)

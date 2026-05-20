@@ -1,5 +1,6 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from agent.contracts import NormalizedAttachment, NormalizedRequest
 from agent.subgraphs.quality_judgement.graph import QualityJudgementSubgraph

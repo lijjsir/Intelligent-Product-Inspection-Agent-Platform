@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from datetime import datetime
 from typing import Optional
 
@@ -166,6 +167,11 @@ class RagAnalysisBreakdownItem(BaseModel):
     avg_citation_coverage: float = 0.0
 
 
+class RagAnalysisOption(BaseModel):
+    key: str
+    label: str
+
+
 class RagEvidenceImpactItem(BaseModel):
     rule_key: str
     verdicts: list[str] = Field(default_factory=list)
@@ -184,21 +190,58 @@ class RagAnalysisItem(BaseModel):
     hit_rate: float
     citation_coverage: float
     latency_ms: float
+    source_agent: Optional[str] = None
     source_graph: Optional[str] = None
-    product_family: Optional[str] = None
+    sub_route: Optional[str] = None
+    trace_id: Optional[str] = None
+    top_score: Optional[float] = None
     product_id: Optional[str] = None
     verdict: Optional[str] = None
     expectation_matched: Optional[bool] = None
+    evidence_found: bool = False
+    evidence_used: bool = False
+    verdict_impacted: bool = False
     top_sources: list[str] = Field(default_factory=list)
     rule_hits: list[str] = Field(default_factory=list)
     created_at: datetime
 
 
+class RagTraceDetailResponse(BaseModel):
+    trace_id: str
+    query: Optional[str] = None
+    rag_space_id: Optional[str] = None
+    rag_space_name: Optional[str] = None
+    source_agent: Optional[str] = None
+    source_graph: Optional[str] = None
+    sub_route: Optional[str] = None
+    top_k: int = 0
+    hit_count: int = 0
+    hit_rate: float = 0.0
+    citation_coverage: float = 0.0
+    latency_ms: float = 0.0
+    top_score: Optional[float] = None
+    product_family: Optional[str] = None
+    expectation_matched: Optional[bool] = None
+    evidence_found: bool = False
+    evidence_used: bool = False
+    verdict_impacted: bool = False
+    retrieval_config: dict[str, Any] = Field(default_factory=dict)
+    retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    used_citations: list[dict[str, Any]] = Field(default_factory=list)
+    rule_hits: list[str] = Field(default_factory=list)
+    verdict: Optional[str] = None
+    answer: Optional[str] = None
+    result: Any = None
+    top_sources: list[str] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+
+
 class RagAnalysisResponse(BaseModel):
     stats: RagAnalysisStats
+    space_options: list[RagAnalysisOption] = Field(default_factory=list)
+    source_agent_options: list[RagAnalysisOption] = Field(default_factory=list)
     space_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
-    source_graph_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
-    product_family_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
+    source_agent_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
     evidence_impact: list[RagEvidenceImpactItem] = Field(default_factory=list)
     recent_items: list[RagAnalysisItem]
 

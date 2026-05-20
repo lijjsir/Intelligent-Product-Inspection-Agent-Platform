@@ -25,6 +25,7 @@ import type {
   AgentDetail,
   AgentRuntimeEvent,
   RagAnalysisResponse,
+  RagTraceDetailResponse,
   RoutingStrategyOverview,
   RoutingCurrent,
   RouteSimulateRequest,
@@ -146,6 +147,12 @@ export const agentOpsApi = {
 
   getRagAnalysis() {
     return http.get<RagAnalysisResponse>("/v1/agent-ops/rag-analysis");
+  },
+
+  getRagTraceDetail(traceId: string) {
+    return http.get<RagTraceDetailResponse>(
+      `/v1/agent-ops/rag-analysis/traces/${encodeURIComponent(traceId)}`,
+    );
   },
 
   getRuntimeOverview() {

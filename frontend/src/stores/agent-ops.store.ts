@@ -27,6 +27,7 @@ import type {
   AgentRuntimeEvent,
   PauseRouteRequest,
   RagAnalysisResponse,
+  RagTraceDetailResponse,
   RoutingStrategyOverview,
   RoutingCurrent,
   RouteSimulateRequest,
@@ -40,6 +41,8 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   const prompts = ref<PromptVersion[]>([]);
   const routes = ref<IntentRoute[]>([]);
   const ragAnalysis = ref<RagAnalysisResponse | null>(null);
+  const ragTraceDetail = ref<RagTraceDetailResponse | null>(null);
+  const ragTraceDetailLoading = ref(false);
   const runtimeOverview = ref<AgentRuntimeOverview | null>(null);
   const runtimeAgents = ref<AgentRuntimeInstance[]>([]);
   const topology = ref<AgentTopology | null>(null);
@@ -257,13 +260,28 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     return data.data;
   }
 
-  async function fetchRagAnalysis() {
-    loading.value = true;
+  async function fetchRagAnalysis(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      loading.value = true;
+    }
     try {
       const { data } = await agentOpsApi.getRagAnalysis();
       ragAnalysis.value = data.data;
     } finally {
-      loading.value = false;
+      if (!options?.silent) {
+        loading.value = false;
+      }
+    }
+  }
+
+  async function fetchRagTraceDetail(traceId: string) {
+    ragTraceDetailLoading.value = true;
+    try {
+      const { data } = await agentOpsApi.getRagTraceDetail(traceId);
+      ragTraceDetail.value = data.data;
+      return data.data;
+    } finally {
+      ragTraceDetailLoading.value = false;
     }
   }
 
@@ -396,6 +414,8 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     prompts.value = [];
     routes.value = [];
     ragAnalysis.value = null;
+    ragTraceDetail.value = null;
+    ragTraceDetailLoading.value = false;
     runtimeOverview.value = null;
     runtimeAgents.value = [];
     topology.value = null;
@@ -420,6 +440,8 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     prompts,
     routes,
     ragAnalysis,
+    ragTraceDetail,
+    ragTraceDetailLoading,
     runtimeOverview,
     runtimeAgents,
     topology,
@@ -464,6 +486,7 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     deleteRoute,
     fetchRouteGraph,
     fetchRagAnalysis,
+    fetchRagTraceDetail,
     fetchRuntimeOverview,
     fetchRuntimeAgents,
     startRuntimeAgent,
