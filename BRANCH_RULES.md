@@ -165,7 +165,7 @@ cd frontend && npm run build
 
 ## 三端分支命名约束
 
-为对齐 `PIAP_INT_008_three_workspace_collab_spec_v1_0_0`，后续分支命名统一按以下前缀：
+为对齐 `docs/project_docx/PIAP_INT_008_three_workspace_collab_spec_v1_0_0.docx`，后续分支命名统一按以下前缀：
 
 - `feature/a-*`
 - `feature/b-*`

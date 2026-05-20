@@ -24,11 +24,12 @@ services:
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
       PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local-secret
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
       PIAP_LANGFUSE_PROJECT_ID: piap-local
-      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
-      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+      PIAP_LANGFUSE_ENVIRONMENT: local-self-hosted
     depends_on:
       mysql:
         condition: service_healthy
@@ -82,7 +83,6 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app/backend
-
   mysql:
     image: mysql:8.0
     container_name: piap-mysql
@@ -93,7 +93,7 @@ services:
       MYSQL_USER: piap
       MYSQL_PASSWORD: piap
     ports:
-      - "127.0.0.1:13306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -107,7 +107,7 @@ services:
     image: redis:7
     container_name: piap-redis
     ports:
-      - "127.0.0.1:16379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -133,8 +133,8 @@ services:
       MINIO_ROOT_USER: piap
       MINIO_ROOT_PASSWORD: piap_password
     ports:
-      - "19000:9000"
-      - "19001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
 
@@ -142,11 +142,71 @@ services:
     image: qdrant/qdrant:latest
     container_name: piap-qdrant
     ports:
-      - "16333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+  langfuse-postgres:
+    image: postgres:16-alpine
+    container_name: piap-langfuse-postgres
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      TZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
-  # ── Langfuse (observability / LLM tracing) ────────────────────
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: piap-langfuse-clickhouse
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      TZ: UTC
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-redis:
+    image: redis:7
+    container_name: piap-langfuse-redis
+    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_PASSWORD:-langfuse-redis-password}"]
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${LANGFUSE_REDIS_PASSWORD:-langfuse-redis-password}\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  langfuse-minio:
+    image: minio/minio:latest
+    container_name: piap-langfuse-minio
+    entrypoint: ["sh", "-c"]
+    command: ["mkdir -p /data/langfuse && minio server /data --console-address ':9001'"]
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: langfuse_password
+      TZ: UTC
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   langfuse-web:
     image: langfuse/langfuse:3
     container_name: piap-langfuse-web
@@ -251,74 +311,15 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: piap_admin_123456
       TELEMETRY_ENABLED: "false"
 
-  langfuse-postgres:
-    image: postgres:16
-    container_name: piap-langfuse-postgres
-    environment:
-      POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
-      POSTGRES_DB: langfuse
-      TZ: UTC
-    volumes:
-      - langfuse_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  langfuse-clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    container_name: piap-langfuse-clickhouse
-    environment:
-      CLICKHOUSE_DB: default
-      CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: clickhouse
-      TZ: UTC
-    volumes:
-      - langfuse_clickhouse_data:/var/lib/clickhouse
-      - langfuse_clickhouse_logs:/var/log/clickhouse-server
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  langfuse-redis:
-    image: redis:7
-    container_name: piap-langfuse-redis
-    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_PASSWORD:-langfuse-redis-password}"]
-    volumes:
-      - langfuse_redis_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$${LANGFUSE_REDIS_PASSWORD:-langfuse-redis-password}\" ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  langfuse-minio:
-    image: minio/minio:latest
-    container_name: piap-langfuse-minio
-    entrypoint: ["sh", "-c"]
-    command: ["mkdir -p /data/langfuse && minio server /data --console-address ':9001'"]
-    environment:
-      MINIO_ROOT_USER: langfuse
-      MINIO_ROOT_PASSWORD: langfuse_password
-      TZ: UTC
-    volumes:
-      - langfuse_minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
 volumes:
   mysql_data:
   minio_data:
   qdrant_data:
   langfuse_postgres_data:
   langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
   langfuse_redis_data:

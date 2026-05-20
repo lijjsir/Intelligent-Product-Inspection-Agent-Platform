@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  dev-up          Start local stack (deps + backend + celery worker)"
+	@echo "  dev-up          Start local dependency stack (db, redis, minio, qdrant, langfuse)"
 	@echo "  dev-down        Stop local dependencies"
 	@echo "  backend-run     Run backend (from backend/)"
 	@echo "  frontend-dev    Run frontend dev server (from frontend/)"
