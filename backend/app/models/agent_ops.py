@@ -56,6 +56,9 @@ class PromptVersion(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    prompt_definition_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class IntentRoute(Base, TimestampMixin):
@@ -75,69 +78,6 @@ class IntentRoute(Base, TimestampMixin):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-
-class PromptDSPyConfig(Base, TimestampMixin):
-    __tablename__ = "prompt_dspy_configs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    prompt_version_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    module_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    fallback_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metric_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    config_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-
-
-class DSPyOptimizationConfig(Base, TimestampMixin):
-    __tablename__ = "dspy_optimization_configs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    target_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    subgraph_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    node_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    node_label: Mapped[str] = mapped_column(String(128), nullable=False)
-    module_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    optimization_goal: Mapped[str] = mapped_column(Text, nullable=False)
-    optimizer_strategy: Mapped[str] = mapped_column(String(64), nullable=False, default="bootstrap-fewshot")
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    metric_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    config_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    is_active_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    supports_compile: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    current_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    current_prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    previous_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    previous_prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    latest_failed_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    latest_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    latest_metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    last_compiled_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    last_evaluated_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-
-
-class DSPyOptimizationRun(Base, TimestampMixin):
-    __tablename__ = "dspy_optimization_runs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    target_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    run_type: Mapped[str] = mapped_column(String(32), nullable=False, default="compile")
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    started_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    finished_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
 
 class AgentRuntimeInstance(Base, TimestampMixin):

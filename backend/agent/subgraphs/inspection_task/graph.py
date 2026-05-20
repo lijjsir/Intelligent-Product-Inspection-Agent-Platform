@@ -48,7 +48,7 @@ from agent.llm.gateway import LLMGateway
 from agent.prompts.prompt_builder import PromptBuilder
 from agent.rag.rag_policy import RagPolicy
 from agent.tools.file_parsers import parse_file_content
-from app.services.dspy_runtime_service import resolve_dspy_runtime_profile
+from app.services.runtime_profile_service import resolve_runtime_profile
 from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.model_config_service import ModelConfigService
@@ -325,10 +325,11 @@ class InspectionTaskGraph:
 
         # ── PromptBuilder ──
         history = list(request.ext.get("history") or [])
-        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        system_prompt, user_message, temperature, prompt_meta = await PromptBuilder.build_runtime(
             agent=agent,
             sub_route=sub_route,
             query=request.query,
+            org_id=request.org_id,
             history=history,
             retrieved_docs=retrieved_docs if retrieved_docs else None,
         )
@@ -424,10 +425,11 @@ class InspectionTaskGraph:
 
         # ── PromptBuilder ──
         history = list(request.ext.get("history") or [])
-        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        system_prompt, user_message, temperature, prompt_meta = await PromptBuilder.build_runtime(
             agent=agent,
             sub_route=sub_route,
             query=request.query,
+            org_id=request.org_id,
             history=history,
             task_draft=context["task_draft"],
             action_state="awaiting_task_details",
@@ -530,8 +532,8 @@ class InspectionTaskGraph:
 
     async def _run_structured_inspection(self, request: NormalizedRequest) -> AgentOutput:
         started_at = perf_counter()
-        runtime_profile = await resolve_dspy_runtime_profile(request.org_id, "quality_judgement")
-        contract_target = runtime_profile.get("quality_judgement.contract_inferencer_dspy")
+        runtime_profile = await resolve_runtime_profile(request.org_id, "quality_judgement")
+        contract_target = runtime_profile.get("quality_judgement.contract_inferencer")
         planner_target = runtime_profile.get("quality_judgement.planner")
         knowledge_target = runtime_profile.get("quality_judgement.knowledge_router")
         synthesizer_target = runtime_profile.get("quality_judgement.evidence_synthesizer")
@@ -653,7 +655,7 @@ class InspectionTaskGraph:
             "source_files": [{"name": item["name"], "url": item.get("url")} for item in parsed_files],
             "trace": {"trace_id": request.workflow_run_id or request.request_id, "trace_url": None,
                       "model_key": "quality_judgement"},
-            "langfuse_scores": [], "dspy_runtime": runtime_profile.as_metadata(),
+            "langfuse_scores": [], "runtime_profile": runtime_profile.as_metadata(),
             "knowledge_router": {
                 "selected_rag_space_id": request.ext.get("selected_rag_space_id"),
                 "selected_rag_space_name": rag_result.get("rag_space_name"),
@@ -693,8 +695,8 @@ class InspectionTaskGraph:
             verdict = "manual_required"
             evaluation = {
                 **evaluation, "verdict": verdict,
-                "summary": "由于当前证据阈值未达到配置要求，DSPy 评审门禁阻止了自动放行。",
-                "reasons": [*list(evaluation.get("reasons") or []), "dspy_review_gate_blocked_auto_pass"],
+                "summary": "由于当前证据阈值未达到配置要求，评审门禁阻止了自动放行。",
+                "reasons": [*list(evaluation.get("reasons") or []), "review_gate_blocked_auto_pass"],
             }
 
         rag_hits = list(rag_result.get("hits") or [])
@@ -810,7 +812,7 @@ class InspectionTaskGraph:
                          "used_citations": rag_used_citations,
                          "answer": answer,
                          "result": result_card,
-                         "dspy_runtime": runtime_profile.as_metadata()},
+                         "runtime_profile": runtime_profile.as_metadata()},
             )],
         )
 
@@ -836,7 +838,7 @@ class InspectionTaskGraph:
                       "evaluation": evaluation, "task_draft": task_draft,
                       "product_family": product_family, "result_card": result_card,
                       "expectation_check": expectation_check, "rag_summary": rag_summary,
-                      "dspy_runtime": runtime_profile.as_metadata()},
+                      "runtime_profile": runtime_profile.as_metadata()},
         )
 
 

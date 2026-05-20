@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import cast
 
@@ -8,9 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.topology_catalog import (
     get_agent_overview_root,
-    get_dspy_graph_context,
-    get_dspy_optimization_target,
-    get_dspy_optimization_targets,
     get_registered_subgraphs,
     get_route_topology,
     get_topology,
@@ -19,8 +15,6 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.repositories.agent_ops_repo import (
     AgentDefinitionRepository,
     AgentRuntimeRepository,
-    DSPyOptimizationConfigRepository,
-    DSPyOptimizationRunRepository,
     IntentRouteRepository,
     PromptVersionRepository,
     RagAnalysisRepository,
@@ -46,15 +40,6 @@ from app.schemas.agent_ops import (
     PromptVersionResponse,
     PromptVersionUpdate,
     PromptVersionListQuery,
-    PromptDSPyConfigPayload,
-    PromptDSPyConfigResponse,
-    PromptOptimizationConfigPayload,
-    PromptOptimizationConfigResponse,
-    PromptOptimizationOverview,
-    PromptOptimizationRunResponse,
-    PromptOptimizationTargetListQuery,
-    PromptOptimizationTargetResponse,
-    PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
     RagAnalysisOption,
     RagAnalysisBreakdownItem,
@@ -80,7 +65,6 @@ from app.schemas.agent_ops import (
     RoutingMetricsResponse,
 )
 from app.services.audit_service import AuditService
-from infra.database.session import create_session
 from app.core.config import settings
 
 
@@ -93,8 +77,6 @@ class AgentOpsService:
         self._prompt_repo = PromptVersionRepository(session, org_id)
         self._route_repo = IntentRouteRepository(session, org_id)
         self._runtime_repo = AgentRuntimeRepository(session, org_id)
-        self._optimization_repo = DSPyOptimizationConfigRepository(session, org_id)
-        self._optimization_run_repo = DSPyOptimizationRunRepository(session, org_id)
 
     async def _log_audit(self, resource_type: str, resource_id: str, action: str):
         audit = AuditService(self._session)
@@ -229,15 +211,6 @@ class AgentOpsService:
                     runtime.runtime_status = "stopped"
         await self._session.flush()
 
-    async def _sync_prompt_optimization_targets(self) -> None:
-        catalog = get_dspy_optimization_targets()
-        active_keys: list[str] = []
-        for target in catalog:
-            active_keys.append(str(target["target_key"]))
-            config = await self._optimization_repo.upsert_from_catalog(target, updated_by=self._actor_id)
-            await self._migrate_legacy_prompt_dspy_config(config)
-        await self._optimization_repo.mark_inactive_missing(active_keys, updated_by=self._actor_id)
-
     @staticmethod
     def _runtime_status_value(runtime) -> str:
         return str(getattr(runtime, "runtime_status", None) or getattr(runtime, "status", None) or "stopped")
@@ -284,135 +257,6 @@ class AgentOpsService:
             edges.append({"source": "subgraph_runner", "target": node_id})
             edges.append({"source": node_id, "target": "result_synthesizer"})
         return edges
-
-    async def _migrate_legacy_prompt_dspy_config(self, config: PromptOptimizationConfigResponse | object) -> None:
-        target_key = str(getattr(config, "target_key", "") or "")
-        if not target_key:
-            return
-        current_prompt_version_id = getattr(config, "current_prompt_version_id", None)
-        latest_metrics_snapshot = getattr(config, "latest_metrics_snapshot", None)
-        compiler_version = getattr(config, "compiler_version", None)
-        if current_prompt_version_id or latest_metrics_snapshot or compiler_version:
-            return
-        legacy_prompt = await self._prompt_repo.get_latest_version(target_key)
-        if not legacy_prompt:
-            return
-        legacy_dspy = await self._prompt_repo.get_dspy_config(str(legacy_prompt.id))
-        if not legacy_dspy:
-            return
-        await self._optimization_repo.update_config(
-            target_key,
-            {
-                "module_name": legacy_dspy.module_name,
-                "compiler_version": legacy_dspy.compiler_version,
-                "metric_names": list(legacy_dspy.metric_names or []),
-                "config_payload": dict(legacy_dspy.config_payload or {}),
-                "is_enabled": bool(legacy_dspy.is_enabled),
-                "current_artifact_version": f"legacy-v{legacy_prompt.version}",
-                "current_prompt_version_id": str(legacy_prompt.id),
-                "updated_by": self._actor_id,
-            },
-        )
-
-    def _build_default_config_payload(self, target: dict, config_payload: dict | None = None) -> dict:
-        return {
-            "strategy": target.get("optimizer_strategy") or "bootstrap-fewshot",
-            "target_key": target["target_key"],
-            "module_name": target["module_name"],
-            "optimization_goal": target["optimization_goal"],
-            **dict(config_payload or {}),
-        }
-
-    def _build_metrics_snapshot(self, target_key: str, metric_names: list[str]) -> dict:
-        seed = (sum(ord(char) for char in target_key) % 9) / 100
-        base = {
-            "faithfulness": round(0.88 + seed, 4),
-            "traceability": round(0.84 + seed, 4),
-            "physical_hallucination": round(max(0.01, 0.08 - seed), 4),
-            "pass_rate": round(0.79 + seed, 4),
-        }
-        return {name: base.get(name, round(0.8 + seed, 4)) for name in metric_names}
-
-    def _build_artifact_version(self, target_key: str, version: int) -> str:
-        return f"{target_key.replace('.', '-')}-v{version}"
-
-    async def _build_prompt_optimization_target(
-        self,
-        config,
-        *,
-        runs: list | None = None,
-    ) -> PromptOptimizationTargetResponse:
-        recent_runs = runs if runs is not None else await self._optimization_run_repo.list_for_target(str(config.target_key), limit=8)
-        graph_context = get_dspy_graph_context(str(config.target_key))
-        if not graph_context:
-            graph_context = {
-                "focus_node_id": f"{config.subgraph_key}.{config.node_id}",
-                "focus_node_label": str(config.node_label),
-                "upstream_nodes": [],
-                "downstream_nodes": [],
-                "nodes": get_topology(str(config.subgraph_key), include_root=True)["nodes"],
-                "edges": get_topology(str(config.subgraph_key), include_root=True)["edges"],
-            }
-        latest_run = recent_runs[0] if recent_runs else None
-        config_response = PromptOptimizationConfigResponse(
-            id=str(config.id),
-            target_key=str(config.target_key),
-            subgraph_key=str(config.subgraph_key),
-            node_id=str(config.node_id),
-            node_label=str(config.node_label),
-            module_name=str(config.module_name),
-            optimization_goal=str(config.optimization_goal),
-            optimizer_strategy=str(config.optimizer_strategy),
-            compiler_version=config.compiler_version,
-            metric_names=list(config.metric_names or []),
-            config_payload=dict(config.config_payload or {}),
-            is_enabled=bool(config.is_enabled),
-            supports_compile=bool(config.supports_compile),
-            is_active_target=bool(config.is_active_target),
-            current_artifact_version=config.current_artifact_version,
-            previous_artifact_version=config.previous_artifact_version,
-            latest_failed_artifact_version=config.latest_failed_artifact_version,
-            latest_error_message=config.latest_error_message,
-            latest_metrics_snapshot=dict(config.latest_metrics_snapshot or {}) or None,
-            last_compiled_at=config.last_compiled_at,
-            last_evaluated_at=config.last_evaluated_at,
-            updated_by=str(config.updated_by) if config.updated_by else None,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
-        )
-        run_responses = [
-            PromptOptimizationRunResponse(
-                id=str(run.id),
-                target_key=str(run.target_key),
-                run_type=str(run.run_type),
-                status=str(run.status),
-                compiler_version=run.compiler_version,
-                artifact_version=run.artifact_version,
-                prompt_version_id=str(run.prompt_version_id) if run.prompt_version_id else None,
-                metrics_snapshot=dict(run.metrics_snapshot or {}) or None,
-                error_message=run.error_message,
-                started_at=run.started_at,
-                finished_at=run.finished_at,
-                created_at=run.created_at,
-                updated_at=run.updated_at,
-            )
-            for run in recent_runs
-        ]
-        return PromptOptimizationTargetResponse(
-            target_key=str(config.target_key),
-            subgraph_key=str(config.subgraph_key),
-            node_id=str(config.node_id),
-            node_label=str(config.node_label),
-            module_name=str(config.module_name),
-            optimization_goal=str(config.optimization_goal),
-            supports_compile=bool(config.supports_compile),
-            current_status=str(latest_run.status) if latest_run else "idle",
-            current_artifact_version=config.current_artifact_version,
-            latest_metrics=dict(config.latest_metrics_snapshot or {}) or None,
-            graph_context=graph_context,
-            config=config_response,
-            recent_runs=run_responses,
-        )
 
     async def list_agents(self, query: AgentDefinitionListQuery) -> tuple[list[AgentDefinitionResponse], int]:
         await self._sync_registered_agents()
@@ -481,38 +325,14 @@ class AgentOpsService:
         items, total = await self._prompt_repo.list_paged(
             filters=query.to_filters(), page=query.page, size=query.size
         )
-        rows: list[PromptVersionResponse] = []
-        for item in items:
-            dspy = await self._prompt_repo.get_dspy_config(str(item.id))
-            data = PromptVersionResponse.model_validate(item).model_dump()
-            data["dspy_config"] = None if not dspy else {
-                "id": str(dspy.id),
-                "module_name": dspy.module_name,
-                "compiler_version": dspy.compiler_version,
-                "fallback_prompt": dspy.fallback_prompt,
-                "metric_names": list(dspy.metric_names or []),
-                "config_payload": dict(dspy.config_payload or {}),
-                "is_enabled": bool(dspy.is_enabled),
-            }
-            rows.append(PromptVersionResponse(**data))
+        rows = [PromptVersionResponse.model_validate(item) for item in items]
         return rows, total
 
     async def get_prompt(self, id: str) -> PromptVersionResponse:
         obj = await self._prompt_repo.get(id)
         if not obj:
             raise NotFoundError(f"Prompt version {id} not found")
-        dspy = await self._prompt_repo.get_dspy_config(id)
-        data = PromptVersionResponse.model_validate(obj).model_dump()
-        data["dspy_config"] = None if not dspy else {
-            "id": str(dspy.id),
-            "module_name": dspy.module_name,
-            "compiler_version": dspy.compiler_version,
-            "fallback_prompt": dspy.fallback_prompt,
-            "metric_names": list(dspy.metric_names or []),
-            "config_payload": dict(dspy.config_payload or {}),
-            "is_enabled": bool(dspy.is_enabled),
-        }
-        return PromptVersionResponse(**data)
+        return PromptVersionResponse.model_validate(obj)
 
     async def create_prompt(self, body: PromptVersionCreate) -> PromptVersionResponse:
         latest = await self._prompt_repo.get_latest_version(body.name)
@@ -536,195 +356,6 @@ class AgentOpsService:
         if not success:
             raise NotFoundError(f"Prompt version {id} not found")
         await self._log_audit("prompt_version", id, "delete")
-
-    async def list_prompt_optimization_targets(
-        self,
-        query: PromptOptimizationTargetListQuery,
-    ) -> PromptOptimizationTargetsResponse:
-        await self._sync_prompt_optimization_targets()
-        configs = await self._optimization_repo.list_all()
-        recent_runs = await self._optimization_run_repo.list_recent(limit=200)
-        runs_by_target: dict[str, list] = {}
-        for run in recent_runs:
-            runs_by_target.setdefault(str(run.target_key), []).append(run)
-
-        items: list[PromptOptimizationTargetResponse] = []
-        for config in configs:
-            if query.subgraph_key and config.subgraph_key != query.subgraph_key:
-                continue
-            if query.is_enabled is not None and bool(config.is_enabled) != bool(query.is_enabled):
-                continue
-            target_runs = runs_by_target.get(str(config.target_key), [])
-            current_status = str(target_runs[0].status) if target_runs else "idle"
-            if query.status and current_status != query.status:
-                continue
-            items.append(await self._build_prompt_optimization_target(config, runs=target_runs[:8]))
-
-        overview = PromptOptimizationOverview(
-            total_targets=len(items),
-            enabled_targets=sum(1 for item in items if item.config.is_enabled),
-            active_targets=sum(1 for item in items if item.config.is_active_target),
-            successful_runs=sum(1 for run in recent_runs if run.status == "completed"),
-            failed_runs=sum(1 for run in recent_runs if run.status == "failed"),
-            pending_runs=sum(1 for run in recent_runs if run.status in {"pending", "running"}),
-        )
-        return PromptOptimizationTargetsResponse(overview=overview, items=items)
-
-    async def get_prompt_optimization_target(self, target_key: str) -> PromptOptimizationTargetResponse:
-        await self._sync_prompt_optimization_targets()
-        config = await self._optimization_repo.get_by_target_key(target_key)
-        if not config:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        return await self._build_prompt_optimization_target(config)
-
-    async def update_prompt_optimization_config(
-        self,
-        target_key: str,
-        payload: PromptOptimizationConfigPayload,
-    ) -> PromptOptimizationConfigResponse:
-        await self._sync_prompt_optimization_targets()
-        target = get_dspy_optimization_target(target_key)
-        if not target:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        config = await self._optimization_repo.update_config(
-            target_key,
-            {
-                "module_name": payload.module_name,
-                "compiler_version": payload.compiler_version,
-                "optimizer_strategy": payload.optimizer_strategy,
-                "metric_names": payload.metric_names,
-                "config_payload": self._build_default_config_payload(target, payload.config_payload),
-                "is_enabled": payload.is_enabled,
-                "updated_by": self._actor_id,
-            },
-        )
-        if not config:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        await self._log_audit("dspy_optimization_config", target_key, "update")
-        return (await self.get_prompt_optimization_target(target_key)).config
-
-    async def list_prompt_optimization_runs(self, target_key: str) -> list[PromptOptimizationRunResponse]:
-        await self._sync_prompt_optimization_targets()
-        config = await self._optimization_repo.get_by_target_key(target_key)
-        if not config:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        runs = await self._optimization_run_repo.list_for_target(target_key, limit=20)
-        return [
-            PromptOptimizationRunResponse(
-                id=str(run.id),
-                target_key=str(run.target_key),
-                run_type=str(run.run_type),
-                status=str(run.status),
-                compiler_version=run.compiler_version,
-                artifact_version=run.artifact_version,
-                prompt_version_id=str(run.prompt_version_id) if run.prompt_version_id else None,
-                metrics_snapshot=dict(run.metrics_snapshot or {}) or None,
-                error_message=run.error_message,
-                started_at=run.started_at,
-                finished_at=run.finished_at,
-                created_at=run.created_at,
-                updated_at=run.updated_at,
-            )
-            for run in runs
-        ]
-
-    async def compile_prompt_optimization_target(
-        self,
-        target_key: str,
-        *,
-        schedule_compile: bool = True,
-    ) -> PromptOptimizationRunResponse:
-        await self._sync_prompt_optimization_targets()
-        config = await self._optimization_repo.get_by_target_key(target_key)
-        if not config:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        if not bool(config.supports_compile):
-            raise ValidationError(f"Optimization target {target_key} does not support compile")
-        run = await self._optimization_run_repo.create(
-            {
-                "target_key": target_key,
-                "run_type": "compile",
-                "status": "pending",
-                "compiler_version": config.compiler_version,
-                "payload_json": {
-                    "module_name": config.module_name,
-                    "optimizer_strategy": config.optimizer_strategy,
-                    "metric_names": list(config.metric_names or []),
-                },
-            }
-        )
-        if schedule_compile:
-            asyncio.create_task(run_dspy_compile_job(self._org_id, self._actor_id, target_key, str(run.id)))
-        await self._log_audit("dspy_optimization_run", str(run.id), "create")
-        return PromptOptimizationRunResponse(
-            id=str(run.id),
-            target_key=target_key,
-            run_type=str(run.run_type),
-            status=str(run.status),
-            compiler_version=run.compiler_version,
-            artifact_version=run.artifact_version,
-            prompt_version_id=str(run.prompt_version_id) if run.prompt_version_id else None,
-            metrics_snapshot=dict(run.metrics_snapshot or {}) or None,
-            error_message=run.error_message,
-            started_at=run.started_at,
-            finished_at=run.finished_at,
-            created_at=run.created_at,
-            updated_at=run.updated_at,
-        )
-
-    async def rollback_prompt_optimization_target(self, target_key: str) -> PromptOptimizationRunResponse:
-        await self._sync_prompt_optimization_targets()
-        config = await self._optimization_repo.get_by_target_key(target_key)
-        if not config:
-            raise NotFoundError(f"Optimization target {target_key} not found")
-        if not config.previous_artifact_version or not config.previous_prompt_version_id:
-            raise ValidationError(f"Optimization target {target_key} has no previous stable version to roll back")
-
-        current_artifact_version = config.current_artifact_version
-        current_prompt_version_id = str(config.current_prompt_version_id) if config.current_prompt_version_id else None
-        now = datetime.utcnow()
-        config = await self._optimization_repo.update_config(
-            target_key,
-            {
-                "current_artifact_version": config.previous_artifact_version,
-                "current_prompt_version_id": str(config.previous_prompt_version_id),
-                "previous_artifact_version": current_artifact_version,
-                "previous_prompt_version_id": current_prompt_version_id,
-                "latest_error_message": None,
-                "last_compiled_at": now,
-                "last_evaluated_at": now,
-                "updated_by": self._actor_id,
-            },
-        )
-        run = await self._optimization_run_repo.create(
-            {
-                "target_key": target_key,
-                "run_type": "rollback",
-                "status": "completed",
-                "compiler_version": config.compiler_version if config else None,
-                "artifact_version": config.current_artifact_version if config else None,
-                "prompt_version_id": config.current_prompt_version_id if config else None,
-                "metrics_snapshot": dict(config.latest_metrics_snapshot or {}) if config and config.latest_metrics_snapshot else None,
-                "started_at": now,
-                "finished_at": now,
-            }
-        )
-        await self._log_audit("dspy_optimization_run", str(run.id), "rollback")
-        return PromptOptimizationRunResponse(
-            id=str(run.id),
-            target_key=str(run.target_key),
-            run_type=str(run.run_type),
-            status=str(run.status),
-            compiler_version=run.compiler_version,
-            artifact_version=run.artifact_version,
-            prompt_version_id=str(run.prompt_version_id) if run.prompt_version_id else None,
-            metrics_snapshot=dict(run.metrics_snapshot or {}) or None,
-            error_message=run.error_message,
-            started_at=run.started_at,
-            finished_at=run.finished_at,
-            created_at=run.created_at,
-            updated_at=run.updated_at,
-        )
 
     async def get_routing_strategy(self) -> RoutingStrategyOverviewResponse:
         all_topology = get_topology("all", include_root=True)
@@ -1403,165 +1034,6 @@ class AgentOpsService:
             agent_name=agent_name,
         )
 
-    async def get_prompt_dspy(self, prompt_id: str) -> PromptDSPyConfigResponse | None:
-        prompt = await self._prompt_repo.get(prompt_id)
-        if not prompt:
-            raise NotFoundError(f"Prompt version {prompt_id} not found")
-        config = await self._prompt_repo.get_dspy_config(prompt_id)
-        if not config:
-            return None
-        return PromptDSPyConfigResponse(
-            id=str(config.id),
-            org_id=str(config.org_id),
-            prompt_version_id=str(config.prompt_version_id),
-            module_name=config.module_name,
-            compiler_version=config.compiler_version,
-            fallback_prompt=config.fallback_prompt,
-            metric_names=list(config.metric_names or []),
-            config_payload=dict(config.config_payload or {}),
-            is_enabled=bool(config.is_enabled),
-            updated_by=str(config.updated_by) if config.updated_by else None,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
-        )
-
-    async def upsert_prompt_dspy(self, prompt_id: str, payload: PromptDSPyConfigPayload) -> PromptDSPyConfigResponse:
-        prompt = await self._prompt_repo.get(prompt_id)
-        if not prompt:
-            raise NotFoundError(f"Prompt version {prompt_id} not found")
-        config = await self._prompt_repo.upsert_dspy_config(
-            prompt_id,
-            {
-                **payload.model_dump(),
-                "updated_by": self._actor_id,
-            },
-        )
-        await self._log_audit("prompt_dspy_config", str(config.id), "upsert")
-        return PromptDSPyConfigResponse(
-            id=str(config.id),
-            org_id=str(config.org_id),
-            prompt_version_id=str(config.prompt_version_id),
-            module_name=config.module_name,
-            compiler_version=config.compiler_version,
-            fallback_prompt=config.fallback_prompt,
-            metric_names=list(config.metric_names or []),
-            config_payload=dict(config.config_payload or {}),
-            is_enabled=bool(config.is_enabled),
-            updated_by=str(config.updated_by) if config.updated_by else None,
-            created_at=config.created_at,
-            updated_at=config.updated_at,
-        )
-
-    async def process_compile_run(self, run_id: str, target_key: str) -> None:
-        target = get_dspy_optimization_target(target_key)
-        run = None
-        for _ in range(12):
-            run = await self._optimization_run_repo.get(run_id)
-            if run:
-                break
-            await asyncio.sleep(0.1)
-        if not run or not target:
-            return
-        config = await self._optimization_repo.get_by_target_key(target_key)
-        now = datetime.utcnow()
-        if not config:
-            await self._optimization_run_repo.update(
-                run_id,
-                {
-                    "status": "failed",
-                    "error_message": f"Optimization target {target_key} not found",
-                    "started_at": now,
-                    "finished_at": now,
-                },
-            )
-            return
-
-        await self._optimization_run_repo.update(
-            run_id,
-            {
-                "status": "running",
-                "started_at": now,
-            },
-        )
-
-        try:
-            await asyncio.sleep(0.05)
-            prompt_name = target_key
-            latest_prompt = await self._prompt_repo.get_latest_version(prompt_name)
-            next_version = (latest_prompt.version + 1) if latest_prompt else 1
-            artifact_version = self._build_artifact_version(target_key, next_version)
-            metrics_snapshot = self._build_metrics_snapshot(
-                target_key,
-                list(config.metric_names or target.get("metric_names") or ["faithfulness", "traceability", "pass_rate"]),
-            )
-            prompt = await self._prompt_repo.create(
-                {
-                    "name": prompt_name,
-                    "content": (
-                        f"[system-generated dspy artifact]\n"
-                        f"target={target_key}\n"
-                        f"artifact_version={artifact_version}\n"
-                        f"module_name={config.module_name}\n"
-                        f"optimizer_strategy={config.optimizer_strategy}\n"
-                        f"optimization_goal={config.optimization_goal}\n"
-                        f"metric_names={','.join(list(config.metric_names or []))}\n"
-                        f"config_payload={dict(config.config_payload or {})}\n\n"
-                        "instruction:\n"
-                        f"Apply the compiled DSPy strategy for `{target_key}`. "
-                        f"Prioritize the optimization goal `{config.optimization_goal}` and optimize for metrics "
-                        f"{', '.join(list(config.metric_names or [])) or 'faithfulness, traceability, pass_rate'}."
-                    ),
-                    "version": next_version,
-                    "status": "approved",
-                    "created_by": self._actor_id,
-                }
-            )
-            completed_at = datetime.utcnow()
-            await self._optimization_repo.update_config(
-                target_key,
-                {
-                    "previous_artifact_version": config.current_artifact_version,
-                    "previous_prompt_version_id": str(config.current_prompt_version_id) if config.current_prompt_version_id else None,
-                    "current_artifact_version": artifact_version,
-                    "current_prompt_version_id": str(prompt.id),
-                    "latest_failed_artifact_version": None,
-                    "latest_error_message": None,
-                    "latest_metrics_snapshot": metrics_snapshot,
-                    "last_compiled_at": completed_at,
-                    "last_evaluated_at": completed_at,
-                    "updated_by": self._actor_id,
-                },
-            )
-            await self._optimization_run_repo.update(
-                run_id,
-                {
-                    "status": "completed",
-                    "artifact_version": artifact_version,
-                    "prompt_version_id": str(prompt.id),
-                    "metrics_snapshot": metrics_snapshot,
-                    "finished_at": completed_at,
-                },
-            )
-        except Exception as exc:
-            failed_at = datetime.utcnow()
-            await self._optimization_repo.update_config(
-                target_key,
-                {
-                    "latest_failed_artifact_version": self._build_artifact_version(target_key, int(datetime.utcnow().timestamp())),
-                    "latest_error_message": str(exc),
-                    "updated_by": self._actor_id,
-                },
-            )
-            await self._optimization_run_repo.update(
-                run_id,
-                {
-                    "status": "failed",
-                    "error_message": str(exc),
-                    "finished_at": failed_at,
-                },
-            )
-            raise
-
     async def batch_update_status(self, agent_ids: list[str], is_active: bool) -> dict:
         batch_repo = AgentBatchOperationRepository(self._session, self._org_id)
         success_count = await batch_repo.batch_update_status(agent_ids, is_active)
@@ -1848,14 +1320,3 @@ class AgentOpsService:
         )
 
 
-async def run_dspy_compile_job(org_id: str, actor_id: str, target_key: str, run_id: str) -> None:
-    session = create_session()
-    try:
-        service = AgentOpsService(session, org_id, actor_id)
-        await service.process_compile_run(run_id, target_key)
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()

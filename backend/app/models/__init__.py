@@ -25,15 +25,13 @@ from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
     AgentRuntimeInstance,
-    DSPyOptimizationConfig,
-    DSPyOptimizationRun,
     IntentRoute,
-    PromptDSPyConfig,
     PromptVersion,
     RagQueryLog,
 )
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
+from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
     MemoryDependencyEdge,
     MemoryEvaluation,
@@ -70,9 +68,6 @@ __all__ = [
     "AgentDefinition",
     "PromptVersion",
     "IntentRoute",
-    "PromptDSPyConfig",
-    "DSPyOptimizationConfig",
-    "DSPyOptimizationRun",
     "AgentRuntimeInstance",
     "RagQueryLog",
     "ChatSession",
@@ -89,4 +84,6 @@ __all__ = [
     "MemoryPolicy",
     "MemoryRollback",
     "MemoryEvaluation",
+    "PromptDefinition",
+    "PromptSyncEvent",
 ]

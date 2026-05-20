@@ -141,70 +141,6 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
 ]
 
 
-DSPY_OPTIMIZATION_TARGETS: list[dict[str, Any]] = [
-    {
-        "target_key": "quality_judgement.contract_inferencer",
-        "subgraph_key": "quality_judgement",
-        "node_id": "contract_inferencer",
-        "node_ref": "quality_judgement.contract_inferencer",
-        "node_label": "Contract Inferencer",
-        "module_name": "QualityContractInferencer",
-        "optimization_goal": "Improve contract inference for text and file-driven inspection requests.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.planner",
-        "subgraph_key": "quality_judgement",
-        "node_id": "planner",
-        "node_ref": "quality_judgement.planner",
-        "node_label": "Planner",
-        "module_name": "QualityJudgementPlanner",
-        "optimization_goal": "Optimize inspection task planning for unified quality flows.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.knowledge_router",
-        "subgraph_key": "quality_judgement",
-        "node_id": "knowledge_router",
-        "node_ref": "quality_judgement.knowledge_router",
-        "node_label": "Knowledge Router",
-        "module_name": "QualityJudgementKnowledgeRouter",
-        "optimization_goal": "Improve RAG and spec retrieval decisions.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.evidence_synthesizer",
-        "subgraph_key": "quality_judgement",
-        "node_id": "evidence_synthesizer",
-        "node_ref": "quality_judgement.evidence_synthesizer",
-        "node_label": "Evidence Synthesizer",
-        "module_name": "EvidenceSynthesizer",
-        "optimization_goal": "Improve evidence assembly quality and citation coverage.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.review_gate",
-        "subgraph_key": "quality_judgement",
-        "node_id": "review_gate",
-        "node_ref": "quality_judgement.review_gate",
-        "node_label": "Review Gate",
-        "module_name": "QualityJudgementReviewGate",
-        "optimization_goal": "Improve PASS/FAIL/UNCERTAIN gating decisions.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination", "pass_rate"],
-        "supports_compile": True,
-    },
-]
-
-
 ROOT_NODES: list[dict[str, Any]] = [
     {"id": "request_intake", "label": "Request Intake", "kind": "root"},
     {"id": "memory_context_loader", "label": "Memory Context Loader", "kind": "root"},
@@ -355,35 +291,3 @@ def get_agent_overview_root() -> dict[str, Any]:
     }
 
 
-def get_dspy_optimization_targets() -> list[dict[str, Any]]:
-    return [dict(item) for item in DSPY_OPTIMIZATION_TARGETS]
-
-
-def get_dspy_optimization_target(target_key: str) -> dict[str, Any] | None:
-    return next((dict(item) for item in DSPY_OPTIMIZATION_TARGETS if item["target_key"] == target_key), None)
-
-
-def get_dspy_graph_context(target_key: str) -> dict[str, Any] | None:
-    target = get_dspy_optimization_target(target_key)
-    if not target:
-        return None
-    topology = get_topology(target["subgraph_key"], include_root=True)
-    focus_node = target["node_ref"]
-    upstream = [
-        edge["source"]
-        for edge in topology["edges"]
-        if edge["target"] == focus_node
-    ]
-    downstream = [
-        edge["target"]
-        for edge in topology["edges"]
-        if edge["source"] == focus_node
-    ]
-    return {
-        "focus_node_id": focus_node,
-        "focus_node_label": target["node_label"],
-        "upstream_nodes": upstream,
-        "downstream_nodes": downstream,
-        "nodes": topology["nodes"],
-        "edges": topology["edges"],
-    }

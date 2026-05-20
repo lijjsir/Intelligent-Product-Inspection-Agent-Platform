@@ -99,7 +99,6 @@ class PromptVersionResponse(PromptVersionBase):
     id: str
     org_id: str
     created_by: Optional[str]
-    dspy_config: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -244,117 +243,6 @@ class RagAnalysisResponse(BaseModel):
     source_agent_breakdown: list[RagAnalysisBreakdownItem] = Field(default_factory=list)
     evidence_impact: list[RagEvidenceImpactItem] = Field(default_factory=list)
     recent_items: list[RagAnalysisItem]
-
-
-class PromptDSPyConfigPayload(BaseModel):
-    module_name: str = Field(..., max_length=128)
-    compiler_version: Optional[str] = Field(default=None, max_length=64)
-    fallback_prompt: Optional[str] = None
-    metric_names: list[str] = Field(default_factory=list)
-    config_payload: dict = Field(default_factory=dict)
-    is_enabled: bool = True
-
-
-class PromptDSPyConfigResponse(PromptDSPyConfigPayload):
-    id: str
-    org_id: str
-    prompt_version_id: str
-    updated_by: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class PromptOptimizationConfigPayload(BaseModel):
-    module_name: str = Field(..., max_length=128)
-    compiler_version: Optional[str] = Field(default=None, max_length=64)
-    optimizer_strategy: str = Field(default="bootstrap-fewshot", max_length=64)
-    metric_names: list[str] = Field(default_factory=list)
-    config_payload: dict = Field(default_factory=dict)
-    is_enabled: bool = True
-
-
-class PromptOptimizationConfigResponse(PromptOptimizationConfigPayload):
-    id: str
-    target_key: str
-    subgraph_key: str
-    node_id: str
-    node_label: str
-    optimization_goal: str
-    supports_compile: bool = True
-    is_active_target: bool = True
-    current_artifact_version: Optional[str] = None
-    previous_artifact_version: Optional[str] = None
-    latest_failed_artifact_version: Optional[str] = None
-    latest_error_message: Optional[str] = None
-    latest_metrics_snapshot: Optional[dict] = None
-    last_compiled_at: Optional[datetime] = None
-    last_evaluated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PromptOptimizationRunResponse(BaseModel):
-    id: str
-    target_key: str
-    run_type: str
-    status: str
-    compiler_version: Optional[str] = None
-    artifact_version: Optional[str] = None
-    prompt_version_id: Optional[str] = None
-    metrics_snapshot: Optional[dict] = None
-    error_message: Optional[str] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class PromptOptimizationGraphContext(BaseModel):
-    focus_node_id: str
-    focus_node_label: str
-    upstream_nodes: list[str] = Field(default_factory=list)
-    downstream_nodes: list[str] = Field(default_factory=list)
-    nodes: list[TopologyNode] = Field(default_factory=list)
-    edges: list[TopologyEdge] = Field(default_factory=list)
-
-
-class PromptOptimizationTargetResponse(BaseModel):
-    target_key: str
-    subgraph_key: str
-    node_id: str
-    node_label: str
-    module_name: str
-    optimization_goal: str
-    supports_compile: bool = True
-    current_status: str = "idle"
-    current_artifact_version: Optional[str] = None
-    latest_metrics: Optional[dict] = None
-    graph_context: PromptOptimizationGraphContext
-    config: PromptOptimizationConfigResponse
-    recent_runs: list[PromptOptimizationRunResponse] = Field(default_factory=list)
-
-
-class PromptOptimizationOverview(BaseModel):
-    total_targets: int = 0
-    enabled_targets: int = 0
-    active_targets: int = 0
-    successful_runs: int = 0
-    failed_runs: int = 0
-    pending_runs: int = 0
-
-
-class PromptOptimizationTargetListQuery(PageParams):
-    subgraph_key: Optional[str] = None
-    status: Optional[str] = None
-    is_enabled: Optional[bool] = None
-
-
-class PromptOptimizationTargetsResponse(BaseModel):
-    overview: PromptOptimizationOverview
-    items: list[PromptOptimizationTargetResponse]
 
 
 class AgentRuntimeOverviewResponse(BaseModel):

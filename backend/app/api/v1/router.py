@@ -12,6 +12,7 @@ from app.api.v1 import (
     inspection_specs,
     memory,
     model_configs,
+    prompt_admin,
     quality,
     rag_spaces,
     results,
@@ -33,6 +34,7 @@ router.include_router(tools.router, prefix="/tools", tags=["tools"])
 router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(agent_ops.router, tags=["agent-ops"])
+router.include_router(prompt_admin.router, tags=["prompt-admin"])
 router.include_router(chat.router, tags=["chat"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])

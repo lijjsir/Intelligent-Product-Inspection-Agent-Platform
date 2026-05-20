@@ -89,120 +89,6 @@ export interface AgentDefinitionListQuery {
   lifecycle_status?: string;
 }
 
-export interface PromptDSPyConfig {
-  id?: string;
-  org_id?: string;
-  prompt_version_id?: string;
-  module_name: string;
-  compiler_version?: string | null;
-  fallback_prompt?: string | null;
-  metric_names: string[];
-  config_payload: Record<string, unknown>;
-  is_enabled: boolean;
-  updated_by?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface PromptOptimizationConfig {
-  id?: string;
-  target_key: string;
-  subgraph_key: string;
-  node_id: string;
-  node_label: string;
-  module_name: string;
-  optimization_goal: string;
-  optimizer_strategy: string;
-  compiler_version?: string | null;
-  metric_names: string[];
-  config_payload: Record<string, unknown>;
-  is_enabled: boolean;
-  supports_compile: boolean;
-  is_active_target: boolean;
-  current_artifact_version?: string | null;
-  previous_artifact_version?: string | null;
-  latest_failed_artifact_version?: string | null;
-  latest_error_message?: string | null;
-  latest_metrics_snapshot?: Record<string, number> | null;
-  last_compiled_at?: string | null;
-  last_evaluated_at?: string | null;
-  updated_by?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface PromptOptimizationConfigPayload {
-  module_name: string;
-  compiler_version?: string | null;
-  optimizer_strategy: string;
-  metric_names: string[];
-  config_payload: Record<string, unknown>;
-  is_enabled: boolean;
-}
-
-export interface PromptOptimizationRun {
-  id: string;
-  target_key: string;
-  run_type: string;
-  status: string;
-  compiler_version?: string | null;
-  artifact_version?: string | null;
-  prompt_version_id?: string | null;
-  metrics_snapshot?: Record<string, number> | null;
-  error_message?: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PromptOptimizationGraphContext {
-  focus_node_id: string;
-  focus_node_label: string;
-  upstream_nodes: string[];
-  downstream_nodes: string[];
-  nodes: TopologyNode[];
-  edges: TopologyEdge[];
-}
-
-export interface PromptOptimizationTarget {
-  target_key: string;
-  subgraph_key: string;
-  node_id: string;
-  node_label: string;
-  module_name: string;
-  optimization_goal: string;
-  supports_compile: boolean;
-  current_status: string;
-  current_artifact_version?: string | null;
-  latest_metrics?: Record<string, number> | null;
-  graph_context: PromptOptimizationGraphContext;
-  config: PromptOptimizationConfig;
-  recent_runs: PromptOptimizationRun[];
-}
-
-export interface PromptOptimizationOverview {
-  total_targets: number;
-  enabled_targets: number;
-  active_targets: number;
-  successful_runs: number;
-  failed_runs: number;
-  pending_runs: number;
-}
-
-export interface PromptOptimizationTargetsResponse {
-  overview: PromptOptimizationOverview;
-  items: PromptOptimizationTarget[];
-}
-
-export interface PromptOptimizationTargetListQuery {
-  page?: number;
-  size?: number;
-  subgraph_key?: string;
-  status?: string;
-  is_enabled?: boolean;
-}
-
 export interface PromptVersion {
   id: string;
   org_id: string;
@@ -211,7 +97,6 @@ export interface PromptVersion {
   version: number;
   status: "draft" | "review" | "approved" | "deprecated";
   created_by: string | null;
-  dspy_config?: PromptDSPyConfig | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
@@ -21,14 +19,6 @@ from app.schemas.agent_ops import (
     PromptVersionResponse,
     PromptVersionUpdate,
     PromptVersionListQuery,
-    PromptDSPyConfigPayload,
-    PromptDSPyConfigResponse,
-    PromptOptimizationConfigPayload,
-    PromptOptimizationConfigResponse,
-    PromptOptimizationRunResponse,
-    PromptOptimizationTargetListQuery,
-    PromptOptimizationTargetResponse,
-    PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
     RagTraceDetailResponse,
     AgentRuntimeOverviewResponse,
@@ -52,7 +42,7 @@ from app.schemas.agent_management import (
 )
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import CurrentUser
-from app.services.agent_ops_service import AgentOpsService, run_dspy_compile_job
+from app.services.agent_ops_service import AgentOpsService
 
 router = APIRouter(prefix="/agent-ops", tags=["Agent Operations"])
 
@@ -214,88 +204,6 @@ async def delete_prompt(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ResponseEnvelope(data={"deleted": True})
-
-
-@router.get(
-    "/prompt-optimization/targets",
-    response_model=ResponseEnvelope[PromptOptimizationTargetsResponse],
-)
-async def list_prompt_optimization_targets(
-    query: PromptOptimizationTargetListQuery = Depends(),
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.list_prompt_optimization_targets(query))
-
-
-@router.put(
-    "/prompt-optimization/targets/{target_key}/config",
-    response_model=ResponseEnvelope[PromptOptimizationConfigResponse],
-)
-async def update_prompt_optimization_config(
-    target_key: str,
-    body: PromptOptimizationConfigPayload,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.update_prompt_optimization_config(target_key, body))
-
-
-@router.post(
-    "/prompt-optimization/targets/{target_key}/compile",
-    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
-)
-async def compile_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    data = await svc.compile_prompt_optimization_target(target_key, schedule_compile=False)
-    await db.commit()
-    asyncio.create_task(run_dspy_compile_job(current.org_id, current.user_id, target_key, data.id))
-    return ResponseEnvelope(data=data)
-
-
-@router.get(
-    "/prompt-optimization/targets/{target_key}/runs",
-    response_model=ResponseEnvelope[list[PromptOptimizationRunResponse]],
-)
-async def list_prompt_optimization_runs(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.list_prompt_optimization_runs(target_key))
-
-
-@router.post(
-    "/prompt-optimization/targets/{target_key}/rollback",
-    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
-)
-async def rollback_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.rollback_prompt_optimization_target(target_key))
-
-
-@router.get(
-    "/prompt-optimization/targets/{target_key}",
-    response_model=ResponseEnvelope[PromptOptimizationTargetResponse],
-)
-async def get_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_prompt_optimization_target(target_key))
 
 
 @router.get("/routes", response_model=ResponseEnvelope[PagedResponse[IntentRouteResponse]])
@@ -492,27 +400,6 @@ async def get_route_graph(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.get_route_graph(id))
-
-
-@router.get("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse | None])
-async def get_prompt_dspy(
-    id: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_prompt_dspy(id))
-
-
-@router.put("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse])
-async def upsert_prompt_dspy(
-    id: str,
-    body: PromptDSPyConfigPayload,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.upsert_prompt_dspy(id, body))
 
 
 @router.post("/runtime/agents/{runtime_key}/pause-route", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
