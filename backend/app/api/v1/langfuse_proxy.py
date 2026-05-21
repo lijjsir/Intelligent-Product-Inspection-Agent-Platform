@@ -20,7 +20,7 @@ DEFAULT_PASSWORD = "piap_admin_123456"
 
 def _build_proxy_trace_url(trace_id: str) -> str:
     project_id = str(getattr(settings, "langfuse_project_id", "piap-local") or "piap-local")
-    return f"/langfuse/project/{project_id}/traces/{trace_id}"
+    return f"/project/{project_id}/traces/{trace_id}"
 
 
 @router.get("/langfuse/redirect")

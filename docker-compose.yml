@@ -93,8 +93,10 @@ services:
     working_dir: /app/frontend
     environment:
       VITE_PROXY_TARGET: http://backend:8000
+      VITE_LANGFUSE_PROXY_TARGET: http://langfuse-web:3000
     depends_on:
       - backend
+      - langfuse-web
     ports:
       - "127.0.0.1:${PIAP_FRONTEND_HOST_PORT:-5173}:5173"
     volumes:
