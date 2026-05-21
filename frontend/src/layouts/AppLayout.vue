@@ -162,7 +162,7 @@ const chatStore = useChatStore();
 
 const { menu, primaryRole, showWorkspaceGroups } = useMenu();
 
-const showSidebar = computed(() => primaryRole.value === ROLE_APP_DEVELOPER);
+const showSidebar = computed(() => auth.isAuthed && menu.value.length > 0);
 
 const activeNames = ref<string[]>([]);
 const chatInitialized = ref(false);
