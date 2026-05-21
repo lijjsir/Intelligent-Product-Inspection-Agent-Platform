@@ -1,10 +1,30 @@
 import { nextTick, ref, onMounted, onUnmounted } from "vue";
 import { CanvasRenderer } from "echarts/renderers";
-import { LineChart, BarChart, GraphChart } from "echarts/charts";
-import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { BarChart, GraphChart, LineChart, PieChart, RadarChart } from "echarts/charts";
+import {
+  GridComponent,
+  LegendComponent,
+  MarkPointComponent,
+  TitleComponent,
+  TooltipComponent,
+} from "echarts/components";
 import { init, type ECharts, type EChartsCoreOption, use } from "echarts/core";
 
-use([CanvasRenderer, LineChart, BarChart, GraphChart, GridComponent, LegendComponent, TooltipComponent]);
+const chartExtensions = [
+  CanvasRenderer,
+  LineChart,
+  BarChart,
+  PieChart,
+  RadarChart,
+  GraphChart,
+  GridComponent,
+  LegendComponent,
+  MarkPointComponent,
+  TitleComponent,
+  TooltipComponent,
+];
+
+use(chartExtensions as unknown as Parameters<typeof use>[0]);
 
 export function useECharts() {
   const chartRef = ref<HTMLElement | null>(null);

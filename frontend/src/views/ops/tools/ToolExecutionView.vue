@@ -102,14 +102,17 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useECharts } from "@/composables/useECharts";
 import { useToolsStore } from "@/stores/tools.store";
+import { readStoredValue, TOKEN_KEY } from "@/utils/auth-session";
 import type { ExecutionType, ToolExecutionStatus } from "@/types/tools.types";
 
 const sseConnected = ref(false);
 let eventSource: EventSource | null = null;
 
 function connectSSE() {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || "";
-  eventSource = new EventSource(`${baseUrl}/v1/tools/events/stream`);
+  const baseUrl = (import.meta.env.VITE_API_BASE as string) ?? "/api";
+  const token = readStoredValue(TOKEN_KEY);
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+  eventSource = new EventSource(`${baseUrl}/v1/tools/events/stream${tokenParam}`);
 
   eventSource.addEventListener("tool.execution.started", () => {
     loadExecutions();

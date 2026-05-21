@@ -9,14 +9,15 @@
       <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
         <template v-for="entry in menu" :key="entry.title">
           <el-collapse
-            v-if="isMenuGroup(entry) && showWorkspaceGroups"
+            v-if="isMenuGroup(entry)"
             v-model="activeNames"
             class="nav-collapse"
+            @change="handleGroupCollapseChange(entry, $event)"
           >
             <el-collapse-item :name="entry.title">
               <template #title>
-                <div class="flex items-center gap-2 px-2 text-[13px] font-medium text-zinc-600">
-                  <el-icon class="text-[15px] text-zinc-400">
+                <div class="nav-link nav-group-link w-full">
+                  <el-icon v-if="entry.icon" class="text-[15px] text-zinc-400">
                     <component :is="iconMap[entry.icon || '']" />
                   </el-icon>
                   <span>{{ entry.title }}</span>
@@ -40,31 +41,6 @@
               </div>
             </el-collapse-item>
           </el-collapse>
-
-          <div v-else-if="isMenuGroup(entry)" class="nav-section">
-            <div class="nav-section-head">
-              <div :class="['nav-section-title', isGroupActive(entry) && 'nav-section-title-active']">
-                {{ entry.title }}
-              </div>
-              <span v-if="isGroupActive(entry)" class="nav-section-badge">当前工作区</span>
-            </div>
-            <div class="nav-subnav">
-              <template v-for="item in entry.items" :key="item.path">
-                <RouterLink
-                  v-if="!item.placeholder"
-                  :to="item.path"
-                  class="nav-sublink"
-                  active-class="nav-link-active"
-                >
-                  <span>{{ item.title }}</span>
-                </RouterLink>
-                <span v-else class="nav-sublink cursor-not-allowed text-zinc-400">
-                  <span>{{ item.title }}</span>
-                  <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
-                </span>
-              </template>
-            </div>
-          </div>
 
           <template v-else>
             <RouterLink
@@ -152,7 +128,7 @@ import {
   ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
-import { useMenu, type MenuGroup, type MenuItem } from "@/composables/useMenu";
+import { isMenuGroup, resolveMenuGroupLandingPath, useMenu, type MenuGroup } from "@/composables/useMenu";
 
 const router = useRouter();
 const route = useRoute();
@@ -160,19 +136,18 @@ const auth = useAuthStore();
 const userStore = useUserStore();
 const chatStore = useChatStore();
 
-const { menu, primaryRole, showWorkspaceGroups } = useMenu();
+const { menu, primaryRole } = useMenu();
 
 const showSidebar = computed(() => auth.isAuthed && menu.value.length > 0);
 
 const activeNames = ref<string[]>([]);
 const chatInitialized = ref(false);
 
-const isMenuGroup = (entry: MenuItem | MenuGroup): entry is MenuGroup => "items" in entry;
-
 const iconMap: Record<string, unknown> = {
   Monitor,
   Setting,
   Management,
+  View: Monitor,
 };
 
 const canChat = computed(() => {
@@ -228,10 +203,6 @@ const sessionOptions = computed(() => {
   return rows;
 });
 
-function isGroupActive(group: MenuGroup) {
-  return group.items.some((item) => route.path === item.path || route.path.startsWith(`${item.path}/`));
-}
-
 function formatTime(ts?: string | null) {
   if (!ts) return "-";
   const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(ts) ? ts : `${ts}Z`;
@@ -248,12 +219,16 @@ function sessionLabel(sessionId: string) {
   return `${title} · ${formatTime(ts)}`;
 }
 
-function updateActiveNames() {
-  const names: string[] = [];
-  if (route.path.startsWith("/app")) names.push("应用工作台");
-  if (route.path.startsWith("/ops")) names.push("运维工作台");
-  if (route.path.startsWith("/governance")) names.push("治理工作台");
-  activeNames.value = names;
+function normalizeActiveNames(value: string | string[]) {
+  return Array.isArray(value) ? value : [value].filter(Boolean);
+}
+
+function handleGroupCollapseChange(group: MenuGroup, value: string | string[]) {
+  const nextNames = normalizeActiveNames(value);
+  const landingPath = resolveMenuGroupLandingPath(group);
+  if (nextNames.includes(group.title) && landingPath && route.path !== landingPath) {
+    router.push(landingPath);
+  }
 }
 
 async function ensureChatTopbarState() {
@@ -299,7 +274,6 @@ async function deleteChatSession() {
   }
 }
 
-watch(() => route.path, updateActiveNames, { immediate: true });
 watch(
   () => route.path,
   () => {
@@ -347,34 +321,6 @@ function logout() {
   @apply bg-zinc-800 text-white;
 }
 
-.nav-section {
-  @apply mt-2 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-2 py-2;
-}
-
-.nav-section-head {
-  @apply flex items-center justify-between gap-2 px-2 pb-2;
-}
-
-.nav-section-title {
-  @apply text-[12px] font-semibold tracking-wide text-zinc-400;
-}
-
-.nav-section-title-active {
-  @apply text-zinc-700;
-}
-
-.nav-section-badge {
-  @apply rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-600;
-}
-
-.nav-subnav {
-  @apply flex flex-col gap-1 border-l border-zinc-200 pl-2;
-}
-
-.nav-sublink {
-  @apply min-h-9 text-[13px];
-}
-
 .ghost-btn {
   @apply cursor-pointer rounded-lg border border-zinc-200 bg-transparent px-3 py-1.5 text-[13px] text-zinc-500 transition-all duration-150;
 }
@@ -389,7 +335,7 @@ function logout() {
 }
 
 .nav-collapse :deep(.el-collapse-item__header) {
-  @apply h-9 border-none bg-transparent px-0;
+  @apply h-auto border-none bg-transparent px-0 leading-normal;
 }
 
 .nav-collapse :deep(.el-collapse-item__header.is-active) {
@@ -397,7 +343,7 @@ function logout() {
 }
 
 .nav-collapse :deep(.el-collapse-item__arrow) {
-  @apply text-zinc-400;
+  @apply mr-2 text-zinc-400;
 }
 
 .nav-collapse :deep(.el-collapse-item__wrap) {
@@ -406,5 +352,9 @@ function logout() {
 
 .nav-collapse :deep(.el-collapse-item__content) {
   @apply p-0 pb-1;
+}
+
+.nav-group-link {
+  @apply my-0;
 }
 </style>
