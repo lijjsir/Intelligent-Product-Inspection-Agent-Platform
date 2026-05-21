@@ -18,6 +18,7 @@ export interface AlertEvent {
   id: string;
   org_id: string;
   stability_id?: string;
+  rule_id?: string;
   alert_type: string;
   severity: AlertSeverity | string;
   title: string;

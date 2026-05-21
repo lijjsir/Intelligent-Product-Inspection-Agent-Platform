@@ -30,6 +30,10 @@ export const chatApi = {
     return http.post<ChatSendResponse>(`/v1/chat/sessions/${sessionId}/messages`, payload);
   },
 
+  cancelMessage(sessionId: string, messageId: string) {
+    return http.post<ChatMessage>(`/v1/chat/sessions/${sessionId}/messages/${messageId}/cancel`);
+  },
+
   appendTaskResult(
     sessionId: string,
     payload: {

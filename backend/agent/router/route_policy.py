@@ -92,8 +92,8 @@ class AgentRoutePolicy:
         }
 
         # ── Manual override: force_agent ──
-        if route_hints.get("force_agent") == "inspection_task":
-            forced_sub = route_hints.get("force_sub_route") or "task_create"
+        if route_hints.get("force_agent") == "inspection_task" and route_hints.get("force_sub_route"):
+            forced_sub = route_hints.get("force_sub_route")
             return AgentRouteDecision(
                 selected_agent="inspection_task",
                 sub_route=forced_sub,
@@ -128,6 +128,16 @@ class AgentRoutePolicy:
         has_rag_signal = self._has_general_rag_signal(query)
         is_ambiguous = self._is_ambiguous(query)
 
+        if route_hints.get("force_agent") == "inspection_task":
+            forced_sub_route = "quality_qa" if has_quality_signal and not has_task_signal else "task_create"
+            return AgentRouteDecision(
+                selected_agent="inspection_task",
+                sub_route=forced_sub_route,
+                intent=forced_sub_route,
+                reason="front-end selected inspection workspace; policy kept confirmation gate",
+                route_source="manual",
+            )
+
         # 1. 结构化文件 + 检测意图 → inspection_execute
         if has_structured_file and (has_task_signal or has_quality_signal):
             return AgentRouteDecision(
@@ -139,16 +149,25 @@ class AgentRoutePolicy:
             )
 
         # 2. 图片 + 检测意图 → inspection_execute
-        if (has_image_attachment or image_urls) and (has_task_signal or has_quality_signal):
+        if (has_image_attachment or image_urls) and has_task_signal:
             return AgentRouteDecision(
                 selected_agent="inspection_task",
-                sub_route="inspection_execute",
-                intent="inspection_execute",
+                sub_route="task_create",
+                intent="task_create",
                 reason="图片 + 检测意图",
                 route_source="rule",
             )
 
         # 3. 明确任务创建意图 → task_create
+        if (has_image_attachment or image_urls) and has_quality_signal:
+            return AgentRouteDecision(
+                selected_agent="inspection_task",
+                sub_route="quality_qa",
+                intent="quality_qa",
+                reason="image plus quality question; answer before formal task submission",
+                route_source="rule",
+            )
+
         if has_task_signal and not has_quality_signal:
             return AgentRouteDecision(
                 selected_agent="inspection_task",

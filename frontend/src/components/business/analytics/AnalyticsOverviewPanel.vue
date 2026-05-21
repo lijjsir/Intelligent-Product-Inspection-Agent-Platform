@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { analyticsApi } from "@/api/analytics.api";
@@ -17,6 +17,7 @@ interface Props {
   dateRange: [Date, Date] | null;
 }
 
+const emit = defineEmits<{ loaded: [] }>();
 const props = defineProps<Props>();
 const router = useRouter();
 const analyticsStore = useAnalyticsStore();
@@ -30,7 +31,6 @@ const taskDrilldown = ref<TaskDrilldown | null>(null);
 const drawerLoading = ref(false);
 
 const overview = computed(() => analyticsStore.overview);
-const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
 const redRate = computed(() => {
   const items = overview.value?.alert_distribution ?? [];
   const total = items.reduce((sum, item) => sum + item.value, 0);
@@ -45,19 +45,29 @@ const activeProductLineSeries = computed(() => {
   if (!selectedProductLines.value.length) return allSeries;
   return allSeries.filter((item) => selectedProductLines.value.includes(item.name));
 });
-
-watch(overview, (value) => {
-  if (value && !selectedProductLines.value.length) {
-    selectedProductLines.value = value.product_line_series.slice(0, 3).map((item) => item.name);
-  }
+const productLinesParam = computed(() => {
+  if (!selectedProductLines.value.length) return undefined;
+  return selectedProductLines.value.join(",");
 });
+
+async function fetchOverview() {
+  const params = props.dateRange
+    ? { start_date: formatDate(props.dateRange[0]), end_date: formatDate(props.dateRange[1]) }
+    : undefined;
+  const pl = productLinesParam.value;
+  await analyticsStore.fetchOverview({ ...params, ...(pl ? { product_lines: pl } : {}) });
+}
+
+watch(productLinesParam, () => fetchOverview());
+watch(() => props.dateRange, () => fetchOverview());
+onMounted(async () => { await fetchOverview(); emit("loaded"); });
 
 function formatDate(value: Date) {
   return value.toISOString().slice(0, 10);
 }
 
 function openProductLineDrilldown(name: string) {
-  drawerPayload.value = { title: `产品线钻取 · ${name}`, lines: [] };
+  drawerPayload.value = { title: `产品线详情 · ${name}`, lines: [] };
   productLineDrilldown.value = null;
   modelDrilldown.value = null;
   taskDrilldown.value = null;
@@ -69,7 +79,7 @@ function openModelDrilldown(row: ModelAnalyticsMetric) {
   productLineDrilldown.value = null;
   modelDrilldown.value = null;
   taskDrilldown.value = null;
-  drawerPayload.value = { title: `模型钻取 · ${row.model_key}`, lines: [] };
+  drawerPayload.value = { title: `模型详情 · ${row.model_key}`, lines: [] };
   drawerVisible.value = true;
   fetchModelDrilldown(row.model_key);
 }
@@ -78,7 +88,7 @@ function openTaskDrilldown(taskId: string) {
   productLineDrilldown.value = null;
   modelDrilldown.value = null;
   taskDrilldown.value = null;
-  drawerPayload.value = { title: `任务钻取 · ${taskId}`, lines: [] };
+  drawerPayload.value = { title: `任务详情 · ${taskId}`, lines: [] };
   drawerVisible.value = true;
   fetchTaskDrilldown(taskId);
 }
@@ -164,15 +174,10 @@ function goToProductLineTaskList(productLine: string) {
   <div class="overview-panel">
     <el-alert v-if="analyticsStore.error" :title="analyticsStore.error" type="warning" :closable="false" />
 
-    <div v-if="overview" class="scope-banner">
-      <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
-      <span>分析中心与仪表盘、任务列表、稳定性工作台使用相同统计范围和删除过滤规则。</span>
-    </div>
-
     <div class="filter-stack">
       <div class="filter-title">产品线叠加</div>
       <el-checkbox-group v-model="selectedProductLines">
-        <el-checkbox v-for="item in productLineOptions" :key="item.name" :label="item.name">
+        <el-checkbox v-for="item in productLineOptions" :key="item.name" :label="item.name" :value="item.name">
           {{ item.name }}
         </el-checkbox>
       </el-checkbox-group>
@@ -198,7 +203,7 @@ function goToProductLineTaskList(productLine: string) {
           <div class="card-head">
             <div>
               <strong>产品线任务趋势</strong>
-              <span>点击折线可进入产品线钻取面板</span>
+              <span>点击折线查看产品线详情</span>
             </div>
           </div>
         </template>
@@ -235,7 +240,7 @@ function goToProductLineTaskList(productLine: string) {
         <div class="card-head">
           <div>
             <strong>模型性能对比</strong>
-            <span>点击某一行可查看模型钻取信息</span>
+            <span>点击某一行可查看模型详情</span>
           </div>
         </div>
       </template>

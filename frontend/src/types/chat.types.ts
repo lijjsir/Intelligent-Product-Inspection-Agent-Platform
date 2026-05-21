@@ -51,6 +51,7 @@ export interface ChatTaskDraft {
 
 export interface ChatCreatedTask {
   id: string;
+  result_id?: string | null;
   status: string;
   product_id: string;
   spec_code: string;
@@ -88,6 +89,14 @@ export interface ChatResultCard {
 }
 
 export interface ChatMessagePayload {
+  result_id?: string | null;
+  result?: {
+    id?: string;
+    verdict?: string;
+    overall_score?: number;
+    risk_level?: string;
+    risk_score?: number;
+  } | null;
   answer?: string;
   citations?: Array<Record<string, unknown>>;
   quality?: {

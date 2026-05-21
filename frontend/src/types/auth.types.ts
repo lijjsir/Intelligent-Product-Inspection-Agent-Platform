@@ -5,11 +5,13 @@ export interface LoginPayload {
 }
 
 export interface RegisterPayload {
+  create_org: boolean;
   org_name: string;
   org_slug: string;
   username: string;
   email: string;
   password: string;
+  role: string;
 }
 
 export interface AuthSession {

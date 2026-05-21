@@ -164,13 +164,16 @@ export const useAuthStore = defineStore("auth", () => {
       return "/app/chat";
     }
     if (r === ROLE_ADMIN) {
-      return "/governance/quality/analysis-center";
+      return "/governance/admin/users";
     }
     if (r === ROLE_ALGORITHM_ENGINEER) {
       return "/ops/data/import";
     }
-    if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
+    if (r === ROLE_APP_DEVELOPER) {
       return "/ops/agents";
+    }
+    if (r === ROLE_PLATFORM_OPERATOR) {
+      return "/ops/dashboard";
     }
     return "/app/dashboard";
   }

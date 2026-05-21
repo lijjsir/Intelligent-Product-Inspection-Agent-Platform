@@ -29,7 +29,6 @@ const openAlerts = computed(() => alertStore.items.slice(0, 5));
 const recentTasks = computed(() => taskStore.items.slice(0, 10));
 const selectedRange = ref<7 | 30 | 90>(30);
 const isAdmin = computed(() => hasRole("admin"));
-const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
 const highRiskAlerts = computed(() =>
   openAlerts.value.filter((item) => ["critical", "warning", "error", "high"].includes(String(item.severity).toLowerCase())).length,
 );
@@ -163,7 +162,6 @@ function renderCharts() {
         仪表盘统计真实物化后的任务、结果、稳定性和告警，不把聊天中间态当作统计源。
       </p>
       <div class="flex flex-wrap gap-2 mt-5">
-        <el-tag type="info" effect="plain" size="small">{{ scopeLabel }}</el-tag>
         <el-tag type="info" effect="plain" size="small">最近 {{ selectedRange }} 日</el-tag>
         <el-tag v-if="isAdmin" effect="plain" size="small" class="!border-zinc-600 !text-zinc-300">admin 默认聚合全部组织</el-tag>
       </div>

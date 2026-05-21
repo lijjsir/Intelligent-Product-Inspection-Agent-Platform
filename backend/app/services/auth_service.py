@@ -45,28 +45,45 @@ class AuthService:
         return user, access, refresh
 
     async def register(
-        self, org_name: str, org_slug: str, username: str, email: str, password: str
+        self, create_org: bool, org_name: str, org_slug: str,
+        username: str, email: str, password: str, role: str = "admin",
     ) -> tuple[User, str, str]:
-        existing_org = await self._orgs.get_by_slug(org_slug)
-        if existing_org:
-            raise ConflictError("organization already exists")
+        from app.core.exceptions import NotFoundError
+        from app.core.permissions import ensure_valid_role
+        ensure_valid_role(role)
 
-        org = Organization(
-            id=str(uuid.uuid4()),
-            name=org_name,
-            slug=org_slug,
-            plan="standard",
-            is_active=True,
-        )
-        await self._orgs.create(org)
+        if create_org:
+            existing_org = await self._orgs.get_by_slug(org_slug)
+            if existing_org:
+                raise ConflictError("organization already exists")
+
+            org = Organization(
+                id=str(uuid.uuid4()),
+                name=org_name,
+                slug=org_slug,
+                plan="standard",
+                is_active=True,
+            )
+            await self._orgs.create(org)
+            org_id = org.id
+        else:
+            org = await self._orgs.get_by_slug(org_slug)
+            if not org:
+                raise NotFoundError("organization not found")
+            if not org.is_active:
+                raise ForbiddenError("organization disabled")
+            org_id = org.id
+            existing_user = await self._users.get_by_username(org_id, username)
+            if existing_user:
+                raise ConflictError("username already exists in this organization")
 
         user = User(
             id=str(uuid.uuid4()),
-            org_id=org.id,
+            org_id=org_id,
             username=username,
             email=email,
             password_hash=hash_password(password),
-            role=ROLE_ADMIN,
+            role=role,
             is_active=True,
         )
         await self._users.create(user)

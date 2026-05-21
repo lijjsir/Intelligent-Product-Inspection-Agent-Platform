@@ -8,12 +8,13 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  async function fetchOverview(params?: { start_date?: string; end_date?: string }) {
+  async function fetchOverview(params?: { start_date?: string; end_date?: string; product_lines?: string }) {
     loading.value = true;
     error.value = null;
     try {
       const { data } = await analyticsApi.getOverview(params);
       overview.value = data.data;
+      return overview.value;
     } catch (e: any) {
       error.value = e?.response?.data?.message || "获取分析中心数据失败";
       overview.value = {
@@ -36,6 +37,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
         product_line_series: [],
         scope_kind: "org",
       };
+      return overview.value;
     } finally {
       loading.value = false;
     }

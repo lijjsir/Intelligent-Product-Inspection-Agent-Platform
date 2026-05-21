@@ -1,5 +1,4 @@
 import { useAuthStore } from "@/stores/auth.store";
-import { ROLE_ADMIN } from "@/constants/roles";
 
 export function usePermission() {
   const auth = useAuthStore();
@@ -7,7 +6,6 @@ export function usePermission() {
   function hasRole(requiredRole: string | string[]): boolean {
     if (!auth.isAuthed) return false;
     const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-    if (currentRoles.includes(ROLE_ADMIN)) return true;
     if (Array.isArray(requiredRole)) {
       return requiredRole.some((role) => currentRoles.includes(role));
     }

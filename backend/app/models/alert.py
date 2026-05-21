@@ -11,6 +11,7 @@ class AlertEvent(Base):
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True)
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     stability_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     alert_type: Mapped[str] = mapped_column(String(32))
     severity: Mapped[str] = mapped_column(String(16))
     title: Mapped[str] = mapped_column(String(256))

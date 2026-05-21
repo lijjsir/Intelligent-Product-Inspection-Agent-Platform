@@ -18,6 +18,7 @@ from app.repositories.agent_ops_repo import (
     AgentRuntimeRepository,
     RagAnalysisRepository,
 )
+from app.models.alert_rule import AlertRule
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
 from app.repositories.result_repo import ResultRepository
@@ -161,6 +162,7 @@ class QualityAgentOrchestratorService:
         if materialized:
             materialized_task = {
                 "id": materialized["task_id"],
+                "result_id": materialized.get("result_id"),
                 "status": materialized["task_status"],
                 "product_id": materialized["product_id"],
                 "spec_code": materialized["spec_code"],
@@ -210,6 +212,10 @@ class QualityAgentOrchestratorService:
         async with get_session() as session:
             message_repo = ChatMessageRepository(session)
             session_repo = ChatSessionRepository(session)
+            current_message = await message_repo.get(request.org_id, str(request.assistant_message_id))
+            current_payload = current_message.payload if current_message and isinstance(current_message.payload, dict) else {}
+            if current_payload.get("status") == "interrupted":
+                return False
             await message_repo.update_assistant_message(
                 org_id=request.org_id,
                 message_id=str(request.assistant_message_id),
@@ -539,18 +545,47 @@ class QualityAgentOrchestratorService:
                 }
             )
 
+            from app.services.rule_engine_service import RuleEngineService
+            import logging
+            _logger = logging.getLogger(__name__)
+
+            metrics = {
+                "risk_score": float(stability_data.risk_score or 0.0),
+                "evidence_score": float(stability_data.evidence_score or 0.0),
+                "consistency_score": float(stability_data.faithfulness_score or 0.0),
+                "confidence_score": float(stability_data.confidence_score or 0.0),
+                "traceability_score": float(stability_data.traceability_score or 0.0),
+                "anomaly_score": float(stability_data.physical_hallucination_score or 0.0),
+                "faithfulness_score": float(stability_data.faithfulness_score or 0.0),
+                "physical_hallucination_score": float(stability_data.physical_hallucination_score or 0.0),
+            }
+
+            rule_engine = RuleEngineService(session)
+            rule_matches = await rule_engine.evaluate_and_get_matches(
+                org_id=request.org_id,
+                alert_type="quality_review",
+                metrics=metrics,
+            )
+            # Filter cooldown and build a pool; each rule triggers at most once
+            available_rules: list[AlertRule] = []
+            for rule in rule_matches:
+                if not await rule_engine.is_in_cooldown(rule, request.org_id):
+                    available_rules.append(rule)
+
             for item in persistable_output.alerts:
+                rule = available_rules.pop(0) if available_rules else None
                 await alert_repo.create(
                     {
                         "id": str(uuid7()),
                         "org_id": request.org_id,
+                        "rule_id": str(rule.id) if rule else None,
                         "stability_id": str(stability.id),
                         "alert_type": "quality_review",
-                        "severity": item.severity,
-                        "title": item.title,
+                        "severity": rule.severity if rule else item.severity,
+                        "title": f"{item.title} (规则: {rule.name})" if rule else item.title,
                         "detail": {"message": item.message, "task_id": str(task.id), "result_id": str(result.id)},
                         "status": "open",
-                        "channels": {"ui": True},
+                        "channels": rule.notification_channels if (rule and rule.notification_channels) else {"ui": True},
                     }
                 )
 
@@ -706,23 +741,67 @@ class QualityAgentOrchestratorService:
             )
 
             if self._legacy_should_alert(output):
-                await alert_repo.create(
-                    {
-                        "id": str(uuid7()),
-                        "org_id": request.org_id,
-                        "stability_id": str(stability.id),
-                        "alert_type": "quality_review",
-                        "severity": self._legacy_alert_severity(output),
-                        "title": "Legacy quality answer requires review",
-                        "detail": {
-                            "message": output.summary or output.answer,
-                            "task_id": str(task.id),
-                            "result_id": str(result.id),
-                        },
-                        "status": "open",
-                        "channels": {"ui": True},
-                    }
+                from app.services.rule_engine_service import RuleEngineService
+
+                quality = output.quality or {}
+                _legacy_metrics = {
+                    "risk_score": float(quality.get("risk_score") or 0.0),
+                    "confidence": float(quality.get("confidence") or 0.0),
+                    "faithfulness": float(quality.get("faithfulness") or 0.0),
+                    "evidence_coverage": float(quality.get("evidence_coverage") or 0.0),
+                    "traceability": float(quality.get("traceability") or 0.0),
+                }
+
+                _legacy_rule_engine = RuleEngineService(session)
+                _legacy_matches = await _legacy_rule_engine.evaluate_and_get_matches(
+                    org_id=request.org_id,
+                    alert_type="quality_review",
+                    metrics=_legacy_metrics,
                 )
+
+                _triggered = False
+                for _rule in _legacy_matches:
+                    if await _legacy_rule_engine.is_in_cooldown(_rule, request.org_id):
+                        continue
+                    _triggered = True
+                    await alert_repo.create(
+                        {
+                            "id": str(uuid7()),
+                            "org_id": request.org_id,
+                            "rule_id": str(_rule.id),
+                            "stability_id": str(stability.id),
+                            "alert_type": "quality_review",
+                            "severity": _rule.severity,
+                            "title": f"Quality review required (规则: {_rule.name})",
+                            "detail": {
+                                "message": output.summary or output.answer,
+                                "task_id": str(task.id),
+                                "result_id": str(result.id),
+                            },
+                            "status": "open",
+                            "channels": _rule.notification_channels or {"ui": True},
+                        }
+                    )
+
+                if not _triggered:
+                    await alert_repo.create(
+                        {
+                            "id": str(uuid7()),
+                            "org_id": request.org_id,
+                            "rule_id": None,
+                            "stability_id": str(stability.id),
+                            "alert_type": "quality_review",
+                            "severity": self._legacy_alert_severity(output),
+                            "title": "Legacy quality answer requires review",
+                            "detail": {
+                                "message": output.summary or output.answer,
+                                "task_id": str(task.id),
+                                "result_id": str(result.id),
+                            },
+                            "status": "open",
+                            "channels": {"ui": True},
+                        }
+                    )
 
             usage = self._legacy_usage(output)
             if usage["total_tokens"] > 0:

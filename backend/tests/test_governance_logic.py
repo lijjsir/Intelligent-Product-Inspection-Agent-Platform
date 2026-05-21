@@ -11,6 +11,7 @@ from app.core.claims import (
     WORKSPACE_OPS,
     build_auth_claims,
 )
+from app.core.exceptions import NotFoundError
 from agent.subgraphs.inspection_task import InspectionGraph
 from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.llm.client import LLMClient
@@ -609,6 +610,82 @@ def test_feedback_service_replaces_actor_score_event():
         {"value": 0.5, "scored_at": "2026-03-24T12:00:00", "metadata": {"actor_id": "user-1"}},
         {"value": 1.0, "scored_at": "2026-03-24T09:00:00", "metadata": {"actor_id": "user-2"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_feedback_service_saves_message_feedback_for_visible_target(monkeypatch):
+    saved_payloads = []
+
+    class FakeScalarResult:
+        def scalar_one_or_none(self):
+            return object()
+
+    class FakeSession:
+        async def execute(self, _stmt):
+            return FakeScalarResult()
+
+    class FakeRepo:
+        def __init__(self, _session):
+            return None
+
+        async def save_message_feedback(self, payload):
+            saved_payloads.append(payload)
+            return SimpleNamespace(**payload)
+
+    monkeypatch.setattr("app.services.feedback_service.FeedbackRepository", FakeRepo)
+
+    service = FeedbackService(FakeSession(), "org-1")
+    feedback = await service.submit_message_feedback(
+        "CHAT",
+        "message-1",
+        "user-1",
+        {
+            "feedback_type": "down",
+            "rating": 1,
+            "category": "not_helpful",
+            "comment": "from action bar",
+        },
+    )
+
+    assert feedback.target_type == "chat"
+    assert feedback.target_id == "message-1"
+    assert feedback.actor_id == "user-1"
+    assert saved_payloads[0]["org_id"] == "org-1"
+    assert saved_payloads[0]["feedback_type"] == "down"
+
+
+@pytest.mark.asyncio
+async def test_feedback_service_rejects_message_feedback_without_visible_target(monkeypatch):
+    class FakeScalarResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeSession:
+        async def execute(self, _stmt):
+            return FakeScalarResult()
+
+    class FakeRepo:
+        def __init__(self, _session):
+            return None
+
+        async def save_message_feedback(self, _payload):
+            raise AssertionError("invisible messages must not be saved")
+
+    monkeypatch.setattr("app.services.feedback_service.FeedbackRepository", FakeRepo)
+
+    service = FeedbackService(FakeSession(), "org-1")
+    with pytest.raises(NotFoundError):
+        await service.submit_message_feedback(
+            "meeting",
+            "message-1",
+            "user-1",
+            {
+                "feedback_type": "up",
+                "rating": 5,
+                "category": "helpful",
+                "comment": None,
+            },
+        )
 
 
 def test_visual_fallback_is_variable_by_image_source():

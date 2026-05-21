@@ -73,6 +73,16 @@ async def send_message(
     return ResponseEnvelope(data=await service.send_message(session_id, body))
 
 
+@router.post("/sessions/{session_id}/messages/{message_id}/cancel", response_model=ResponseEnvelope[ChatMessageResponse])
+async def cancel_message(
+    session_id: str,
+    message_id: str,
+    current: CurrentUser = Depends(get_current_user),
+):
+    service = _build_service(current)
+    return ResponseEnvelope(data=await service.cancel_message(session_id, message_id))
+
+
 @router.post("/sessions/{session_id}/task-result", response_model=ResponseEnvelope[ChatMessageResponse])
 async def append_task_result(
     session_id: str,

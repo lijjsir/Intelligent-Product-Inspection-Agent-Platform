@@ -12,8 +12,8 @@ const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
 const tabs: { label: string; key: TabKey }[] = [
-  { label: "总览", key: "overview" },
-  { label: "质量报告", key: "quality" },
+  { label: "分析总览", key: "overview" },
+  { label: "质检质量", key: "quality" },
   { label: "质量追踪", key: "tracing" },
 ];
 
