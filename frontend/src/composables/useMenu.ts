@@ -138,15 +138,14 @@ function getPlatformOperatorMenu(): MenuStructure {
 
 function getAlgorithmEngineerMenu(): MenuStructure {
   return [
-    { title: "数据接入", path: "/ops/data/import", placeholder: true },
-    { title: "数据处理", path: "/ops/data/processing", placeholder: true },
-    { title: "测试集管理", path: "/ops/data/eval-sets", placeholder: true },
-    { title: "训练任务", path: "/ops/training/jobs", placeholder: true },
-    { title: "微调管理", path: "/ops/training/fine-tune", placeholder: true },
-    { title: "离线评测", path: "/ops/eval/offline", placeholder: true },
-    { title: "在线验证", path: "/ops/eval/online", placeholder: true },
-    { title: "实验追踪", path: "/ops/experiments", placeholder: true },
-    { title: "部署记录", path: "/ops/deployments", placeholder: true },
+    { title: "数据接入", path: "/ops/data/import" },
+    { title: "测试集管理", path: "/ops/data/eval-sets" },
+    { title: "训练任务", path: "/ops/training/jobs" },
+    { title: "微调管理", path: "/ops/training/fine-tune" },
+    { title: "离线评测", path: "/ops/eval/offline" },
+    { title: "在线验证", path: "/ops/eval/online" },
+    { title: "实验追踪", path: "/ops/experiments" },
+    { title: "部署记录", path: "/ops/deployments" },
     { title: "模型配置", path: "/governance/admin/models" },
     { title: "个人设置", path: "/app/profile" },
   ];

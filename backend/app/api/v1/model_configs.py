@@ -53,6 +53,7 @@ async def create_model_config(
     require_role("model_config", current.role)
     service = ModelConfigService(db, current.org_id)
     item = await service.create_config(payload.model_dump())
+    await db.refresh(item)
     return ResponseEnvelope(data=_to_response(item))
 
 
@@ -66,6 +67,7 @@ async def update_model_config(
     require_role("model_config", current.role)
     service = ModelConfigService(db, current.org_id)
     item = await service.update_config(config_id, payload.model_dump(exclude_unset=True))
+    await db.refresh(item)
     return ResponseEnvelope(data=_to_response(item))
 
 

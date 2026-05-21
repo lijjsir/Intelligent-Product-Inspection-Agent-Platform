@@ -16,6 +16,8 @@ export interface ModelConfig {
   has_api_key: boolean;
 }
 
+export type ModelType = "chat" | "embedding" | "multimodal";
+
 export interface ModelConfigPayload {
   org_id?: string | null;
   provider: string;
@@ -23,7 +25,7 @@ export interface ModelConfigPayload {
   display_name: string;
   endpoint: string;
   api_key?: string | null;
-  model_type?: string;
+  model_type?: ModelType;
   priority?: number;
   rpm_limit?: number | null;
   input_price_per_million?: number | null;

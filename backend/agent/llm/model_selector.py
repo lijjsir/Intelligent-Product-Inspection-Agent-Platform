@@ -84,3 +84,4 @@ class ModelSelector:
         if provider == "local_openai":
             return True
         return bool(str(item.get("api_key") or "").strip())
+

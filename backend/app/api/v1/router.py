@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    algo_workspace,
     agent,
     agent_ops,
     alerts,
@@ -8,6 +9,7 @@ from app.api.v1 import (
     auth,
     chat,
     billing,
+    datasets,
     feedbacks,
     inspection_specs,
     memory,
@@ -34,6 +36,8 @@ router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(agent_ops.router, tags=["agent-ops"])
 router.include_router(chat.router, tags=["chat"])
+router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
+router.include_router(algo_workspace.router, tags=["algo-workspace"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])

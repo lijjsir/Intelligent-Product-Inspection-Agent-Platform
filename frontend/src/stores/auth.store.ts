@@ -161,7 +161,7 @@ export const useAuthStore = defineStore("auth", () => {
       return "/governance/quality/analysis-center";
     }
     if (r === ROLE_ALGORITHM_ENGINEER) {
-      return "/governance/admin/models";
+      return "/ops/data/import";
     }
     if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
       return "/ops/agents";

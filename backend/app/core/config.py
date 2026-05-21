@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,8 +12,8 @@ class Settings(BaseSettings):
     jwt_public_key: str = ""
     jwt_issuer: str = "piap"
     jwt_audience: str = "piap-users"
-    jwt_exp_minutes: int = 120
-    jwt_refresh_days: int = 7
+    jwt_exp_minutes: int = 0
+    jwt_refresh_days: int = 0
 
     db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
     db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
@@ -81,6 +83,27 @@ class Settings(BaseSettings):
     langfuse_init_user_email: str | None = None
     langfuse_init_user_name: str | None = None
     langfuse_init_user_password: str | None = None
+
+    @field_validator("jwt_private_key", "jwt_public_key", mode="before")
+    @classmethod
+    def _normalize_jwt_pem(cls, value):
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+
+        normalized = text.replace("\\n", "\n")
+        if "-----BEGIN" in normalized:
+            return normalized
+
+        candidate = Path(text)
+        if not candidate.is_absolute():
+            candidate = Path(__file__).resolve().parents[2] / candidate
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8").strip()
+
+        return normalized
 
     @field_validator(
         "langfuse_public_key",

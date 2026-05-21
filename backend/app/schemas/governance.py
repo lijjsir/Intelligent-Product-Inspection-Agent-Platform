@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import PageParams
+
+
+ALLOWED_MODEL_TYPES = {"chat", "embedding", "multimodal"}
 
 
 class ModelConfigCreate(BaseModel):
@@ -22,6 +25,22 @@ class ModelConfigCreate(BaseModel):
     output_price_per_million: Optional[float] = None
     is_active: bool = True
 
+    @field_validator("provider", "model_key", "display_name", "endpoint")
+    @classmethod
+    def _require_non_blank(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+    @field_validator("model_type")
+    @classmethod
+    def _validate_model_type(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if text not in ALLOWED_MODEL_TYPES:
+            raise ValueError("unsupported model_type")
+        return text
+
 
 class ModelConfigUpdate(BaseModel):
     display_name: Optional[str] = None
@@ -35,6 +54,26 @@ class ModelConfigUpdate(BaseModel):
     is_active: Optional[bool] = None
     health_status: Optional[str] = None
     health_message: Optional[str] = None
+
+    @field_validator("display_name", "endpoint", "model_type")
+    @classmethod
+    def _normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            raise ValueError("must not be blank")
+        return text
+
+    @field_validator("model_type")
+    @classmethod
+    def _validate_optional_model_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text not in ALLOWED_MODEL_TYPES:
+            raise ValueError("unsupported model_type")
+        return text
 
 
 class ModelConfigResponse(BaseModel):
