@@ -4,7 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.feedback import ResultFeedback
+from app.models.feedback import MessageFeedback, ResultFeedback
 
 
 class FeedbackRepository:
@@ -32,6 +32,57 @@ class FeedbackRepository:
         self._session.add(obj)
         await self._session.flush()
         return obj
+
+    async def get_actor_message_feedback(
+        self,
+        *,
+        target_type: str,
+        target_id: str,
+        actor_id: str,
+    ) -> MessageFeedback | None:
+        result = await self._session.execute(
+            select(MessageFeedback).where(
+                MessageFeedback.target_type == target_type,
+                MessageFeedback.target_id == target_id,
+                MessageFeedback.actor_id == actor_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def save_message_feedback(self, payload: dict) -> MessageFeedback:
+        existing = await self.get_actor_message_feedback(
+            target_type=payload["target_type"],
+            target_id=payload["target_id"],
+            actor_id=payload["actor_id"],
+        )
+        if existing:
+            for key, value in payload.items():
+                if key != "id":
+                    setattr(existing, key, value)
+            await self._session.flush()
+            return existing
+        obj = MessageFeedback(**payload)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_message_feedbacks(
+        self,
+        *,
+        org_id: str,
+        target_type: str,
+        actor_id: str,
+        target_ids: list[str] | None = None,
+    ) -> list[MessageFeedback]:
+        stmt = select(MessageFeedback).where(
+            MessageFeedback.org_id == org_id,
+            MessageFeedback.target_type == target_type,
+            MessageFeedback.actor_id == actor_id,
+        )
+        if target_ids:
+            stmt = stmt.where(MessageFeedback.target_id.in_(target_ids))
+        result = await self._session.execute(stmt.order_by(MessageFeedback.updated_at.desc()))
+        return list(result.scalars().all())
 
     async def list_feedbacks(
         self,
@@ -67,4 +118,3 @@ class FeedbackRepository:
         items = await self.list_by_range(org_id, start_date, end_date)
         counter = Counter((item.category or "uncategorized") for item in items)
         return dict(counter)
-

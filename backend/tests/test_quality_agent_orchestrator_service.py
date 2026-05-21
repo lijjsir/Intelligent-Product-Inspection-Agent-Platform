@@ -215,6 +215,9 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
         def __init__(self, _session):
             pass
 
+        async def get(self, _org_id, _message_id):
+            return None
+
         async def update_assistant_message(self, **kwargs):
             updates.append(kwargs)
             return object()
@@ -290,6 +293,67 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
 
 
 @pytest.mark.asyncio
+async def test_persist_chat_result_skips_interrupted_message(monkeypatch):
+    updates: list[dict] = []
+    touches: list[dict] = []
+    events: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class InterruptedMessage:
+        payload = {"status": "interrupted"}
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, _org_id, _message_id):
+            return InterruptedMessage()
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            touches.append({"org_id": org_id, "user_id": user_id, "session_id": session_id})
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    request = NormalizedRequest(
+        request_id="req-interrupted",
+        workflow_run_id="wf-interrupted",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        ext={"emit": fake_emit},
+    )
+    output = AgentOutput(message_type="assistant_text", answer="late answer")
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is False
+    assert updates == []
+    assert touches == []
+    assert events == []
+
+
+@pytest.mark.asyncio
 async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
     updates: list[dict] = []
 
@@ -304,6 +368,9 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
     class FakeChatMessageRepository:
         def __init__(self, _session):
             pass
+
+        async def get(self, _org_id, _message_id):
+            return None
 
         async def update_assistant_message(self, **kwargs):
             updates.append(kwargs)
@@ -360,4 +427,3 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
 
     assert success is True
     assert updates[0]["content"] == "hello"
-

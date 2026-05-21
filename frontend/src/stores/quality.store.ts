@@ -14,6 +14,7 @@ export const useQualityStore = defineStore("quality", () => {
     try {
       const { data } = await qualityApi.getReport(params);
       report.value = data.data;
+      return report.value;
     } finally {
       loading.value = false;
     }
@@ -25,6 +26,7 @@ export const useQualityStore = defineStore("quality", () => {
       const { data } = await qualityApi.listTraces(params);
       traces.value = data.data?.items ?? [];
       traceMeta.value = data.data?.meta ?? null;
+      return { items: traces.value, meta: traceMeta.value };
     } finally {
       loading.value = false;
     }

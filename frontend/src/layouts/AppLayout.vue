@@ -43,8 +43,9 @@
             </span>
           </template>
 
-          <!-- Flat group items (non-admin sees group items flattened) -->
+          <!-- Flat group items (non-admin sees group with label) -->
           <template v-else-if="isMenuGroup(entry) && !showWorkspaceGroups">
+            <div class="nav-group-label">{{ entry.title }}</div>
             <template v-for="item in entry.items" :key="item.path">
               <RouterLink v-if="!item.placeholder" :to="item.path" class="nav-link" active-class="nav-link-active">
                 <span>{{ item.title }}</span>
@@ -179,7 +180,11 @@ const roleLabel = computed(() => {
 });
 
 const sessionOptions = computed(() => {
-  const rows = [...chatStore.sessions];
+  const nonEmpty = chatStore.sessions.filter((s) => s.last_message_at != null);
+  const rows = [...nonEmpty];
+  if (chatStore.session && !rows.some((s) => s.id === chatStore.session!.id)) {
+    rows.push(chatStore.session);
+  }
   rows.sort((a, b) => {
     const ta = new Date(a.updated_at || a.last_message_at || a.created_at || 0).getTime();
     const tb = new Date(b.updated_at || b.last_message_at || b.created_at || 0).getTime();
@@ -295,6 +300,10 @@ const logout = () => {
 }
 .nav-link-active:hover {
   @apply bg-zinc-800 text-white;
+}
+
+.nav-group-label {
+  @apply px-3 pt-3 pb-1 text-[11px] text-zinc-400 font-semibold uppercase tracking-wider;
 }
 
 /* Ghost button */

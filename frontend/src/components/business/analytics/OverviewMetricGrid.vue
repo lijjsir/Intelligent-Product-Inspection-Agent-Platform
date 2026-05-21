@@ -28,7 +28,7 @@ defineProps<Props>();
       <div class="metric-value">{{ overview.avg_risk_score.toFixed(1) }}</div>
     </el-card>
     <el-card shadow="never" class="metric-card danger">
-      <div class="metric-label">RED 占比</div>
+      <div class="metric-label">高风险占比</div>
       <div class="metric-value">{{ (redRate * 100).toFixed(1) }}%</div>
     </el-card>
     <el-card shadow="never" class="metric-card slate">

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,3 +78,31 @@ class AlertRepository:
         stmt = stmt.values(**values)
         res = await self._session.execute(stmt)
         return res.rowcount > 0
+
+    async def get_latest_by_rule(
+        self, org_id: str | None, rule_id: str, since: datetime
+    ) -> AlertEvent | None:
+        """Return the most recent alert for this rule within the cooldown window."""
+        stmt = (
+            select(AlertEvent)
+            .where(
+                AlertEvent.rule_id == rule_id,
+                AlertEvent.created_at >= since,
+            )
+        )
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        stmt = stmt.order_by(AlertEvent.created_at.desc()).limit(1)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def nullify_rule_id(self, org_id: str | None, rule_id: str) -> None:
+        """Set rule_id to NULL on all alert_events referencing the given rule."""
+        stmt = (
+            update(AlertEvent)
+            .where(AlertEvent.rule_id == rule_id)
+            .values(rule_id=None)
+        )
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        await self._session.execute(stmt)

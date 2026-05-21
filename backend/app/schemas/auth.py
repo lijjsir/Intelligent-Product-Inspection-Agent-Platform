@@ -18,11 +18,13 @@ class RefreshRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    org_name: str
+    create_org: bool = True
+    org_name: str = ""
     org_slug: str
     username: str
     email: EmailStr
     password: str
+    role: str = "admin"
 
 
 class AuthSessionResponse(BaseModel):

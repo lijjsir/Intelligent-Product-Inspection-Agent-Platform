@@ -482,24 +482,78 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             stability_obj = await stability_repo.upsert_by_task(stability_payload)
 
             if should_trigger(stability):
-                severity = "critical" if stability.get("risk_level") == "critical" else "warning"
-                await alert_repo.create(
-                    {
-                        "id": str(uuid7()),
-                        "org_id": task.org_id,
-                        "stability_id": stability_obj.id,
-                        "alert_type": "stability_risk",
-                        "severity": severity,
-                        "title": f"任务 {task.id} 触发稳定性风险告警，等级 {stability.get('risk_level')}",
-                        "detail": {
-                            "risk_level": stability.get("risk_level"),
-                            "risk_score": stability.get("risk_score_100"),
-                        },
-                        "status": "open",
-                        "channels": {"in_app": True},
-                        "created_at": datetime.utcnow(),
-                    }
+                from app.services.rule_engine_service import RuleEngineService
+                import logging
+                _logger = logging.getLogger(__name__)
+                rule_engine = RuleEngineService(session)
+
+                metrics = {
+                    "risk_score_100": float(stability.get("risk_score_100", 0)),
+                    "risk_score": float(stability.get("risk_score", 0)),
+                    "evidence_score": float(stability.get("evidence_score", 0)),
+                    "consistency_score": float(stability.get("consistency_score", 0)),
+                    "confidence_score": float(stability.get("confidence_score", 0)),
+                    "traceability_score": float(stability.get("traceability_score", 0)),
+                    "anomaly_score": float(stability.get("anomaly_score", 0)),
+                }
+
+                matches = await rule_engine.evaluate_and_get_matches(
+                    org_id=task.org_id,
+                    alert_type="stability_risk",
+                    metrics=metrics,
                 )
+
+                matched_any = False
+                for rule in matches:
+                    if await rule_engine.is_in_cooldown(rule, task.org_id):
+                        _logger.info(
+                            "Rule %s is in cooldown, suppressing alert", str(rule.id)
+                        )
+                        continue
+
+                    matched_any = True
+                    await alert_repo.create(
+                        {
+                            "id": str(uuid7()),
+                            "org_id": task.org_id,
+                            "rule_id": str(rule.id),
+                            "stability_id": stability_obj.id,
+                            "alert_type": "stability_risk",
+                            "severity": rule.severity,
+                            "title": f"任务 {task.id} 触发稳定性风险告警 (规则: {rule.name})",
+                            "detail": {
+                                "risk_level": stability.get("risk_level"),
+                                "risk_score": stability.get("risk_score_100"),
+                                "metric_values": metrics,
+                                "rule_condition": rule.condition_config,
+                            },
+                            "status": "open",
+                            "channels": rule.notification_channels or {"in_app": True},
+                            "created_at": datetime.utcnow(),
+                        }
+                    )
+
+                if not matched_any:
+                    severity = "critical" if stability.get("risk_level") == "critical" else "warning"
+                    await alert_repo.create(
+                        {
+                            "id": str(uuid7()),
+                            "org_id": task.org_id,
+                            "rule_id": None,
+                            "stability_id": stability_obj.id,
+                            "alert_type": "stability_risk",
+                            "severity": severity,
+                            "title": f"任务 {task.id} 触发稳定性风险告警，等级 {stability.get('risk_level')}",
+                            "detail": {
+                                "risk_level": stability.get("risk_level"),
+                                "risk_score": stability.get("risk_score_100"),
+                            },
+                            "status": "open",
+                            "channels": {"in_app": True},
+                            "created_at": datetime.utcnow(),
+                        }
+                    )
+
                 await emit({"type": "alert", "message": "stability risk alert triggered"})
 
             await task_repo.update_status(org_id, task_id, "done")

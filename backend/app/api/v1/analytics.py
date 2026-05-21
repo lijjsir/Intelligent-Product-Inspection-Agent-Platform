@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.deps import get_db, get_current_user
-from app.core.permissions import require_role, ROLE_ADMIN
+from app.core.permissions import require_role, ROLE_ADMIN, ROLE_PLATFORM_OPERATOR
 from app.schemas.analytics import ModelDrilldown, OverviewStats, ProductLineDrilldown, TaskDrilldown
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
@@ -14,19 +14,23 @@ router = APIRouter()
 
 
 def _scope_org_id(current: CurrentUser) -> str | None:
-    return None if ROLE_ADMIN in current.roles else current.org_id
+    if ROLE_ADMIN in current.roles or ROLE_PLATFORM_OPERATOR in current.roles:
+        return None
+    return current.org_id
 
 
 @router.get("/overview", response_model=ResponseEnvelope[OverviewStats])
 async def overview(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    product_lines: str | None = Query(default=None, description="comma-separated product line names"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     require_role("analytics", current.role)
     service = AnalyticsService(db, _scope_org_id(current))
-    stats = await service.overview(start_date=start_date, end_date=end_date)
+    pl_list = [p.strip() for p in product_lines.split(",") if p.strip()] if product_lines else None
+    stats = await service.overview(start_date=start_date, end_date=end_date, product_lines=pl_list)
 
     return ResponseEnvelope(data=OverviewStats(**stats))
 

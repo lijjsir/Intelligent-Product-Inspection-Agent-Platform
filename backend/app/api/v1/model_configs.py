@@ -38,7 +38,7 @@ async def list_model_configs(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("model_config", current.role)
+    require_role("model_config_read", current.role)
     service = ModelConfigService(db, current.org_id)
     items = await service.list_configs()
     return ResponseEnvelope(data=[_to_response(item) for item in items])

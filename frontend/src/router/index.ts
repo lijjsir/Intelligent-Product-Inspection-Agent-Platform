@@ -3,7 +3,6 @@ import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
-import { ROLE_ADMIN } from "@/constants/roles";
 
 const routes = [
   {
@@ -77,16 +76,13 @@ router.beforeEach((to) => {
     return { path: "/login" };
   }
 
-  // Redirect authenticated users away from auth pages
-  if ((to.path === "/login" || to.path === "/register") && auth.isAuthed) {
-    return { path: auth.resolveDefaultRoute() };
-  }
+  // 登录/注册页始终可访问，不自动跳走（方便切换账号或重启后重新登录）
 
   // Check route meta role restrictions
   const routeRoles = to.meta.roles as string[] | undefined;
   if (routeRoles && routeRoles.length) {
     const currentRoles = auth.roles.length ? auth.roles : [auth.role];
-    const hasAccess = currentRoles.includes(ROLE_ADMIN) || routeRoles.some((r) => currentRoles.includes(r));
+    const hasAccess = routeRoles.some((r) => currentRoles.includes(r));
     if (!hasAccess) {
       return { path: auth.resolveDefaultRoute() };
     }

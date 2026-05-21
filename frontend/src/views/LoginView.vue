@@ -52,7 +52,7 @@
 
     <p class="mt-6 text-center text-[13px] text-zinc-400">
       还没有账号？
-      <RouterLink to="/register" class="text-zinc-900 font-medium hover:underline">创建组织</RouterLink>
+      <RouterLink to="/register" class="text-zinc-900 font-medium hover:underline">注册账号</RouterLink>
     </p>
   </div>
 </template>

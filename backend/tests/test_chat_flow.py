@@ -1,6 +1,9 @@
 ﻿from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import ProgrammingError
@@ -23,7 +26,9 @@ from agent.subgraphs.quality_chat.graph import (
 )
 from app.core.config import settings
 from app.core.security import create_stream_token
-from app.services.chat_service import get_current_user_for_stream
+from app.schemas.user import CurrentUser
+from app.services import chat_service as chat_service_mod
+from app.services.chat_service import ChatService, get_current_user_for_stream
 
 
 def test_fallback_answer_uses_first_doc_excerpt():
@@ -680,3 +685,93 @@ def test_get_current_user_for_stream_reads_resource_claims():
     assert current.stream_resource == "chat"
     assert current.stream_resource_id == "session-1"
 
+
+@pytest.mark.asyncio
+async def test_cancel_chat_message_marks_assistant_interrupted(monkeypatch):
+    updates: list[dict] = []
+    touches: list[dict] = []
+    published: list[tuple[str, dict]] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, org_id: str, user_id: str, session_id: str):
+            assert org_id == "org-1"
+            assert user_id == "user-1"
+            assert session_id == "session-1"
+            return object()
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            touches.append({"org_id": org_id, "user_id": user_id, "session_id": session_id})
+
+    class FakeMessage:
+        session_id = "session-1"
+        role = "assistant"
+        payload = {"workflow_run_id": "wf-1", "status": "running"}
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, org_id: str, message_id: str):
+            assert org_id == "org-1"
+            assert message_id == "assistant-1"
+            return FakeMessage()
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return SimpleNamespace(
+                id="assistant-1",
+                session_id="session-1",
+                seq_no=2,
+                role="assistant",
+                message_type=kwargs["message_type"],
+                content=kwargs["content"],
+                payload=kwargs["payload"],
+                created_at=None,
+            )
+
+    class FakeBroker:
+        async def publish(self, session_id: str, event: dict):
+            published.append((session_id, event))
+
+    async def sleeper():
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(sleeper())
+    chat_service_mod._ACTIVE_CHAT_WORKFLOWS["wf-1"] = task
+    chat_service_mod._ACTIVE_CHAT_MESSAGE_TO_WORKFLOW["assistant-1"] = "wf-1"
+
+    monkeypatch.setattr(chat_service_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(chat_service_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+    response = await service.cancel_message("session-1", "assistant-1")
+
+    assert response.message_type == "interrupted"
+    assert updates[0]["payload"]["status"] == "interrupted"
+    assert touches == [{"org_id": "org-1", "user_id": "user-1", "session_id": "session-1"}]
+    assert published[0][0] == "session-1"
+    assert published[0][1]["event"] == "message_final"
+    assert task.cancelled() or task.cancelling()
+
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+    chat_service_mod._ACTIVE_CHAT_WORKFLOWS.pop("wf-1", None)
+    chat_service_mod._ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.pop("assistant-1", None)

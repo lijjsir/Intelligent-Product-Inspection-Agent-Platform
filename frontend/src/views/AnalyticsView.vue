@@ -21,13 +21,14 @@ const loaded = ref<Record<TabName, boolean>>({ overview: false, quality: false, 
 const scopeLabel = computed(() => (analyticsStore.overview?.scope_kind === "global" ? "全部组织" : "当前组织"));
 
 watch(activeTab, (tab) => {
+  if (route.query.tab === tab) return;
   router.replace({ query: { ...route.query, tab } });
 });
 
 watch(
   () => route.query.tab,
   (tab) => {
-    if (tab && (tab === "overview" || tab === "quality" || tab === "tracing")) {
+    if (tab && (tab === "overview" || tab === "quality" || tab === "tracing") && activeTab.value !== tab) {
       activeTab.value = tab;
     }
   },
@@ -50,20 +51,29 @@ async function fetchAll() {
   const params = dateRange.value
     ? { start_date: formatDate(dateRange.value[0]), end_date: formatDate(dateRange.value[1]) }
     : undefined;
-  await Promise.all([
-    analyticsStore.fetchOverview(params).then(() => { loaded.value.overview = true; }),
-    qualityStore.fetchReport(params).then(() => { loaded.value.quality = true; }),
-    qualityStore.fetchTraces({ source: "all", limit: 100 }).then(() => { loaded.value.tracing = true; }),
+  await Promise.allSettled([
+    qualityStore.fetchReport(params),
+    qualityStore.fetchTraces({ source: "all", limit: 100 }),
   ]);
+  loaded.value.quality = true;
+  loaded.value.tracing = true;
+}
+
+function overviewParams() {
+  return dateRange.value
+    ? { start_date: formatDate(dateRange.value[0]), end_date: formatDate(dateRange.value[1]) }
+    : undefined;
 }
 
 async function applyDateFilter() {
   await fetchAll();
+  await analyticsStore.fetchOverview(overviewParams());
 }
 
 async function clearDateFilter() {
   dateRange.value = null;
   await fetchAll();
+  await analyticsStore.fetchOverview();
 }
 
 async function quickRange(days: 7 | 30 | 90) {
@@ -80,6 +90,10 @@ function formatDate(value: Date) {
 
 function handleTabChange(tab: TabName) {
   activeTab.value = tab;
+}
+
+function markOverviewLoaded() {
+  loaded.value.overview = true;
 }
 </script>
 
@@ -125,7 +139,7 @@ function handleTabChange(tab: TabName) {
       </div>
     </el-card>
 
-    <AnalyticsOverviewPanel v-show="activeTab === 'overview'" :date-range="dateRange" />
+    <AnalyticsOverviewPanel v-show="activeTab === 'overview'" :date-range="dateRange" @loaded="markOverviewLoaded" />
     <QualityReportPanel v-show="activeTab === 'quality'" />
     <QualityTracingPanel v-if="loaded.tracing" v-show="activeTab === 'tracing'" />
   </div>

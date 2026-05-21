@@ -4,9 +4,13 @@ import { ElMessage } from "element-plus";
 import { useAgentOpsStore } from "@/stores/agent-ops.store";
 import { usePagination } from "@/composables/usePagination";
 import { useECharts } from "@/composables/useECharts";
+import { useAuthStore } from "@/stores/auth.store";
+import { ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
 import type { AgentRuntimeInstance } from "@/types/agent-ops.types";
 
 const store = useAgentOpsStore();
+const auth = useAuthStore();
+const isReadonly = computed(() => auth.primaryRole === ROLE_PLATFORM_OPERATOR);
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination();
 const loading = computed(() => store.loading);
 const activeTab = ref("definitions");
@@ -290,7 +294,7 @@ async function handleRuntimeToggle(row: AgentRuntimeInstance) {
                 {{ row.last_started_at ? new Date(row.last_started_at).toLocaleString() : "-" }}
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="140" fixed="right">
+            <el-table-column v-if="!isReadonly" label="操作" width="140" fixed="right">
               <template #default="{ row }">
                 <el-button
                   v-if="row.supports_start_stop"

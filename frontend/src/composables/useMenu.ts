@@ -58,38 +58,15 @@ export function useMenu() {
 function getAdminMenu(): MenuStructure {
   return [
     {
-      title: "应用工作台",
-      icon: "Monitor",
-      items: [
-        { title: "Dashboard", path: "/app/dashboard" },
-        { title: "任务管理", path: "/app/tasks" },
-        { title: "检测结果", path: "/app/results" },
-        { title: "反馈管理", path: "/app/feedbacks" },
-      ],
-    },
-    {
-      title: "运维工作台",
-      icon: "Setting",
-      items: [
-        { title: "Agent 管理", path: "/ops/agents" },
-        { title: "Prompt 管理", path: "/ops/prompts" },
-        { title: "RAG 配置", path: "/ops/rag" },
-        { title: "分析看板", path: "/ops/analytics" },
-        { title: "发布管理", path: "/ops/releases", placeholder: true },
-        { title: "计费管理", path: "/ops/billing" },
-      ],
-    },
-    {
-      title: "治理工作台",
+      title: "系统治理",
       icon: "Management",
       items: [
         { title: "用户管理", path: "/governance/admin/users" },
         { title: "角色与菜单", path: "/governance/admin/roles", placeholder: true },
         { title: "租户/组织", path: "/governance/admin/orgs", placeholder: true },
-        { title: "模型配置", path: "/governance/admin/models" },
         { title: "存储/基础设施", path: "/governance/admin/infrastructure", placeholder: true },
-        { title: "GPU 调度", path: "/governance/admin/gpu" },
         { title: "检测标准", path: "/governance/admin/inspection-specs" },
+        { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
         { title: "记忆治理", path: "/governance/memory", placeholder: true },
         { title: "登录日志", path: "/governance/admin/auth-logs", placeholder: true },
@@ -119,25 +96,31 @@ function getAppDeveloperMenu(): MenuStructure {
 
 function getPlatformOperatorMenu(): MenuStructure {
   return [
-    { title: "Agent 管理", path: "/ops/agents" },
-    { title: "模板审核", path: "/ops/templates/review", placeholder: true },
-    { title: "发布协同", path: "/ops/releases", placeholder: true },
-    { title: "模型版本", path: "/ops/models/versions", placeholder: true },
-    { title: "调用监控", path: "/ops/models/monitor", placeholder: true },
-    { title: "数据质量", path: "/ops/data-quality", placeholder: true },
-    { title: "标注任务", path: "/ops/label-tasks", placeholder: true },
-    { title: "数据审核", path: "/ops/data-review", placeholder: true },
-    { title: "用户行为分析", path: "/ops/analytics/behavior", placeholder: true },
-    { title: "业务报表", path: "/ops/analytics/reports", placeholder: true },
-    { title: "成本分析", path: "/ops/analytics/cost", placeholder: true },
-    { title: "分析中心", path: "/governance/quality/analysis-center" },
-    { title: "记忆治理", path: "/governance/memory", placeholder: true },
+    { title: "平台运维工作台", path: "/ops/dashboard" },
+    { title: "任务查看", path: "/ops/tasks" },
+    { title: "分析中心", path: "/ops/analytics" },
+    { title: "告警管理", path: "/ops/alerts" },
+    { title: "调用监控", path: "/ops/calls" },
+    { title: "数据质量", path: "/ops/data-quality" },
+    { title: "成本分析", path: "/ops/cost" },
+    { title: "业务报表", path: "/ops/reports" },
+    {
+      title: "跨域查看",
+      icon: "View",
+      items: [
+        { title: "Agent 查看", path: "/ops/agents" },
+        { title: "稳定性查看", path: "/ops/stability" },
+        { title: "检测标准查看", path: "/ops/inspection-specs" },
+      ],
+    },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
 
 function getAlgorithmEngineerMenu(): MenuStructure {
   return [
+    { title: "模型配置", path: "/governance/admin/models" },
+    { title: "GPU 调度", path: "/governance/admin/gpu" },
     { title: "数据接入", path: "/ops/data/import", placeholder: true },
     { title: "数据处理", path: "/ops/data/processing", placeholder: true },
     { title: "测试集管理", path: "/ops/data/eval-sets", placeholder: true },
@@ -147,14 +130,14 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     { title: "在线验证", path: "/ops/eval/online", placeholder: true },
     { title: "实验追踪", path: "/ops/experiments", placeholder: true },
     { title: "部署记录", path: "/ops/deployments", placeholder: true },
-    { title: "模型配置", path: "/governance/admin/models" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
 
 function getUserMenu(): MenuStructure {
   return [
-    { title: "AI 检测对话", path: "/app/chat" },
+    { title: "AI 对话", path: "/app/chat" },
+    { title: "会议室", path: "/app/meetings" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
     { title: "证据溯源", path: "/app/results/:id", placeholder: true },
@@ -166,7 +149,8 @@ function getUserMenu(): MenuStructure {
 
 function getExpertMenu(): MenuStructure {
   return [
-    { title: "AI 检测对话", path: "/app/chat" },
+    { title: "AI 对话", path: "/app/chat" },
+    { title: "会议室", path: "/app/meetings" },
     { title: "RAG 空间", path: "/app/rag-spaces" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
