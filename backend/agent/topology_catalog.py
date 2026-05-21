@@ -4,14 +4,19 @@ from typing import Any
 
 REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
     {
-        "name": "Quality Judgement",
-        "description": "统一质量判定（合并 Legacy + LLM-native），支持 chat / file / task 多策略。",
-        "workflow_binding": "quality_judgement_v2",
-        "subgraph_key": "quality_judgement",
-        "entry_graph": "MemoryManagerGraph",
+        "name": "Agent Manager",
+        "description": "统一入口路由，负责将请求分发给聊天或检测 Agent。",
+        "workflow_binding": "agent_manager_v1",
+        "subgraph_key": "agent_manager",
+        "entry_graph": "AgentManagerService",
         "supports_start_stop": True,
-        "graph_version": "v2",
+        "graph_version": "v1",
         "is_active": True,
+        "lifecycle_status": "active",
+        "group": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "customer_visible_description": "统一请求入口，负责将用户请求智能路由分发给对应的专业Agent处理。",
     },
     {
         "name": "Quality Chat",
@@ -22,6 +27,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": True,
         "graph_version": "v2",
         "is_active": True,
+        "lifecycle_status": "active",
+        "group": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "customer_visible_description": "轻量级智能问答入口，支持附件上传和RAG知识空间检索，适用于日常产品质量咨询。",
     },
     {
         "name": "Inspection Task Agent",
@@ -32,16 +42,26 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": True,
         "graph_version": "v1",
         "is_active": True,
+        "lifecycle_status": "active",
+        "group": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "customer_visible_description": "负责正式质检任务的全流程：创建任务、图片/文件检测、结果计算与入库。",
     },
     {
-        "name": "Agent Manager",
-        "description": "统一入口路由，负责将请求分发给聊天或检测 Agent。",
-        "workflow_binding": "agent_manager_v1",
-        "subgraph_key": "agent_manager",
-        "entry_graph": "AgentManagerService",
+        "name": "Quality Judgement",
+        "description": "统一质量判定（合并 Legacy + LLM-native），支持 chat / file / task 多策略。",
+        "workflow_binding": "quality_judgement_v2",
+        "subgraph_key": "quality_judgement",
+        "entry_graph": "MemoryManagerGraph",
         "supports_start_stop": True,
-        "graph_version": "v1",
+        "graph_version": "v2",
         "is_active": True,
+        "lifecycle_status": "active",
+        "group": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "customer_visible_description": "统一质量判定引擎，支持文本问答、文件解析、图片检测等多模式质检，自动合成判定证据。",
     },
     {
         "name": "Market Monitor",
@@ -52,6 +72,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": False,
         "graph_version": "v0",
         "is_active": False,
+        "lifecycle_status": "planned",
+        "group": "planned",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "customer_visible_description": "市场价格、销量、渠道异常检测与预警（规划中，暂未接入业务链路）。",
     },
     {
         "name": "Public Opinion",
@@ -62,6 +87,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": False,
         "graph_version": "v0",
         "is_active": False,
+        "lifecycle_status": "planned",
+        "group": "planned",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "customer_visible_description": "新闻、社交媒体、投诉举报等多渠道舆情采集与分析（规划中，暂未接入业务链路）。",
     },
     {
         "name": "Trend Evolution",
@@ -72,6 +102,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": False,
         "graph_version": "v0",
         "is_active": False,
+        "lifecycle_status": "planned",
+        "group": "planned",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "customer_visible_description": "风险融合、趋势推演和情景预测（规划中，暂未接入业务链路）。",
     },
     {
         "name": "Supervision Sampling",
@@ -82,6 +117,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": False,
         "graph_version": "v0",
         "is_active": False,
+        "lifecycle_status": "planned",
+        "group": "planned",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "customer_visible_description": "抽检计划生成、样品管理和现场检查记录（规划中，暂未接入业务链路）。",
     },
     {
         "name": "Lab Detection",
@@ -92,70 +132,11 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "supports_start_stop": False,
         "graph_version": "v0",
         "is_active": False,
-    },
-]
-
-
-DSPY_OPTIMIZATION_TARGETS: list[dict[str, Any]] = [
-    {
-        "target_key": "quality_judgement.contract_inferencer",
-        "subgraph_key": "quality_judgement",
-        "node_id": "contract_inferencer",
-        "node_ref": "quality_judgement.contract_inferencer",
-        "node_label": "Contract Inferencer",
-        "module_name": "QualityContractInferencer",
-        "optimization_goal": "Improve contract inference for text and file-driven inspection requests.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.planner",
-        "subgraph_key": "quality_judgement",
-        "node_id": "planner",
-        "node_ref": "quality_judgement.planner",
-        "node_label": "Planner",
-        "module_name": "QualityJudgementPlanner",
-        "optimization_goal": "Optimize inspection task planning for unified quality flows.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.knowledge_router",
-        "subgraph_key": "quality_judgement",
-        "node_id": "knowledge_router",
-        "node_ref": "quality_judgement.knowledge_router",
-        "node_label": "Knowledge Router",
-        "module_name": "QualityJudgementKnowledgeRouter",
-        "optimization_goal": "Improve RAG and spec retrieval decisions.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.evidence_synthesizer",
-        "subgraph_key": "quality_judgement",
-        "node_id": "evidence_synthesizer",
-        "node_ref": "quality_judgement.evidence_synthesizer",
-        "node_label": "Evidence Synthesizer",
-        "module_name": "EvidenceSynthesizer",
-        "optimization_goal": "Improve evidence assembly quality and citation coverage.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination", "pass_rate"],
-        "supports_compile": True,
-    },
-    {
-        "target_key": "quality_judgement.review_gate",
-        "subgraph_key": "quality_judgement",
-        "node_id": "review_gate",
-        "node_ref": "quality_judgement.review_gate",
-        "node_label": "Review Gate",
-        "module_name": "QualityJudgementReviewGate",
-        "optimization_goal": "Improve PASS/FAIL/UNCERTAIN gating decisions.",
-        "optimizer_strategy": "bootstrap-fewshot",
-        "metric_names": ["faithfulness", "traceability", "physical_hallucination", "pass_rate"],
-        "supports_compile": True,
+        "lifecycle_status": "planned",
+        "group": "planned",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "customer_visible_description": "实验室样品检测指标解析和标准比对（规划中，暂未接入业务链路）。",
     },
 ]
 
@@ -172,6 +153,19 @@ ROOT_EDGES: list[dict[str, Any]] = [
     {"source": "memory_context_loader", "target": "manager_route_policy"},
     {"source": "manager_route_policy", "target": "subgraph_runner"},
     {"source": "subgraph_runner", "target": "result_synthesizer"},
+]
+
+AGENT_OVERVIEW_ROOT_NODES: list[dict[str, Any]] = [
+    {"id": "request_intake", "label": "Request Intake", "kind": "system"},
+    {"id": "memory_context_loader", "label": "Memory Context Loader", "kind": "system"},
+    {"id": "manager_route_policy", "label": "Manager Route Policy", "kind": "system"},
+    {"id": "subgraph_runner", "label": "Subgraph Runner", "kind": "system"},
+    {"id": "result_synthesizer", "label": "Result Synthesizer", "kind": "system"},
+]
+AGENT_OVERVIEW_ROOT_EDGES: list[dict[str, Any]] = [
+    {"source": "request_intake", "target": "memory_context_loader"},
+    {"source": "memory_context_loader", "target": "manager_route_policy"},
+    {"source": "manager_route_policy", "target": "subgraph_runner"},
 ]
 
 QUALITY_JUDGEMENT_NODES: list[dict[str, Any]] = [
@@ -290,35 +284,10 @@ def get_registered_subgraphs() -> list[dict[str, Any]]:
     return [dict(item) for item in REGISTERED_SUBGRAPHS]
 
 
-def get_dspy_optimization_targets() -> list[dict[str, Any]]:
-    return [dict(item) for item in DSPY_OPTIMIZATION_TARGETS]
-
-
-def get_dspy_optimization_target(target_key: str) -> dict[str, Any] | None:
-    return next((dict(item) for item in DSPY_OPTIMIZATION_TARGETS if item["target_key"] == target_key), None)
-
-
-def get_dspy_graph_context(target_key: str) -> dict[str, Any] | None:
-    target = get_dspy_optimization_target(target_key)
-    if not target:
-        return None
-    topology = get_topology(target["subgraph_key"], include_root=True)
-    focus_node = target["node_ref"]
-    upstream = [
-        edge["source"]
-        for edge in topology["edges"]
-        if edge["target"] == focus_node
-    ]
-    downstream = [
-        edge["target"]
-        for edge in topology["edges"]
-        if edge["source"] == focus_node
-    ]
+def get_agent_overview_root() -> dict[str, Any]:
     return {
-        "focus_node_id": focus_node,
-        "focus_node_label": target["node_label"],
-        "upstream_nodes": upstream,
-        "downstream_nodes": downstream,
-        "nodes": topology["nodes"],
-        "edges": topology["edges"],
+        "nodes": [dict(item) for item in AGENT_OVERVIEW_ROOT_NODES],
+        "edges": [dict(item) for item in AGENT_OVERVIEW_ROOT_EDGES],
     }
+
+

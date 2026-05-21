@@ -128,11 +128,12 @@ class QualityTraceEvent(BaseModel):
 class RagQueryLog(BaseModel):
     query: str
     rag_space_id: str | None = None
+    top_k: int = 0
     hit_count: int = 0
     hit_rate: float = 0.0
     citation_coverage: float = 0.0
     latency_ms: float = 0.0
-    source_graph: str = "quality_judgement"
+    source_graph: str = "unknown"
     agent_name: str | None = None
     sub_route: str | None = None
     trace_id: str | None = None

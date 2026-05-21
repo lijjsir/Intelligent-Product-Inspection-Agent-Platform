@@ -37,5 +37,5 @@ class AgentRouterOutput(BaseModel):
     """AgentManager 输出，包装原始 Agent 输出 + 路由元信息"""
     route_decision: AgentRouteDecision
     agent_output: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["completed", "failed", "degraded"] = "completed"
+    status: Literal["completed", "failed", "degraded", "blocked"] = "completed"
     degrade_reason: str | None = None

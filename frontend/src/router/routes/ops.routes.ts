@@ -18,7 +18,12 @@ export const opsRoutes = [
 
   // Developer tools
   { path: "workflows", name: "ops-workflows", component: Placeholder, meta: { title: "流程节点", roles: [ROLE_APP_DEVELOPER] } },
-  { path: "tools", name: "ops-tools", component: Placeholder, meta: { title: "工具注册", roles: [ROLE_APP_DEVELOPER] } },
+  { path: "tools", name: "ops-tools-overview", component: () => import("@/views/ops/tools/ToolOverviewView.vue"), meta: { title: "工具总览", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "tools/catalog", name: "ops-tools-catalog", component: () => import("@/views/ops/tools/ToolCatalogView.vue"), meta: { title: "工具库", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "tools/catalog/:id", name: "ops-tools-detail", component: () => import("@/views/ops/tools/ToolDetailView.vue"), meta: { title: "工具详情", hiddenInMenu: true, roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "tools/import", name: "ops-tools-import", component: () => import("@/views/ops/tools/ToolImportView.vue"), meta: { title: "外部导入", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "tools/bindings", name: "ops-tools-bindings", component: () => import("@/views/ops/tools/ToolBindingView.vue"), meta: { title: "Agent 绑定", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "tools/executions", name: "ops-tools-executions", component: () => import("@/views/ops/tools/ToolExecutionView.vue"), meta: { title: "执行监控", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
 
   // Releases
   { path: "releases", name: "ops-releases", component: Placeholder, meta: { title: "发布管理", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },

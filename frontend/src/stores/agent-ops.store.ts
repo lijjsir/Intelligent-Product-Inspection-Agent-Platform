@@ -13,18 +13,20 @@ import type {
   IntentRouteCreate,
   IntentRouteListQuery,
   IntentRouteUpdate,
-  PromptDSPyConfig,
-  PromptOptimizationConfigPayload,
-  PromptOptimizationRun,
-  PromptOptimizationTarget,
-  PromptOptimizationTargetListQuery,
-  PromptOptimizationTargetsResponse,
   PromptVersion,
   PromptVersionCreate,
   PromptVersionListQuery,
   PromptVersionUpdate,
+  AgentDetail,
+  AgentRuntimeEvent,
   RagAnalysisResponse,
+  RagTraceDetailResponse,
   RoutingStrategyOverview,
+  RoutingCurrent,
+  RouteSimulateRequest,
+  RouteSimulateResult,
+  RouteEventItem,
+  RoutingMetrics,
 } from "@/types/agent-ops.types";
 
 export const useAgentOpsStore = defineStore("agentOps", () => {
@@ -32,18 +34,27 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
   const prompts = ref<PromptVersion[]>([]);
   const routes = ref<IntentRoute[]>([]);
   const ragAnalysis = ref<RagAnalysisResponse | null>(null);
+  const ragTraceDetail = ref<RagTraceDetailResponse | null>(null);
+  const ragTraceDetailLoading = ref(false);
   const runtimeOverview = ref<AgentRuntimeOverview | null>(null);
   const runtimeAgents = ref<AgentRuntimeInstance[]>([]);
   const topology = ref<AgentTopology | null>(null);
   const routeTopology = ref<AgentTopology | null>(null);
   const routingStrategy = ref<RoutingStrategyOverview | null>(null);
-  const promptOptimization = ref<PromptOptimizationTargetsResponse | null>(null);
-  const promptOptimizationCurrent = ref<PromptOptimizationTarget | null>(null);
-  const promptOptimizationRuns = ref<PromptOptimizationRun[]>([]);
-
   const agentsTotal = ref(0);
   const promptsTotal = ref(0);
   const routesTotal = ref(0);
+
+  /** Agent 详情 */
+  const agentDetail = ref<AgentDetail | null>(null);
+  /** 运行态事件列表 */
+  const runtimeEvents = ref<AgentRuntimeEvent[]>([]);
+
+  /** ── Routing Strategy Viewer state ── */
+  const routingCurrent = ref<RoutingCurrent | null>(null);
+  const simulateResult = ref<RouteSimulateResult | null>(null);
+  const routingEvents = ref<RouteEventItem[]>([]);
+  const routingMetrics = ref<RoutingMetrics | null>(null);
 
   const loading = ref(false);
 
@@ -119,72 +130,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     promptsTotal.value = Math.max(0, promptsTotal.value - 1);
   }
 
-  async function fetchPromptDspy(id: string) {
-    const { data } = await agentOpsApi.getPromptDspy(id);
-    return data.data;
-  }
-
-  async function savePromptDspy(id: string, payload: PromptDSPyConfig) {
-    const { data } = await agentOpsApi.updatePromptDspy(id, payload);
-    const idx = prompts.value.findIndex((item) => item.id === id);
-    if (idx !== -1) {
-      prompts.value[idx] = {
-        ...prompts.value[idx],
-        dspy_config: data.data,
-      };
-    }
-    return data.data;
-  }
-
-  async function fetchPromptOptimizationTargets(query: PromptOptimizationTargetListQuery = {}) {
-    loading.value = true;
-    try {
-      const { data } = await agentOpsApi.listPromptOptimizationTargets(query);
-      promptOptimization.value = data.data;
-      return data.data;
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function fetchPromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.getPromptOptimizationTarget(targetKey);
-    promptOptimizationCurrent.value = data.data;
-    return data.data;
-  }
-
-  async function updatePromptOptimizationConfig(targetKey: string, payload: PromptOptimizationConfigPayload) {
-    const { data } = await agentOpsApi.updatePromptOptimizationConfig(targetKey, payload);
-    if (promptOptimizationCurrent.value?.target_key === targetKey) {
-      promptOptimizationCurrent.value = {
-        ...promptOptimizationCurrent.value,
-        config: data.data,
-      };
-    }
-    if (promptOptimization.value) {
-      promptOptimization.value.items = promptOptimization.value.items.map((item) =>
-        item.target_key === targetKey ? { ...item, config: data.data } : item,
-      );
-    }
-    return data.data;
-  }
-
-  async function compilePromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.compilePromptOptimizationTarget(targetKey);
-    return data.data;
-  }
-
-  async function fetchPromptOptimizationRuns(targetKey: string) {
-    const { data } = await agentOpsApi.listPromptOptimizationRuns(targetKey);
-    promptOptimizationRuns.value = data.data;
-    return data.data;
-  }
-
-  async function rollbackPromptOptimizationTarget(targetKey: string) {
-    const { data } = await agentOpsApi.rollbackPromptOptimizationTarget(targetKey);
-    return data.data;
-  }
-
   async function fetchRoutes(query: IntentRouteListQuery) {
     loading.value = true;
     try {
@@ -238,13 +183,28 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     return data.data;
   }
 
-  async function fetchRagAnalysis() {
-    loading.value = true;
+  async function fetchRagAnalysis(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      loading.value = true;
+    }
     try {
       const { data } = await agentOpsApi.getRagAnalysis();
       ragAnalysis.value = data.data;
     } finally {
-      loading.value = false;
+      if (!options?.silent) {
+        loading.value = false;
+      }
+    }
+  }
+
+  async function fetchRagTraceDetail(traceId: string) {
+    ragTraceDetailLoading.value = true;
+    try {
+      const { data } = await agentOpsApi.getRagTraceDetail(traceId);
+      ragTraceDetail.value = data.data;
+      return data.data;
+    } finally {
+      ragTraceDetailLoading.value = false;
     }
   }
 
@@ -264,6 +224,10 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     const { data } = await agentOpsApi.startRuntimeAgent(runtimeKey);
     const idx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
     if (idx !== -1) runtimeAgents.value[idx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = { ...agents.value[agentIdx], runtime_status: data.data.runtime_status };
+    }
     return data.data;
   }
 
@@ -271,13 +235,101 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     const { data } = await agentOpsApi.stopRuntimeAgent(runtimeKey);
     const idx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
     if (idx !== -1) runtimeAgents.value[idx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = { ...agents.value[agentIdx], runtime_status: data.data.runtime_status };
+    }
     return data.data;
   }
 
-  async function fetchAgentsTopology(subgraphKey = "all") {
-    const { data } = await agentOpsApi.getAgentsTopology(subgraphKey);
+  async function fetchAgentsTopology(
+    subgraphKey = "all",
+    mode: "design" | "runtime" = "design",
+    includePlanned = true,
+  ) {
+    const { data } = await agentOpsApi.getAgentsTopology(subgraphKey, mode, includePlanned);
     topology.value = data.data;
     return data.data;
+  }
+
+  /** 暂停路由 */
+  async function pauseRoute(runtimeKey: string, reason: string) {
+    const { data } = await agentOpsApi.pauseAgentRoute(runtimeKey, { reason });
+    const runtimeIdx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
+    if (runtimeIdx !== -1) runtimeAgents.value[runtimeIdx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = {
+        ...agents.value[agentIdx],
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    if (agentDetail.value?.id === data.data.agent_id) {
+      agentDetail.value = {
+        ...agentDetail.value,
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    return data.data;
+  }
+
+  /** 恢复路由 */
+  async function resumeRoute(runtimeKey: string) {
+    const { data } = await agentOpsApi.resumeAgentRoute(runtimeKey);
+    const runtimeIdx = runtimeAgents.value.findIndex((item) => item.runtime_key === runtimeKey);
+    if (runtimeIdx !== -1) runtimeAgents.value[runtimeIdx] = data.data;
+    const agentIdx = agents.value.findIndex((item) => item.id === data.data.agent_id);
+    if (agentIdx !== -1) {
+      agents.value[agentIdx] = {
+        ...agents.value[agentIdx],
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    if (agentDetail.value?.id === data.data.agent_id) {
+      agentDetail.value = {
+        ...agentDetail.value,
+        route_enabled: data.data.route_enabled,
+        runtime_status: data.data.runtime_status,
+      };
+    }
+    return data.data;
+  }
+
+  /** 获取 Agent 详情 */
+  async function fetchAgentDetail(agentId: string) {
+    const { data } = await agentOpsApi.getAgentDetail(agentId);
+    agentDetail.value = data.data;
+  }
+
+  /** 获取运行态事件 */
+  async function fetchRuntimeEvents(agentId: string, limit = 20) {
+    const { data } = await agentOpsApi.getRuntimeEvents(agentId, limit);
+    runtimeEvents.value = data.data;
+  }
+
+  /** ── Routing Strategy Viewer actions ── */
+
+  async function fetchRoutingCurrent() {
+    const { data } = await agentOpsApi.getRoutingCurrent();
+    routingCurrent.value = data.data;
+  }
+
+  async function simulateRoute(simData: RouteSimulateRequest) {
+    const { data } = await agentOpsApi.simulateRoute(simData);
+    simulateResult.value = data.data;
+  }
+
+  async function fetchRoutingEvents(limit = 20) {
+    const { data } = await agentOpsApi.getRoutingEvents(limit);
+    routingEvents.value = data.data;
+  }
+
+  async function fetchRoutingMetrics() {
+    const { data } = await agentOpsApi.getRoutingMetrics();
+    routingMetrics.value = data.data;
   }
 
   function $reset() {
@@ -285,17 +337,23 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     prompts.value = [];
     routes.value = [];
     ragAnalysis.value = null;
+    ragTraceDetail.value = null;
+    ragTraceDetailLoading.value = false;
     runtimeOverview.value = null;
     runtimeAgents.value = [];
     topology.value = null;
     routeTopology.value = null;
     routingStrategy.value = null;
-    promptOptimization.value = null;
-    promptOptimizationCurrent.value = null;
-    promptOptimizationRuns.value = [];
+    agentDetail.value = null;
+    runtimeEvents.value = [];
+    routingCurrent.value = null;
+    simulateResult.value = null;
+    routingEvents.value = [];
+    routingMetrics.value = null;
     agentsTotal.value = 0;
     promptsTotal.value = 0;
     routesTotal.value = 0;
+    loading.value = false;
   }
 
   return {
@@ -303,14 +361,19 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     prompts,
     routes,
     ragAnalysis,
+    ragTraceDetail,
+    ragTraceDetailLoading,
     runtimeOverview,
     runtimeAgents,
     topology,
     routeTopology,
     routingStrategy,
-    promptOptimization,
-    promptOptimizationCurrent,
-    promptOptimizationRuns,
+    agentDetail,
+    runtimeEvents,
+    routingCurrent,
+    simulateResult,
+    routingEvents,
+    routingMetrics,
     agentsTotal,
     promptsTotal,
     routesTotal,
@@ -325,14 +388,6 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     createPrompt,
     updatePrompt,
     deletePrompt,
-    fetchPromptDspy,
-    savePromptDspy,
-    fetchPromptOptimizationTargets,
-    fetchPromptOptimizationTarget,
-    updatePromptOptimizationConfig,
-    compilePromptOptimizationTarget,
-    fetchPromptOptimizationRuns,
-    rollbackPromptOptimizationTarget,
     fetchRoutes,
     fetchRoutingStrategy,
     fetchRoute,
@@ -341,11 +396,20 @@ export const useAgentOpsStore = defineStore("agentOps", () => {
     deleteRoute,
     fetchRouteGraph,
     fetchRagAnalysis,
+    fetchRagTraceDetail,
     fetchRuntimeOverview,
     fetchRuntimeAgents,
     startRuntimeAgent,
     stopRuntimeAgent,
     fetchAgentsTopology,
+    pauseRoute,
+    resumeRoute,
+    fetchAgentDetail,
+    fetchRuntimeEvents,
+    fetchRoutingCurrent,
+    simulateRoute,
+    fetchRoutingEvents,
+    fetchRoutingMetrics,
     $reset,
   };
 });

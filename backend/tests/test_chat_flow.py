@@ -12,6 +12,7 @@ from agent.subgraphs.quality_chat.graph import (
     _enqueue_trust_scoring,
     _extract_named_user_from_history,
     _fallback_answer,
+    _persist_rag_query_log,
     _smalltalk_answer,
     finalizer,
     knowledge,
@@ -214,6 +215,87 @@ async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
     assert updated["reasoning"]["llm_error"] == "upstream unavailable"
 
 
+@pytest.mark.asyncio
+async def test_reasoning_uses_prompt_admin_override_when_available(monkeypatch):
+    captured_messages: list[list[dict[str, str]]] = []
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id):
+            return None
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "chat",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    class FakeGateway:
+        async def select_runtime(self, models, **kwargs):
+            item = list(models)[0]
+            return {
+                "model_id": item["model_key"],
+                "base_url": item["endpoint"],
+                "api_key": item["api_key"],
+                "provider": item["provider"],
+                "input_price_per_million": None,
+                "output_price_per_million": None,
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            return None
+
+        async def chat(self, messages, *args, **kwargs):
+            captured_messages.append(messages)
+            return {"answer": "ok", "summary": "override used", "__meta__": {}}
+
+    async def fake_prompt_get(self, prompt_key: str, *, org_id: str):
+        assert prompt_key == "chat.general.system"
+        assert org_id == "org-1"
+        return "PROMPT_OVERRIDE_FROM_DB"
+
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.LLMClient", FakeLLMClient)
+    monkeypatch.setattr("app.services.prompt_admin_service.PromptResolver.get", fake_prompt_get)
+
+    state = {
+        "org_id": "org-1",
+        "session_id": "session-1",
+        "intent": "general_qa",
+        "query": "hello",
+        "history": [],
+        "retrieved_chunks": [],
+        "citations": [],
+        "action_state": "answered",
+        "task_draft": {},
+        "missing_slots": [],
+        "trace": {"trace_id": "trace-1"},
+    }
+
+    updated = await reasoning(state)
+
+    assert updated["reasoning"]["answer"] == "ok"
+    assert captured_messages[0][0]["content"] == "PROMPT_OVERRIDE_FROM_DB"
+
+
 def test_chat_state_keeps_trust_scoring_runtime_fields():
     annotations = ChatState.__annotations__
 
@@ -222,12 +304,17 @@ def test_chat_state_keeps_trust_scoring_runtime_fields():
 
 
 def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
-    from worker.tasks.chat_trust_scoring_task import score_chat_message
+    import sys
+    from types import SimpleNamespace
 
     def fail_delay(_payload):
         raise RuntimeError("redis transport unavailable")
 
-    monkeypatch.setattr(score_chat_message, "delay", fail_delay)
+    monkeypatch.setitem(
+        sys.modules,
+        "worker.tasks.chat_trust_scoring_task",
+        SimpleNamespace(score_chat_message=SimpleNamespace(delay=fail_delay)),
+    )
 
     with caplog.at_level("WARNING", logger="agent.subgraphs.quality_chat.graph"):
         _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
@@ -376,6 +463,98 @@ def test_rag_metadata_missing_detection_matches_missing_table_error():
         Exception("Table 'piap_main.rag_spaces' doesn't exist"),
     )
     assert _is_rag_metadata_missing(exc) is True
+
+
+@pytest.mark.asyncio
+async def test_persist_rag_query_log_writes_trace_detail_payload(monkeypatch):
+    payloads: list[dict] = []
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_log(self, data: dict):
+            payloads.append(data)
+            return None
+
+    monkeypatch.setattr(
+        "agent.subgraphs.quality_chat.graph.RagAnalysisRepository",
+        FakeRagAnalysisRepository,
+    )
+
+    state = {
+        "org_id": "org-1",
+        "session_id": "session-1",
+        "user_id": "user-1",
+        "query": "苹果划痕怎么判定",
+        "intent": "rag_qa",
+        "sub_route": "rag_qa",
+        "trace": {"trace_id": "trace-rag-1"},
+        "retrieval_metrics": {
+            "query": "苹果划痕怎么判定",
+            "rag_space_id": "rag-food",
+            "hit_count": 2,
+            "latency_ms": 320,
+            "top_score": 0.87,
+            "top_k": 5,
+        },
+        "retrieved_chunks": [
+            {
+                "chunk_id": "chunk-1",
+                "title": "苹果外观标准",
+                "source": "apple-spec.pdf",
+                "quote": "划痕长度超过 3mm 判定为不合格",
+                "score": 0.87,
+            },
+            {
+                "chunk_id": "chunk-2",
+                "title": "苹果包装规范",
+                "source": "packaging.docx",
+                "quote": "轻微擦痕可接受",
+                "score": 0.73,
+            },
+        ],
+        "citations": [
+            {
+                "id": "rag-1",
+                "title": "苹果外观标准",
+                "source": "apple-spec.pdf",
+                "quote": "划痕长度超过 3mm 判定为不合格",
+                "score": 0.87,
+                "kind": "rag",
+            }
+        ],
+        "response_payload": {
+            "answer": "超过 3mm 的划痕通常判定为不合格。",
+            "summary": "基于知识库回答",
+        },
+        "ext": {
+            "selected_rag_space": {
+                "id": "rag-food",
+                "name": "食品知识库",
+            }
+        },
+    }
+
+    await _persist_rag_query_log(object(), state)
+
+    assert len(payloads) == 1
+    log = payloads[0]
+    assert log["query"] == "苹果划痕怎么判定"
+    assert log["rag_space_id"] == "rag-food"
+    assert log["top_k"] == 5
+    assert log["hit_count"] == 2
+    assert log["hit_rate"] == 0.4
+    assert log["trace_id"] == "trace-rag-1"
+    assert log["metadata_json"]["top_sources"] == ["apple-spec.pdf", "packaging.docx"]
+    assert log["metadata_json"]["rule_hits"] == []
+    assert log["metadata_json"]["verdict"] is None
+    assert log["metadata_json"]["product_family"] is None
+    assert log["metadata_json"]["expectation_matched"] is None
+    assert log["metadata_json"]["retrieval_config"]["top_k"] == 5
+    assert log["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
+    assert log["metadata_json"]["used_citations"][0]["id"] == "rag-1"
+    assert log["metadata_json"]["answer"] == "超过 3mm 的划痕通常判定为不合格。"
 
 
 @pytest.mark.asyncio

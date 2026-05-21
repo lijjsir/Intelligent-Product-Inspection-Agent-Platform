@@ -35,7 +35,6 @@ from agent.subgraphs.quality_judgement.product_adapters import (
     score_from_record,
 )
 from agent.tools.file_parsers import parse_file_content
-from app.services.dspy_runtime_service import resolve_dspy_runtime_profile
 from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.rag_retrieval_service import RagRetrievalService
@@ -228,7 +227,7 @@ class QualityJudgementSubgraph:
         self._chat_graph = QualityChatGraph()
         self._storage = FileStorageService()
 
-    async def run(self, request: NormalizedRequest) -> AgentOutput:
+    async def run(self, request: NormalizedRequest, db_session=None) -> AgentOutput:
         from agent.router import AgentManager
         from agent.router.contracts import AgentRouteDecision
         from agent.contracts.quality_contracts import RouteDecision, RouteSignals
@@ -252,7 +251,11 @@ class QualityJudgementSubgraph:
             return output
 
         manager = AgentManager()
-        result = await manager.run(request)
+        if db_session is not None:
+            result = await manager.run(request, db_session=db_session)
+        else:
+            async with get_session() as session:
+                result = await manager.run(request, db_session=session)
 
         rd = result.route_decision
         route_decision = RouteDecision(

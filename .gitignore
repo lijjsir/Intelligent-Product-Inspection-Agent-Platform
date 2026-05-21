@@ -59,6 +59,10 @@ logs/
 
 # Codex
 .codex/
+
+# Playwright MCP
+.playwright-mcp/
+tool-catalog-real-data.png
 # OS / editor
 .DS_Store
 Thumbs.db

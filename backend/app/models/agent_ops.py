@@ -31,6 +31,12 @@ class AgentDefinition(Base, TimestampMixin):
     graph_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # 新增：产品化字段
+    lifecycle_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", comment="active/partial/planned/legacy/deprecated")
+    group_key: Mapped[str] = mapped_column(String(32), nullable=False, default="core", comment="core/memory/planned/legacy")
+    route_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否参与路由")
+    supports_route_toggle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否允许暂停恢复路由")
+    customer_visible_description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="给客户看的能力说明")
 
 
 class PromptVersion(Base, TimestampMixin):
@@ -50,6 +56,9 @@ class PromptVersion(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    prompt_definition_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class IntentRoute(Base, TimestampMixin):
@@ -71,69 +80,6 @@ class IntentRoute(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
-class PromptDSPyConfig(Base, TimestampMixin):
-    __tablename__ = "prompt_dspy_configs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    prompt_version_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    module_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    fallback_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    metric_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    config_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-
-
-class DSPyOptimizationConfig(Base, TimestampMixin):
-    __tablename__ = "dspy_optimization_configs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    target_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    subgraph_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    node_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    node_label: Mapped[str] = mapped_column(String(128), nullable=False)
-    module_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    optimization_goal: Mapped[str] = mapped_column(Text, nullable=False)
-    optimizer_strategy: Mapped[str] = mapped_column(String(64), nullable=False, default="bootstrap-fewshot")
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    metric_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    config_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    is_active_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    supports_compile: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    current_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    current_prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    previous_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    previous_prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    latest_failed_artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    latest_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    latest_metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    last_compiled_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    last_evaluated_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-
-
-class DSPyOptimizationRun(Base, TimestampMixin):
-    __tablename__ = "dspy_optimization_runs"
-
-    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
-    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    target_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    run_type: Mapped[str] = mapped_column(String(32), nullable=False, default="compile")
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    compiler_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    artifact_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    prompt_version_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    started_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    finished_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
-
-
 class AgentRuntimeInstance(Base, TimestampMixin):
     __tablename__ = "agent_runtime_instances"
 
@@ -147,6 +93,13 @@ class AgentRuntimeInstance(Base, TimestampMixin):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     last_started_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_stopped_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # 新增：增强运行态字段
+    runtime_status: Mapped[str] = mapped_column(String(32), nullable=False, default="stopped", comment="running/stopped/degraded/maintenance/readonly")
+    last_health_check_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    maintenance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
 
 
 class RagQueryLog(Base, TimestampMixin):
@@ -159,11 +112,12 @@ class RagQueryLog(Base, TimestampMixin):
     user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     query: Mapped[str] = mapped_column(Text, nullable=False)
     rag_space_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     hit_rate: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
     citation_coverage: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    source_graph: Mapped[str] = mapped_column(String(64), nullable=False, default="quality_judgement")
+    source_graph: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
     agent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sub_route: Mapped[str | None] = mapped_column(String(64), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -196,3 +150,21 @@ class AgentRouteLog(Base, TimestampMixin):
     signals_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     model_output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 新增：运行态阻止
+    blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="是否被运行态阻止")
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="阻止原因")
+
+
+class AgentRuntimeEvent(Base, TimestampMixin):
+    """Agent 运行态操作事件日志 — pause_route/resume_route/start/stop/maintenance"""
+    __tablename__ = "agent_runtime_events"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    agent_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    runtime_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="pause_route/resume_route/start/stop/maintenance")
+    before_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    after_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operator_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)

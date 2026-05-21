@@ -44,22 +44,26 @@ export const useAuthStore = defineStore("auth", () => {
   const workspaces = ref<string[]>(readStoredArray(WORKSPACES_KEY));
   const defaultWorkspace = ref(readStoredValue(DEFAULT_WORKSPACE_KEY) || WORKSPACE_APP);
 
+  function deriveWorkspacesFromRoles(rs: string[]) {
+    const workspacesForRoles: string[] = [];
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
+      workspacesForRoles.push(WORKSPACE_APP);
+    }
+    if (rs.length > 0) {
+      workspacesForRoles.push(WORKSPACE_OPS);
+    }
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+      workspacesForRoles.push(WORKSPACE_GOVERNANCE);
+    }
+    return Array.from(new Set(workspacesForRoles));
+  }
+
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
   }
   if (!workspaces.value.length) {
-    const rs = roles.value;
-    const w: string[] = [];
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
-      w.push(WORKSPACE_APP);
-    }
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
-      w.push(WORKSPACE_OPS);
-    }
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
-      w.push(WORKSPACE_GOVERNANCE);
-    }
-    workspaces.value = w.length ? w : [WORKSPACE_APP];
+    const derived = deriveWorkspacesFromRoles(roles.value);
+    workspaces.value = derived.length ? derived : [WORKSPACE_APP];
   }
 
   const isAuthed = computed(() => Boolean(token.value));
@@ -80,7 +84,9 @@ export const useAuthStore = defineStore("auth", () => {
     roles.value = normalizeRoles(session);
     planTier.value = session.plan_tier || "basic";
     capabilities.value = [...(session.capabilities || [])];
-    workspaces.value = [...(session.workspaces || [WORKSPACE_APP])];
+    const sessionWorkspaces = [...(session.workspaces || [])];
+    const derivedWorkspaces = deriveWorkspacesFromRoles(roles.value);
+    workspaces.value = Array.from(new Set([...(sessionWorkspaces.length ? sessionWorkspaces : [WORKSPACE_APP]), ...derivedWorkspaces]));
     defaultWorkspace.value = session.default_workspace || workspaces.value[0] || WORKSPACE_APP;
 
     setStoredValue(TOKEN_KEY, token.value);

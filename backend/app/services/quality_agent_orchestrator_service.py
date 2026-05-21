@@ -101,7 +101,8 @@ class QualityAgentOrchestratorService:
         )
         success = True
         try:
-            router_output = await self._agent_manager.run_chat(payload)
+            async with get_session() as session:
+                router_output = await self._agent_manager.run_chat(payload, db_session=session)
             agent_output = AgentOutput.model_validate(router_output.agent_output)
             # Inject route_decision from router output
             from agent.contracts.quality_contracts import RouteDecision as RD, RouteSignals
@@ -231,6 +232,7 @@ class QualityAgentOrchestratorService:
                             "user_id": str(request.user_id or ""),
                             "query": item.query,
                             "rag_space_id": item.rag_space_id,
+                            "top_k": int(item.top_k or 0),
                             "hit_count": item.hit_count,
                             "hit_rate": item.hit_rate,
                             "citation_coverage": item.citation_coverage,
