@@ -31,7 +31,7 @@ def _build_session_response(
     return AuthSessionResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        expires_in=settings.jwt_exp_minutes * 60,
+        expires_in=0,
         user_id=user_id,
         username=username,
         org_id=org_id,
@@ -89,7 +89,7 @@ async def refresh(payload: RefreshRequest):
     data = TokenResponse(
         access_token=access,
         refresh_token=payload.refresh_token,
-        expires_in=settings.jwt_exp_minutes * 60,
+        expires_in=0,
     )
     return ResponseEnvelope(data=data)
 

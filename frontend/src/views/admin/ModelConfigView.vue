@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useModelConfigStore } from "@/stores/model_config.store";
 
@@ -8,6 +8,7 @@ const drawerOpen = ref(false);
 const editingId = ref("");
 const checkingId = ref("");
 const checkingAll = ref(false);
+const editingHasApiKey = ref(false);
 const form = reactive({
   provider: "volcengine",
   model_key: "",
@@ -22,8 +23,15 @@ const form = reactive({
   is_active: true,
 });
 
+const modelTypeOptions = [
+  { label: "chat", value: "chat" },
+  { label: "embedding", value: "embedding" },
+  { label: "multimodal", value: "multimodal" },
+];
+
 function resetForm() {
   editingId.value = "";
+  editingHasApiKey.value = false;
   Object.assign(form, {
     provider: "volcengine",
     model_key: "",
@@ -46,6 +54,7 @@ function openCreate() {
 
 function openEdit(row: any) {
   editingId.value = row.id;
+  editingHasApiKey.value = Boolean(row.has_api_key);
   Object.assign(form, {
     provider: row.provider,
     model_key: row.model_key,
@@ -62,13 +71,18 @@ function openEdit(row: any) {
   drawerOpen.value = true;
 }
 
+const isEditing = computed(() => Boolean(editingId.value));
+const apiKeyHint = computed(() => {
+  if (!isEditing.value) return "创建后不会回显明文 API Key，请妥善保管。";
+  return editingHasApiKey.value
+    ? "已配置 API Key；留空表示保持不变，输入新值表示覆盖。"
+    : "尚未配置 API Key；留空表示不设置。";
+});
+
 async function submit() {
-  const payload = {
-    provider: form.provider,
-    model_key: form.model_key,
+  const payload: Record<string, unknown> = {
     display_name: form.display_name,
     endpoint: form.endpoint,
-    api_key: form.api_key || undefined,
     model_type: form.model_type,
     priority: form.priority,
     rpm_limit: form.rpm_limit,
@@ -77,9 +91,15 @@ async function submit() {
     is_active: form.is_active,
   };
   if (editingId.value) {
+    if (form.api_key) {
+      payload.api_key = form.api_key;
+    }
     await store.updateOne(editingId.value, payload);
     ElMessage.success("模型配置已更新");
   } else {
+    payload.provider = form.provider;
+    payload.model_key = form.model_key;
+    payload.api_key = form.api_key || undefined;
     const created = await store.createOne(payload);
     ElMessage.success("模型配置已创建");
     try {
@@ -106,8 +126,14 @@ async function remove(id: string) {
 async function checkOne(id: string) {
   checkingId.value = id;
   try {
-    await store.checkHealth(id);
-    ElMessage.success("健康检查完成");
+    const result = await store.checkHealth(id);
+    if (result.health_status === "healthy") {
+      ElMessage.success(result.health_message || "健康检查通过");
+    } else if (result.health_status === "degraded") {
+      ElMessage.warning(result.health_message || "健康检查降级");
+    } else {
+      ElMessage.error(result.health_message || "健康检查失败");
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || "健康检查失败");
   } finally {
@@ -119,7 +145,12 @@ async function checkAll() {
   checkingAll.value = true;
   try {
     const result = await store.checkHealthAll();
-    ElMessage.success(`检测完成: ${result.checked} 个模型, ${result.healthy} 健康, ${result.degraded} 降级, ${result.unhealthy} 异常`);
+    const message = `检测完成: ${result.checked} 个模型, ${result.healthy} 健康, ${result.degraded} 降级, ${result.unhealthy} 异常`;
+    if (result.unhealthy > 0) {
+      ElMessage.warning(message);
+    } else {
+      ElMessage.success(message);
+    }
   } catch (e: any) {
     ElMessage.error(e?.message || "批量健康检查失败");
   } finally {
@@ -156,7 +187,7 @@ onMounted(() => {
       <el-table :data="store.items" v-loading="store.loading">
         <el-table-column prop="display_name" label="名称" min-width="150" />
         <el-table-column prop="model_key" label="模型标识" min-width="150" />
-        <el-table-column prop="provider" label="Provider" width="110" />
+        <el-table-column prop="provider" label="提供方" width="110" />
         <el-table-column prop="priority" label="优先级" width="80" />
         <el-table-column label="输入单价" width="110">
           <template #default="{ row }">￥{{ Number(row.input_price_per_million || 0).toFixed(2) }}/1M</template>
@@ -190,12 +221,24 @@ onMounted(() => {
 
     <el-drawer v-model="drawerOpen" :title="editingId ? '编辑模型配置' : '新增模型配置'" size="500px">
       <el-form label-position="top">
-        <el-form-item label="Provider"><el-input v-model="form.provider" /></el-form-item>
-        <el-form-item label="模型标识"><el-input v-model="form.model_key" /></el-form-item>
+        <el-form-item label="提供方">
+          <el-input v-model="form.provider" :disabled="isEditing" />
+        </el-form-item>
+        <el-form-item label="模型标识">
+          <el-input v-model="form.model_key" :disabled="isEditing" />
+          <div v-if="isEditing" class="field-hint">编辑时不支持修改提供方或模型标识；如需变更请新建模型配置。</div>
+        </el-form-item>
         <el-form-item label="展示名称"><el-input v-model="form.display_name" /></el-form-item>
-        <el-form-item label="Endpoint"><el-input v-model="form.endpoint" /></el-form-item>
-        <el-form-item label="API Key"><el-input v-model="form.api_key" type="password" show-password /></el-form-item>
-        <el-form-item label="模型类型"><el-input v-model="form.model_type" /></el-form-item>
+        <el-form-item label="接口地址"><el-input v-model="form.endpoint" /></el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="form.api_key" type="password" show-password />
+          <div class="field-hint">{{ apiKeyHint }}</div>
+        </el-form-item>
+        <el-form-item label="模型类型">
+          <el-select v-model="form.model_type" placeholder="选择模型类型">
+            <el-option v-for="item in modelTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="优先级"><el-input-number v-model="form.priority" :min="1" :max="9999" /></el-form-item>
         <el-form-item label="RPM 限制"><el-input-number v-model="form.rpm_limit" :min="1" :max="100000" /></el-form-item>
         <el-form-item label="输入单价（元 / 1M tokens）">
@@ -217,5 +260,12 @@ onMounted(() => {
 <style scoped>
 :deep(.el-drawer__body) {
   overflow-y: auto;
+}
+
+.field-hint {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 </style>

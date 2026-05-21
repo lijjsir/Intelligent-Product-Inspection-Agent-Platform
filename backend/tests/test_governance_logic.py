@@ -82,6 +82,19 @@ def test_model_selector_skips_embedding_models_for_inference():
     assert selected["model_key"] == "chat-1"
 
 
+def test_model_config_schema_rejects_unsupported_model_type():
+    with pytest.raises(ValueError):
+        from app.schemas.governance import ModelConfigCreate
+
+        ModelConfigCreate(
+            provider="deepseek",
+            model_key="test-model",
+            display_name="Test Model",
+            endpoint="https://api.example.com",
+            model_type="vision",
+        )
+
+
 def test_model_selector_can_select_embedding_models_for_embedding_runtime():
     selector = ModelSelector()
     selected = selector.select(
@@ -264,9 +277,13 @@ async def test_llm_gateway_fails_over_when_first_model_hits_rpm_limit():
 @pytest.mark.asyncio
 async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
     class FakeResponse:
-        def __init__(self, status_code: int, text: str = ""):
+        def __init__(self, status_code: int, text: str = "", payload=None):
             self.status_code = status_code
             self.text = text
+            self._payload = payload if payload is not None else []
+
+        def json(self):
+            return self._payload
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -279,9 +296,6 @@ async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
             return False
 
         async def get(self, path, headers=None):
-            return FakeResponse(401, "unauthorized")
-
-        async def post(self, path, json=None, headers=None):
             return FakeResponse(401, "unauthorized")
 
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
@@ -297,17 +311,19 @@ async def test_health_checker_marks_auth_failure_unhealthy(monkeypatch):
     )
 
     assert checked[0]["health_status"] == "unhealthy"
-    assert checked[0]["health_message"] == "/chat/completions auth failed: 401"
+    assert checked[0]["health_message"] == "/models auth failed: 401"
 
 
 @pytest.mark.asyncio
-async def test_health_checker_probes_embeddings_for_embedding_models(monkeypatch):
-    calls: list[dict] = []
-
+async def test_health_checker_requires_model_key_in_models_list(monkeypatch):
     class FakeResponse:
-        def __init__(self, status_code: int, text: str = ""):
+        def __init__(self, status_code: int, text: str = "", payload=None):
             self.status_code = status_code
             self.text = text
+            self._payload = payload if payload is not None else []
+
+        def json(self):
+            return self._payload
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -320,40 +336,34 @@ async def test_health_checker_probes_embeddings_for_embedding_models(monkeypatch
             return False
 
         async def get(self, path, headers=None):
-            calls.append({"method": "GET", "path": path})
-            return FakeResponse(404, "models listing disabled")
-
-        async def post(self, path, json=None, headers=None):
-            calls.append({"method": "POST", "path": path, "json": json})
-            if path == "/embeddings":
-                return FakeResponse(200, "ok")
-            return FakeResponse(400, "wrong probe")
+            return FakeResponse(200, payload=[{"id": "other-model"}])
 
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
     checked = await ModelHealthChecker().check(
         [
             {
-                "id": "embed-cfg",
-                "endpoint": "http://localhost:11434/v1",
-                "model_key": "bge-m3",
-                "api_key": None,
-                "model_type": "embedding",
+                "id": "cfg-1",
+                "endpoint": "https://example.com/api/v3",
+                "model_key": "chat-1",
+                "api_key": "secret",
             }
         ]
     )
 
-    assert checked[0]["health_status"] == "healthy"
-    assert calls[-1]["path"] == "/embeddings"
+    assert checked[0]["health_status"] == "unhealthy"
+    assert checked[0]["health_message"] == "GET /models missing model_key: chat-1"
 
 
 @pytest.mark.asyncio
-async def test_health_checker_still_probes_embeddings_when_models_endpoint_is_available(monkeypatch):
-    calls: list[dict] = []
-
+async def test_health_checker_accepts_volcengine_endpoint_model_when_chat_probe_succeeds(monkeypatch):
     class FakeResponse:
-        def __init__(self, status_code: int, text: str = ""):
+        def __init__(self, status_code: int, text: str = "", payload=None):
             self.status_code = status_code
             self.text = text
+            self._payload = payload if payload is not None else []
+
+        def json(self):
+            return self._payload
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -366,70 +376,70 @@ async def test_health_checker_still_probes_embeddings_when_models_endpoint_is_av
             return False
 
         async def get(self, path, headers=None):
-            calls.append({"method": "GET", "path": path})
-            return FakeResponse(200, "ok")
+            return FakeResponse(200, payload=[{"id": "deepseek-r1"}, {"id": "deepseek-r1-250120"}])
 
         async def post(self, path, json=None, headers=None):
-            calls.append({"method": "POST", "path": path, "json": json})
-            if path == "/embeddings":
-                return FakeResponse(200, "ok")
-            return FakeResponse(400, "wrong probe")
+            assert path == "/chat/completions"
+            assert json["model"] == "ep-20260325082100-v7vs6"
+            return FakeResponse(200, payload={"id": "resp-1", "choices": [{"message": {"content": "pong"}}]})
 
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
     checked = await ModelHealthChecker().check(
         [
             {
-                "id": "embed-cfg",
-                "endpoint": "https://example.com/v1",
-                "model_key": "embedding-model",
-                "api_key": "secret",
-                "model_type": "embedding",
-            }
-        ]
-    )
-
-    assert checked[0]["health_status"] == "healthy"
-    assert [call["path"] for call in calls] == ["/models", "/embeddings"]
-
-
-@pytest.mark.asyncio
-async def test_health_checker_uses_sdk_probe_for_volcengine_embedding_models(monkeypatch):
-    created_clients: list[dict] = []
-
-    class FakeLLMClient:
-        def __init__(self, **kwargs):
-            created_clients.append(kwargs)
-
-        async def embed(self, text, **kwargs):
-            assert text == "ping"
-            return [0.1, 0.2, 0.3]
-
-    monkeypatch.setattr("agent.llm.health_checker.LLMClient", FakeLLMClient)
-
-    checked = await ModelHealthChecker().check(
-        [
-            {
-                "id": "embed-cfg",
-                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
-                "model_key": "doubao-embedding-vision-251215",
-                "api_key": "secret",
+                "id": "cfg-1",
                 "provider": "volcengine",
-                "model_type": "embedding",
+                "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+                "model_key": "ep-20260325082100-v7vs6",
+                "model_type": "chat",
+                "api_key": "secret",
             }
         ]
     )
 
     assert checked[0]["health_status"] == "healthy"
-    assert checked[0]["health_message"] == "embedding runtime ok"
-    assert created_clients == [
-        {
-            "api_key": "secret",
-            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-            "model_id": "doubao-embedding-vision-251215",
-            "embed_model": "doubao-embedding-vision-251215",
-            "provider": "volcengine",
-        }
-    ]
+    assert checked[0]["health_message"] is not None
+    assert "/chat/completions accepted model_key: ep-20260325082100-v7vs6" in checked[0]["health_message"]
+
+
+@pytest.mark.asyncio
+async def test_health_checker_healthy_when_models_list_contains_model_key(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code: int, text: str = "", payload=None):
+            self.status_code = status_code
+            self.text = text
+            self._payload = payload if payload is not None else []
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            return FakeResponse(200, payload=[{"id": "chat-1"}, {"id": "other-model"}])
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "cfg-1",
+                "endpoint": "https://example.com/api/v3",
+                "model_key": "chat-1",
+                "api_key": "secret",
+            }
+        ]
+    )
+
+    assert checked[0]["health_status"] == "healthy"
+    assert checked[0]["health_message"] == "GET /models contains model_key"
 
 
 @pytest.mark.asyncio

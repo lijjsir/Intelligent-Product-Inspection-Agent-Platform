@@ -31,7 +31,7 @@ const session: AuthSession = {
   access_token: "access",
   refresh_token: "refresh",
   token_type: "bearer",
-  expires_in: 900,
+  expires_in: 0,
   user_id: "u1",
   org_id: "org1",
   role: "org_admin",

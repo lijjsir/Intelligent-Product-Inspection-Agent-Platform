@@ -11,6 +11,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']
+    AlgoResourcePage: typeof import('./src/components/business/algo/AlgoResourcePage.vue')['default']
     AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
     AnalyticsOverviewPanel: typeof import('./src/components/business/analytics/AnalyticsOverviewPanel.vue')['default']
     AnalyticsTabNav: typeof import('./src/components/business/analytics/AnalyticsTabNav.vue')['default']
@@ -26,6 +28,7 @@ declare module 'vue' {
     ElDescriptions: typeof import('element-plus/es')['ElDescriptions']
     ElDescriptionsItem: typeof import('element-plus/es')['ElDescriptionsItem']
     ElDialog: typeof import('element-plus/es')['ElDialog']
+    ElDivider: typeof import('element-plus/es')['ElDivider']
     ElDrawer: typeof import('element-plus/es')['ElDrawer']
     ElEmpty: typeof import('element-plus/es')['ElEmpty']
     ElForm: typeof import('element-plus/es')['ElForm']

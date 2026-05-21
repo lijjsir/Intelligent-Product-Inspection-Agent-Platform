@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable
 
 import httpx
 
-from agent.llm.client import LLMClient
 from app.core.config import settings
 
 
@@ -24,8 +24,9 @@ class ModelHealthChecker:
         if not endpoint:
             return "unhealthy", "missing endpoint"
 
-        if self._is_embedding_model(item) and self._uses_sdk_embedding(item):
-            return await self._probe_embedding_runtime(item)
+        model_key = str(item.get("model_key") or "").strip()
+        if not model_key:
+            return "unhealthy", "missing model_key"
 
         headers = {}
         if item.get("api_key"):
@@ -40,91 +41,92 @@ class ModelHealthChecker:
             except httpx.HTTPError as exc:
                 return "degraded", self._trim_message(f"http probe failed: {exc}")
 
-            if response.status_code < 400:
-                if self._is_embedding_model(item):
-                    return await self._probe_embedding(client, headers=headers, model_key=str(item.get("model_key") or ""))
-                return "healthy", "GET /models ok"
+            if response.status_code >= 400:
+                return self._status_from_response(response, path="/models")
 
-            if response.status_code in {401, 403, 404, 405}:
-                if self._is_embedding_model(item):
-                    return await self._probe_embedding(client, headers=headers, model_key=str(item.get("model_key") or ""))
-                return await self._probe_chat_completion(client, headers=headers, model_key=str(item.get("model_key") or ""))
+            try:
+                model_ids = self._extract_model_ids(response)
+            except ValueError as exc:
+                return "unhealthy", self._trim_message(f"GET /models returned invalid payload: {exc}")
 
-            return self._status_from_response(response, path="/models")
+            if model_key in model_ids:
+                return "healthy", "GET /models contains model_key"
+            fallback_status, fallback_message = await self._probe_runtime_model(
+                client=client,
+                item=item,
+                headers=headers,
+                model_ids=model_ids,
+            )
+            if fallback_status is not None:
+                return fallback_status, fallback_message
+            return "unhealthy", self._missing_model_key_message(model_key, model_ids)
 
-    async def _probe_chat_completion(
+    async def _probe_runtime_model(
         self,
-        client: httpx.AsyncClient,
         *,
+        client: httpx.AsyncClient,
+        item: dict[str, Any],
+        headers: dict[str, str],
+        model_ids: set[str],
+    ) -> tuple[str | None, str | None]:
+        model_key = str(item.get("model_key") or "").strip()
+        provider = str(item.get("provider") or "").strip().lower()
+        model_type = str(item.get("model_type") or "chat").strip().lower()
+
+        # Ark endpoint-style models such as ep-... may be callable even when /models
+        # only returns upstream foundation model names instead of the endpoint id.
+        if provider == "volcengine" and model_key.startswith("ep-"):
+            if model_type == "embedding":
+                return await self._probe_embedding_runtime(client=client, headers=headers, model_key=model_key, model_ids=model_ids)
+            return await self._probe_chat_runtime(client=client, headers=headers, model_key=model_key, model_ids=model_ids)
+        return None, None
+
+    async def _probe_chat_runtime(
+        self,
+        *,
+        client: httpx.AsyncClient,
         headers: dict[str, str],
         model_key: str,
-    ) -> tuple[str, str | None]:
+        model_ids: set[str],
+    ) -> tuple[str, str]:
+        payload = {
+            "model": model_key,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
         try:
-            response = await client.post(
-                "/chat/completions",
-                json={
-                    "model": model_key,
-                    "messages": [{"role": "user", "content": "ping"}],
-                    "max_tokens": 1,
-                },
-                headers=headers,
-            )
+            response = await client.post("/chat/completions", json=payload, headers=headers)
         except httpx.TimeoutException:
             return "degraded", "chat probe timeout"
         except httpx.HTTPError as exc:
             return "degraded", self._trim_message(f"chat probe failed: {exc}")
 
-        if response.status_code < 400:
-            return "healthy", "POST /chat/completions ok"
-        return self._status_from_response(response, path="/chat/completions")
+        if response.status_code >= 400:
+            return self._status_from_response(response, path="/chat/completions")
+        return "healthy", self._direct_probe_success_message(model_key, model_ids, probe_path="/chat/completions")
 
-    async def _probe_embedding(
+    async def _probe_embedding_runtime(
         self,
-        client: httpx.AsyncClient,
         *,
+        client: httpx.AsyncClient,
         headers: dict[str, str],
         model_key: str,
-    ) -> tuple[str, str | None]:
+        model_ids: set[str],
+    ) -> tuple[str, str]:
+        payload = {
+            "model": model_key,
+            "input": "ping",
+        }
         try:
-            response = await client.post(
-                "/embeddings",
-                json={
-                    "model": model_key,
-                    "input": ["ping"],
-                },
-                headers=headers,
-            )
+            response = await client.post("/embeddings", json=payload, headers=headers)
         except httpx.TimeoutException:
             return "degraded", "embedding probe timeout"
         except httpx.HTTPError as exc:
             return "degraded", self._trim_message(f"embedding probe failed: {exc}")
 
-        if response.status_code < 400:
-            return "healthy", "POST /embeddings ok"
-        return self._status_from_response(response, path="/embeddings")
-
-    async def _probe_embedding_runtime(self, item: dict[str, Any]) -> tuple[str, str | None]:
-        client = LLMClient(
-            api_key=str(item.get("api_key") or "") or None,
-            base_url=str(item.get("endpoint") or ""),
-            model_id=str(item.get("model_key") or ""),
-            embed_model=str(item.get("model_key") or ""),
-            provider=str(item.get("provider") or ""),
-        )
-        try:
-            vector = await client.embed(
-                "ping",
-                observation_name="llm.health_embedding_probe",
-                observation_metadata={"component": "health_checker"},
-            )
-        except httpx.TimeoutException:
-            return "degraded", "embedding probe timeout"
-        except Exception as exc:
-            return "degraded", self._trim_message(f"embedding probe failed: {exc}")
-
-        if vector:
-            return "healthy", "embedding runtime ok"
-        return "unhealthy", "embedding probe returned empty vector"
+        if response.status_code >= 400:
+            return self._status_from_response(response, path="/embeddings")
+        return "healthy", self._direct_probe_success_message(model_key, model_ids, probe_path="/embeddings")
 
     def _status_from_response(self, response: httpx.Response, *, path: str) -> tuple[str, str | None]:
         status_code = response.status_code
@@ -143,13 +145,56 @@ class ModelHealthChecker:
             return None
         return message.strip()[:256]
 
-    @staticmethod
-    def _is_embedding_model(item: dict[str, Any]) -> bool:
-        model_type = str(item.get("model_type") or "").strip().lower()
-        return model_type in {"embedding", "embed", "text_embedding"}
+    @classmethod
+    def _missing_model_key_message(cls, model_key: str, model_ids: set[str]) -> str:
+        available = sorted(value for value in model_ids if value)[:5]
+        suffix = f"; available: [{', '.join(available)}]" if available else ""
+        return cls._trim_message(f"GET /models missing model_key: {model_key}{suffix}") or (
+            f"GET /models missing model_key: {model_key}"
+        )
+
+    @classmethod
+    def _direct_probe_success_message(cls, model_key: str, model_ids: set[str], *, probe_path: str) -> str:
+        available = sorted(value for value in model_ids if value)[:5]
+        suffix = f"; available: [{', '.join(available)}]" if available else ""
+        return cls._trim_message(
+            f"{probe_path} accepted model_key: {model_key}; /models did not list endpoint id{suffix}"
+        ) or f"{probe_path} accepted model_key: {model_key}"
 
     @staticmethod
-    def _uses_sdk_embedding(item: dict[str, Any]) -> bool:
-        provider = str(item.get("provider") or "").strip().lower()
-        model_key = str(item.get("model_key") or "").strip().lower()
-        return provider == "volcengine" and ("embedding-vision" in model_key or model_key.startswith("ep-"))
+    def _extract_model_ids(response: httpx.Response) -> set[str]:
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("response is not valid JSON") from exc
+
+        items: list[Any]
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            for key in ("data", "models", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    items = value
+                    break
+            else:
+                raise ValueError("missing model list")
+        else:
+            raise ValueError("unsupported response type")
+
+        model_ids: set[str] = set()
+        for entry in items:
+            if isinstance(entry, str):
+                value = entry.strip()
+                if value:
+                    model_ids.add(value)
+                continue
+            if isinstance(entry, dict):
+                for key in ("id", "model", "model_key", "name"):
+                    value = str(entry.get(key) or "").strip()
+                    if value:
+                        model_ids.add(value)
+                continue
+        if not model_ids:
+            raise ValueError("empty model list")
+        return model_ids

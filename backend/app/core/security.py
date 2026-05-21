@@ -32,7 +32,6 @@ def create_access_token(subject: str, extra: Dict[str, Any] | None = None) -> st
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=settings.jwt_exp_minutes)).timestamp()),
     }
     if extra:
         payload.update(extra)
@@ -46,7 +45,6 @@ def create_refresh_token(subject: str, extra: Dict[str, Any] | None = None) -> s
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(days=settings.jwt_refresh_days)).timestamp()),
         "typ": "refresh",
     }
     if extra:

@@ -41,7 +41,9 @@ class ModelConfigService(TenantAwareService):
             body["api_key_enc"] = _fernet().encrypt(str(body.pop("api_key")).encode("utf-8")).decode("utf-8")
         body.setdefault("health_status", "unknown")
         body.setdefault("health_message", None)
-        return await self._repo.create(body)
+        created = await self._repo.create(body)
+        await self._session.commit()
+        return created
 
     async def update_config(self, config_id: str, payload: dict[str, Any]):
         model = await self.get_config(config_id)
@@ -49,11 +51,14 @@ class ModelConfigService(TenantAwareService):
         if "api_key" in body:
             value = body.pop("api_key")
             body["api_key_enc"] = _fernet().encrypt(str(value).encode("utf-8")).decode("utf-8") if value else None
-        return await self._repo.save(model, body)
+        updated = await self._repo.save(model, body)
+        await self._session.commit()
+        return updated
 
     async def delete_config(self, config_id: str) -> None:
         model = await self.get_config(config_id)
         await self._repo.delete(model)
+        await self._session.commit()
 
     async def list_runtime_models(self) -> list[dict[str, Any]]:
         models = await self._repo.list_active(self._org_id)
