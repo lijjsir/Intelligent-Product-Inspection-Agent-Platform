@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import type { InspectionSpec, InspectionSpecItemPayload, InspectionSpecPayload } from "@/types/governance.types";
-import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
 import { useAuthStore } from "@/stores/auth.store";
 
 interface RuleForm {
@@ -44,7 +44,11 @@ const form = reactive({
 
 const canManageGlobal = computed(() => {
   const allRoles = [...auth.roles, auth.role].filter(Boolean);
-  return allRoles.includes(ROLE_ADMIN) || allRoles.includes(ROLE_ALGORITHM_ENGINEER);
+  return allRoles.includes(ROLE_ADMIN);
+});
+const isReadonly = computed(() => {
+  const allRoles = [...auth.roles, auth.role].filter(Boolean);
+  return allRoles.includes(ROLE_PLATFORM_OPERATOR) && !allRoles.includes(ROLE_ADMIN);
 });
 const productOptions = computed(() =>
   Array.from(new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[])).sort(),
@@ -186,7 +190,7 @@ function buildPayload(): InspectionSpecPayload {
   }));
 
   return {
-    org_id: canManageGlobal.value && scopeMode.value === "global" ? null : undefined,
+    org_id: canManageGlobal.value && scopeMode.value === "global" ? null : (auth.orgId || ""),
     spec_code: form.spec_code.trim(),
     name: form.name.trim(),
     version: form.version.trim() || "v1",
@@ -337,9 +341,11 @@ onMounted(() => {
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link @click="openPreview(row)">预览</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link @click="duplicateSpec(row)">复制</el-button>
-            <el-button link type="danger" @click="remove(row.id)">删除</el-button>
+            <template v-if="!isReadonly">
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link @click="duplicateSpec(row)">复制</el-button>
+              <el-button link type="danger" @click="remove(row.id)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

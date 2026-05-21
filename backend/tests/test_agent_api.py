@@ -20,8 +20,8 @@ def build_current_user() -> CurrentUser:
     return CurrentUser(
         user_id="user-1",
         org_id="org-1",
-        role="admin",
-        roles=["admin"],
+        role="user",
+        roles=["user"],
         plan_tier="basic",
         capabilities=[],
         workspaces=["app"],

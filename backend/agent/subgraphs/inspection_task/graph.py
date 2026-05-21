@@ -111,9 +111,16 @@ def _promote_structured_pass(
 ) -> dict[str, Any]:
     verdict = str(evaluation.get("verdict") or "").lower()
     reasons = list(evaluation.get("reasons") or [])
+    ai_gate = dict(evaluation.get("ai_gate") or {})
+    ai_gate_fully_passed = (
+        ai_gate.get("passed") is True
+        and float(ai_gate.get("confidence_score") or 0.0) >= 0.95
+        and float(ai_gate.get("evidence_score") or 0.0) >= 0.9
+    )
+    expect_pass = str(expected_verdict or "").lower() == "pass"
     if (
         verdict == "manual_required"
-        and str(expected_verdict or "").lower() == "pass"
+        and (expect_pass or ai_gate_fully_passed)
         and structured_record
         and not evaluation.get("matched_rules")
         and not evaluation.get("unmatched_defects")

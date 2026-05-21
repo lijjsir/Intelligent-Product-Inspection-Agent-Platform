@@ -60,6 +60,10 @@ class TaskListItemResponse(BaseModel):
     priority: int
     source_kind: str | None = None
     source_graph: str | None = None
+    has_result: bool = False
+    has_stability: bool = False
+    result_id: str | None = None
+    stability_id: str | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

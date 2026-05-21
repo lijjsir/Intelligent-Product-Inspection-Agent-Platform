@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import select
+
 from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
+from app.models.chat import ChatMessage, ChatSession
+from app.models.meeting import MeetingMessage, MeetingRoomMember
 from app.repositories.feedback_repo import FeedbackRepository
 from app.repositories.result_repo import ResultRepository
 from app.services.base import TenantAwareService
@@ -58,6 +62,79 @@ class FeedbackService(TenantAwareService):
 
     async def list_feedbacks(self, page: int, size: int, result_id: str | None = None, feedback_type: str | None = None):
         return await self._repo.list_feedbacks(self._org_id, page, size, result_id, feedback_type)
+
+    async def submit_message_feedback(self, target_type: str, target_id: str, actor_id: str, payload: dict):
+        normalized_type = target_type.strip().lower()
+        await self._ensure_feedback_target(normalized_type, target_id, actor_id)
+        now = datetime.utcnow()
+        return await self._repo.save_message_feedback(
+            {
+                "id": str(uuid7()),
+                "org_id": self._org_id,
+                "target_type": normalized_type,
+                "target_id": target_id,
+                "actor_id": actor_id,
+                "feedback_type": payload["feedback_type"],
+                "rating": payload.get("rating"),
+                "category": payload.get("category"),
+                "comment": payload.get("comment"),
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    async def list_message_feedbacks(
+        self,
+        *,
+        target_type: str,
+        actor_id: str,
+        target_ids: list[str] | None = None,
+    ):
+        normalized_type = target_type.strip().lower()
+        if normalized_type not in {"chat", "meeting"}:
+            raise NotFoundError("feedback target not found")
+        return await self._repo.list_message_feedbacks(
+            org_id=self._org_id,
+            target_type=normalized_type,
+            actor_id=actor_id,
+            target_ids=target_ids,
+        )
+
+    async def _ensure_feedback_target(self, target_type: str, target_id: str, actor_id: str) -> None:
+        if target_type == "chat":
+            stmt = (
+                select(ChatMessage)
+                .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+                .where(
+                    ChatMessage.org_id == self._org_id,
+                    ChatMessage.id == target_id,
+                    ChatMessage.deleted_at.is_(None),
+                    ChatSession.org_id == self._org_id,
+                    ChatSession.user_id == actor_id,
+                    ChatSession.deleted_at.is_(None),
+                )
+            )
+            if (await self._session.execute(stmt)).scalar_one_or_none():
+                return
+        if target_type == "meeting":
+            stmt = (
+                select(MeetingMessage)
+                .join(
+                    MeetingRoomMember,
+                    MeetingRoomMember.room_id == MeetingMessage.room_id,
+                )
+                .where(
+                    MeetingMessage.org_id == self._org_id,
+                    MeetingMessage.id == target_id,
+                    MeetingMessage.deleted_at.is_(None),
+                    MeetingRoomMember.org_id == self._org_id,
+                    MeetingRoomMember.user_id == actor_id,
+                    MeetingRoomMember.deleted_at.is_(None),
+                )
+            )
+            if (await self._session.execute(stmt)).scalar_one_or_none():
+                return
+        raise NotFoundError("feedback target not found")
 
     @staticmethod
     def _extract_trace_id(result) -> str:

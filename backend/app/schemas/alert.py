@@ -46,6 +46,7 @@ class AlertResponse(BaseModel):
     id: str
     org_id: str
     stability_id: Optional[str] = None
+    rule_id: Optional[str] = None
     alert_type: str
     severity: str
     title: str

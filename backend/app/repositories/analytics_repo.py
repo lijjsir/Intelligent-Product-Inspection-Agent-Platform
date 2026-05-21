@@ -29,9 +29,15 @@ class AnalyticsRepository:
         }
         return mapping.get(normalized, normalized or "unknown")
 
-    async def get_overview(self, org_id: str | None, start_date: date | None = None, end_date: date | None = None) -> dict:
-        tasks = await self._list_tasks(org_id, start_date, end_date)
-        results = await self._list_results(org_id, start_date, end_date)
+    async def get_overview(
+        self,
+        org_id: str | None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        product_lines: list[str] | None = None,
+    ) -> dict:
+        tasks = await self._list_tasks(org_id, start_date, end_date, product_lines=product_lines)
+        results = await self._list_results(org_id, start_date, end_date, product_lines=product_lines)
         alerts = await self._list_alerts(org_id, start_date, end_date)
         stabilities = await self._list_stabilities(org_id, start_date, end_date)
         ledgers = await self._list_ledgers(org_id, start_date, end_date)
@@ -440,15 +446,23 @@ class AnalyticsRepository:
             "related_task_ids": related_task_ids,
         }
 
-    async def _list_tasks(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[InspectionTask]:
+    async def _list_tasks(
+        self, org_id: str | None, start_date: date | None, end_date: date | None,
+        product_lines: list[str] | None = None,
+    ) -> list[InspectionTask]:
         stmt = select(InspectionTask).where(InspectionTask.deleted_at.is_(None))
         if org_id:
             stmt = stmt.where(InspectionTask.org_id == org_id)
+        if product_lines:
+            stmt = stmt.where(InspectionTask.product_id.in_(product_lines))
         stmt = self._apply_range(stmt, InspectionTask.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def _list_results(self, org_id: str | None, start_date: date | None, end_date: date | None) -> list[InspectionResult]:
+    async def _list_results(
+        self, org_id: str | None, start_date: date | None, end_date: date | None,
+        product_lines: list[str] | None = None,
+    ) -> list[InspectionResult]:
         stmt = (
             select(InspectionResult)
             .join(InspectionTask, InspectionTask.id == InspectionResult.task_id)
@@ -456,6 +470,8 @@ class AnalyticsRepository:
         )
         if org_id:
             stmt = stmt.where(InspectionResult.org_id == org_id, InspectionTask.org_id == org_id)
+        if product_lines:
+            stmt = stmt.where(InspectionTask.product_id.in_(product_lines))
         stmt = self._apply_range(stmt, InspectionResult.created_at, start_date, end_date)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

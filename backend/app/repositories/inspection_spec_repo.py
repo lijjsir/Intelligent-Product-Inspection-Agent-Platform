@@ -13,7 +13,10 @@ class InspectionSpecRepository:
     async def list_all(self, org_id: str) -> list[InspectionSpec]:
         result = await self._session.execute(
             select(InspectionSpec)
-            .where(or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)))
+            .where(
+                InspectionSpec.deleted_at.is_(None),
+                or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)),
+            )
             .order_by(
                 case((InspectionSpec.org_id == org_id, 0), else_=1),
                 InspectionSpec.spec_code.asc(),

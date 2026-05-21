@@ -39,7 +39,7 @@ const createForm = ref({
 
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
 const isAdmin = computed(() => hasRole("admin"));
-const canCreateTask = computed(() => hasRole(["user"]));
+const canCreateTask = computed(() => hasRole(["user", "expert"]));
 
 const rules: FormRules = {
   product_id: [

@@ -98,11 +98,13 @@ async def refresh(payload: RefreshRequest):
 async def register(payload: RegisterRequest, db=Depends(get_db)):
     service = AuthService(db)
     user, access, refresh = await service.register(
+        payload.create_org,
         payload.org_name,
         payload.org_slug,
         payload.username,
         payload.email,
         payload.password,
+        payload.role,
     )
     await db.commit()
     data = _build_session_response(access, refresh, user.id, user.username, user.org_id, user.role)

@@ -55,6 +55,30 @@ def test_route_decision_accepts_new_chat_agent_fields():
     assert decision.sub_route == "general_chat"
 
 
+def test_route_policy_image_quality_question_waits_for_formal_submission():
+    decision = AgentRoutePolicy().decide(
+        AgentRouterInput(
+            query="这个划痕算不算不合格？",
+            attachments=[{"name": "sample.png", "kind": "image"}],
+        )
+    )
+
+    assert decision.selected_agent == "inspection_task"
+    assert decision.sub_route == "quality_qa"
+
+
+def test_route_policy_forced_inspection_without_subroute_keeps_task_draft_gate():
+    decision = AgentRoutePolicy().decide(
+        AgentRouterInput(
+            query="创建质检任务，产品编号 001",
+            ext={"route_hints": {"force_agent": "inspection_task"}},
+        )
+    )
+
+    assert decision.selected_agent == "inspection_task"
+    assert decision.sub_route == "task_create"
+
+
 @pytest.mark.asyncio
 async def test_route_policy_uses_model_classifier_for_ambiguous_input(monkeypatch):
     calls: list[str] = []
@@ -160,4 +184,3 @@ async def test_inspection_task_inspection_execute_runs_formal_inspection(monkeyp
 
     assert calls == ["req-2"]
     assert output.message_type == "task_result"
-

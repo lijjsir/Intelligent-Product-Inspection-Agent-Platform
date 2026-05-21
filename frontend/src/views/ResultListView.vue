@@ -109,6 +109,8 @@ const getVerdictType = (verdict: string) => {
             <el-option label="PASS" value="pass" />
             <el-option label="FAIL" value="fail" />
             <el-option label="UNCERTAIN" value="uncertain" />
+            <el-option label="MANUAL_REQUIRED" value="manual_required" />
+            <el-option label="UNCERTAIN" value="uncertain" />
           </el-select>
         </el-form-item>
         <el-form-item label="产品线">

@@ -115,6 +115,22 @@ export interface ResultFeedback {
   updated_at: string;
 }
 
+export type MessageFeedbackTargetType = "chat" | "meeting";
+
+export interface MessageFeedback {
+  id: string;
+  org_id: string;
+  target_type: MessageFeedbackTargetType;
+  target_id: string;
+  actor_id: string;
+  feedback_type: "up" | "down";
+  rating: number | null;
+  category: string | null;
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FeedbackSubmitPayload {
   feedback_type: "up" | "down";
   rating?: number | null;
@@ -127,6 +143,11 @@ export interface FeedbackQuery {
   size?: number;
   result_id?: string;
   feedback_type?: "up" | "down";
+}
+
+export interface MessageFeedbackQuery {
+  target_type: MessageFeedbackTargetType;
+  target_ids?: string;
 }
 
 export interface TrendPoint {

@@ -4,13 +4,13 @@ from typing import Any
 
 from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
-from app.core.permissions import ROLE_ALGORITHM_ENGINEER
+from app.core.permissions import ROLE_ADMIN
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.services.base import TenantAwareService
 
 
 GLOBAL_SPEC_LEGACY_ROLES: set[str] = set()
-GLOBAL_SPEC_NORMALIZED_ROLES = {ROLE_ALGORITHM_ENGINEER}
+GLOBAL_SPEC_NORMALIZED_ROLES = {ROLE_ADMIN}
 
 
 class InspectionSpecService(TenantAwareService):

@@ -50,13 +50,13 @@ export const useAuthStore = defineStore("auth", () => {
   if (!workspaces.value.length) {
     const rs = roles.value;
     const w: string[] = [];
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
+    if (rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
       w.push(WORKSPACE_APP);
     }
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+    if (rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
       w.push(WORKSPACE_OPS);
     }
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+    if (rs.includes(ROLE_ADMIN)) {
       w.push(WORKSPACE_GOVERNANCE);
     }
     workspaces.value = w.length ? w : [WORKSPACE_APP];
@@ -158,13 +158,16 @@ export const useAuthStore = defineStore("auth", () => {
       return "/app/chat";
     }
     if (r === ROLE_ADMIN) {
-      return "/governance/quality/analysis-center";
+      return "/governance/admin/users";
     }
     if (r === ROLE_ALGORITHM_ENGINEER) {
       return "/governance/admin/models";
     }
-    if (r === ROLE_APP_DEVELOPER || r === ROLE_PLATFORM_OPERATOR) {
+    if (r === ROLE_APP_DEVELOPER) {
       return "/ops/agents";
+    }
+    if (r === ROLE_PLATFORM_OPERATOR) {
+      return "/ops/dashboard";
     }
     return "/app/dashboard";
   }

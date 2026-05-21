@@ -26,12 +26,22 @@ function refreshTraces() {
   return store.fetchTraces({ source: source.value });
 }
 
+function extractTraceId(traceUrl: string): string {
+  const idx = traceUrl.lastIndexOf("/traces/");
+  return idx >= 0 ? traceUrl.slice(idx + "/traces/".length) : "";
+}
+
 function openLangfuseTrace(row: QualityTraceItem) {
   if (!canOpenLangfuse(row) || !row.trace_url) {
     ElMessage.warning("当前 Trace 暂无可跳转的 Langfuse 地址");
     return;
   }
-  window.open(row.trace_url, "_blank", "noopener,noreferrer");
+  const traceId = extractTraceId(row.trace_url);
+  if (!traceId) {
+    window.open(row.trace_url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  window.open(`/api/v1/langfuse/redirect?trace_id=${encodeURIComponent(traceId)}`, "_blank", "noopener,noreferrer");
 }
 
 async function handleDeleteTrace(row: QualityTraceItem) {
