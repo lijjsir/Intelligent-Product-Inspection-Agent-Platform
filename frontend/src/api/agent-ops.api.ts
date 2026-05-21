@@ -11,19 +11,20 @@ import type {
   IntentRouteCreate,
   IntentRouteListQuery,
   IntentRouteUpdate,
-  PromptDSPyConfig,
-  PromptOptimizationConfig,
-  PromptOptimizationConfigPayload,
-  PromptOptimizationRun,
-  PromptOptimizationTarget,
-  PromptOptimizationTargetListQuery,
-  PromptOptimizationTargetsResponse,
   PromptVersion,
   PromptVersionCreate,
   PromptVersionListQuery,
   PromptVersionUpdate,
+  AgentDetail,
+  AgentRuntimeEvent,
   RagAnalysisResponse,
+  RagTraceDetailResponse,
   RoutingStrategyOverview,
+  RoutingCurrent,
+  RouteSimulateRequest,
+  RouteSimulateResult,
+  RouteEventItem,
+  RoutingMetrics,
 } from "@/types/agent-ops.types";
 import type { PagedResponse } from "@/types/common.types";
 
@@ -68,47 +69,6 @@ export const agentOpsApi = {
     return http.delete<{ deleted: boolean }>(`/v1/agent-ops/prompts/${id}`);
   },
 
-  getPromptDspy(id: string) {
-    return http.get<PromptDSPyConfig | null>(`/v1/agent-ops/prompts/${id}/dspy`);
-  },
-
-  updatePromptDspy(id: string, payload: PromptDSPyConfig) {
-    return http.put<PromptDSPyConfig>(`/v1/agent-ops/prompts/${id}/dspy`, payload);
-  },
-
-  listPromptOptimizationTargets(query: PromptOptimizationTargetListQuery) {
-    return http.get<PromptOptimizationTargetsResponse>("/v1/agent-ops/prompt-optimization/targets", { params: query });
-  },
-
-  getPromptOptimizationTarget(targetKey: string) {
-    return http.get<PromptOptimizationTarget>(`/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}`);
-  },
-
-  updatePromptOptimizationConfig(targetKey: string, payload: PromptOptimizationConfigPayload) {
-    return http.put<PromptOptimizationConfig>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/config`,
-      payload,
-    );
-  },
-
-  compilePromptOptimizationTarget(targetKey: string) {
-    return http.post<PromptOptimizationRun>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/compile`,
-    );
-  },
-
-  listPromptOptimizationRuns(targetKey: string) {
-    return http.get<PromptOptimizationRun[]>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/runs`,
-    );
-  },
-
-  rollbackPromptOptimizationTarget(targetKey: string) {
-    return http.post<PromptOptimizationRun>(
-      `/v1/agent-ops/prompt-optimization/targets/${encodeURIComponent(targetKey)}/rollback`,
-    );
-  },
-
   listRoutes(query: IntentRouteListQuery) {
     return http.get<PagedResponse<IntentRoute>>("/v1/agent-ops/routes", { params: query });
   },
@@ -141,6 +101,12 @@ export const agentOpsApi = {
     return http.get<RagAnalysisResponse>("/v1/agent-ops/rag-analysis");
   },
 
+  getRagTraceDetail(traceId: string) {
+    return http.get<RagTraceDetailResponse>(
+      `/v1/agent-ops/rag-analysis/traces/${encodeURIComponent(traceId)}`,
+    );
+  },
+
   getRuntimeOverview() {
     return http.get<AgentRuntimeOverview>("/v1/agent-ops/runtime/overview");
   },
@@ -161,9 +127,36 @@ export const agentOpsApi = {
     );
   },
 
-  getAgentsTopology(subgraphKey = "all") {
+  getAgentsTopology(
+    subgraphKey = "all",
+    mode: "design" | "runtime" = "design",
+    includePlanned = true,
+  ) {
     return http.get<AgentTopology>("/v1/agent-ops/agents/topology", {
-      params: { subgraph_key: subgraphKey },
+      params: { subgraph_key: subgraphKey, mode, include_planned: includePlanned },
     });
   },
+
+  /** 暂停 Agent 路由 */
+  pauseAgentRoute: (runtimeKey: string, data: { reason: string }) =>
+    http.post<AgentRuntimeInstance>(`/v1/agent-ops/runtime/agents/${runtimeKey}/pause-route`, data),
+
+  /** 恢复 Agent 路由 */
+  resumeAgentRoute: (runtimeKey: string) =>
+    http.post<AgentRuntimeInstance>(`/v1/agent-ops/runtime/agents/${runtimeKey}/resume-route`),
+
+  /** 获取 Agent 完整详情 */
+  getAgentDetail: (agentId: string) =>
+    http.get<AgentDetail>(`/v1/agent-ops/agents/${agentId}/detail`),
+
+  /** 查询 Agent 运行态事件 */
+  getRuntimeEvents: (agentId: string, limit?: number) =>
+    http.get<AgentRuntimeEvent[]>(`/v1/agent-ops/runtime/events`, { params: { agent_id: agentId, limit } }),
+
+  /** ── Routing Strategy Viewer ── */
+
+  getRoutingCurrent: () => http.get<RoutingCurrent>("/v1/agent-ops/routing/current"),
+  simulateRoute: (data: RouteSimulateRequest) => http.post<RouteSimulateResult>("/v1/agent-ops/routing/simulate", data),
+  getRoutingEvents: (limit?: number) => http.get<RouteEventItem[]>("/v1/agent-ops/routing/events", { params: { limit } }),
+  getRoutingMetrics: () => http.get<RoutingMetrics>("/v1/agent-ops/routing/metrics"),
 };

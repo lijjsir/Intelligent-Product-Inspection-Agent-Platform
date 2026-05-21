@@ -6,7 +6,7 @@ from app.models.task_execution_event import TaskExecutionEvent
 from app.models.result import InspectionResult
 from app.models.stability import StabilityReport
 from app.models.alert import AlertEvent
-from app.models.tool import ToolRegistry, ToolExecution
+from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolSyncEvent, ToolVersion
 from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
@@ -25,10 +25,7 @@ from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
     AgentRuntimeInstance,
-    DSPyOptimizationConfig,
-    DSPyOptimizationRun,
     IntentRoute,
-    PromptDSPyConfig,
     PromptVersion,
     RagQueryLog,
 )
@@ -53,6 +50,7 @@ from app.models.algo_resources import (
     ModelDeployment,
 )
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
+from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
     MemoryDependencyEdge,
     MemoryEvaluation,
@@ -71,7 +69,11 @@ __all__ = [
     "InspectionResult",
     "StabilityReport",
     "AlertEvent",
-    "ToolRegistry",
+    "ToolDefinition",
+    "ToolVersion",
+    "AgentToolBinding",
+    "ToolSyncEvent",
+    "ToolRuntimeEvent",
     "ToolExecution",
     "AuditLog",
     "AuditOutbox",
@@ -89,9 +91,6 @@ __all__ = [
     "AgentDefinition",
     "PromptVersion",
     "IntentRoute",
-    "PromptDSPyConfig",
-    "DSPyOptimizationConfig",
-    "DSPyOptimizationRun",
     "AgentRuntimeInstance",
     "RagQueryLog",
     "ChatSession",
@@ -128,4 +127,6 @@ __all__ = [
     "MemoryPolicy",
     "MemoryRollback",
     "MemoryEvaluation",
+    "PromptDefinition",
+    "PromptSyncEvent",
 ]

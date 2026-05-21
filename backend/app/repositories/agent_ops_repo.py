@@ -10,10 +10,7 @@ from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
     AgentRuntimeInstance,
-    DSPyOptimizationConfig,
-    DSPyOptimizationRun,
     IntentRoute,
-    PromptDSPyConfig,
     PromptVersion,
     RagQueryLog,
 )
@@ -183,185 +180,6 @@ class PromptVersionRepository(AgentOpsRepository):
         )
         return result.scalar_one_or_none()
 
-    async def get_dspy_config(self, prompt_version_id: str) -> PromptDSPyConfig | None:
-        result = await self._session.execute(
-            select(PromptDSPyConfig).where(
-                PromptDSPyConfig.org_id == self._org_id,
-                PromptDSPyConfig.prompt_version_id == prompt_version_id,
-                PromptDSPyConfig.deleted_at.is_(None),
-            )
-        )
-        return result.scalar_one_or_none()
-
-    async def upsert_dspy_config(self, prompt_version_id: str, data: dict) -> PromptDSPyConfig:
-        existing = await self.get_dspy_config(prompt_version_id)
-        if existing:
-            for key, value in data.items():
-                setattr(existing, key, value)
-            await self._session.flush()
-            await self._session.refresh(existing, attribute_names=["updated_at"])
-            return existing
-        obj = PromptDSPyConfig(
-            **data,
-            org_id=self._org_id,
-            prompt_version_id=prompt_version_id,
-        )
-        self._session.add(obj)
-        await self._session.flush()
-        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
-        return obj
-
-
-class DSPyOptimizationConfigRepository(AgentOpsRepository):
-    async def get_by_target_key(self, target_key: str) -> DSPyOptimizationConfig | None:
-        result = await self._session.execute(
-            select(DSPyOptimizationConfig).where(
-                DSPyOptimizationConfig.org_id == self._org_id,
-                DSPyOptimizationConfig.target_key == target_key,
-                DSPyOptimizationConfig.deleted_at.is_(None),
-            )
-            .order_by(
-                DSPyOptimizationConfig.updated_at.desc(),
-                DSPyOptimizationConfig.created_at.desc(),
-                DSPyOptimizationConfig.id.desc(),
-            )
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
-
-    async def list_all(self) -> list[DSPyOptimizationConfig]:
-        result = await self._session.execute(
-            select(DSPyOptimizationConfig)
-            .where(
-                DSPyOptimizationConfig.org_id == self._org_id,
-                DSPyOptimizationConfig.deleted_at.is_(None),
-            )
-            .order_by(DSPyOptimizationConfig.subgraph_key.asc(), DSPyOptimizationConfig.node_label.asc())
-        )
-        return list(result.scalars().all())
-
-    async def upsert_from_catalog(self, target: dict, *, updated_by: str | None = None) -> DSPyOptimizationConfig:
-        existing = await self.get_by_target_key(str(target["target_key"]))
-        payload = {
-            "subgraph_key": target["subgraph_key"],
-            "node_id": target["node_id"],
-            "node_label": target["node_label"],
-            "module_name": target["module_name"],
-            "optimization_goal": target["optimization_goal"],
-            "optimizer_strategy": target.get("optimizer_strategy") or "bootstrap-fewshot",
-            "compiler_version": target.get("compiler_version"),
-            "metric_names": list(target.get("metric_names") or []),
-            "config_payload": dict(target.get("config_payload") or {}),
-            "supports_compile": bool(target.get("supports_compile", True)),
-            "is_active_target": True,
-        }
-        if existing:
-            for key, value in payload.items():
-                setattr(existing, key, value)
-            existing.updated_by = updated_by
-            existing.deleted_at = None
-            await self._session.flush()
-            await self._session.refresh(existing, attribute_names=["updated_at"])
-            return existing
-        obj = DSPyOptimizationConfig(
-            org_id=self._org_id,
-            target_key=target["target_key"],
-            is_enabled=True,
-            updated_by=updated_by,
-            **payload,
-        )
-        self._session.add(obj)
-        await self._session.flush()
-        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
-        return obj
-
-    async def mark_inactive_missing(self, active_target_keys: list[str], *, updated_by: str | None = None) -> None:
-        items = await self.list_all()
-        active_set = set(active_target_keys)
-        changed = False
-        for item in items:
-            is_active_target = item.target_key in active_set
-            if item.is_active_target != is_active_target:
-                item.is_active_target = is_active_target
-                item.updated_by = updated_by
-                changed = True
-        if changed:
-            await self._session.flush()
-
-    async def update_config(self, target_key: str, data: dict) -> DSPyOptimizationConfig | None:
-        obj = await self.get_by_target_key(target_key)
-        if not obj:
-            return None
-        for key, value in data.items():
-            if value is not None:
-                setattr(obj, key, value)
-        await self._session.flush()
-        await self._session.refresh(obj, attribute_names=["updated_at"])
-        return obj
-
-
-class DSPyOptimizationRunRepository(AgentOpsRepository):
-    async def create(self, data: dict) -> DSPyOptimizationRun:
-        obj = DSPyOptimizationRun(org_id=self._org_id, **data)
-        self._session.add(obj)
-        await self._session.flush()
-        await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
-        return obj
-
-    async def get(self, id: str) -> DSPyOptimizationRun | None:
-        return await self._get_by_id(DSPyOptimizationRun, id)
-
-    async def list_for_target(self, target_key: str, limit: int = 10) -> list[DSPyOptimizationRun]:
-        result = await self._session.execute(
-            select(DSPyOptimizationRun)
-            .where(
-                DSPyOptimizationRun.org_id == self._org_id,
-                DSPyOptimizationRun.target_key == target_key,
-                DSPyOptimizationRun.deleted_at.is_(None),
-            )
-            .order_by(DSPyOptimizationRun.created_at.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def list_recent(self, limit: int = 50) -> list[DSPyOptimizationRun]:
-        result = await self._session.execute(
-            select(DSPyOptimizationRun)
-            .where(
-                DSPyOptimizationRun.org_id == self._org_id,
-                DSPyOptimizationRun.deleted_at.is_(None),
-            )
-            .order_by(DSPyOptimizationRun.created_at.desc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    async def update(self, id: str, data: dict) -> DSPyOptimizationRun | None:
-        obj = await self.get(id)
-        if not obj:
-            return None
-        for key, value in data.items():
-            if value is not None:
-                setattr(obj, key, value)
-        await self._session.flush()
-        await self._session.refresh(obj, attribute_names=["updated_at"])
-        return obj
-
-    async def get_latest_completed(self, target_key: str) -> DSPyOptimizationRun | None:
-        result = await self._session.execute(
-            select(DSPyOptimizationRun)
-            .where(
-                DSPyOptimizationRun.org_id == self._org_id,
-                DSPyOptimizationRun.target_key == target_key,
-                DSPyOptimizationRun.status == "completed",
-                DSPyOptimizationRun.deleted_at.is_(None),
-            )
-            .order_by(DSPyOptimizationRun.finished_at.desc(), DSPyOptimizationRun.created_at.desc())
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
-
-
 class IntentRouteRepository(AgentOpsRepository):
     async def create(self, data: dict) -> IntentRoute:
         obj = IntentRoute(**data, org_id=self._org_id)
@@ -461,6 +279,7 @@ class RagAnalysisRepository(AgentOpsRepository):
             RagQueryLog.session_id,
             RagQueryLog.query,
             RagQueryLog.rag_space_id,
+            RagQueryLog.top_k,
             RagQueryLog.hit_count,
             RagQueryLog.hit_rate,
             RagQueryLog.citation_coverage,
@@ -484,6 +303,7 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "session_id": str(row.session_id or "") or None,
                 "query": str(row.query or ""),
                 "rag_space_id": str(row.rag_space_id or "") or None,
+                "top_k": int(row.top_k or 0),
                 "hit_count": int(row.hit_count or 0),
                 "hit_rate": float(row.hit_rate or 0.0),
                 "citation_coverage": float(row.citation_coverage or 0.0),
@@ -497,6 +317,59 @@ class RagAnalysisRepository(AgentOpsRepository):
                 "created_at": row.created_at,
             })
         return items
+
+    async def get_trace_detail(self, trace_id: str) -> dict | None:
+        filters = [
+            RagQueryLog.trace_id == trace_id,
+            RagQueryLog.deleted_at.is_(None),
+        ]
+        if self._org_id is not None:
+            filters.insert(0, RagQueryLog.org_id == self._org_id)
+
+        stmt = (
+            select(
+                RagQueryLog.task_id,
+                RagQueryLog.session_id,
+                RagQueryLog.query,
+                RagQueryLog.rag_space_id,
+                RagQueryLog.top_k,
+                RagQueryLog.hit_count,
+                RagQueryLog.hit_rate,
+                RagQueryLog.citation_coverage,
+                RagQueryLog.latency_ms,
+                RagQueryLog.source_graph,
+                RagQueryLog.agent_name,
+                RagQueryLog.sub_route,
+                RagQueryLog.trace_id,
+                RagQueryLog.top_score,
+                RagQueryLog.metadata_json,
+                RagQueryLog.created_at,
+            )
+            .where(*filters)
+            .order_by(RagQueryLog.created_at.desc(), RagQueryLog.id.desc())
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).one_or_none()
+        if row is None:
+            return None
+        return {
+            "task_id": str(row.task_id or ""),
+            "session_id": str(row.session_id or "") or None,
+            "query": str(row.query or ""),
+            "rag_space_id": str(row.rag_space_id or "") or None,
+            "top_k": int(row.top_k or 0),
+            "hit_count": int(row.hit_count or 0),
+            "hit_rate": float(row.hit_rate or 0.0),
+            "citation_coverage": float(row.citation_coverage or 0.0),
+            "latency_ms": int(row.latency_ms or 0),
+            "source_graph": str(row.source_graph or ""),
+            "agent_name": str(row.agent_name or ""),
+            "sub_route": str(row.sub_route or ""),
+            "trace_id": str(row.trace_id or "") or None,
+            "top_score": float(row.top_score or 0.0) if row.top_score is not None else None,
+            "metadata": dict(row.metadata_json or {}),
+            "created_at": row.created_at,
+        }
 
     async def create_log(self, data: dict) -> RagQueryLog:
         obj = RagQueryLog(org_id=self._org_id, **data)
@@ -580,9 +453,12 @@ class AgentRuntimeRepository(AgentOpsRepository):
             existing.agent_id = str(agent.id)
             existing.runtime_key = runtime_key
             existing.subgraph_key = str(agent.subgraph_key or "quality_judgement")
-            existing.status = "running" if agent.is_active else "stopped"
             existing.supports_start_stop = bool(agent.supports_start_stop)
             existing.metadata_json = {"entry_graph": agent.entry_graph, "graph_version": agent.graph_version}
+            if not getattr(existing, "status", None):
+                existing.status = "running" if agent.is_active else "stopped"
+            if not getattr(existing, "runtime_status", None):
+                existing.runtime_status = "running" if agent.is_active else "stopped"
             await self._session.flush()
             return existing
         obj = AgentRuntimeInstance(
@@ -591,6 +467,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
             runtime_key=runtime_key,
             subgraph_key=str(agent.subgraph_key or "quality_judgement"),
             status="running" if agent.is_active else "stopped",
+            runtime_status="running" if agent.is_active else "stopped",
             supports_start_stop=bool(agent.supports_start_stop),
             metadata_json={"entry_graph": agent.entry_graph, "graph_version": agent.graph_version},
         )
@@ -620,6 +497,38 @@ class AgentRuntimeRepository(AgentOpsRepository):
         if status == "running":
             obj.last_started_at = datetime.utcnow()
         if status == "stopped":
+            obj.last_stopped_at = datetime.utcnow()
+        await self._session.flush()
+        return obj
+
+    async def create_event(self, data: dict):
+        from app.models.agent_ops import AgentRuntimeEvent
+        obj = AgentRuntimeEvent(org_id=self._org_id, **data)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_events(self, agent_id: str, limit: int = 20):
+        from app.models.agent_ops import AgentRuntimeEvent
+        result = await self._session.execute(
+            select(AgentRuntimeEvent).where(
+                AgentRuntimeEvent.org_id == self._org_id,
+                AgentRuntimeEvent.agent_id == agent_id,
+                AgentRuntimeEvent.deleted_at.is_(None),
+            ).order_by(AgentRuntimeEvent.created_at.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def set_runtime_status(self, runtime_key: str, runtime_status: str, *, updated_by: str | None = None):
+        obj = await self.dedupe_by_runtime_key(runtime_key)
+        if not obj:
+            return None
+        obj.status = runtime_status
+        obj.runtime_status = runtime_status
+        obj.updated_by = updated_by
+        if runtime_status == "running":
+            obj.last_started_at = datetime.utcnow()
+        if runtime_status == "stopped":
             obj.last_stopped_at = datetime.utcnow()
         await self._session.flush()
         return obj
@@ -661,5 +570,25 @@ class AgentRouteLogRepository(AgentOpsRepository):
             )
             .order_by(AgentRouteLog.created_at.desc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
+class AgentRuntimeEventRepository(AgentOpsRepository):
+    async def create(self, data: dict):
+        from app.models.agent_ops import AgentRuntimeEvent
+        obj = AgentRuntimeEvent(org_id=self._org_id, **data)
+        self._session.add(obj)
+        await self._session.flush()
+        return obj
+
+    async def list_by_agent(self, agent_id: str, limit: int = 20):
+        from app.models.agent_ops import AgentRuntimeEvent
+        result = await self._session.execute(
+            select(AgentRuntimeEvent).where(
+                AgentRuntimeEvent.org_id == self._org_id,
+                AgentRuntimeEvent.agent_id == agent_id,
+                AgentRuntimeEvent.deleted_at.is_(None),
+            ).order_by(AgentRuntimeEvent.created_at.desc()).limit(limit)
         )
         return list(result.scalars().all())

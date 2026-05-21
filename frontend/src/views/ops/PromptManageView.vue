@@ -1,1138 +1,1116 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, onMounted, ref, watch } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import {
-  Aim,
-  Connection,
-  MagicStick,
   RefreshRight,
-  Select,
-  Warning,
+  Edit,
+  Upload,
 } from "@element-plus/icons-vue";
-import { useAgentOpsStore } from "@/stores/agent-ops.store";
-import type {
-  PromptOptimizationConfigPayload,
-  PromptOptimizationRun,
-  PromptOptimizationTarget,
-} from "@/types/agent-ops.types";
+import { usePromptAdminStore } from "@/stores/prompt-admin.store";
+import type { PromptDefinitionSummary, PromptVersionItem } from "@/types/prompt-admin.types";
 
-const store = useAgentOpsStore();
+const store = usePromptAdminStore();
+
 const loading = computed(() => store.loading);
-const selectedTargetKey = ref("");
-const pollingTimer = ref<number | null>(null);
+const overview = computed(() => store.overview);
+const agentGroups = computed(() => store.agentGroups);
+const detail = computed(() => store.detail);
+
+const selectedAgent = ref("");
+const activeRightTab = ref<"edit" | "code" | "diff" | "history">("edit");
+const editorDraft = ref("");
+const changeSummary = ref("");
 const saving = ref(false);
-const compiling = ref(false);
+const publishing = ref(false);
 const rollingBack = ref(false);
+const syncing = ref(false);
+const editorReadonly = ref(true);
 
-const filters = reactive({
-  keyword: "",
-  subgraph_key: "all",
-  status: "all",
-  dspy_state: "all",
-});
-
-const configForm = reactive<PromptOptimizationConfigPayload>({
-  module_name: "",
-  compiler_version: "",
-  optimizer_strategy: "bootstrap-fewshot",
-  metric_names: [],
-  config_payload: {},
-  is_enabled: true,
-});
-
-const metricDraft = ref("");
-const payloadDraft = ref('{\n  "temperature": 0.1,\n  "max_examples": 6\n}');
-
-const overview = computed(() => store.promptOptimization?.overview);
-const allTargets = computed(() => store.promptOptimization?.items ?? []);
-
-const filteredTargets = computed(() => {
-  const keyword = filters.keyword.trim().toLowerCase();
-  return allTargets.value.filter((item) => {
-    if (filters.subgraph_key !== "all" && item.subgraph_key !== filters.subgraph_key) return false;
-    if (filters.status !== "all" && item.current_status !== filters.status) return false;
-    if (filters.dspy_state === "enabled" && !item.config.is_enabled) return false;
-    if (filters.dspy_state === "disabled" && item.config.is_enabled) return false;
-    if (!keyword) return true;
-    return [item.node_label, item.target_key, item.module_name, item.optimization_goal]
-      .some((value) => value.toLowerCase().includes(keyword));
-  });
-});
-
-const groupedTargets = computed(() => {
-  const groups = new Map<string, PromptOptimizationTarget[]>();
-  for (const item of filteredTargets.value) {
-    const current = groups.get(item.subgraph_key) ?? [];
-    current.push(item);
-    groups.set(item.subgraph_key, current);
+// Initialize from active content
+watch(detail, (d) => {
+  if (d) {
+    editorDraft.value = d.active_content;
+    changeSummary.value = "";
+    activeRightTab.value = "edit";
   }
-  return Array.from(groups.entries()).map(([key, items]) => ({
-    key,
-    label: key === "legacy_quality" ? "Legacy Quality 子图" : "LLM-native Quality 子图",
-    items,
-  }));
-});
-
-const selectedTarget = computed<PromptOptimizationTarget | null>(() => {
-  if (store.promptOptimizationCurrent?.target_key === selectedTargetKey.value) {
-    return store.promptOptimizationCurrent;
-  }
-  return filteredTargets.value.find((item) => item.target_key === selectedTargetKey.value) ?? null;
-});
-
-const selectedRuns = computed<PromptOptimizationRun[]>(() => {
-  if (store.promptOptimizationRuns.length) {
-    return store.promptOptimizationRuns;
-  }
-  return selectedTarget.value?.recent_runs ?? [];
-});
-
-const graphNodeMap = computed(() => {
-  const map = new Map<string, string>();
-  selectedTarget.value?.graph_context.nodes.forEach((node) => map.set(node.id, node.label));
-  return map;
 });
 
 onMounted(async () => {
-  await loadWorkbench();
-});
-
-onBeforeUnmount(() => {
-  if (pollingTimer.value) {
-    window.clearInterval(pollingTimer.value);
+  try {
+    await store.fetchOverview();
+    await store.fetchDefinitions();
+    if (store.definitions.length > 0) {
+      await selectPrompt(store.definitions[0]);
+    }
+  } catch {
+    ElMessage.error("加载 Prompt 管理数据失败，请刷新重试");
   }
 });
 
-watch(selectedTarget, (value) => {
-  if (!value) return;
-  configForm.module_name = value.config.module_name;
-  configForm.compiler_version = value.config.compiler_version ?? "dspy-2.0";
-  configForm.optimizer_strategy = value.config.optimizer_strategy || "bootstrap-fewshot";
-  configForm.metric_names = [...value.config.metric_names];
-  configForm.config_payload = { ...value.config.config_payload };
-  configForm.is_enabled = value.config.is_enabled;
-  metricDraft.value = value.config.metric_names.join(", ");
-  payloadDraft.value = JSON.stringify(value.config.config_payload ?? {}, null, 2);
-});
-
-function statusTone(status: string) {
-  if (status === "completed") return "success";
-  if (status === "failed") return "danger";
-  if (status === "running") return "warning";
-  if (status === "pending") return "info";
-  return "info";
+function selectAgent(name: string) {
+  selectedAgent.value = name === selectedAgent.value ? "" : name;
 }
 
-function subgraphAccent(subgraphKey: string) {
-  return subgraphKey === "legacy_quality" ? "#0f766e" : "#b45309";
-}
-
-function metricLabel(metric: string) {
-  const labels: Record<string, string> = {
-    faithfulness: "忠实度",
-    traceability: "可追溯性",
-    physical_hallucination: "物理幻觉",
-    pass_rate: "通过率",
-  };
-  return labels[metric] ?? metric;
-}
-
-function formatMetric(value?: number | null) {
-  if (value == null) return "--";
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatDateTime(value?: string | null) {
-  if (!value) return "--";
-  return new Date(value).toLocaleString();
-}
-
-function selectTarget(item: PromptOptimizationTarget) {
-  if (
-    selectedTargetKey.value === item.target_key &&
-    store.promptOptimizationCurrent?.target_key === item.target_key
-  ) {
-    return;
-  }
-  selectedTargetKey.value = item.target_key;
-  void refreshSelectedTarget(item.target_key);
-}
-
-async function loadWorkbench() {
-  const response = await store.fetchPromptOptimizationTargets();
-  const nextTarget =
-    response.items.find((item) => item.target_key === selectedTargetKey.value) ?? response.items[0];
-  if (nextTarget) {
-    selectedTargetKey.value = nextTarget.target_key;
-    await refreshSelectedTarget(nextTarget.target_key);
+async function selectPrompt(def: PromptDefinitionSummary) {
+  store.selectPrompt(def.prompt_key);
+  try {
+    await store.fetchDetail(def.prompt_key);
+  } catch {
+    ElMessage.error("加载 Prompt 详情失败");
   }
 }
 
-async function refreshSelectedTarget(targetKey = selectedTargetKey.value) {
-  if (!targetKey) return;
-  await Promise.all([
-    store.fetchPromptOptimizationTarget(targetKey),
-    store.fetchPromptOptimizationRuns(targetKey),
-  ]);
-}
-
-async function refreshAll() {
-  const response = await store.fetchPromptOptimizationTargets({
-    subgraph_key: filters.subgraph_key === "all" ? undefined : filters.subgraph_key,
-    status: filters.status === "all" ? undefined : filters.status,
-    is_enabled: filters.dspy_state === "all" ? undefined : filters.dspy_state === "enabled",
-  });
-  const candidate =
-    response.items.find((item) => item.target_key === selectedTargetKey.value) ?? response.items[0];
-  if (!candidate) {
-    selectedTargetKey.value = "";
-    return;
+function toggleEdit() {
+  editorReadonly.value = !editorReadonly.value;
+  if (editorReadonly.value) {
+    editorDraft.value = detail.value?.active_content ?? "";
   }
-  selectedTargetKey.value = candidate.target_key;
-  await refreshSelectedTarget(candidate.target_key);
 }
 
-async function saveConfig() {
-  if (!selectedTarget.value) return;
+async function saveDraft() {
+  if (!detail.value) return;
   saving.value = true;
   try {
-    configForm.metric_names = metricDraft.value.split(",").map((item) => item.trim()).filter(Boolean);
-    configForm.config_payload = JSON.parse(payloadDraft.value || "{}");
-    await store.updatePromptOptimizationConfig(selectedTarget.value.target_key, {
-      module_name: configForm.module_name.trim(),
-      compiler_version: configForm.compiler_version?.trim() || null,
-      optimizer_strategy: configForm.optimizer_strategy.trim(),
-      metric_names: configForm.metric_names,
-      config_payload: configForm.config_payload,
-      is_enabled: configForm.is_enabled,
-    });
-    ElMessage.success("DSPy 配置已保存");
-    await refreshAll();
+    await store.createVersion(
+      detail.value.prompt_key,
+      editorDraft.value,
+      changeSummary.value || undefined,
+      detail.value.active_content_hash,
+    );
+    ElMessage.success("草稿已保存");
+    changeSummary.value = "";
+    editorReadonly.value = true;
   } catch {
-    ElMessage.error("保存失败，请检查配置项和 JSON 格式");
+    ElMessage.error("保存草稿失败");
   } finally {
     saving.value = false;
   }
 }
 
-async function compileTarget() {
-  if (!selectedTarget.value) return;
-  compiling.value = true;
+async function publishLatest() {
+  if (!detail.value) return;
+  const draft = detail.value.versions.find((v) => v.status === "draft");
+  if (!draft) {
+    ElMessage.warning("没有待发布的草稿版本。请先保存草稿。");
+    return;
+  }
+  publishing.value = true;
   try {
-    await store.compilePromptOptimizationTarget(selectedTarget.value.target_key);
-    ElMessage.success("编译任务已提交");
-    await pollTargetState(selectedTarget.value.target_key);
+    await store.publishVersion(draft.id);
+    ElMessage.success(`版本 v${draft.version} 已发布`);
   } catch {
-    ElMessage.error("编译任务提交失败");
+    ElMessage.error("发布失败");
   } finally {
-    compiling.value = false;
+    publishing.value = false;
   }
 }
 
-async function rollbackTarget() {
-  if (!selectedTarget.value) return;
+async function rollbackTo(version: PromptVersionItem) {
+  if (!detail.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定回滚到版本 v${version.version}？当前生效版本将被替换。`,
+      "确认回滚",
+      { confirmButtonText: "确认回滚", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
   rollingBack.value = true;
   try {
-    await store.rollbackPromptOptimizationTarget(selectedTarget.value.target_key);
-    ElMessage.success("已回退到上一个稳定版本");
-    await refreshAll();
+    await store.rollback(detail.value.prompt_key, version.id);
+    ElMessage.success(`已回滚到版本 v${version.version}`);
   } catch {
-    ElMessage.error("当前没有可回退的稳定版本");
+    ElMessage.error("回滚失败");
   } finally {
     rollingBack.value = false;
   }
 }
 
-async function pollTargetState(targetKey: string) {
-  if (pollingTimer.value) {
-    window.clearInterval(pollingTimer.value);
-    pollingTimer.value = null;
+async function showDiff() {
+  if (!detail.value) return;
+  activeRightTab.value = "diff";
+  try {
+    await store.fetchDiff(detail.value.prompt_key);
+  } catch {
+    ElMessage.error("加载差异对比失败");
   }
-  let attempts = 0;
-  pollingTimer.value = window.setInterval(async () => {
-    attempts += 1;
-    await refreshSelectedTarget(targetKey);
-    const latestStatus =
-      store.promptOptimizationRuns[0]?.status || store.promptOptimizationCurrent?.current_status;
-    if (latestStatus === "completed" || latestStatus === "failed" || attempts >= 12) {
-      if (pollingTimer.value) {
-        window.clearInterval(pollingTimer.value);
-      }
-      pollingTimer.value = null;
-      await refreshAll();
-    }
-  }, 800);
+}
+
+async function syncScan() {
+  syncing.value = true;
+  try {
+    const result = await store.scanCodePrompts();
+    ElMessage.success(`扫描完成：发现 ${result.scanned}，新建 ${result.created}，更新 ${result.updated}，缺失 ${result.missing}`);
+  } catch {
+    ElMessage.error("同步扫描失败");
+  } finally {
+    syncing.value = false;
+  }
+}
+
+function syncStatusLabel(s: string): string {
+  const map: Record<string, string> = {
+    synced: "代码默认",
+    code_changed: "代码已变化",
+    db_override: "数据库覆盖",
+    conflict: "有冲突",
+    missing_in_code: "缺失代码",
+  };
+  return map[s] ?? s;
+}
+
+function syncStatusClass(s: string): string {
+  const map: Record<string, string> = {
+    synced: "tag-blue",
+    code_changed: "tag-amber",
+    db_override: "tag-green",
+    conflict: "tag-red",
+    missing_in_code: "tag-gray",
+  };
+  return map[s] ?? "tag-gray";
+}
+
+function versionStatusClass(s: string): string {
+  const map: Record<string, string> = {
+    draft: "tag-gray",
+    review: "tag-amber",
+    approved: "tag-green",
+    deprecated: "tag-gray",
+  };
+  return map[s] ?? "tag-gray";
+}
+
+function formatDate(d?: string): string {
+  if (!d) return "--";
+  return new Date(d).toLocaleString("zh-CN");
+}
+
+function editorLineCount(content: string): number {
+  return (content || "").split("\n").length;
 }
 </script>
 
 <template>
-  <div class="workbench-page">
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <div class="eyebrow">Governance Workspace</div>
-        <h1>DSPy 优化工作台</h1>
-        <p>
-          自动发现 LangGraph 子图中需要做提示词优化的节点，在一个界面里完成配置、编译、评测、
-          版本回退和图谱上下文查看。这里展示的是系统自动识别的优化位点，而不是人工维护的原始 Prompt。
-        </p>
+  <div class="prompt-admin-root">
+    <!-- Page header -->
+    <div class="page-masthead">
+      <h1 class="page-title">Prompt 管理</h1>
+      <p class="page-subtitle">集中管理各 Agent 与流程阶段使用的提示词，支持代码默认版本、数据库生效版本、差异对比、发布和回滚。</p>
+    </div>
+
+    <!-- Top overview strip -->
+    <div class="overview-strip">
+      <div class="overview-item">
+        <span class="overview-value">{{ overview?.total ?? 0 }}</span>
+        <span class="overview-label">总 Prompt</span>
       </div>
-      <div class="hero-actions">
-        <el-button type="primary" :icon="RefreshRight" @click="refreshAll">刷新位点</el-button>
+      <div class="overview-sep" />
+      <div class="overview-item accent-green">
+        <span class="overview-value">{{ overview?.db_override ?? 0 }}</span>
+        <span class="overview-label">数据库覆盖</span>
       </div>
-    </section>
+      <div class="overview-sep" />
+      <div class="overview-item accent-amber">
+        <span class="overview-value">{{ overview?.code_changed ?? 0 }}</span>
+        <span class="overview-label">代码有变化</span>
+      </div>
+      <div class="overview-sep" />
+      <div class="overview-item accent-red">
+        <span class="overview-value">{{ overview?.conflict ?? 0 }}</span>
+        <span class="overview-label">有冲突</span>
+      </div>
+      <div class="overview-sep" />
+      <div class="overview-item accent-gray">
+        <span class="overview-value">{{ overview?.missing_in_code ?? 0 }}</span>
+        <span class="overview-label">缺失代码</span>
+      </div>
+      <div class="overview-spacer" />
+      <el-button :icon="RefreshRight" :loading="syncing" size="small" text @click="syncScan">
+        同步代码
+      </el-button>
+    </div>
 
-    <section class="overview-grid">
-      <el-card shadow="never" class="overview-card">
-        <div class="overview-icon mint"><el-icon><Aim /></el-icon></div>
-        <div class="overview-label">已发现位点</div>
-        <div class="overview-value">{{ overview?.total_targets ?? 0 }}</div>
-      </el-card>
-      <el-card shadow="never" class="overview-card">
-        <div class="overview-icon amber"><el-icon><MagicStick /></el-icon></div>
-        <div class="overview-label">启用 DSPy</div>
-        <div class="overview-value">{{ overview?.enabled_targets ?? 0 }}</div>
-      </el-card>
-      <el-card shadow="never" class="overview-card">
-        <div class="overview-icon blue"><el-icon><Select /></el-icon></div>
-        <div class="overview-label">最近编译成功</div>
-        <div class="overview-value">{{ overview?.successful_runs ?? 0 }}</div>
-      </el-card>
-      <el-card shadow="never" class="overview-card danger-card">
-        <div class="overview-icon rose"><el-icon><Warning /></el-icon></div>
-        <div class="overview-label">待处理异常</div>
-        <div class="overview-value">{{ (overview?.failed_runs ?? 0) + (overview?.pending_runs ?? 0) }}</div>
-      </el-card>
-    </section>
-
-    <section class="workbench-grid">
-      <el-card shadow="never" class="sidebar-card">
-        <template #header>
-          <div class="section-header">
-            <div>
-              <div class="section-title">自动发现位点</div>
-              <div class="section-subtitle">按子图浏览 DSPy 优化目标</div>
-            </div>
-          </div>
-        </template>
-
-        <div class="filter-stack">
-          <el-input
-            v-model="filters.keyword"
-            placeholder="搜索节点名称、模块名或优化目标"
-            clearable
-          />
-          <div class="filter-row">
-            <el-select v-model="filters.subgraph_key">
-              <el-option label="全部子图" value="all" />
-              <el-option label="Legacy Quality" value="legacy_quality" />
-              <el-option label="LLM-native Quality" value="llm_native_quality" />
-            </el-select>
-            <el-select v-model="filters.status">
-              <el-option label="全部状态" value="all" />
-              <el-option label="idle" value="idle" />
-              <el-option label="pending" value="pending" />
-              <el-option label="running" value="running" />
-              <el-option label="completed" value="completed" />
-              <el-option label="failed" value="failed" />
-            </el-select>
-          </div>
-          <el-segmented
-            v-model="filters.dspy_state"
-            :options="[
-              { label: '全部', value: 'all' },
-              { label: '已启用', value: 'enabled' },
-              { label: '已关闭', value: 'disabled' },
-            ]"
-          />
+    <!-- Three-column body -->
+    <div class="columns-shell">
+      <!-- Left: Location tree -->
+      <aside class="left-tree">
+        <div class="tree-header">
+          <span class="tree-title">位置</span>
         </div>
-
-        <div class="target-groups" v-loading="loading">
-          <div v-for="group in groupedTargets" :key="group.key" class="target-group">
-            <div class="group-title">{{ group.label }}</div>
+        <nav class="tree-body">
+          <div v-for="group in agentGroups" :key="group.name" class="tree-group">
             <button
-              v-for="item in group.items"
-              :key="item.target_key"
-              type="button"
-              class="target-card"
-              :class="{ active: selectedTargetKey === item.target_key, inactive: !item.config.is_active_target }"
-              :style="{ '--accent': subgraphAccent(item.subgraph_key) }"
-              @click="selectTarget(item)"
+              class="tree-group-btn"
+              :class="{ open: selectedAgent === group.name }"
+              @click="selectAgent(group.name)"
             >
-              <div class="target-card-top">
-                <div>
-                  <div class="target-label">{{ item.node_label }}</div>
-                  <div class="target-key">{{ item.target_key }}</div>
-                </div>
-                <el-tag :type="statusTone(item.current_status)" size="small">{{ item.current_status }}</el-tag>
-              </div>
-              <div class="target-meta">
-                <span>{{ item.module_name }}</span>
-                <span>{{ item.current_artifact_version || "未生成版本" }}</span>
-              </div>
-              <div class="target-metrics">
-                <span>忠实度 {{ formatMetric(item.latest_metrics?.faithfulness) }}</span>
-                <span>可追溯 {{ formatMetric(item.latest_metrics?.traceability) }}</span>
-              </div>
-              <div class="target-alert" v-if="item.config.latest_error_message">
-                最近异常：{{ item.config.latest_error_message }}
-              </div>
-              <div class="target-alert muted" v-else-if="!item.config.is_active_target">
-                该位点已从当前代码目录移除，配置以失效位点形式保留。
-              </div>
+              <span class="tree-chevron">{{ selectedAgent === group.name ? "▾" : "▸" }}</span>
+              <span class="tree-group-name">{{ group.name }}</span>
+              <span class="tree-group-count">{{ group.items.length }}</span>
             </button>
+            <div v-if="selectedAgent === group.name" class="tree-items">
+              <button
+                v-for="item in group.items"
+                :key="item.prompt_key"
+                class="tree-item"
+                :class="{ active: store.selectedPromptKey === item.prompt_key }"
+                @click="selectPrompt(item)"
+              >
+                <span class="tree-item-name">{{ item.display_name }}</span>
+                <span v-if="item.sync_status !== 'synced'" class="tree-item-dot" :class="syncStatusClass(item.sync_status)" />
+              </button>
+            </div>
           </div>
-          <el-empty
-            v-if="!filteredTargets.length"
-            description="没有符合筛选条件的优化位点"
-            :image-size="90"
-          />
+        </nav>
+      </aside>
+
+      <!-- Middle: Prompt cards -->
+      <section class="mid-list">
+        <div class="mid-list-header">
+          <span class="mid-list-title">Prompt 详情</span>
+          <span v-if="store.definitions.length" class="mid-list-count">{{ store.definitions.length }}</span>
         </div>
-      </el-card>
-
-      <div class="detail-column" v-if="selectedTarget">
-        <el-card shadow="never" class="detail-hero">
-          <div class="detail-hero-content">
-            <div>
-              <div class="detail-eyebrow">{{ selectedTarget.subgraph_key }}</div>
-              <h2>{{ selectedTarget.node_label }}</h2>
-              <p>{{ selectedTarget.optimization_goal }}</p>
+        <div class="mid-list-body" v-loading="loading">
+          <button
+            v-for="def in store.definitions"
+            :key="def.prompt_key"
+            class="prompt-card"
+            :class="{ active: store.selectedPromptKey === def.prompt_key }"
+            @click="selectPrompt(def)"
+          >
+            <div class="card-top">
+              <span class="card-name">{{ def.display_name }}</span>
+              <span class="card-tag" :class="syncStatusClass(def.sync_status)">
+                {{ syncStatusLabel(def.sync_status) }}
+              </span>
             </div>
-            <div class="detail-actions">
-              <el-tag :type="selectedTarget.config.is_enabled ? 'success' : 'info'">
-                {{ selectedTarget.config.is_enabled ? "DSPy 已启用" : "DSPy 已关闭" }}
-              </el-tag>
-              <el-button
-                type="primary"
-                :loading="compiling"
-                :disabled="!selectedTarget.supports_compile || !selectedTarget.config.is_active_target"
-                @click="compileTarget"
-              >
-                触发编译
-              </el-button>
-              <el-button :loading="rollingBack" @click="rollbackTarget">回退稳定版本</el-button>
+            <div class="card-location">{{ def.usage_location || def.agent_name }}</div>
+            <div class="card-key mono">{{ def.prompt_key }}</div>
+            <div class="card-meta">
+              <span v-if="def.active_version">v{{ def.active_version }} · {{ def.current_source === "database" ? "数据库生效" : "代码默认" }}</span>
+              <span v-else>代码默认</span>
+              <span>{{ formatDate(def.updated_at) }}</span>
+            </div>
+          </button>
+          <el-empty v-if="!store.definitions.length && !loading" description="暂无 Prompt 定义，请先同步代码" :image-size="80" />
+        </div>
+      </section>
+
+      <!-- Right: Editor + detail -->
+      <section class="right-panel" v-if="detail">
+        <!-- Header with back button -->
+        <div class="panel-header">
+          <div class="panel-header-left">
+            <h2 class="panel-title">{{ detail.display_name }}</h2>
+            <div class="panel-badges">
+              <span class="card-tag" :class="syncStatusClass(detail.sync_status)">
+                {{ syncStatusLabel(detail.sync_status) }}
+              </span>
+              <span v-if="detail.active_version" class="card-tag tag-green">v{{ detail.active_version }}</span>
+            </div>
+          </div>
+          <div class="panel-header-actions">
+            <el-button v-if="editorReadonly" :icon="Edit" size="small" @click="toggleEdit">编辑</el-button>
+            <el-button v-else size="small" text @click="toggleEdit">取消编辑</el-button>
+            <el-button
+              v-if="!editorReadonly"
+              type="primary"
+              size="small"
+              :loading="saving"
+              @click="saveDraft"
+            >
+              保存草稿
+            </el-button>
+            <el-button
+              :icon="Upload"
+              size="small"
+              :loading="publishing"
+              @click="publishLatest"
+            >
+              发布
+            </el-button>
+          </div>
+        </div>
+
+        <!-- Meta info row -->
+        <div class="panel-meta">
+          <div class="meta-item">
+            <span class="meta-label">位置</span>
+            <span class="meta-value">{{ detail.usage_location || detail.agent_name + " / " + detail.stage_name }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">代码文件</span>
+            <span class="meta-value mono">{{ detail.source_file || "--" }}</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">Prompt Key</span>
+            <span class="meta-value mono">{{ detail.prompt_key }}</span>
+          </div>
+          <div class="meta-item" v-if="detail.description">
+            <span class="meta-label">说明</span>
+            <span class="meta-value">{{ detail.description }}</span>
+          </div>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="tab-bar">
+          <button
+            class="tab-btn"
+            :class="{ active: activeRightTab === 'edit' }"
+            @click="activeRightTab = 'edit'"
+          >编辑</button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeRightTab === 'code' }"
+            @click="activeRightTab = 'code'"
+          >代码默认版本</button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeRightTab === 'diff' }"
+            @click="showDiff"
+          >差异对比</button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeRightTab === 'history' }"
+            @click="activeRightTab = 'history'"
+          >历史版本</button>
+        </div>
+
+        <!-- Tab content -->
+        <div class="tab-content">
+          <!-- Edit tab -->
+          <div v-if="activeRightTab === 'edit'" class="editor-shell">
+            <div class="editor-meta-row">
+              <span class="editor-meta">行数：{{ editorLineCount(editorDraft) }} · 字符数：{{ editorDraft.length }}</span>
+              <span class="editor-meta" v-if="!editorReadonly">编辑模式 · 内容将保存为草稿</span>
+              <span class="editor-meta" v-else>只读模式 · 点击"编辑"开始修改</span>
+            </div>
+            <textarea
+              v-model="editorDraft"
+              class="prompt-editor"
+              :readonly="editorReadonly"
+              spellcheck="false"
+            />
+            <div v-if="!editorReadonly" class="editor-footer">
+              <el-input
+                v-model="changeSummary"
+                placeholder="变更说明（可选）"
+                size="small"
+                class="change-input"
+              />
             </div>
           </div>
 
-          <div class="version-strip">
-            <div class="version-pill">
-              <span class="label">当前生效版本</span>
-              <strong>{{ selectedTarget.config.current_artifact_version || "未生成" }}</strong>
+          <!-- Code default tab -->
+          <div v-if="activeRightTab === 'code'" class="editor-shell">
+            <div class="editor-meta-row">
+              <span class="editor-meta">代码默认版本 · 只读 · 行数：{{ editorLineCount(detail.code_default_content) }}</span>
             </div>
-            <div class="version-pill">
-              <span class="label">上一个稳定版本</span>
-              <strong>{{ selectedTarget.config.previous_artifact_version || "暂无" }}</strong>
-            </div>
-            <div class="version-pill danger">
-              <span class="label">最近失败版本</span>
-              <strong>{{ selectedTarget.config.latest_failed_artifact_version || "无" }}</strong>
-            </div>
+            <textarea
+              :value="detail.code_default_content"
+              class="prompt-editor"
+              readonly
+              spellcheck="false"
+            />
           </div>
-        </el-card>
 
-        <div class="detail-grid">
-          <el-card shadow="never" class="panel-card">
-            <template #header>
-              <div class="section-header">
-                <div>
-                  <div class="section-title">DSPy 配置</div>
-                  <div class="section-subtitle">节点级优化参数和策略</div>
-                </div>
-                <el-tag type="info">{{ selectedTarget.module_name }}</el-tag>
+          <!-- Diff tab -->
+          <div v-if="activeRightTab === 'diff'" class="diff-panel">
+            <div v-if="store.diff" class="diff-columns">
+              <div class="diff-col">
+                <div class="diff-col-header">{{ store.diff.left_label }}</div>
+                <pre class="diff-content">{{ store.diff.left_content }}</pre>
               </div>
-            </template>
-
-            <el-form label-position="top" class="config-form">
-              <div class="config-row">
-                <el-form-item label="模块名称">
-                  <el-input v-model="configForm.module_name" />
-                </el-form-item>
-                <el-form-item label="编译版本">
-                  <el-input v-model="configForm.compiler_version" placeholder="例如 dspy-2.0" />
-                </el-form-item>
+              <div class="diff-col">
+                <div class="diff-col-header">{{ store.diff.right_label }}</div>
+                <pre class="diff-content">{{ store.diff.right_content }}</pre>
               </div>
+            </div>
+            <el-empty v-else description="加载差异中..." :image-size="60" />
+          </div>
 
-              <div class="config-row">
-                <el-form-item label="优化策略">
-                  <el-input v-model="configForm.optimizer_strategy" placeholder="bootstrap-fewshot" />
-                </el-form-item>
-                <el-form-item label="评测指标">
-                  <el-input
-                    v-model="metricDraft"
-                    placeholder="用逗号分隔，例如 faithfulness, traceability, pass_rate"
-                  />
-                </el-form-item>
-              </div>
-
-              <el-form-item label="配置载荷 JSON">
-                <el-input
-                  v-model="payloadDraft"
-                  type="textarea"
-                  :rows="8"
-                  placeholder='{"temperature": 0.1, "max_examples": 6}'
-                />
-              </el-form-item>
-
-              <div class="config-footer">
-                <div class="switch-line">
-                  <span>启用 DSPy 优化</span>
-                  <el-switch v-model="configForm.is_enabled" />
-                </div>
-                <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
-              </div>
-            </el-form>
-          </el-card>
-
-          <el-card shadow="never" class="panel-card">
-            <template #header>
-              <div class="section-header">
-                <div>
-                  <div class="section-title">最近评测</div>
-                  <div class="section-subtitle">当前位点最近一次有效指标快照</div>
-                </div>
-              </div>
-            </template>
-
-            <div class="metric-grid">
+          <!-- History tab -->
+          <div v-if="activeRightTab === 'history'" class="history-panel">
+            <div v-if="detail.versions.length" class="version-list">
               <div
-                v-for="(value, key) in selectedTarget.latest_metrics || {}"
-                :key="key"
-                class="metric-stat"
+                v-for="v in detail.versions"
+                :key="v.id"
+                class="version-item"
+                :class="{ current: v.version === detail.active_version }"
               >
-                <span>{{ metricLabel(key) }}</span>
-                <strong>{{ formatMetric(value) }}</strong>
-              </div>
-              <div v-if="!selectedTarget.latest_metrics" class="metric-stat">
-                <span>暂无评测结果</span>
-                <strong>--</strong>
-              </div>
-            </div>
-
-            <el-descriptions :column="1" border>
-              <el-descriptions-item label="最近编译时间">
-                {{ formatDateTime(selectedTarget.config.last_compiled_at) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="最近评测时间">
-                {{ formatDateTime(selectedTarget.config.last_evaluated_at) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="最近错误">
-                {{ selectedTarget.config.latest_error_message || "无" }}
-              </el-descriptions-item>
-            </el-descriptions>
-          </el-card>
-
-          <el-card shadow="never" class="panel-card full-width">
-            <template #header>
-              <div class="section-header">
-                <div>
-                  <div class="section-title">编译与回退记录</div>
-                  <div class="section-subtitle">展示该位点最近的编译、失败与回退动作</div>
-                </div>
-              </div>
-            </template>
-
-            <div class="run-list" v-if="selectedRuns.length">
-              <div v-for="run in selectedRuns" :key="run.id" class="run-item">
-                <div class="target-card-top">
-                  <div class="run-title">
-                    <strong>{{ run.run_type }}</strong>
-                    <div class="target-key">{{ run.artifact_version || "未生成产物版本" }}</div>
+                <div class="version-top">
+                  <div class="version-left">
+                    <strong>v{{ v.version }}</strong>
+                    <span class="card-tag" :class="versionStatusClass(v.status)">{{ v.status === "approved" ? "已发布" : v.status === "draft" ? "草稿" : v.status === "review" ? "审核中" : "已废弃" }}</span>
+                    <span v-if="v.version === detail.active_version" class="card-tag tag-green">当前生效</span>
                   </div>
-                  <el-tag :type="statusTone(run.status)">{{ run.status }}</el-tag>
+                  <div class="version-right">
+                    <span class="version-date">{{ formatDate(v.created_at) }}</span>
+                    <el-button
+                      v-if="v.version !== detail.active_version && v.status === 'approved'"
+                      size="small"
+                      text
+                      :loading="rollingBack"
+                      @click="rollbackTo(v)"
+                    >
+                      回滚到此版本
+                    </el-button>
+                  </div>
                 </div>
-                <div class="target-meta">
-                  <span>编译器 {{ run.compiler_version || "--" }}</span>
-                  <span>开始 {{ formatDateTime(run.started_at) }}</span>
-                  <span>结束 {{ formatDateTime(run.finished_at) }}</span>
-                </div>
-                <div class="target-metrics" v-if="run.metrics_snapshot">
-                  <span v-for="(value, key) in run.metrics_snapshot" :key="key">
-                    {{ metricLabel(key) }} {{ formatMetric(value) }}
-                  </span>
-                </div>
-                <div v-if="run.error_message" class="target-alert run-error">
-                  {{ run.error_message }}
-                </div>
+                <div v-if="v.change_summary" class="version-summary">{{ v.change_summary }}</div>
+                <pre class="version-preview">{{ v.content.slice(0, 200) }}{{ v.content.length > 200 ? "..." : "" }}</pre>
               </div>
             </div>
-            <el-empty v-else description="该位点还没有运行记录" :image-size="90" />
-          </el-card>
-
-          <el-card shadow="never" class="panel-card full-width">
-            <template #header>
-              <div class="section-header">
-                <div>
-                  <div class="section-title">图谱上下文</div>
-                  <div class="section-subtitle">说明该位点在 LangGraph 子图中的前后节点关系</div>
-                </div>
-                <el-tag type="warning">
-                  <el-icon><Connection /></el-icon>
-                  <span style="margin-left: 6px">{{ selectedTarget.graph_context.focus_node_label }}</span>
-                </el-tag>
-              </div>
-            </template>
-
-            <div class="graph-columns">
-              <div class="graph-block">
-                <div class="graph-label">上游节点</div>
-                <div class="chip-list">
-                  <el-tag
-                    v-for="nodeId in selectedTarget.graph_context.upstream_nodes"
-                    :key="nodeId"
-                    effect="plain"
-                  >
-                    {{ graphNodeMap.get(nodeId) || nodeId }}
-                  </el-tag>
-                  <span v-if="!selectedTarget.graph_context.upstream_nodes.length" class="empty-copy">无</span>
-                </div>
-              </div>
-
-              <div class="graph-focus">
-                <div class="focus-badge">{{ selectedTarget.graph_context.focus_node_label }}</div>
-                <div class="target-key">{{ selectedTarget.graph_context.focus_node_id }}</div>
-              </div>
-
-              <div class="graph-block">
-                <div class="graph-label">下游节点</div>
-                <div class="chip-list">
-                  <el-tag
-                    v-for="nodeId in selectedTarget.graph_context.downstream_nodes"
-                    :key="nodeId"
-                    effect="plain"
-                  >
-                    {{ graphNodeMap.get(nodeId) || nodeId }}
-                  </el-tag>
-                  <span v-if="!selectedTarget.graph_context.downstream_nodes.length" class="empty-copy">无</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="graph-node-cloud">
-              <div
-                v-for="node in selectedTarget.graph_context.nodes"
-                :key="node.id"
-                class="cloud-node"
-                :class="{ focused: node.id === selectedTarget.graph_context.focus_node_id }"
-              >
-                <strong>{{ node.label }}</strong>
-                <span>{{ node.id }}</span>
-                <span>{{ node.kind }}</span>
-              </div>
-            </div>
-          </el-card>
+            <el-empty v-else description="暂无历史版本" :image-size="80" />
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div v-else class="empty-detail">
-        <el-empty description="请选择左侧自动发现的 DSPy 优化位点" :image-size="110" />
-      </div>
-    </section>
+      <!-- Right panel empty state -->
+      <section class="right-panel empty-panel" v-else>
+        <el-empty description="请从左侧选择一个 Prompt" :image-size="100" />
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.workbench-page {
-  min-height: 100%;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 24%),
-    radial-gradient(circle at left bottom, rgba(245, 158, 11, 0.1), transparent 26%),
-    linear-gradient(180deg, #f8fbfd 0%, #eef3f7 100%);
-}
-
-.hero-panel,
-.overview-card,
-.sidebar-card,
-.panel-card,
-.detail-hero,
-.empty-detail {
-  border-radius: 24px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.05);
-  backdrop-filter: blur(14px);
-}
-
-.hero-panel {
+.prompt-admin-root {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 28px 30px;
-  margin-bottom: 20px;
+  flex-direction: column;
+  height: calc(100vh - 64px);
+  background: oklch(0.97 0.003 260);
 }
 
-.eyebrow,
-.detail-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: rgba(15, 118, 110, 0.08);
-  color: #0f766e;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* ── Page masthead ── */
+.page-masthead {
+  padding: 16px 20px 6px;
+  flex-shrink: 0;
 }
 
-.hero-copy h1 {
-  margin: 12px 0 10px;
-  font-size: 34px;
-  line-height: 1.15;
-  color: #0f172a;
-}
-
-.hero-copy p {
-  max-width: 760px;
+.page-title {
   margin: 0;
-  color: #475569;
-  line-height: 1.8;
-}
-
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.overview-card :deep(.el-card__body) {
-  display: grid;
-  gap: 8px;
-  padding: 22px;
-}
-
-.overview-icon {
-  display: inline-flex;
-  width: 44px;
-  height: 44px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
   font-size: 20px;
+  font-weight: 700;
+  color: oklch(0.18 0.012 260);
+  line-height: 1.3;
 }
 
-.overview-icon.mint {
-  background: rgba(15, 118, 110, 0.12);
-  color: #0f766e;
-}
-
-.overview-icon.amber {
-  background: rgba(245, 158, 11, 0.16);
-  color: #b45309;
-}
-
-.overview-icon.blue {
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-}
-
-.overview-icon.rose {
-  background: rgba(225, 29, 72, 0.12);
-  color: #be123c;
-}
-
-.overview-label {
-  color: #64748b;
+.page-subtitle {
+  margin: 2px 0 0;
   font-size: 13px;
+  color: oklch(0.5 0.012 260);
+  max-width: 780px;
+}
+
+/* ── Overview strip ── */
+.overview-strip {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 14px 20px;
+  border-bottom: 1px solid oklch(0.89 0.006 260);
+  background: oklch(0.99 0.002 260);
+  flex-shrink: 0;
+}
+
+.overview-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 90px;
+  padding: 0 16px;
 }
 
 .overview-value {
-  font-size: 30px;
+  font-size: 22px;
   font-weight: 700;
-  color: #0f172a;
+  color: oklch(0.2 0.012 260);
+  line-height: 1.2;
 }
 
-.danger-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 241, 242, 0.9));
+.overview-label {
+  font-size: 12px;
+  color: oklch(0.5 0.012 260);
+  margin-top: 2px;
 }
 
-.workbench-grid {
+.overview-item.accent-green .overview-value { color: oklch(0.48 0.12 175); }
+.overview-item.accent-amber .overview-value { color: oklch(0.55 0.12 85); }
+.overview-item.accent-red .overview-value { color: oklch(0.48 0.16 25); }
+.overview-item.accent-gray .overview-value { color: oklch(0.45 0.01 260); }
+
+.overview-sep {
+  width: 1px;
+  height: 32px;
+  background: oklch(0.88 0.006 260);
+}
+
+.overview-spacer {
+  flex: 1;
+}
+
+/* ── Three column shell ── */
+.columns-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
+  grid-template-columns: 240px minmax(280px, 340px) 1fr;
+  flex: 1;
+  overflow: hidden;
 }
 
-.sidebar-card :deep(.el-card__body),
-.panel-card :deep(.el-card__body) {
-  padding: 18px;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.section-title {
-  color: #0f172a;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.section-subtitle {
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 13px;
-}
-
-.filter-stack {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.filter-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.target-groups {
+/* ── Left tree ── */
+.left-tree {
+  border-right: 1px solid oklch(0.89 0.006 260);
+  background: oklch(0.985 0.002 260);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  overflow: hidden;
 }
 
-.target-group {
-  display: grid;
-  gap: 12px;
+.tree-header {
+  padding: 16px 16px 10px;
+  flex-shrink: 0;
 }
 
-.group-title {
-  color: #334155;
+.tree-title {
   font-size: 13px;
   font-weight: 700;
+  color: oklch(0.35 0.012 260);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.target-card {
+.tree-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 16px;
+}
+
+.tree-group {
+  margin-bottom: 4px;
+}
+
+.tree-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
-  padding: 16px;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-  border-left: 4px solid var(--accent);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.98));
-  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  font-size: 13px;
+  color: oklch(0.3 0.012 260);
+  transition: background 0.15s ease;
 }
 
-.target-card:hover,
-.target-card.active {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.08);
-  border-color: rgba(15, 23, 42, 0.12);
+.tree-group-btn:hover {
+  background: oklch(0.94 0.006 260);
 }
 
-.target-card.inactive {
-  opacity: 0.72;
+.tree-group-btn.open {
+  font-weight: 600;
 }
 
-.target-card-top,
-.target-meta,
-.target-metrics {
+.tree-chevron {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  color: oklch(0.5 0.012 260);
+}
+
+.tree-group-name {
+  flex: 1;
+  text-align: left;
+}
+
+.tree-group-count {
+  font-size: 11px;
+  color: oklch(0.5 0.012 260);
+  background: oklch(0.92 0.006 260);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.tree-items {
+  padding-left: 20px;
+}
+
+.tree-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: oklch(0.38 0.012 260);
+  transition: background 0.15s ease;
+  text-align: left;
 }
 
-.target-label {
-  color: #0f172a;
-  font-size: 16px;
-  font-weight: 700;
+.tree-item:hover {
+  background: oklch(0.93 0.006 260);
 }
 
-.target-key {
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 12px;
-  word-break: break-all;
+.tree-item.active {
+  background: oklch(0.9 0.03 200);
+  color: oklch(0.35 0.08 230);
+  font-weight: 600;
 }
 
-.target-meta,
-.target-metrics {
-  margin-top: 10px;
-  color: #475569;
-  font-size: 12px;
-  flex-wrap: wrap;
+.tree-item-name {
+  flex: 1;
 }
 
-.target-alert {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(190, 24, 93, 0.08);
-  color: #9f1239;
-  font-size: 12px;
-  line-height: 1.6;
+.tree-item-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.target-alert.muted {
-  background: rgba(100, 116, 139, 0.08);
-  color: #475569;
-}
-
-.detail-column {
+/* ── Middle list ── */
+.mid-list {
+  border-right: 1px solid oklch(0.89 0.006 260);
+  background: oklch(0.99 0.002 260);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  overflow: hidden;
 }
 
-.detail-hero {
-  padding: 24px 24px 20px;
-  background:
-    radial-gradient(circle at top right, rgba(251, 191, 36, 0.18), transparent 32%),
-    linear-gradient(135deg, #fffdf7 0%, #ffffff 52%, #f0fdfa 100%);
+.mid-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 10px;
+  flex-shrink: 0;
 }
 
-.detail-hero-content {
+.mid-list-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: oklch(0.35 0.012 260);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mid-list-count {
+  font-size: 11px;
+  color: oklch(0.5 0.012 260);
+  background: oklch(0.92 0.006 260);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.mid-list-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Prompt card ── */
+.prompt-card {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid oklch(0.9 0.006 260);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prompt-card:hover {
+  border-color: oklch(0.78 0.03 215);
+}
+
+.prompt-card.active {
+  border-color: oklch(0.72 0.06 220);
+  box-shadow: 0 0 0 2px oklch(0.72 0.06 220 / 0.25);
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: oklch(0.2 0.012 260);
+}
+
+.card-location {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: oklch(0.48 0.012 260);
+  line-height: 1.4;
+}
+
+.card-key {
+  margin-top: 1px;
+  font-size: 11px;
+  color: oklch(0.55 0.01 260);
+}
+
+.card-meta {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: oklch(0.55 0.012 260);
+}
+
+/* ── Tags ── */
+.card-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.tag-blue {
+  background: oklch(0.92 0.03 240);
+  color: oklch(0.42 0.08 235);
+}
+
+.tag-green {
+  background: oklch(0.92 0.06 165);
+  color: oklch(0.45 0.1 165);
+}
+
+.tag-amber {
+  background: oklch(0.93 0.08 85);
+  color: oklch(0.5 0.1 80);
+}
+
+.tag-red {
+  background: oklch(0.93 0.06 25);
+  color: oklch(0.48 0.14 22);
+}
+
+.tag-gray {
+  background: oklch(0.92 0.006 260);
+  color: oklch(0.45 0.01 260);
+}
+
+/* ── Right panel ── */
+.right-panel {
+  background: oklch(0.99 0.002 260);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.right-panel.empty-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid oklch(0.9 0.006 260);
+  flex-shrink: 0;
 }
 
-.detail-hero h2 {
-  margin: 10px 0 8px;
-  font-size: 28px;
-  color: #0f172a;
-}
-
-.detail-hero p {
-  margin: 0;
-  max-width: 720px;
-  color: #475569;
-  line-height: 1.7;
-}
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.version-strip,
-.metric-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.version-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 18px;
-}
-
-.version-pill,
-.metric-stat,
-.graph-block,
-.graph-focus,
-.cloud-node,
-.run-item {
-  border-radius: 18px;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-  background: #fff;
-}
-
-.version-pill {
-  padding: 14px 16px;
-  background: rgba(15, 118, 110, 0.08);
-}
-
-.version-pill.danger {
-  background: rgba(190, 24, 93, 0.08);
-}
-
-.version-pill .label,
-.metric-stat span,
-.graph-label {
-  display: block;
-  font-size: 12px;
-  color: #64748b;
-}
-
-.version-pill strong,
-.metric-stat strong {
-  display: block;
-  margin-top: 6px;
-  color: #0f172a;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  gap: 18px;
-}
-
-.panel-card.full-width {
-  grid-column: 1 / -1;
-}
-
-.config-form {
+.panel-header-left {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.config-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+.panel-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: oklch(0.18 0.012 260);
+  margin: 0;
+  line-height: 1.25;
 }
 
-.config-footer {
+.panel-badges {
+  display: flex;
+  gap: 6px;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.panel-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 20px;
+  padding: 10px 20px;
+  border-bottom: 1px solid oklch(0.92 0.006 260);
+  flex-shrink: 0;
+}
+
+.meta-item {
+  display: flex;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.meta-label {
+  color: oklch(0.5 0.01 260);
+  white-space: nowrap;
+  min-width: 60px;
+}
+
+.meta-value {
+  color: oklch(0.25 0.012 260);
+}
+
+.meta-value.mono {
+  font-family: "ui-monospace", "SF Mono", "Menlo", "Consolas", monospace;
+  font-size: 11.5px;
+}
+
+/* ── Tab bar ── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  border-bottom: 1px solid oklch(0.9 0.006 260);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  padding: 10px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 13px;
+  color: oklch(0.5 0.012 260);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-btn:hover {
+  color: oklch(0.25 0.012 260);
+}
+
+.tab-btn.active {
+  color: oklch(0.35 0.08 230);
+  border-bottom-color: oklch(0.5 0.1 235);
+  font-weight: 600;
+}
+
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Editor ── */
+.editor-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editor-meta-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 6px 20px;
+  flex-shrink: 0;
+}
+
+.editor-meta {
+  font-size: 11.5px;
+  color: oklch(0.5 0.01 260);
+}
+
+.prompt-editor {
+  flex: 1;
+  width: 100%;
+  padding: 16px 20px;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: "ui-monospace", "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: oklch(0.2 0.012 260);
+  background: oklch(0.985 0.002 260);
+  tab-size: 2;
+}
+
+.prompt-editor:focus {
+  background: #fff;
+}
+
+.editor-footer {
+  padding: 8px 20px 12px;
+  border-top: 1px solid oklch(0.92 0.006 260);
+  flex-shrink: 0;
+}
+
+.change-input {
+  max-width: 360px;
+}
+
+/* ── Diff ── */
+.diff-panel {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.diff-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
+  height: 100%;
 }
 
-.switch-line {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: #334155;
-  font-size: 13px;
-}
-
-.metric-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 16px;
-}
-
-.metric-stat {
-  padding: 14px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(241, 245, 249, 0.92));
-}
-
-.metric-stat strong {
-  font-size: 22px;
-}
-
-.run-list {
+.diff-col {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-col-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: oklch(0.3 0.012 260);
+  padding-bottom: 8px;
+  border-bottom: 1px solid oklch(0.9 0.006 260);
+  flex-shrink: 0;
+}
+
+.diff-content {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 0;
+  font-family: "ui-monospace", "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: oklch(0.25 0.012 260);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── History ── */
+.history-panel {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 20px;
+}
+
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-item {
+  padding: 12px 14px;
+  border: 1px solid oklch(0.9 0.006 260);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.version-item.current {
+  border-color: oklch(0.72 0.06 220);
+  background: oklch(0.97 0.02 225);
+}
+
+.version-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.run-item {
-  padding: 14px;
-}
-
-.run-title strong {
-  color: #0f172a;
-  font-size: 14px;
-}
-
-.run-error {
-  background: rgba(225, 29, 72, 0.08);
-  color: #9f1239;
-}
-
-.graph-columns {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 14px;
-  align-items: center;
-}
-
-.graph-block,
-.graph-focus {
-  min-height: 126px;
-  padding: 16px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.96));
-}
-
-.graph-label {
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: 12px;
-}
-
-.chip-list {
+.version-left {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: oklch(0.25 0.012 260);
+}
+
+.version-right {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
-.graph-focus {
-  text-align: center;
-  min-width: 210px;
-  background: linear-gradient(180deg, rgba(255, 247, 237, 0.98), rgba(236, 253, 245, 0.96));
+.version-date {
+  font-size: 11.5px;
+  color: oklch(0.5 0.01 260);
 }
 
-.focus-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: #0f172a;
-  color: #fff;
-  font-weight: 700;
+.version-summary {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: oklch(0.4 0.012 260);
 }
 
-.graph-node-cloud {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-top: 18px;
+.version-preview {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: oklch(0.98 0.003 260);
+  border-radius: 4px;
+  font-family: "ui-monospace", "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: oklch(0.4 0.01 260);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.cloud-node {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px;
-}
-
-.cloud-node.focused {
-  border-color: rgba(245, 158, 11, 0.5);
-  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(255, 255, 255, 1));
-}
-
-.empty-copy {
-  color: #94a3b8;
-  font-size: 13px;
-}
-
-.empty-detail {
-  display: grid;
-  place-items: center;
-  min-height: 620px;
-  padding: 40px 24px;
-  border-style: dashed;
-}
-
+/* ── Responsive ── */
 @media (max-width: 1400px) {
-  .workbench-grid,
-  .detail-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .overview-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .columns-shell {
+    grid-template-columns: 220px minmax(240px, 300px) 1fr;
   }
 }
 
-@media (max-width: 900px) {
-  .hero-panel,
-  .detail-hero-content,
-  .config-footer,
-  .graph-columns {
-    display: grid;
+@media (max-width: 1100px) {
+  .columns-shell {
     grid-template-columns: 1fr;
   }
 
-  .overview-grid,
-  .version-strip,
-  .metric-grid,
-  .config-row,
-  .filter-row {
+  .left-tree,
+  .mid-list {
+    display: none;
+  }
+
+  .panel-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .diff-columns {
     grid-template-columns: 1fr;
   }
 }

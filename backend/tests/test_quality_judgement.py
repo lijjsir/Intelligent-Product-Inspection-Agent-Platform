@@ -1,8 +1,29 @@
-import pytest
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+
+import pytest
 
 from agent.contracts import NormalizedAttachment, NormalizedRequest
 from agent.subgraphs.quality_judgement.graph import QualityJudgementSubgraph
+
+
+@pytest.fixture(autouse=True)
+def patch_runtime_sessions(monkeypatch):
+    class FakeSession:
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def close(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.get_session", fake_get_session)
 
 
 @pytest.mark.asyncio
@@ -144,7 +165,7 @@ expected_decision=FAIL
 
 
 @pytest.mark.asyncio
-async def test_quality_judgement_applies_dspy_review_gate_and_prompt_version(monkeypatch):
+async def test_quality_judgement_applies_runtime_review_gate_and_prompt_version(monkeypatch):
     file_text = """
 record_id=SCREW-PASS-02
 product_id=screw
@@ -212,11 +233,7 @@ expected_decision=PASS
         return FakeProfile()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.resolve_dspy_runtime_profile",
-        fake_runtime_profile,
-    )
-    monkeypatch.setattr(
-        "agent.subgraphs.inspection_task.graph.resolve_dspy_runtime_profile",
+        "agent.subgraphs.inspection_task.graph.resolve_runtime_profile",
         fake_runtime_profile,
     )
 
@@ -246,6 +263,8 @@ expected_decision=PASS
     assert output.persistable_output.stability.risk_level == "medium"
     assert output.persistable_output.quality_trace is not None
     assert output.persistable_output.quality_trace.prompt_version == "llm-native-review-gate-v4"
+    assert output.persistable_output.result is not None
+    assert (output.persistable_output.result.reasoning_chain or {}).get("standard_evaluation", {}).get("summary", "") == "由于当前证据阈值未达到配置要求，评审门禁阻止了自动放行。"
 
 
 @pytest.mark.asyncio

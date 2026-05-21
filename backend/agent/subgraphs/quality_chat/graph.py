@@ -26,7 +26,7 @@ from app.services.chat_trust_scoring_service import (
     build_pending_trust_score,
     trust_payload_from_score,
 )
-from app.services.dspy_runtime_service import build_runtime_prompt_section, resolve_dspy_runtime_profile
+from app.services.runtime_profile_service import build_runtime_prompt_section, resolve_runtime_profile
 from app.services.model_config_service import ModelConfigService
 from app.services.task_service import TaskService
 from infra.database.session import get_session
@@ -327,16 +327,17 @@ def _selected_rag_scope_node_ids(ext: dict[str, Any] | None) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def _dspy_runtime_meta(state: ChatState) -> dict[str, Any]:
-    return dict((state.get("metadata") or {}).get("dspy_runtime") or {})
+def _runtime_profile_meta(state: ChatState) -> dict[str, Any]:
+    metadata = dict(state.get("metadata") or {})
+    return dict(metadata.get("runtime_profile") or {})
 
 
-def _dspy_target_payload(state: ChatState, target_key: str) -> dict[str, Any]:
-    return dict(_dspy_runtime_meta(state).get("targets", {}).get(target_key, {}).get("config_payload") or {})
+def _runtime_target_payload(state: ChatState, target_key: str) -> dict[str, Any]:
+    return dict(_runtime_profile_meta(state).get("targets", {}).get(target_key, {}).get("config_payload") or {})
 
 
-def _dspy_prompt_section(state: ChatState, target_keys: list[str]) -> str:
-    runtime_meta = _dspy_runtime_meta(state)
+def _runtime_prompt_section(state: ChatState, target_keys: list[str]) -> str:
+    runtime_meta = _runtime_profile_meta(state)
     targets = {}
     for key in target_keys:
         target = dict(runtime_meta.get("targets", {}).get(key) or {})
@@ -367,11 +368,11 @@ def _dspy_prompt_section(state: ChatState, target_keys: list[str]) -> str:
 
 
 async def input_adapter(state: ChatState) -> ChatState:
-    runtime_profile = await resolve_dspy_runtime_profile(str(state["org_id"]), "quality_judgement")
+    runtime_profile = await resolve_runtime_profile(str(state["org_id"]), "quality_judgement")
     state["workflow_version"] = "quality_chat_v2"
     state["prompt_version"] = runtime_profile.active_prompt_version
     state["metadata"] = dict(state.get("metadata") or {})
-    state["metadata"]["dspy_runtime"] = runtime_profile.as_metadata()
+    state["metadata"]["runtime_profile"] = runtime_profile.as_metadata()
     state["ext"] = dict(state.get("ext") or {})
     state["history"] = list(state.get("history") or [])
     state["intent"] = str(state.get("intent") or "")
@@ -399,7 +400,7 @@ async def planner(state: ChatState) -> ChatState:
     history = list(state.get("history") or [])
     pending = _latest_pending_task(history)
     selected_rag = _selected_rag_space(state.get("ext") or {})
-    planner_payload = _dspy_target_payload(state, "quality_judgement.planner")
+    planner_payload = _runtime_target_payload(state, "quality_judgement.planner")
     extra_task_keywords = [str(item).strip().lower() for item in list(planner_payload.get("task_keywords") or []) if str(item).strip()]
     if pending is not None:
         state["intent"] = "task_followup"
@@ -484,7 +485,7 @@ async def knowledge(state: ChatState) -> ChatState:
     if scope_node_ids:
         payload_filter["ancestor_node_ids"] = scope_node_ids
     retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
-    knowledge_payload = _dspy_target_payload(state, "quality_judgement.knowledge")
+    knowledge_payload = _runtime_target_payload(state, "quality_judgement.knowledge")
     top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or policy_decision.top_k)))
     started_at = perf_counter()
     docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
@@ -535,15 +536,16 @@ async def reasoning(state: ChatState) -> ChatState:
         else:
             sub_route = "general_chat"
 
-    prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+    prompt, user_message, temperature, prompt_meta = await PromptBuilder.build_runtime(
         agent=agent_name,
         sub_route=sub_route,
         query=query,
+        org_id=str(state["org_id"]),
         history=history,
         retrieved_docs=docs if sub_route in {"rag_qa", "quality_qa", "inspection_execute"} else None,
         task_draft=draft if sub_route in {"task_create"} else None,
         action_state=action_state,
-        runtime_prompt_section=_dspy_prompt_section(
+        runtime_prompt_section=_runtime_prompt_section(
             state,
             [
                 "quality_judgement.planner",
@@ -814,18 +816,41 @@ async def _persist_rag_query_log(session, state: ChatState) -> None:
     if bool(metrics.get("skipped")):
         return
     rag_repo = RagAnalysisRepository(session, str(state["org_id"]))
-    citation_count = len(list(state.get("citations") or []))
+    citations = [dict(item) for item in list(state.get("citations") or []) if isinstance(item, dict)]
+    retrieved_chunks = [dict(item) for item in list(state.get("retrieved_chunks") or []) if isinstance(item, dict)]
+    response_payload = dict(state.get("response_payload") or {})
+    citation_count = len(citations)
     hit_count = int(metrics.get("hit_count") or 0)
-    hit_rate = min(1.0, hit_count / 4) if hit_count else 0.0
+    top_k = max(int(metrics.get("top_k") or 0), 0)
+    hit_rate = min(1.0, hit_count / top_k) if hit_count and top_k else 0.0
     coverage = 0.0
     if hit_count > 0:
         coverage = min(1.0, citation_count / hit_count)
+    top_sources: list[str] = []
+    for item in [*retrieved_chunks, *citations]:
+        source = str(item.get("source") or "").strip()
+        if source and source not in top_sources:
+            top_sources.append(source)
+    expectation_check = response_payload.get("expectation_check")
+    expectation_matched = None
+    if isinstance(expectation_check, dict):
+        expectation_matched = expectation_check.get("matched")
+    verdict = response_payload.get("verdict")
+    if verdict is None:
+        result_card = response_payload.get("result_card")
+        if isinstance(result_card, dict):
+            verdict = result_card.get("verdict")
+    normalized_verdict = str(verdict).strip() if verdict is not None else ""
+    evidence_found = bool(hit_count > 0 or retrieved_chunks or top_sources)
+    evidence_used = bool(citations)
+    verdict_impacted = bool(normalized_verdict and response_payload.get("rule_hits"))
     await rag_repo.create_log(
         {
             "session_id": str(state["session_id"]),
             "user_id": str(state["user_id"]),
             "query": str(metrics.get("query") or state.get("query") or ""),
             "rag_space_id": metrics.get("rag_space_id"),
+            "top_k": top_k,
             "hit_count": hit_count,
             "hit_rate": round(hit_rate, 4),
             "citation_coverage": round(coverage, 4),
@@ -839,6 +864,24 @@ async def _persist_rag_query_log(session, state: ChatState) -> None:
                 "intent": state.get("intent"),
                 "empty_recall": bool(metrics.get("empty_recall")),
                 "top_score": float(metrics.get("top_score") or 0.0),
+                "top_sources": top_sources[:5],
+                "rule_hits": [str(item) for item in list(response_payload.get("rule_hits") or []) if str(item).strip()],
+                "verdict": normalized_verdict or None,
+                "product_family": str((state.get("metadata") or {}).get("product_family") or "").strip() or None,
+                "expectation_matched": expectation_matched,
+                "evidence_found": evidence_found,
+                "evidence_used": evidence_used,
+                "verdict_impacted": verdict_impacted,
+                "retrieval_config": {
+                    "rag_space_id": metrics.get("rag_space_id"),
+                    "rag_space_name": str((((state.get("ext") or {}).get("selected_rag_space") or {}).get("name") or "")).strip() or None,
+                    "top_k": top_k,
+                    "scope_node_ids": _selected_rag_scope_node_ids(state.get("ext") or {}),
+                },
+                "retrieved_chunks": retrieved_chunks,
+                "used_citations": citations,
+                "answer": str(response_payload.get("answer") or "").strip() or None,
+                "result": response_payload.get("result") or response_payload.get("result_card"),
             },
         }
     )
@@ -876,7 +919,7 @@ async def response_writer(state: ChatState) -> ChatState:
         "created_task": dict(state.get("created_task") or {}) or None,
         "selected_rag_space": selected_rag,
         "attachment_echo": attachments,
-        "dspy_runtime": _dspy_runtime_meta(state),
+        "runtime_profile": _runtime_profile_meta(state),
         "message_type": _message_type_for_state(state),
     }
     state["trust_scoring_payload"] = _build_trust_scoring_request(state, state["response_payload"])

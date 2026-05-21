@@ -1,35 +1,35 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.exceptions import NotFoundError
 from app.core.permissions import require_role, ROLE_ADMIN
 from app.schemas.agent_ops import (
     AgentDefinitionCreate,
     AgentDefinitionResponse,
     AgentDefinitionUpdate,
     AgentDefinitionListQuery,
+    AgentDetailResponse,
+    AgentRuntimeEventResponse,
     IntentRouteCreate,
     IntentRouteResponse,
     IntentRouteUpdate,
     IntentRouteListQuery,
+    PauseRouteRequest,
     PromptVersionCreate,
     PromptVersionResponse,
     PromptVersionUpdate,
     PromptVersionListQuery,
-    PromptDSPyConfigPayload,
-    PromptDSPyConfigResponse,
-    PromptOptimizationConfigPayload,
-    PromptOptimizationConfigResponse,
-    PromptOptimizationRunResponse,
-    PromptOptimizationTargetListQuery,
-    PromptOptimizationTargetResponse,
-    PromptOptimizationTargetsResponse,
     RagAnalysisResponse,
+    RagTraceDetailResponse,
     AgentRuntimeOverviewResponse,
     AgentRuntimeInstanceResponse,
     AgentTopologyResponse,
     RoutingStrategyOverviewResponse,
+    RoutingCurrentResponse,
+    RouteSimulateRequest,
+    RouteSimulateResponse,
+    RouteEventItem,
+    RoutingMetricsResponse,
 )
 from app.schemas.agent_management import (
     BatchUpdateStatusRequest,
@@ -42,7 +42,7 @@ from app.schemas.agent_management import (
 )
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.user import CurrentUser
-from app.services.agent_ops_service import AgentOpsService, run_dspy_compile_job
+from app.services.agent_ops_service import AgentOpsService
 
 router = APIRouter(prefix="/agent-ops", tags=["Agent Operations"])
 
@@ -86,11 +86,18 @@ async def create_agent(
 @router.get("/agents/topology", response_model=ResponseEnvelope[AgentTopologyResponse])
 async def get_agents_topology(
     subgraph_key: str = Query(default="all"),
+    mode: str = Query(default="design", description="design / runtime"),
+    include_planned: bool = Query(default=True, description="whether planned subgraphs should be included"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_agents_topology(subgraph_key))
+    topology = await svc.get_agents_topology(
+        subgraph_key=subgraph_key,
+        mode=mode,
+        include_planned=include_planned,
+    )
+    return ResponseEnvelope(data=topology)
 
 
 @router.get("/agents/{id}", response_model=ResponseEnvelope[AgentDefinitionResponse])
@@ -226,88 +233,6 @@ async def delete_prompt(
     return ResponseEnvelope(data={"deleted": True})
 
 
-@router.get(
-    "/prompt-optimization/targets",
-    response_model=ResponseEnvelope[PromptOptimizationTargetsResponse],
-)
-async def list_prompt_optimization_targets(
-    query: PromptOptimizationTargetListQuery = Depends(),
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.list_prompt_optimization_targets(query))
-
-
-@router.put(
-    "/prompt-optimization/targets/{target_key}/config",
-    response_model=ResponseEnvelope[PromptOptimizationConfigResponse],
-)
-async def update_prompt_optimization_config(
-    target_key: str,
-    body: PromptOptimizationConfigPayload,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.update_prompt_optimization_config(target_key, body))
-
-
-@router.post(
-    "/prompt-optimization/targets/{target_key}/compile",
-    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
-)
-async def compile_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    data = await svc.compile_prompt_optimization_target(target_key, schedule_compile=False)
-    await db.commit()
-    asyncio.create_task(run_dspy_compile_job(current.org_id, current.user_id, target_key, data.id))
-    return ResponseEnvelope(data=data)
-
-
-@router.get(
-    "/prompt-optimization/targets/{target_key}/runs",
-    response_model=ResponseEnvelope[list[PromptOptimizationRunResponse]],
-)
-async def list_prompt_optimization_runs(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.list_prompt_optimization_runs(target_key))
-
-
-@router.post(
-    "/prompt-optimization/targets/{target_key}/rollback",
-    response_model=ResponseEnvelope[PromptOptimizationRunResponse],
-)
-async def rollback_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.rollback_prompt_optimization_target(target_key))
-
-
-@router.get(
-    "/prompt-optimization/targets/{target_key}",
-    response_model=ResponseEnvelope[PromptOptimizationTargetResponse],
-)
-async def get_prompt_optimization_target(
-    target_key: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_prompt_optimization_target(target_key))
-
-
 @router.get("/routes", response_model=ResponseEnvelope[PagedResponse[IntentRouteResponse]])
 async def list_routes(
     query: IntentRouteListQuery = Depends(),
@@ -328,6 +253,48 @@ async def get_routing_strategy(
 ):
     svc = _build_service(current, db)
     return ResponseEnvelope(data=await svc.get_routing_strategy())
+
+
+@router.get("/routing/current", response_model=ResponseEnvelope[RoutingCurrentResponse])
+async def get_routing_current(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取当前系统真实路由策略视图（非配置版，展示真实路由结构）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_current())
+
+
+@router.post("/routing/simulate", response_model=ResponseEnvelope[RouteSimulateResponse])
+async def simulate_route(
+    body: RouteSimulateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """模拟路由 — 调用真实路由决策逻辑，展示路由结果，不执行Agent"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.simulate_route(body))
+
+
+@router.get("/routing/events", response_model=ResponseEnvelope[list[RouteEventItem]])
+async def get_routing_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取最近路由事件"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_events(limit=limit))
+
+
+@router.get("/routing/metrics", response_model=ResponseEnvelope[RoutingMetricsResponse])
+async def get_routing_metrics(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取路由统计指标（最近24h）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_routing_metrics())
 
 
 @router.post("/routes", response_model=ResponseEnvelope[IntentRouteResponse], status_code=201)
@@ -394,6 +361,20 @@ async def get_rag_analysis(
     return ResponseEnvelope(data=await svc.get_rag_analysis(global_scope=_use_global_scope(current)))
 
 
+@router.get("/rag-analysis/traces/{trace_id}", response_model=ResponseEnvelope[RagTraceDetailResponse])
+async def get_rag_trace_detail(
+    trace_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    svc = _build_service(current, db)
+    try:
+        data = await svc.get_rag_trace_detail(trace_id, global_scope=_use_global_scope(current))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ResponseEnvelope(data=data)
+
+
 @router.get("/runtime/overview", response_model=ResponseEnvelope[AgentRuntimeOverviewResponse])
 async def get_runtime_overview(
     current: CurrentUser = Depends(get_current_user),
@@ -448,25 +429,50 @@ async def get_route_graph(
     return ResponseEnvelope(data=await svc.get_route_graph(id))
 
 
-@router.get("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse | None])
-async def get_prompt_dspy(
-    id: str,
+@router.post("/runtime/agents/{runtime_key}/pause-route", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def pause_agent_route(
+    runtime_key: str,
+    body: PauseRouteRequest,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """暂停 Agent 路由 — 该 Agent 不再接收新请求"""
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.get_prompt_dspy(id))
+    return ResponseEnvelope(data=await svc.pause_route(runtime_key, body.reason))
 
 
-@router.put("/prompts/{id}/dspy", response_model=ResponseEnvelope[PromptDSPyConfigResponse])
-async def upsert_prompt_dspy(
-    id: str,
-    body: PromptDSPyConfigPayload,
+@router.post("/runtime/agents/{runtime_key}/resume-route", response_model=ResponseEnvelope[AgentRuntimeInstanceResponse])
+async def resume_agent_route(
+    runtime_key: str,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """恢复 Agent 路由 — 该 Agent 重新接收请求"""
     svc = _build_service(current, db)
-    return ResponseEnvelope(data=await svc.upsert_prompt_dspy(id, body))
+    return ResponseEnvelope(data=await svc.resume_route(runtime_key))
+
+
+@router.get("/agents/{agent_id}/detail", response_model=ResponseEnvelope[AgentDetailResponse])
+async def get_agent_detail(
+    agent_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """获取 Agent 完整详情（含绑定资源、操作记录）"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.get_agent_detail(agent_id))
+
+
+@router.get("/runtime/events", response_model=ResponseEnvelope[list[AgentRuntimeEventResponse]])
+async def list_runtime_events(
+    agent_id: str = Query(..., description="Agent ID"),
+    limit: int = Query(default=20, ge=1, le=100),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """查询 Agent 运行态操作事件日志"""
+    svc = _build_service(current, db)
+    return ResponseEnvelope(data=await svc.list_runtime_events(agent_id, limit=limit))
 
 
 @router.post("/agents/batch/status", response_model=ResponseEnvelope[BatchOperationResponse])

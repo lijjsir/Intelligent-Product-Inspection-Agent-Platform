@@ -7,6 +7,7 @@ from agent.contracts import (
     ClarificationRequest,
     NormalizedRequest,
     PersistableOutput,
+    RagQueryLog,
     ResultAggregate,
     RouteDecision,
     RouteSignals,
@@ -124,7 +125,8 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
     from agent.router.contracts import AgentRouteDecision, AgentRouterOutput
 
     class FakeAgentManagerService:
-        async def run_chat(self, payload: dict):
+        async def run_chat(self, payload: dict, db_session=None):
+            assert db_session is not None
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
                     selected_agent="chat",
@@ -360,4 +362,107 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
 
     assert success is True
     assert updates[0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(monkeypatch):
+    updates: list[dict] = []
+    rag_logs: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_log(self, data: dict):
+            rag_logs.append(data)
+            return None
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+
+    request = NormalizedRequest(
+        request_id="req-rag-detail",
+        workflow_run_id="wf-rag-detail",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="task_result",
+        answer="检测结论：PASS",
+        summary="inspection done",
+        route_decision=RouteDecision(
+            mode="router_enabled",
+            selected_agent="inspection_task",
+            sub_route="inspection_execute",
+            intent="inspection_execute",
+            reason="inspection flow",
+        ),
+        persistable_output=PersistableOutput(
+            rag_queries=[
+                RagQueryLog(
+                    query="苹果划痕 3mm 标准",
+                    rag_space_id="rag-food",
+                    top_k=6,
+                    hit_count=3,
+                    hit_rate=0.5,
+                    citation_coverage=0.67,
+                    latency_ms=188,
+                    source_graph="inspection_task",
+                    agent_name="inspection_task",
+                    sub_route="inspection_execute",
+                    trace_id="trace-rag-detail",
+                    top_score=0.92,
+                    metadata={
+                        "top_sources": ["apple-spec.pdf"],
+                        "rule_hits": ["apple.surface.scratch_limit"],
+                        "verdict": "pass",
+                        "product_family": "food",
+                        "expectation_matched": True,
+                        "retrieval_config": {"top_k": 6},
+                        "retrieved_chunks": [{"chunk_id": "chunk-1"}],
+                        "used_citations": [{"id": "rag-1"}],
+                        "answer": "检测结论：PASS",
+                        "result": {"verdict": "pass"},
+                    },
+                )
+            ]
+        ),
+    )
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is True
+    assert updates[0]["content"] == "检测结论：PASS"
+    assert len(rag_logs) == 1
+    assert rag_logs[0]["top_k"] == 6
+    assert rag_logs[0]["trace_id"] == "trace-rag-detail"
+    assert rag_logs[0]["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
+    assert rag_logs[0]["metadata_json"]["used_citations"][0]["id"] == "rag-1"
 

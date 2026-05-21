@@ -48,7 +48,7 @@ from agent.llm.gateway import LLMGateway
 from agent.prompts.prompt_builder import PromptBuilder
 from agent.rag.rag_policy import RagPolicy
 from agent.tools.file_parsers import parse_file_content
-from app.services.dspy_runtime_service import resolve_dspy_runtime_profile
+from app.services.runtime_profile_service import resolve_runtime_profile
 from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.model_config_service import ModelConfigService
@@ -325,10 +325,11 @@ class InspectionTaskGraph:
 
         # ── PromptBuilder ──
         history = list(request.ext.get("history") or [])
-        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        system_prompt, user_message, temperature, prompt_meta = await PromptBuilder.build_runtime(
             agent=agent,
             sub_route=sub_route,
             query=request.query,
+            org_id=request.org_id,
             history=history,
             retrieved_docs=retrieved_docs if retrieved_docs else None,
         )
@@ -424,10 +425,11 @@ class InspectionTaskGraph:
 
         # ── PromptBuilder ──
         history = list(request.ext.get("history") or [])
-        system_prompt, user_message, temperature, prompt_meta = PromptBuilder.build(
+        system_prompt, user_message, temperature, prompt_meta = await PromptBuilder.build_runtime(
             agent=agent,
             sub_route=sub_route,
             query=request.query,
+            org_id=request.org_id,
             history=history,
             task_draft=context["task_draft"],
             action_state="awaiting_task_details",
@@ -530,8 +532,8 @@ class InspectionTaskGraph:
 
     async def _run_structured_inspection(self, request: NormalizedRequest) -> AgentOutput:
         started_at = perf_counter()
-        runtime_profile = await resolve_dspy_runtime_profile(request.org_id, "quality_judgement")
-        contract_target = runtime_profile.get("quality_judgement.contract_inferencer_dspy")
+        runtime_profile = await resolve_runtime_profile(request.org_id, "quality_judgement")
+        contract_target = runtime_profile.get("quality_judgement.contract_inferencer")
         planner_target = runtime_profile.get("quality_judgement.planner")
         knowledge_target = runtime_profile.get("quality_judgement.knowledge_router")
         synthesizer_target = runtime_profile.get("quality_judgement.evidence_synthesizer")
@@ -632,17 +634,19 @@ class InspectionTaskGraph:
             request=request, product_id=product_id, product_family=product_family,
             product_name=product_name, spec_code=spec_code, structured_record=structured_record,
         )
+        retrieval_top_k = int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4
         async with get_session() as session:
             rag_retrieval_service = RagRetrievalService(session, org_id=request.org_id, user_id=request.user_id)
             rag_result = await rag_retrieval_service.search(
                 rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
                 query=retrieval_query,
-                top_k=int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4,
+                top_k=retrieval_top_k,
                 scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
             )
 
         file_citations = _build_file_citations(request, parsed_files)
         citations = _merge_citations(file_citations, list(rag_result.get("hits") or []))
+        rag_used_citations = [dict(item) for item in citations if str(item.get("kind") or "") == "rag"]
 
         reasoning_chain = {
             "summary": "已基于结构化文件、产品类别解析结果和 RAG 证据完成检验标准评估。",
@@ -651,7 +655,7 @@ class InspectionTaskGraph:
             "source_files": [{"name": item["name"], "url": item.get("url")} for item in parsed_files],
             "trace": {"trace_id": request.workflow_run_id or request.request_id, "trace_url": None,
                       "model_key": "quality_judgement"},
-            "langfuse_scores": [], "dspy_runtime": runtime_profile.as_metadata(),
+            "langfuse_scores": [], "runtime_profile": runtime_profile.as_metadata(),
             "knowledge_router": {
                 "selected_rag_space_id": request.ext.get("selected_rag_space_id"),
                 "selected_rag_space_name": rag_result.get("rag_space_name"),
@@ -691,8 +695,8 @@ class InspectionTaskGraph:
             verdict = "manual_required"
             evaluation = {
                 **evaluation, "verdict": verdict,
-                "summary": "由于当前证据阈值未达到配置要求，DSPy 评审门禁阻止了自动放行。",
-                "reasons": [*list(evaluation.get("reasons") or []), "dspy_review_gate_blocked_auto_pass"],
+                "summary": "由于当前证据阈值未达到配置要求，评审门禁阻止了自动放行。",
+                "reasons": [*list(evaluation.get("reasons") or []), "review_gate_blocked_auto_pass"],
             }
 
         rag_hits = list(rag_result.get("hits") or [])
@@ -712,6 +716,7 @@ class InspectionTaskGraph:
             spec_code=spec_code, verdict=verdict, overall_score=overall_score, risk_level=risk_level,
             evaluation=evaluation, rag_summary=rag_summary, expectation_check=expectation_check,
         )
+        verdict_rule_hits = list(dict.fromkeys(result_card["failed_rules"]))
 
         answer_lines = [
             _build_answer_title(product_family=product_family, product_id=product_id,
@@ -778,7 +783,8 @@ class InspectionTaskGraph:
             rag_queries=[RagQueryLog(
                 query=retrieval_query,
                 rag_space_id=str(rag_result.get("rag_space_id") or "") or None,
-                hit_count=len(rag_hits), hit_rate=1.0 if rag_hits else 0.0,
+                top_k=retrieval_top_k,
+                hit_count=len(rag_hits), hit_rate=round(min(1.0, len(rag_hits) / max(retrieval_top_k, 1)), 4),
                 citation_coverage=float(ai_gate.get("evidence_score") or 0.0),
                 latency_ms=latency_ms, source_graph="inspection_task",
                 agent_name="inspection_task",
@@ -790,10 +796,23 @@ class InspectionTaskGraph:
                          "product_name": product_name, "spec_code": spec_code, "verdict": verdict,
                          "top_score": float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
                          "expectation_matched": None if not expectation_check else expectation_check["matched"],
+                         "evidence_found": bool(rag_hits),
+                         "evidence_used": bool(rag_used_citations),
+                         "verdict_impacted": bool(verdict_rule_hits),
                          "rag_space_name": rag_result.get("rag_space_name"),
                          "top_sources": rag_summary["top_sources"],
-                         "rule_hits": list(dict.fromkeys(result_card["failed_rules"])),
-                         "dspy_runtime": runtime_profile.as_metadata()},
+                         "rule_hits": verdict_rule_hits,
+                         "retrieval_config": {
+                             "rag_space_id": str(rag_result.get("rag_space_id") or "") or None,
+                             "rag_space_name": str(rag_result.get("rag_space_name") or "") or None,
+                             "top_k": retrieval_top_k,
+                             "scope_node_ids": list(request.ext.get("selected_rag_scope_node_ids") or []),
+                         },
+                         "retrieved_chunks": rag_hits,
+                         "used_citations": rag_used_citations,
+                         "answer": answer,
+                         "result": result_card,
+                         "runtime_profile": runtime_profile.as_metadata()},
             )],
         )
 
@@ -819,7 +838,7 @@ class InspectionTaskGraph:
                       "evaluation": evaluation, "task_draft": task_draft,
                       "product_family": product_family, "result_card": result_card,
                       "expectation_check": expectation_check, "rag_summary": rag_summary,
-                      "dspy_runtime": runtime_profile.as_metadata()},
+                      "runtime_profile": runtime_profile.as_metadata()},
         )
 
 
