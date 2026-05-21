@@ -3,7 +3,6 @@ import type {
   AgentLifecycleStatus,
   AgentRuntimeInstance,
   AgentRuntimeOverview,
-  AgentRuntimeStatus,
   AgentTopology,
   TopologyNode,
 } from "@/types/agent-ops.types";

@@ -1,70 +1,95 @@
 <template>
   <div class="flex h-screen overflow-hidden bg-zinc-50">
-    <!-- Sidebar -->
-    <aside class="flex h-screen w-52 shrink-0 flex-col border-r border-zinc-200 bg-white">
-      <div class="px-4 py-4">
-        <div class="text-lg font-bold tracking-wider text-zinc-900">PIAP</div>
-        <div class="text-2xs text-zinc-400 tracking-widest uppercase mt-0.5">智能检测平台</div>
+    <aside v-if="showSidebar" class="flex h-screen w-56 shrink-0 flex-col border-r border-zinc-200 bg-white">
+      <div class="border-b border-zinc-100 px-5 py-5">
+        <div class="text-[2rem] font-bold tracking-[0.08em] text-zinc-950">PIAP</div>
+        <div class="mt-1 text-[11px] tracking-[0.2em] text-zinc-400">智能检测平台</div>
       </div>
 
-      <nav class="flex-1 flex flex-col gap-0.5 px-2 overflow-y-auto">
+      <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
         <template v-for="entry in menu" :key="entry.title">
-          <!-- Workspace group (admin only) -->
-          <el-collapse v-if="isMenuGroup(entry) && showWorkspaceGroups" v-model="activeNames" class="nav-collapse">
+          <el-collapse
+            v-if="isMenuGroup(entry) && showWorkspaceGroups"
+            v-model="activeNames"
+            class="nav-collapse"
+          >
             <el-collapse-item :name="entry.title">
               <template #title>
                 <div class="flex items-center gap-2 px-2 text-[13px] font-medium text-zinc-600">
-                  <el-icon class="text-[15px] text-zinc-400"><component :is="iconMap[entry.icon || '']" /></el-icon>
+                  <el-icon class="text-[15px] text-zinc-400">
+                    <component :is="iconMap[entry.icon || '']" />
+                  </el-icon>
                   <span>{{ entry.title }}</span>
                 </div>
               </template>
-              <div class="flex flex-col gap-0.5 pl-2">
+              <div class="flex flex-col gap-1 pl-2">
                 <template v-for="item in entry.items" :key="item.path">
-                  <RouterLink v-if="!item.placeholder" :to="item.path" class="nav-link" active-class="nav-link-active">
+                  <RouterLink
+                    v-if="!item.placeholder"
+                    :to="item.path"
+                    class="nav-link"
+                    active-class="nav-link-active"
+                  >
                     <span>{{ item.title }}</span>
                   </RouterLink>
-                  <span v-else class="nav-link text-zinc-400 cursor-not-allowed">
+                  <span v-else class="nav-link cursor-not-allowed text-zinc-400">
                     <span>{{ item.title }}</span>
-                    <span class="text-2xs text-zinc-300 ml-1">开发中</span>
+                    <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
                   </span>
                 </template>
               </div>
             </el-collapse-item>
           </el-collapse>
 
-          <!-- Flat menu item (non-admin) -->
-          <template v-else-if="isMenuItem(entry) && !isMenuGroup(entry)">
-            <RouterLink v-if="!entry.placeholder" :to="entry.path" class="nav-link" active-class="nav-link-active">
+          <div v-else-if="isMenuGroup(entry)" class="nav-section">
+            <div class="nav-section-head">
+              <div :class="['nav-section-title', isGroupActive(entry) && 'nav-section-title-active']">
+                {{ entry.title }}
+              </div>
+              <span v-if="isGroupActive(entry)" class="nav-section-badge">当前工作区</span>
+            </div>
+            <div class="nav-subnav">
+              <template v-for="item in entry.items" :key="item.path">
+                <RouterLink
+                  v-if="!item.placeholder"
+                  :to="item.path"
+                  class="nav-sublink"
+                  active-class="nav-link-active"
+                >
+                  <span>{{ item.title }}</span>
+                </RouterLink>
+                <span v-else class="nav-sublink cursor-not-allowed text-zinc-400">
+                  <span>{{ item.title }}</span>
+                  <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
+                </span>
+              </template>
+            </div>
+          </div>
+
+          <template v-else>
+            <RouterLink
+              v-if="!entry.placeholder"
+              :to="entry.path"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
               <span>{{ entry.title }}</span>
             </RouterLink>
-            <span v-else class="nav-link text-zinc-400 cursor-not-allowed">
+            <span v-else class="nav-link cursor-not-allowed text-zinc-400">
               <span>{{ entry.title }}</span>
-              <span class="text-2xs text-zinc-300 ml-1">开发中</span>
+              <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
             </span>
-          </template>
-
-          <!-- Flat group items (non-admin sees group items flattened) -->
-          <template v-else-if="isMenuGroup(entry) && !showWorkspaceGroups">
-            <template v-for="item in entry.items" :key="item.path">
-              <RouterLink v-if="!item.placeholder" :to="item.path" class="nav-link" active-class="nav-link-active">
-                <span>{{ item.title }}</span>
-              </RouterLink>
-              <span v-else class="nav-link text-zinc-400 cursor-not-allowed">
-                <span>{{ item.title }}</span>
-                <span class="text-2xs text-zinc-300 ml-1">开发中</span>
-              </span>
-            </template>
           </template>
         </template>
       </nav>
     </aside>
 
-    <!-- Main content -->
     <div class="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
-      <!-- Topbar -->
-      <header class="h-12 flex items-center justify-between px-5 bg-white border-b border-zinc-200 shrink-0 gap-4">
-        <div class="flex items-center gap-4 min-w-0 flex-wrap">
-          <span class="text-sm font-semibold text-zinc-900 whitespace-nowrap">PIAP 控制台</span>
+      <header
+        class="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-zinc-200 bg-white px-5"
+      >
+        <div class="flex min-w-0 flex-wrap items-center gap-4">
+          <span class="whitespace-nowrap text-sm font-semibold text-zinc-900">PIAP 控制台</span>
 
           <template v-if="showChatControls">
             <el-select
@@ -88,9 +113,16 @@
           </template>
         </div>
 
-        <div class="flex items-center gap-3 flex-wrap shrink-0">
-          <span class="px-2.5 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-2xs tracking-wider font-semibold uppercase">{{ workspaceLabel }}</span>
-          <RouterLink to="/app/profile" class="flex flex-col items-end leading-tight text-zinc-700 hover:text-zinc-900 transition-colors">
+        <div class="flex shrink-0 flex-wrap items-center gap-3">
+          <span
+            class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-600"
+          >
+            {{ workspaceLabel }}
+          </span>
+          <RouterLink
+            to="/app/profile"
+            class="flex flex-col items-end leading-tight text-zinc-700 transition-colors hover:text-zinc-900"
+          >
             <span class="text-[13px] font-medium">{{ profileName }}</span>
             <span class="text-[11px] text-zinc-400">{{ roleLabel }}</span>
           </RouterLink>
@@ -98,8 +130,7 @@
         </div>
       </header>
 
-      <!-- Page content -->
-      <main class="flex-1 overflow-y-auto overflow-x-hidden p-4">
+      <main class="flex-1 overflow-x-hidden overflow-y-auto p-4">
         <RouterView />
       </main>
     </div>
@@ -110,23 +141,18 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import {
-  Management,
-  Monitor,
-  Setting,
-} from "@element-plus/icons-vue";
+import { Management, Monitor, Setting } from "@element-plus/icons-vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useUserStore } from "@/stores/user.store";
 import {
   ROLE_ADMIN,
-  ROLE_APP_DEVELOPER,
-  ROLE_PLATFORM_OPERATOR,
   ROLE_ALGORITHM_ENGINEER,
-  ROLE_USER,
+  ROLE_APP_DEVELOPER,
   ROLE_EXPERT,
+  ROLE_USER,
 } from "@/constants/roles";
-import { useMenu, type MenuItem, type MenuGroup } from "@/composables/useMenu";
+import { useMenu, type MenuGroup, type MenuItem } from "@/composables/useMenu";
 
 const router = useRouter();
 const route = useRoute();
@@ -136,45 +162,59 @@ const chatStore = useChatStore();
 
 const { menu, primaryRole, showWorkspaceGroups } = useMenu();
 
+const showSidebar = computed(() => primaryRole.value === ROLE_APP_DEVELOPER);
+
 const activeNames = ref<string[]>([]);
 const chatInitialized = ref(false);
 
 const isMenuGroup = (entry: MenuItem | MenuGroup): entry is MenuGroup => "items" in entry;
-const isMenuItem = (entry: MenuItem | MenuGroup): entry is MenuItem => !("items" in entry);
 
-const iconMap: Record<string, any> = {
+const iconMap: Record<string, unknown> = {
   Monitor,
   Setting,
   Management,
 };
 
 const canChat = computed(() => {
-  const r = primaryRole.value;
-  return r === ROLE_USER || r === ROLE_EXPERT;
+  const role = primaryRole.value;
+  return role === ROLE_USER || role === ROLE_EXPERT;
 });
 
-const showChatControls = computed(() => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"));
+const showChatControls = computed(
+  () => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"),
+);
 
-const profileName = computed(() => userStore.current?.username || auth.username || auth.userId || "当前用户");
+const profileName = computed(
+  () => userStore.current?.username || auth.username || auth.userId || "当前用户",
+);
 
 const workspaceLabel = computed(() => {
   switch (auth.defaultWorkspace) {
-    case "app": return "应用";
-    case "ops": return "运维";
-    case "governance": return "治理";
-    default: return auth.defaultWorkspace || "工作台";
+    case "app":
+      return "应用";
+    case "ops":
+      return "运维";
+    case "governance":
+      return "治理";
+    default:
+      return auth.defaultWorkspace || "工作台";
   }
 });
 
 const roleLabel = computed(() => {
   switch (primaryRole.value) {
-    case ROLE_ADMIN: return "系统管理员";
-    case ROLE_APP_DEVELOPER: return "应用开发者";
-    case ROLE_PLATFORM_OPERATOR: return "平台运维员";
-    case ROLE_ALGORITHM_ENGINEER: return "算法工程师";
-    case ROLE_USER: return "终端用户-标准";
-    case ROLE_EXPERT: return "终端用户-专业";
-    default: return auth.role || "未识别角色";
+    case ROLE_ADMIN:
+      return "系统管理员";
+    case ROLE_APP_DEVELOPER:
+      return "应用开发者";
+    case ROLE_ALGORITHM_ENGINEER:
+      return "算法工程师";
+    case ROLE_EXPERT:
+      return "终端用户-专业";
+    case ROLE_USER:
+      return "终端用户-标准";
+    default:
+      return auth.role || "未识别角色";
   }
 });
 
@@ -187,6 +227,10 @@ const sessionOptions = computed(() => {
   });
   return rows;
 });
+
+function isGroupActive(group: MenuGroup) {
+  return group.items.some((item) => route.path === item.path || route.path.startsWith(`${item.path}/`));
+}
 
 function formatTime(ts?: string | null) {
   if (!ts) return "-";
@@ -205,22 +249,23 @@ function sessionLabel(sessionId: string) {
 }
 
 function updateActiveNames() {
-  const path = route.path;
   const names: string[] = [];
-  if (path.startsWith("/app")) names.push("应用工作台");
-  if (path.startsWith("/ops")) names.push("运维工作台");
-  if (path.startsWith("/governance")) names.push("治理工作台");
+  if (route.path.startsWith("/app")) names.push("应用工作台");
+  if (route.path.startsWith("/ops")) names.push("运维工作台");
+  if (route.path.startsWith("/governance")) names.push("治理工作台");
   activeNames.value = names;
 }
 
 async function ensureChatTopbarState() {
   if (!showChatControls.value || !canChat.value || !auth.isAuthed) return;
+
   if (chatInitialized.value) {
     if (!chatStore.session && chatStore.sessions.length > 0) {
       await chatStore.selectSession(chatStore.sessions[0].id);
     }
     return;
   }
+
   await chatStore.initForChatPage();
   chatInitialized.value = true;
 }
@@ -262,6 +307,7 @@ watch(
       chatStore.stopStream();
       return;
     }
+
     ensureChatTopbarState().catch((error) => {
       console.error(error);
     });
@@ -275,53 +321,89 @@ onMounted(() => {
   }
 });
 
-const logout = () => {
+function logout() {
   chatStore.stopStream();
   auth.logout();
   router.push("/login");
-};
+}
 </script>
 
 <style scoped>
-/* Navigation link */
-.nav-link {
-  @apply flex items-center gap-2 px-3 py-2 rounded-lg text-[13px] text-zinc-600 transition-colors duration-150;
+.nav-link,
+.nav-sublink {
+  @apply flex items-center gap-2 rounded-xl px-3 py-2 text-[14px] text-zinc-600 transition-colors duration-150;
 }
-.nav-link:hover {
+
+.nav-link:hover,
+.nav-sublink:hover {
   @apply bg-zinc-100 text-zinc-900;
 }
+
 .nav-link-active {
   @apply bg-zinc-900 text-white;
 }
+
 .nav-link-active:hover {
   @apply bg-zinc-800 text-white;
 }
 
-/* Ghost button */
-.ghost-btn {
-  @apply px-3 py-1.5 text-[13px] text-zinc-500 border border-zinc-200 rounded-lg cursor-pointer bg-transparent transition-all duration-150;
-}
-.ghost-btn:hover {
-  @apply border-zinc-300 text-zinc-700 bg-zinc-50;
+.nav-section {
+  @apply mt-2 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-2 py-2;
 }
 
-/* Element Plus collapse overrides */
+.nav-section-head {
+  @apply flex items-center justify-between gap-2 px-2 pb-2;
+}
+
+.nav-section-title {
+  @apply text-[12px] font-semibold tracking-wide text-zinc-400;
+}
+
+.nav-section-title-active {
+  @apply text-zinc-700;
+}
+
+.nav-section-badge {
+  @apply rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-600;
+}
+
+.nav-subnav {
+  @apply flex flex-col gap-1 border-l border-zinc-200 pl-2;
+}
+
+.nav-sublink {
+  @apply min-h-9 text-[13px];
+}
+
+.ghost-btn {
+  @apply cursor-pointer rounded-lg border border-zinc-200 bg-transparent px-3 py-1.5 text-[13px] text-zinc-500 transition-all duration-150;
+}
+
+.ghost-btn:hover {
+  @apply border-zinc-300 bg-zinc-50 text-zinc-700;
+}
+
 .nav-collapse {
   background: transparent;
   border: none;
 }
+
 .nav-collapse :deep(.el-collapse-item__header) {
-  @apply bg-transparent border-none h-9 px-0;
+  @apply h-9 border-none bg-transparent px-0;
 }
+
 .nav-collapse :deep(.el-collapse-item__header.is-active) {
   @apply text-zinc-900;
 }
+
 .nav-collapse :deep(.el-collapse-item__arrow) {
   @apply text-zinc-400;
 }
+
 .nav-collapse :deep(.el-collapse-item__wrap) {
-  @apply bg-transparent border-none;
+  @apply border-none bg-transparent;
 }
+
 .nav-collapse :deep(.el-collapse-item__content) {
   @apply p-0 pb-1;
 }

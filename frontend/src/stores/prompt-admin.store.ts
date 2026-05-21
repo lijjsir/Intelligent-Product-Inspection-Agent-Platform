@@ -6,7 +6,6 @@ import type {
   PromptDefinitionDetail,
   PromptOverview,
   DiffResponse,
-  PromptVersionItem,
 } from "@/types/prompt-admin.types";
 
 export const usePromptAdminStore = defineStore("promptAdmin", () => {
