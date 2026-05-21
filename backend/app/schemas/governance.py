@@ -181,10 +181,31 @@ class FeedbackQuery(PageParams):
     feedback_type: Optional[str] = None
 
 
+class MessageFeedbackQuery(BaseModel):
+    target_type: str = Field(pattern="^(chat|meeting)$")
+    target_ids: Optional[str] = None
+
+
 class FeedbackResponse(BaseModel):
     id: str
     org_id: str
     result_id: str
+    actor_id: str
+    feedback_type: str
+    rating: Optional[int] = None
+    category: Optional[str] = None
+    comment: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MessageFeedbackResponse(BaseModel):
+    id: str
+    org_id: str
+    target_type: str
+    target_id: str
     actor_id: str
     feedback_type: str
     rating: Optional[int] = None

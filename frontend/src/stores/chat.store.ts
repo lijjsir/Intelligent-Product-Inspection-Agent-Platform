@@ -135,6 +135,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   const selectedRagSpace = computed(() => getSelectedRagSpaceSnapshot());
+  const canCancelResponse = computed(() => Boolean(session.value && activeAssistantMessageId.value && loading.value));
   const lastSeq = computed(() => {
     if (messages.value.length === 0) return 0;
     return Math.max(...messages.value.map((x) => x.seq_no));
@@ -374,6 +375,10 @@ export const useChatStore = defineStore("chat", () => {
     pendingAttachments.value = [];
   }
 
+  function replacePendingAttachments(items: ChatAttachment[]) {
+    pendingAttachments.value = [...items];
+  }
+
   function selectRagSpace(spaceId: string) {
     selectedRagSpaceId.value = spaceId;
     saveSelectedRagSpace(spaceId);
@@ -440,12 +445,14 @@ export const useChatStore = defineStore("chat", () => {
         // RAG metadata initialization should not block ordinary chat usage.
       }
       const savedSessionId = getSavedSession();
-      if (savedSessionId && sessions.value.some((x) => x.id === savedSessionId)) {
+      const saved = savedSessionId ? sessions.value.find((x) => x.id === savedSessionId) : null;
+      if (saved && saved.last_message_at != null) {
         await selectSession(savedSessionId);
         return;
       }
-      if (sessions.value.length > 0) {
-        await selectSession(sessions.value[0].id);
+      const nonEmpty = sessions.value.filter((s) => s.last_message_at != null);
+      if (nonEmpty.length > 0) {
+        await selectSession(nonEmpty[0].id);
         return;
       }
       await createNewSession();
@@ -590,6 +597,37 @@ export const useChatStore = defineStore("chat", () => {
       stopStreamForIdle();
       throw error;
     }
+  }
+
+  async function cancelCurrentResponse() {
+    const sessionId = session.value?.id || "";
+    const messageId = activeAssistantMessageId.value || "";
+    if (!sessionId || !messageId) {
+      stopStreamForIdle();
+      return null;
+    }
+    const current = messages.value.find((item) => item.id === messageId);
+    const interrupted: ChatMessage = {
+      id: messageId,
+      session_id: sessionId,
+      seq_no: current?.seq_no || 0,
+      client_seq: current?.client_seq || current?.seq_no || allocateClientSeq(),
+      role: "assistant",
+      message_type: "interrupted",
+      content: "已中断本次回答。你可以编辑上一条问题后重新发送。",
+      payload: {
+        ...(current?.payload || {}),
+        status: "interrupted",
+        message_type: "interrupted",
+      },
+      created_at: current?.created_at || new Date().toISOString(),
+    };
+    upsertMessage(interrupted);
+    stopStreamForIdle();
+    const { data } = await chatApi.cancelMessage(sessionId, messageId);
+    upsertMessage(normalizeMessage({ ...data.data, client_seq: interrupted.client_seq }));
+    sortMessages();
+    return data.data;
   }
 
   async function appendTaskResult(task: ChatCreatedTask) {
@@ -752,6 +790,7 @@ export const useChatStore = defineStore("chat", () => {
     ragSpacesError,
     selectedRagSpaceId,
     selectedRagSpace,
+    canCancelResponse,
     pendingAttachments,
     fetchSessions,
     fetchRagSpaces,
@@ -759,12 +798,14 @@ export const useChatStore = defineStore("chat", () => {
     uploadPendingAttachments,
     removePendingAttachment,
     clearPendingAttachments,
+    replacePendingAttachments,
     selectRagSpace,
     clearSelectedRagSpace,
     createNewSession,
     selectSession,
     initForChatPage,
     sendMessage,
+    cancelCurrentResponse,
     reloadCurrentSessionMessages,
     appendTaskResult,
     submitTask,

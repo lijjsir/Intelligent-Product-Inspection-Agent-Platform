@@ -15,7 +15,10 @@ class InspectionSpecRepository:
         """查询租户可见的全部检测标准，优先返回租户私有标准。"""
         result = await self._session.execute(
             select(InspectionSpec)
-            .where(or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)))
+            .where(
+                InspectionSpec.deleted_at.is_(None),
+                or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)),
+            )
             .order_by(
                 case((InspectionSpec.org_id == org_id, 0), else_=1),
                 InspectionSpec.spec_code.asc(),

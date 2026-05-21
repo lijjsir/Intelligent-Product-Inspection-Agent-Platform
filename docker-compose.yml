@@ -30,6 +30,8 @@ services:
       PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
       PIAP_LANGFUSE_PROJECT_ID: piap-local
       PIAP_LANGFUSE_ENVIRONMENT: local-self-hosted
+      PIAP_LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@piap.local}
+      PIAP_LANGFUSE_INIT_USER_PASSWORD: piap_admin_123456
     depends_on:
       mysql:
         condition: service_healthy
@@ -83,6 +85,30 @@ services:
         condition: service_started
     volumes:
       - ./backend:/app/backend
+
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: piap-frontend
+    working_dir: /app/frontend
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+      VITE_LANGFUSE_PROXY_TARGET: http://langfuse-web:3000
+    depends_on:
+      - backend
+      - langfuse-web
+    ports:
+      - "127.0.0.1:${PIAP_FRONTEND_HOST_PORT:-5173}:5173"
+    volumes:
+      - ./frontend/src:/app/frontend/src
+      - ./frontend/index.html:/app/frontend/index.html
+      - ./frontend/vite.config.ts:/app/frontend/vite.config.ts
+      - ./frontend/tailwind.config.js:/app/frontend/tailwind.config.js
+      - ./frontend/postcss.config.js:/app/frontend/postcss.config.js
+      - ./frontend/tsconfig.json:/app/frontend/tsconfig.json
+
   mysql:
     image: mysql:8.0
     container_name: piap-mysql

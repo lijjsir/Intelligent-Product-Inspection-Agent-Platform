@@ -12,8 +12,8 @@ class AnalyticsService:
         self._org_id = org_id
         self._repo = AnalyticsRepository(session)
 
-    async def overview(self, start_date=None, end_date=None) -> dict:
-        overview = await self._repo.get_overview(self._org_id, start_date=start_date, end_date=end_date)
+    async def overview(self, start_date=None, end_date=None, product_lines: list[str] | None = None) -> dict:
+        overview = await self._repo.get_overview(self._org_id, start_date=start_date, end_date=end_date, product_lines=product_lines)
         api_client = LangfuseApiClient()
         if not api_client.enabled:
             return overview
@@ -27,7 +27,11 @@ class AnalyticsService:
             end_date=end_date,
         )
         quality = QualityReportService.build_overview_quality_from_trace_items([] if error else traces)
-        overview.update(quality)
+        for key in ("hallucination_rate", "hallucination_trend"):
+            if quality.get(key):
+                overview[key] = quality[key]
+        if quality.get("model_metrics"):
+            overview["model_metrics"] = quality["model_metrics"]
         return overview
 
     async def product_line_drilldown(self, product_line: str, start_date=None, end_date=None, page: int = 1, size: int = 8) -> dict:

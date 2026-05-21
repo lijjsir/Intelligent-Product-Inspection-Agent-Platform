@@ -4,6 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import DefectImageViewer from "@/components/business/result/DefectImageViewer.vue";
 import FeedbackWidget from "@/components/business/result/FeedbackWidget.vue";
+import { resultApi, type ReviewSubmit } from "@/api/result.api";
+import { usePermission } from "@/composables/usePermission";
 import { useResultStore } from "@/stores/result.store";
 import { useTaskStore } from "@/stores/task.store";
 
@@ -11,9 +13,19 @@ const route = useRoute();
 const router = useRouter();
 const store = useResultStore();
 const taskStore = useTaskStore();
+const { hasRole } = usePermission();
 
 const loading = ref(true);
+const reviewing = ref(false);
 const taskId = route.params.id as string;
+const reviewForm = ref<ReviewSubmit>({ verdict: "", note: "" });
+const canReview = computed(() => hasRole(["expert", "platform_operator"]));
+
+const verdictOptions = [
+  { label: "合格 (Pass)", value: "pass" },
+  { label: "不合格 (Fail)", value: "fail" },
+  { label: "需人工复核 (Manual Required)", value: "manual_required" },
+];
 
 function resolveTaskImageUrl(value?: string | null) {
   const url = String(value || "").trim();
@@ -58,6 +70,26 @@ onMounted(async () => {
 
 function goBack() {
   router.back();
+}
+
+async function submitReview() {
+  if (!store.current || !reviewForm.value.verdict) return;
+  reviewing.value = true;
+  try {
+    const { data } = await resultApi.review(store.current.id, reviewForm.value);
+    if (store.current) {
+      store.current.verdict = data.data.verdict;
+      store.current.reviewed_by = data.data.reviewed_by;
+      store.current.reviewed_at = data.data.reviewed_at;
+      store.current.review_note = data.data.review_note;
+    }
+    ElMessage.success("复核已提交");
+  } catch (error) {
+    ElMessage.error("复核提交失败");
+    console.error(error);
+  } finally {
+    reviewing.value = false;
+  }
 }
 </script>
 
@@ -148,7 +180,23 @@ function goBack() {
             <template #header>人工复核记录</template>
             <div v-if="store.current.reviewed_by">
               <p>专家 ({{ store.current.reviewed_by }}) 于 {{ new Date(store.current.reviewed_at!).toLocaleString() }} 进行了覆写。</p>
-              <p>批注: {{ store.current.review_note }}</p>
+              <p>判定: <el-tag :type="getVerdictType(store.current.verdict)" size="small">{{ store.current.verdict.toUpperCase() }}</el-tag></p>
+              <p v-if="store.current.review_note">批注: {{ store.current.review_note }}</p>
+            </div>
+            <div v-else-if="canReview && store.current" class="review-form">
+              <el-form label-position="top">
+                <el-form-item label="复核判定">
+                  <el-select v-model="reviewForm.verdict" placeholder="请选择复核结论" class="!w-full">
+                    <el-option v-for="opt in verdictOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="复核备注">
+                  <el-input v-model="reviewForm.note" type="textarea" :rows="2" placeholder="可选：说明复核理由" />
+                </el-form-item>
+                <el-button type="primary" :loading="reviewing" :disabled="!reviewForm.verdict" @click="submitReview">
+                  提交复核
+                </el-button>
+              </el-form>
             </div>
             <el-empty v-else description="暂无人工专家覆写此结果记录" :image-size="60" />
           </el-card>

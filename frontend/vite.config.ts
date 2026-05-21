@@ -1,12 +1,38 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { fileURLToPath, URL } from "node:url";
 import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 import { ElementPlusResolver } from "unplugin-vue-components/resolvers";
 
+function langfuseLegacyRedirect(): Plugin {
+  return {
+    name: "langfuse-legacy-redirect",
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url || "";
+        if (url.startsWith("/langfuse/project/")) {
+          res.statusCode = 302;
+          res.setHeader("Location", url.replace(/^\/langfuse/, ""));
+          res.end();
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
+const backendTarget = process.env.VITE_PROXY_TARGET || "http://localhost:8000";
+const langfuseTarget = process.env.VITE_LANGFUSE_PROXY_TARGET || "http://127.0.0.1:3000";
+const langfuseProxy = {
+  target: langfuseTarget,
+  changeOrigin: true,
+};
+
 export default defineConfig({
   plugins: [
+    langfuseLegacyRedirect(),
     vue(),
     AutoImport({
       resolvers: [ElementPlusResolver()],
@@ -46,13 +72,25 @@ export default defineConfig({
     port: 5173,
     host: true,
     proxy: {
+      "/_next": langfuseProxy,
+      "/api/auth": langfuseProxy,
+      "/api/public": langfuseProxy,
+      "/api/trpc": langfuseProxy,
+      "/auth": langfuseProxy,
+      "/icon.svg": langfuseProxy,
+      "/project": langfuseProxy,
       "/api": {
-        target: "http://localhost:8000",
+        target: backendTarget,
         changeOrigin: true,
       },
       "/uploads": {
-        target: "http://localhost:8000",
+        target: backendTarget,
         changeOrigin: true,
+      },
+      "/langfuse": {
+        target: langfuseTarget,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/langfuse/, ""),
       },
     },
   },

@@ -33,6 +33,20 @@ from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
+_ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
+
+
+def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: asyncio.Task[None]) -> None:
+    _ACTIVE_CHAT_WORKFLOWS[workflow_run_id] = task
+    _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW[assistant_message_id] = workflow_run_id
+
+    def cleanup(_task: asyncio.Task[None]) -> None:
+        _ACTIVE_CHAT_WORKFLOWS.pop(workflow_run_id, None)
+        _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.pop(assistant_message_id, None)
+
+    task.add_done_callback(cleanup)
+
 
 def get_current_user_for_stream(
     authorization: str = Header(default=""),
@@ -203,7 +217,7 @@ class ChatService:
             await session_repo.touch(self._org_id, self._user_id, session_id)
             await session.commit()
 
-        asyncio.create_task(
+        workflow_task = asyncio.create_task(
             self._run_workflow(
                 session_id=session_id,
                 assistant_message_id=str(assistant_message.id),
@@ -211,6 +225,7 @@ class ChatService:
                 workflow_run_id=workflow_run_id,
             )
         )
+        _track_chat_workflow(workflow_run_id, str(assistant_message.id), workflow_task)
 
         return ChatSendResponse(
             session=ChatSessionResponse.model_validate(chat_session),
@@ -218,6 +233,56 @@ class ChatService:
             assistant_message_id=str(assistant_message.id),
             workflow_run_id=workflow_run_id,
         )
+
+    async def cancel_message(self, session_id: str, message_id: str) -> ChatMessageResponse:
+        content = "已中断本次回答。你可以编辑上一条问题后重新发送。"
+        now = datetime.utcnow().isoformat()
+        async with get_session() as session:
+            session_repo = ChatSessionRepository(session)
+            if not await session_repo.get(self._org_id, self._user_id, session_id):
+                raise NotFoundError("chat session not found")
+
+            message_repo = ChatMessageRepository(session)
+            message = await message_repo.get(self._org_id, message_id)
+            if not message or str(message.session_id) != session_id or message.role != "assistant":
+                raise NotFoundError("assistant message not found")
+
+            payload = dict(message.payload or {})
+            workflow_run_id = str(payload.get("workflow_run_id") or _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.get(message_id) or "")
+            if workflow_run_id:
+                task = _ACTIVE_CHAT_WORKFLOWS.get(workflow_run_id)
+                if task and not task.done():
+                    task.cancel()
+
+            payload.update(
+                {
+                    "status": "interrupted",
+                    "message_type": "interrupted",
+                    "interrupted_at": now,
+                    "workflow_run_id": workflow_run_id or payload.get("workflow_run_id"),
+                }
+            )
+            updated = await message_repo.update_assistant_message(
+                org_id=self._org_id,
+                message_id=message_id,
+                content=content,
+                message_type="interrupted",
+                payload=payload,
+            )
+            await session_repo.touch(self._org_id, self._user_id, session_id)
+            await session.commit()
+
+        event = {
+            "event": "message_final",
+            "session_id": session_id,
+            "message_id": message_id,
+            "workflow_run_id": workflow_run_id,
+            "content": content,
+            "payload": payload,
+            "ts": now,
+        }
+        await chat_stream_broker.publish(session_id, event)
+        return ChatMessageResponse.model_validate(updated)
 
     async def append_task_result(
         self,

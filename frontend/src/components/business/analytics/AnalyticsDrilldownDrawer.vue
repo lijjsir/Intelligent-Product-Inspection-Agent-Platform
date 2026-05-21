@@ -141,7 +141,7 @@ defineEmits<Emits>();
         </el-card>
       </template>
       <template v-else>
-        <el-alert title="暂无钻取数据，请调整时间范围或先产生分析结果。" type="info" :closable="false" />
+        <el-alert title="暂无详情数据，请调整时间范围或先产生分析结果。" type="info" :closable="false" />
       </template>
     </div>
   </el-drawer>

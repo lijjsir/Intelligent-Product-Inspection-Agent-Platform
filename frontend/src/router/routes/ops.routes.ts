@@ -3,20 +3,46 @@ import { ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_
 const Placeholder = () => import("@/views/placeholder/PlaceholderPage.vue");
 
 export const opsRoutes = [
-  // Agents section
-  { path: "agents", name: "ops-agents", component: () => import("@/views/ops/AgentManageView.vue"), meta: { title: "Agent 管理", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },
+  // Dashboard
+  { path: "dashboard", name: "ops-dashboard", component: () => import("@/views/ops/OpsDashboardView.vue"), meta: { title: "平台运维工作台", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Analytics
+  { path: "analytics", name: "ops-analytics", component: () => import("@/views/AnalyticsView.vue"), meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "analytics/behavior", name: "ops-analytics-behavior", component: Placeholder, meta: { title: "用户行为分析", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Alerts
+  { path: "alerts", name: "ops-alerts", component: () => import("@/views/ops/AlertManageView.vue"), meta: { title: "告警管理", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+
+  // Call monitor
+  { path: "calls", name: "ops-calls", component: () => import("@/views/ops/ModelMonitorView.vue"), meta: { title: "调用监控", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Data quality
+  { path: "data-quality", name: "ops-data-quality", component: () => import("@/views/ops/DataQualityView.vue"), meta: { title: "数据质量", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Cost analysis
+  { path: "cost", name: "ops-cost", component: () => import("@/views/ops/CostAnalysisView.vue"), meta: { title: "成本分析", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Reports
+  { path: "reports", name: "ops-reports", component: () => import("@/views/ops/BizReportView.vue"), meta: { title: "业务报表", roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // Cross-domain readonly
+  { path: "agents", name: "ops-agents", component: () => import("@/views/ops/AgentManageView.vue"), meta: { title: "Agent 查看", roles: [ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },
+  { path: "stability", name: "ops-stability", component: () => import("@/views/StabilityOverviewView.vue"), meta: { title: "稳定性查看", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "inspection-specs", name: "ops-inspection-specs", component: () => import("@/views/admin/InspectionSpecView.vue"), meta: { title: "检测标准查看", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "tasks", name: "ops-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务查看", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "tasks/:id", name: "ops-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_PLATFORM_OPERATOR] } },
+
+  // App developer section
   { path: "agents/topology", name: "ops-agents-topology", component: Placeholder, meta: { title: "Agent 拓扑图", roles: [ROLE_APP_DEVELOPER] } },
   { path: "agents/intent-routes", name: "ops-agents-intent-routes", component: () => import("@/views/ops/IntentRouteView.vue"), meta: { title: "路由策略", roles: [ROLE_APP_DEVELOPER] } },
 
-  // Prompts section
-  { path: "prompts", name: "ops-prompts", component: () => import("@/views/ops/PromptManageView.vue"), meta: { title: "Prompt 管理", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "prompts", name: "ops-prompts", component: () => import("@/views/ops/PromptManageView.vue"), meta: { title: "Prompt 管理", roles: [ROLE_APP_DEVELOPER] } },
   { path: "prompts/dspy", name: "ops-prompts-dspy", component: Placeholder, meta: { title: "DSPy 优化", roles: [ROLE_APP_DEVELOPER] } },
 
-  // RAG section
-  { path: "rag", name: "ops-rag", component: () => import("@/views/ops/RagAnalysisView.vue"), meta: { title: "RAG 配置", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
+  { path: "rag", name: "ops-rag", component: () => import("@/views/ops/RagAnalysisView.vue"), meta: { title: "RAG 配置", roles: [ROLE_APP_DEVELOPER] } },
   { path: "rag/policies", name: "ops-rag-policies", component: Placeholder, meta: { title: "召回策略", roles: [ROLE_APP_DEVELOPER] } },
 
-  // Developer tools
   { path: "workflows", name: "ops-workflows", component: Placeholder, meta: { title: "流程节点", roles: [ROLE_APP_DEVELOPER] } },
   { path: "tools", name: "ops-tools-overview", component: () => import("@/views/ops/tools/ToolOverviewView.vue"), meta: { title: "工具总览", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "tools/catalog", name: "ops-tools-catalog", component: () => import("@/views/ops/tools/ToolCatalogView.vue"), meta: { title: "工具库", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
@@ -25,25 +51,14 @@ export const opsRoutes = [
   { path: "tools/bindings", name: "ops-tools-bindings", component: () => import("@/views/ops/tools/ToolBindingView.vue"), meta: { title: "Agent 绑定", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "tools/executions", name: "ops-tools-executions", component: () => import("@/views/ops/tools/ToolExecutionView.vue"), meta: { title: "执行监控", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
 
-  // Releases
-  { path: "releases", name: "ops-releases", component: Placeholder, meta: { title: "发布管理", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },
-
-  // Analytics
-  { path: "analytics", name: "ops-analytics", component: () => import("@/views/AnalyticsView.vue"), meta: { title: "分析看板", roles: [ROLE_ADMIN, ROLE_PLATFORM_OPERATOR] } },
-  { path: "analytics/behavior", name: "ops-analytics-behavior", component: Placeholder, meta: { title: "用户行为分析", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "analytics/reports", name: "ops-analytics-reports", component: Placeholder, meta: { title: "业务报表", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "analytics/cost", name: "ops-analytics-cost", component: Placeholder, meta: { title: "成本分析", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "releases", name: "ops-releases", component: () => import("@/views/ops/ReleaseView.vue"), meta: { title: "发布协同", roles: [ROLE_APP_DEVELOPER] } },
+  { path: "templates/review", name: "ops-templates-review", component: () => import("@/views/ops/TemplateReviewView.vue"), meta: { title: "模板审核", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Billing
   { path: "billing", name: "ops-billing", component: () => import("@/views/admin/TokenBillingView.vue"), meta: { title: "计费管理", roles: [ROLE_ADMIN] } },
 
-  // Platform operator section
-  { path: "templates/review", name: "ops-templates-review", component: Placeholder, meta: { title: "模板审核", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "models/versions", name: "ops-models-versions", component: Placeholder, meta: { title: "模型版本", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "models/monitor", name: "ops-models-monitor", component: Placeholder, meta: { title: "调用监控", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "data-quality", name: "ops-data-quality", component: Placeholder, meta: { title: "数据质量", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "label-tasks", name: "ops-label-tasks", component: Placeholder, meta: { title: "标注任务", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "data-review", name: "ops-data-review", component: Placeholder, meta: { title: "数据审核", roles: [ROLE_PLATFORM_OPERATOR] } },
+  // Model operations
+  { path: "models/config", name: "ops-models-config", component: () => import("@/views/admin/ModelConfigView.vue"), meta: { title: "模型配置", roles: [ROLE_ALGORITHM_ENGINEER] } },
 
   // Algorithm engineer section
   { path: "data/import", name: "ops-data-import", component: () => import("@/views/ops/DatasetImportListView.vue"), meta: { title: "数据接入", roles: [ROLE_ALGORITHM_ENGINEER] } },

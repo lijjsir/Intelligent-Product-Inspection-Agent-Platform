@@ -5,6 +5,8 @@ import { Connection, RefreshRight, VideoPause, VideoPlay } from "@element-plus/i
 import { useAgentOpsStore } from "@/stores/agent-ops.store";
 import { usePagination } from "@/composables/usePagination";
 import { useECharts } from "@/composables/useECharts";
+import { useAuthStore } from "@/stores/auth.store";
+import { ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
 import type { AgentDefinition, AgentRuntimeInstance } from "@/types/agent-ops.types";
 import {
   buildDefinitionCards,
@@ -24,6 +26,8 @@ import {
 } from "@/views/ops/agent-manage.utils";
 
 const store = useAgentOpsStore();
+const auth = useAuthStore();
+const isReadonly = computed(() => auth.primaryRole === ROLE_PLATFORM_OPERATOR);
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination();
 const loading = computed(() => store.loading);
 
@@ -388,7 +392,7 @@ onUnmounted(() => {
             <el-table-column label="最近启动" width="180">
               <template #default="{ row }">{{ formatDateTime(row.last_started_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" min-width="180" fixed="right">
+            <el-table-column v-if="!isReadonly" label="操作" min-width="180" fixed="right">
               <template #default="{ row }">
                 <div class="action-row">
                   <el-button
