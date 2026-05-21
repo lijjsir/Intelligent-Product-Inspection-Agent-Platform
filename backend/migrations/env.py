@@ -4,7 +4,7 @@ from pathlib import Path
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -45,6 +45,17 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
+        # Pre-create alembic_version with VARCHAR(255) so long revision IDs
+        # (e.g. "0036_algorithm_engineer_workspace_phase2" = 42 chars) fit.
+        # Alembic's own CREATE TABLE IF NOT EXISTS uses VARCHAR(32) which is
+        # too short; if we create it first, Alembic's becomes a no-op.
+        await connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS alembic_version "
+                "(version_num VARCHAR(255) NOT NULL PRIMARY KEY)"
+            )
+        )
+        await connection.commit()
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
