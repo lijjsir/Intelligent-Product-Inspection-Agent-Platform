@@ -21,7 +21,7 @@ export interface MenuGroup {
   items: MenuItem[];
 }
 
-export type MenuStructure = (MenuItem | MenuGroup)[];
+export type MenuStructure = Array<MenuItem | MenuGroup>;
 
 const SHARED_AGENT_OPS_ITEMS: MenuItem[] = [
   { title: "Agent 管理", path: "/ops/agents" },
@@ -30,18 +30,31 @@ const SHARED_AGENT_OPS_ITEMS: MenuItem[] = [
   { title: "RAG 分析", path: "/ops/rag" },
 ];
 
-function appendProfile(items: MenuItem[]): MenuStructure {
+const TOOL_MANAGEMENT_GROUP: MenuGroup = {
+  title: "工具管理",
+  items: [
+    { title: "工具总览", path: "/ops/tools" },
+    { title: "工具库", path: "/ops/tools/catalog" },
+    { title: "外部导入", path: "/ops/tools/import" },
+    { title: "Agent 绑定", path: "/ops/tools/bindings" },
+    { title: "执行监控", path: "/ops/tools/executions" },
+  ],
+};
+
+function appendProfile(items: MenuStructure): MenuStructure {
   return [...items, { title: "个人设置", path: "/app/profile" }];
 }
 
 function prependSharedAgentOps(items: MenuItem[]): MenuStructure {
   const merged = [...SHARED_AGENT_OPS_ITEMS];
   const existing = new Set(merged.map((item) => item.path));
+
   for (const item of items) {
     if (!existing.has(item.path)) {
       merged.push(item);
     }
   }
+
   return appendProfile(merged);
 }
 
@@ -55,7 +68,7 @@ export function useMenu() {
     const role = primaryRole.value;
 
     if (role === ROLE_ADMIN) return getAdminMenu();
-    if (role === ROLE_APP_DEVELOPER) return appendProfile([...SHARED_AGENT_OPS_ITEMS]);
+    if (role === ROLE_APP_DEVELOPER) return getAppDeveloperMenu();
     if (role === ROLE_PLATFORM_OPERATOR) return getPlatformOperatorMenu();
     if (role === ROLE_ALGORITHM_ENGINEER) return getAlgorithmEngineerMenu();
     if (role === ROLE_EXPERT) return getExpertMenu();
@@ -82,6 +95,7 @@ function getAdminMenu(): MenuStructure {
       icon: "Setting",
       items: [
         ...SHARED_AGENT_OPS_ITEMS,
+        ...TOOL_MANAGEMENT_GROUP.items,
         { title: "分析看板", path: "/ops/analytics" },
         { title: "计费管理", path: "/ops/billing" },
       ],
@@ -92,9 +106,9 @@ function getAdminMenu(): MenuStructure {
       items: [
         { title: "用户管理", path: "/governance/admin/users" },
         { title: "角色与菜单", path: "/governance/admin/roles", placeholder: true },
-        { title: "租户/组织", path: "/governance/admin/orgs", placeholder: true },
+        { title: "租户与组织", path: "/governance/admin/orgs", placeholder: true },
         { title: "模型配置", path: "/governance/admin/models" },
-        { title: "存储/基础设施", path: "/governance/admin/infrastructure", placeholder: true },
+        { title: "存储与基础设施", path: "/governance/admin/infrastructure", placeholder: true },
         { title: "GPU 调度", path: "/governance/admin/gpu" },
         { title: "检测标准", path: "/governance/admin/inspection-specs" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
@@ -137,6 +151,13 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     { title: "实验追踪", path: "/ops/experiments", placeholder: true },
     { title: "部署记录", path: "/ops/deployments", placeholder: true },
     { title: "模型配置", path: "/governance/admin/models" },
+  ]);
+}
+
+function getAppDeveloperMenu(): MenuStructure {
+  return appendProfile([
+    ...SHARED_AGENT_OPS_ITEMS,
+    TOOL_MANAGEMENT_GROUP,
   ]);
 }
 

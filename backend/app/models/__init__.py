@@ -6,7 +6,7 @@ from app.models.task_execution_event import TaskExecutionEvent
 from app.models.result import InspectionResult
 from app.models.stability import StabilityReport
 from app.models.alert import AlertEvent
-from app.models.tool import ToolRegistry, ToolExecution
+from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolSyncEvent, ToolVersion
 from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
 from app.models.token_ledger import TokenUsageLedger
@@ -50,7 +50,11 @@ __all__ = [
     "InspectionResult",
     "StabilityReport",
     "AlertEvent",
-    "ToolRegistry",
+    "ToolDefinition",
+    "ToolVersion",
+    "AgentToolBinding",
+    "ToolSyncEvent",
+    "ToolRuntimeEvent",
     "ToolExecution",
     "AuditLog",
     "AuditOutbox",
