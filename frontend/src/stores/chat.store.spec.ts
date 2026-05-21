@@ -33,10 +33,20 @@ describe("chat store", () => {
     sessionStorage.setItem("chat_current_session_id", "session-1");
     sessionStorage.setItem("chat_selected_rag_space_id", "rag-1");
     vi.mocked(chatApi.listSessions).mockResolvedValue({
-      data: { data: [{ id: "session-1", title: "会话", created_at: "", updated_at: "" }] },
+      data: {
+        data: [
+          {
+            id: "session-1",
+            title: "Session",
+            created_at: "",
+            updated_at: "",
+            last_message_at: "",
+          },
+        ],
+      },
     } as any);
     vi.mocked(ragSpaceApi.list).mockResolvedValue({
-      data: { data: [{ id: "rag-1", name: "食品标准库", description: null }] },
+      data: { data: [{ id: "rag-1", name: "RAG Space", description: null }] },
     } as any);
     vi.mocked(chatApi.listMessages).mockResolvedValue({ data: { data: [] } } as any);
 

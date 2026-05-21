@@ -23,6 +23,18 @@ export interface MenuGroup {
 
 export type MenuStructure = (MenuItem | MenuGroup)[];
 
+export function isMenuGroup(entry: MenuItem | MenuGroup): entry is MenuGroup {
+  return "items" in entry;
+}
+
+export function toggleActiveMenuGroupTitle(activeTitles: string[], title: string) {
+  return activeTitles.includes(title) ? activeTitles.filter((item) => item !== title) : [...activeTitles, title];
+}
+
+export function resolveMenuGroupLandingPath(group: MenuGroup) {
+  return group.items.find((item) => !item.placeholder)?.path;
+}
+
 export function useMenu() {
   const auth = useAuthStore();
 
@@ -81,15 +93,19 @@ function getAdminMenu(): MenuStructure {
 function getAppDeveloperMenu(): MenuStructure {
   return [
     { title: "Agent 管理", path: "/ops/agents" },
-    { title: "Agent 拓扑图", path: "/ops/agents/topology", placeholder: true },
     { title: "路由策略", path: "/ops/agents/intent-routes" },
     { title: "Prompt 管理", path: "/ops/prompts" },
-    { title: "DSPy 优化", path: "/ops/prompts/dspy", placeholder: true },
-    { title: "RAG 配置", path: "/ops/rag" },
-    { title: "召回策略", path: "/ops/rag/policies", placeholder: true },
-    { title: "流程节点", path: "/ops/workflows", placeholder: true },
-    { title: "工具注册", path: "/ops/tools", placeholder: true },
-    { title: "发布管理", path: "/ops/releases", placeholder: true },
+    { title: "RAG 分析", path: "/ops/rag" },
+    {
+      title: "工具管理",
+      items: [
+        { title: "工具总览", path: "/ops/tools" },
+        { title: "工具库", path: "/ops/tools/catalog" },
+        { title: "外部导入", path: "/ops/tools/import" },
+        { title: "Agent 绑定", path: "/ops/tools/bindings" },
+        { title: "执行监控", path: "/ops/tools/executions" },
+      ],
+    },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

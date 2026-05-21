@@ -1,6 +1,5 @@
 import { http } from "./http";
 import type {
-  Dataset,
   DatasetCreateRequest,
   DatasetDetail,
   DatasetListQuery,

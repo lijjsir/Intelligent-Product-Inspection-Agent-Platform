@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.ids import uuid7
-from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolVersion
+from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolVersion
 from app.repositories.tool_binding_repo import ToolBindingRepository
 from app.repositories.tool_repo import ToolRepository
 from app.repositories.tool_version_repo import ToolVersionRepository
@@ -306,11 +306,27 @@ class ToolService:
         if not version:
             raise ValidationError("tool has no active version")
 
+        execution_id = str(uuid7())
         started_at = datetime.utcnow()
         trace_id = f"tool-test-{tool.id}-{uuid7()}"
         status = "success"
         output = None
         error = None
+
+        self._session.add(
+            ToolRuntimeEvent(
+                id=str(uuid7()),
+                org_id=self._org_id,
+                event_type="tool.execution.started",
+                tool_id=tool.id,
+                execution_id=execution_id,
+                payload={
+                    "tool_id": tool.id,
+                    "tool_name": tool.display_name,
+                    "trace_id": trace_id,
+                },
+            )
+        )
 
         try:
             missing = self._validate_required_params(version.parameters_schema or {}, params)
@@ -324,7 +340,7 @@ class ToolService:
         duration_ms = max(1, int((datetime.utcnow() - started_at).total_seconds() * 1000))
         await self._repo.create_execution(
             ToolExecution(
-                id=str(uuid7()),
+                id=execution_id,
                 task_id=str(uuid7()),
                 org_id=self._org_id,
                 tool_id=tool.id,
@@ -341,6 +357,25 @@ class ToolService:
                 output_redacted=output if status == "success" else None,
             )
         )
+
+        event_type = "tool.execution.completed" if status == "success" else "tool.execution.failed"
+        self._session.add(
+            ToolRuntimeEvent(
+                id=str(uuid7()),
+                org_id=self._org_id,
+                event_type=event_type,
+                tool_id=tool.id,
+                execution_id=execution_id,
+                payload={
+                    "tool_id": tool.id,
+                    "tool_name": tool.display_name,
+                    "trace_id": trace_id,
+                    "status": status,
+                    "duration_ms": duration_ms,
+                },
+            )
+        )
+        await self._session.flush()
 
         return {
             "status": status,
