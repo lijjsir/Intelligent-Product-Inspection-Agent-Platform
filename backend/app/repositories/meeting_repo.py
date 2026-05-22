@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.meeting import MeetingAgentDefinition, MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
@@ -272,6 +272,7 @@ class MeetingRepository:
     async def get_agent_definition(self, org_id: str, agent_def_id: str) -> MeetingAgentDefinition | None:
         result = await self._session.execute(
             select(MeetingAgentDefinition).where(
+                MeetingAgentDefinition.org_id == org_id,
                 MeetingAgentDefinition.id == agent_def_id,
                 MeetingAgentDefinition.deleted_at.is_(None),
             )
@@ -279,8 +280,13 @@ class MeetingRepository:
         return result.scalar_one_or_none()
 
     async def list_active_agent_definitions(self, org_id: str) -> list[MeetingAgentDefinition]:
+        system_org_id = "00000000-0000-0000-0000-000000000000"
         result = await self._session.execute(
             select(MeetingAgentDefinition).where(
+                or_(
+                    MeetingAgentDefinition.org_id == org_id,
+                    MeetingAgentDefinition.org_id == system_org_id,
+                ),
                 MeetingAgentDefinition.is_active.is_(True),
                 MeetingAgentDefinition.deleted_at.is_(None),
             ).order_by(MeetingAgentDefinition.name.asc())
