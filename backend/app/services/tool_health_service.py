@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.repositories.tool_repo import ToolRepository
 
 
@@ -20,7 +21,7 @@ class ToolHealthService:
             recent = await self._repo.list_recent_executions(
                 self._org_id,
                 tool_id=tool.id,
-                since=datetime.utcnow() - timedelta(hours=1),
+                since=utcnow() - timedelta(hours=1),
                 limit=20,
             )
             successes = sum(1 for r in recent if r.status == "success")

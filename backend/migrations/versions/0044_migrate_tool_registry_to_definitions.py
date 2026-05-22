@@ -8,7 +8,7 @@ Create Date: 2026-05-21
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence, Union
 
 from alembic import op
@@ -29,7 +29,7 @@ def upgrade() -> None:
     tool_versions = sa.Table("tool_versions", metadata, autoload_with=bind)
 
     rows = list(bind.execute(sa.select(tool_registry)).mappings())
-    now = datetime.utcnow()
+    now = utcnow()
 
     for row in rows:
         existing_definition = bind.execute(

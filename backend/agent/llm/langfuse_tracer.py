@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.core.datetime import utcnow_iso
 from app.core.ids import uuid7
 
 
@@ -168,7 +169,7 @@ class LangfuseTracer:
             "org_id": kwargs.get("org_id"),
             "model_key": kwargs.get("model_key"),
             "name": trace_name,
-            "started_at": kwargs.get("started_at") or datetime.utcnow().isoformat(),
+            "started_at": kwargs.get("started_at") or utcnow_iso(),
             "trace_url": self.get_trace_url(trace_id),
             "source_type": source_type,
             "agent": agent,
@@ -338,7 +339,7 @@ class LangfuseTracer:
             "data_type": kwargs.get("data_type") or "NUMERIC",
             "comment": kwargs.get("comment"),
             "metadata": kwargs.get("metadata") or {},
-            "scored_at": kwargs.get("scored_at") or datetime.utcnow().isoformat(),
+            "scored_at": kwargs.get("scored_at") or utcnow_iso(),
             "trace_url": self.get_trace_url(str(trace_id)) if trace_id else None,
         }
         return payload

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_object_storage_factory_uses_minio_backend(monkeypatch):
     monkeypatch.setenv("PIAP_OBJECT_STORAGE_BACKEND", "minio")
@@ -50,3 +52,28 @@ def test_minio_storage_returns_bucket_and_object_key():
     assert payload["bucket"] == "rag-docs"
     assert payload["object_key"] == "rag/org-1/space-1/spec.txt"
     assert payload["size_bytes"] == 5
+
+
+def test_local_storage_put_and_get_bytes_by_object_key(tmp_path, monkeypatch):
+    from app.core.config import settings
+    from app.services.file_storage_service import FileStorageService
+    from app.services.object_storage.local import LocalObjectStorage
+
+    monkeypatch.setattr(settings, "local_upload_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "local_upload_url_prefix", "/uploads")
+
+    storage = LocalObjectStorage(FileStorageService())
+    storage.put_bytes(
+        bucket="dataset-exports",
+        object_key="dataset-exports/org-1/ds-1/export-1/annotations.coco.json",
+        data=b'{"format":"coco"}',
+        content_type="application/json",
+    )
+
+    payload = storage.get_bytes(
+        bucket="dataset-exports",
+        object_key="dataset-exports/org-1/ds-1/export-1/annotations.coco.json",
+    )
+
+    assert payload == (b'{"format":"coco"}', "application/json")
+    assert (Path(tmp_path) / "dataset-exports/org-1/ds-1/export-1/annotations.coco.json").exists()

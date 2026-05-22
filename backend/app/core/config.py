@@ -28,11 +28,31 @@ class Settings(BaseSettings):
     s3_bucket: str = "piap"
     object_storage_backend: str = "local"
     rag_storage_bucket: str = "rag-docs"
+    dataset_storage_bucket: str = "dataset-assets"
+    dataset_export_bucket: str = "dataset-exports"
+    model_artifact_bucket: str = "algo-model-artifacts"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
+    neo4j_enabled: bool = False
+    neo4j_uri: str = "bolt://127.0.0.1:7687"
+    neo4j_username: str = "neo4j"
+    neo4j_password: str = "neo4j_password"
+    neo4j_database: str = "neo4j"
+    algo_runner_workdir: str = "runtime_algo_workspace"
+    algo_runtime_base_url: str = "http://127.0.0.1:18080"
 
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
+    gpu_scheduling_strategy: str = "load_balance"
+    gpu_heartbeat_timeout_sec: int = 120
+    gpu_ssh_connect_timeout_sec: int = 15
+    gpu_ssh_command_timeout_sec: int = 120
+    gpu_metric_poll_interval_sec: int = 30
+    gpu_enable_real_execution: bool = False
+    gpu_job_poll_interval_sec: int = 15
+    gpu_remote_status_grace_sec: int = 60
+    gpu_runtime_http_timeout_sec: int = 30
+    gpu_deploy_startup_timeout_sec: int = 180
 
     volcengine_api_key: str = ""
     volcengine_model_id: str = ""

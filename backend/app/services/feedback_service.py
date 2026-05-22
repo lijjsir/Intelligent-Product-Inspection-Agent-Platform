@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from agent.llm.langfuse_tracer import LangfuseTracer
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
 from app.models.chat import ChatMessage, ChatSession
@@ -25,7 +26,7 @@ class FeedbackService(TenantAwareService):
         result = await self._result_repo.get_by_id(self._org_id, result_id)
         if not result:
             raise NotFoundError("result not found")
-        now = datetime.utcnow()
+        now = utcnow()
         feedback = await self._repo.save(
             {
                 "id": str(uuid7()),
@@ -66,7 +67,7 @@ class FeedbackService(TenantAwareService):
     async def submit_message_feedback(self, target_type: str, target_id: str, actor_id: str, payload: dict):
         normalized_type = target_type.strip().lower()
         await self._ensure_feedback_target(normalized_type, target_id, actor_id)
-        now = datetime.utcnow()
+        now = utcnow()
         return await self._repo.save_message_feedback(
             {
                 "id": str(uuid7()),
