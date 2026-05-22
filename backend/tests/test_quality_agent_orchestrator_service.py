@@ -83,7 +83,7 @@ def test_inspection_task_without_full_structured_output_is_not_materialized():
     assert QualityAgentOrchestratorService()._should_materialize_chat_output(output) is False
 
 
-def test_response_payload_prefers_subgraph_intent_over_router_default():
+def test_response_payload_prefers_router_subroute_over_legacy_subgraph_intent():
     request = NormalizedRequest(
         request_id="req-rag",
         workflow_run_id="wf-rag",
@@ -114,7 +114,7 @@ def test_response_payload_prefers_subgraph_intent_over_router_default():
         materialization_error=None,
     )
 
-    assert payload["intent"] == "rag_qa"
+    assert payload["intent"] == "general_chat"
 
 
 @pytest.mark.asyncio
@@ -465,4 +465,3 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
     assert rag_logs[0]["trace_id"] == "trace-rag-detail"
     assert rag_logs[0]["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
     assert rag_logs[0]["metadata_json"]["used_citations"][0]["id"] == "rag-1"
-

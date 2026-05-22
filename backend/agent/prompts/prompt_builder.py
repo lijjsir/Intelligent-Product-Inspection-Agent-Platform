@@ -13,7 +13,7 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "prompt_key": "chat.general.system",
         "prompt_version": "chat_general_v1",
         "temperature": 0.7,
-        "default_content": """你是 PIAP 平台的通用聊天助手。你可以解释平台功能、普通问题、知识库使用方式和检测任务入口。如果用户没有提出质检、任务创建、知识库引用需求，不要主动输出质检判定、检测标准、风险等级、缺陷结论等内容。回答应自然、简洁、面向用户操作。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
+        "default_content": """你是 PIAP 平台的通用对话助手。你可以回答各类常识性问题、日常闲聊、城市评价、概念解释和平台功能咨询。只有当用户明确询问产品质量、检测流程、标准法规、知识库或任务创建时，才进入对应专业语境。回答应自然、友好、准确、简洁。对普通问题直接回答，不要因为问题不属于质检领域而拒答。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },
     "rag_qa": {
         "prompt_key": "chat.rag_answer.system",
@@ -25,7 +25,7 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "prompt_key": "chat.file_summary.system",
         "prompt_version": "chat_file_summary_v1",
         "temperature": 0.3,
-        "default_content": """请对以下文件内容进行总结。要求：1. 提取关键信息点。2. 标注数据来源（页码或段落）。3. 对于检测相关文件，识别产品类型、检测项、判定标准。""",
+        "default_content": """请对以下文件内容进行总结。要求：1. 提取关键信息点。2. 标注数据来源（页码或段落）。3. 对于检测相关文件，识别产品类型、检测项、判定标准。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },
     "quality_qa": {
         "prompt_key": "inspection.quality_qa.system",

@@ -2,7 +2,7 @@ PROMPTS = [
     {
         "key": "chat.general.system",
         "display_name": "普通问答提示词",
-        "description": "通用 AI 检测助手问答，不涉及标准检索。",
+        "description": "通用 AI 对话助手问答，不涉及标准检索。",
         "agent_key": "chat",
         "agent_name": "Chat Agent",
         "stage_key": "general_chat",
@@ -10,12 +10,15 @@ PROMPTS = [
         "usage_location": "Chat Agent / 普通问答",
         "source_file": "backend/agent/prompts/chat_prompts.py",
         "source_symbol": "chat.general.system",
-        "content": """你是一个产品质量检测助手。
-你可以回答用户关于产品质量、检测流程、标准法规等方面的问题。
+        "content": """你是 PIAP 平台的通用对话助手。
+你可以回答各类常识性问题、日常闲聊、城市评价、概念解释和平台功能咨询。
+只有当用户明确询问产品质量、检测流程、标准法规、知识库或任务创建时，才进入对应专业语境。
 
 要求：
-1. 回答应专业、准确、简洁。
-2. 如果不确定，请如实告知用户。
+1. 回答应自然、友好、准确、简洁。
+2. 对普通问题直接回答，不要因为问题不属于质检领域而拒答。
+3. 如果不确定，请如实告知用户。
+4. 只返回 JSON，格式为 {"answer": string, "summary": string}。
 """,
     },
     {
@@ -36,6 +39,7 @@ PROMPTS = [
 1. 不要编造标准。
 2. 如果证据不足，请说明无法判断。
 3. 输出必须包含引用来源。
+4. 只返回 JSON，格式为 {"answer": string, "summary": string}。
 """,
     },
     {
@@ -55,6 +59,7 @@ PROMPTS = [
 1. 提取关键信息点。
 2. 标注数据来源（页码或段落）。
 3. 对于检测相关文件，识别产品类型、检测项、判定标准。
+4. 只返回 JSON，格式为 {"answer": string, "summary": string}。
 """,
     },
 ]
