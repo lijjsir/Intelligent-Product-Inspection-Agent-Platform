@@ -55,6 +55,7 @@ def _build_runtime_state(
         "product_id": task.product_id,
         "spec_code": task.spec_code,
         "image_urls": _normalize_image_urls_for_runtime(task.image_urls or []),
+        "image_items": list(task.image_items or []),
         "model_id": str(runtime.get("model_id") or "unknown"),
         "model_config_id": runtime.get("model_config_id"),
         "model_base_url": runtime.get("base_url"),
@@ -515,9 +516,10 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                         continue
 
                     matched_any = True
+                    alert_id = str(uuid7())
                     await alert_repo.create(
                         {
-                            "id": str(uuid7()),
+                            "id": alert_id,
                             "org_id": task.org_id,
                             "rule_id": str(rule.id),
                             "stability_id": stability_obj.id,
@@ -535,12 +537,18 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             "created_at": utcnow(),
                         }
                     )
+                    try:
+                        from worker.tasks.alert_dispatch_task import dispatch_alert
+                        dispatch_alert.delay(alert_id)
+                    except Exception:
+                        _logger.exception("Failed to enqueue dispatch for alert %s", alert_id)
 
                 if not matched_any:
                     severity = "critical" if stability.get("risk_level") == "critical" else "warning"
+                    fallback_alert_id = str(uuid7())
                     await alert_repo.create(
                         {
-                            "id": str(uuid7()),
+                            "id": fallback_alert_id,
                             "org_id": task.org_id,
                             "rule_id": None,
                             "stability_id": stability_obj.id,
@@ -556,6 +564,11 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             "created_at": utcnow(),
                         }
                     )
+                    try:
+                        from worker.tasks.alert_dispatch_task import dispatch_alert
+                        dispatch_alert.delay(fallback_alert_id)
+                    except Exception:
+                        _logger.exception("Failed to enqueue dispatch for fallback alert %s", fallback_alert_id)
 
                 await emit({"type": "alert", "message": "stability risk alert triggered"})
 

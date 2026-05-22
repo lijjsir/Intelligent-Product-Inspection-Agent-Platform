@@ -274,16 +274,19 @@ class ModelQualityMetric(BaseModel):
     pass_rate: float
     hallucination_rate: float
     thumbs_down_rate: float
+    thumbs_up_rate: float
 
 
 class QualityReportResponse(BaseModel):
     total_results: int
     hallucination_rate: float
     thumbs_down_rate: float
+    thumbs_up_rate: float
     avg_risk_score: float
     feedback_distribution: dict[str, int]
     hallucination_trend: list[TrendPoint]
     thumbs_down_trend: list[TrendPoint]
+    thumbs_up_trend: list[TrendPoint]
     model_metrics: list[ModelQualityMetric]
     chat_score_count: int = 0
     chat_avg_trust_score: float = 0.0
@@ -316,6 +319,7 @@ class QualityTraceItem(BaseModel):
     total_tokens: int = 0
     feedback_count: int = 0
     thumbs_down_count: int = 0
+    thumbs_up_count: int = 0
     last_score_value: Optional[float] = None
     last_score_at: Optional[datetime] = None
     trust_score: Optional[float] = None
