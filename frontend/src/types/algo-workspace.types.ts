@@ -192,7 +192,7 @@ export interface OnlineValidation extends AlgoExecutionResource {
   experiment_id?: string | null;
 }
 
-export interface Experiment extends AlgoResourceBase {}
+export type Experiment = AlgoResourceBase;
 
 export interface Deployment extends AlgoExecutionResource {
   source_type: string;

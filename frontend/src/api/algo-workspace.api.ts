@@ -13,7 +13,6 @@ import type {
   DeploymentListResponse,
   EvaluationDataset,
   EvaluationDatasetCreateRequest,
-  EvaluationDatasetItem,
   EvaluationDatasetItemListQuery,
   EvaluationDatasetItemListResponse,
   EvaluationDatasetListResponse,
