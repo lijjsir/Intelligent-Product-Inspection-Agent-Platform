@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from agent.llm.client import LLMClient
+from agent.prompts.chat_prompts import PROMPTS as CHAT_CODE_PROMPTS
 from app.services.rag_space_service import _is_rag_metadata_missing
 from agent.subgraphs.quality_chat.graph import (
     _chat_usage_from_state,
@@ -46,6 +47,29 @@ def test_fallback_answer_uses_first_doc_excerpt():
     )
     assert "Surface Defect Standard" in data["answer"]
     assert data["citations"] == [{"id": "doc-1"}]
+
+
+def test_chat_general_prompt_supports_normal_model_chat():
+    prompts = {str(item["key"]): str(item["content"]) for item in CHAT_CODE_PROMPTS}
+    content = prompts["chat.general.system"]
+
+    assert "通用对话助手" in content
+    assert "常识性问题" in content
+    assert "城市评价" in content
+    assert "对普通问题直接回答" in content
+    assert "不要因为问题不属于质检领域而拒答" in content
+    assert "JSON" in content
+    assert '{"answer": string, "summary": string}' in content
+    assert "你是一个产品质量检测助手" not in content
+    assert "只回答产品质量" not in content
+
+
+def test_chat_specialized_prompts_keep_json_contract():
+    prompts = {str(item["key"]): str(item["content"]) for item in CHAT_CODE_PROMPTS}
+    for prompt_key in {"chat.rag_answer.system", "chat.file_summary.system"}:
+        content = prompts[prompt_key]
+        assert "JSON" in content
+        assert '{"answer": string, "summary": string}' in content
 
 
 @pytest.mark.asyncio

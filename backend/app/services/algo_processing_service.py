@@ -90,7 +90,7 @@ class AlgoProcessingService:
     def __init__(self, deps: ProcessingDeps):
         self._deps = deps
 
-    async def run_kg_build(self, *, dataset_id: str, resource_id: str) -> dict[str, Any]:
+    async def run_kg_build(self, *, dataset_id: str, resource_id: str, config_json: dict[str, Any] | None = None) -> dict[str, Any]:
         samples = await self._deps.samples.list_for_dataset_all(
             org_id=self._deps.org_id,
             dataset_id=dataset_id,
@@ -118,6 +118,7 @@ class AlgoProcessingService:
         relation_defs: set[tuple[str, str, str]] = set()
         warnings: list[str] = []
 
+        relation_rules = list((config_json or {}).get("relation_rules") or [])
         for sample in samples:
             sample_key = f"sample::{sample.id}"
             entity_defs[sample_key] = {
@@ -131,7 +132,8 @@ class AlgoProcessingService:
                 },
                 "confidence": 1.0,
             }
-            for entity_type, term in self._extract_terms(sample):
+            extracted_terms = self._extract_terms(sample, config_json=config_json)
+            for entity_type, term in extracted_terms:
                 entity_key = f"{entity_type.lower()}::{term}"
                 entity_defs.setdefault(
                     entity_key,
@@ -144,6 +146,7 @@ class AlgoProcessingService:
                     },
                 )
                 relation_defs.add((sample_key, entity_key, f"MENTIONS_{entity_type.upper()}"))
+            relation_defs.update(self._build_rule_relations(sample_key, extracted_terms, relation_rules))
 
         created_entities: dict[str, Any] = {}
         for key, payload in entity_defs.items():
@@ -477,7 +480,7 @@ class AlgoProcessingService:
             extra={"artifact": artifact},
         )
 
-    def _extract_terms(self, sample: Any) -> list[tuple[str, str]]:
+    def _extract_terms(self, sample: Any, config_json: dict[str, Any] | None = None) -> list[tuple[str, str]]:
         text_parts = [
             str(sample.sample_name or ""),
             str(sample.text_content or ""),
@@ -487,16 +490,17 @@ class AlgoProcessingService:
         ]
         corpus = " ".join(part for part in text_parts if part).lower()
         extracted: list[tuple[str, str]] = []
-        for source, normalized in DEFECT_TERMS.items():
+        lexicon = self._merge_entity_lexicon(config_json)
+        for source, normalized in lexicon["Defect"].items():
             if source in corpus:
                 extracted.append(("Defect", normalized))
-        for source, normalized in PART_TERMS.items():
+        for source, normalized in lexicon["Part"].items():
             if source in corpus:
                 extracted.append(("Part", normalized))
-        for source, normalized in PROCESS_TERMS.items():
+        for source, normalized in lexicon["Process"].items():
             if source in corpus:
                 extracted.append(("Process", normalized))
-        for source, normalized in ATTRIBUTE_TERMS.items():
+        for source, normalized in lexicon["Attribute"].items():
             if source in corpus:
                 extracted.append(("Attribute", normalized))
         seen: set[tuple[str, str]] = set()
@@ -507,6 +511,50 @@ class AlgoProcessingService:
             seen.add(item)
             ordered.append(item)
         return ordered
+
+    @staticmethod
+    def _merge_entity_lexicon(config_json: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+        merged = {
+            "Defect": dict(DEFECT_TERMS),
+            "Part": dict(PART_TERMS),
+            "Process": dict(PROCESS_TERMS),
+            "Attribute": dict(ATTRIBUTE_TERMS),
+        }
+        custom = dict((config_json or {}).get("entity_lexicon") or {})
+        for entity_type, values in custom.items():
+            entity_bucket = merged.setdefault(str(entity_type), {})
+            if isinstance(values, dict):
+                for key, value in values.items():
+                    entity_bucket[str(key).lower()] = str(value)
+            elif isinstance(values, list):
+                for item in values:
+                    entity_bucket[str(item).lower()] = str(item)
+        return merged
+
+    @staticmethod
+    def _build_rule_relations(
+        sample_key: str,
+        extracted_terms: list[tuple[str, str]],
+        relation_rules: list[Any],
+    ) -> set[tuple[str, str, str]]:
+        relations: set[tuple[str, str, str]] = set()
+        typed_terms: dict[str, set[str]] = {}
+        for entity_type, term in extracted_terms:
+          typed_terms.setdefault(entity_type, set()).add(term)
+        for rule in relation_rules:
+            if not isinstance(rule, dict):
+                continue
+            source_type = str(rule.get("source") or "")
+            target_type = str(rule.get("target") or "")
+            relation = str(rule.get("relation") or "").strip()
+            if not relation or source_type not in typed_terms or target_type not in typed_terms:
+                continue
+            for source_term in typed_terms[source_type]:
+                for target_term in typed_terms[target_type]:
+                    relations.add((f"{source_type.lower()}::{source_term}", f"{target_type.lower()}::{target_term}", relation))
+                    relations.add((sample_key, f"{source_type.lower()}::{source_term}", f"MENTIONS_{source_type.upper()}"))
+                    relations.add((sample_key, f"{target_type.lower()}::{target_term}", f"MENTIONS_{target_type.upper()}"))
+        return relations
 
     def _describe_image_sample(self, sample: Any) -> str:
         text_bits = [

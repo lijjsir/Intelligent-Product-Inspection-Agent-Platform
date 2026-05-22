@@ -79,6 +79,16 @@ def test_route_policy_forced_inspection_without_subroute_keeps_task_draft_gate()
     assert decision.sub_route == "task_create"
 
 
+def test_route_policy_keeps_city_question_in_general_chat():
+    decision = AgentRoutePolicy().decide(
+        AgentRouterInput(query="重庆这个城市怎么样")
+    )
+
+    assert decision.selected_agent == "chat"
+    assert decision.sub_route == "general_chat"
+    assert decision.intent == "general_chat"
+
+
 @pytest.mark.asyncio
 async def test_route_policy_uses_model_classifier_for_ambiguous_input(monkeypatch):
     calls: list[str] = []

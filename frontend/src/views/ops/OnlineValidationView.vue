@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive } from "vue";
+import { computed, onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
 import { useDeploymentStore } from "@/stores/deployment.store";
@@ -9,10 +9,15 @@ import { useOnlineValidationStore } from "@/stores/onlineValidation.store";
 const store = useOnlineValidationStore();
 const deploymentStore = useDeploymentStore();
 const experimentStore = useExperimentStore();
+const completedDeployments = computed(() => deploymentStore.items.filter((item) => item.status === "completed"));
 const refs = reactive({
   deployment_id: "",
   experiment_id: "",
 });
+
+function isCompleted(item: { status?: string }) {
+  return item.status === "completed";
+}
 
 function buildPayload(form: { name: string; description: string; config_json: string }) {
   if (!refs.deployment_id) {
@@ -32,12 +37,12 @@ onMounted(async () => {
     deploymentStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     experimentStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
   ]);
-  refs.deployment_id = deploymentStore.items[0]?.id || "";
+  refs.deployment_id = completedDeployments.value[0]?.id || "";
 });
 </script>
 
 <template>
-  <div v-if="!deploymentStore.items.length" class="flex flex-col gap-5">
+  <div v-if="!completedDeployments.length" class="flex flex-col gap-5">
     <section class="hero">
       <div>
         <h2>在线验证</h2>
@@ -51,7 +56,7 @@ onMounted(async () => {
   <AlgoResourcePage
     v-else
     title="在线验证"
-    subtitle="围绕部署记录创建在线验证任务骨架，跟踪状态与结果占位。"
+    subtitle="围绕已完成部署创建在线验证任务，展示影子回放汇总与执行日志。"
     :store="store"
     :build-payload="buildPayload"
     :detail-description="(item) => `部署：${item?.deployment_id || '-'}`"
@@ -59,8 +64,8 @@ onMounted(async () => {
   >
     <template #form-extra>
       <el-form-item label="部署记录">
-        <el-select v-model="refs.deployment_id" placeholder="选择部署">
-          <el-option v-for="item in deploymentStore.items" :key="item.id" :label="item.name" :value="item.id" />
+        <el-select v-model="refs.deployment_id" placeholder="选择已完成部署">
+          <el-option v-for="item in completedDeployments" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="实验">

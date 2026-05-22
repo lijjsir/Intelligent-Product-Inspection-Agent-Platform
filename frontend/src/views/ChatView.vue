@@ -52,7 +52,7 @@ const taskRules: FormRules = {
         }
         callback();
       },
-      trigger: "change",
+      trigger: "blur",
     },
   ],
 };
@@ -916,7 +916,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     </div>
 
     <!-- Task dialog -->
-    <el-dialog v-model="taskDialogVisible" :title="taskSourceMessage ? '编辑检测信息' : '整理质检任务草稿'" width="640px" @closed="resetTaskDialog">
+    <el-dialog v-model="taskDialogVisible" :title="taskSourceMessage ? '编辑检测信息' : '整理质检任务草稿'" width="640px" destroy-on-close @closed="resetTaskDialog">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-position="top">
         <el-form-item label="产品线" prop="product_id">
           <el-input v-model="taskForm.product_id" placeholder="选择标准后自动带入" />

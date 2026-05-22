@@ -24,6 +24,147 @@ export interface AlgoExecutionResource extends AlgoResourceBase {
   completed_at?: string | null;
 }
 
+export interface TrainingExecutionSummary {
+  status?: string;
+  execution_mode?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  source_dataset_id?: string;
+  training_job_id?: string;
+  model_config_id?: string | null;
+  model_key?: string | null;
+  effective_hyperparameters?: Record<string, unknown>;
+  base_checkpoint?: string | null;
+}
+
+export interface TrainingArtifact {
+  type: string;
+  name?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
+export interface SummaryHighlightItem {
+  label: string;
+  value: unknown;
+  unit?: string;
+  tone?: "primary" | "success" | "warning" | "danger" | "info";
+  hint?: string;
+}
+
+export interface SummaryArtifactItem {
+  title: string;
+  subtitle?: string;
+  meta?: Record<string, unknown> | null;
+  path?: string | null;
+  type?: string | null;
+  link?: string | null;
+}
+
+export interface SummaryLogItem {
+  text: string;
+  level?: string | null;
+  timestamp?: string | null;
+}
+
+export interface SummaryMetricItem {
+  key: string;
+  label: string;
+  value: unknown;
+}
+
+export interface TrainingMetrics {
+  train_loss?: number[];
+  val_accuracy?: number[];
+  summary?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface TrainingResultSummary {
+  summary?: TrainingExecutionSummary;
+  artifacts: TrainingArtifact[];
+  metrics: TrainingMetrics;
+  logs: string[];
+}
+export type TrainingResultSummaryRecord = TrainingResultSummary & Record<string, unknown>;
+
+export interface OfflineEvaluationResultSummary {
+  summary?: {
+    status?: string;
+    execution_mode?: string | null;
+    started_at?: string | null;
+    completed_at?: string | null;
+    eval_set_id?: string;
+    target_type?: string;
+    target_id?: string;
+  };
+  metrics: Record<string, unknown>;
+  error_cases: Array<Record<string, unknown>>;
+  artifacts: TrainingArtifact[];
+  logs: string[];
+}
+export type OfflineEvaluationResultSummaryRecord = OfflineEvaluationResultSummary & Record<string, unknown>;
+
+export interface DeploymentRuntimeRegistration {
+  source_type?: string;
+  source_id?: string;
+  model_key?: string | null;
+  provider?: string | null;
+  endpoint_placeholder?: string | null;
+  inference_config?: Record<string, unknown>;
+  status?: string;
+}
+
+export interface OnlineValidationMetrics {
+  shadow_pass_rate?: number;
+  avg_latency_ms?: number;
+  throughput_qps?: number;
+  replay_count?: number;
+  baseline_runtime_status?: string;
+  [key: string]: unknown;
+}
+
+export interface OnlineValidationReplaySample {
+  task_id?: string;
+  product_id?: string;
+  spec_code?: string;
+  verdict?: string | null;
+  overall_score?: number | null;
+}
+
+export interface OnlineValidationResultSummary {
+  summary?: {
+    status?: string;
+    execution_mode?: string | null;
+    started_at?: string | null;
+    completed_at?: string | null;
+    deployment_id?: string;
+    validation_type?: string;
+    replay_source?: string;
+    replay_count?: number;
+  };
+  metrics: OnlineValidationMetrics;
+  replay_samples?: OnlineValidationReplaySample[];
+  artifacts: TrainingArtifact[];
+  logs: string[];
+}
+export type OnlineValidationResultSummaryRecord = OnlineValidationResultSummary & Record<string, unknown>;
+
+export interface DeploymentResultSummary {
+  summary?: {
+    status?: string;
+    execution_mode?: string | null;
+    started_at?: string | null;
+    completed_at?: string | null;
+    source_type?: string;
+    source_id?: string;
+  };
+  runtime_registration: DeploymentRuntimeRegistration;
+  artifacts: TrainingArtifact[];
+  logs: string[];
+}
+export type DeploymentResultSummaryRecord = DeploymentResultSummary & Record<string, unknown>;
+
 export interface DatasetProcessingRunRequest {
   name: string;
   description?: string;
@@ -97,6 +238,8 @@ export interface AugmentationProposal extends AlgoResourceBase {
   source_sample_id?: string | null;
   augmentation_method?: string | null;
   augmentation_params?: Record<string, unknown> | null;
+  created_sample_id?: string | null;
+  created_sample_ids?: string[];
 }
 
 export interface DatasetProcessingSubgraphNode {
@@ -171,6 +314,7 @@ export interface TrainingJob extends AlgoExecutionResource {
   model_config_ref?: ResourceModelRef | null;
   eval_set_id?: string | null;
   experiment_id?: string | null;
+  result_summary?: TrainingResultSummaryRecord | null;
 }
 
 export interface FineTuneRun extends AlgoExecutionResource {
@@ -178,6 +322,7 @@ export interface FineTuneRun extends AlgoExecutionResource {
   model_config_id: string;
   model_config_ref?: ResourceModelRef | null;
   experiment_id?: string | null;
+  result_summary?: TrainingResultSummaryRecord | null;
 }
 
 export interface OfflineEvaluation extends AlgoExecutionResource {
@@ -185,19 +330,37 @@ export interface OfflineEvaluation extends AlgoExecutionResource {
   target_type: string;
   target_id: string;
   experiment_id?: string | null;
+  result_summary?: OfflineEvaluationResultSummaryRecord | null;
 }
 
 export interface OnlineValidation extends AlgoExecutionResource {
   deployment_id: string;
   experiment_id?: string | null;
+  result_summary?: OnlineValidationResultSummaryRecord | null;
 }
 
-export type Experiment = AlgoResourceBase;
+export interface ExperimentRelatedResourceSummary {
+  id: string;
+  name: string;
+  status: AlgoResourceStatus;
+  metrics: Record<string, unknown>;
+  updated_at?: string | null;
+}
+
+export interface Experiment extends AlgoResourceBase {
+  related_resources?: {
+    training_jobs: ExperimentRelatedResourceSummary[];
+    fine_tunes: ExperimentRelatedResourceSummary[];
+    offline_evaluations: ExperimentRelatedResourceSummary[];
+    deployments: ExperimentRelatedResourceSummary[];
+  };
+}
 
 export interface Deployment extends AlgoExecutionResource {
-  source_type: string;
+  source_type: "training_job" | "fine_tune";
   source_id: string;
   experiment_id?: string | null;
+  result_summary?: DeploymentResultSummaryRecord | null;
 }
 
 export interface AlgoResourceActionResponse {
@@ -276,8 +439,15 @@ export interface OfflineEvaluationCreateRequest {
   description?: string;
   config_json?: Record<string, unknown>;
   eval_set_id: string;
-  target_type: string;
+  target_type: "training_job" | "fine_tune" | "deployment";
   target_id: string;
+  experiment_id?: string | null;
+}
+
+export interface OfflineEvaluationUpdateRequest {
+  name?: string;
+  description?: string | null;
+  config_json?: Record<string, unknown>;
   experiment_id?: string | null;
 }
 
@@ -299,7 +469,7 @@ export interface ModelDeploymentCreateRequest {
   name: string;
   description?: string;
   config_json?: Record<string, unknown>;
-  source_type: string;
+  source_type: "training_job" | "fine_tune";
   source_id: string;
   experiment_id?: string | null;
 }

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from time import perf_counter
@@ -255,14 +256,14 @@ def _smalltalk_answer(query: str, history: list[dict[str, Any]] | None = None) -
     if introduced_name:
         return f"好的，我记住了，你叫{introduced_name}。"
     if re.search(r"(你是谁|介绍一下自己)", query):
-        return "我是质量检测聊天助手，可以帮你整理任务信息、解释质量标准、分析缺陷判定依据，也可以在信息补齐后直接发起检测任务。"
-    return "我可以帮你解答质量检测问题，也可以把聊天里整理好的任务信息直接提交给智能体执行。"
+        return "我是 PIAP 平台的智能助手，可以陪你聊天、回答问题，也可以帮你使用平台的质量检测、知识库检索等功能。有什么我可以帮你的吗？"
+    return "你好！我是 PIAP 智能助手，可以陪你聊天、解答问题。如果你需要使用质量检测或任务管理功能，也可以随时告诉我。"
 
 
 def _general_answer_fallback(query: str) -> dict[str, Any]:
     return {
-        "answer": f"我收到了你的问题“{query}”。如果你准备发起质量检测任务，也可以继续补充产品编号、检测标准和图片。",
-        "summary": "普通问答",
+        "answer": f"抱歉，我暂时无法处理你的问题「{query}」。请换个方式描述一下，或者告诉我你需要什么帮助？",
+        "summary": "普通问答（兜底）",
         "citations": [],
     }
 
@@ -596,6 +597,19 @@ async def reasoning(state: ChatState) -> ChatState:
         )
         answer = str(response.get("answer") or "").strip()
         summary = str(response.get("summary") or "").strip()
+        # If the LLM returned raw text instead of structured JSON, try to parse or use it directly
+        if not answer and "text" in response:
+            raw_text = str(response["text"]).strip()
+            try:
+                parsed = json.loads(raw_text)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                answer = str(parsed.get("answer") or "").strip()
+                summary = str(parsed.get("summary") or "").strip()
+            if not answer:
+                answer = raw_text
+                summary = summary or "普通问答"
         if not answer:
             if intent == "quality_qa":
                 fallback = _fallback_answer(query, docs, citations)

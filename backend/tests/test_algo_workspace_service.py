@@ -15,6 +15,7 @@ class FakeDataset:
     org_id: str
     created_by: str | None
     name: str
+    status: str = "active"
     deleted_at: datetime | None = None
 
 
@@ -27,6 +28,10 @@ class FakeDatasetSample:
     sample_type: str = "text"
     sample_name: str | None = None
     text_content: str | None = None
+    content_type: str | None = None
+    size_bytes: int = 0
+    checksum_sha256: str = ""
+    quality_score: float | None = None
     annotation_data: dict | list | None = None
     related_entities: list | None = None
     source_metadata: dict | None = None
@@ -70,6 +75,7 @@ class FakeResource:
     executor_job_id: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    history_json: dict | None = None
 
 
 @dataclass
@@ -84,6 +90,23 @@ class FakeJob:
     result_summary: dict | None = None
     deleted_at: datetime | None = None
     created_at: datetime = datetime(2026, 5, 20, 10, 5, 0)
+
+
+@dataclass
+class FakeTask:
+    id: str
+    org_id: str
+    product_id: str
+    spec_code: str
+    status: str = "done"
+
+
+@dataclass
+class FakeTaskResult:
+    task_id: str
+    org_id: str
+    verdict: str | None = None
+    overall_score: float | None = None
 
 
 @dataclass
@@ -105,6 +128,7 @@ class FakeDatasetRepo:
     def __init__(self, _session):
         self.rows = {
             "ds-1": FakeDataset(id="ds-1", org_id="org-1", created_by="user-1", name="dataset 1"),
+            "ds-2": FakeDataset(id="ds-2", org_id="org-1", created_by="user-1", name="dataset 2", status="archived"),
         }
 
     async def get(self, *, org_id: str, dataset_id: str, owner_user_id: str):
@@ -112,6 +136,9 @@ class FakeDatasetRepo:
         if row and row.org_id == org_id and row.created_by == owner_user_id and row.deleted_at is None:
             return row
         return None
+
+    async def recalculate_counters(self, *, dataset_id: str):
+        return self.rows.get(dataset_id)
 
 
 class FakeDatasetSampleRepo:
@@ -180,6 +207,35 @@ class FakeDatasetJobRepo:
         return None
 
 
+class FakeTaskRepo:
+    def __init__(self, _session):
+        self.rows = [
+            FakeTask(id="task-1", org_id="org-1", product_id="p-1", spec_code="spec-a"),
+            FakeTask(id="task-2", org_id="org-1", product_id="p-2", spec_code="spec-b"),
+        ]
+
+    async def list_paged(self, *, org_id: str, filters: dict | None, page: int, size: int, owner_user_id=None):
+        rows = [row for row in self.rows if row.org_id == org_id and row.status == (filters or {}).get("status", row.status)]
+        return rows[:size], len(rows)
+
+    async def get(self, org_id: str, task_id: str):
+        return next((row for row in self.rows if row.id == task_id and row.org_id == org_id), None)
+
+
+class FakeTaskResultRepo:
+    def __init__(self, _session):
+        self.rows = {
+            "task-1": FakeTaskResult(task_id="task-1", org_id="org-1", verdict="pass", overall_score=0.93),
+            "task-2": FakeTaskResult(task_id="task-2", org_id="org-1", verdict="warn", overall_score=0.71),
+        }
+
+    async def get_by_task(self, org_id: str, task_id: str):
+        row = self.rows.get(task_id)
+        if row and row.org_id == org_id:
+            return row
+        return None
+
+
 class FakeAlgoRepo:
     def __init__(self, _session):
         self.rows_by_model: dict[object, list[FakeResource]] = {}
@@ -199,7 +255,6 @@ class FakeAlgoRepo:
         if keyword:
             rows = [row for row in rows if keyword in row.name]
         if extra_filters:
-            # Fake filter only supports dataset_id equality from service usage.
             for clause in extra_filters:
                 field_name = str(clause.left.key)
                 value = clause.right.value
@@ -248,11 +303,13 @@ class FakeEvalItemRepo:
         return len(self.items.get(evaluation_dataset_id, []))
 
     async def list_items(self, *, org_id: str, evaluation_dataset_id: str, created_by: str, page: int, size: int, sample_type: str | None = None):
-        rows = self.items.get(evaluation_dataset_id, [])
+        rows = [row for row in self.items.get(evaluation_dataset_id, []) if row.deleted_at is None]
+        if sample_type:
+            rows = [row for row in rows if (row.payload_json or {}).get("sample_type") == sample_type]
         return rows[:size], len(rows)
 
     async def list_items_all(self, *, org_id: str, evaluation_dataset_id: str, created_by: str):
-        return self.items.get(evaluation_dataset_id, [])
+        return [row for row in self.items.get(evaluation_dataset_id, []) if row.deleted_at is None]
 
     async def append_items(self, *, org_id: str, evaluation_dataset_id: str, source_dataset_id: str, created_by: str, items: list[dict]):
         existing = self.items.setdefault(evaluation_dataset_id, [])
@@ -274,13 +331,14 @@ class FakeEvalItemRepo:
         )
 
     async def get_item(self, *, org_id: str, evaluation_dataset_id: str, item_id: str, created_by: str):
-        return None
+        return next((row for row in self.items.get(evaluation_dataset_id, []) if row.id == item_id and row.deleted_at is None), None)
 
     async def soft_delete(self, obj):
-        return None
+        obj.deleted_at = datetime.utcnow()
 
     async def soft_delete_many(self, *, org_id: str, evaluation_dataset_id: str, created_by: str):
-        return None
+        for row in self.items.get(evaluation_dataset_id, []):
+            row.deleted_at = datetime.utcnow()
 
 
 class FakeKgRepo:
@@ -317,11 +375,19 @@ class FakeKgRepo:
         return list(self.relations)
 
     async def create_relation(self, payload: dict):
-        row = FakeResource(id=f"relation-{len(self.relations) + 1}", org_id=payload["org_id"], created_by=payload["created_by"], name=payload["relation_type"])
+        row = FakeResource(
+            id=f"relation-{len(self.relations) + 1}",
+            org_id=payload["org_id"],
+            created_by=payload["created_by"],
+            name=payload["relation_type"],
+            dataset_id=payload["dataset_id"],
+        )
         row.knowledge_graph_id = payload["knowledge_graph_id"]
         row.source_entity_id = payload["source_entity_id"]
         row.target_entity_id = payload["target_entity_id"]
         row.relation_type = payload["relation_type"]
+        row.properties_json = payload.get("properties_json")
+        row.confidence = payload.get("confidence")
         self.relations.append(row)
         return row
 
@@ -340,7 +406,13 @@ class FakePairRepo:
         return list(self.rows)
 
     async def create_pair(self, payload: dict):
-        row = FakeResource(id=f"pair-{len(self.rows) + 1}", org_id=payload["org_id"], created_by=payload["created_by"], name=payload["relation_type"])
+        row = FakeResource(
+            id=f"pair-{len(self.rows) + 1}",
+            org_id=payload["org_id"],
+            created_by=payload["created_by"],
+            name=payload["relation_type"],
+            dataset_id=payload["dataset_id"],
+        )
         row.alignment_id = payload["alignment_id"]
         row.source_sample_id = payload.get("source_sample_id")
         row.target_sample_id = payload.get("target_sample_id")
@@ -398,6 +470,11 @@ class FakeProposalRepo:
     async def get_proposal(self, *, org_id: str, proposal_id: str, created_by: str):
         return next((row for row in self.rows if row.id == proposal_id and row.org_id == org_id and row.created_by == created_by), None)
 
+    async def update_proposal(self, obj, payload: dict):
+        for key, value in payload.items():
+            setattr(obj, key, value)
+        return obj
+
     async def delete_proposal(self, obj):
         obj.deleted_at = datetime.utcnow()
 
@@ -414,13 +491,16 @@ class FakeSession:
 
 
 class FakeModelConfig:
-    def __init__(self, id: str, org_id: str, display_name: str, model_key: str, model_type: str = "chat", is_active: bool = True):
+    def __init__(self, id: str, org_id: str, display_name: str, model_key: str, model_type: str = "chat", is_active: bool = True, provider: str = "openai", endpoint: str = "https://example.invalid/model", priority: int = 100):
         self.id = id
         self.org_id = org_id
         self.display_name = display_name
         self.model_key = model_key
         self.model_type = model_type
         self.is_active = is_active
+        self.provider = provider
+        self.endpoint = endpoint
+        self.priority = priority
 
 
 class FakeModelConfigRepo:
@@ -478,6 +558,8 @@ def service(monkeypatch):
     pair_repo = FakePairRepo(None)
     proposal_repo = FakeProposalRepo(None)
     model_config_repo = FakeModelConfigRepo(None)
+    task_repo = FakeTaskRepo(None)
+    result_repo = FakeTaskResultRepo(None)
     object_storage = FakeObjectStorage()
 
     monkeypatch.setattr(algo_mod, "DatasetRepository", lambda session: dataset_repo)
@@ -489,16 +571,18 @@ def service(monkeypatch):
     monkeypatch.setattr(algo_mod, "DatasetAlignmentPairRepository", lambda session: pair_repo)
     monkeypatch.setattr(algo_mod, "DatasetAugmentationProposalRepository", lambda session: proposal_repo)
     monkeypatch.setattr(algo_mod, "ModelConfigRepository", lambda session: model_config_repo)
+    monkeypatch.setattr(algo_mod, "TaskRepository", lambda session: task_repo)
+    monkeypatch.setattr(algo_mod, "ResultRepository", lambda session: result_repo)
     monkeypatch.setattr(algo_mod, "build_object_storage", lambda: object_storage)
     monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
 
     svc = algo_mod.AlgoWorkspaceService(session, "org-1", "user-1")
-    return svc, algo_repo, eval_item_repo, job_repo, kg_repo, session, pair_repo, proposal_repo, sample_repo
+    return svc, algo_repo, eval_item_repo, job_repo, kg_repo, session, pair_repo, proposal_repo, sample_repo, dataset_repo
 
 
 @pytest.mark.asyncio
 async def test_create_eval_dataset_validates_samples_and_counts_items(service):
-    svc, _algo_repo, eval_item_repo, _job_repo, _kg_repo, session = service
+    svc, _algo_repo, eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
     created = await svc.create_evaluation_dataset(
         algo_mod.EvaluationDatasetCreateRequest(
@@ -530,7 +614,7 @@ async def test_create_eval_dataset_rejects_foreign_sample(service):
 
 @pytest.mark.asyncio
 async def test_create_training_job_requires_existing_dataset(service):
-    svc, *_rest, session = service
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
     created = await svc.create_training_job(
         algo_mod.TrainingJobCreateRequest(
@@ -547,8 +631,22 @@ async def test_create_training_job_requires_existing_dataset(service):
 
 
 @pytest.mark.asyncio
+async def test_create_training_job_rejects_inactive_dataset(service):
+    svc, *_ = service
+
+    with pytest.raises(ValidationError):
+        await svc.create_training_job(
+            algo_mod.TrainingJobCreateRequest(
+                name="训练任务 inactive",
+                source_dataset_id="ds-2",
+                model_config_id="mc-1",
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_training_job_launch_cancel_and_result_summary(service):
-    svc, *_rest, session = service
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
     created = await svc.create_training_job(
         algo_mod.TrainingJobCreateRequest(
             name="训练任务 2",
@@ -572,7 +670,7 @@ async def test_training_job_launch_cancel_and_result_summary(service):
 
 @pytest.mark.asyncio
 async def test_remaining_algo_resources_commit_and_validate_relations(service):
-    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session = service
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
     training_job = await svc.create_training_job(
         algo_mod.TrainingJobCreateRequest(
@@ -582,6 +680,14 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
         )
     )
     experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验 A"))
+    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    training_row.status = "completed"
+    training_row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
+        "artifacts": [{"type": "checkpoint", "path": "local://train/checkpoint.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.9}},
+        "logs": [],
+    }
     fine_tune = await svc.create_fine_tune(
         algo_mod.FineTuneRunCreateRequest(
             name="微调 A",
@@ -590,6 +696,14 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
             experiment_id=experiment.id,
         )
     )
+    fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
+    fine_tune_row.status = "completed"
+    fine_tune_row.result_summary = {
+        "summary": {"model_config_id": "mc-2", "model_key": "tune-model"},
+        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.93}},
+        "logs": [],
+    }
     offline = await svc.create_offline_evaluation(
         algo_mod.OfflineEvaluationCreateRequest(
             name="离线评测 A",
@@ -613,6 +727,22 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
             experiment_id=experiment.id,
         )
     )
+    deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
+    deployment_row.status = "completed"
+    deployment_row.result_summary = {
+        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id},
+        "runtime_registration": {
+            "source_type": "fine_tune",
+            "source_id": fine_tune.id,
+            "model_key": "tune-model",
+            "provider": "openai",
+            "endpoint_placeholder": "https://deployments.invalid/tune-model",
+            "inference_config": {},
+            "status": "registered",
+        },
+        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "logs": [],
+    }
     online = await svc.create_online_validation(
         algo_mod.OnlineValidationCreateRequest(
             name="在线验证 A",
@@ -627,6 +757,187 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
     assert deployment.source_id == fine_tune.id
     assert online.deployment_id == deployment.id
     assert session.commit_count >= 6
+
+
+@pytest.mark.asyncio
+async def test_online_validation_requires_completed_deployment_and_stable_replay_summary(service):
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
+
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 online",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+        )
+    )
+    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    training_row.status = "completed"
+    training_row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
+        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.91}},
+        "logs": [],
+    }
+
+    deployment = await svc.create_deployment(
+        algo_mod.ModelDeploymentCreateRequest(
+            name="部署 B",
+            source_type="training_job",
+            source_id=training_job.id,
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        await svc.create_online_validation(
+            algo_mod.OnlineValidationCreateRequest(
+                name="在线验证 B",
+                deployment_id=deployment.id,
+            )
+        )
+
+    deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
+    deployment_row.status = "completed"
+    deployment_row.result_summary = {
+        "summary": {"source_type": "training_job", "source_id": training_job.id},
+        "runtime_registration": {
+            "source_type": "training_job",
+            "source_id": training_job.id,
+            "model_key": "train-model",
+            "provider": "openai",
+            "endpoint_placeholder": "https://deployments.invalid/train-model",
+            "inference_config": {},
+            "status": "registered",
+        },
+        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "logs": [],
+    }
+
+    online = await svc.create_online_validation(
+        algo_mod.OnlineValidationCreateRequest(
+            name="在线验证 C",
+            deployment_id=deployment.id,
+        )
+    )
+    launched = await svc.launch_generic_resource(resource_type="online_validation", resource_id=online.id)
+    assert launched.status == "queued"
+
+    await svc._run_online_validation_job(resource_id=online.id, mode="local_background")
+    row = await svc.get_generic_resource(resource_type="online_validation", resource_id=online.id)
+    summary = row.result_summary or {}
+    assert summary["summary"]["deployment_id"] == deployment.id
+    assert summary["summary"]["validation_type"] == "shadow"
+    assert "replay_samples" in summary
+    assert "metrics" in summary
+    assert "logs" in summary
+    assert row.status == "completed"
+    assert session.commit_count >= 4
+
+
+@pytest.mark.asyncio
+async def test_experiment_detail_includes_related_resource_summary(service):
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
+
+    experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验追踪"))
+
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 summary",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+            experiment_id=experiment.id,
+        )
+    )
+    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    training_row.status = "completed"
+    training_row.result_summary = {
+        "summary": {"status": "completed", "model_config_id": "mc-1"},
+        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.93}},
+        "logs": [],
+    }
+
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调任务 summary",
+            training_job_id=training_job.id,
+            model_config_id="mc-2",
+            experiment_id=experiment.id,
+        )
+    )
+    fine_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
+    fine_row.status = "completed"
+    fine_row.result_summary = {
+        "summary": {"status": "completed", "model_config_id": "mc-2"},
+        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.95}},
+        "logs": [],
+    }
+
+    eval_set = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="评测集 summary",
+            source_dataset_id="ds-1",
+            sample_ids=["sample-1"],
+        )
+    )
+
+    offline = await svc.create_offline_evaluation(
+        algo_mod.OfflineEvaluationCreateRequest(
+            name="离线评测 summary",
+            eval_set_id=eval_set.id,
+            target_type="fine_tune",
+            target_id=fine_tune.id,
+            experiment_id=experiment.id,
+        )
+    )
+    offline_row = await svc._require_generic_resource(resource_type="offline_evaluation", resource_id=offline.id)
+    offline_row.status = "completed"
+    offline_row.result_summary = {
+        "summary": {"status": "completed", "target_id": fine_tune.id},
+        "metrics": {"accuracy": 0.89, "f1": 0.91},
+        "error_cases": [],
+        "artifacts": [],
+        "logs": [],
+    }
+
+    deployment = await svc.create_deployment(
+        algo_mod.ModelDeploymentCreateRequest(
+            name="部署 summary",
+            source_type="fine_tune",
+            source_id=fine_tune.id,
+            experiment_id=experiment.id,
+        )
+    )
+    deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
+    deployment_row.status = "completed"
+    deployment_row.result_summary = {
+        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id},
+        "runtime_registration": {
+            "source_type": "fine_tune",
+            "source_id": fine_tune.id,
+            "model_key": "fine-model",
+            "provider": "openai",
+            "endpoint_placeholder": "https://deployments.invalid/fine-model",
+            "inference_config": {},
+            "status": "registered",
+        },
+        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "logs": [],
+    }
+
+    response = await svc.get_generic_resource(resource_type="experiment", resource_id=experiment.id)
+    summary = response.result_summary or {}
+    related = response.related_resources
+
+    assert summary["summary"]["训练任务数"] == 1
+    assert summary["summary"]["微调任务数"] == 1
+    assert summary["summary"]["离线评测数"] == 1
+    assert summary["summary"]["部署数"] == 1
+    assert len(related.training_jobs) == 1
+    assert len(related.fine_tunes) == 1
+    assert len(related.offline_evaluations) == 1
+    assert len(related.deployments) == 1
+    assert session.commit_count >= 5
 
 
 @pytest.mark.asyncio
@@ -645,7 +956,7 @@ async def test_training_and_fine_tune_reject_embedding_model_config(service):
 
 @pytest.mark.asyncio
 async def test_generic_launch_cancel_commits_for_execution_resources(service):
-    svc, *_rest, session = service
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
     experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验 C"))
 
     launched = await svc.launch_generic_resource(resource_type="experiment", resource_id=experiment.id)
@@ -680,7 +991,7 @@ async def test_cancel_generic_resource_rejects_draft(service):
 
 @pytest.mark.asyncio
 async def test_launch_processing_run_creates_job(service, monkeypatch):
-    svc, _algo_repo, _eval_item_repo, job_repo, _kg_repo = service
+    svc, _algo_repo, _eval_item_repo, job_repo, _kg_repo, *_ = service
     monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
 
     status = await svc.launch_processing_run(
@@ -696,12 +1007,14 @@ async def test_launch_processing_run_creates_job(service, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_kg_relation_requires_existing_entities(service):
-    svc, _algo_repo, _eval_item_repo, _job_repo, kg_repo = service
+    svc, _algo_repo, _eval_item_repo, _job_repo, kg_repo, *_ = service
     await svc.launch_processing_run(
         dataset_id="ds-1",
         processing_type="kg",
         payload=algo_mod.DatasetProcessingRunRequest(name="kg run"),
     )
+    resource = await svc._require_processing_resource(dataset_id="ds-1", processing_type="kg")
+    resource.status = "failed"
     entity = await svc.create_kg_entity(
         dataset_id="ds-1",
         payload=algo_mod.DatasetKgEntityCreateRequest(name="实体 1", entity_type="Defect"),
@@ -726,3 +1039,387 @@ async def test_get_generic_resource_not_found(service):
 
     with pytest.raises(NotFoundError):
         await svc.get_generic_resource(resource_type="experiment", resource_id="missing")
+
+
+@pytest.mark.asyncio
+async def test_create_fine_tune_rejects_incomplete_training_job(service):
+    svc, *_ = service
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 pending",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        await svc.create_fine_tune(
+            algo_mod.FineTuneRunCreateRequest(
+                name="微调失败",
+                training_job_id=training_job.id,
+                model_config_id="mc-2",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_offline_evaluation_rejects_incomplete_target(service):
+    svc, *_ = service
+    eval_set = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="评测集 C",
+            source_dataset_id="ds-1",
+            sample_ids=["sample-1"],
+        )
+    )
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 pending eval",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+        )
+    )
+
+    with pytest.raises(ValidationError):
+        await svc.create_offline_evaluation(
+            algo_mod.OfflineEvaluationCreateRequest(
+                name="离线评测失败",
+                eval_set_id=eval_set.id,
+                target_type="training_job",
+                target_id=training_job.id,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_deployment_accepts_training_job_and_rejects_missing_artifact(service):
+    svc, *_ = service
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 deploy",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+        )
+    )
+    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    training_row.status = "completed"
+    training_row.result_summary = {"artifacts": [], "metrics": {}, "logs": []}
+
+    with pytest.raises(ValidationError):
+        await svc.create_deployment(
+            algo_mod.ModelDeploymentCreateRequest(
+                name="部署失败",
+                source_type="training_job",
+                source_id=training_job.id,
+            )
+        )
+
+    training_row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
+        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.91}},
+        "logs": [],
+    }
+    created = await svc.create_deployment(
+        algo_mod.ModelDeploymentCreateRequest(
+            name="部署成功",
+            source_type="training_job",
+            source_id=training_job.id,
+        )
+    )
+    assert created.source_type == "training_job"
+
+
+@pytest.mark.asyncio
+async def test_create_alignment_pair_confirms_manual_rows_and_validates_sample_types(service):
+    svc, *_ = service
+    await svc.launch_processing_run(
+        dataset_id="ds-1",
+        processing_type="alignment",
+        payload=algo_mod.DatasetProcessingRunRequest(name="alignment run"),
+    )
+    resource = await svc._require_processing_resource(dataset_id="ds-1", processing_type="alignment")
+    resource.status = "failed"
+
+    created = await svc.create_alignment_pair(
+        dataset_id="ds-1",
+        payload=algo_mod.DatasetAlignmentPairCreateRequest(
+            source_sample_id="sample-1",
+            target_sample_id="sample-2",
+            relation_type="describes",
+            similarity_score=0.88,
+        ),
+    )
+
+    assert created.confirmation_status == "confirmed"
+    assert created.payload_json["source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_manual_editing_rejects_running_processing_resources(service):
+    svc, *_ = service
+    await svc.launch_processing_run(
+        dataset_id="ds-1",
+        processing_type="kg",
+        payload=algo_mod.DatasetProcessingRunRequest(name="kg run"),
+    )
+    resource = await svc._require_processing_resource(dataset_id="ds-1", processing_type="kg")
+    resource.status = "running"
+
+    with pytest.raises(ValidationError):
+        await svc.create_kg_entity(
+            dataset_id="ds-1",
+            payload=algo_mod.DatasetKgEntityCreateRequest(name="实体 1", entity_type="Defect"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_alignment_can_use_explicit_embedding_model_config(service):
+    svc, *_ = service
+    await svc.launch_processing_run(
+        dataset_id="ds-1",
+        processing_type="alignment",
+        payload=algo_mod.DatasetProcessingRunRequest(name="alignment run", config_json={"embedding_model_id": "mc-embed"}),
+    )
+    status = await svc.get_processing_status(dataset_id="ds-1", processing_type="alignment")
+    assert status.resource is not None
+
+
+@pytest.mark.asyncio
+async def test_apply_augmentation_creates_augmented_samples_and_history(service):
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, _session, _pair_repo, proposal_repo, sample_repo, *_ = service
+    await svc.launch_processing_run(
+        dataset_id="ds-1",
+        processing_type="augmentation",
+        payload=algo_mod.DatasetProcessingRunRequest(name="augmentation run"),
+    )
+    resource = await svc._require_processing_resource(dataset_id="ds-1", processing_type="augmentation")
+    resource.status = "failed"
+    proposal = await svc.create_augmentation_proposal(
+        dataset_id="ds-1",
+        payload=algo_mod.DatasetAugmentationProposalCreateRequest(
+            name="proposal-1",
+            description="屏幕存在划痕，需要返修处理",
+            source_sample_id="sample-2",
+            augmentation_method="entity_substitution",
+            augmentation_params={"mode": "demo"},
+        ),
+    )
+
+    result = await svc.apply_augmentation(dataset_id="ds-1", proposal_ids=[proposal.id])
+    history = await svc.get_augmentation_history(dataset_id="ds-1")
+
+    assert result["created_sample_ids"]
+    assert sample_repo.rows[-1].is_augmented is True
+    assert sample_repo.rows[-1].augmentation_source_id == "sample-2"
+    assert proposal_repo.rows[0].status == "completed"
+    assert history["history"][0]["created_sample_id"] == result["created_sample_ids"][0]
+
+
+@pytest.mark.asyncio
+async def test_delete_generic_resource_rejects_running_status(service):
+    svc, *_ = service
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务 running",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+        )
+    )
+    row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    row.status = "running"
+
+    with pytest.raises(ValidationError):
+        await svc.delete_training_job(training_job.id)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_items_survive_source_sample_deletion(service):
+    svc, _algo_repo, eval_item_repo, _job_repo, _kg_repo, _session, _pair_repo, _proposal_repo, sample_repo, *_ = service
+    created = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="评测集 snapshot",
+            source_dataset_id="ds-1",
+            sample_ids=["sample-1"],
+        )
+    )
+    sample_repo.rows = [row for row in sample_repo.rows if row.id != "sample-1"]
+    items = await svc.list_evaluation_dataset_items(resource_id=created.id, page=1, size=10)
+
+    assert items.items[0].snapshot_deleted_from_source is True
+    assert items.items[0].sample_name == "screen-scratch.png"
+    assert eval_item_repo.items
+
+
+@pytest.mark.asyncio
+async def test_experiment_detail_includes_related_resources(service):
+    svc, *_ = service
+    experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验聚合"))
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练任务聚合",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+            experiment_id=experiment.id,
+        )
+    )
+    row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    row.status = "completed"
+    row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
+        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.92}},
+        "logs": [],
+    }
+
+    detail = await svc.get_generic_resource(resource_type="experiment", resource_id=experiment.id)
+
+    assert detail.related_resources.training_jobs
+    assert detail.related_resources.training_jobs[0].id == training_job.id
+
+
+@pytest.mark.asyncio
+async def test_p0_chain_create_flow_success(service):
+    svc, *_ = service
+    eval_set = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="评测集链路",
+            source_dataset_id="ds-1",
+            sample_ids=["sample-1", "sample-2"],
+        )
+    )
+    training_job = await svc.create_training_job(
+        algo_mod.TrainingJobCreateRequest(
+            name="训练链路",
+            source_dataset_id="ds-1",
+            model_config_id="mc-1",
+            eval_set_id=eval_set.id,
+        )
+    )
+    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    training_row.status = "completed"
+    training_row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
+        "artifacts": [{"type": "checkpoint", "path": "local://train/checkpoint.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.89}},
+        "logs": [],
+    }
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调链路",
+            training_job_id=training_job.id,
+            model_config_id="mc-2",
+        )
+    )
+    fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
+    fine_tune_row.status = "completed"
+    fine_tune_row.result_summary = {
+        "summary": {"model_config_id": "mc-2", "model_key": "tune-model"},
+        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "metrics": {"summary": {"best_val_accuracy": 0.93}},
+        "logs": [],
+    }
+    offline = await svc.create_offline_evaluation(
+        algo_mod.OfflineEvaluationCreateRequest(
+            name="离线评测链路",
+            eval_set_id=eval_set.id,
+            target_type="fine_tune",
+            target_id=fine_tune.id,
+        )
+    )
+    deployment = await svc.create_deployment(
+        algo_mod.ModelDeploymentCreateRequest(
+            name="部署链路",
+            source_type="fine_tune",
+            source_id=fine_tune.id,
+        )
+    )
+
+    assert eval_set.sample_count == 2
+    assert training_job.eval_set_id == eval_set.id
+    assert fine_tune.training_job_id == training_job.id
+    assert offline.target_id == fine_tune.id
+    assert deployment.source_id == fine_tune.id
+
+
+@pytest.mark.asyncio
+async def test_execution_helpers_generate_stable_result_summary_structures():
+    training_summary = algo_mod.TrainingRunner.run_training(
+        resource_id="tj-1",
+        resource_name="训练任务",
+        source_dataset_id="ds-1",
+        model_ref=algo_mod.ExecutionModelRef(
+            id="mc-1",
+            provider="openai",
+            model_key="train-model",
+            display_name="Train Model",
+            endpoint="https://example.invalid/train",
+            model_type="chat",
+        ),
+        config_json={"hyperparameters": {"epochs": 4, "learning_rate": 0.001}},
+        execution_mode="local_background",
+        started_at=datetime(2026, 5, 21, 10, 0, 0),
+        completed_at=datetime(2026, 5, 21, 10, 5, 0),
+    )
+    assert training_summary["summary"]["status"] == "completed"
+    assert training_summary["artifacts"]
+    assert "train_loss" in training_summary["metrics"]
+
+    fine_tune_summary = algo_mod.TrainingRunner.run_fine_tune(
+        resource_id="ft-1",
+        resource_name="微调任务",
+        training_job_id="tj-1",
+        base_training_summary=training_summary,
+        model_ref=algo_mod.ExecutionModelRef(
+            id="mc-2",
+            provider="openai",
+            model_key="tune-model",
+            display_name="Tune Model",
+            endpoint="https://example.invalid/tune",
+            model_type="multimodal",
+        ),
+        config_json={"hyperparameters": {"epochs": 2}},
+        execution_mode="local_background",
+        started_at=datetime(2026, 5, 21, 10, 10, 0),
+        completed_at=datetime(2026, 5, 21, 10, 12, 0),
+    )
+    assert fine_tune_summary["summary"]["base_checkpoint"]
+    assert fine_tune_summary["artifacts"]
+
+    offline_summary = algo_mod.EvaluationEngine.run_offline_evaluation(
+        resource_id="oe-1",
+        resource_name="离线评测",
+        eval_set_id="eval-1",
+        sample_count=3,
+        target_type="fine_tune",
+        target_id="ft-1",
+        target_summary=fine_tune_summary,
+        config_json={"metrics": ["accuracy", "f1"]},
+        execution_mode="local_background",
+        started_at=datetime(2026, 5, 21, 10, 20, 0),
+        completed_at=datetime(2026, 5, 21, 10, 22, 0),
+    )
+    assert offline_summary["metrics"]["accuracy"] > 0
+    assert offline_summary["error_cases"]
+
+    deployment_summary = algo_mod.DeploymentManager.run_deployment(
+        resource_id="dp-1",
+        resource_name="部署任务",
+        source_type="fine_tune",
+        source_id="ft-1",
+        source_summary=fine_tune_summary,
+        model_ref=algo_mod.ExecutionModelRef(
+            id="mc-2",
+            provider="openai",
+            model_key="tune-model",
+            display_name="Tune Model",
+            endpoint="https://example.invalid/tune",
+            model_type="multimodal",
+        ),
+        config_json={"service_config": {"max_batch_size": 8, "max_concurrency": 16, "timeout_ms": 5000}},
+        execution_mode="local_background",
+        started_at=datetime(2026, 5, 21, 10, 30, 0),
+        completed_at=datetime(2026, 5, 21, 10, 35, 0),
+    )
+    assert deployment_summary["runtime_registration"]["status"] == "available"
+    assert deployment_summary["artifacts"]

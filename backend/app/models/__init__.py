@@ -25,11 +25,13 @@ from app.models.inspection_spec import (
 from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
+    AgentRuntimeEvent,
     AgentRuntimeInstance,
     IntentRoute,
     PromptVersion,
     RagQueryLog,
 )
+from app.models.agent_management import AgentConfigVersion, AgentExecutionMetrics
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
 from app.models.dataset import Dataset, DatasetAsyncJob, DatasetSample, DatasetUploadSession
 from app.models.algo_resources import (
@@ -96,7 +98,10 @@ __all__ = [
     "PromptVersion",
     "IntentRoute",
     "AgentRuntimeInstance",
+    "AgentRuntimeEvent",
     "RagQueryLog",
+    "AgentExecutionMetrics",
+    "AgentConfigVersion",
     "ChatSession",
     "ChatMessage",
     "ChatMessageScore",
