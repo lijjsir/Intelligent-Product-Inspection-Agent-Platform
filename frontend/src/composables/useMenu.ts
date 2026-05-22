@@ -84,6 +84,7 @@ function getAdminMenu(): MenuStructure {
         { title: "登录日志", path: "/governance/admin/auth-logs", placeholder: true },
         { title: "审计日志", path: "/governance/admin/audit-logs", placeholder: true },
         { title: "高风险审批", path: "/governance/admin/approvals", placeholder: true },
+        { title: "会议管理", path: "/governance/admin/meetings" },
       ],
     },
     { title: "个人设置", path: "/app/profile" },
