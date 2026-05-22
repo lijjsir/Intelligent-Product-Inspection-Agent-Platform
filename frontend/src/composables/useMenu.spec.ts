@@ -22,10 +22,10 @@ describe("useMenu", () => {
     setActivePinia(createPinia());
   });
 
-  it("shows shared agent ops entries for platform operators", () => {
+  it("keeps agent ops entries scoped to app developers", () => {
     const auth = useAuthStore();
-    auth.role = ROLE_PLATFORM_OPERATOR;
-    auth.roles = [ROLE_PLATFORM_OPERATOR];
+    auth.role = ROLE_APP_DEVELOPER;
+    auth.roles = [ROLE_APP_DEVELOPER];
 
     const titles = flattenTitles();
 
@@ -35,17 +35,17 @@ describe("useMenu", () => {
     expect(titles).toContain("RAG 分析");
   });
 
-  it("shows shared agent ops entries for experts", () => {
+  it("does not expose developer agent ops entries to platform operators or experts", () => {
     const auth = useAuthStore();
+    auth.role = ROLE_PLATFORM_OPERATOR;
+    auth.roles = [ROLE_PLATFORM_OPERATOR];
+
+    expect(flattenTitles()).not.toContain("Prompt 管理");
+
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
 
-    const titles = flattenTitles();
-
-    expect(titles).toContain("Agent 管理");
-    expect(titles).toContain("路由策略");
-    expect(titles).toContain("Prompt 管理");
-    expect(titles).toContain("RAG 分析");
+    expect(flattenTitles()).not.toContain("Prompt 管理");
   });
 
   it("groups tool management entries under app developer navigation", () => {

@@ -60,7 +60,7 @@
         :page-size="pageSize"
         :total="filteredBindings.length"
         layout="prev, pager, next"
-        small
+        size="small"
         class="pagination"
       />
     </section>
@@ -136,6 +136,7 @@ const editingBindingId = ref<string | null>(null);
 const createForm = reactive<BindingCreateRequest>({
   agent_id: "",
   tool_id: "",
+  tool_version_id: "",
   auto_call_enabled: true,
   approval_required: false,
 });
@@ -196,11 +197,8 @@ function editBinding(row: AgentToolBinding) {
 async function doUpdateBinding() {
   if (!editingBindingId.value) return;
   try {
-    const { binding_status, ...rest } = editForm;
-    await store.updateBinding(editingBindingId.value, {
-      ...rest,
-      binding_status: binding_status as string,
-    });
+    const { binding_status: _, ...rest } = editForm;
+    await store.updateBinding(editingBindingId.value, rest);
     showEditDialog.value = false;
     ElMessage.success("绑定已更新");
     await loadBindings();

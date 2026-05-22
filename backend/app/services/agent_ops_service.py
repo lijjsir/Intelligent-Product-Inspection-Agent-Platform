@@ -174,6 +174,8 @@ class AgentOpsService:
         for item in get_registered_subgraphs():
             existing = await self._agent_repo.dedupe_by_subgraph_key(str(item["subgraph_key"]))
             payload = dict(item)
+            if "group" in payload:
+                payload["group_key"] = payload.pop("group")
             if existing:
                 mutable_catalog_keys = {
                     "name",

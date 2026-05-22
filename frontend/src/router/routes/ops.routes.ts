@@ -34,16 +34,12 @@ export const opsRoutes = [
   { path: "tasks/:id", name: "ops-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // App developer section
-  { path: "agents/topology", name: "ops-agents-topology", component: Placeholder, meta: { title: "Agent 拓扑图", roles: [ROLE_APP_DEVELOPER] } },
   { path: "agents/intent-routes", name: "ops-agents-intent-routes", component: () => import("@/views/ops/IntentRouteView.vue"), meta: { title: "路由策略", roles: [ROLE_APP_DEVELOPER] } },
 
   { path: "prompts", name: "ops-prompts", component: () => import("@/views/ops/PromptManageView.vue"), meta: { title: "Prompt 管理", roles: [ROLE_APP_DEVELOPER] } },
-  { path: "prompts/dspy", name: "ops-prompts-dspy", component: Placeholder, meta: { title: "DSPy 优化", roles: [ROLE_APP_DEVELOPER] } },
 
   { path: "rag", name: "ops-rag", component: () => import("@/views/ops/RagAnalysisView.vue"), meta: { title: "RAG 配置", roles: [ROLE_APP_DEVELOPER] } },
-  { path: "rag/policies", name: "ops-rag-policies", component: Placeholder, meta: { title: "召回策略", roles: [ROLE_APP_DEVELOPER] } },
 
-  { path: "workflows", name: "ops-workflows", component: Placeholder, meta: { title: "流程节点", roles: [ROLE_APP_DEVELOPER] } },
   { path: "tools", name: "ops-tools-overview", component: () => import("@/views/ops/tools/ToolOverviewView.vue"), meta: { title: "工具总览", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "tools/catalog", name: "ops-tools-catalog", component: () => import("@/views/ops/tools/ToolCatalogView.vue"), meta: { title: "工具库", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "tools/catalog/:id", name: "ops-tools-detail", component: () => import("@/views/ops/tools/ToolDetailView.vue"), meta: { title: "工具详情", hiddenInMenu: true, roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
@@ -51,7 +47,6 @@ export const opsRoutes = [
   { path: "tools/bindings", name: "ops-tools-bindings", component: () => import("@/views/ops/tools/ToolBindingView.vue"), meta: { title: "Agent 绑定", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
   { path: "tools/executions", name: "ops-tools-executions", component: () => import("@/views/ops/tools/ToolExecutionView.vue"), meta: { title: "执行监控", roles: [ROLE_ADMIN, ROLE_APP_DEVELOPER] } },
 
-  { path: "releases", name: "ops-releases", component: () => import("@/views/ops/ReleaseView.vue"), meta: { title: "发布协同", roles: [ROLE_APP_DEVELOPER] } },
   { path: "templates/review", name: "ops-templates-review", component: () => import("@/views/ops/TemplateReviewView.vue"), meta: { title: "模板审核", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Billing

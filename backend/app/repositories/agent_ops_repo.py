@@ -242,7 +242,7 @@ class IntentRouteRepository(AgentOpsRepository):
 
 
 class RagAnalysisRepository(AgentOpsRepository):
-    async def get_rag_stats(self, days: int = 7) -> dict:
+    async def get_rag_stats(self, days: int = 90) -> dict:
         cutoff_date = datetime.utcnow() - timedelta(days=days)
 
         filters = [

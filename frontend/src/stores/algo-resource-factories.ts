@@ -3,7 +3,7 @@ import type { Ref } from "vue";
 
 import type { AlgoListQuery } from "@/types/algo-workspace.types";
 
-export interface ResourceFactoryOptions<TItem, TCreatePayload, TUpdatePayload> {
+export interface ResourceFactoryOptions<TCreatePayload, TUpdatePayload> {
   list: (query: AlgoListQuery) => Promise<any>;
   get: (id: string) => Promise<any>;
   create: (payload: TCreatePayload) => Promise<any>;
@@ -15,7 +15,7 @@ export interface ResourceFactoryOptions<TItem, TCreatePayload, TUpdatePayload> {
 }
 
 export function createAlgoResourceStore<TItem extends { id: string; status?: string }, TCreatePayload, TUpdatePayload>(
-  options: ResourceFactoryOptions<TItem, TCreatePayload, TUpdatePayload>,
+  options: ResourceFactoryOptions<TCreatePayload, TUpdatePayload>,
 ) {
   const items = ref<TItem[]>([]) as Ref<TItem[]>;
   const current = ref<TItem | null>(null) as Ref<TItem | null>;
