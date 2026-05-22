@@ -468,6 +468,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     "conclusion": conclusion,
                 }
             )
+            trust_scoring = reasoning_chain.get("trust_scoring") if isinstance(reasoning_chain, dict) else None
             stability_payload = {
                 "id": str(uuid7()),
                 "result_id": result.id,
@@ -483,6 +484,8 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "dimension_detail": stability.get("dimension_detail"),
                 "sampling_results": {"timeline": state.get("timeline") or []},
                 "root_cause": None,
+                "hallucination_risk": float(trust_scoring.get("hallucination_risk")) if isinstance(trust_scoring, dict) and trust_scoring.get("hallucination_risk") is not None else None,
+                "overconfidence": float(trust_scoring.get("overconfidence")) if isinstance(trust_scoring, dict) and trust_scoring.get("overconfidence") is not None else None,
                 "created_at": utcnow(),
             }
             stability_obj = await stability_repo.upsert_by_task(stability_payload)

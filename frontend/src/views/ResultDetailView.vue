@@ -72,6 +72,23 @@ function goBack() {
   router.back();
 }
 
+const sampleLabels = computed(() => {
+  const items = taskStore.current?.image_items;
+  if (!items || !items.length) return {} as Record<number, string>;
+  const map: Record<number, string> = {};
+  for (const item of items) {
+    if (item.sample_number != null && !(item.index in map)) {
+      map[item.index] = `样品${item.sample_number}`;
+    }
+  }
+  return map;
+});
+
+function sampleLabel(imageIndex?: number | null): string {
+  if (imageIndex == null) return "";
+  return sampleLabels.value[imageIndex] || "";
+}
+
 async function submitReview() {
   if (!store.current || !reviewForm.value.verdict) return;
   reviewing.value = true;
@@ -147,6 +164,12 @@ async function submitReview() {
                 <div v-else>
                   <el-table :data="store.current.defects" stripe style="width: 100%">
                     <el-table-column type="index" label="#" width="50" />
+                    <el-table-column label="样品" width="80">
+                      <template #default="{ row }">
+                        <el-tag v-if="sampleLabel(row.image_index)" type="danger" size="small">{{ sampleLabel(row.image_index) }}</el-tag>
+                        <span v-else class="text-gray-400">-</span>
+                      </template>
+                    </el-table-column>
                     <el-table-column prop="image_index" label="图片序号" width="90">
                       <template #default="{ row }">
                         <el-tag v-if="row.image_index != null" type="primary" size="small">图{{ row.image_index + 1 }}</el-tag>

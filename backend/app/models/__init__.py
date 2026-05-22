@@ -53,7 +53,7 @@ from app.models.algo_resources import (
     Experiment,
     ModelDeployment,
 )
-from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomMember
+from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
@@ -129,6 +129,7 @@ __all__ = [
     "Experiment",
     "ModelDeployment",
     "MeetingRoom",
+    "MeetingRoomAgent",
     "MeetingRoomMember",
     "MeetingMessage",
     "RagSpace",

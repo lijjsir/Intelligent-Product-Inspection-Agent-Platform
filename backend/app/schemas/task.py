@@ -14,6 +14,7 @@ class ImageItem(BaseModel):
     index: int = Field(ge=0, description="Zero-based position in the image list")
     url: str = Field(min_length=1)
     hash: str = Field(min_length=1, description="SHA-256 hex digest of the image content")
+    sample_number: int | None = Field(default=None, ge=1, description="Batch sample/unit number for traceability")
 
     @classmethod
     def from_url(cls, index: int, url: str, content_bytes: bytes | None = None) -> ImageItem:

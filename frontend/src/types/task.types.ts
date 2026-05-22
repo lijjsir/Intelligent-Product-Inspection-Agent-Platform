@@ -6,6 +6,7 @@ export interface ImageItem {
   index: number;
   url: string;
   hash: string;
+  sample_number?: number | null;
 }
 
 export interface DefectItem {

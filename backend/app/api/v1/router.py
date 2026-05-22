@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin_meetings,
     algo_runtime,
     algo_workspace,
     agent,
@@ -48,6 +49,7 @@ router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 router.include_router(algo_workspace.router, tags=["algo-workspace"])
 router.include_router(algo_runtime.router, tags=["algo-runtime"])
 router.include_router(meetings.router, tags=["meetings"])
+router.include_router(admin_meetings.router, tags=["admin-meetings"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
