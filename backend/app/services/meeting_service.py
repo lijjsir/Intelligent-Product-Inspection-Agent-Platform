@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
+import uuid
+from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, NotFoundError
@@ -20,6 +23,14 @@ from app.services.stream_service import meeting_stream_broker
 from app.services.meeting_agent_service import MeetingAgentService
 
 _MENTION_RE = re.compile(r"@(\S+?)(?:\s|$)")
+
+
+def _is_valid_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 class MeetingService:
@@ -148,16 +159,18 @@ class MeetingService:
         await self._ensure_member(room_id)
         rows = await self._repo.get_agents(self._org_id, room_id)
 
-        # Load agent definitions for name resolution
+        # Load agent definitions for name resolution (only valid UUIDs)
         agent_ids = [str(r.agent_id) for r in rows]
         from app.models.meeting import MeetingAgentDefinition
-        from sqlalchemy import select
-        result = await self._session.execute(
-            select(MeetingAgentDefinition).where(
-                MeetingAgentDefinition.id.in_(agent_ids),
+        valid_ids = [aid for aid in agent_ids if _is_valid_uuid(aid)]
+        defs_by_id: dict[str, Any] = {}
+        if valid_ids:
+            result = await self._session.execute(
+                select(MeetingAgentDefinition).where(
+                    MeetingAgentDefinition.id.in_(valid_ids),
+                )
             )
-        )
-        defs_by_id = {str(ad.id): ad for ad in result.scalars().all()}
+            defs_by_id = {str(ad.id): ad for ad in result.scalars().all()}
 
         results = []
         for row in rows:
@@ -246,21 +259,24 @@ class MeetingService:
         if not room_agent_ids:
             return []
 
-        # Load agent definitions for room agents
-        from app.models.meeting import MeetingAgentDefinition
-        from sqlalchemy import select
-        agent_defs_result = await self._session.execute(
-            select(MeetingAgentDefinition).where(
-                MeetingAgentDefinition.id.in_(list(room_agent_ids)),
-                MeetingAgentDefinition.deleted_at.is_(None),
+        # Only query with valid UUIDs (old agents may use topology subgraph_keys)
+        valid_ids = [aid for aid in room_agent_ids if _is_valid_uuid(aid)]
+        agent_defs: dict[str, Any] = {}
+        if valid_ids:
+            from app.models.meeting import MeetingAgentDefinition
+            agent_defs_result = await self._session.execute(
+                select(MeetingAgentDefinition).where(
+                    MeetingAgentDefinition.id.in_(valid_ids),
+                    MeetingAgentDefinition.deleted_at.is_(None),
+                )
             )
-        )
-        agent_defs = {str(ad.id): ad for ad in agent_defs_result.scalars().all()}
+            agent_defs = {str(ad.id): ad for ad in agent_defs_result.scalars().all()}
 
         mentions = []
         for name in raw_names:
-            for agent_id, ad in agent_defs.items():
-                if ad.name.lower() == name.lower() and agent_id in room_agent_ids:
+            for agent_id in room_agent_ids:
+                ad = agent_defs.get(agent_id)
+                if ad and ad.name.lower() == name.lower():
                     mentions.append({"agent_id": agent_id, "agent_name": ad.name})
                     break
         return mentions
