@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
+import json
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +11,8 @@ from typing import Any
 
 from fastapi import UploadFile
 
+from app.core.config import settings
+from app.core.datetime import utcnow, utcnow_iso
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.dataset import Dataset, DatasetSample
 from app.repositories.dataset_repo import DatasetAsyncJobRepository, DatasetRepository, DatasetSampleRepository, DatasetUploadSessionRepository
@@ -41,6 +45,9 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/gif",
     "image/bmp",
 }
+TEXT_SIDECAR_EXTENSIONS = {".txt"}
+ANNOTATION_SIDECAR_EXTENSIONS = {".json"}
+IGNORED_TEXT_EXTENSIONS = {".txt", ".md", ".jsonl", ".json"}
 
 
 class DatasetService(TenantAwareService):
@@ -52,6 +59,7 @@ class DatasetService(TenantAwareService):
         self._jobs = DatasetAsyncJobRepository(session)
         self._uploads = DatasetUploadSessionRepository(session)
         self._storage = build_object_storage()
+        self._dataset_bucket = settings.dataset_storage_bucket
 
     async def list_datasets(
         self,
@@ -134,7 +142,7 @@ class DatasetService(TenantAwareService):
             sample_type=sample_type,
         )
         return PagedResponse(
-            items=[DatasetSampleResponse.model_validate(row) for row in rows],
+            items=[self._serialize_sample(row) for row in rows],
             total=total,
             page=page,
             size=size,
@@ -177,7 +185,7 @@ class DatasetService(TenantAwareService):
                 "result_summary": {"created": 1, "sample_type": "text"},
             }
         )
-        return DatasetSampleResponse.model_validate(created)
+        return self._serialize_sample(created)
 
     async def upload_image_samples(self, *, dataset_id: str, files: list[UploadFile]) -> list[DatasetSampleResponse]:
         dataset = await self._require_dataset(dataset_id)
@@ -201,9 +209,9 @@ class DatasetService(TenantAwareService):
 
             checksum = hashlib.sha256(content).hexdigest()
             object_key = f"datasets/{self._org_id}/{dataset_id}/{checksum[:12]}-{raw_name}"
-            self._storage.ensure_bucket("dataset-assets")
+            self._storage.ensure_bucket(self._dataset_bucket)
             stored = self._storage.put_bytes(
-                bucket="dataset-assets",
+                bucket=self._dataset_bucket,
                 object_key=object_key,
                 data=content,
                 content_type=content_type or None,
@@ -222,7 +230,7 @@ class DatasetService(TenantAwareService):
                             "size_bytes": int(stored.get("size_bytes") or len(content)),
                             "checksum_sha256": checksum,
                             "storage_backend": self._storage.backend_name,
-                            "bucket": stored.get("bucket") or "dataset-assets",
+                            "bucket": stored.get("bucket") or self._dataset_bucket,
                             "object_key": stored.get("object_key") or object_key,
                             "file_url": stored.get("url"),
                             "annotation_data": None,
@@ -233,7 +241,7 @@ class DatasetService(TenantAwareService):
                 )
             except Exception:
                 self._storage.delete_object(
-                    bucket=stored.get("bucket") or "dataset-assets",
+                    bucket=stored.get("bucket") or self._dataset_bucket,
                     object_key=stored.get("object_key") or object_key,
                 )
                 raise
@@ -251,16 +259,16 @@ class DatasetService(TenantAwareService):
                 "result_summary": {"created": len(created_rows), "sample_type": "image", "uploaded_bytes": total_bytes},
             }
         )
-        return [DatasetSampleResponse.model_validate(row) for row in created_rows]
+        return [self._serialize_sample(row) for row in created_rows]
 
     async def init_upload_session(self, *, dataset_id: str, payload: DatasetUploadInitRequest) -> DatasetUploadInitResponse:
         dataset = await self._require_dataset(dataset_id)
         if Path(payload.file_name).suffix.lower() != ".zip":
             raise ValidationError("only zip uploads are supported")
-        bucket = "dataset-assets"
+        bucket = self._dataset_bucket
         self._storage.ensure_bucket(bucket)
-        object_key = f"datasets/{self._org_id}/{dataset_id}/uploads/{hashlib.sha256(f'{payload.file_name}:{datetime.utcnow().isoformat()}'.encode()).hexdigest()[:16]}-{Path(payload.file_name).name}"
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        object_key = f"datasets/{self._org_id}/{dataset_id}/uploads/{hashlib.sha256(f'{payload.file_name}:{utcnow_iso()}'.encode()).hexdigest()[:16]}-{Path(payload.file_name).name}"
+        expires_at = utcnow() + timedelta(hours=24)
         session_row = await self._uploads.create(
             {
                 "org_id": self._org_id,
@@ -309,7 +317,7 @@ class DatasetService(TenantAwareService):
         if part_number < 1 or part_number > int(upload.total_chunks or 0):
             raise ValidationError("invalid part number")
 
-        bucket = upload.bucket or "dataset-assets"
+        bucket = upload.bucket or self._dataset_bucket
         self._storage.ensure_bucket(bucket)
         raw_parts = upload.uploaded_parts_json or []
         uploaded_parts = sorted({int(item) for item in raw_parts if str(item).isdigit()})
@@ -349,7 +357,7 @@ class DatasetService(TenantAwareService):
         )
         if upload is None:
             raise NotFoundError("upload session not found")
-        bucket = upload.bucket or "dataset-assets"
+        bucket = upload.bucket or self._dataset_bucket
         object_key = upload.object_key or ""
         if not object_key:
             raise ValidationError("upload object key missing")
@@ -378,7 +386,7 @@ class DatasetService(TenantAwareService):
             upload,
             {
                 "status": "completed",
-                "completed_at": datetime.utcnow(),
+                "completed_at": utcnow(),
                 "uploaded_parts_json": sorted(expected_parts),
             },
         )
@@ -428,7 +436,7 @@ class DatasetService(TenantAwareService):
         await asyncio.sleep(0)
         async with get_session() as session:
             service = DatasetService(session, self._org_id, self._user_id)
-            job = await service._dataset_jobs.get(
+            job = await service._jobs.get(
                 org_id=self._org_id,
                 dataset_id=dataset_id,
                 job_id=job_id,
@@ -451,11 +459,14 @@ class DatasetService(TenantAwareService):
         created_sample_count = 0
         created_image_count = 0
         created_text_count = 0
+        text_sidecar_attached = 0
+        annotation_sidecar_attached = 0
         total_bytes = 0
+        skipped_files = 0
 
         async with get_session() as session:
             service = DatasetService(session, self._org_id, self._user_id)
-            job = await service._dataset_jobs.get(
+            job = await service._jobs.get(
                 org_id=self._org_id,
                 dataset_id=dataset_id,
                 job_id=job_id,
@@ -483,21 +494,68 @@ class DatasetService(TenantAwareService):
             try:
                 with zipfile.ZipFile(io.BytesIO(content)) as archive:
                     members = [info for info in archive.infolist() if not info.is_dir()]
+                    image_entries: dict[str, tuple[Any, bytes]] = {}
+                    sidecar_entries: list[Any] = []
                     for info in members:
                         filename = Path(info.filename).name
                         suffix = Path(filename).suffix.lower()
-                        if suffix not in ALLOWED_IMAGE_EXTENSIONS:
-                            warnings.append(f"skipped non-image file: {info.filename}")
+                        stem = Path(filename).stem
+                        if suffix in ALLOWED_IMAGE_EXTENSIONS:
+                            image_entries[stem] = (info, archive.read(info))
                             continue
-                        sample_bytes = archive.read(info)
+                        sidecar_entries.append(info)
+
+                    for stem, (info, sample_bytes) in image_entries.items():
+                        filename = Path(info.filename).name
                         if not sample_bytes:
                             warnings.append(f"skipped empty image file: {info.filename}")
+                            skipped_files += 1
                             continue
+                        text_content = None
+                        preview_text = filename
+                        annotation_data = None
+                        sidecar_text_filename = None
+                        sidecar_annotation_filename = None
+                        for sidecar in sidecar_entries:
+                            sidecar_name = Path(sidecar.filename).name
+                            sidecar_stem = Path(sidecar_name).stem
+                            sidecar_suffix = Path(sidecar_name).suffix.lower()
+                            if sidecar_stem != stem:
+                                continue
+                            raw_sidecar = archive.read(sidecar)
+                            if sidecar_suffix in TEXT_SIDECAR_EXTENSIONS:
+                                try:
+                                    parsed_text = raw_sidecar.decode("utf-8").strip()
+                                except UnicodeDecodeError:
+                                    warnings.append(f"skipped invalid text sidecar: {sidecar.filename}")
+                                    skipped_files += 1
+                                    continue
+                                if parsed_text:
+                                    text_content = parsed_text
+                                    preview_text = parsed_text[:200]
+                                    sidecar_text_filename = sidecar.filename
+                                    text_sidecar_attached += 1
+                                continue
+                            if sidecar_suffix in ANNOTATION_SIDECAR_EXTENSIONS:
+                                try:
+                                    parsed_annotation = json.loads(raw_sidecar.decode("utf-8"))
+                                except (UnicodeDecodeError, json.JSONDecodeError):
+                                    warnings.append(f"skipped invalid annotation sidecar: {sidecar.filename}")
+                                    skipped_files += 1
+                                    continue
+                                if not isinstance(parsed_annotation, (dict, list)):
+                                    warnings.append(f"skipped unsupported annotation sidecar payload: {sidecar.filename}")
+                                    skipped_files += 1
+                                    continue
+                                annotation_data = parsed_annotation
+                                sidecar_annotation_filename = sidecar.filename
+                                annotation_sidecar_attached += 1
+
                         checksum = hashlib.sha256(sample_bytes).hexdigest()
                         object_key_item = f"datasets/{self._org_id}/{dataset_id}/{checksum[:12]}-{filename}"
-                        service._storage.ensure_bucket("dataset-assets")
+                        service._storage.ensure_bucket(service._dataset_bucket)
                         stored_image = service._storage.put_bytes(
-                            bucket="dataset-assets",
+                            bucket=service._dataset_bucket,
                             object_key=object_key_item,
                             data=sample_bytes,
                             content_type="image/*",
@@ -509,22 +567,40 @@ class DatasetService(TenantAwareService):
                                 "created_by": self._user_id,
                                 "sample_type": "image",
                                 "sample_name": filename,
-                                "text_content": None,
+                                "text_content": text_content,
                                 "content_type": stored_image.get("content_type") or "image/*",
                                 "size_bytes": int(stored_image.get("size_bytes") or len(sample_bytes)),
                                 "checksum_sha256": checksum,
                                 "storage_backend": service._storage.backend_name,
-                                "bucket": stored_image.get("bucket") or "dataset-assets",
+                                "bucket": stored_image.get("bucket") or service._dataset_bucket,
                                 "object_key": stored_image.get("object_key") or object_key_item,
                                 "file_url": stored_image.get("url"),
-                                "annotation_data": None,
-                                "source_metadata": {"original_filename": info.filename, "upload_session_id": upload.id},
-                                "preview_text": filename,
+                                "annotation_data": annotation_data,
+                                "source_metadata": {
+                                    "original_filename": info.filename,
+                                    "upload_session_id": upload.id,
+                                    "sidecar_text_filename": sidecar_text_filename,
+                                    "sidecar_annotation_filename": sidecar_annotation_filename,
+                                },
+                                "preview_text": preview_text,
                             }
                         )
                         created_sample_count += 1
                         created_image_count += 1
                         total_bytes += len(sample_bytes)
+
+                    for sidecar in sidecar_entries:
+                        sidecar_name = Path(sidecar.filename).name
+                        sidecar_suffix = Path(sidecar_name).suffix.lower()
+                        sidecar_stem = Path(sidecar_name).stem
+                        if sidecar_stem in image_entries:
+                            continue
+                        if sidecar_suffix in IGNORED_TEXT_EXTENSIONS:
+                            warnings.append(f"skipped orphan sidecar file: {sidecar.filename}")
+                            skipped_files += 1
+                            continue
+                        warnings.append(f"skipped unsupported file: {sidecar.filename}")
+                        skipped_files += 1
                 dataset = await service._datasets.get(org_id=self._org_id, dataset_id=dataset_id, owner_user_id=self._user_id)
                 if dataset is None:
                     raise NotFoundError("dataset not found")
@@ -535,11 +611,14 @@ class DatasetService(TenantAwareService):
                     "created_samples": created_sample_count,
                     "image_samples": created_image_count,
                     "text_samples": created_text_count,
+                    "text_sidecar_attached": text_sidecar_attached,
+                    "annotation_sidecar_attached": annotation_sidecar_attached,
+                    "skipped_files": skipped_files,
                     "uploaded_bytes": total_bytes,
                     "warnings": warnings,
                 }
                 upload.status = "completed"
-                upload.completed_at = datetime.utcnow()
+                upload.completed_at = utcnow()
                 upload.error_message = None
             except zipfile.BadZipFile:
                 job.status = "failed"
@@ -602,6 +681,14 @@ class DatasetService(TenantAwareService):
             raise NotFoundError("dataset not found")
         return dataset
 
+    async def _commit(self) -> None:
+        commit = getattr(self._session, "commit", None)
+        if commit is None:
+            return
+        result = commit()
+        if asyncio.iscoroutine(result):
+            await result
+
     async def _resolve_execution_mode(self) -> str:
         result = has_active_celery_worker()
         if hasattr(result, "__await__"):
@@ -619,7 +706,7 @@ class DatasetService(TenantAwareService):
     def _delete_sample_object(self, sample: DatasetSample) -> None:
         if sample.sample_type != "image":
             return
-        bucket = sample.bucket or "dataset-assets"
+        bucket = sample.bucket or self._dataset_bucket
         object_key = sample.object_key or ""
         if not object_key:
             return
@@ -646,6 +733,14 @@ class DatasetService(TenantAwareService):
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
+
+    def _serialize_sample(self, row: DatasetSample) -> DatasetSampleResponse:
+        payload = DatasetSampleResponse.model_validate(row).model_dump()
+        download_url = None
+        if row.bucket and row.object_key:
+            download_url = self._storage.presign_download_url(bucket=row.bucket, object_key=row.object_key)
+        payload["download_url"] = download_url
+        return DatasetSampleResponse(**payload)
 
 
 async def run_dataset_import_pipeline(

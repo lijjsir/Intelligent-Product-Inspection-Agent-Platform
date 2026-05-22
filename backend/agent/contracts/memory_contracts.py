@@ -8,6 +8,7 @@ from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
+from app.core.datetime import utcnow
 
 
 # ---- Enums ----
@@ -215,7 +216,7 @@ class MemoryEventPayload(BaseModel):
     payload_ref: str | None = None
     risk_tags: dict | None = None
     parent_event_ids: list[str] | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=lambda: utcnow())
 
 
 # ---- Propagation ----

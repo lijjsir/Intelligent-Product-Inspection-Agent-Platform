@@ -6,6 +6,7 @@ from typing import TypeVar
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
@@ -68,7 +69,7 @@ class AgentDefinitionRepository(AgentOpsRepository):
         canonical = items[0]
         if len(items) == 1:
             return canonical
-        now = datetime.utcnow()
+        now = utcnow()
         for duplicate in items[1:]:
             duplicate.is_active = False
             duplicate.deleted_at = now
@@ -91,7 +92,7 @@ class AgentDefinitionRepository(AgentOpsRepository):
         if not obj:
             return False
         from datetime import datetime
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return True
 
@@ -148,7 +149,7 @@ class PromptVersionRepository(AgentOpsRepository):
         if not obj:
             return False
         from datetime import datetime
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return True
 
@@ -207,7 +208,7 @@ class IntentRouteRepository(AgentOpsRepository):
         if not obj:
             return False
         from datetime import datetime
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return True
 
@@ -243,7 +244,7 @@ class IntentRouteRepository(AgentOpsRepository):
 
 class RagAnalysisRepository(AgentOpsRepository):
     async def get_rag_stats(self, days: int = 90) -> dict:
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = utcnow() - timedelta(days=days)
 
         filters = [
             RagQueryLog.created_at >= cutoff_date,
@@ -425,7 +426,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
         canonical = items[0]
         if len(items) == 1:
             return canonical
-        now = datetime.utcnow()
+        now = utcnow()
         for duplicate in items[1:]:
             duplicate.deleted_at = now
         await self._session.flush()
@@ -438,7 +439,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
         canonical = items[0]
         if len(items) == 1:
             return canonical
-        now = datetime.utcnow()
+        now = utcnow()
         for duplicate in items[1:]:
             duplicate.deleted_at = now
         await self._session.flush()
@@ -495,9 +496,9 @@ class AgentRuntimeRepository(AgentOpsRepository):
             return None
         obj.status = status
         if status == "running":
-            obj.last_started_at = datetime.utcnow()
+            obj.last_started_at = utcnow()
         if status == "stopped":
-            obj.last_stopped_at = datetime.utcnow()
+            obj.last_stopped_at = utcnow()
         await self._session.flush()
         return obj
 
@@ -527,9 +528,9 @@ class AgentRuntimeRepository(AgentOpsRepository):
         obj.runtime_status = runtime_status
         obj.updated_by = updated_by
         if runtime_status == "running":
-            obj.last_started_at = datetime.utcnow()
+            obj.last_started_at = utcnow()
         if runtime_status == "stopped":
-            obj.last_stopped_at = datetime.utcnow()
+            obj.last_stopped_at = utcnow()
         await self._session.flush()
         return obj
 

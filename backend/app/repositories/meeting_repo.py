@@ -6,6 +6,7 @@ from typing import Sequence
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomMember
 
 
@@ -165,5 +166,5 @@ class MeetingRepository:
                 MeetingRoom.id == room_id,
                 MeetingRoom.deleted_at.is_(None),
             )
-            .values(last_message_at=datetime.utcnow())
+            .values(last_message_at=utcnow())
         )

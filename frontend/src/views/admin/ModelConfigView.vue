@@ -17,6 +17,14 @@ const form = reactive({
   endpoint: "",
   api_key: "",
   model_type: "chat",
+  training_command_template: "",
+  fine_tune_command_template: "",
+  offline_eval_command_template: "",
+  deployment_command_template: "",
+  runtime_env_json: "{\"workdir\":\"/tmp/piap-gpu-jobs\",\"artifact_root\":\"/tmp/piap-gpu-jobs/artifacts\",\"env\":{}}",
+  default_gpu_request: 1,
+  default_cpu_request: 8,
+  default_memory_gb: 32,
   priority: 100,
   rpm_limit: 60,
   input_price_per_million: 0,
@@ -40,6 +48,14 @@ function resetForm() {
     endpoint: "",
     api_key: "",
     model_type: "chat",
+    training_command_template: "",
+    fine_tune_command_template: "",
+    offline_eval_command_template: "",
+    deployment_command_template: "",
+    runtime_env_json: "{\"workdir\":\"/tmp/piap-gpu-jobs\",\"artifact_root\":\"/tmp/piap-gpu-jobs/artifacts\",\"env\":{}}",
+    default_gpu_request: 1,
+    default_cpu_request: 8,
+    default_memory_gb: 32,
     priority: 100,
     rpm_limit: 60,
     input_price_per_million: 0,
@@ -63,6 +79,14 @@ function openEdit(row: any) {
     endpoint: row.endpoint,
     api_key: "",
     model_type: row.model_type,
+    training_command_template: row.training_command_template || "",
+    fine_tune_command_template: row.fine_tune_command_template || "",
+    offline_eval_command_template: row.offline_eval_command_template || "",
+    deployment_command_template: row.deployment_command_template || "",
+    runtime_env_json: JSON.stringify(row.runtime_env_json || { workdir: "/tmp/piap-gpu-jobs", artifact_root: "/tmp/piap-gpu-jobs/artifacts", env: {} }, null, 2),
+    default_gpu_request: row.default_gpu_request ?? 1,
+    default_cpu_request: row.default_cpu_request ?? 8,
+    default_memory_gb: row.default_memory_gb ?? 32,
     priority: row.priority,
     rpm_limit: row.rpm_limit ?? 60,
     input_price_per_million: row.input_price_per_million ?? 0,
@@ -81,12 +105,25 @@ const apiKeyHint = computed(() => {
 });
 
 async function submit() {
-  const payload: ModelConfigPayload = {
-    provider: form.provider,
-    model_key: form.model_key,
+  let runtimeEnvJson: Record<string, unknown> | null = null;
+  try {
+    runtimeEnvJson = form.runtime_env_json ? JSON.parse(form.runtime_env_json) : null;
+  } catch {
+    ElMessage.error("运行时环境 JSON 解析失败");
+    return;
+  }
+  const payload: Record<string, unknown> = {
     display_name: form.display_name,
     endpoint: form.endpoint,
-    model_type: form.model_type as ModelType,
+    model_type: form.model_type,
+    training_command_template: form.training_command_template || null,
+    fine_tune_command_template: form.fine_tune_command_template || null,
+    offline_eval_command_template: form.offline_eval_command_template || null,
+    deployment_command_template: form.deployment_command_template || null,
+    runtime_env_json: runtimeEnvJson,
+    default_gpu_request: form.default_gpu_request || null,
+    default_cpu_request: form.default_cpu_request || null,
+    default_memory_gb: form.default_memory_gb || null,
     priority: form.priority,
     rpm_limit: form.rpm_limit,
     input_price_per_million: form.input_price_per_million,
@@ -101,7 +138,7 @@ async function submit() {
     ElMessage.success("模型配置已更新");
   } else {
     payload.api_key = form.api_key || undefined;
-    const created = await store.createOne(payload);
+    const created = await store.createOne(payload as unknown as ModelConfigPayload);
     ElMessage.success("模型配置已创建");
     try {
       await store.checkHealth(created.id);
@@ -189,6 +226,13 @@ onMounted(() => {
         <el-table-column prop="display_name" label="名称" min-width="150" />
         <el-table-column prop="model_key" label="模型标识" min-width="150" />
         <el-table-column prop="provider" label="提供方" width="110" />
+        <el-table-column label="GPU 模板" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.training_command_template || row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? 'success' : 'info'">
+              {{ row.training_command_template || row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? "已配置" : "未配置" }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="priority" label="优先级" width="80" />
         <el-table-column label="输入单价" width="110">
           <template #default="{ row }">￥{{ Number(row.input_price_per_million || 0).toFixed(2) }}/1M</template>
@@ -240,6 +284,22 @@ onMounted(() => {
             <el-option v-for="item in modelTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
+        <el-divider content-position="left">GPU 作业模板</el-divider>
+        <el-form-item label="训练命令模板">
+          <el-input v-model="form.training_command_template" type="textarea" :rows="4" placeholder="python train.py --dataset {dataset_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
+        </el-form-item>
+        <el-form-item label="微调命令模板">
+          <el-input v-model="form.fine_tune_command_template" type="textarea" :rows="4" placeholder="python finetune.py --training-job {training_job_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
+        </el-form-item>
+        <el-form-item label="离线评测命令模板">
+          <el-input v-model="form.offline_eval_command_template" type="textarea" :rows="4" placeholder="python evaluate.py --eval-set {eval_set_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
+        </el-form-item>
+        <el-form-item label="运行时环境 JSON">
+          <el-input v-model="form.runtime_env_json" type="textarea" :rows="6" />
+        </el-form-item>
+        <el-form-item label="默认 GPU 数"><el-input-number v-model="form.default_gpu_request" :min="1" :max="64" /></el-form-item>
+        <el-form-item label="默认 CPU 数"><el-input-number v-model="form.default_cpu_request" :min="1" :max="1024" /></el-form-item>
+        <el-form-item label="默认内存 GB"><el-input-number v-model="form.default_memory_gb" :min="1" :max="8192" /></el-form-item>
         <el-form-item label="优先级"><el-input-number v-model="form.priority" :min="1" :max="9999" /></el-form-item>
         <el-form-item label="RPM 限制"><el-input-number v-model="form.rpm_limit" :min="1" :max="100000" /></el-form-item>
         <el-form-item label="输入单价（元 / 1M tokens）">

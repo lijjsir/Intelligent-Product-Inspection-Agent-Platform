@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator
 
 from fastapi import Header, Query
 
+from app.core.datetime import utcnow, utcnow_iso
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.core.ids import uuid7
 from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER, require_role
@@ -133,7 +134,7 @@ class ChatService:
                 org_scope = None if self._current.role == ROLE_ADMIN else self._org_id
                 if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
-        expires_at = datetime.utcnow() + timedelta(minutes=10)
+        expires_at = utcnow() + timedelta(minutes=10)
         token = create_stream_token(
             self._user_id,
             extra={
@@ -234,7 +235,7 @@ class ChatService:
 
     async def cancel_message(self, session_id: str, message_id: str) -> ChatMessageResponse:
         content = "已中断本次回答。你可以编辑上一条问题后重新发送。"
-        now = datetime.utcnow().isoformat()
+        now = utcnow_iso()
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             if not await session_repo.get(self._org_id, self._user_id, session_id):
@@ -395,7 +396,7 @@ class ChatService:
         workflow_run_id: str,
     ) -> None:
         async def emit(event: dict[str, Any]) -> None:
-            event.setdefault("ts", datetime.utcnow().isoformat())
+            event.setdefault("ts", utcnow_iso())
             await chat_stream_broker.publish(session_id, event)
 
         await emit(

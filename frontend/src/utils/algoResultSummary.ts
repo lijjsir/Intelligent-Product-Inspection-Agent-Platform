@@ -76,6 +76,41 @@ function compactValue(value: unknown): unknown {
   return value;
 }
 
+function appendGpuSummary(
+  highlights: SummaryHighlightItem[],
+  metrics: SummaryMetricItem[],
+  summary: GenericRecord,
+) {
+  const lease = isRecord(summary.lease) ? summary.lease : undefined;
+  const remote = isRecord(summary.remote_execution) ? summary.remote_execution : undefined;
+  if (lease) {
+    highlights.push({
+      label: "GPU 节点",
+      value: Array.isArray(lease.node_ids) ? lease.node_ids.join(", ") : "-",
+      tone: "info",
+    });
+    metrics.push({
+      key: "gpu_indices_by_node",
+      label: "GPU 分配",
+      value: lease.gpu_indices_by_node || {},
+    });
+  }
+  if (remote) {
+    highlights.push({
+      label: "远端主机",
+      value: remote.host || "-",
+      tone: "info",
+    });
+    metrics.push(
+      { key: "remote_workdir", label: "远端目录", value: remote.workdir || "-" },
+      { key: "remote_command", label: "命令摘要", value: remote.command_preview || "-" },
+      { key: "remote_pid", label: "远端 PID", value: remote.remote_pid || "-" },
+      { key: "remote_log", label: "日志路径", value: remote.log_path || "-" },
+      { key: "remote_status", label: "状态文件", value: remote.status_path || "-" },
+    );
+  }
+}
+
 export function buildTrainingSummaryViewModel(resource: TrainingJob | FineTuneRun | null | undefined): ResourceSummaryViewModel {
   const resultSummary = (resource?.result_summary || {}) as TrainingResultSummaryRecord;
   const summary = isRecord(resultSummary.summary) ? resultSummary.summary : {};
@@ -111,9 +146,16 @@ export function buildTrainingSummaryViewModel(resource: TrainingJob | FineTuneRu
     });
   }
 
+  const mergedMetrics = Object.entries(detailMetrics).map(([key, value]) => ({
+    key,
+    label: key,
+    value,
+  }));
+  appendGpuSummary(highlights, mergedMetrics, summary);
+
   return {
     highlights,
-    metrics: toMetricItems(detailMetrics),
+    metrics: mergedMetrics,
     artifacts: Array.isArray(resultSummary.artifacts) ? resultSummary.artifacts.map(toArtifactItem) : [],
     logs: Array.isArray(resultSummary.logs) ? toLogItems(resultSummary.logs) : [],
   };
@@ -130,17 +172,20 @@ export function buildOfflineEvaluationSummaryViewModel(resource: OfflineEvaluati
     { label: "AR", value: metrics.AR ?? "-" },
     { label: "样本数", value: metrics.sample_count ?? "-" },
   ];
+  const detailMetrics = toMetricItems(metrics, {
+    accuracy: "准确率",
+    f1: "F1 分数",
+    mAP: "mAP",
+    IoU: "IoU",
+    AR: "AR",
+    sample_count: "样本数",
+  });
+  const summary = isRecord(resultSummary.summary) ? resultSummary.summary : {};
+  appendGpuSummary(highlights, detailMetrics, summary);
 
   return {
     highlights,
-    metrics: toMetricItems(metrics, {
-      accuracy: "准确率",
-      f1: "F1 分数",
-      mAP: "mAP",
-      IoU: "IoU",
-      AR: "AR",
-      sample_count: "样本数",
-    }),
+    metrics: detailMetrics,
     artifacts: Array.isArray(resultSummary.artifacts) ? resultSummary.artifacts.map(toArtifactItem) : [],
     logs: Array.isArray(resultSummary.logs) ? toLogItems(resultSummary.logs) : [],
   };
@@ -155,6 +200,7 @@ export function buildOnlineValidationSummaryViewModel(resource: OnlineValidation
     { label: "吞吐", value: metrics.throughput_qps ?? "-", unit: "qps" },
     { label: "回放数", value: metrics.replay_count ?? 0 },
     { label: "基线状态", value: metrics.baseline_runtime_status || "-" },
+    { label: "错误数", value: metrics.error_count ?? 0, tone: (metrics.error_count ?? 0) > 0 ? "warning" : "success" },
   ];
   return {
     highlights,
@@ -164,6 +210,7 @@ export function buildOnlineValidationSummaryViewModel(resource: OnlineValidation
       throughput_qps: "吞吐",
       replay_count: "回放数",
       baseline_runtime_status: "基线状态",
+      error_count: "错误数",
     }),
     artifacts: Array.isArray(resultSummary.artifacts) ? resultSummary.artifacts.map(toArtifactItem) : [],
     logs: Array.isArray(resultSummary.logs) ? toLogItems(resultSummary.logs) : [],
@@ -173,10 +220,11 @@ export function buildOnlineValidationSummaryViewModel(resource: OnlineValidation
 export function buildDeploymentSummaryViewModel(resource: Deployment | null | undefined): ResourceSummaryViewModel {
   const resultSummary = (resource?.result_summary || {}) as DeploymentResultSummaryRecord;
   const runtimeRegistration = isRecord(resultSummary.runtime_registration) ? resultSummary.runtime_registration : {};
+  const summary = isRecord(resultSummary.summary) ? resultSummary.summary : {};
   const highlights: SummaryHighlightItem[] = [
-    { label: "运行状态", value: runtimeRegistration.status || "-" },
+    { label: "运行状态", value: runtimeRegistration.service_status || runtimeRegistration.status || "-" },
     { label: "模型标识", value: runtimeRegistration.model_key || "-" },
-    { label: "服务入口", value: runtimeRegistration.endpoint_placeholder || "-" },
+    { label: "服务入口", value: runtimeRegistration.endpoint || "-" },
     { label: "服务提供方", value: runtimeRegistration.provider || "-" },
   ];
   const metrics: SummaryMetricItem[] = toMetricItems(runtimeRegistration, {
@@ -184,10 +232,20 @@ export function buildDeploymentSummaryViewModel(resource: Deployment | null | un
     source_id: "来源资源",
     model_key: "模型标识",
     provider: "服务提供方",
-    endpoint_placeholder: "服务入口",
+    endpoint: "服务入口",
+    health_url: "健康检查",
+    infer_url: "推理入口",
+    service_status: "服务状态",
+    model_version: "模型版本",
+    remote_pid: "远端 PID",
+    leased_node_ids: "节点",
+    gpu_indices_by_node: "GPU 分配",
+    available_at: "可用时间",
+    last_checked_at: "最近检查",
     inference_config: "推理配置",
-    status: "运行状态",
+    request_timeout_ms: "请求超时",
   });
+  appendGpuSummary(highlights, metrics, summary);
 
   return {
     highlights,

@@ -76,6 +76,7 @@ class DatasetSampleResponse(BaseModel):
     related_entities: list | None = None
     source_metadata: dict | None = None
     preview_text: str | None = None
+    download_url: str | None = None
     is_augmented: bool = False
     augmentation_source_id: str | None = None
     augmentation_method: str | None = None
@@ -88,6 +89,7 @@ class DatasetSampleResponse(BaseModel):
 
 class DatasetDetailResponse(DatasetListItem):
     recent_jobs: list["AsyncJobResponse"] = Field(default_factory=list)
+    supported_export_formats: list[str] = Field(default_factory=lambda: ["vlm-json", "coco", "yolo"])
 
 
 class DatasetSampleCreateRequest(BaseModel):

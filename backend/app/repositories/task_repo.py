@@ -4,6 +4,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
+from app.core.datetime import utcnow
 from app.models.task import InspectionTask
 
 
@@ -47,9 +48,9 @@ class TaskRepository:
     async def update_status(self, org_id: str, task_id: str, status: str) -> bool:
         values: dict = {"status": status}
         if status == "running":
-            values["started_at"] = datetime.utcnow()
+            values["started_at"] = utcnow()
         if status in {"done", "failed"}:
-            values["finished_at"] = datetime.utcnow()
+            values["finished_at"] = utcnow()
 
         res = await self._session.execute(
             update(InspectionTask)
@@ -150,6 +151,6 @@ class TaskRepository:
         obj = await self.get_for_user(org_id=org_id, task_id=task_id, owner_user_id=owner_user_id)
         if obj is None:
             return None
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return obj

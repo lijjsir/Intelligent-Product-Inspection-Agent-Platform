@@ -33,6 +33,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "audit": {ROLE_ADMIN},
     "model_config": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER},
     "model_config_read": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_PLATFORM_OPERATOR},
+    "gpu_infra": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER},
     "inspection_spec_read": {
         ROLE_ADMIN,
         ROLE_APP_DEVELOPER,

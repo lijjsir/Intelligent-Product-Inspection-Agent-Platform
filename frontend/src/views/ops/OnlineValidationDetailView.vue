@@ -27,6 +27,21 @@ const summaryView = computed(() => buildOnlineValidationSummaryViewModel(current
     :artifacts="summaryView.artifacts"
     :logs="summaryView.logs"
   >
+    <section v-if="summaryView.artifacts.length" class="card-surface p-4">
+      <h3 class="mb-4">验证报告</h3>
+      <div class="flex flex-wrap gap-3">
+        <a
+          v-for="artifact in summaryView.artifacts.filter((item) => item.link)"
+          :key="artifact.title"
+          class="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-cyan-400 hover:text-cyan-700"
+          :href="artifact.link || undefined"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {{ artifact.title }}
+        </a>
+      </div>
+    </section>
     <section class="card-surface p-4">
       <h3 class="mb-4">回放样本</h3>
       <el-empty v-if="!replaySamples.length" description="暂无回放样本" />

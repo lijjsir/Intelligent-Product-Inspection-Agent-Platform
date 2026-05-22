@@ -6,6 +6,7 @@ from datetime import datetime
 import pytest
 
 from agent.rag.embedder import EmbeddingModelNotConfigured
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.services.rag_space_service import RagSpaceService
 
@@ -110,7 +111,7 @@ class FakeSpaceRepo:
         self.soft_delete_calls.append({"org_id": org_id, "rag_space_id": rag_space_id, "owner_user_id": owner_user_id})
         obj = self.spaces.get(rag_space_id)
         if obj is not None:
-            obj.deleted_at = datetime.utcnow()
+            obj.deleted_at = utcnow()
         return obj
 
 
@@ -196,7 +197,7 @@ class FakeNodeRepo:
         self.deleted_node_ids.extend(node_ids)
         for node in self.nodes:
             if node.id in node_ids:
-                node.deleted_at = datetime.utcnow()
+                node.deleted_at = utcnow()
 
 
 class FakeDocumentRepo:
@@ -247,7 +248,7 @@ class FakeDocumentRepo:
         self.deleted_document_ids.extend(document_ids)
         for doc in self.documents:
             if doc.id in document_ids:
-                doc.deleted_at = datetime.utcnow()
+                doc.deleted_at = utcnow()
 
 
 class FakeStorageService:
