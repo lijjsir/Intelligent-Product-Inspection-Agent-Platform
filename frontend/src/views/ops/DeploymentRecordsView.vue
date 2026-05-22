@@ -5,8 +5,10 @@ import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
 import { useDeploymentStore } from "@/stores/deployment.store";
 import { useExperimentStore } from "@/stores/experiment.store";
 import { useFineTuneStore } from "@/stores/fineTune.store";
+import { useTrainingJobStore } from "@/stores/trainingJob.store";
 
 const store = useDeploymentStore();
+const trainingStore = useTrainingJobStore();
 const fineTuneStore = useFineTuneStore();
 const experimentStore = useExperimentStore();
 const refs = reactive({
@@ -31,15 +33,16 @@ function buildPayload(form: { name: string; description: string; config_json: st
 
 onMounted(async () => {
   await Promise.all([
+    trainingStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     fineTuneStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     experimentStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
   ]);
-  refs.source_id = fineTuneStore.items[0]?.id || "";
+  refs.source_id = fineTuneStore.items.find((item) => item.status === "completed")?.id || trainingStore.items.find((item) => item.status === "completed")?.id || "";
 });
 </script>
 
 <template>
-  <div v-if="!fineTuneStore.items.length" class="flex flex-col gap-5">
+  <div v-if="!fineTuneStore.items.some((item) => item.status === 'completed') && !trainingStore.items.some((item) => item.status === 'completed')" class="flex flex-col gap-5">
     <section class="hero">
       <div>
         <h2>部署记录</h2>
@@ -63,11 +66,17 @@ onMounted(async () => {
       <el-form-item label="来源类型">
         <el-select v-model="refs.source_type">
           <el-option label="fine_tune" value="fine_tune" />
+          <el-option label="training_job" value="training_job" />
         </el-select>
       </el-form-item>
       <el-form-item label="来源资源">
-        <el-select v-model="refs.source_id" placeholder="选择微调任务">
-          <el-option v-for="item in fineTuneStore.items" :key="item.id" :label="item.name" :value="item.id" />
+        <el-select v-model="refs.source_id" placeholder="选择来源资源">
+          <el-option
+            v-for="item in (refs.source_type === 'fine_tune' ? fineTuneStore.items : trainingStore.items).filter((row) => row.status === 'completed')"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="实验">

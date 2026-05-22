@@ -49,7 +49,12 @@ const kgForm = reactive({ name: "", entity_type: "Defect", description: "" });
 const kgRelationForm = reactive({ source_entity_id: "", target_entity_id: "", relation_type: "RELATED_TO" });
 const alignmentForm = reactive({ source_sample_id: "", target_sample_id: "", relation_type: "describes", similarity_score: 0.72 });
 const exportConfig = reactive({ train_ratio: 0.7, val_ratio: 0.15, test_ratio: 0.15, include_augmented: true, only_confirmed_alignment: false });
+const kgConfig = reactive({ entity_lexicon: "", relation_rules: "" });
 const augmentationSelected = ref<string[]>([]);
+const alignmentCandidateSource = ref("");
+const alignmentCandidateTarget = ref("");
+const alignmentSourceOptions = computed(() => sampleItems.value.filter((item) => item.sample_type === "image"));
+const alignmentTargetOptions = computed(() => sampleItems.value.filter((item) => item.sample_type === "text"));
 
 const sampleItems = computed(() => datasetStore.samples);
 const dataset = computed(() => datasetStore.current);
@@ -123,8 +128,27 @@ function statusTagType(status?: string | null) {
   return "";
 }
 
+function parseOptionalJson(text: string) {
+  const trimmed = text.trim();
+  return trimmed ? JSON.parse(trimmed) : undefined;
+}
+
 function sampleTypeLabel(type?: DatasetSampleType | null) {
   return type === "image" ? "图片" : "文本";
+}
+
+function formatImportJobSummary(resultSummary: unknown) {
+  if (!resultSummary || typeof resultSummary !== "object") return "-";
+  const record = resultSummary as Record<string, unknown>;
+  const sampleCount = record.sample_count;
+  const importedCount = record.imported_count;
+  const skippedCount = record.skipped_count;
+  const parts = [
+    sampleCount !== undefined ? `样本数: ${sampleCount}` : null,
+    importedCount !== undefined ? `已导入: ${importedCount}` : null,
+    skippedCount !== undefined ? `已跳过: ${skippedCount}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : JSON.stringify(record);
 }
 
 function handleZipChange(event: Event) {
@@ -169,10 +193,24 @@ function pushTab(tab: string) {
 
 async function startProcessing(type: DatasetProcessingType) {
   if (!datasetId.value) return;
+  const configJson = type === "export"
+    ? { ...exportConfig }
+    : type === "kg"
+      ? {
+          entity_lexicon: parseOptionalJson(kgConfig.entity_lexicon || "") || {},
+          relation_rules: parseOptionalJson(kgConfig.relation_rules || "") || [],
+        }
+      : type === "alignment"
+        ? {
+            threshold: alignmentForm.similarity_score,
+            top_k: 3,
+            mutual_check: true,
+          }
+        : {};
   await processingStore.startProcessing(datasetId.value, type, {
     name: type,
     description: `${type} run`,
-    config_json: type === "export" ? { ...exportConfig } : {},
+    config_json: configJson,
   });
   await processingStore.pollUntilSettled(datasetId.value, type, 12);
   await refreshAll();
@@ -247,7 +285,9 @@ async function addKgRelation() {
 }
 
 async function addAlignmentPair() {
-  if (!datasetId.value || !alignmentForm.source_sample_id || !alignmentForm.target_sample_id) return;
+  if (!datasetId.value || !alignmentCandidateSource.value || !alignmentCandidateTarget.value) return;
+  alignmentForm.source_sample_id = alignmentCandidateSource.value;
+  alignmentForm.target_sample_id = alignmentCandidateTarget.value;
   await processingStore.createAlignmentPair(datasetId.value, { ...alignmentForm });
 }
 
@@ -502,7 +542,7 @@ watch(activeTab, (value) => {
         <div v-if="latestImportJob" class="job-panel">
           <div><span>任务 ID</span><strong class="mono">{{ latestImportJob.id }}</strong></div>
           <div><span>状态</span><strong>{{ latestImportJob.status }}</strong></div>
-          <div><span>摘要</span><strong class="mono">{{ JSON.stringify(latestImportJob.result_summary || {}) }}</strong></div>
+          <div><span>摘要</span><strong>{{ formatImportJobSummary(latestImportJob.result_summary) }}</strong></div>
         </div>
       </article>
 
@@ -576,7 +616,15 @@ watch(activeTab, (value) => {
           <el-form-item label="描述">
             <el-input v-model="kgForm.description" type="textarea" :rows="2" />
           </el-form-item>
-          <el-button type="primary" @click="addKgEntity">新增实体</el-button>
+          <el-form-item label="扩展词典(JSON)">
+            <el-input v-model="kgConfig.entity_lexicon" type="textarea" :rows="2" placeholder='{"Defect":["划痕"]}' />
+          </el-form-item>
+          <el-form-item label="关系规则(JSON)">
+            <el-input v-model="kgConfig.relation_rules" type="textarea" :rows="2" placeholder='[{"source":"Part","target":"Defect","relation":"HAS_DEFECT"}]' />
+          </el-form-item>
+          <el-button type="primary" @click="startProcessing('kg')">启动构建</el-button>
+          <el-button @click="loadKgSubgraph">刷新子图</el-button>
+          <el-button type="primary" plain @click="addKgEntity">新增实体</el-button>
         </el-form>
         <el-divider />
         <el-form label-position="top">
@@ -615,18 +663,25 @@ watch(activeTab, (value) => {
         </div>
       </div>
       <div class="manual-add">
-        <el-input v-model="alignmentForm.source_sample_id" placeholder="图片样本 ID" />
-        <el-input v-model="alignmentForm.target_sample_id" placeholder="文本样本 ID" />
-        <el-input-number v-model="alignmentForm.similarity_score" :min="0" :max="1" :step="0.01" />
-        <el-button type="primary" @click="addAlignmentPair">手工新增</el-button>
-      </div>
-      <el-table :data="alignmentPairs" empty-text="暂无对齐结果">
-        <el-table-column prop="source_sample_id" label="图片样本" min-width="170" />
-        <el-table-column prop="target_sample_id" label="文本样本" min-width="170" />
-        <el-table-column prop="similarity_score" label="分数" width="100" />
-        <el-table-column prop="confirmation_status" label="状态" width="120" />
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }">
+          <el-select v-model="alignmentCandidateSource" placeholder="选择图片样本">
+            <el-option v-for="item in alignmentSourceOptions" :key="item.id" :label="item.sample_name || item.id" :value="item.id" />
+          </el-select>
+          <el-select v-model="alignmentCandidateTarget" placeholder="选择文本样本">
+            <el-option v-for="item in alignmentTargetOptions" :key="item.id" :label="item.sample_name || item.id" :value="item.id" />
+          </el-select>
+          <el-input-number v-model="alignmentForm.similarity_score" :min="0" :max="1" :step="0.01" />
+          <el-button type="primary" @click="addAlignmentPair">手工新增</el-button>
+        </div>
+        <el-table :data="alignmentPairs" empty-text="暂无对齐结果">
+          <el-table-column prop="source_sample_id" label="图片样本" min-width="170" />
+          <el-table-column prop="target_sample_id" label="文本样本" min-width="170" />
+          <el-table-column prop="similarity_score" label="分数" width="100" />
+          <el-table-column label="方式" width="120">
+            <template #default="{ row }">{{ row.payload_json?.alignment_method || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="confirmation_status" label="状态" width="120" />
+          <el-table-column label="操作" width="140">
+            <template #default="{ row }">
             <el-button v-if="row.confirmation_status !== 'confirmed'" link type="primary" @click="confirmAlignmentPair(row.id)">确认</el-button>
             <el-button link type="danger" @click="deleteAlignmentPair(row.id)">删除</el-button>
           </template>
@@ -649,6 +704,11 @@ watch(activeTab, (value) => {
           <el-table-column prop="name" label="名称" min-width="200" />
           <el-table-column prop="augmentation_method" label="方法" width="160" />
           <el-table-column prop="description" label="生成文本" min-width="260" />
+          <el-table-column label="应用结果" width="180">
+            <template #default="{ row }">
+              {{ row.created_sample_id || (row.created_sample_ids || []).join(", ") || "-" }}
+            </template>
+          </el-table-column>
         </el-table>
       </article>
 
@@ -661,6 +721,7 @@ watch(activeTab, (value) => {
           <div v-for="(item, index) in augmentationHistory" :key="index" class="history-item">
             <strong>{{ item.name || item.id }}</strong>
             <span>{{ item.augmentation_method || "-" }}</span>
+            <span>{{ item.created_sample_id || (item.created_sample_ids || []).join(", ") || "-" }}</span>
           </div>
         </div>
       </article>
