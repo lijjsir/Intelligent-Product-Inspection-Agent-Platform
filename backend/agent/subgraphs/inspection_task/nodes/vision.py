@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from agent.llm.client import LLMClient
 from agent.subgraphs.inspection_task.state import InspectionState
 from agent.vision.detector_client import VisionDetectorClient
 from agent.vision.heuristic_detector import extract_defects
+from app.core.datetime import utcnow_iso
 
 
 def _has_structured_defect_payload(data: object) -> bool:
@@ -29,7 +29,7 @@ def _has_structured_defect_payload(data: object) -> bool:
 
 async def run_vision(state: InspectionState) -> InspectionState:
     """优先调用专用视觉检测服务，失败时回退到多模态大模型识别候选缺陷。"""
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     images = state.get("image_urls") or []
     defects: list[dict[str, Any]] = []
     if images:

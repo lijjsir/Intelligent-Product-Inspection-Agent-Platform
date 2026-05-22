@@ -5,12 +5,28 @@ import { useRoute } from "vue-router";
 import AlgoResourceDetail from "@/components/business/algo/AlgoResourceDetail.vue";
 import { useExperimentStore } from "@/stores/experiment.store";
 import { buildExperimentSummaryViewModel, summarizeMetrics } from "@/utils/algoResultSummary";
+import type { ExperimentRelatedResourceSummary } from "@/types/algo-workspace.types";
 
 const route = useRoute();
 const store = useExperimentStore();
 const current = computed(() => store.current);
 const relatedResources = computed(() => current.value?.related_resources);
 const summaryView = computed(() => buildExperimentSummaryViewModel(current.value));
+
+function deploymentEndpoint(item: ExperimentRelatedResourceSummary) {
+  const metrics = item?.metrics || {};
+  return String(metrics.endpoint || metrics.endpoint_placeholder || "-");
+}
+
+function deploymentStatus(item: ExperimentRelatedResourceSummary) {
+  const metrics = item?.metrics || {};
+  return String(metrics.status || item?.status || "-");
+}
+
+function deploymentModel(item: ExperimentRelatedResourceSummary) {
+  const metrics = item?.metrics || {};
+  return String(metrics.model_key || "-");
+}
 
 function summarizeOfflineMetrics(item: Record<string, any>) {
   return summarizeMetrics(item?.metrics || {}, [
@@ -22,6 +38,7 @@ function summarizeOfflineMetrics(item: Record<string, any>) {
 
 function summarizeDeploymentMetrics(item: Record<string, any>) {
   return summarizeMetrics(item?.metrics || {}, [
+    { key: "endpoint", label: "endpoint" },
     { key: "endpoint_placeholder", label: "endpoint" },
     { key: "status", label: "status" },
     { key: "model_key", label: "model" },
@@ -88,7 +105,21 @@ watch(() => route.params.id, load);
         <el-table v-else :data="relatedResources?.deployments">
           <el-table-column prop="name" label="名称" min-width="160" />
           <el-table-column prop="status" label="状态" width="120" />
-          <el-table-column prop="metrics.endpoint_placeholder" label="入口" min-width="220" show-overflow-tooltip />
+          <el-table-column label="运行状态" width="140">
+            <template #default="{ row }">
+              <span>{{ deploymentStatus(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="模型" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ deploymentModel(row) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="入口" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ deploymentEndpoint(row) }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="运行时注册" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">
               <span>{{ summarizeDeploymentMetrics(row) || "-" }}</span>

@@ -5,6 +5,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.chat import ChatMessageScore
 
 
@@ -61,7 +62,7 @@ class ChatMessageScoreRepository:
         from datetime import datetime as dt
         obj = await self._session.get(ChatMessageScore, score_id)
         if obj:
-            obj.deleted_at = dt.utcnow()
+            obj.deleted_at = utcnow()
             await self._session.flush()
 
     async def list_by_range(

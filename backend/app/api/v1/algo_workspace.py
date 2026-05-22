@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import Response
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.exceptions import NotFoundError
 from app.core.permissions import require_role
 from app.schemas.algo_resources import (
     DatasetAlignmentPairCreateRequest,
@@ -254,6 +256,25 @@ async def get_dataset_export_status(dataset_id: str, current: CurrentUser = Depe
 @router.get("/datasets/{dataset_id}/exports/results", response_model=ResponseEnvelope)
 async def get_dataset_export_results(dataset_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
     return ResponseEnvelope(data=await _svc(current, db).get_processing_results(dataset_id=dataset_id, processing_type="export"))
+
+
+@router.get("/datasets/{dataset_id}/exports/download")
+async def download_dataset_export(dataset_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    service = _svc(current, db)
+    artifact = await service.get_export_artifact_download(dataset_id=dataset_id)
+    payload = service.get_export_artifact_payload(
+        bucket=artifact["bucket"],
+        object_key=artifact["object_key"],
+        storage_backend=artifact.get("storage_backend"),
+    )
+    if payload is None:
+        raise NotFoundError("export artifact payload not found")
+    content, content_type = payload
+    return Response(
+        content=content,
+        media_type=content_type or "application/json",
+        headers={"Content-Disposition": f'attachment; filename="{artifact["file_name"]}"'},
+    )
 
 
 @router.get("/eval-datasets", response_model=ResponseEnvelope)

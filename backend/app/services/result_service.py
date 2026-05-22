@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ForbiddenError
 from app.repositories.result_repo import ResultRepository
 
@@ -50,7 +51,7 @@ class ResultService:
             "tokens_used": result.tokens_used,
             "latency_ms": result.latency_ms,
             "reviewed_by": actor_user_id,
-            "reviewed_at": datetime.utcnow(),
+            "reviewed_at": utcnow(),
             "review_note": payload.get("note", ""),
             "id": result.id,
         })

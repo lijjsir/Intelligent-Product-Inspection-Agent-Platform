@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.rag.embedder import Embedder, EmbeddingModelNotConfigured
+from app.core.config import settings
 from app.repositories.algo_resource_repo import (
     DatasetAlignmentPairRepository,
     DatasetAugmentationProposalRepository,
     DatasetProcessingEntityRepository,
 )
 from app.repositories.dataset_repo import DatasetRepository, DatasetSampleRepository
+from app.services.graph_store import GraphEdgePayload, GraphNodePayload, GraphStore
 from app.services.object_storage.base import ObjectStorage
 
 
@@ -84,6 +86,7 @@ class ProcessingDeps:
     pair_repo: DatasetAlignmentPairRepository
     proposal_repo: DatasetAugmentationProposalRepository
     storage: ObjectStorage
+    graph_store: GraphStore
 
 
 class AlgoProcessingService:
@@ -106,6 +109,7 @@ class AlgoProcessingService:
             knowledge_graph_id=resource_id,
             created_by=self._deps.user_id,
         )
+        self._deps.graph_store.reset_graph(dataset_id=dataset_id, knowledge_graph_id=resource_id)
 
         for row in existing_relations:
             if (row.properties_json or {}).get("source") != "manual":
@@ -150,7 +154,7 @@ class AlgoProcessingService:
 
         created_entities: dict[str, Any] = {}
         for key, payload in entity_defs.items():
-            created_entities[key] = await self._deps.kg_repo.create_entity(
+            created = await self._deps.kg_repo.create_entity(
                 {
                     "org_id": self._deps.org_id,
                     "dataset_id": dataset_id,
@@ -159,6 +163,19 @@ class AlgoProcessingService:
                     **payload,
                 }
             )
+            created_entities[key] = created
+            self._deps.graph_store.upsert_entity(
+                GraphNodePayload(
+                    id=created.id,
+                    dataset_id=dataset_id,
+                    knowledge_graph_id=resource_id,
+                    name=created.name,
+                    entity_type=created.entity_type,
+                    description=created.description,
+                    properties_json=dict(created.properties_json or {}),
+                    confidence=created.confidence,
+                )
+            )
 
         for source_key, target_key, relation_type in sorted(relation_defs):
             source = created_entities.get(source_key)
@@ -166,7 +183,7 @@ class AlgoProcessingService:
             if source is None or target is None:
                 warnings.append(f"skipped relation {relation_type} for missing entity")
                 continue
-            await self._deps.kg_repo.create_relation(
+            created_relation = await self._deps.kg_repo.create_relation(
                 {
                     "org_id": self._deps.org_id,
                     "dataset_id": dataset_id,
@@ -178,6 +195,18 @@ class AlgoProcessingService:
                     "properties_json": {"source": "auto"},
                     "confidence": 0.8,
                 }
+            )
+            self._deps.graph_store.upsert_relation(
+                GraphEdgePayload(
+                    id=created_relation.id,
+                    dataset_id=dataset_id,
+                    knowledge_graph_id=resource_id,
+                    source_entity_id=created_relation.source_entity_id,
+                    target_entity_id=created_relation.target_entity_id,
+                    relation_type=created_relation.relation_type,
+                    properties_json=dict(created_relation.properties_json or {}),
+                    confidence=created_relation.confidence,
+                )
             )
 
         stats = {
@@ -401,6 +430,7 @@ class AlgoProcessingService:
             else:
                 split_map[sample.id] = "test"
 
+        export_format = str((config_json or {}).get("format") or "vlm-json").strip().lower()
         payload = {
             "dataset": {"id": dataset.id, "name": dataset.name, "modality": dataset.modality},
             "split": {"train": train_ratio, "val": val_ratio, "test": test_ratio},
@@ -430,16 +460,27 @@ class AlgoProcessingService:
                 for row in pairs
             ],
         }
-        artifact_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        export_payload = self._build_export_payload(
+            export_format=export_format,
+            payload=payload,
+            dataset_id=dataset_id,
+            ordered_samples=ordered_samples,
+        )
+        artifact_bytes = json.dumps(export_payload, ensure_ascii=False, indent=2).encode("utf-8")
         manifest = {
             "dataset_id": dataset_id,
             "resource_id": resource_id,
-            "format": "vlm-json",
+            "format": export_format,
             "sample_count": len(ordered_samples),
             "alignment_count": len(pairs),
         }
-        bucket = "dataset-exports"
-        object_key = f"dataset-exports/{self._deps.org_id}/{dataset_id}/{resource_id}/vlm.json"
+        bucket = settings.dataset_export_bucket
+        suffix = {
+            "vlm-json": "vlm.json",
+            "coco": "annotations.coco.json",
+            "yolo": "labels.yolo.json",
+        }.get(export_format, "export.json")
+        object_key = f"dataset-exports/{self._deps.org_id}/{dataset_id}/{resource_id}/{suffix}"
         manifest_key = f"dataset-exports/{self._deps.org_id}/{dataset_id}/{resource_id}/manifest.json"
         self._deps.storage.ensure_bucket(bucket)
         artifact_result = self._deps.storage.put_bytes(
@@ -463,10 +504,11 @@ class AlgoProcessingService:
             "alignment_count": len(pairs),
         }
         artifact = {
-            "format": "vlm-json",
+            "format": export_format,
             "bucket": bucket,
             "object_key": object_key,
             "manifest_key": manifest_key,
+            "storage_backend": getattr(self._deps.storage, "backend_name", "local"),
             "download_url": artifact_result.get("url")
             or self._deps.storage.presign_download_url(bucket=bucket, object_key=object_key),
             "file_size_bytes": int(artifact_result.get("size_bytes") or len(artifact_bytes)),
@@ -479,6 +521,66 @@ class AlgoProcessingService:
             warnings=[],
             extra={"artifact": artifact},
         )
+
+    def _build_export_payload(
+        self,
+        *,
+        export_format: str,
+        payload: dict[str, Any],
+        dataset_id: str,
+        ordered_samples: list[Any],
+    ) -> dict[str, Any]:
+        if export_format == "coco":
+            images = []
+            annotations = []
+            categories = {}
+            category_index = 1
+            annotation_index = 1
+            for image_index, sample in enumerate((item for item in ordered_samples if item.sample_type == "image"), start=1):
+                images.append(
+                    {
+                        "id": image_index,
+                        "file_name": sample.sample_name or sample.id,
+                        "width": int((sample.source_metadata or {}).get("image_width") or 0),
+                        "height": int((sample.source_metadata or {}).get("image_height") or 0),
+                    }
+                )
+                labels = list(((sample.annotation_data or {}) if isinstance(sample.annotation_data, dict) else {}).get("labels") or [])
+                for label in labels:
+                    if label not in categories:
+                        categories[label] = category_index
+                        category_index += 1
+                    annotations.append(
+                        {
+                            "id": annotation_index,
+                            "image_id": image_index,
+                            "category_id": categories[label],
+                            "bbox": [0, 0, 0, 0],
+                            "area": 0,
+                            "iscrowd": 0,
+                        }
+                    )
+                    annotation_index += 1
+            return {
+                "info": {"dataset_id": dataset_id, "format": "coco"},
+                "images": images,
+                "annotations": annotations,
+                "categories": [{"id": category_id, "name": name} for name, category_id in categories.items()],
+            }
+        if export_format == "yolo":
+            records = []
+            for sample in ordered_samples:
+                labels = list(((sample.annotation_data or {}) if isinstance(sample.annotation_data, dict) else {}).get("labels") or [])
+                records.append(
+                    {
+                        "sample_id": sample.id,
+                        "file_name": sample.sample_name,
+                        "labels": labels,
+                        "split": next((item["split"] for item in payload["records"] if item["id"] == sample.id), "train"),
+                    }
+                )
+            return {"dataset_id": dataset_id, "format": "yolo", "records": records}
+        return payload
 
     def _extract_terms(self, sample: Any, config_json: dict[str, Any] | None = None) -> list[tuple[str, str]]:
         text_parts = [

@@ -43,6 +43,29 @@ class FileStorageService:
             "size_bytes": os.path.getsize(target),
         }
 
+    def save_bytes_at_relative_path(self, *, relative_path: str, data: bytes, content_type: str | None = None) -> dict:
+        cleaned = relative_path.strip().lstrip("/").replace("\\", "/")
+        if not cleaned:
+            cleaned = uuid4().hex
+        target = (self._root / cleaned).resolve()
+        root = self._root.resolve()
+        if not str(target).startswith(str(root)):
+            raise ValueError("invalid relative path")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        resolved_type = content_type or mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        rel_path = target.relative_to(self._root).as_posix()
+        return {
+            "id": uuid4().hex,
+            "name": target.name,
+            "stored_name": target.name,
+            "path": str(target),
+            "relative_path": rel_path,
+            "url": f"{settings.local_upload_url_prefix.rstrip('/')}/{rel_path}",
+            "content_type": resolved_type,
+            "size_bytes": os.path.getsize(target),
+        }
+
     def delete_relative_path(self, relative_path: str) -> None:
         if not relative_path:
             return

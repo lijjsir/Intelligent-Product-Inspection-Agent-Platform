@@ -11,6 +11,7 @@ from agent.topology_catalog import (
     get_route_topology,
     get_topology,
 )
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.repositories.agent_ops_repo import (
     AgentDefinitionRepository,
@@ -1284,7 +1285,7 @@ class AgentOpsService:
         from sqlalchemy import select
         from datetime import datetime, timedelta
 
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = utcnow() - timedelta(hours=24)
 
         result = await self._session.execute(
             select(AgentRouteLog).where(
@@ -1320,5 +1321,4 @@ class AgentOpsService:
             by_agent=by_agent,
             by_rule=by_rule,
         )
-
 
