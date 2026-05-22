@@ -1,7 +1,7 @@
 """gpu infra and model config gpu fields
 
-Revision ID: 0049
-Revises: 0048
+Revision ID: 0054
+Revises: 0053
 Create Date: 2026-05-22 20:30:00.000000
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
-revision = "0049"
-down_revision = "0048"
+revision = "0054"
+down_revision = "0053"
 branch_labels = None
 depends_on = None
 
