@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useAlertStore } from "@/stores/alert.store";
 import { usePagination } from "@/composables/usePagination";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { severityLabel, SEVERITY_TAG_TYPES } from "@/constants/spec";
 
 const store = useAlertStore();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
@@ -60,13 +61,7 @@ function handleResolve(id: string) {
 }
 
 const getSeverityType = (severity: string) => {
-  const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
-    info: "info",
-    warning: "warning",
-    error: "danger",
-    critical: "danger", // custom styling via css could also be done
-  };
-  return map[severity] || "info";
+  return (SEVERITY_TAG_TYPES[severity] as "info"|"danger"|"warning") || "info";
 };
 
 const getStatusType = (status: string) => {
@@ -110,7 +105,7 @@ const getStatusType = (status: string) => {
         <el-table-column prop="alert_type" label="类型" width="140" />
         <el-table-column prop="severity" label="严重程度" width="120">
           <template #default="{ row }">
-            <el-tag :type="getSeverityType(row.severity)" size="small">{{ row.severity.toUpperCase() }}</el-tag>
+            <el-tag :type="getSeverityType(row.severity)" size="small">{{ severityLabel(row.severity) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="现时状态" width="120">
