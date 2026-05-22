@@ -10,6 +10,7 @@ from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from agent.stability.alert_trigger import should_trigger
 from agent.stability.analyzer import analyze
+from app.core.datetime import utcnow, utcnow_iso
 from app.core.ids import uuid7
 from app.models.task import InspectionTask
 from app.repositories.alert_repo import AlertRepository
@@ -316,14 +317,14 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         running_metadata = dict(task.meta_data or {})
         running_metadata["execution"] = {
             **dict(running_metadata.get("execution") or {}),
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": utcnow_iso(),
         }
         await task_repo.patch_metadata(org_id, task_id, running_metadata)
         await session.commit()
 
         async def emit(event: dict) -> None:
             """为流水线事件补齐服务端时间戳并发布到任务事件流。"""
-            event.setdefault("ts", datetime.utcnow().isoformat())
+            event.setdefault("ts", utcnow_iso())
             async with get_session() as event_session:
                 event_repo = TaskExecutionEventRepository(event_session)
                 await event_repo.create(
@@ -389,7 +390,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     {
                         "stage": "gateway",
                         "message": f"Model {runtime.get('model_id')} failed, switching fallback model",
-                        "ts": datetime.utcnow().isoformat(),
+                        "ts": utcnow_iso(),
                     }
                 )
                 await emit(
@@ -482,7 +483,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "dimension_detail": stability.get("dimension_detail"),
                 "sampling_results": {"timeline": state.get("timeline") or []},
                 "root_cause": None,
-                "created_at": datetime.utcnow(),
+                "created_at": utcnow(),
             }
             stability_obj = await stability_repo.upsert_by_task(stability_payload)
 
@@ -535,7 +536,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             },
                             "status": "open",
                             "channels": rule.notification_channels or {"in_app": True},
-                            "created_at": datetime.utcnow(),
+                            "created_at": utcnow(),
                         }
                     )
                     try:
@@ -562,7 +563,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             },
                             "status": "open",
                             "channels": {"in_app": True},
-                            "created_at": datetime.utcnow(),
+                            "created_at": utcnow(),
                         }
                     )
                     try:
@@ -577,7 +578,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             done_metadata = dict(task.meta_data or {})
             done_metadata["execution"] = {
                 **dict(done_metadata.get("execution") or {}),
-                "finished_at": datetime.utcnow().isoformat(),
+                "finished_at": utcnow_iso(),
             }
             await task_repo.patch_metadata(org_id, task_id, done_metadata)
             await session.commit()
@@ -623,7 +624,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             failed_metadata = dict(task.meta_data or {})
             failed_metadata["execution"] = {
                 **dict(failed_metadata.get("execution") or {}),
-                "finished_at": datetime.utcnow().isoformat(),
+                "finished_at": utcnow_iso(),
                 "error": str(exc),
             }
             await task_repo.patch_metadata(org_id, task_id, failed_metadata)

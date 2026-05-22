@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.result import InspectionResult
 from app.models.task import InspectionTask
 
@@ -93,7 +94,7 @@ class ResultRepository:
         )
         obj = result.scalar_one_or_none()
         if obj:
-            obj.deleted_at = dt.utcnow()
+            obj.deleted_at = utcnow()
             await self._session.flush()
 
     async def upsert_by_task(self, payload: dict) -> InspectionResult:

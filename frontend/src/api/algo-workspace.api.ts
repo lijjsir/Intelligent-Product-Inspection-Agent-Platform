@@ -1,9 +1,10 @@
-import { http } from "./http";
+import apiClient, { http } from "./http";
 import type {
   AlgoListQuery,
   AlgoResourceActionResponse,
   AlignmentPair,
   DatasetProcessingResults,
+  DatasetExportRequest,
   DatasetProcessingRunRequest,
   DatasetProcessingStatus,
   DatasetProcessingSubgraph,
@@ -50,6 +51,10 @@ export const algoWorkspaceApi = {
     return http.post<DatasetProcessingStatus | EvaluationDataset>(url, payload);
   },
 
+  createDatasetExport(datasetId: string, payload: DatasetExportRequest) {
+    return http.post<DatasetProcessingStatus>(`/v1/datasets/${datasetId}/exports`, payload);
+  },
+
   getProcessingStatus(datasetId: string, type: DatasetProcessingType) {
     const url = type === "export" ? `${processingBase(datasetId, type)}/status` : `${processingBase(datasetId, type)}/status`;
     return http.get<DatasetProcessingStatus>(url);
@@ -58,6 +63,12 @@ export const algoWorkspaceApi = {
   getProcessingResults(datasetId: string, type: DatasetProcessingType) {
     const url = type === "export" ? `${processingBase(datasetId, type)}/results` : `${processingBase(datasetId, type)}/results`;
     return http.get<DatasetProcessingResults>(url);
+  },
+
+  downloadDatasetExport(datasetId: string) {
+    return apiClient.get(`/v1/datasets/${datasetId}/exports/download`, {
+      responseType: "blob",
+    });
   },
 
   getKgSubgraph(datasetId: string, payload: { entity_type?: string; keyword?: string }) {

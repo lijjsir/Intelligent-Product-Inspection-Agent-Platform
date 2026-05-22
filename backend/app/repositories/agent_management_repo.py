@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.agent_management import AgentExecutionMetrics, AgentConfigVersion
 from app.models.agent_ops import AgentDefinition
 
@@ -33,7 +34,7 @@ class AgentExecutionMetricsRepository:
         if success:
             metrics.success_count += 1
         metrics.total_latency_ms += latency_ms
-        metrics.last_executed_at = datetime.utcnow()
+        metrics.last_executed_at = utcnow()
         await self._session.flush()
 
     async def get_metrics(self, agent_id: str) -> dict | None:
@@ -131,7 +132,7 @@ class AgentBatchOperationRepository:
             AgentDefinition.org_id == self._org_id,
             AgentDefinition.id.in_(agent_ids),
             AgentDefinition.deleted_at.is_(None),
-        ).values(deleted_at=datetime.utcnow())
+        ).values(deleted_at=utcnow())
         result = await self._session.execute(stmt)
         await self._session.flush()
         return result.rowcount

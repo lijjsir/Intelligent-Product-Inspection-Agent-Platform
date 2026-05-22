@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import PageParams, PagedResponse
 
@@ -155,6 +155,31 @@ class DatasetExportRequest(AlgoResourceBase):
     test_ratio: float = Field(default=0.15, ge=0, le=1)
     include_augmented: bool = True
     only_confirmed_alignment: bool = False
+
+    @field_validator("format")
+    @classmethod
+    def _validate_export_format(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"vlm-json", "coco", "yolo"}:
+            raise ValueError("format must be one of vlm-json, coco, yolo")
+        return normalized
+
+
+class AlgoDeploymentInferRequest(BaseModel):
+    request: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlgoDeploymentInferResponse(BaseModel):
+    deployment_id: str
+    deployment_status: str
+    runtime_status: str
+    prediction: Any = None
+    latency_ms: int | None = None
+    model_version: str | None = None
+    request_id: str | None = None
+    error: str | None = None
+    runtime_registration: dict[str, Any] = Field(default_factory=dict)
+    accepted_at: datetime
 
 
 class DatasetProcessingSubgraphRequest(BaseModel):

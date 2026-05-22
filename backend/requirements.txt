@@ -16,3 +16,4 @@ langgraph>=0.2.50
 python-multipart>=0.0.9
 pypdf>=5.4.0
 minio>=7.2.7
+paramiko>=3.4.0

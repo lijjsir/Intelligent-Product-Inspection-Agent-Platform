@@ -5,6 +5,7 @@ import { algoWorkspaceApi } from "@/api/algo-workspace.api";
 import type {
   AlignmentPair,
   AugmentationProposal,
+  DatasetExportRequest,
   DatasetProcessingResults,
   DatasetProcessingRunRequest,
   DatasetProcessingStatus,
@@ -39,7 +40,9 @@ export const useDatasetProcessingStore = defineStore("datasetProcessing", () => 
     selectedDatasetId.value = datasetId;
     loading.value = true;
     try {
-      const { data } = await algoWorkspaceApi.startProcessing(datasetId, type, payload);
+      const { data } = type === "export"
+        ? await algoWorkspaceApi.createDatasetExport(datasetId, payload as DatasetExportRequest)
+        : await algoWorkspaceApi.startProcessing(datasetId, type, payload);
       statusMap.value[type] = data.data as DatasetProcessingStatus;
       return data.data;
     } finally {

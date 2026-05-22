@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from agent.llm.client import LLMClient
 from agent.subgraphs.inspection_task.state import InspectionState
+from app.core.datetime import utcnow_iso
 
 
 def _is_valid_conclusion_payload(data: object) -> bool:
@@ -24,7 +24,7 @@ def _is_valid_conclusion_payload(data: object) -> bool:
 
 async def run_reasoning(state: InspectionState) -> InspectionState:
     """结合缺陷信息和检索到的证据，生成结构化的质检结论。"""
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     defects = state.get("defects") or []
     docs = state.get("knowledge_docs") or []
     prompt = {

@@ -6,6 +6,7 @@ from typing import Sequence
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.meeting import MeetingAgentDefinition, MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
 
 
@@ -171,7 +172,7 @@ class MeetingRepository:
                 MeetingRoom.id == room_id,
                 MeetingRoom.deleted_at.is_(None),
             )
-            .values(last_message_at=datetime.utcnow())
+            .values(last_message_at=utcnow())
         )
 
     # ── Agent management ──────────────────────────────────────────
@@ -309,7 +310,7 @@ class MeetingRepository:
         row = await self.get_agent_definition(org_id, agent_def_id)
         if row is None:
             return False
-        row.deleted_at = datetime.utcnow()
+        row.deleted_at = utcnow()
         await self._session.flush()
         return True
 

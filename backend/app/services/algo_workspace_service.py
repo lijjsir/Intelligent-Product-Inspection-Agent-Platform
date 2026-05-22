@@ -5,8 +5,11 @@ import hashlib
 import inspect
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
+from app.core.datetime import utcnow, utcnow_iso
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.algo_resources import (
     DatasetAlignment,
@@ -78,9 +81,14 @@ from app.schemas.algo_resources import (
 )
 from app.schemas.common import PagedResponse
 from app.services.algo_execution_service import DeploymentManager, EvaluationEngine, ExecutionModelRef, OnlineValidationRunner, TrainingRunner
+from app.services.gpu_infra_service import GpuJobRunner, GpuNodeService, RemoteExecutionRecord
+from app.services.graph_store import GraphNodePayload, GraphEdgePayload, build_graph_store
 from app.services.algo_processing_service import AlgoProcessingService, ProcessingDeps
+from app.services.algo_runtime_service import AlgoRuntimeRegistry
 from app.services.base import TenantAwareService
 from app.services.object_storage.factory import build_object_storage
+from app.services.object_storage.local import LocalObjectStorage
+from app.services.object_storage.minio import MinioObjectStorage
 from app.services.task_execution_service import has_active_celery_worker
 from infra.database.session import get_session
 
@@ -115,6 +123,8 @@ class AlgoWorkspaceService(TenantAwareService):
         self._proposal_repo = DatasetAugmentationProposalRepository(session)
         self._model_configs = ModelConfigRepository(session)
         self._storage = build_object_storage()
+        self._graph_store = build_graph_store()
+        self._runtime_registry = AlgoRuntimeRegistry()
         self._processing = AlgoProcessingService(
             ProcessingDeps(
                 org_id=org_id,
@@ -125,6 +135,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 pair_repo=self._pair_repo,
                 proposal_repo=self._proposal_repo,
                 storage=self._storage,
+                graph_store=self._graph_store,
             )
         )
         self._task_repo = TaskRepository(session)
@@ -314,7 +325,12 @@ class AlgoWorkspaceService(TenantAwareService):
         row = await self._require_generic_resource(resource_type="training_job", resource_id=resource_id)
         if row.status not in {"draft", "failed"}:
             raise ValidationError("resource cannot be launched from current status")
-        mode = await self._resolve_execution_mode()
+        model = await self._model_configs.get(self._org_id, row.model_config_id)
+        model_ref = self._to_execution_model_ref(model)
+        mode = await self._resolve_algo_execution_mode(
+            template=model_ref.training_command_template if model_ref else None,
+            requested_gpu_count=model_ref.default_gpu_request if model_ref else None,
+        )
         await self._resources.save(
             row,
             {
@@ -330,7 +346,7 @@ class AlgoWorkspaceService(TenantAwareService):
         if mode == "celery":
             from worker.tasks.algo_workspace_task import run_resource
 
-            run_resource.delay(
+            async_result = run_resource.delay(
                 {
                     "org_id": self._org_id,
                     "user_id": self._user_id,
@@ -339,19 +355,40 @@ class AlgoWorkspaceService(TenantAwareService):
                     "mode": mode,
                 }
             )
+            await self._resources.save(row, {"executor_job_id": async_result.id})
+            await self._commit()
+            executor_job_id = async_result.id
+        elif mode == "gpu_ssh":
+            from worker.tasks.algo_workspace_task import run_resource
+
+            async_result = run_resource.delay(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "resource_type": "training_job",
+                    "resource_id": row.id,
+                    "mode": mode,
+                }
+            )
+            await self._resources.save(row, {"executor_job_id": async_result.id})
+            await self._commit()
+            executor_job_id = async_result.id
         else:
             asyncio.create_task(self._run_training_job(resource_id=row.id, mode=mode))
-        return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=None)
+            executor_job_id = None
+        return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=executor_job_id)
 
     async def cancel_training_job(self, resource_id: str) -> ResourceActionResponse:
         row = await self._require_generic_resource(resource_type="training_job", resource_id=resource_id)
         if row.status not in CANCELLABLE_STATUSES:
             raise ValidationError("resource cannot be cancelled from current status")
+        if getattr(row, "execution_mode", None) == "gpu_ssh":
+            await self._cancel_gpu_execution(resource_type="training_job", row=row, release_leases=True)
         await self._resources.save(
             row,
             {
                 "status": "cancelled",
-                "completed_at": datetime.utcnow(),
+                "completed_at": utcnow(),
             },
         )
         await self._commit()
@@ -451,6 +488,9 @@ class AlgoWorkspaceService(TenantAwareService):
         runtime_registration = (getattr(deployment, "result_summary", {}) or {}).get("runtime_registration") or {}
         if not runtime_registration:
             raise ValidationError("deployment is missing runtime_registration")
+        runtime_status = str(runtime_registration.get("service_status") or runtime_registration.get("status") or "").strip().lower()
+        if runtime_status not in {"available", "registered"}:
+            raise ValidationError("deployment runtime is not available")
         created = await self._resources.create(
             OnlineValidation,
             {
@@ -564,6 +604,8 @@ class AlgoWorkspaceService(TenantAwareService):
         row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
         if getattr(row, "status", "draft") not in DELETABLE_STATUSES:
             raise ValidationError("resource cannot be deleted from current status")
+        if resource_type == "deployment" and getattr(row, "execution_mode", None) == "gpu_ssh":
+            await self._cancel_gpu_execution(resource_type="deployment", row=row, release_leases=True)
         if resource_type == "evaluation_dataset":
             await self._eval_items.soft_delete_many(
                 org_id=self._org_id,
@@ -578,6 +620,27 @@ class AlgoWorkspaceService(TenantAwareService):
         if row.status not in {"draft", "failed", "cancelled"}:
             raise ValidationError("resource cannot be launched from current status")
         mode = await self._resolve_execution_mode()
+        if resource_type == "fine_tune":
+            model = await self._model_configs.get(self._org_id, row.model_config_id)
+            model_ref = self._to_execution_model_ref(model)
+            mode = await self._resolve_algo_execution_mode(
+                template=model_ref.fine_tune_command_template if model_ref else None,
+                requested_gpu_count=model_ref.default_gpu_request if model_ref else None,
+            )
+        elif resource_type == "offline_evaluation":
+            target = await self._require_completed_target_resource(row.target_type, row.target_id)
+            model_ref = await self._resolve_model_ref_for_resource(target)
+            mode = await self._resolve_algo_execution_mode(
+                template=model_ref.offline_eval_command_template if model_ref else None,
+                requested_gpu_count=model_ref.default_gpu_request if model_ref else None,
+            )
+        elif resource_type == "deployment":
+            source = await self._require_completed_target_resource(row.source_type, row.source_id)
+            model_ref = await self._resolve_model_ref_for_resource(source)
+            mode = await self._resolve_algo_execution_mode(
+                template=model_ref.deployment_command_template if model_ref else None,
+                requested_gpu_count=model_ref.default_gpu_request if model_ref else None,
+            )
         await self._resources.save(
             row,
             {
@@ -590,11 +653,12 @@ class AlgoWorkspaceService(TenantAwareService):
             },
         )
         await self._commit()
+        executor_job_id = None
         if resource_type == "fine_tune":
-            if mode == "celery":
+            if mode in {"celery", "gpu_ssh"}:
                 from worker.tasks.algo_workspace_task import run_resource
 
-                run_resource.delay(
+                async_result = run_resource.delay(
                     {
                         "org_id": self._org_id,
                         "user_id": self._user_id,
@@ -603,13 +667,14 @@ class AlgoWorkspaceService(TenantAwareService):
                         "mode": mode,
                     }
                 )
+                executor_job_id = async_result.id
             else:
                 asyncio.create_task(self._run_fine_tune_job(resource_id=row.id, mode=mode))
         elif resource_type == "offline_evaluation":
-            if mode == "celery":
+            if mode in {"celery", "gpu_ssh"}:
                 from worker.tasks.algo_workspace_task import run_resource
 
-                run_resource.delay(
+                async_result = run_resource.delay(
                     {
                         "org_id": self._org_id,
                         "user_id": self._user_id,
@@ -618,13 +683,14 @@ class AlgoWorkspaceService(TenantAwareService):
                         "mode": mode,
                     }
                 )
+                executor_job_id = async_result.id
             else:
                 asyncio.create_task(self._run_offline_evaluation_job(resource_id=row.id, mode=mode))
         elif resource_type == "deployment":
-            if mode == "celery":
+            if mode in {"celery", "gpu_ssh"}:
                 from worker.tasks.algo_workspace_task import run_resource
 
-                run_resource.delay(
+                async_result = run_resource.delay(
                     {
                         "org_id": self._org_id,
                         "user_id": self._user_id,
@@ -633,13 +699,14 @@ class AlgoWorkspaceService(TenantAwareService):
                         "mode": mode,
                     }
                 )
+                executor_job_id = async_result.id
             else:
                 asyncio.create_task(self._run_deployment_job(resource_id=row.id, mode=mode))
         elif resource_type == "online_validation":
             if mode == "celery":
                 from worker.tasks.algo_workspace_task import run_resource
 
-                run_resource.delay(
+                async_result = run_resource.delay(
                     {
                         "org_id": self._org_id,
                         "user_id": self._user_id,
@@ -648,21 +715,27 @@ class AlgoWorkspaceService(TenantAwareService):
                         "mode": mode,
                     }
                 )
+                executor_job_id = async_result.id
             else:
                 asyncio.create_task(self._run_online_validation_job(resource_id=row.id, mode=mode))
         else:
             asyncio.create_task(self._run_generic_resource(resource_type=resource_type, resource_id=row.id, mode=mode))
-        return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=None)
+        if executor_job_id:
+            await self._resources.save(row, {"executor_job_id": executor_job_id})
+            await self._commit()
+        return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=executor_job_id)
 
     async def cancel_generic_resource(self, *, resource_type: str, resource_id: str) -> ResourceActionResponse:
         row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
         if row.status not in CANCELLABLE_STATUSES:
             raise ValidationError("resource cannot be cancelled from current status")
+        if getattr(row, "execution_mode", None) == "gpu_ssh" and resource_type in {"fine_tune", "offline_evaluation", "deployment"}:
+            await self._cancel_gpu_execution(resource_type=resource_type, row=row, release_leases=True)
         await self._resources.save(
             row,
             {
                 "status": "cancelled",
-                "completed_at": datetime.utcnow(),
+                "completed_at": utcnow(),
             },
         )
         await self._commit()
@@ -833,10 +906,78 @@ class AlgoWorkspaceService(TenantAwareService):
                 summary=summary,
                 proposals=[DatasetAugmentationProposalResponse.model_validate(row) for row in proposals],
             )
+        artifact = dict(summary.get("artifact") or {})
+        if artifact:
+            artifact["download_url"] = f"/api/v1/datasets/{dataset_id}/exports/download"
+            summary["artifact"] = artifact
         return DatasetProcessingResultsResponse(
             summary=summary,
-            artifact=dict(summary.get("artifact") or {}),
+            artifact=artifact,
         )
+
+    async def get_export_artifact_download(self, *, dataset_id: str) -> dict[str, str]:
+        resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="export")
+        if resource.status != "completed":
+            raise ValidationError("export artifact is not ready")
+        artifact = dict((resource.result_summary or {}).get("artifact") or {})
+        bucket = str(artifact.get("bucket") or "").strip()
+        object_key = str(artifact.get("object_key") or "").strip()
+        if not bucket or not object_key:
+            raise NotFoundError("export artifact not found")
+        file_name = Path(object_key).name or "export.json"
+        return {
+            "bucket": bucket,
+            "object_key": object_key,
+            "file_name": file_name,
+            "storage_backend": str(artifact.get("storage_backend") or getattr(self._storage, "backend_name", "local")),
+        }
+
+    def get_export_artifact_payload(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        storage_backend: str | None = None,
+    ) -> tuple[bytes, str | None] | None:
+        preferred_backend = str(storage_backend or "").strip().lower()
+        active_backend = str(getattr(self._storage, "backend_name", "local") or "local").strip().lower()
+
+        candidates = []
+        if preferred_backend and preferred_backend == active_backend:
+            candidates.append(self._storage)
+        else:
+            if preferred_backend == "minio":
+                candidates.append(
+                    MinioObjectStorage(
+                        endpoint=settings.s3_endpoint,
+                        access_key=settings.s3_access_key,
+                        secret_key=settings.s3_secret_key,
+                    )
+                )
+            elif preferred_backend == "local":
+                candidates.append(LocalObjectStorage())
+            candidates.append(self._storage)
+
+        seen: set[str] = set()
+        for storage in candidates:
+            backend_name = str(getattr(storage, "backend_name", "") or "")
+            if backend_name in seen:
+                continue
+            seen.add(backend_name)
+            try:
+                payload = storage.get_bytes(bucket=bucket, object_key=object_key)
+            except Exception:
+                continue
+            if payload is not None:
+                return payload
+            if backend_name == "local" and hasattr(storage, "get_bytes_from_legacy_prefix"):
+                legacy_payload = storage.get_bytes_from_legacy_prefix(
+                    object_key_prefix=str(Path(object_key).parent).replace("\\", "/"),
+                    suffix=Path(object_key).suffix or None,
+                )
+                if legacy_payload is not None:
+                    return legacy_payload
+        return None
 
     async def get_processing_subgraph(self, *, dataset_id: str, entity_type: str | None = None, keyword: str | None = None) -> dict[str, Any]:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
@@ -894,6 +1035,18 @@ class AlgoWorkspaceService(TenantAwareService):
                 "confidence": payload.confidence,
             }
         )
+        self._graph_store.upsert_entity(
+            GraphNodePayload(
+                id=created.id,
+                dataset_id=dataset_id,
+                knowledge_graph_id=resource.id,
+                name=created.name,
+                entity_type=created.entity_type,
+                description=created.description,
+                properties_json=dict(created.properties_json or {}),
+                confidence=created.confidence,
+            )
+        )
         return DatasetKgEntityResponse.model_validate(created)
 
     async def delete_kg_entity(self, *, entity_id: str) -> None:
@@ -903,6 +1056,7 @@ class AlgoWorkspaceService(TenantAwareService):
         resource = await self._require_processing_resource(dataset_id=entity.dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
         await self._kg_repo.delete_entity(entity)
+        self._graph_store.delete_entity(entity_id=entity.id)
 
     async def create_kg_relation(self, *, dataset_id: str, payload: DatasetKgRelationCreateRequest) -> DatasetKgRelationResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
@@ -922,6 +1076,18 @@ class AlgoWorkspaceService(TenantAwareService):
                 "confidence": payload.confidence,
             }
         )
+        self._graph_store.upsert_relation(
+            GraphEdgePayload(
+                id=created.id,
+                dataset_id=dataset_id,
+                knowledge_graph_id=resource.id,
+                source_entity_id=created.source_entity_id,
+                target_entity_id=created.target_entity_id,
+                relation_type=created.relation_type,
+                properties_json=dict(created.properties_json or {}),
+                confidence=created.confidence,
+            )
+        )
         return DatasetKgRelationResponse.model_validate(created)
 
     async def delete_kg_relation(self, *, relation_id: str) -> None:
@@ -931,6 +1097,7 @@ class AlgoWorkspaceService(TenantAwareService):
         resource = await self._require_processing_resource(dataset_id=relation.dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
         await self._kg_repo.delete_relation(relation)
+        self._graph_store.delete_relation(relation_id=relation.id)
 
     async def create_alignment_pair(self, *, dataset_id: str, payload: DatasetAlignmentPairCreateRequest) -> DatasetAlignmentPairResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="alignment")
@@ -1001,7 +1168,19 @@ class AlgoWorkspaceService(TenantAwareService):
         await self._proposal_repo.delete_proposal(proposal)
 
     async def create_export(self, *, dataset_id: str, payload: DatasetExportRequest) -> AlgoResourceResponse:
-        await self.launch_processing_run(dataset_id=dataset_id, processing_type="export", payload=DatasetProcessingRunRequest(name=payload.name, description=payload.description, config_json=payload.model_dump()))
+        export_config = payload.model_dump(
+            exclude={"name", "description", "config_json", "result_summary"},
+            exclude_none=True,
+        )
+        await self.launch_processing_run(
+            dataset_id=dataset_id,
+            processing_type="export",
+            payload=DatasetProcessingRunRequest(
+                name=payload.name,
+                description=payload.description,
+                config_json=export_config,
+            ),
+        )
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="export")
         return AlgoResourceResponse.model_validate(resource)
 
@@ -1186,7 +1365,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 {
                     "status": "running",
                     "execution_mode": mode,
-                    "started_at": datetime.utcnow(),
+                    "started_at": utcnow(),
                 },
             )
             await session.commit()
@@ -1200,7 +1379,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 row,
                 {
                     "status": "completed",
-                    "completed_at": datetime.utcnow(),
+                    "completed_at": utcnow(),
                     "result_summary": service._default_generic_completion_summary(resource_type, row.result_summary),
                 },
             )
@@ -1213,7 +1392,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="training_job", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            started_at = datetime.utcnow()
+            started_at = utcnow()
             await service._resources.save(
                 row,
                 {
@@ -1229,34 +1408,59 @@ class AlgoWorkspaceService(TenantAwareService):
             )
             await session.commit()
 
-        await asyncio.sleep(0.05)
-
         async with get_session() as session:
             service = AlgoWorkspaceService(session, self._org_id, self._user_id)
             row = await service._require_generic_resource(resource_type="training_job", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            completed_at = datetime.utcnow()
             model = await service._model_configs.get(service._org_id, row.model_config_id)
             model_ref = service._to_execution_model_ref(model)
-            await service._resources.save(
-                row,
-                {
-                    "status": "completed",
-                    "completed_at": completed_at,
-                    "result_summary": TrainingRunner.run_training(
-                        resource_id=row.id,
-                        resource_name=row.name,
-                        source_dataset_id=row.source_dataset_id,
-                        model_ref=model_ref,
-                        config_json=row.config_json,
-                        execution_mode=mode,
-                        started_at=getattr(row, "started_at", None),
-                        completed_at=completed_at,
-                    ),
-                },
-            )
-            await session.commit()
+            try:
+                gpu_result = await service._maybe_run_gpu_training(
+                    row=row,
+                    model_ref=model_ref,
+                    mode=mode,
+                )
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "running" if gpu_result is not None else "completed",
+                        "completed_at": None if gpu_result is not None else utcnow(),
+                        "execution_mode": "gpu_ssh" if gpu_result is not None else mode,
+                        "result_summary": gpu_result or TrainingRunner.run_training(
+                            resource_id=row.id,
+                            resource_name=row.name,
+                            source_dataset_id=row.source_dataset_id,
+                            model_ref=model_ref,
+                            config_json=row.config_json,
+                            execution_mode=mode,
+                            started_at=getattr(row, "started_at", None),
+                            completed_at=utcnow(),
+                        ),
+                    },
+                )
+                await session.commit()
+            except Exception as exc:
+                await GpuNodeService(session, service._org_id, service._user_id).release_leases(resource_type="training_job", resource_id=row.id)
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "failed",
+                        "completed_at": utcnow(),
+                        "result_summary": {
+                            **service._default_training_job_summary(
+                                status="failed",
+                                execution_mode="gpu_ssh" if mode == "gpu_ssh" else mode,
+                                started_at=getattr(row, "started_at", None),
+                                completed_at=utcnow(),
+                                model_config_id=row.model_config_id,
+                            ),
+                            "logs": [f"training failed: {exc}"],
+                        },
+                    },
+                )
+                await session.commit()
+                raise
 
     async def _run_fine_tune_job(self, *, resource_id: str, mode: str) -> None:
         await asyncio.sleep(0)
@@ -1265,7 +1469,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="fine_tune", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            started_at = datetime.utcnow()
+            started_at = utcnow()
             await service._resources.save(
                 row,
                 {
@@ -1280,8 +1484,6 @@ class AlgoWorkspaceService(TenantAwareService):
                 },
             )
             await session.commit()
-
-        await asyncio.sleep(0.05)
 
         async with get_session() as session:
             service = AlgoWorkspaceService(session, self._org_id, self._user_id)
@@ -1291,26 +1493,54 @@ class AlgoWorkspaceService(TenantAwareService):
             training_job = await service._require_generic_resource(resource_type="training_job", resource_id=row.training_job_id)
             model = await service._model_configs.get(service._org_id, row.model_config_id)
             model_ref = service._to_execution_model_ref(model)
-            completed_at = datetime.utcnow()
-            await service._resources.save(
-                row,
-                {
-                    "status": "completed",
-                    "completed_at": completed_at,
-                    "result_summary": TrainingRunner.run_fine_tune(
-                        resource_id=row.id,
-                        resource_name=row.name,
-                        training_job_id=row.training_job_id,
-                        base_training_summary=training_job.result_summary,
-                        model_ref=model_ref,
-                        config_json=row.config_json,
-                        execution_mode=mode,
-                        started_at=getattr(row, "started_at", None),
-                        completed_at=completed_at,
-                    ),
-                },
-            )
-            await session.commit()
+            try:
+                gpu_result = await service._maybe_run_gpu_fine_tune(
+                    row=row,
+                    training_job=training_job,
+                    model_ref=model_ref,
+                    mode=mode,
+                )
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "running" if gpu_result is not None else "completed",
+                        "completed_at": None if gpu_result is not None else utcnow(),
+                        "execution_mode": "gpu_ssh" if gpu_result is not None else mode,
+                        "result_summary": gpu_result or TrainingRunner.run_fine_tune(
+                            resource_id=row.id,
+                            resource_name=row.name,
+                            training_job_id=row.training_job_id,
+                            base_training_summary=training_job.result_summary,
+                            model_ref=model_ref,
+                            config_json=row.config_json,
+                            execution_mode=mode,
+                            started_at=getattr(row, "started_at", None),
+                            completed_at=utcnow(),
+                        ),
+                    },
+                )
+                await session.commit()
+            except Exception as exc:
+                await GpuNodeService(session, service._org_id, service._user_id).release_leases(resource_type="fine_tune", resource_id=row.id)
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "failed",
+                        "completed_at": utcnow(),
+                        "result_summary": {
+                            **service._default_training_job_summary(
+                                status="failed",
+                                execution_mode="gpu_ssh" if mode == "gpu_ssh" else mode,
+                                started_at=getattr(row, "started_at", None),
+                                completed_at=utcnow(),
+                                model_config_id=row.model_config_id,
+                            ),
+                            "logs": [f"fine tune failed: {exc}"],
+                        },
+                    },
+                )
+                await session.commit()
+                raise
 
     async def _run_offline_evaluation_job(self, *, resource_id: str, mode: str) -> None:
         await asyncio.sleep(0)
@@ -1319,7 +1549,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="offline_evaluation", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            started_at = datetime.utcnow()
+            started_at = utcnow()
             await service._resources.save(
                 row,
                 {
@@ -1334,8 +1564,6 @@ class AlgoWorkspaceService(TenantAwareService):
             )
             await session.commit()
 
-        await asyncio.sleep(0.05)
-
         async with get_session() as session:
             service = AlgoWorkspaceService(session, self._org_id, self._user_id)
             row = await service._require_generic_resource(resource_type="offline_evaluation", resource_id=resource_id)
@@ -1348,28 +1576,55 @@ class AlgoWorkspaceService(TenantAwareService):
                 created_by=service._user_id,
             )
             target = await service._require_completed_target_resource(row.target_type, row.target_id)
-            completed_at = datetime.utcnow()
-            await service._resources.save(
-                row,
-                {
-                    "status": "completed",
-                    "completed_at": completed_at,
-                    "result_summary": EvaluationEngine.run_offline_evaluation(
-                        resource_id=row.id,
-                        resource_name=row.name,
-                        eval_set_id=row.eval_set_id,
-                        sample_count=sample_count,
-                        target_type=row.target_type,
-                        target_id=row.target_id,
-                        target_summary=target.result_summary,
-                        config_json=row.config_json,
-                        execution_mode=mode,
-                        started_at=getattr(row, "started_at", None),
-                        completed_at=completed_at,
-                    ),
-                },
-            )
-            await session.commit()
+            try:
+                gpu_result = await service._maybe_run_gpu_offline_evaluation(
+                    row=row,
+                    sample_count=sample_count,
+                    target=target,
+                    mode=mode,
+                )
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "running" if gpu_result is not None else "completed",
+                        "completed_at": None if gpu_result is not None else utcnow(),
+                        "execution_mode": "gpu_ssh" if gpu_result is not None else mode,
+                        "result_summary": gpu_result or EvaluationEngine.run_offline_evaluation(
+                            resource_id=row.id,
+                            resource_name=row.name,
+                            eval_set_id=row.eval_set_id,
+                            sample_count=sample_count,
+                            target_type=row.target_type,
+                            target_id=row.target_id,
+                            target_summary=target.result_summary,
+                            config_json=row.config_json,
+                            execution_mode=mode,
+                            started_at=getattr(row, "started_at", None),
+                            completed_at=utcnow(),
+                        ),
+                    },
+                )
+                await session.commit()
+            except Exception as exc:
+                await GpuNodeService(session, service._org_id, service._user_id).release_leases(resource_type="offline_evaluation", resource_id=row.id)
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "failed",
+                        "completed_at": utcnow(),
+                        "result_summary": {
+                            **service._default_offline_evaluation_summary(
+                                status="failed",
+                                execution_mode="gpu_ssh" if mode == "gpu_ssh" else mode,
+                                started_at=getattr(row, "started_at", None),
+                                completed_at=utcnow(),
+                            ),
+                            "logs": [f"offline evaluation failed: {exc}"],
+                        },
+                    },
+                )
+                await session.commit()
+                raise
 
     async def _run_deployment_job(self, *, resource_id: str, mode: str) -> None:
         await asyncio.sleep(0)
@@ -1378,7 +1633,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="deployment", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            started_at = datetime.utcnow()
+            started_at = utcnow()
             await service._resources.save(
                 row,
                 {
@@ -1393,6 +1648,73 @@ class AlgoWorkspaceService(TenantAwareService):
             )
             await session.commit()
 
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="deployment", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            source = await service._require_completed_target_resource(row.source_type, row.source_id)
+            model_ref = await service._resolve_model_ref_for_resource(source)
+            try:
+                gpu_result = await service._maybe_run_gpu_deployment(
+                    row=row,
+                    source=source,
+                    model_ref=model_ref,
+                    mode=mode,
+                )
+                if gpu_result is not None:
+                    await service._resources.save(
+                        row,
+                        {
+                            "status": "running",
+                            "execution_mode": "gpu_ssh",
+                            "completed_at": None,
+                            "result_summary": gpu_result,
+                        },
+                    )
+                else:
+                    completed_at = utcnow()
+                    await service._resources.save(
+                        row,
+                        {
+                            "status": "completed",
+                            "completed_at": completed_at,
+                            "result_summary": DeploymentManager.run_deployment(
+                                resource_id=row.id,
+                                resource_name=row.name,
+                                source_type=row.source_type,
+                                source_id=row.source_id,
+                                source_summary=source.result_summary,
+                                model_ref=model_ref,
+                                config_json=row.config_json,
+                                execution_mode=mode,
+                                started_at=getattr(row, "started_at", None),
+                                completed_at=completed_at,
+                            ),
+                        },
+                    )
+                await session.commit()
+            except Exception as exc:
+                await GpuNodeService(session, service._org_id, service._user_id).release_leases(resource_type="deployment", resource_id=row.id)
+                await service._resources.save(
+                    row,
+                    {
+                        "status": "failed",
+                        "completed_at": utcnow(),
+                        "result_summary": {
+                            **service._default_deployment_summary(
+                                status="failed",
+                                execution_mode="gpu_ssh" if mode == "gpu_ssh" else mode,
+                                started_at=getattr(row, "started_at", None),
+                                completed_at=utcnow(),
+                            ),
+                            "logs": [f"deployment failed: {exc}"],
+                        },
+                    },
+                )
+                await session.commit()
+                raise
+
     async def _run_online_validation_job(self, *, resource_id: str, mode: str) -> None:
         await asyncio.sleep(0)
         async with get_session() as session:
@@ -1400,7 +1722,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="online_validation", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            started_at = datetime.utcnow()
+            started_at = utcnow()
             await service._resources.save(
                 row,
                 {
@@ -1434,13 +1756,13 @@ class AlgoWorkspaceService(TenantAwareService):
             deployment = await service._require_completed_target_resource("deployment", row.deployment_id)
             task_ids = await service._select_validation_replay_task_ids(limit=5)
             replay_tasks = await service._build_validation_replay_tasks(task_ids)
-            completed_at = datetime.utcnow()
+            completed_at = utcnow()
             await service._resources.save(
                 row,
                 {
                     "status": "completed",
                     "completed_at": completed_at,
-                    "result_summary": OnlineValidationRunner.run_shadow_validation(
+                    "result_summary": await OnlineValidationRunner.run_shadow_validation(
                         resource_id=row.id,
                         resource_name=row.name,
                         deployment_id=row.deployment_id,
@@ -1455,41 +1777,260 @@ class AlgoWorkspaceService(TenantAwareService):
             )
             await session.commit()
 
-        await asyncio.sleep(0.05)
+    async def poll_running_gpu_jobs(self) -> dict[str, int]:
+        counts = {"completed": 0, "failed": 0, "running": 0}
+        resource_types = {
+            "training_job": TrainingJob,
+            "fine_tune": FineTuneRun,
+            "offline_evaluation": OfflineEvaluation,
+            "deployment": ModelDeployment,
+        }
+        for resource_type, model in resource_types.items():
+            rows = await self._resources.list_by_status_and_execution_mode(
+                model=model,
+                org_id=self._org_id,
+                status="running",
+                execution_mode="gpu_ssh",
+                owner_user_id=self._user_id,
+            )
+            for row in rows:
+                status = await self._poll_single_gpu_job(resource_type=resource_type, row=row)
+                counts[status] = counts.get(status, 0) + 1
+        return counts
 
-        async with get_session() as session:
-            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
-            row = await service._require_generic_resource(resource_type="online_validation", resource_id=resource_id)
-            if row.status == "cancelled":
-                return
-            completed_at = datetime.utcnow()
-            previous_summary = dict(row.result_summary or {})
-            summary = dict(previous_summary.get("summary") or {})
-            summary.update(
-                {
-                    "status": "completed",
-                    "completed_at": _iso_dt(completed_at),
-                    "deployment_id": row.deployment_id,
-                    "execution_mode": mode,
-                    "validation_type": summary.get("validation_type") or "shadow",
-                }
+    async def _poll_single_gpu_job(self, *, resource_type: str, row) -> str:
+        summary = dict(getattr(row, "result_summary", None) or {})
+        remote = dict(summary.get("remote_execution") or summary.get("summary", {}).get("remote_execution") or {})
+        lease = dict(summary.get("lease") or summary.get("summary", {}).get("lease") or {})
+        node_ids = list(lease.get("node_ids") or [])
+        if not remote or not node_ids:
+            await self._mark_gpu_job_failed(
+                resource_type=resource_type,
+                row=row,
+                error="missing gpu execution metadata",
+                release_leases=True,
             )
-            await service._resources.save(
-                row,
-                {
-                    "status": "completed",
-                    "completed_at": completed_at,
-                    "result_summary": {
-                        **previous_summary,
-                        "summary": summary,
-                        "metrics": dict(previous_summary.get("metrics") or {"status": "skeleton_ready"}),
-                        "replay_samples": list(previous_summary.get("replay_samples") or []),
-                        "artifacts": list(previous_summary.get("artifacts") or []),
-                        "logs": list(previous_summary.get("logs") or ["online validation skeleton execution completed"]),
-                    },
-                },
+            return "failed"
+        gpu_service = GpuNodeService(self._session, self._org_id, self._user_id)
+        node = await gpu_service._nodes.get(org_id=self._org_id, node_id=str(node_ids[0]))
+        if node is None:
+            await self._mark_gpu_job_failed(
+                resource_type=resource_type,
+                row=row,
+                error="gpu node not found",
+                release_leases=True,
             )
-            await session.commit()
+            return "failed"
+        runner = GpuJobRunner(gpu_service)
+        remote_status = await runner.collect_remote_status(
+            node=node,
+            remote=RemoteExecutionRecord(
+                host=str(remote.get("host") or node.host),
+                workdir=str(remote.get("workdir") or ""),
+                command_preview=str(remote.get("command_preview") or ""),
+                remote_pid=str(remote.get("remote_pid") or "") or None,
+                log_path=str(remote.get("log_path") or ""),
+                status_path=str(remote.get("status_path") or ""),
+                service_pid_path=str(remote.get("service_pid_path") or "") or None,
+                exit_code=remote.get("exit_code") if isinstance(remote.get("exit_code"), int) else None,
+            ),
+        )
+        normalized = str(remote_status.get("status") or "").strip().lower()
+        if normalized == "missing":
+            started_at = getattr(row, "started_at", None)
+            if started_at and (utcnow() - started_at).total_seconds() > settings.gpu_remote_status_grace_sec:
+                await self._mark_gpu_job_failed(
+                    resource_type=resource_type,
+                    row=row,
+                    error=str(remote_status.get("error") or "missing status file"),
+                    log_tail=str(remote_status.get("log_tail") or ""),
+                    release_leases=True,
+                )
+                return "failed"
+            await self._update_gpu_running_summary(row=row, summary=summary, remote_status=remote_status)
+            return "running"
+        if normalized in {"running", ""}:
+            if resource_type == "deployment":
+                runtime_registration = dict(summary.get("runtime_registration") or {})
+                is_healthy, health_error = await DeploymentManager.check_runtime_health(runtime_registration)
+                runtime_registration["last_checked_at"] = utcnow_iso()
+                if is_healthy:
+                    runtime_registration["service_status"] = "available"
+                    runtime_registration["available_at"] = runtime_registration.get("available_at") or utcnow_iso()
+                    await self._complete_gpu_job(
+                        resource_type=resource_type,
+                        row=row,
+                        remote_status=remote_status,
+                        summary=summary,
+                        runtime_registration=runtime_registration,
+                        keep_leases=True,
+                    )
+                    return "completed"
+                runtime_registration["service_status"] = "starting"
+                if health_error:
+                    summary_logs = list(summary.get("logs") or [])
+                    summary_logs.append(f"health check pending: {health_error}")
+                    summary["logs"] = summary_logs[-20:]
+                summary["runtime_registration"] = runtime_registration
+            await self._update_gpu_running_summary(row=row, summary=summary, remote_status=remote_status)
+            return "running"
+        if normalized in {"succeeded", "completed"}:
+            runtime_registration = dict(summary.get("runtime_registration") or {})
+            keep_leases = resource_type == "deployment"
+            if resource_type == "deployment":
+                is_healthy, health_error = await DeploymentManager.check_runtime_health(runtime_registration)
+                runtime_registration["last_checked_at"] = utcnow_iso()
+                if not is_healthy:
+                    await self._mark_gpu_job_failed(
+                        resource_type=resource_type,
+                        row=row,
+                        error=health_error or "deployment health check failed",
+                        log_tail=str(remote_status.get("log_tail") or ""),
+                        release_leases=True,
+                    )
+                    return "failed"
+                runtime_registration["service_status"] = "available"
+                runtime_registration["available_at"] = runtime_registration.get("available_at") or utcnow_iso()
+            await self._complete_gpu_job(
+                resource_type=resource_type,
+                row=row,
+                remote_status=remote_status,
+                summary=summary,
+                runtime_registration=runtime_registration or None,
+                keep_leases=keep_leases,
+            )
+            return "completed"
+        if normalized in {"failed", "cancelled"}:
+            await self._mark_gpu_job_failed(
+                resource_type=resource_type,
+                row=row,
+                error=str(remote_status.get("error") or normalized),
+                log_tail=str(remote_status.get("log_tail") or ""),
+                release_leases=True,
+                cancelled=normalized == "cancelled",
+            )
+            return "failed" if normalized == "failed" else "completed"
+        await self._update_gpu_running_summary(row=row, summary=summary, remote_status=remote_status)
+        return "running"
+
+    async def _update_gpu_running_summary(self, *, row, summary: dict[str, Any], remote_status: dict[str, Any]) -> None:
+        remote = dict(summary.get("remote_execution") or summary.get("summary", {}).get("remote_execution") or {})
+        if remote_status.get("exit_code") is not None:
+            remote["exit_code"] = remote_status.get("exit_code")
+        if remote_status.get("log_tail"):
+            logs = list(summary.get("logs") or [])
+            logs.append(str(remote_status.get("log_tail") or ""))
+            summary["logs"] = logs[-20:]
+        summary["remote_execution"] = remote
+        nested_summary = dict(summary.get("summary") or {})
+        nested_summary["remote_execution"] = remote
+        nested_summary["status"] = "running"
+        summary["summary"] = nested_summary
+        await self._resources.save(row, {"result_summary": summary})
+        await self._commit()
+
+    async def _complete_gpu_job(
+        self,
+        *,
+        resource_type: str,
+        row,
+        remote_status: dict[str, Any],
+        summary: dict[str, Any],
+        runtime_registration: dict[str, Any] | None,
+        keep_leases: bool,
+    ) -> None:
+        completed_at = utcnow()
+        normalized = self._merge_remote_terminal_summary(
+            resource_type=resource_type,
+            row=row,
+            previous_summary=summary,
+            remote_status=remote_status,
+            completed_at=completed_at,
+            runtime_registration=runtime_registration,
+        )
+        if not keep_leases:
+            await GpuNodeService(self._session, self._org_id, self._user_id).release_leases(resource_type=resource_type, resource_id=row.id)
+            release_summary = dict(normalized.get("lease") or normalized.get("summary", {}).get("lease") or {})
+            release_summary["released_at"] = completed_at.isoformat()
+            normalized["lease"] = release_summary
+            nested_summary = dict(normalized.get("summary") or {})
+            nested_summary["lease"] = release_summary
+            normalized["summary"] = nested_summary
+        await self._resources.save(
+            row,
+            {
+                "status": "completed",
+                "completed_at": completed_at,
+                "result_summary": normalized,
+            },
+        )
+        await self._commit()
+
+    async def _mark_gpu_job_failed(
+        self,
+        *,
+        resource_type: str,
+        row,
+        error: str,
+        log_tail: str | None = None,
+        release_leases: bool,
+        cancelled: bool = False,
+    ) -> None:
+        completed_at = utcnow()
+        summary = dict(getattr(row, "result_summary", None) or {})
+        nested_summary = dict(summary.get("summary") or {})
+        nested_summary["status"] = "cancelled" if cancelled else "failed"
+        nested_summary["completed_at"] = completed_at.isoformat()
+        summary["summary"] = nested_summary
+        logs = list(summary.get("logs") or [])
+        logs.append(error)
+        if log_tail:
+            logs.append(log_tail)
+        summary["logs"] = logs[-20:]
+        if release_leases:
+            await GpuNodeService(self._session, self._org_id, self._user_id).release_leases(resource_type=resource_type, resource_id=row.id)
+        await self._resources.save(
+            row,
+            {
+                "status": "cancelled" if cancelled else "failed",
+                "completed_at": completed_at,
+                "result_summary": summary,
+            },
+        )
+        await self._commit()
+
+    def _merge_remote_terminal_summary(
+        self,
+        *,
+        resource_type: str,
+        row,
+        previous_summary: dict[str, Any],
+        remote_status: dict[str, Any],
+        completed_at: datetime,
+        runtime_registration: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        summary = dict(previous_summary or {})
+        nested = dict(summary.get("summary") or {})
+        nested["status"] = "completed"
+        nested["completed_at"] = completed_at.isoformat()
+        summary["summary"] = nested
+        summary["metrics"] = dict(remote_status.get("metrics") or summary.get("metrics") or {})
+        summary["artifacts"] = list(remote_status.get("artifacts") or summary.get("artifacts") or [])
+        remote = dict(summary.get("remote_execution") or nested.get("remote_execution") or {})
+        if remote_status.get("exit_code") is not None:
+            remote["exit_code"] = remote_status.get("exit_code")
+        summary["remote_execution"] = remote
+        nested["remote_execution"] = remote
+        logs = list(summary.get("logs") or [])
+        if remote_status.get("log_tail"):
+            logs.append(str(remote_status.get("log_tail") or ""))
+        summary["logs"] = logs[-20:]
+        if runtime_registration is not None:
+            summary["runtime_registration"] = runtime_registration
+        if resource_type == "deployment":
+            return summary
+        return summary
+
 
     async def _require_dataset(self, dataset_id: str):
         row = await self._datasets.get(org_id=self._org_id, dataset_id=dataset_id, owner_user_id=self._user_id)
@@ -1523,6 +2064,22 @@ class AlgoWorkspaceService(TenantAwareService):
         if inspect.isawaitable(result):
             result = await result
         return "celery" if result else "local_background"
+
+    async def _resolve_algo_execution_mode(self, *, template: str | None, requested_gpu_count: int | None) -> str:
+        if template:
+            result = has_active_celery_worker()
+            if inspect.isawaitable(result):
+                result = await result
+            if not result:
+                raise ValidationError("gpu_ssh requires active celery worker")
+            gpu_service = GpuNodeService(self._session, self._org_id, self._user_id)
+            online_nodes = await gpu_service.list_nodes()
+            if not any(item.status == "online" for item in online_nodes):
+                raise ValidationError("gpu template configured but no online gpu nodes available")
+            if int(requested_gpu_count or 0) <= 0:
+                raise ValidationError("gpu template configured but default_gpu_request is missing")
+            return "gpu_ssh"
+        return await self._resolve_execution_mode()
 
     async def _require_processing_resource(self, *, dataset_id: str, processing_type: str):
         await self._require_dataset(dataset_id)
@@ -1642,6 +2199,35 @@ class AlgoWorkspaceService(TenantAwareService):
             )
         return replay_tasks
 
+    async def _cancel_gpu_execution(self, *, resource_type: str, row, release_leases: bool) -> None:
+        summary = dict(getattr(row, "result_summary", None) or {})
+        remote = dict(summary.get("remote_execution") or summary.get("summary", {}).get("remote_execution") or {})
+        lease = dict(summary.get("lease") or summary.get("summary", {}).get("lease") or {})
+        node_ids = list(lease.get("node_ids") or [])
+        if remote and node_ids:
+            gpu_service = GpuNodeService(self._session, self._org_id, self._user_id)
+            runner = GpuJobRunner(gpu_service)
+            node = await gpu_service._nodes.get(org_id=self._org_id, node_id=str(node_ids[0]))
+            if node is not None:
+                await runner.terminate_remote_job(
+                    node=node,
+                    remote=RemoteExecutionRecord(
+                        host=str(remote.get("host") or node.host),
+                        workdir=str(remote.get("workdir") or ""),
+                        command_preview=str(remote.get("command_preview") or ""),
+                        remote_pid=str(remote.get("remote_pid") or "") or None,
+                        log_path=str(remote.get("log_path") or ""),
+                        status_path=str(remote.get("status_path") or ""),
+                        service_pid_path=str(remote.get("service_pid_path") or "") or None,
+                        exit_code=remote.get("exit_code") if isinstance(remote.get("exit_code"), int) else None,
+                    ),
+                )
+        if release_leases:
+            await GpuNodeService(self._session, self._org_id, self._user_id).release_leases(
+                resource_type=resource_type,
+                resource_id=row.id,
+            )
+
     async def _require_training_model_config(self, model_config_id: str):
         model = await self._model_configs.get(self._org_id, model_config_id)
         if model is None:
@@ -1737,6 +2323,14 @@ class AlgoWorkspaceService(TenantAwareService):
             display_name=getattr(model, "display_name", None),
             endpoint=getattr(model, "endpoint", None),
             model_type=getattr(model, "model_type", None),
+            training_command_template=getattr(model, "training_command_template", None),
+            fine_tune_command_template=getattr(model, "fine_tune_command_template", None),
+            offline_eval_command_template=getattr(model, "offline_eval_command_template", None),
+            deployment_command_template=getattr(model, "deployment_command_template", None),
+            runtime_env_json=getattr(model, "runtime_env_json", None),
+            default_gpu_request=getattr(model, "default_gpu_request", None),
+            default_cpu_request=getattr(model, "default_cpu_request", None),
+            default_memory_gb=getattr(model, "default_memory_gb", None),
         )
 
     async def _resolve_model_ref_for_resource(self, row) -> ExecutionModelRef | None:
@@ -1760,6 +2354,218 @@ class AlgoWorkspaceService(TenantAwareService):
                 endpoint=None,
             )
         return None
+
+    async def _run_gpu_job(
+        self,
+        *,
+        resource_type: str,
+        resource_id: str,
+        requested_gpu_count: int,
+        command_template: str,
+        runtime_env: dict[str, Any] | None,
+        context: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        gpu_service = GpuNodeService(self._session, self._org_id, self._user_id)
+        runner = GpuJobRunner(gpu_service)
+        lease, remote = await runner.launch_remote_job(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            requested_gpu_count=requested_gpu_count,
+            node_command_template=command_template,
+            runtime_env=runtime_env,
+            context=context,
+        )
+        lease_payload = {
+            "node_ids": lease.node_ids,
+            "gpu_indices_by_node": lease.gpu_indices_by_node,
+            "leased_at": lease.leased_at,
+            "released_at": lease.released_at,
+        }
+        remote_payload = {
+            "host": remote.host,
+            "workdir": remote.workdir,
+            "command_preview": remote.command_preview,
+            "remote_pid": remote.remote_pid,
+            "log_path": remote.log_path,
+            "status_path": remote.status_path,
+            "service_pid_path": remote.service_pid_path,
+            "exit_code": remote.exit_code,
+        }
+        return lease_payload, remote_payload
+
+    async def _maybe_run_gpu_training(self, *, row, model_ref: ExecutionModelRef | None, mode: str) -> dict[str, Any] | None:
+        if mode != "gpu_ssh" or model_ref is None or not model_ref.training_command_template:
+            return None
+        lease_payload, remote_payload = await self._run_gpu_job(
+            resource_type="training_job",
+            resource_id=row.id,
+            requested_gpu_count=int(model_ref.default_gpu_request or 0),
+            command_template=model_ref.training_command_template,
+            runtime_env=model_ref.runtime_env_json,
+            context={
+                "resource_id": row.id,
+                "resource_name": row.name,
+                "org_id": self._org_id,
+                "dataset_id": row.source_dataset_id,
+                "eval_set_id": row.eval_set_id,
+                "model_config_id": row.model_config_id,
+                "training_job_id": row.id,
+                "config_json": row.config_json or {},
+            },
+        )
+        return {
+            "summary": {
+                "status": "running",
+                "execution_mode": "gpu_ssh",
+                "started_at": _iso_dt(getattr(row, "started_at", None)),
+                "completed_at": None,
+                "source_dataset_id": row.source_dataset_id,
+                "model_config_id": model_ref.id if model_ref else None,
+                "model_key": model_ref.model_key if model_ref else None,
+                "lease": lease_payload,
+                "remote_execution": remote_payload,
+            },
+            "artifacts": [],
+            "metrics": {},
+            "logs": ["gpu training job launched remotely"],
+            "lease": lease_payload,
+            "remote_execution": remote_payload,
+        }
+
+    async def _maybe_run_gpu_fine_tune(self, *, row, training_job, model_ref: ExecutionModelRef | None, mode: str) -> dict[str, Any] | None:
+        if mode != "gpu_ssh" or model_ref is None or not model_ref.fine_tune_command_template:
+            return None
+        lease_payload, remote_payload = await self._run_gpu_job(
+            resource_type="fine_tune",
+            resource_id=row.id,
+            requested_gpu_count=int(model_ref.default_gpu_request or 0),
+            command_template=model_ref.fine_tune_command_template,
+            runtime_env=model_ref.runtime_env_json,
+            context={
+                "resource_id": row.id,
+                "resource_name": row.name,
+                "org_id": self._org_id,
+                "dataset_id": None,
+                "eval_set_id": None,
+                "model_config_id": row.model_config_id,
+                "training_job_id": row.training_job_id,
+                "config_json": row.config_json or {},
+            },
+        )
+        return {
+            "summary": {
+                "status": "running",
+                "execution_mode": "gpu_ssh",
+                "started_at": _iso_dt(getattr(row, "started_at", None)),
+                "completed_at": None,
+                "training_job_id": row.training_job_id,
+                "model_config_id": model_ref.id if model_ref else None,
+                "model_key": model_ref.model_key if model_ref else None,
+                "lease": lease_payload,
+                "remote_execution": remote_payload,
+            },
+            "artifacts": [],
+            "metrics": {},
+            "logs": ["gpu fine-tune job launched remotely"],
+            "lease": lease_payload,
+            "remote_execution": remote_payload,
+        }
+
+    async def _maybe_run_gpu_offline_evaluation(self, *, row, sample_count: int, target, mode: str) -> dict[str, Any] | None:
+        model_ref = await self._resolve_model_ref_for_resource(target)
+        if mode != "gpu_ssh" or model_ref is None or not model_ref.offline_eval_command_template:
+            return None
+        lease_payload, remote_payload = await self._run_gpu_job(
+            resource_type="offline_evaluation",
+            resource_id=row.id,
+            requested_gpu_count=int(model_ref.default_gpu_request or 0),
+            command_template=model_ref.offline_eval_command_template,
+            runtime_env=model_ref.runtime_env_json,
+            context={
+                "resource_id": row.id,
+                "resource_name": row.name,
+                "org_id": self._org_id,
+                "dataset_id": None,
+                "eval_set_id": row.eval_set_id,
+                "model_config_id": model_ref.id,
+                "training_job_id": row.target_id if row.target_type == "training_job" else None,
+                "config_json": row.config_json or {},
+            },
+        )
+        return {
+            "summary": {
+                "status": "running",
+                "execution_mode": "gpu_ssh",
+                "started_at": _iso_dt(getattr(row, "started_at", None)),
+                "completed_at": None,
+                "eval_set_id": row.eval_set_id,
+                "target_type": row.target_type,
+                "target_id": row.target_id,
+                "lease": lease_payload,
+                "remote_execution": remote_payload,
+            },
+            "metrics": {},
+            "error_cases": [],
+            "artifacts": [],
+            "logs": ["gpu offline evaluation launched remotely"],
+            "lease": lease_payload,
+            "remote_execution": remote_payload,
+        }
+
+    async def _maybe_run_gpu_deployment(self, *, row, source, model_ref: ExecutionModelRef | None, mode: str) -> dict[str, Any] | None:
+        if mode != "gpu_ssh" or model_ref is None or not model_ref.deployment_command_template:
+            return None
+        lease_payload, remote_payload = await self._run_gpu_job(
+            resource_type="deployment",
+            resource_id=row.id,
+            requested_gpu_count=int(model_ref.default_gpu_request or 0),
+            command_template=model_ref.deployment_command_template,
+            runtime_env=model_ref.runtime_env_json,
+            context={
+                "resource_id": row.id,
+                "resource_name": row.name,
+                "org_id": self._org_id,
+                "dataset_id": getattr(source, "source_dataset_id", None),
+                "eval_set_id": None,
+                "model_config_id": model_ref.id,
+                "training_job_id": source.id if row.source_type == "training_job" else getattr(source, "training_job_id", None),
+                "config_json": row.config_json or {},
+            },
+        )
+        runtime_registration = {
+            **DeploymentManager.build_service_urls(
+                host=str(remote_payload.get("host") or ""),
+                config_json=row.config_json,
+            ),
+            "service_status": "starting",
+            "model_version": str(source.id),
+            "remote_pid": remote_payload.get("remote_pid"),
+            "leased_node_ids": lease_payload.get("node_ids") or [],
+            "gpu_indices_by_node": lease_payload.get("gpu_indices_by_node") or {},
+            "available_at": None,
+            "last_checked_at": None,
+            "source_type": row.source_type,
+            "source_id": row.source_id,
+            "model_key": model_ref.model_key,
+            "provider": model_ref.provider,
+        }
+        return {
+            "summary": {
+                "status": "running",
+                "execution_mode": "gpu_ssh",
+                "started_at": _iso_dt(getattr(row, "started_at", None)),
+                "completed_at": None,
+                "source_type": row.source_type,
+                "source_id": row.source_id,
+                "lease": lease_payload,
+                "remote_execution": remote_payload,
+            },
+            "runtime_registration": runtime_registration,
+            "artifacts": [],
+            "logs": ["gpu deployment launched remotely"],
+            "lease": lease_payload,
+            "remote_execution": remote_payload,
+        }
 
     async def _build_training_job_response(self, row) -> TrainingJobResponse:
         payload = TrainingJobResponse.model_validate(row).model_dump()
@@ -2149,3 +2955,13 @@ async def run_algo_resource_pipeline(
         else:
             await service._run_generic_resource(resource_type=resource_type, resource_id=resource_id, mode=mode)
     return {"status": "ok"}
+
+
+async def poll_running_gpu_jobs_pipeline(
+    *,
+    org_id: str,
+    user_id: str,
+) -> dict[str, int]:
+    async with get_session() as session:
+        service = AlgoWorkspaceService(session, org_id, user_id)
+        return await service.poll_running_gpu_jobs()

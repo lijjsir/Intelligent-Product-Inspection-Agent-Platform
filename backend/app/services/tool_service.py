@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.ids import uuid7
 from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolVersion
@@ -90,7 +91,7 @@ class ToolService:
         versions = await self._resolve_active_versions(tools)
         today_executions = await self._repo.list_recent_executions(
             self._org_id,
-            since=datetime.utcnow() - timedelta(days=1),
+            since=utcnow() - timedelta(days=1),
         )
 
         summaries = self._build_execution_summary(today_executions)
@@ -115,7 +116,7 @@ class ToolService:
         today_executions = await self._repo.list_recent_executions(
             self._org_id,
             tool_id=tool_id,
-            since=datetime.utcnow() - timedelta(days=1),
+            since=utcnow() - timedelta(days=1),
         )
         recent_executions = await self._repo.list_executions(
             self._org_id,
@@ -180,7 +181,7 @@ class ToolService:
         versions = await self._resolve_active_versions(tools)
         recent = await self._repo.list_recent_executions(
             self._org_id,
-            since=datetime.utcnow() - timedelta(days=1),
+            since=utcnow() - timedelta(days=1),
         )
 
         summaries = self._build_execution_summary(recent)
@@ -284,7 +285,7 @@ class ToolService:
     async def get_execution_overview(self) -> dict[str, Any]:
         recent = await self._repo.list_recent_executions(
             self._org_id,
-            since=datetime.utcnow() - timedelta(days=1),
+            since=utcnow() - timedelta(days=1),
         )
         successes = sum(1 for r in recent if r.status == "success")
         avg_latency = int(mean([r.latency_ms for r in recent if r.latency_ms is not None])) if recent else 0
@@ -307,7 +308,7 @@ class ToolService:
             raise ValidationError("tool has no active version")
 
         execution_id = str(uuid7())
-        started_at = datetime.utcnow()
+        started_at = utcnow()
         trace_id = f"tool-test-{tool.id}-{uuid7()}"
         status = "success"
         output = None
@@ -337,7 +338,7 @@ class ToolService:
             status = "failed"
             error = str(exc)
 
-        duration_ms = max(1, int((datetime.utcnow() - started_at).total_seconds() * 1000))
+        duration_ms = max(1, int((utcnow() - started_at).total_seconds() * 1000))
         await self._repo.create_execution(
             ToolExecution(
                 id=execution_id,
@@ -595,7 +596,7 @@ class ToolService:
         return summary
 
     def _build_trends(self, executions: list[ToolExecution]) -> dict[str, list[dict[str, Any]]]:
-        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        now = utcnow().replace(minute=0, second=0, microsecond=0)
         buckets = [now - timedelta(hours=hour) for hour in range(23, -1, -1)]
         calls: dict[datetime, int] = {bucket: 0 for bucket in buckets}
         errors: dict[datetime, int] = {bucket: 0 for bucket in buckets}

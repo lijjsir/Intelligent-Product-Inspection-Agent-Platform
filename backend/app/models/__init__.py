@@ -10,6 +10,7 @@ from app.models.alert_rule import AlertRule
 from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolSyncEvent, ToolVersion
 from app.models.audit import AuditLog, AuditOutbox
 from app.models.model_config import ModelConfig
+from app.models.gpu_infra import GpuComputeNode, GpuJobLease
 from app.models.token_ledger import TokenUsageLedger
 from app.models.user_token_usage import UserTokenUsageSummary
 from app.models.feedback import MessageFeedback, ResultFeedback
@@ -83,6 +84,8 @@ __all__ = [
     "AuditLog",
     "AuditOutbox",
     "ModelConfig",
+    "GpuComputeNode",
+    "GpuJobLease",
     "TokenUsageLedger",
     "UserTokenUsageSummary",
     "ResultFeedback",
