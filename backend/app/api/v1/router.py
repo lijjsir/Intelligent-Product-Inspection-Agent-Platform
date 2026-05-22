@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    algo_runtime,
     algo_workspace,
     agent,
     agent_ops,
@@ -12,6 +13,7 @@ from app.api.v1 import (
     billing,
     datasets,
     feedbacks,
+    gpu_nodes,
     inspection_specs,
     langfuse_proxy,
     memory,
@@ -44,6 +46,7 @@ router.include_router(prompt_admin.router, tags=["prompt-admin"])
 router.include_router(chat.router, tags=["chat"])
 router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 router.include_router(algo_workspace.router, tags=["algo-workspace"])
+router.include_router(algo_runtime.router, tags=["algo-runtime"])
 router.include_router(meetings.router, tags=["meetings"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
@@ -51,6 +54,7 @@ router.include_router(model_configs.router, prefix="/model-configs", tags=["mode
 router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
+router.include_router(gpu_nodes.router, tags=["gpu-nodes"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])
 router.include_router(memory.router, prefix="/memory", tags=["memory"])

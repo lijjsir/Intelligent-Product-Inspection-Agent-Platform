@@ -6,6 +6,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.user import User
 from app.models.user_token_usage import UserTokenUsageSummary
 
@@ -25,7 +26,7 @@ class UserTokenUsageSummaryRepository:
         cost_amount: float,
         ledger_created_at: datetime | None = None,
     ) -> None:
-        ledger_created_at = ledger_created_at or datetime.utcnow()
+        ledger_created_at = ledger_created_at or utcnow()
         stmt = insert(UserTokenUsageSummary).values(
             user_id=user_id,
             org_id=org_id,

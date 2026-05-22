@@ -24,6 +24,10 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.health_check_task.run_model_health_check",
         "schedule": 300.0,
     },
+    "poll-gpu-jobs": {
+        "task": "worker.tasks.algo_workspace_task.poll_gpu_jobs",
+        "schedule": settings.gpu_job_poll_interval_sec,
+    },
 }
 
 # Import task modules eagerly so the worker always registers named tasks.

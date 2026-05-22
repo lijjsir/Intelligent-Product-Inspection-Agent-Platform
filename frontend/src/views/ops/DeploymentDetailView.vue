@@ -11,6 +11,9 @@ const store = useDeploymentStore();
 const current = computed(() => store.current);
 const runtimeRegistration = computed(() => current.value?.result_summary?.runtime_registration || {});
 const summaryView = computed(() => buildDeploymentSummaryViewModel(current.value));
+const runtimeEndpoint = computed(() => runtimeRegistration.value.endpoint || "");
+const healthUrl = computed(() => runtimeRegistration.value.health_url || "");
+const inferUrl = computed(() => runtimeRegistration.value.infer_url || runtimeEndpoint.value || "");
 
 async function load() {
   const id = String(route.params.id || "");
@@ -43,7 +46,7 @@ watch(() => route.params.id, load);
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">状态</div>
-          <div class="mt-2 text-base font-semibold text-slate-900">{{ runtimeRegistration.status || "-" }}</div>
+          <div class="mt-2 text-base font-semibold text-slate-900">{{ runtimeRegistration.service_status || runtimeRegistration.status || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">来源</div>
@@ -53,9 +56,30 @@ watch(() => route.params.id, load);
           <div class="text-sm text-slate-500">模型</div>
           <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.model_key || "-" }}</div>
         </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div class="text-sm text-slate-500">模型版本</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.model_version || "-" }}</div>
+        </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">入口</div>
-          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.endpoint_placeholder || "-" }}</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeEndpoint || "-" }}</div>
+          <a
+            v-if="runtimeEndpoint"
+            class="mt-3 inline-flex text-sm font-medium text-cyan-700 transition hover:text-cyan-500"
+            :href="String(runtimeEndpoint)"
+            target="_blank"
+            rel="noreferrer"
+          >
+            打开推理入口
+          </a>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
+          <div class="text-sm text-slate-500">健康检查</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ healthUrl || "-" }}</div>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
+          <div class="text-sm text-slate-500">推理地址</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ inferUrl || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">推理配置</div>

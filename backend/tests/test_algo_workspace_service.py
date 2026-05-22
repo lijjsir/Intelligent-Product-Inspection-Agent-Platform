@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pytest
 
+from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.services import algo_workspace_service as algo_mod
 
@@ -15,6 +16,7 @@ class FakeDataset:
     org_id: str
     created_by: str | None
     name: str
+    modality: str = "image_text"
     status: str = "active"
     deleted_at: datetime | None = None
 
@@ -273,7 +275,7 @@ class FakeAlgoRepo:
         return obj
 
     async def soft_delete(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         return obj
 
     async def soft_delete_many(self, **kwargs):
@@ -334,11 +336,11 @@ class FakeEvalItemRepo:
         return next((row for row in self.items.get(evaluation_dataset_id, []) if row.id == item_id and row.deleted_at is None), None)
 
     async def soft_delete(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
 
     async def soft_delete_many(self, *, org_id: str, evaluation_dataset_id: str, created_by: str):
         for row in self.items.get(evaluation_dataset_id, []):
-            row.deleted_at = datetime.utcnow()
+            row.deleted_at = utcnow()
 
 
 class FakeKgRepo:
@@ -369,7 +371,7 @@ class FakeKgRepo:
         return next((row for row in self.entities if row.id == entity_id and row.org_id == org_id and row.created_by == created_by), None)
 
     async def delete_entity(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
 
     async def list_relations(self, **kwargs):
         return list(self.relations)
@@ -395,7 +397,7 @@ class FakeKgRepo:
         return next((row for row in self.relations if row.id == relation_id and row.org_id == org_id and row.created_by == created_by), None)
 
     async def delete_relation(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
 
 
 class FakePairRepo:
@@ -427,7 +429,7 @@ class FakePairRepo:
         return next((row for row in self.rows if row.id == pair_id and row.org_id == org_id and row.created_by == created_by), None)
 
     async def delete_pair(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
 
     async def update_pair(self, obj, payload: dict):
         for key, value in payload.items():
@@ -476,7 +478,7 @@ class FakeProposalRepo:
         return obj
 
     async def delete_proposal(self, obj):
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
 
     async def list_history(self, *, org_id: str, dataset_id: str, created_by: str):
         return [row for row in self.rows if row.org_id == org_id and row.dataset_id == dataset_id and row.created_by == created_by and row.deleted_at is None]
@@ -524,10 +526,14 @@ class FakeModelConfigRepo:
 class FakeObjectStorage:
     backend_name = "local"
 
+    def __init__(self):
+        self.objects: dict[tuple[str, str], tuple[bytes, str | None]] = {}
+
     def ensure_bucket(self, bucket: str) -> None:
         return None
 
     def put_bytes(self, *, bucket: str, object_key: str, data: bytes, content_type: str | None = None):
+        self.objects[(bucket, object_key)] = (data, content_type)
         return {
             "bucket": bucket,
             "object_key": object_key,
@@ -537,13 +543,39 @@ class FakeObjectStorage:
         }
 
     def get_bytes(self, *, bucket: str, object_key: str):
-        return None
+        return self.objects.get((bucket, object_key))
 
     def delete_object(self, *, bucket: str, object_key: str) -> None:
         return None
 
     def presign_download_url(self, *, bucket: str, object_key: str, expires_seconds: int = 3600) -> str:
         return f"/download/{object_key}"
+
+
+class FakeGraphStore:
+    enabled = True
+
+    def __init__(self):
+        self.entities: list[dict] = []
+        self.relations: list[dict] = []
+        self.resets: list[dict] = []
+        self.deleted_entities: list[str] = []
+        self.deleted_relations: list[str] = []
+
+    def reset_graph(self, *, dataset_id: str, knowledge_graph_id: str) -> None:
+        self.resets.append({"dataset_id": dataset_id, "knowledge_graph_id": knowledge_graph_id})
+
+    def upsert_entity(self, payload) -> None:
+        self.entities.append({key: getattr(payload, key) for key in payload.__slots__})
+
+    def upsert_relation(self, payload) -> None:
+        self.relations.append({key: getattr(payload, key) for key in payload.__slots__})
+
+    def delete_entity(self, *, entity_id: str) -> None:
+        self.deleted_entities.append(entity_id)
+
+    def delete_relation(self, *, relation_id: str) -> None:
+        self.deleted_relations.append(relation_id)
 
 
 @pytest.fixture
@@ -561,6 +593,7 @@ def service(monkeypatch):
     task_repo = FakeTaskRepo(None)
     result_repo = FakeTaskResultRepo(None)
     object_storage = FakeObjectStorage()
+    graph_store = FakeGraphStore()
 
     monkeypatch.setattr(algo_mod, "DatasetRepository", lambda session: dataset_repo)
     monkeypatch.setattr(algo_mod, "DatasetSampleRepository", lambda session: sample_repo)
@@ -574,6 +607,7 @@ def service(monkeypatch):
     monkeypatch.setattr(algo_mod, "TaskRepository", lambda session: task_repo)
     monkeypatch.setattr(algo_mod, "ResultRepository", lambda session: result_repo)
     monkeypatch.setattr(algo_mod, "build_object_storage", lambda: object_storage)
+    monkeypatch.setattr(algo_mod, "build_graph_store", lambda: graph_store)
     monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
 
     svc = algo_mod.AlgoWorkspaceService(session, "org-1", "user-1")
@@ -1003,6 +1037,130 @@ async def test_launch_processing_run_creates_job(service, monkeypatch):
     assert status.resource is not None
     assert status.resource.status == "queued"
     assert job_repo.jobs[-1].job_type == "knowledge_graph_build"
+
+
+@pytest.mark.asyncio
+async def test_create_export_preserves_selected_format_in_config(service, monkeypatch):
+    svc, _algo_repo, _eval_item_repo, job_repo, _kg_repo, *_ = service
+    monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
+
+    created = await svc.create_export(
+        dataset_id="ds-1",
+        payload=algo_mod.DatasetExportRequest(
+            name="export run",
+            format="coco",
+            train_ratio=0.7,
+            val_ratio=0.15,
+            test_ratio=0.15,
+            include_augmented=True,
+            only_confirmed_alignment=False,
+        ),
+    )
+
+    assert created.config_json is not None
+    assert created.config_json["format"] == "coco"
+    assert "config_json" not in created.config_json
+    assert job_repo.jobs[-1].job_type == "dataset_export"
+
+
+@pytest.mark.asyncio
+async def test_get_export_results_rewrites_download_url_to_api_route(service, monkeypatch):
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, *_ = service
+    monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
+
+    await svc.create_export(
+        dataset_id="ds-1",
+        payload=algo_mod.DatasetExportRequest(name="export run", format="yolo"),
+    )
+    resource = await svc._require_processing_resource(dataset_id="ds-1", processing_type="export")
+    resource.status = "completed"
+    resource.result_summary = {
+        "artifact": {
+            "bucket": "dataset-exports",
+            "object_key": "dataset-exports/org-1/ds-1/export-1/labels.yolo.json",
+            "download_url": "http://minio:9000/dataset-exports/org-1/ds-1/export-1/labels.yolo.json",
+            "format": "yolo",
+        }
+    }
+
+    result = await svc.get_processing_results(dataset_id="ds-1", processing_type="export")
+
+    assert result.artifact is not None
+    assert result.artifact["format"] == "yolo"
+    assert result.artifact["download_url"] == "/api/v1/datasets/ds-1/exports/download"
+    assert isinstance(result.summary, dict)
+    assert result.summary["artifact"]["download_url"] == "/api/v1/datasets/ds-1/exports/download"
+
+
+@pytest.mark.asyncio
+async def test_export_pipeline_records_storage_backend(service, monkeypatch):
+    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, *_ = service
+    monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
+
+    summary = await svc._processing.run_export_build(
+        dataset_id="ds-1",
+        resource_id="export-1",
+        dataset=svc._datasets.rows["ds-1"],
+        config_json={"format": "coco"},
+        alignment_resource_id=None,
+    )
+
+    assert summary["artifact"]["storage_backend"] == "local"
+
+
+def test_get_export_artifact_payload_uses_minio_backend_fallback(service, monkeypatch):
+    svc, *_ = service
+
+    class FakeMinioStorage:
+        backend_name = "minio"
+
+        def __init__(self, *, endpoint: str, access_key: str, secret_key: str):
+            self.endpoint = endpoint
+            self.access_key = access_key
+            self.secret_key = secret_key
+
+        def get_bytes(self, *, bucket: str, object_key: str):
+            return (b'{"format":"coco"}', "application/json")
+
+    monkeypatch.setattr(algo_mod, "MinioObjectStorage", FakeMinioStorage)
+
+    payload = svc.get_export_artifact_payload(
+        bucket="dataset-exports",
+        object_key="dataset-exports/org-1/ds-1/export-1/annotations.coco.json",
+        storage_backend="minio",
+    )
+
+    assert payload == (b'{"format":"coco"}', "application/json")
+
+
+def test_get_export_artifact_payload_falls_back_to_local_legacy_file(service, monkeypatch, tmp_path):
+    svc, *_ = service
+
+    legacy_dir = tmp_path / "dataset-exports/org-1/ds-1/export-1"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_dir / "legacy-random.json"
+    legacy_file.write_bytes(b'{"format":"legacy"}')
+
+    class FakeLegacyLocalStorage:
+        backend_name = "local"
+
+        def get_bytes(self, *, bucket: str, object_key: str):
+            return None
+
+        def get_bytes_from_legacy_prefix(self, *, object_key_prefix: str, suffix: str | None = None):
+            if object_key_prefix == "dataset-exports/org-1/ds-1/export-1":
+                return legacy_file.read_bytes(), "application/json"
+            return None
+
+    svc._storage = FakeLegacyLocalStorage()
+
+    payload = svc.get_export_artifact_payload(
+        bucket="dataset-exports",
+        object_key="dataset-exports/org-1/ds-1/export-1/annotations.coco.json",
+        storage_backend="local",
+    )
+
+    assert payload == (b'{"format":"legacy"}', "application/json")
 
 
 @pytest.mark.asyncio

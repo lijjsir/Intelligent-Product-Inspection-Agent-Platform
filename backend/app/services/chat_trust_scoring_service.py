@@ -13,6 +13,7 @@ from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.config import settings
+from app.core.datetime import utcnow
 from app.services.model_config_service import ModelConfigService
 
 CERTAINTY_PATTERNS = [
@@ -424,7 +425,7 @@ class ChatTrustScoringService:
             synced_payload = tracer.sync_score(payload)
             synced = bool(synced_payload.get("synced")) or synced
             trace_url = synced_payload.get("trace_url") or trace_url
-        return trace_url, datetime.utcnow() if synced else None
+        return trace_url, utcnow() if synced else None
 
 
 def trust_payload_from_score(score: dict[str, Any] | None) -> dict[str, Any] | None:

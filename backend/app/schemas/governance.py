@@ -19,6 +19,14 @@ class ModelConfigCreate(BaseModel):
     endpoint: str
     api_key: Optional[str] = None
     model_type: str = "chat"
+    training_command_template: Optional[str] = None
+    fine_tune_command_template: Optional[str] = None
+    offline_eval_command_template: Optional[str] = None
+    deployment_command_template: Optional[str] = None
+    runtime_env_json: Optional[dict] = None
+    default_gpu_request: Optional[int] = Field(default=None, ge=1, le=64)
+    default_cpu_request: Optional[int] = Field(default=None, ge=1, le=1024)
+    default_memory_gb: Optional[int] = Field(default=None, ge=1, le=8192)
     priority: int = 100
     rpm_limit: Optional[int] = None
     input_price_per_million: Optional[float] = None
@@ -47,6 +55,14 @@ class ModelConfigUpdate(BaseModel):
     endpoint: Optional[str] = None
     api_key: Optional[str] = None
     model_type: Optional[str] = None
+    training_command_template: Optional[str] = None
+    fine_tune_command_template: Optional[str] = None
+    offline_eval_command_template: Optional[str] = None
+    deployment_command_template: Optional[str] = None
+    runtime_env_json: Optional[dict] = None
+    default_gpu_request: Optional[int] = Field(default=None, ge=1, le=64)
+    default_cpu_request: Optional[int] = Field(default=None, ge=1, le=1024)
+    default_memory_gb: Optional[int] = Field(default=None, ge=1, le=8192)
     priority: Optional[int] = None
     rpm_limit: Optional[int] = None
     input_price_per_million: Optional[float] = None
@@ -84,6 +100,14 @@ class ModelConfigResponse(BaseModel):
     display_name: str
     endpoint: str
     model_type: str
+    training_command_template: Optional[str] = None
+    fine_tune_command_template: Optional[str] = None
+    offline_eval_command_template: Optional[str] = None
+    deployment_command_template: Optional[str] = None
+    runtime_env_json: Optional[dict] = None
+    default_gpu_request: Optional[int] = None
+    default_cpu_request: Optional[int] = None
+    default_memory_gb: Optional[int] = None
     priority: int
     rpm_limit: Optional[int] = None
     input_price_per_million: Optional[float] = None

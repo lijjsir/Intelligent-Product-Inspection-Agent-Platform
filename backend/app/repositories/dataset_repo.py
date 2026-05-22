@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.dataset import Dataset, DatasetAsyncJob, DatasetSample, DatasetUploadSession
 
 
@@ -78,7 +79,7 @@ class DatasetRepository:
         return obj
 
     async def soft_delete(self, obj: Dataset) -> Dataset:
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return obj
 
@@ -175,7 +176,7 @@ class DatasetSampleRepository:
         return list(result.scalars().all())
 
     async def soft_delete(self, obj: DatasetSample) -> DatasetSample:
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return obj
 
@@ -187,7 +188,7 @@ class DatasetSampleRepository:
             )
         )
         for row in result.scalars().all():
-            row.deleted_at = datetime.utcnow()
+            row.deleted_at = utcnow()
         await self._session.flush()
 
 

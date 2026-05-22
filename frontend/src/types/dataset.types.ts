@@ -40,6 +40,7 @@ export interface Dataset {
 
 export interface DatasetDetail extends Dataset {
   recent_jobs: AsyncJob[];
+  supported_export_formats: string[];
 }
 
 export interface DatasetSample {
@@ -62,6 +63,7 @@ export interface DatasetSample {
   related_entities?: unknown[] | null;
   source_metadata?: Record<string, unknown> | null;
   preview_text?: string | null;
+  download_url?: string | null;
   is_augmented?: boolean;
   augmentation_source_id?: string | null;
   augmentation_method?: string | null;
