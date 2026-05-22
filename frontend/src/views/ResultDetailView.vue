@@ -19,7 +19,7 @@ const loading = ref(true);
 const reviewing = ref(false);
 const taskId = route.params.id as string;
 const reviewForm = ref<ReviewSubmit>({ verdict: "", note: "" });
-const canReview = computed(() => hasRole(["expert", "platform_operator"]));
+const canReview = computed(() => hasRole(["expert"]));
 
 const verdictOptions = [
   { label: "合格 (Pass)", value: "pass" },
