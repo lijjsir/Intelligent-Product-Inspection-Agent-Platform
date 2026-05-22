@@ -27,8 +27,6 @@ from app.schemas.user import CurrentUser
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
 from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
-from app.services.task_execution_service import launch_task_execution
-from app.services.task_service import TaskService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -334,60 +332,54 @@ class ChatService:
         session_id: str,
         payload: ChatTaskSubmitRequest,
     ) -> ChatMessageResponse:
+        content = (
+            "聊天页面不能创建或执行正式质量检测任务。\n\n"
+            "请前往质量检测任务页面提交正式检测；聊天页只保留任务草稿、解释和辅助分析。"
+        )
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             if not await session_repo.get(self._org_id, self._user_id, session_id):
                 raise NotFoundError("chat session not found")
 
-            task_service = TaskService(session, self._org_id)
-            task_metadata = {
-                "source": "chat_submit",
-                "chat_session_id": session_id,
-                "chat_source_message_id": payload.source_message_id,
-                **dict(payload.metadata or {}),
-            }
-            task = await task_service.create_task(
-                created_by=self._user_id,
-                product_id=payload.product_id.strip(),
-                spec_code=payload.spec_code.strip(),
-                image_urls=[item for item in payload.image_urls if item],
-                priority=payload.priority,
-                metadata=task_metadata,
-            )
-            await session.commit()
-
-        launch = await launch_task_execution(task_id=str(task.id), org_id=self._org_id)
-        async with get_session() as session:
-            session_repo = ChatSessionRepository(session)
             message_repo = ChatMessageRepository(session)
-            content = (
-                "检测任务已创建并启动执行。\n\n"
-                f"任务 ID：{task.id}\n"
-                f"产品编号：{task.product_id}\n"
-                f"检测标准：{task.spec_code}\n"
-                f"执行方式：{launch['mode']}\n"
-                f"图片数量：{len(task.image_urls or [])}"
-            )
             message = await message_repo.create(
                 session_id=session_id,
                 org_id=self._org_id,
                 user_id=None,
                 role="assistant",
                 content=content,
-                message_type="task_result",
+                message_type="action_blocked",
                 payload={
                     "answer": content,
-                    "summary": "任务已创建并启动执行",
-                    "action_state": "task_started",
-                    "created_task": {
-                        "id": str(task.id),
-                        "status": str(launch.get("status") or "queued"),
-                        "product_id": str(task.product_id),
-                        "spec_code": str(task.spec_code),
-                        "priority": int(task.priority),
-                        "image_count": len(task.image_urls or []),
+                    "summary": "聊天页禁止正式质检 action",
+                    "message_type": "action_blocked",
+                    "action_state": "blocked",
+                    "task_draft": {
+                        "product_id": payload.product_id.strip(),
+                        "spec_code": payload.spec_code.strip(),
+                        "image_urls": [item for item in payload.image_urls if item],
+                        "priority": payload.priority,
+                        "metadata": {
+                            "source": "chat_draft",
+                            "chat_source_message_id": payload.source_message_id,
+                            **dict(payload.metadata or {}),
+                        },
                     },
-                    "execution": launch,
+                    "task_form_defaults": {
+                        "product_id": payload.product_id.strip(),
+                        "spec_code": payload.spec_code.strip(),
+                        "image_urls": [item for item in payload.image_urls if item],
+                        "priority": payload.priority,
+                        "metadata": dict(payload.metadata or {}),
+                    },
+                    "created_task": None,
+                    "ui_schema": "chat_answer_v2",
+                    "route_trace": {
+                        "surface": "chat",
+                        "capabilities_used": [],
+                        "satisfied": False,
+                        "errors": [{"message": "chat surface forbids action"}],
+                    },
                 },
             )
             await session_repo.touch(self._org_id, self._user_id, session_id)

@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
+import type { AlgoResourceStatus } from "@/types/algo-workspace.types";
 import type { DatasetSample, DatasetSampleType } from "@/types/dataset.types";
 
 const router = useRouter();
@@ -15,7 +16,7 @@ const query = reactive({
   page: 1,
   size: 20,
   keyword: "",
-  status: "",
+  status: "" as AlgoResourceStatus | "",
 });
 
 const sourceSampleQuery = reactive({
@@ -50,7 +51,7 @@ async function loadList() {
 }
 
 async function loadSourceDatasets() {
-  await datasetStore.fetchDatasets({ page: 1, size: 100, keyword: "", modality: "", status: "" });
+  await datasetStore.fetchDatasets({ page: 1, size: 100, keyword: "", modality: "", status: "" } as any);
   if (!sourceDatasetId.value && datasetStore.items.length) {
     sourceDatasetId.value = datasetStore.items[0].id;
   }
@@ -289,7 +290,7 @@ watch(sourceDatasetId, async (next, prev) => {
             :page-size="sourceSampleQuery.size"
             :current-page="sourceSampleQuery.page"
             :total="datasetStore.sampleTotal"
-            @current-change="(page) => { sourceSampleQuery.page = page; loadSourceSamples(); }"
+            @current-change="(page: number) => { sourceSampleQuery.page = page; loadSourceSamples(); }"
           />
         </section>
 

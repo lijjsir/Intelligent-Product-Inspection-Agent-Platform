@@ -212,7 +212,12 @@ class QualityAgentOrchestratorService:
         async with get_session() as session:
             message_repo = ChatMessageRepository(session)
             session_repo = ChatSessionRepository(session)
-            current_message = await message_repo.get(request.org_id, str(request.assistant_message_id))
+            get_message = getattr(message_repo, "get", None)
+            current_message = (
+                await get_message(request.org_id, str(request.assistant_message_id))
+                if callable(get_message)
+                else None
+            )
             current_payload = current_message.payload if current_message and isinstance(current_message.payload, dict) else {}
             if current_payload.get("status") == "interrupted":
                 return False
@@ -381,6 +386,10 @@ class QualityAgentOrchestratorService:
             trace_url=base_payload.get("trace_url"),
             prompt_version=base_payload.get("prompt_version", ""),
             selected_rag_space=request.ext.get("selected_rag_space") or base_payload.get("selected_rag_space"),
+            artifacts=list(base_payload.get("artifacts") or []),
+            route_trace=base_payload.get("route_trace"),
+            capabilities_used=list(base_payload.get("capabilities_used") or []),
+            satisfied=base_payload.get("satisfied"),
         )
 
     async def _materialize_chat_output(

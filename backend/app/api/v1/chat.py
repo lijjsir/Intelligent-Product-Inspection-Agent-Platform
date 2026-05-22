@@ -4,12 +4,15 @@ import asyncio
 import json
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from io import BytesIO
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import require_role
+from app.services.object_storage.factory import build_object_storage
 from app.schemas.chat import (
     ChatMessageResponse,
     ChatMessageSendRequest,
@@ -113,6 +116,15 @@ async def upload_chat_attachments(
     service = RagSpaceService(db, org_id=current.org_id, user_id=current.user_id)
     items = await service.upload_attachments(files=files)
     return ResponseEnvelope(data=AttachmentUploadResponse(items=items))
+
+
+@router.get("/files/{bucket}/{object_key:path}")
+async def serve_file(bucket: str, object_key: str):
+    result = build_object_storage().get_bytes(bucket=bucket, object_key=object_key)
+    if result is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    content, content_type = result
+    return StreamingResponse(BytesIO(content), media_type=content_type or "application/octet-stream")
 
 
 @router.delete("/sessions/{session_id}", response_model=ResponseEnvelope[dict])

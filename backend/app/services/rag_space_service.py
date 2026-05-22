@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from agent.rag.embedder import EmbeddingModelNotConfigured
 from fastapi import UploadFile
@@ -29,7 +30,6 @@ from app.schemas.rag_space import (
     RagSpaceDocumentListItem,
     RagSpaceResponse,
 )
-from app.services.file_storage_service import FileStorageService
 from app.services.object_storage.factory import build_object_storage
 
 
@@ -105,7 +105,7 @@ class RagSpaceService:
         self._documents = RagDocumentRepository(session)
         self._chunks = RagDocumentChunkRepository(session)
         self._jobs = RagIndexJobRepository(session)
-        self._storage = FileStorageService()
+        self._storage = build_object_storage()
         self._rag_storage_bucket = settings.rag_storage_bucket
         self._indexer = KnowledgeIndexer(org_id=self._org_id)
 
@@ -534,21 +534,25 @@ class RagSpaceService:
             content = await upload.read()
             if not content:
                 raise ValidationError(f"empty attachment: {upload.filename or 'unnamed'}")
-            stored = self._storage.save_bytes(
-                category="chat_attachments",
-                file_name=upload.filename or "attachment.bin",
+            safe_name = Path(upload.filename or "attachment.bin").name
+            object_key = f"chat_attachments/{uuid4().hex}{suffix}"
+            stored = self._storage.put_bytes(
+                bucket="chat-attachments",
+                object_key=object_key,
                 data=content,
                 content_type=upload.content_type,
             )
             kind = "image" if (stored["content_type"] or "").startswith("image/") else "file"
             items.append(
                 {
-                    "id": stored["id"],
-                    "name": stored["name"],
-                    "url": stored["url"],
+                    "id": uuid4().hex,
+                    "name": safe_name,
+                    "url": f"/api/v1/files/{stored['bucket']}/{stored['object_key']}",
                     "content_type": stored["content_type"],
                     "size_bytes": stored["size_bytes"],
                     "kind": kind,
+                    "bucket": stored["bucket"],
+                    "object_key": stored["object_key"],
                 }
             )
         return items

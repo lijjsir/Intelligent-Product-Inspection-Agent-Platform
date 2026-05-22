@@ -1,0 +1,8 @@
+Product Inspection Report
+Product ID: SCREW-001
+Inspection Date: 2026-05-20
+Result: FAIL
+Defects Found:
+  - Surface scratch (3.2mm) at position A3
+  - Thread damage at position B7
+Summary: Product does not meet quality standards.

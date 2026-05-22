@@ -88,6 +88,27 @@ export interface ChatResultCard {
   rag_summary?: ChatRagSummary | null;
 }
 
+export interface ChatArtifact {
+  artifact_id: string;
+  type: string;
+  source_agent: string;
+  content?: Record<string, unknown>;
+  citations?: Array<Record<string, unknown>>;
+  confidence?: number | null;
+  created_at?: string | null;
+}
+
+export interface ChatRouteTrace {
+  iterations?: number;
+  capabilities_used?: string[];
+  satisfied?: boolean;
+  score?: number;
+  surface?: string;
+  steps?: Array<Record<string, unknown>>;
+  observations?: Array<Record<string, unknown>>;
+  errors?: Array<Record<string, unknown>>;
+}
+
 export interface ChatMessagePayload {
   result_id?: string | null;
   result?: {
@@ -146,6 +167,10 @@ export interface ChatMessagePayload {
   materialization_status?: "synced" | "failed" | string;
   materialization_error?: string | null;
   route_decision?: Record<string, unknown> | null;
+  artifacts?: ChatArtifact[];
+  route_trace?: ChatRouteTrace | null;
+  capabilities_used?: string[];
+  satisfied?: boolean;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   message_type?: string;

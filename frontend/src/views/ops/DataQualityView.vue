@@ -6,7 +6,7 @@ import { GridComponent, TooltipComponent } from "echarts/components";
 import { init, type ECharts, use } from "echarts/core";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent]);
+use([CanvasRenderer, LineChart, GridComponent, TooltipComponent] as any);
 
 const analyticsStore = useAnalyticsStore();
 const loading = ref(false);
