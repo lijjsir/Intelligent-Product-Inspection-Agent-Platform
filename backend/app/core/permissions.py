@@ -52,6 +52,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "dataset": {ROLE_ALGORITHM_ENGINEER},
     "algo_workspace": {ROLE_ALGORITHM_ENGINEER},
     "meeting": {ROLE_USER, ROLE_EXPERT},
+    "meeting_admin": {ROLE_ADMIN},
 }
 
 

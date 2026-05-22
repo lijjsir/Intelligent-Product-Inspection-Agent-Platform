@@ -44,8 +44,8 @@ const canCreateTask = computed(() => hasRole(["user", "expert"]));
 
 const rules: FormRules = {
   product_id: [
-    { required: true, message: "产品编号不能为空", trigger: "blur" },
-    { max: 64, message: "产品编号不能超过 64 个字符", trigger: "blur" },
+    { required: true, message: "请选择检测标准以自动填入产品线", trigger: "blur" },
+    { max: 64, message: "产品线不能超过 64 个字符", trigger: "blur" },
   ],
   spec_code: [{ required: true, message: "请选择检测标准", trigger: "change" }],
   image_urls_input: [
@@ -199,10 +199,21 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    const urlsFromText = createForm.value.image_urls_input
-      .split(/[\n,]+/)
+    // Parse URL lines with optional #N prefix for sample number
+    const urlLines = createForm.value.image_urls_input
+      .split(/[\n]+/)
       .map((item) => item.trim())
       .filter(Boolean);
+    const parsedUrls: { url: string; sample_number?: number }[] = [];
+    for (const line of urlLines) {
+      const match = line.match(/^#(\d+)\s+(.+)$/);
+      if (match) {
+        parsedUrls.push({ url: match[2].trim(), sample_number: parseInt(match[1]) });
+      } else {
+        parsedUrls.push({ url: line });
+      }
+    }
+    const urlsFromText = parsedUrls.map((p) => p.url);
     const uploadFilesRaw = uploadFiles.value
       .map((item) => item.raw)
       .filter((item): item is File => Boolean(item));
@@ -214,7 +225,8 @@ async function handleSubmitCreate() {
       allUrls.map(async (url, i) => {
         const uploadFile = uploadFilesRaw[i - urlsFromText.length];
         if (uploadFile && i >= urlsFromText.length) {
-          return { index: i, url, hash: await fileToHash(uploadFile) };
+          const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
+          return { index: i, url, hash: await fileToHash(uploadFile), sample_number: sn };
         }
         // For URL-only entries, hash the URL string.
         const msgUint8 = new TextEncoder().encode(url);
@@ -222,7 +234,8 @@ async function handleSubmitCreate() {
         const urlHashHex = Array.from(new Uint8Array(urlHash))
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
-        return { index: i, url, hash: urlHashHex };
+        const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
+        return { index: i, url, hash: urlHashHex, sample_number: sn };
       }),
     );
 
@@ -386,18 +399,18 @@ watch(
 
     <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
       <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
-        <el-form-item label="产品线" prop="product_id">
-          <el-input v-model="createForm.product_id" placeholder="选择标准后自动带入" />
-        </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
           <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full" @change="onSpecChange">
             <el-option
               v-for="spec in activeSpecOptions"
               :key="spec.id"
-              :label="`${spec.spec_code} · ${spec.name} [${spec.product_family || '未分类'}]`"
+              :label="`${spec.spec_code} · ${spec.name}`"
               :value="spec.spec_code"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="产品线" prop="product_id">
+          <div class="product-line-display">{{ createForm.product_id || '选择标准后自动填入' }}</div>
         </el-form-item>
         <el-form-item label="图片 URL" prop="image_urls_input">
           <el-input
@@ -405,7 +418,7 @@ watch(
             type="textarea"
             :rows="4"
             resize="none"
-            placeholder="每行一个 URL，也可以同时上传本地图片"
+            placeholder="每行一个URL；批量标号加 #N 前缀，如：#1 https://a.jpg"
           />
         </el-form-item>
         <el-form-item label="上传图片">
@@ -461,5 +474,17 @@ watch(
 }
 .list-table :deep(.el-table__body tr:hover > td) {
   @apply bg-zinc-50;
+}
+
+.product-line-display {
+  height: 32px;
+  line-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
 }
 </style>

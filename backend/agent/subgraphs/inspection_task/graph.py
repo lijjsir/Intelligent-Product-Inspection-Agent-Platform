@@ -30,6 +30,7 @@ from agent.subgraphs.inspection_task.nodes import (
     run_reasoning,
     run_vision,
 )
+from app.services.chat_trust_scoring_service import score_output_rule
 from agent.subgraphs.quality_judgement.product_adapters import (
     build_defects,
     collect_rule_hits,
@@ -90,16 +91,18 @@ def _status_from_verdict(verdict: str) -> str:
     return "pending"
 
 
-def _quality_payload(verdict: str, ai_gate: dict[str, Any], citations: list[dict[str, Any]]) -> dict[str, Any]:
+def _quality_payload(verdict: str, ai_gate: dict[str, Any], citations: list[dict[str, Any]], trust_scores: dict[str, Any] | None = None) -> dict[str, Any]:
     risk_level, risk_score = _verdict_risk(verdict)
     flags = list(ai_gate.get("reasons") or [])
     if not citations:
         flags.append("no_citations")
+    hallucination_risk = float(trust_scores.get("hallucination_risk") or 0.0) if trust_scores else 0.0
+    faithfulness = round(1.0 - hallucination_risk, 4)
     return {
         "confidence": float(ai_gate.get("confidence_score") or 0.0),
         "evidence_coverage": float(ai_gate.get("evidence_score") or 0.0),
         "traceability": float(ai_gate.get("traceability_score") or 0.0),
-        "faithfulness": 0.94 if verdict == "pass" else 0.71,
+        "faithfulness": faithfulness,
         "risk_level": risk_level,
         "risk_score": round(risk_score, 4),
         "passed": verdict == "pass",
@@ -703,7 +706,8 @@ class InspectionTaskGraph:
         review_thresholds = dict(review_target.config_payload if review_target else {})
         min_confidence = float(review_thresholds.get("min_confidence", 0.85))
         min_evidence = float(review_thresholds.get("min_evidence_score", 0.9))
-        physical_hallucination_score = 0.08 if verdict == "pass" else 0.29
+
+        rag_hits = list(rag_result.get("hits") or [])
         if verdict == "pass" and (
             float(ai_gate.get("confidence_score") or 0.0) < min_confidence
             or float(ai_gate.get("evidence_score") or 0.0) < min_evidence
@@ -715,8 +719,13 @@ class InspectionTaskGraph:
                 "reasons": [*list(evaluation.get("reasons") or []), "review_gate_blocked_auto_pass"],
             }
 
-        rag_hits = list(rag_result.get("hits") or [])
-        quality = _quality_payload(verdict, ai_gate, citations)
+        trust_scores = score_output_rule(
+            input_text=request.query,
+            output_text=evaluation.get("summary") or "",
+            citations=citations if citations else None,
+        )
+        physical_hallucination_score = float(trust_scores.get("hallucination_risk") or 0.0)
+        quality = _quality_payload(verdict, ai_gate, citations, trust_scores)
         task_status = _status_from_verdict(verdict)
         risk_level, risk_score = _verdict_risk(verdict)
         latency_ms = round((perf_counter() - started_at) * 1000, 2)
@@ -772,7 +781,8 @@ class InspectionTaskGraph:
                 llm_model="quality_judgement", citations={"items": citations},
                 reasoning_chain={**reasoning_chain, "standard_evaluation": evaluation,
                                 "quality": quality, "result_card": result_card,
-                                "expectation_check": expectation_check, "rag_summary": rag_summary},
+                                "expectation_check": expectation_check, "rag_summary": rag_summary,
+                                "trust_scoring": trust_scores},
             ),
             stability=StabilityAggregate(
                 risk_score=risk_score, risk_level=risk_level,

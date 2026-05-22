@@ -14,6 +14,7 @@ export const governanceRoutes = [
   { path: "admin/auth-logs", name: "governance-admin-auth-logs", component: Placeholder, meta: { title: "登录日志", roles: [ROLE_ADMIN] } },
   { path: "admin/audit-logs", name: "governance-admin-audit-logs", component: Placeholder, meta: { title: "审计日志", roles: [ROLE_ADMIN] } },
   { path: "admin/approvals", name: "governance-admin-approvals", component: Placeholder, meta: { title: "高风险审批", roles: [ROLE_ADMIN] } },
+  { path: "admin/meetings", name: "governance-admin-meetings", component: () => import("@/views/admin/MeetingManageView.vue"), meta: { title: "会议管理", roles: [ROLE_ADMIN] } },
 
   // Quality section
   { path: "quality/analysis-center", name: "governance-analysis-center", component: () => import("@/views/quality/AnalysisCenterView.vue"), meta: { title: "分析中心", roles: [ROLE_ADMIN] } },

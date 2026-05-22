@@ -36,4 +36,5 @@ class MemoryStreamBroker:
 
 task_stream_broker = MemoryStreamBroker()
 chat_stream_broker = MemoryStreamBroker(history_size=500)
+meeting_stream_broker = MemoryStreamBroker(history_size=500)
 stream_broker = task_stream_broker

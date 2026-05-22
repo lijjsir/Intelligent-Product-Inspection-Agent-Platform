@@ -45,7 +45,25 @@ class QualityReportService(TenantAwareService):
         self._chat_message_repo = ChatMessageRepository(session)
 
     @staticmethod
-    def _has_citations(citations) -> bool:
+    def _extract_trust_risk(reasoning_chain) -> float | None:
+        if not isinstance(reasoning_chain, dict):
+            return None
+        trust = reasoning_chain.get("trust_scoring")
+        if not isinstance(trust, dict):
+            return None
+        risk = trust.get("hallucination_risk")
+        if risk is None:
+            return None
+        try:
+            return float(risk)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _has_citations(citations, reasoning_chain=None) -> bool:
+        trust_risk = QualityReportService._extract_trust_risk(reasoning_chain)
+        if trust_risk is not None:
+            return trust_risk < 0.6
         if not citations:
             return False
         if isinstance(citations, dict):
@@ -427,7 +445,7 @@ class QualityReportService(TenantAwareService):
             results, feedbacks, stabilities = [], [], []
 
         total_results = len(results) + len(chat_messages)
-        hallucination_count = sum(1 for item in results if not self._has_citations(item.citations))
+        hallucination_count = sum(1 for item in results if not self._has_citations(item.citations, item.reasoning_chain))
         thumbs_down_count = sum(1 for item in feedbacks if item.feedback_type == "down")
         thumbs_up_count = sum(1 for item in feedbacks if item.feedback_type == "up")
         avg_risk_score = round(
@@ -455,7 +473,7 @@ class QualityReportService(TenantAwareService):
                     "model_key": model_key,
                     "result_count": result_count,
                     "pass_rate": round(sum(1 for item in model_results if hasattr(item, "verdict") and item.verdict == "pass") / result_count, 4) if result_count else 0.0,
-                    "hallucination_rate": round(sum(1 for item in model_results if hasattr(item, "citations") and not self._has_citations(item.citations)) / result_count, 4) if result_count else 0.0,
+                    "hallucination_rate": round(sum(1 for item in model_results if hasattr(item, "citations") and not self._has_citations(item.citations, getattr(item, "reasoning_chain", None))) / result_count, 4) if result_count else 0.0,
                     "thumbs_down_rate": 0.0,
                     "thumbs_up_rate": 0.0,
                 })
@@ -476,7 +494,7 @@ class QualityReportService(TenantAwareService):
             "thumbs_up_rate": round(thumbs_up_count / total_results, 4) if total_results else 0.0,
             "avg_risk_score": avg_risk_score,
             "feedback_distribution": dict(Counter((item.category or "uncategorized") for item in feedbacks)),
-            "hallucination_trend": self._build_result_trend(results, lambda item: 0 if self._has_citations(item.citations) else 1),
+            "hallucination_trend": self._build_result_trend(results, lambda item: 0 if self._has_citations(item.citations, item.reasoning_chain) else 1),
             "thumbs_down_trend": self._build_feedback_trend(feedbacks, "down"),
             "thumbs_up_trend": self._build_feedback_trend(feedbacks, "up"),
             "model_metrics": model_metrics,
