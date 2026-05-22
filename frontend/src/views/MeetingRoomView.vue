@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChatDotRound, Delete, Key, Plus, Promotion, RefreshRight, MagicStick } from "@element-plus/icons-vue";
+import { ChatDotRound, Delete, Key, Plus, Promotion, RefreshRight } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
@@ -263,17 +263,6 @@ onBeforeUnmount(() => {
             </div>
           </el-popover>
 
-          <!-- AI Toggle -->
-          <el-button
-            v-if="store.activeRoom"
-            :type="store.aiEnabled ? 'primary' : 'default'"
-            :icon="MagicStick"
-            :loading="store.aiThinking"
-            size="small"
-            @click="store.aiEnabled = !store.aiEnabled"
-          >
-            AI 助手{{ store.aiEnabled ? ' · 开' : '' }}
-          </el-button>
           <div v-if="store.activeRoom" class="room-code">
             <span>会议码</span>
             <strong>{{ store.activeRoom.access_code }}</strong>
@@ -296,14 +285,6 @@ onBeforeUnmount(() => {
           <ChatDotRound />
           <h3>会议内容将在这里实时同步</h3>
           <p>输入会议消息后回车发送，开启 AI 助手后自动获得智能回复。</p>
-        </div>
-
-        <!-- AI thinking indicator -->
-        <div v-if="store.aiThinking" class="ai-thinking-bar">
-          <span class="ai-thinking-dots">
-            <span class="dot" /><span class="dot" /><span class="dot" />
-          </span>
-          AI 助手思考中...
         </div>
 
         <article
@@ -627,41 +608,6 @@ label span {
   margin-top: 8px;
   color: #71717a;
   line-height: 1.7;
-}
-
-.ai-thinking-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  border: 1px solid #dbeafe;
-  border-radius: 8px;
-  background: #eff6ff;
-  color: #2563eb;
-  font-size: 13px;
-}
-
-.ai-thinking-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #2563eb;
-  animation: blink 1.4s infinite both;
-}
-
-.dot:nth-child(2) { animation-delay: 0.2s; }
-.dot:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes blink {
-  0%, 80%, 100% { opacity: 0.2; }
-  40% { opacity: 1; }
 }
 
 .message-row {
