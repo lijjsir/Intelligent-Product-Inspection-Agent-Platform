@@ -24,8 +24,6 @@ export const useMeetingStore = defineStore("meeting", () => {
   const loadingRooms = ref(false);
   const loadingMessages = ref(false);
   const sending = ref(false);
-  const aiEnabled = ref(false);
-  const aiThinking = ref(false);
   const availableAgentDefs = ref<Array<{
     id: string;
     name: string;
@@ -113,21 +111,6 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  // ── AI Assistant ────────────────────────────────────────────────
-
-  async function aiChat() {
-    if (!activeRoom.value || aiThinking.value) return null;
-    aiThinking.value = true;
-    try {
-      const { data } = await meetingApi.aiChat(activeRoom.value.id);
-      const msg = (data as { data?: MeetingMessage }).data || (data as unknown as MeetingMessage);
-      messages.value = [...messages.value, msg];
-      return msg;
-    } finally {
-      aiThinking.value = false;
-    }
-  }
-
   // ── Agent Actions ──────────────────────────────────────────────
 
   async function loadAgents() {
@@ -143,14 +126,6 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function addAgent(agentId: string, role = "participant") {
-    if (!activeRoom.value) return null;
-    const { data } = await meetingApi.addAgent(activeRoom.value.id, { agent_id: agentId, role });
-    const agent = (data as { data?: MeetingRoomAgent }).data || (data as unknown as MeetingRoomAgent);
-    agents.value = [...agents.value, agent];
-    return agent;
-  }
-
   async function deleteRoom() {
     if (!activeRoom.value) return;
     await meetingApi.deleteRoom(activeRoom.value.id);
@@ -158,12 +133,6 @@ export const useMeetingStore = defineStore("meeting", () => {
     activeRoomId.value = rooms.value[0]?.id || "";
     messages.value = [];
     agents.value = [];
-  }
-
-  async function removeAgent(agentId: string) {
-    if (!activeRoom.value) return;
-    await meetingApi.removeAgent(activeRoom.value.id, agentId);
-    agents.value = agents.value.filter((a) => a.agent_id !== agentId);
   }
 
   async function loadAvailableAgentDefs() {
@@ -303,8 +272,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     // actions
     loadRooms, createRoom, joinRoom,
     loadMessages, sendMessage,
-    aiEnabled, aiThinking, aiChat,
-    loadAgents, addAgent, removeAgent, deleteRoom,
+    loadAgents, deleteRoom,
     availableAgentDefs, loadAvailableAgentDefs, addAgentToRoom, removeAgentFromRoom,
     connectStream, disconnectStream, handleStreamEvent,
     setReaction,
