@@ -30,7 +30,10 @@ async def main() -> None:
 
     input_path = Path(args.input)
     docs = load_jsonl(input_path)
-    result = await KnowledgeIndexer().index(docs)
+    # 使用全局模型配置（org_id=None）或从环境变量读取指定组织
+    import os
+    org_id = os.environ.get("PIAP_IMPORT_ORG_ID") or None
+    result = await KnowledgeIndexer(org_id=org_id).index(docs)
     output = {"input_docs": len(docs), **result}
     print(json.dumps(output, ensure_ascii=False))
     if output.get("input_docs", 0) > 0 and output.get("accepted", 0) == 0:

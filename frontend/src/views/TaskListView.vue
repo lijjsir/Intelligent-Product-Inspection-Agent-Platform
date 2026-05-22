@@ -144,6 +144,14 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+async function fileToHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function handleUploadChange(_file: UploadFile, files: UploadFiles) {
   uploadFiles.value = files;
 }
@@ -166,16 +174,34 @@ async function handleSubmitCreate() {
       .split(/[\n,]+/)
       .map((item) => item.trim())
       .filter(Boolean);
-    const dataUrls = await Promise.all(
-      uploadFiles.value
-        .map((item) => item.raw)
-        .filter((item): item is File => Boolean(item))
-        .map((item) => fileToDataUrl(item)),
+    const uploadFilesRaw = uploadFiles.value
+      .map((item) => item.raw)
+      .filter((item): item is File => Boolean(item));
+    const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
+    const allUrls = [...urlsFromText, ...dataUrls];
+
+    // Build image_items with content hashes for uploaded files.
+    const imageItems = await Promise.all(
+      allUrls.map(async (url, i) => {
+        const uploadFile = uploadFilesRaw[i - urlsFromText.length];
+        if (uploadFile && i >= urlsFromText.length) {
+          return { index: i, url, hash: await fileToHash(uploadFile) };
+        }
+        // For URL-only entries, hash the URL string.
+        const msgUint8 = new TextEncoder().encode(url);
+        const urlHash = await crypto.subtle.digest("SHA-256", msgUint8);
+        const urlHashHex = Array.from(new Uint8Array(urlHash))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        return { index: i, url, hash: urlHashHex };
+      }),
     );
+
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
-      image_urls: [...urlsFromText, ...dataUrls],
+      image_urls: allUrls,
+      image_items: imageItems,
       priority: createForm.value.priority,
       metadata: { source: "task_list" },
     });
@@ -296,6 +322,7 @@ watch(
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
             <el-button
+              v-if="isAdmin"
               link
               type="danger"
               size="small"

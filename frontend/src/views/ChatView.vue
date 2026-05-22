@@ -196,6 +196,13 @@ function canConfirmTask(message: ChatMessage) {
   return canConfirmTaskAction(message);
 }
 
+function onTaskSpecChange(specCode: string) {
+  const spec = specOptions.value.find((s) => s.spec_code === specCode);
+  if (spec) {
+    taskForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
+}
+
 function fillTaskForm(message: ChatMessage) {
   const draft = buildTaskDraft(message);
   taskForm.value = {
@@ -911,11 +918,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     <!-- Task dialog -->
     <el-dialog v-model="taskDialogVisible" :title="taskSourceMessage ? '编辑检测信息' : '整理质检任务草稿'" width="640px" @closed="resetTaskDialog">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-position="top">
-        <el-form-item label="产品编号" prop="product_id">
-          <el-input v-model="taskForm.product_id" placeholder="例如：P-1001" />
+        <el-form-item label="产品线" prop="product_id">
+          <el-input v-model="taskForm.product_id" placeholder="选择标准后自动带入" />
         </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select v-model="taskForm.spec_code" filterable allow-create default-first-option placeholder="选择或输入检测标准" class="!w-full">
+          <el-select v-model="taskForm.spec_code" filterable allow-create default-first-option placeholder="选择或输入检测标准" class="!w-full" @change="onTaskSpecChange">
             <el-option v-for="spec in filteredSpecOptions" :key="spec.id" :label="`${spec.spec_code} · ${spec.name}`" :value="spec.spec_code" />
           </el-select>
           <div class="task-form-toolbar">

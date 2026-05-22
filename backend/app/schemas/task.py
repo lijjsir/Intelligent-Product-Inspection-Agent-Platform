@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import PageParams
+
+
+class ImageItem(BaseModel):
+    """Per-image metadata for traceability and duplicate detection."""
+    index: int = Field(ge=0, description="Zero-based position in the image list")
+    url: str = Field(min_length=1)
+    hash: str = Field(min_length=1, description="SHA-256 hex digest of the image content")
+
+    @classmethod
+    def from_url(cls, index: int, url: str, content_bytes: bytes | None = None) -> ImageItem:
+        """Build an ImageItem, computing hash from raw bytes when available;
+        otherwise fall back to hashing the URL string."""
+        if content_bytes:
+            digest = hashlib.sha256(content_bytes).hexdigest()
+        else:
+            digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        return cls(index=index, url=url, hash=digest)
 
 
 class TaskListQuery(PageParams):
@@ -24,8 +42,38 @@ class TaskCreate(BaseModel):
     product_id: str
     spec_code: str
     image_urls: List[str]
+    image_items: Optional[List[ImageItem]] = None
     priority: int = Field(default=5, ge=1, le=10)
     metadata: Optional[dict] = None
+
+    @field_validator("image_items")
+    @classmethod
+    def validate_image_items(cls, v: list[ImageItem] | None, info) -> list[ImageItem] | None:
+        if v is None:
+            return None
+        indices = [item.index for item in v]
+        if sorted(indices) != list(range(len(v))):
+            raise ValueError("image_items 的 index 必须从 0 开始连续递增")
+        urls = [item.url for item in v]
+        hashes = [item.hash for item in v]
+        if len(set(hashes)) != len(hashes):
+            raise ValueError("检测到重复上传：存在相同的图片哈希")
+        return v
+
+    def deduplicated_items(self) -> list[ImageItem]:
+        """Return image_items with duplicates removed, keeping first occurrence."""
+        if not self.image_items:
+            return [
+                ImageItem.from_url(i, url)
+                for i, url in enumerate(self.image_urls)
+            ]
+        seen: set[str] = set()
+        result: list[ImageItem] = []
+        for item in self.image_items:
+            if item.hash not in seen:
+                seen.add(item.hash)
+                result.append(item)
+        return result
 
 
 class TaskResponse(BaseModel):
@@ -37,6 +85,7 @@ class TaskResponse(BaseModel):
     status: str
     priority: int
     image_urls: List[str]
+    image_items: Optional[List[ImageItem]] = None
     source_kind: str | None = None
     source_graph: str | None = None
     has_result: bool = False
@@ -46,7 +95,7 @@ class TaskResponse(BaseModel):
     execution: dict[str, Any] | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
+
     model_config = {"from_attributes": True}
 
 

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useQualityStore } from "@/stores/quality.store";
 import ChatTrustTrendChart from "@/components/business/analytics/ChatTrustTrendChart.vue";
 import ThumbsDownTrendChart from "@/components/business/analytics/ThumbsDownTrendChart.vue";
+import ThumbsUpTrendChart from "@/components/business/analytics/ThumbsUpTrendChart.vue";
 
 const store = useQualityStore();
 const report = computed(() => store.report);
@@ -42,6 +43,12 @@ const summaryCards = computed(() => {
       value: `${(r.chat_citation_rate * 100).toFixed(1)}%`,
       sub: "回复中包含引用依据的比例",
       tone: r.chat_citation_rate >= 0.8 ? "success" : r.chat_citation_rate >= 0.5 ? "warning" : "danger",
+    },
+    {
+      label: "点赞率",
+      value: `${(r.thumbs_up_rate * 100).toFixed(1)}%`,
+      sub: "用户明确标记满意的比例",
+      tone: r.thumbs_up_rate >= 0.8 ? "success" : r.thumbs_up_rate >= 0.5 ? "warning" : "danger",
     },
     {
       label: "点踩率",
@@ -137,6 +144,17 @@ const modelComparison = computed(() => {
           </div>
         </div>
         <el-empty v-else description="暂无模型数据" :image-size="48" />
+      </el-card>
+
+      <el-card shadow="never" class="chart-card">
+        <template #header>
+          <div class="card-head">
+            <strong>点赞率趋势</strong>
+            <span>用户标记满意的比例变化</span>
+          </div>
+        </template>
+        <ThumbsUpTrendChart v-if="(report?.thumbs_up_trend || []).length" :points="report?.thumbs_up_trend || []" />
+        <el-empty v-else description="暂无点赞数据" :image-size="48" />
       </el-card>
 
       <el-card shadow="never" class="chart-card">

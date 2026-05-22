@@ -66,6 +66,10 @@ class AuthService:
             )
             await self._orgs.create(org)
             org_id = org.id
+
+            # Seed default alert rules for the new organization.
+            from app.services.alert_rule_service import AlertRuleService
+            await AlertRuleService.seed_default_rules(self._session, org_id)
         else:
             org = await self._orgs.get_by_slug(org_slug)
             if not org:
