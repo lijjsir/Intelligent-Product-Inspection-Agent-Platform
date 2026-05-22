@@ -2,7 +2,20 @@ import type { PageParams, PagedResponse } from "./common.types";
 import type { DatasetSampleType } from "./dataset.types";
 
 export type AlgoResourceStatus = "draft" | "queued" | "running" | "completed" | "failed" | "cancelled";
+export type AlgoExecutionMode = "local_background" | "celery" | "gpu_ssh";
 export type DatasetProcessingType = "kg" | "alignment" | "augmentation" | "export";
+export type DatasetExportFormat = "vlm-json" | "coco" | "yolo";
+
+export interface DatasetExportRequest {
+  name: string;
+  description?: string;
+  format?: DatasetExportFormat;
+  train_ratio?: number;
+  val_ratio?: number;
+  test_ratio?: number;
+  include_augmented?: boolean;
+  only_confirmed_alignment?: boolean;
+}
 
 export interface AlgoResourceBase {
   id: string;
@@ -18,15 +31,53 @@ export interface AlgoResourceBase {
 }
 
 export interface AlgoExecutionResource extends AlgoResourceBase {
-  execution_mode?: string | null;
+  execution_mode?: AlgoExecutionMode | string | null;
   executor_job_id?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
 }
 
+export interface GpuLeaseSummary {
+  node_ids: string[];
+  gpu_indices_by_node: Record<string, number[]>;
+  leased_at?: string | null;
+  released_at?: string | null;
+}
+
+export interface RemoteExecutionSummary {
+  host?: string | null;
+  workdir?: string | null;
+  command_preview?: string | null;
+  remote_pid?: string | null;
+  log_path?: string | null;
+  status_path?: string | null;
+  service_pid_path?: string | null;
+  exit_code?: number | null;
+}
+
+export interface RuntimeRegistrationSummary {
+  source_type?: string;
+  source_id?: string;
+  model_key?: string | null;
+  provider?: string | null;
+  endpoint?: string | null;
+  health_url?: string | null;
+  infer_url?: string | null;
+  model_version?: string | null;
+  service_status?: string | null;
+  remote_pid?: string | null;
+  available_at?: string | null;
+  last_checked_at?: string | null;
+  leased_node_ids?: string[];
+  gpu_indices_by_node?: Record<string, number[]>;
+  inference_config?: Record<string, unknown>;
+  request_timeout_ms?: number | null;
+  service_port?: number | null;
+}
+
 export interface TrainingExecutionSummary {
   status?: string;
-  execution_mode?: string | null;
+  execution_mode?: AlgoExecutionMode | string | null;
   started_at?: string | null;
   completed_at?: string | null;
   source_dataset_id?: string;
@@ -35,6 +86,8 @@ export interface TrainingExecutionSummary {
   model_key?: string | null;
   effective_hyperparameters?: Record<string, unknown>;
   base_checkpoint?: string | null;
+  lease?: GpuLeaseSummary;
+  remote_execution?: RemoteExecutionSummary;
 }
 
 export interface TrainingArtifact {
@@ -85,35 +138,31 @@ export interface TrainingResultSummary {
   artifacts: TrainingArtifact[];
   metrics: TrainingMetrics;
   logs: string[];
+  lease?: GpuLeaseSummary;
+  remote_execution?: RemoteExecutionSummary;
 }
 export type TrainingResultSummaryRecord = TrainingResultSummary & Record<string, unknown>;
 
 export interface OfflineEvaluationResultSummary {
   summary?: {
     status?: string;
-    execution_mode?: string | null;
+    execution_mode?: AlgoExecutionMode | string | null;
     started_at?: string | null;
     completed_at?: string | null;
     eval_set_id?: string;
     target_type?: string;
     target_id?: string;
+    lease?: GpuLeaseSummary;
+    remote_execution?: RemoteExecutionSummary;
   };
   metrics: Record<string, unknown>;
   error_cases: Array<Record<string, unknown>>;
   artifacts: TrainingArtifact[];
   logs: string[];
+  lease?: GpuLeaseSummary;
+  remote_execution?: RemoteExecutionSummary;
 }
 export type OfflineEvaluationResultSummaryRecord = OfflineEvaluationResultSummary & Record<string, unknown>;
-
-export interface DeploymentRuntimeRegistration {
-  source_type?: string;
-  source_id?: string;
-  model_key?: string | null;
-  provider?: string | null;
-  endpoint_placeholder?: string | null;
-  inference_config?: Record<string, unknown>;
-  status?: string;
-}
 
 export interface OnlineValidationMetrics {
   shadow_pass_rate?: number;
@@ -121,6 +170,7 @@ export interface OnlineValidationMetrics {
   throughput_qps?: number;
   replay_count?: number;
   baseline_runtime_status?: string;
+  error_count?: number;
   [key: string]: unknown;
 }
 
@@ -145,6 +195,7 @@ export interface OnlineValidationResultSummary {
   };
   metrics: OnlineValidationMetrics;
   replay_samples?: OnlineValidationReplaySample[];
+  failure_samples?: Array<Record<string, unknown>>;
   artifacts: TrainingArtifact[];
   logs: string[];
 }
@@ -153,17 +204,34 @@ export type OnlineValidationResultSummaryRecord = OnlineValidationResultSummary 
 export interface DeploymentResultSummary {
   summary?: {
     status?: string;
-    execution_mode?: string | null;
+    execution_mode?: AlgoExecutionMode | string | null;
     started_at?: string | null;
     completed_at?: string | null;
     source_type?: string;
     source_id?: string;
+    lease?: GpuLeaseSummary;
+    remote_execution?: RemoteExecutionSummary;
   };
-  runtime_registration: DeploymentRuntimeRegistration;
+  runtime_registration: RuntimeRegistrationSummary;
   artifacts: TrainingArtifact[];
   logs: string[];
+  lease?: GpuLeaseSummary;
+  remote_execution?: RemoteExecutionSummary;
 }
 export type DeploymentResultSummaryRecord = DeploymentResultSummary & Record<string, unknown>;
+
+export interface AlgoDeploymentInferResult {
+  deployment_id: string;
+  deployment_status: string;
+  runtime_status: string;
+  prediction: unknown;
+  latency_ms?: number | null;
+  model_version?: string | null;
+  request_id?: string | null;
+  error?: string | null;
+  runtime_registration?: RuntimeRegistrationSummary;
+  accepted_at: string;
+}
 
 export interface DatasetProcessingRunRequest {
   name: string;

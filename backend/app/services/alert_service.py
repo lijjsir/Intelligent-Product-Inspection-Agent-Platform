@@ -1,6 +1,7 @@
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.core.exceptions import ValidationError, NotFoundError
 from app.repositories.alert_repo import AlertRepository
 from app.schemas.alert import AlertAction
@@ -37,7 +38,7 @@ class AlertService:
         if target_status is None:
             raise ValidationError(f"无法从 {alert.status} 执行 {action.value} 操作")
 
-        now = datetime.utcnow()
+        now = utcnow()
         values: dict = {"status": target_status, "action_note": action_note}
 
         if action == AlertAction.acknowledge:

@@ -137,6 +137,36 @@ class AlgoResourceRepository:
         total = await self._session.execute(select(func.count(model.id)).where(*conditions))
         return int(total.scalar_one() or 0)
 
+    async def list_by_status_and_execution_mode(
+        self,
+        *,
+        model,
+        org_id: str,
+        status: str,
+        execution_mode: str,
+        owner_user_id: str | None = None,
+    ):
+        conditions = [
+            model.org_id == org_id,
+            model.status == status,
+            model.execution_mode == execution_mode,
+            model.deleted_at.is_(None),
+        ]
+        if owner_user_id:
+            conditions.append(model.created_by == owner_user_id)
+        rows = (
+            (
+                await self._session.execute(
+                    select(model)
+                    .where(*conditions)
+                    .order_by(model.updated_at.asc(), model.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
 
 class EvaluationDatasetItemRepository:
     def __init__(self, session: AsyncSession):

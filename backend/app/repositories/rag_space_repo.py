@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 
 
@@ -120,7 +121,7 @@ class RagSpaceRepository:
         obj = await self.get(org_id=org_id, rag_space_id=rag_space_id, owner_user_id=owner_user_id)
         if obj is None:
             return None
-        obj.deleted_at = datetime.utcnow()
+        obj.deleted_at = utcnow()
         await self._session.flush()
         return obj
 
@@ -262,7 +263,7 @@ class RagNodeRepository:
     async def soft_delete_many(self, *, node_ids: list[str]) -> None:
         if not node_ids:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         result = await self._session.execute(select(RagNode).where(RagNode.id.in_(node_ids), RagNode.deleted_at.is_(None)))
         for row in result.scalars().all():
             row.deleted_at = now
@@ -417,7 +418,7 @@ class RagDocumentRepository:
     async def soft_delete_many(self, *, document_ids: list[str]) -> None:
         if not document_ids:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         result = await self._session.execute(
             select(RagDocument).where(RagDocument.id.in_(document_ids), RagDocument.deleted_at.is_(None))
         )
@@ -438,7 +439,7 @@ class RagDocumentChunkRepository:
     async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
         if not document_ids:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         result = await self._session.execute(
             select(RagDocumentChunk).where(RagDocumentChunk.document_id.in_(document_ids), RagDocumentChunk.deleted_at.is_(None))
         )
@@ -466,7 +467,7 @@ class RagIndexJobRepository:
     async def soft_delete_by_document_ids(self, *, document_ids: list[str]) -> None:
         if not document_ids:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         result = await self._session.execute(
             select(RagIndexJob).where(RagIndexJob.document_id.in_(document_ids), RagIndexJob.deleted_at.is_(None))
         )

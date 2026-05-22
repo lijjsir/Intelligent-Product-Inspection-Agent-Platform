@@ -10,7 +10,6 @@ const route = useRoute();
 const store = useOfflineEvaluationStore();
 const current = computed(() => store.current);
 const resultSummary = computed(() => current.value?.result_summary);
-const metrics = computed(() => resultSummary.value?.metrics || {});
 const errorCases = computed(() => resultSummary.value?.error_cases || []);
 const summaryView = computed(() => buildOfflineEvaluationSummaryViewModel(current.value));
 
@@ -42,6 +41,25 @@ watch(() => route.params.id, load);
       :artifacts="summaryView.artifacts"
       :logs="summaryView.logs"
     >
+      <section v-if="current?.execution_mode === 'gpu_ssh'" class="card-surface p-4">
+        <h3 class="mb-3">GPU 执行信息</h3>
+        <p class="text-sm text-slate-600">当前离线评测运行在 GPU 节点上，分配节点、GPU 槽位和远端命令摘要已汇总到上方指标区。</p>
+      </section>
+      <section v-if="summaryView.artifacts.length" class="card-surface p-4">
+        <h3 class="mb-4">评测报告</h3>
+        <div class="flex flex-wrap gap-3">
+          <a
+            v-for="artifact in summaryView.artifacts.filter((item) => item.link)"
+            :key="artifact.title"
+            class="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-cyan-400 hover:text-cyan-700"
+            :href="artifact.link || undefined"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {{ artifact.title }}
+          </a>
+        </div>
+      </section>
       <section class="card-surface p-4">
         <h3 class="mb-4">错误案例</h3>
         <el-empty v-if="!errorCases.length" description="暂无错误案例" />

@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from typing import Any
 
+from app.core.datetime import utcnow_iso
 from app.services.inspection_pipeline_service import run_inspection_pipeline
 from app.repositories.task_repo import TaskRepository
 from infra.database.session import get_session
@@ -39,7 +40,7 @@ async def launch_task_execution(task_id: str, org_id: str) -> dict[str, Any]:
             **dict(metadata.get("execution") or {}),
             "mode": mode,
             "job_id": None,
-            "queued_at": datetime.utcnow().isoformat(),
+            "queued_at": utcnow_iso(),
         }
         await repo.patch_metadata(org_id, task_id, metadata)
         await session.commit()

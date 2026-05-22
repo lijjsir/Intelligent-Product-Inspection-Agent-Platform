@@ -8,8 +8,10 @@ import { datasetApi } from "@/api/dataset.api";
 import { useECharts } from "@/composables/useECharts";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useDatasetProcessingStore } from "@/stores/datasetProcessing.store";
+import { ORG_ID_KEY, TOKEN_KEY, readStoredValue } from "@/utils/auth-session";
 import type {
   AlignmentPair,
+  DatasetExportFormat,
   DatasetProcessingStatus,
   DatasetProcessingSubgraph,
   DatasetProcessingSubgraphEdge,
@@ -44,11 +46,30 @@ const graphEntityType = ref("");
 const alignmentMinScore = ref<number | null>(null);
 const alignmentOnlyConfirmed = ref(false);
 const augmentationHistory = ref<any[]>([]);
+const exportFormatOptions: Array<{ label: string; value: DatasetExportFormat }> = [
+  { label: "VLM-JSON", value: "vlm-json" },
+  { label: "COCO", value: "coco" },
+  { label: "YOLO", value: "yolo" },
+];
 
 const kgForm = reactive({ name: "", entity_type: "Defect", description: "" });
 const kgRelationForm = reactive({ source_entity_id: "", target_entity_id: "", relation_type: "RELATED_TO" });
 const alignmentForm = reactive({ source_sample_id: "", target_sample_id: "", relation_type: "describes", similarity_score: 0.72 });
-const exportConfig = reactive({ train_ratio: 0.7, val_ratio: 0.15, test_ratio: 0.15, include_augmented: true, only_confirmed_alignment: false });
+const exportConfig = reactive<{
+  format: DatasetExportFormat;
+  train_ratio: number;
+  val_ratio: number;
+  test_ratio: number;
+  include_augmented: boolean;
+  only_confirmed_alignment: boolean;
+}>({
+  format: "vlm-json",
+  train_ratio: 0.7,
+  val_ratio: 0.15,
+  test_ratio: 0.15,
+  include_augmented: true,
+  only_confirmed_alignment: false,
+});
 const kgConfig = reactive({ entity_lexicon: "", relation_rules: "" });
 const augmentationSelected = ref<string[]>([]);
 const alignmentCandidateSource = ref("");
@@ -81,8 +102,26 @@ const alignmentPairs = computed(() => {
 const augmentationProposals = computed(() => processingStore.resultsMap.augmentation?.proposals || []);
 const exportArtifact = computed<Record<string, unknown>>(() => {
   const summary = processingStore.resultsMap.export?.summary || {};
-  const artifact = processingStore.resultsMap.export?.artifact;
-  return ((summary as Record<string, unknown>).artifact as Record<string, unknown> | undefined) || artifact || {};
+  const summaryArtifact = ((summary as Record<string, unknown>).artifact as Record<string, unknown> | undefined) || {};
+  const resultArtifact = processingStore.resultsMap.export?.artifact || {};
+  return {
+    ...summaryArtifact,
+    ...resultArtifact,
+  };
+});
+const supportedExportFormats = computed(() => {
+  const allowed = new Set((dataset.value?.supported_export_formats || ["vlm-json", "coco", "yolo"]).map((item) => String(item).toLowerCase()));
+  return exportFormatOptions.map((item) => ({ ...item, disabled: !allowed.has(item.value) }));
+});
+const exportArtifactFormat = computed(() => {
+  const format = String(exportArtifact.value.format || "").trim().toLowerCase();
+  if (format === "vlm-json" || format === "coco" || format === "yolo") return format;
+  return exportConfig.format;
+});
+const exportDownloadLabel = computed(() => {
+  if (exportArtifactFormat.value === "coco") return "下载 COCO 导出";
+  if (exportArtifactFormat.value === "yolo") return "下载 YOLO 导出";
+  return "下载 VLM-JSON 导出";
 });
 const degradedWarnings = computed(() => {
   return processingCards.value
@@ -140,12 +179,16 @@ function sampleTypeLabel(type?: DatasetSampleType | null) {
 function formatImportJobSummary(resultSummary: unknown) {
   if (!resultSummary || typeof resultSummary !== "object") return "-";
   const record = resultSummary as Record<string, unknown>;
-  const sampleCount = record.sample_count;
-  const importedCount = record.imported_count;
-  const skippedCount = record.skipped_count;
+  const createdSamples = record.created_samples;
+  const imageSamples = record.image_samples;
+  const textSidecars = record.text_sidecar_attached;
+  const annotationSidecars = record.annotation_sidecar_attached;
+  const skippedCount = record.skipped_files;
   const parts = [
-    sampleCount !== undefined ? `样本数: ${sampleCount}` : null,
-    importedCount !== undefined ? `已导入: ${importedCount}` : null,
+    createdSamples !== undefined ? `已导入: ${createdSamples}` : null,
+    imageSamples !== undefined ? `图片: ${imageSamples}` : null,
+    textSidecars !== undefined ? `文本侧车: ${textSidecars}` : null,
+    annotationSidecars !== undefined ? `标注侧车: ${annotationSidecars}` : null,
     skippedCount !== undefined ? `已跳过: ${skippedCount}` : null,
   ].filter(Boolean);
   return parts.length ? parts.join(" / ") : JSON.stringify(record);
@@ -159,6 +202,11 @@ function handleZipChange(event: Event) {
 async function fetchDataset() {
   if (!datasetId.value) return;
   await datasetStore.fetchDataset(datasetId.value);
+  const supported = new Set((datasetStore.current?.supported_export_formats || []).map((item) => String(item).toLowerCase()));
+  if (supported.size && !supported.has(exportConfig.format)) {
+    const fallback = exportFormatOptions.find((item) => supported.has(item.value));
+    if (fallback) exportConfig.format = fallback.value;
+  }
 }
 
 async function fetchSamples() {
@@ -187,31 +235,85 @@ async function refreshAll() {
   ]);
 }
 
+function resolveDownloadFilename() {
+  const objectKey = String(exportArtifact.value.object_key || "").trim();
+  if (objectKey) {
+    const parts = objectKey.split("/");
+    const last = parts[parts.length - 1];
+    if (last) return last;
+  }
+  if (exportArtifactFormat.value === "coco") return "annotations.coco.json";
+  if (exportArtifactFormat.value === "yolo") return "labels.yolo.json";
+  return "vlm.json";
+}
+
+async function downloadExportArtifact() {
+  if (!datasetId.value) return;
+  try {
+    const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim().replace(/\/$/, "");
+    const token = readStoredValue(TOKEN_KEY);
+    const orgId = readStoredValue(ORG_ID_KEY);
+    const response = await fetch(`${apiBase}/v1/datasets/${datasetId.value}/exports/download`, {
+      method: "GET",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(orgId ? { "X-Org-Id": orgId } : {}),
+      },
+    });
+    if (!response.ok) {
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const payload = await response.json() as { message?: string };
+        throw new Error(payload.message || "导出文件下载失败");
+      }
+      throw new Error((await response.text()) || "导出文件下载失败");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const header = response.headers.get("content-disposition") || "";
+    const matched = header.match(/filename=\"?([^\";]+)\"?/i);
+    link.download = matched?.[1] || resolveDownloadFilename();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "导出文件下载失败";
+    ElMessage.error(message);
+  }
+}
+
 function pushTab(tab: string) {
   router.replace({ path: `/ops/data/import/${datasetId.value}`, query: { tab } });
 }
 
 async function startProcessing(type: DatasetProcessingType) {
   if (!datasetId.value) return;
-  const configJson = type === "export"
-    ? { ...exportConfig }
-    : type === "kg"
-      ? {
-          entity_lexicon: parseOptionalJson(kgConfig.entity_lexicon || "") || {},
-          relation_rules: parseOptionalJson(kgConfig.relation_rules || "") || [],
-        }
-      : type === "alignment"
-        ? {
-            threshold: alignmentForm.similarity_score,
-            top_k: 3,
-            mutual_check: true,
-          }
-        : {};
-  await processingStore.startProcessing(datasetId.value, type, {
-    name: type,
-    description: `${type} run`,
-    config_json: configJson,
-  });
+  const payload = type === "export"
+    ? {
+        name: type,
+        description: `${type} run`,
+        ...exportConfig,
+      }
+    : {
+        name: type,
+        description: `${type} run`,
+        config_json: type === "kg"
+          ? {
+              entity_lexicon: parseOptionalJson(kgConfig.entity_lexicon || "") || {},
+              relation_rules: parseOptionalJson(kgConfig.relation_rules || "") || [],
+            }
+          : type === "alignment"
+            ? {
+                threshold: alignmentForm.similarity_score,
+                top_k: 3,
+                mutual_check: true,
+              }
+            : {},
+      };
+  await processingStore.startProcessing(datasetId.value, type, payload);
   await processingStore.pollUntilSettled(datasetId.value, type, 12);
   await refreshAll();
   if (type === "kg") {
@@ -520,10 +622,10 @@ watch(activeTab, (value) => {
         </div>
         <el-empty v-if="!Object.keys(exportArtifact).length" description="暂无导出产物" />
         <div v-else class="artifact-panel">
-          <div><span>格式</span><strong>{{ exportArtifact.format || "-" }}</strong></div>
+          <div><span>格式</span><strong>{{ exportArtifactFormat || "-" }}</strong></div>
           <div><span>文件大小</span><strong>{{ formatBytes(Number(exportArtifact.file_size_bytes || 0)) }}</strong></div>
           <div><span>对象路径</span><strong class="mono">{{ exportArtifact.object_key || "-" }}</strong></div>
-          <a v-if="exportArtifact.download_url" class="artifact-link" :href="String(exportArtifact.download_url)" target="_blank" rel="noreferrer">下载产物</a>
+          <button v-if="exportArtifact.download_url" type="button" class="artifact-link artifact-button" @click="downloadExportArtifact">{{ exportDownloadLabel }}</button>
         </div>
       </article>
     </section>
@@ -532,7 +634,7 @@ watch(activeTab, (value) => {
       <article class="card-surface panel">
         <div class="panel-head">
           <h3>ZIP 导入</h3>
-          <span class="hint">只支持 ZIP 图片包</span>
+          <span class="hint">支持图片及同名 .txt / .json 侧车</span>
         </div>
         <input type="file" accept=".zip" @change="handleZipChange" />
         <div class="action-row">
@@ -732,6 +834,18 @@ watch(activeTab, (value) => {
         <div class="panel-head">
           <h3>导出配置</h3>
         </div>
+        <label class="export-format">
+          <span>导出格式</span>
+          <el-select v-model="exportConfig.format">
+            <el-option
+              v-for="item in supportedExportFormats"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+              :disabled="item.disabled"
+            />
+          </el-select>
+        </label>
         <div class="ratio-grid">
           <label>
             <span>Train</span>
@@ -759,11 +873,11 @@ watch(activeTab, (value) => {
         </div>
         <el-empty v-if="!Object.keys(exportArtifact).length" description="暂无导出结果" />
         <div v-else class="artifact-panel">
-          <div><span>格式</span><strong>{{ exportArtifact.format || "-" }}</strong></div>
+          <div><span>格式</span><strong>{{ exportArtifactFormat || "-" }}</strong></div>
           <div><span>路径</span><strong class="mono">{{ exportArtifact.object_key || "-" }}</strong></div>
           <div><span>文件大小</span><strong>{{ formatBytes(Number(exportArtifact.file_size_bytes || 0)) }}</strong></div>
           <div><span>切分统计</span><strong class="mono">{{ JSON.stringify(exportArtifact.split_counts || {}) }}</strong></div>
-          <a v-if="exportArtifact.download_url" class="artifact-link" :href="String(exportArtifact.download_url)" target="_blank" rel="noreferrer">下载 VLM-JSON</a>
+          <button v-if="exportArtifact.download_url" type="button" class="artifact-link artifact-button" @click="downloadExportArtifact">{{ exportDownloadLabel }}</button>
         </div>
       </article>
     </section>
@@ -949,6 +1063,15 @@ watch(activeTab, (value) => {
   font-weight: 600;
 }
 
+.artifact-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  align-self: flex-start;
+}
+
 .filter-row,
 .action-row,
 .manual-add {
@@ -1010,6 +1133,15 @@ watch(activeTab, (value) => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.export-format {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: #52525b;
+  font-size: 13px;
 }
 
 .ratio-grid label {

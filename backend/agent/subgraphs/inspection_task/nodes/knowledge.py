@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from agent.rag.citation_tracker import attach_citations
 from agent.rag.reranker import Reranker
 from agent.rag.retriever import Retriever
 from agent.subgraphs.inspection_task.state import InspectionState
+from app.core.datetime import utcnow_iso
 
 
 async def run_knowledge(state: InspectionState) -> InspectionState:
     """检索并重排检测标准证据，再为后续推理阶段挂载引用信息。"""
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     query = f"产品 {state.get('product_id', '')} 检测标准 {state.get('spec_code', '')} 缺陷判定标准"
     retriever = Retriever(
         trace_id=state.get("trace_id"),

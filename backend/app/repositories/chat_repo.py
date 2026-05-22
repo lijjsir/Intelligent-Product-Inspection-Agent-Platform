@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.datetime import utcnow
 from app.models.agent_ops import AgentDefinition, IntentRoute
 from app.models.chat import ChatMessage, ChatSession
 
@@ -53,7 +54,7 @@ class ChatSessionRepository:
                 ChatSession.id == session_id,
                 ChatSession.deleted_at.is_(None),
             )
-            .values(last_message_at=ts or datetime.utcnow())
+            .values(last_message_at=ts or utcnow())
         )
 
     async def soft_delete(self, org_id: str, user_id: str, session_id: str) -> bool:
@@ -65,7 +66,7 @@ class ChatSessionRepository:
                 ChatSession.id == session_id,
                 ChatSession.deleted_at.is_(None),
             )
-            .values(status="deleted", deleted_at=datetime.utcnow())
+            .values(status="deleted", deleted_at=utcnow())
         )
         return bool(result.rowcount and result.rowcount > 0)
 
