@@ -529,6 +529,13 @@ class DatasetAugmentationProposalRepository:
         await self._session.refresh(obj)
         return obj
 
+    async def update_proposal(self, obj, payload: dict):
+        for key, value in payload.items():
+            setattr(obj, key, value)
+        await self._session.flush()
+        await self._session.refresh(obj)
+        return obj
+
     async def get_proposal(self, *, org_id: str, proposal_id: str, created_by: str):
         result = await self._session.execute(
             select(DatasetAugmentationProposal).where(

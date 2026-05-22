@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 from collections import Counter
 from datetime import datetime
 from typing import Any
@@ -31,6 +32,8 @@ from app.repositories.algo_resource_repo import (
     RESOURCE_MODEL_MAP,
 )
 from app.repositories.dataset_repo import DatasetAsyncJobRepository, DatasetRepository, DatasetSampleRepository
+from app.repositories.result_repo import ResultRepository
+from app.repositories.task_repo import TaskRepository
 from app.schemas.algo_resources import (
     AlgoResourceResponse,
     DatasetAlignmentPairCreateRequest,
@@ -50,6 +53,8 @@ from app.schemas.algo_resources import (
     EvaluationDatasetSampleAppendRequest,
     EvaluationDatasetResponse,
     EvaluationDatasetUpdateRequest,
+    ExperimentRelatedResourceSummary,
+    ExperimentRelatedResources,
     ExperimentCreateRequest,
     ExperimentResponse,
     ExperimentUpdateRequest,
@@ -72,6 +77,7 @@ from app.schemas.algo_resources import (
     TrainingJobUpdateRequest,
 )
 from app.schemas.common import PagedResponse
+from app.services.algo_execution_service import DeploymentManager, EvaluationEngine, ExecutionModelRef, OnlineValidationRunner, TrainingRunner
 from app.services.algo_processing_service import AlgoProcessingService, ProcessingDeps
 from app.services.base import TenantAwareService
 from app.services.object_storage.factory import build_object_storage
@@ -88,6 +94,11 @@ PROCESSING_JOB_TYPE_MAP = {
 
 EDITABLE_STATUSES = {"draft", "failed"}
 CANCELLABLE_STATUSES = {"queued", "running"}
+DELETABLE_STATUSES = {"draft", "completed", "failed", "cancelled"}
+
+
+def _iso_dt(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 class AlgoWorkspaceService(TenantAwareService):
@@ -116,6 +127,8 @@ class AlgoWorkspaceService(TenantAwareService):
                 storage=self._storage,
             )
         )
+        self._task_repo = TaskRepository(session)
+        self._result_repo = ResultRepository(session)
 
     async def list_generic_resources(self, *, resource_type: str, page: int, size: int, keyword: str | None = None, status: str | None = None):
         model = RESOURCE_MODEL_MAP[resource_type]
@@ -254,7 +267,7 @@ class AlgoWorkspaceService(TenantAwareService):
         await self._commit()
 
     async def create_training_job(self, payload: TrainingJobCreateRequest) -> TrainingJobResponse:
-        await self._require_dataset(payload.source_dataset_id)
+        await self._require_dataset_active(payload.source_dataset_id)
         await self._require_training_model_config(payload.model_config_id)
         if payload.eval_set_id:
             await self._require_generic_resource(resource_type="evaluation_dataset", resource_id=payload.eval_set_id)
@@ -301,7 +314,7 @@ class AlgoWorkspaceService(TenantAwareService):
         row = await self._require_generic_resource(resource_type="training_job", resource_id=resource_id)
         if row.status not in {"draft", "failed"}:
             raise ValidationError("resource cannot be launched from current status")
-        mode = "celery" if await has_active_celery_worker() else "local_background"
+        mode = await self._resolve_execution_mode()
         await self._resources.save(
             row,
             {
@@ -314,7 +327,20 @@ class AlgoWorkspaceService(TenantAwareService):
             },
         )
         await self._commit()
-        asyncio.create_task(self._run_training_job(resource_id=row.id, mode=mode))
+        if mode == "celery":
+            from worker.tasks.algo_workspace_task import run_resource
+
+            run_resource.delay(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "resource_type": "training_job",
+                    "resource_id": row.id,
+                    "mode": mode,
+                }
+            )
+        else:
+            asyncio.create_task(self._run_training_job(resource_id=row.id, mode=mode))
         return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=None)
 
     async def cancel_training_job(self, resource_id: str) -> ResourceActionResponse:
@@ -340,7 +366,8 @@ class AlgoWorkspaceService(TenantAwareService):
         await self.delete_generic_resource(resource_type="training_job", resource_id=resource_id)
 
     async def create_fine_tune(self, payload: FineTuneRunCreateRequest) -> FineTuneRunResponse:
-        await self._require_generic_resource(resource_type="training_job", resource_id=payload.training_job_id)
+        training_job = await self._require_completed_resource(resource_type="training_job", resource_id=payload.training_job_id)
+        self._require_deployable_artifacts(training_job.result_summary, "training job")
         await self._require_training_model_config(payload.model_config_id)
         if payload.experiment_id:
             await self._require_generic_resource(resource_type="experiment", resource_id=payload.experiment_id)
@@ -353,7 +380,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "description": (payload.description or "").strip() or None,
                 "status": "draft",
                 "config_json": payload.config_json or {},
-                "result_summary": {"artifacts": [], "metrics": {}, "logs": []},
+                "result_summary": self._default_training_job_summary(model_config_id=payload.model_config_id),
                 "training_job_id": payload.training_job_id,
                 "model_config_id": payload.model_config_id,
                 "experiment_id": payload.experiment_id,
@@ -380,7 +407,7 @@ class AlgoWorkspaceService(TenantAwareService):
 
     async def create_offline_evaluation(self, payload: OfflineEvaluationCreateRequest) -> OfflineEvaluationResponse:
         await self._require_generic_resource(resource_type="evaluation_dataset", resource_id=payload.eval_set_id)
-        await self._require_target_resource(payload.target_type, payload.target_id)
+        await self._require_completed_target_resource(payload.target_type, payload.target_id)
         if payload.experiment_id:
             await self._require_generic_resource(resource_type="experiment", resource_id=payload.experiment_id)
         created = await self._resources.create(
@@ -392,7 +419,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "description": (payload.description or "").strip() or None,
                 "status": "draft",
                 "config_json": payload.config_json or {},
-                "result_summary": {"artifacts": [], "metrics": {}, "logs": []},
+                "result_summary": self._default_offline_evaluation_summary(),
                 "eval_set_id": payload.eval_set_id,
                 "target_type": payload.target_type,
                 "target_id": payload.target_id,
@@ -417,9 +444,13 @@ class AlgoWorkspaceService(TenantAwareService):
         return OfflineEvaluationResponse.model_validate(row)
 
     async def create_online_validation(self, payload: OnlineValidationCreateRequest) -> OnlineValidationResponse:
-        await self._require_generic_resource(resource_type="deployment", resource_id=payload.deployment_id)
+        await self._require_completed_resource(resource_type="deployment", resource_id=payload.deployment_id)
         if payload.experiment_id:
             await self._require_generic_resource(resource_type="experiment", resource_id=payload.experiment_id)
+        deployment = await self._require_generic_resource(resource_type="deployment", resource_id=payload.deployment_id)
+        runtime_registration = (getattr(deployment, "result_summary", {}) or {}).get("runtime_registration") or {}
+        if not runtime_registration:
+            raise ValidationError("deployment is missing runtime_registration")
         created = await self._resources.create(
             OnlineValidation,
             {
@@ -429,7 +460,22 @@ class AlgoWorkspaceService(TenantAwareService):
                 "description": (payload.description or "").strip() or None,
                 "status": "draft",
                 "config_json": payload.config_json or {},
-                "result_summary": {"artifacts": [], "metrics": {}, "logs": []},
+                "result_summary": {
+                    "summary": {
+                        "status": "draft",
+                        "execution_mode": None,
+                        "started_at": None,
+                        "completed_at": None,
+                        "deployment_id": payload.deployment_id,
+                        "validation_type": "shadow",
+                        "replay_source": "historical_tasks",
+                        "replay_count": 0,
+                    },
+                    "metrics": {},
+                    "replay_samples": [],
+                    "artifacts": [],
+                    "logs": [],
+                },
                 "deployment_id": payload.deployment_id,
                 "experiment_id": payload.experiment_id,
                 "execution_mode": None,
@@ -465,7 +511,7 @@ class AlgoWorkspaceService(TenantAwareService):
             },
         )
         await self._commit()
-        return ExperimentResponse.model_validate(created)
+        return await self._build_experiment_response(created)
 
     async def update_experiment(self, resource_id: str, payload: ExperimentUpdateRequest) -> ExperimentResponse:
         row = await self._require_generic_resource(resource_type="experiment", resource_id=resource_id)
@@ -473,10 +519,13 @@ class AlgoWorkspaceService(TenantAwareService):
         updates = self._normalize_updates(payload.model_dump(exclude_unset=True))
         await self._resources.save(row, updates)
         await self._commit()
-        return ExperimentResponse.model_validate(row)
+        return await self._build_experiment_response(row)
 
     async def create_deployment(self, payload: ModelDeploymentCreateRequest) -> ModelDeploymentResponse:
-        await self._require_target_resource(payload.source_type, payload.source_id)
+        if payload.source_type not in {"training_job", "fine_tune"}:
+            raise ValidationError("deployment source_type must be training_job or fine_tune")
+        source = await self._require_completed_target_resource(payload.source_type, payload.source_id)
+        self._require_deployable_artifacts(source.result_summary, payload.source_type)
         if payload.experiment_id:
             await self._require_generic_resource(resource_type="experiment", resource_id=payload.experiment_id)
         created = await self._resources.create(
@@ -488,7 +537,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "description": (payload.description or "").strip() or None,
                 "status": "draft",
                 "config_json": payload.config_json or {},
-                "result_summary": {"artifacts": [], "metrics": {}, "logs": []},
+                "result_summary": self._default_deployment_summary(),
                 "source_type": payload.source_type,
                 "source_id": payload.source_id,
                 "experiment_id": payload.experiment_id,
@@ -513,6 +562,8 @@ class AlgoWorkspaceService(TenantAwareService):
 
     async def delete_generic_resource(self, *, resource_type: str, resource_id: str) -> None:
         row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
+        if getattr(row, "status", "draft") not in DELETABLE_STATUSES:
+            raise ValidationError("resource cannot be deleted from current status")
         if resource_type == "evaluation_dataset":
             await self._eval_items.soft_delete_many(
                 org_id=self._org_id,
@@ -526,7 +577,7 @@ class AlgoWorkspaceService(TenantAwareService):
         row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
         if row.status not in {"draft", "failed", "cancelled"}:
             raise ValidationError("resource cannot be launched from current status")
-        mode = "celery" if await has_active_celery_worker() else "local_background"
+        mode = await self._resolve_execution_mode()
         await self._resources.save(
             row,
             {
@@ -535,11 +586,72 @@ class AlgoWorkspaceService(TenantAwareService):
                 "executor_job_id": None,
                 "started_at": None,
                 "completed_at": None,
-                "result_summary": {"artifacts": [], "metrics": {}, "logs": []},
+                "result_summary": self._default_generic_execution_summary(resource_type),
             },
         )
         await self._commit()
-        asyncio.create_task(self._run_generic_resource(resource_type=resource_type, resource_id=row.id, mode=mode))
+        if resource_type == "fine_tune":
+            if mode == "celery":
+                from worker.tasks.algo_workspace_task import run_resource
+
+                run_resource.delay(
+                    {
+                        "org_id": self._org_id,
+                        "user_id": self._user_id,
+                        "resource_type": "fine_tune",
+                        "resource_id": row.id,
+                        "mode": mode,
+                    }
+                )
+            else:
+                asyncio.create_task(self._run_fine_tune_job(resource_id=row.id, mode=mode))
+        elif resource_type == "offline_evaluation":
+            if mode == "celery":
+                from worker.tasks.algo_workspace_task import run_resource
+
+                run_resource.delay(
+                    {
+                        "org_id": self._org_id,
+                        "user_id": self._user_id,
+                        "resource_type": "offline_evaluation",
+                        "resource_id": row.id,
+                        "mode": mode,
+                    }
+                )
+            else:
+                asyncio.create_task(self._run_offline_evaluation_job(resource_id=row.id, mode=mode))
+        elif resource_type == "deployment":
+            if mode == "celery":
+                from worker.tasks.algo_workspace_task import run_resource
+
+                run_resource.delay(
+                    {
+                        "org_id": self._org_id,
+                        "user_id": self._user_id,
+                        "resource_type": "deployment",
+                        "resource_id": row.id,
+                        "mode": mode,
+                    }
+                )
+            else:
+                asyncio.create_task(self._run_deployment_job(resource_id=row.id, mode=mode))
+        elif resource_type == "online_validation":
+            if mode == "celery":
+                from worker.tasks.algo_workspace_task import run_resource
+
+                run_resource.delay(
+                    {
+                        "org_id": self._org_id,
+                        "user_id": self._user_id,
+                        "resource_type": "online_validation",
+                        "resource_id": row.id,
+                        "mode": mode,
+                    }
+                )
+            else:
+                asyncio.create_task(self._run_online_validation_job(resource_id=row.id, mode=mode))
+        else:
+            asyncio.create_task(self._run_generic_resource(resource_type=resource_type, resource_id=row.id, mode=mode))
         return ResourceActionResponse(id=row.id, status="queued", execution_mode=mode, executor_job_id=None)
 
     async def cancel_generic_resource(self, *, resource_type: str, resource_id: str) -> ResourceActionResponse:
@@ -601,7 +713,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 },
             )
 
-        mode = "celery" if await has_active_celery_worker() else "local_background"
+        mode = await self._resolve_execution_mode()
         job = await self._dataset_jobs.create(
             {
                 "org_id": self._org_id,
@@ -613,7 +725,23 @@ class AlgoWorkspaceService(TenantAwareService):
                 "result_summary": self._default_processing_summary(processing_type),
             }
         )
-        asyncio.create_task(self._run_processing(processing_type=processing_type, dataset_id=dataset_id, resource_id=row.id, job_id=job.id, mode=mode))
+        await self._commit()
+        if mode == "celery":
+            from worker.tasks.algo_workspace_task import run_processing
+
+            run_processing.delay(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "dataset_id": dataset_id,
+                    "processing_type": processing_type,
+                    "resource_id": row.id,
+                    "job_id": job.id,
+                    "mode": mode,
+                }
+            )
+        else:
+            asyncio.create_task(self._run_processing(processing_type=processing_type, dataset_id=dataset_id, resource_id=row.id, job_id=job.id, mode=mode))
         return await self.get_processing_status(dataset_id=dataset_id, processing_type=processing_type)
 
     async def get_processing_status(self, *, dataset_id: str, processing_type: str) -> DatasetProcessingStatusResponse:
@@ -752,6 +880,7 @@ class AlgoWorkspaceService(TenantAwareService):
 
     async def create_kg_entity(self, *, dataset_id: str, payload: DatasetKgEntityCreateRequest) -> DatasetKgEntityResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
+        self._ensure_processing_resource_editable(resource)
         created = await self._kg_repo.create_entity(
             {
                 "org_id": self._org_id,
@@ -761,7 +890,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "name": payload.name.strip(),
                 "entity_type": payload.entity_type.strip(),
                 "description": (payload.description or "").strip() or None,
-                "properties_json": payload.properties_json or {},
+                "properties_json": {"source": "manual", **(payload.properties_json or {})},
                 "confidence": payload.confidence,
             }
         )
@@ -771,10 +900,13 @@ class AlgoWorkspaceService(TenantAwareService):
         entity = await self._kg_repo.get_entity(org_id=self._org_id, entity_id=entity_id, created_by=self._user_id)
         if entity is None:
             raise NotFoundError("knowledge graph entity not found")
+        resource = await self._require_processing_resource(dataset_id=entity.dataset_id, processing_type="kg")
+        self._ensure_processing_resource_editable(resource)
         await self._kg_repo.delete_entity(entity)
 
     async def create_kg_relation(self, *, dataset_id: str, payload: DatasetKgRelationCreateRequest) -> DatasetKgRelationResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
+        self._ensure_processing_resource_editable(resource)
         await self._require_kg_entity(payload.source_entity_id)
         await self._require_kg_entity(payload.target_entity_id)
         created = await self._kg_repo.create_relation(
@@ -786,7 +918,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "source_entity_id": payload.source_entity_id,
                 "target_entity_id": payload.target_entity_id,
                 "relation_type": payload.relation_type.strip(),
-                "properties_json": payload.properties_json or {},
+                "properties_json": {"source": "manual", **(payload.properties_json or {})},
                 "confidence": payload.confidence,
             }
         )
@@ -796,10 +928,17 @@ class AlgoWorkspaceService(TenantAwareService):
         relation = await self._kg_repo.get_relation(org_id=self._org_id, relation_id=relation_id, created_by=self._user_id)
         if relation is None:
             raise NotFoundError("knowledge graph relation not found")
+        resource = await self._require_processing_resource(dataset_id=relation.dataset_id, processing_type="kg")
+        self._ensure_processing_resource_editable(resource)
         await self._kg_repo.delete_relation(relation)
 
     async def create_alignment_pair(self, *, dataset_id: str, payload: DatasetAlignmentPairCreateRequest) -> DatasetAlignmentPairResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="alignment")
+        self._ensure_processing_resource_editable(resource)
+        if payload.source_sample_id:
+            await self._require_dataset_sample(dataset_id=dataset_id, sample_id=payload.source_sample_id, sample_type="image")
+        if payload.target_sample_id:
+            await self._require_dataset_sample(dataset_id=dataset_id, sample_id=payload.target_sample_id, sample_type="text")
         created = await self._pair_repo.create_pair(
             {
                 "org_id": self._org_id,
@@ -810,7 +949,8 @@ class AlgoWorkspaceService(TenantAwareService):
                 "target_sample_id": payload.target_sample_id,
                 "relation_type": payload.relation_type.strip(),
                 "similarity_score": payload.similarity_score,
-                "payload_json": payload.payload_json or {},
+                "payload_json": {**(payload.payload_json or {}), "source": "manual"},
+                "confirmation_status": "confirmed",
             }
         )
         return DatasetAlignmentPairResponse.model_validate(created)
@@ -827,10 +967,13 @@ class AlgoWorkspaceService(TenantAwareService):
         pair = await self._pair_repo.get_pair(org_id=self._org_id, pair_id=pair_id, created_by=self._user_id)
         if pair is None:
             raise NotFoundError("alignment pair not found")
+        resource = await self._require_processing_resource(dataset_id=pair.dataset_id, processing_type="alignment")
+        self._ensure_processing_resource_editable(resource)
         await self._pair_repo.delete_pair(pair)
 
     async def create_augmentation_proposal(self, *, dataset_id: str, payload: DatasetAugmentationProposalCreateRequest) -> DatasetAugmentationProposalResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="augmentation")
+        self._ensure_processing_resource_editable(resource)
         created = await self._proposal_repo.create_proposal(
             {
                 "org_id": self._org_id,
@@ -853,6 +996,8 @@ class AlgoWorkspaceService(TenantAwareService):
         proposal = await self._proposal_repo.get_proposal(org_id=self._org_id, proposal_id=proposal_id, created_by=self._user_id)
         if proposal is None:
             raise NotFoundError("augmentation proposal not found")
+        resource = await self._require_processing_resource(dataset_id=proposal.dataset_id, processing_type="augmentation")
+        self._ensure_processing_resource_editable(resource)
         await self._proposal_repo.delete_proposal(proposal)
 
     async def create_export(self, *, dataset_id: str, payload: DatasetExportRequest) -> AlgoResourceResponse:
@@ -867,10 +1012,13 @@ class AlgoWorkspaceService(TenantAwareService):
         proposals = await self._proposal_repo.list_proposals(org_id=self._org_id, batch_id=resource.id, created_by=self._user_id)
         proposal_map = {row.id: row for row in proposals}
         created_ids: list[str] = []
+        history_entries: list[dict[str, Any]] = []
         for proposal_id in proposal_ids:
             proposal = proposal_map.get(proposal_id)
             if proposal is None:
                 raise NotFoundError("augmentation proposal not found")
+            if proposal.status == "completed":
+                continue
             source_sample_id = proposal.source_sample_id
             source = None
             if source_sample_id:
@@ -894,36 +1042,63 @@ class AlgoWorkspaceService(TenantAwareService):
                     "content_type": "text/plain",
                     "size_bytes": len(text_content.encode("utf-8")),
                     "checksum_sha256": hashlib.sha256(text_content.encode("utf-8")).hexdigest(),
-                    "annotation_data": {"augmentation": proposal.name},
-                    "quality_score": None,
-                    "related_entities": [],
-                    "source_metadata": {"source_sample_id": source_sample_id, "augmentation_proposal_id": proposal.id},
-                    "preview_text": text_content[:200],
-                    "is_augmented": True,
-                    "augmentation_source_id": source_sample_id,
-                    "augmentation_method": proposal.augmentation_method or "entity_substitution",
-                    "augmentation_params": proposal.augmentation_params or proposal.config_json or {},
-                }
+                "annotation_data": {"augmentation": proposal.name},
+                "quality_score": None,
+                "related_entities": [],
+                "source_metadata": {
+                    "source_sample_id": source_sample_id,
+                    "augmentation_proposal_id": proposal.id,
+                    "augmentation_preview": text_content[:200],
+                },
+                "preview_text": text_content[:200],
+                "is_augmented": True,
+                "augmentation_source_id": source_sample_id,
+                "augmentation_method": proposal.augmentation_method or "entity_substitution",
+                "augmentation_params": proposal.augmentation_params or proposal.config_json or {},
+            }
             )
             created_ids.append(created.id)
+            history_entries.append(
+                {
+                    "proposal_id": proposal.id,
+                    "proposal_name": proposal.name,
+                    "created_sample_id": created.id,
+                    "source_sample_id": source_sample_id,
+                    "augmentation_method": proposal.augmentation_method or "entity_substitution",
+                }
+            )
+            await self._proposal_repo.update_proposal(proposal, {"status": "completed", "result_summary": {**dict(proposal.result_summary or {}), "created_sample_id": created.id, "created_sample_ids": [created.id]}})
         if created_ids:
             dataset = await self._require_dataset(dataset_id)
             await self._datasets.recalculate_counters(dataset_id=dataset.id)
-        return {"created_sample_ids": created_ids, "proposal_ids": proposal_ids}
+        if created_ids:
+            batch = await self._resources.get(model=DatasetAugmentationBatch, org_id=self._org_id, resource_id=resource.id, owner_user_id=self._user_id)
+            if batch is not None:
+                history = list(dict(batch.history_json or {}).get("history") or [])
+                history.extend(history_entries)
+                await self._resources.save(batch, {"history_json": {"history": history}})
+        return {"created_sample_ids": created_ids, "proposal_ids": proposal_ids, "history": history_entries}
 
     async def get_augmentation_history(self, *, dataset_id: str) -> dict[str, Any]:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="augmentation")
         history = await self._proposal_repo.list_history(org_id=self._org_id, dataset_id=dataset_id, created_by=self._user_id)
         return {
             "batch_id": resource.id,
-            "history": [DatasetAugmentationProposalResponse.model_validate(row).model_dump() for row in history],
+            "history": [
+                {
+                    **DatasetAugmentationProposalResponse.model_validate(row).model_dump(),
+                    "created_sample_id": (dict(getattr(row, "result_summary", None) or {}).get("created_sample_id")),
+                    "created_sample_ids": list(dict(getattr(row, "result_summary", None) or {}).get("created_sample_ids") or []),
+                }
+                for row in history
+            ],
         }
 
     async def _run_kg_build(self, *, dataset_id: str, resource) -> dict[str, Any]:
-        return await self._processing.run_kg_build(dataset_id=dataset_id, resource_id=resource.id)
+        return await self._processing.run_kg_build(dataset_id=dataset_id, resource_id=resource.id, config_json=resource.config_json)
 
     async def _run_alignment_build(self, *, dataset_id: str, resource) -> dict[str, Any]:
-        model = await self._get_active_embedding_model()
+        model = await self._get_active_embedding_model(resource.config_json)
         return await self._processing.run_alignment_build(
             dataset_id=dataset_id,
             resource_id=resource.id,
@@ -969,7 +1144,6 @@ class AlgoWorkspaceService(TenantAwareService):
                 tracked_job.status = "running"
                 tracked_job.result_summary = {"mode": mode, "status": "running"}
             await session.commit()
-
         await asyncio.sleep(0.05)
 
         async with get_session() as session:
@@ -1027,12 +1201,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 {
                     "status": "completed",
                     "completed_at": datetime.utcnow(),
-                    "result_summary": {
-                        **dict(row.result_summary or {}),
-                        "artifacts": list((row.result_summary or {}).get("artifacts") or []),
-                        "metrics": dict((row.result_summary or {}).get("metrics") or {"status": "skeleton_ready"}),
-                        "logs": list((row.result_summary or {}).get("logs") or ["phase2 skeleton execution completed"]),
-                    },
+                    "result_summary": service._default_generic_completion_summary(resource_type, row.result_summary),
                 },
             )
             await session.commit()
@@ -1068,18 +1237,256 @@ class AlgoWorkspaceService(TenantAwareService):
             if row.status == "cancelled":
                 return
             completed_at = datetime.utcnow()
+            model = await service._model_configs.get(service._org_id, row.model_config_id)
+            model_ref = service._to_execution_model_ref(model)
             await service._resources.save(
                 row,
                 {
                     "status": "completed",
                     "completed_at": completed_at,
-                    "result_summary": service._default_training_job_summary(
-                        status="completed",
+                    "result_summary": TrainingRunner.run_training(
+                        resource_id=row.id,
+                        resource_name=row.name,
+                        source_dataset_id=row.source_dataset_id,
+                        model_ref=model_ref,
+                        config_json=row.config_json,
                         execution_mode=mode,
                         started_at=getattr(row, "started_at", None),
                         completed_at=completed_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+    async def _run_fine_tune_job(self, *, resource_id: str, mode: str) -> None:
+        await asyncio.sleep(0)
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="fine_tune", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            started_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "result_summary": service._default_training_job_summary(
+                        status="running",
+                        execution_mode=mode,
+                        started_at=started_at,
                         model_config_id=row.model_config_id,
                     ),
+                },
+            )
+            await session.commit()
+
+        await asyncio.sleep(0.05)
+
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="fine_tune", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            training_job = await service._require_generic_resource(resource_type="training_job", resource_id=row.training_job_id)
+            model = await service._model_configs.get(service._org_id, row.model_config_id)
+            model_ref = service._to_execution_model_ref(model)
+            completed_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "result_summary": TrainingRunner.run_fine_tune(
+                        resource_id=row.id,
+                        resource_name=row.name,
+                        training_job_id=row.training_job_id,
+                        base_training_summary=training_job.result_summary,
+                        model_ref=model_ref,
+                        config_json=row.config_json,
+                        execution_mode=mode,
+                        started_at=getattr(row, "started_at", None),
+                        completed_at=completed_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+    async def _run_offline_evaluation_job(self, *, resource_id: str, mode: str) -> None:
+        await asyncio.sleep(0)
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="offline_evaluation", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            started_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "result_summary": service._default_offline_evaluation_summary(
+                        status="running",
+                        execution_mode=mode,
+                        started_at=started_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+        await asyncio.sleep(0.05)
+
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="offline_evaluation", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            eval_set = await service._require_generic_resource(resource_type="evaluation_dataset", resource_id=row.eval_set_id)
+            sample_count = await service._eval_items.count_items(
+                org_id=service._org_id,
+                evaluation_dataset_id=eval_set.id,
+                created_by=service._user_id,
+            )
+            target = await service._require_completed_target_resource(row.target_type, row.target_id)
+            completed_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "result_summary": EvaluationEngine.run_offline_evaluation(
+                        resource_id=row.id,
+                        resource_name=row.name,
+                        eval_set_id=row.eval_set_id,
+                        sample_count=sample_count,
+                        target_type=row.target_type,
+                        target_id=row.target_id,
+                        target_summary=target.result_summary,
+                        config_json=row.config_json,
+                        execution_mode=mode,
+                        started_at=getattr(row, "started_at", None),
+                        completed_at=completed_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+    async def _run_deployment_job(self, *, resource_id: str, mode: str) -> None:
+        await asyncio.sleep(0)
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="deployment", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            started_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "result_summary": service._default_deployment_summary(
+                        status="running",
+                        execution_mode=mode,
+                        started_at=started_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+    async def _run_online_validation_job(self, *, resource_id: str, mode: str) -> None:
+        await asyncio.sleep(0)
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="online_validation", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            started_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "result_summary": {
+                        "summary": {
+                            "status": "running",
+                            "execution_mode": mode,
+                            "started_at": _iso_dt(started_at),
+                            "completed_at": None,
+                            "deployment_id": row.deployment_id,
+                            "validation_type": "shadow",
+                        },
+                        "metrics": {},
+                        "replay_samples": [],
+                        "artifacts": [],
+                        "logs": [],
+                    },
+                },
+            )
+            await session.commit()
+
+        await asyncio.sleep(0.05)
+
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="online_validation", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            deployment = await service._require_completed_target_resource("deployment", row.deployment_id)
+            task_ids = await service._select_validation_replay_task_ids(limit=5)
+            replay_tasks = await service._build_validation_replay_tasks(task_ids)
+            completed_at = datetime.utcnow()
+            await service._resources.save(
+                row,
+                {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "result_summary": OnlineValidationRunner.run_shadow_validation(
+                        resource_id=row.id,
+                        resource_name=row.name,
+                        deployment_id=row.deployment_id,
+                        deployment_summary=deployment.result_summary,
+                        replay_tasks=replay_tasks,
+                        config_json=row.config_json,
+                        execution_mode=mode,
+                        started_at=getattr(row, "started_at", None),
+                        completed_at=completed_at,
+                    ),
+                },
+            )
+            await session.commit()
+
+        await asyncio.sleep(0.05)
+
+        async with get_session() as session:
+            service = AlgoWorkspaceService(session, self._org_id, self._user_id)
+            row = await service._require_generic_resource(resource_type="online_validation", resource_id=resource_id)
+            if row.status == "cancelled":
+                return
+            completed_at = datetime.utcnow()
+            previous_summary = dict(row.result_summary or {})
+            summary = dict(previous_summary.get("summary") or {})
+            summary.update(
+                {
+                    "status": "completed",
+                    "completed_at": _iso_dt(completed_at),
+                    "deployment_id": row.deployment_id,
+                    "execution_mode": mode,
+                    "validation_type": summary.get("validation_type") or "shadow",
+                }
+            )
+            await service._resources.save(
+                row,
+                {
+                    "status": "completed",
+                    "completed_at": completed_at,
+                    "result_summary": {
+                        **previous_summary,
+                        "summary": summary,
+                        "metrics": dict(previous_summary.get("metrics") or {"status": "skeleton_ready"}),
+                        "replay_samples": list(previous_summary.get("replay_samples") or []),
+                        "artifacts": list(previous_summary.get("artifacts") or []),
+                        "logs": list(previous_summary.get("logs") or ["online validation skeleton execution completed"]),
+                    },
                 },
             )
             await session.commit()
@@ -1088,6 +1495,12 @@ class AlgoWorkspaceService(TenantAwareService):
         row = await self._datasets.get(org_id=self._org_id, dataset_id=dataset_id, owner_user_id=self._user_id)
         if row is None:
             raise NotFoundError("dataset not found")
+        return row
+
+    async def _require_dataset_active(self, dataset_id: str):
+        row = await self._require_dataset(dataset_id)
+        if str(getattr(row, "status", "") or "").lower() != "active":
+            raise ValidationError("dataset must be active")
         return row
 
     async def _require_generic_resource(self, *, resource_type: str, resource_id: str):
@@ -1104,6 +1517,12 @@ class AlgoWorkspaceService(TenantAwareService):
         result = commit()
         if asyncio.iscoroutine(result):
             await result
+
+    async def _resolve_execution_mode(self) -> str:
+        result = has_active_celery_worker()
+        if inspect.isawaitable(result):
+            result = await result
+        return "celery" if result else "local_background"
 
     async def _require_processing_resource(self, *, dataset_id: str, processing_type: str):
         await self._require_dataset(dataset_id)
@@ -1171,7 +1590,7 @@ class AlgoWorkspaceService(TenantAwareService):
             )
         return payloads
 
-    async def _require_target_resource(self, target_type: str, target_id: str) -> None:
+    async def _require_target_resource(self, target_type: str, target_id: str):
         mapping = {
             "training_job": "training_job",
             "fine_tune": "fine_tune",
@@ -1179,7 +1598,49 @@ class AlgoWorkspaceService(TenantAwareService):
         }
         if target_type not in mapping:
             raise ValidationError("unsupported target_type")
-        await self._require_generic_resource(resource_type=mapping[target_type], resource_id=target_id)
+        return await self._require_generic_resource(resource_type=mapping[target_type], resource_id=target_id)
+
+    async def _require_completed_target_resource(self, target_type: str, target_id: str):
+        row = await self._require_target_resource(target_type, target_id)
+        if str(getattr(row, "status", "") or "") != "completed":
+            raise ValidationError("target resource must be completed")
+        return row
+
+    async def _require_completed_resource(self, *, resource_type: str, resource_id: str):
+        row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
+        if str(getattr(row, "status", "") or "") != "completed":
+            raise ValidationError(f"{resource_type} must be completed")
+        return row
+
+    async def _select_validation_replay_task_ids(self, *, limit: int = 5) -> list[str]:
+        task_rows, _ = await self._task_repo.list_paged(
+            org_id=self._org_id,
+            filters={"status": "done"},
+            page=1,
+            size=limit,
+            owner_user_id=None,
+        )
+        return [row.id for row in task_rows[:limit]]
+
+    async def _build_validation_replay_tasks(self, task_ids: list[str]) -> list[dict[str, Any]]:
+        if not task_ids:
+            return []
+        replay_tasks: list[dict[str, Any]] = []
+        for task_id in task_ids:
+            task = await self._task_repo.get(self._org_id, task_id)
+            if task is None or str(getattr(task, "status", "") or "") != "done":
+                continue
+            result = await self._result_repo.get_by_task(self._org_id, task_id)
+            replay_tasks.append(
+                {
+                    "task_id": task.id,
+                    "product_id": task.product_id,
+                    "spec_code": task.spec_code,
+                    "verdict": getattr(result, "verdict", None),
+                    "overall_score": float(getattr(result, "overall_score", 0.0) or 0.0),
+                }
+            )
+        return replay_tasks
 
     async def _require_training_model_config(self, model_config_id: str):
         model = await self._model_configs.get(self._org_id, model_config_id)
@@ -1197,7 +1658,31 @@ class AlgoWorkspaceService(TenantAwareService):
             raise NotFoundError("knowledge graph entity not found")
         return entity
 
-    async def _get_active_embedding_model(self) -> dict[str, Any] | None:
+    async def _require_dataset_sample(self, *, dataset_id: str, sample_id: str, sample_type: str | None = None):
+        sample = await self._dataset_samples.get(
+            org_id=self._org_id,
+            dataset_id=dataset_id,
+            sample_id=sample_id,
+            owner_user_id=self._user_id,
+        )
+        if sample is None:
+            raise NotFoundError("dataset sample not found")
+        if sample_type and str(getattr(sample, "sample_type", "") or "") != sample_type:
+            raise ValidationError(f"sample must be {sample_type}")
+        return sample
+
+    async def _get_active_embedding_model(self, config_json: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        requested_model_id = str((config_json or {}).get("embedding_model_id") or "").strip()
+        if requested_model_id:
+            model = await self._model_configs.get(self._org_id, requested_model_id)
+            if model and model.is_active and str(model.model_type or "").lower() in {"embedding", "embed", "text_embedding"}:
+                return {
+                    "id": model.id,
+                    "display_name": model.display_name,
+                    "model_key": model.model_key,
+                    "provider": model.provider,
+                    "priority": model.priority,
+                }
         models = await self._model_configs.list_active(self._org_id)
         for model in sorted(models, key=lambda item: int(item.priority or 0)):
             if str(model.model_type or "").lower() in {"embedding", "embed", "text_embedding"}:
@@ -1209,6 +1694,11 @@ class AlgoWorkspaceService(TenantAwareService):
                     "priority": model.priority,
                 }
         return None
+
+    @staticmethod
+    def _ensure_processing_resource_editable(resource) -> None:
+        if str(getattr(resource, "status", "") or "") in {"queued", "running"}:
+            raise ValidationError("processing resource is not editable while queued or running")
 
     @staticmethod
     async def _ensure_editable(status: str) -> None:
@@ -1237,6 +1727,40 @@ class AlgoWorkspaceService(TenantAwareService):
             model_type=model.model_type,
         )
 
+    def _to_execution_model_ref(self, model) -> ExecutionModelRef | None:
+        if model is None:
+            return None
+        return ExecutionModelRef(
+            id=model.id,
+            provider=getattr(model, "provider", None),
+            model_key=getattr(model, "model_key", None),
+            display_name=getattr(model, "display_name", None),
+            endpoint=getattr(model, "endpoint", None),
+            model_type=getattr(model, "model_type", None),
+        )
+
+    async def _resolve_model_ref_for_resource(self, row) -> ExecutionModelRef | None:
+        model_config_id = getattr(row, "model_config_id", None)
+        if model_config_id:
+            model = await self._model_configs.get(self._org_id, model_config_id)
+            return self._to_execution_model_ref(model)
+        summary = dict(getattr(row, "result_summary", None) or {})
+        nested_summary = dict(summary.get("summary") or {})
+        model_key = nested_summary.get("model_key")
+        model_config_id = nested_summary.get("model_config_id")
+        if model_config_id:
+            model = await self._model_configs.get(self._org_id, model_config_id)
+            return self._to_execution_model_ref(model)
+        if model_key:
+            return ExecutionModelRef(
+                id=None,
+                provider=None,
+                model_key=str(model_key),
+                display_name=str(model_key),
+                endpoint=None,
+            )
+        return None
+
     async def _build_training_job_response(self, row) -> TrainingJobResponse:
         payload = TrainingJobResponse.model_validate(row).model_dump()
         payload["result_summary"] = dict(payload.get("result_summary") or self._default_training_job_summary())
@@ -1246,10 +1770,114 @@ class AlgoWorkspaceService(TenantAwareService):
 
     async def _build_fine_tune_response(self, row) -> FineTuneRunResponse:
         payload = FineTuneRunResponse.model_validate(row).model_dump()
-        payload["result_summary"] = dict(payload.get("result_summary") or {"artifacts": [], "metrics": {}, "logs": []})
+        payload["result_summary"] = dict(payload.get("result_summary") or self._default_training_job_summary())
         model_ref = await self._build_model_ref(getattr(row, "model_config_id", None))
         payload["model_config_ref"] = model_ref.model_dump() if model_ref else None
         return FineTuneRunResponse(**payload)
+
+    async def _build_experiment_response(self, row) -> ExperimentResponse:
+        payload = ExperimentResponse.model_validate(row).model_dump()
+        related_resources, artifacts = await self._build_experiment_related_resources(row.id)
+        payload["related_resources"] = related_resources.model_dump()
+        payload["result_summary"] = self._build_experiment_result_summary(related_resources, artifacts)
+        return ExperimentResponse(**payload)
+
+    @staticmethod
+    def _build_experiment_result_summary(
+        related_resources: ExperimentRelatedResources,
+        artifacts: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        counts = {
+            "training_jobs": len(related_resources.training_jobs),
+            "fine_tunes": len(related_resources.fine_tunes),
+            "offline_evaluations": len(related_resources.offline_evaluations),
+            "deployments": len(related_resources.deployments),
+        }
+        latest_lines = [
+            f"训练任务数={counts['training_jobs']}",
+            f"微调任务数={counts['fine_tunes']}",
+            f"离线评测数={counts['offline_evaluations']}",
+            f"部署数={counts['deployments']}",
+        ]
+        latest_status = next(
+            (
+                item.status
+                for bucket in (
+                    related_resources.deployments,
+                    related_resources.offline_evaluations,
+                    related_resources.fine_tunes,
+                    related_resources.training_jobs,
+                )
+                for item in bucket
+                if item.status
+            ),
+            "draft",
+        )
+        return {
+            "summary": {
+                "status": latest_status,
+                "训练任务数": counts["training_jobs"],
+                "微调任务数": counts["fine_tunes"],
+                "离线评测数": counts["offline_evaluations"],
+                "部署数": counts["deployments"],
+            },
+            "metrics": counts,
+            "artifacts": artifacts,
+            "logs": latest_lines,
+        }
+
+    async def _build_experiment_related_resources(self, experiment_id: str) -> tuple[ExperimentRelatedResources, list[dict[str, Any]]]:
+        artifacts: list[dict[str, Any]] = []
+
+        async def build_items(resource_type: str, metric_keys: list[str]) -> list[ExperimentRelatedResourceSummary]:
+            model = RESOURCE_MODEL_MAP[resource_type]
+            rows, _ = await self._resources.list_for_owner(
+                model=model,
+                org_id=self._org_id,
+                owner_user_id=self._user_id,
+                page=1,
+                size=100,
+                extra_filters=[model.experiment_id == experiment_id],
+            )
+            items: list[ExperimentRelatedResourceSummary] = []
+            for resource in rows:
+                summary = dict(getattr(resource, "result_summary", None) or {})
+                metrics = dict(summary.get("metrics") or {})
+                metric_excerpt = {key: metrics.get(key) for key in metric_keys if key in metrics}
+                if not metric_excerpt and isinstance(metrics.get("summary"), dict):
+                    metric_excerpt = dict(metrics.get("summary") or {})
+                if resource_type == "deployment":
+                    metric_excerpt = dict(summary.get("runtime_registration") or {})
+                source_artifacts = list(summary.get("artifacts") or [])
+                if not source_artifacts and isinstance(metrics.get("summary"), dict):
+                    source_artifacts = list((metrics.get("summary") or {}).get("artifacts") or [])
+                for artifact in source_artifacts:
+                    if isinstance(artifact, dict):
+                        artifacts.append(
+                            {
+                                "source_type": resource_type,
+                                "source_id": resource.id,
+                                "source_name": resource.name,
+                                **artifact,
+                            }
+                        )
+                items.append(
+                    ExperimentRelatedResourceSummary(
+                        id=resource.id,
+                        name=resource.name,
+                        status=resource.status,
+                        metrics=metric_excerpt,
+                        updated_at=getattr(resource, "updated_at", None),
+                    )
+            )
+            return items
+
+        return ExperimentRelatedResources(
+            training_jobs=await build_items("training_job", ["accuracy", "f1", "mAP", "IoU", "AR"]),
+            fine_tunes=await build_items("fine_tune", ["accuracy", "f1", "mAP", "IoU", "AR"]),
+            offline_evaluations=await build_items("offline_evaluation", ["accuracy", "f1", "mAP", "IoU", "AR"]),
+            deployments=await build_items("deployment", []),
+        ), artifacts
 
     async def _build_evaluation_dataset_response(self, row) -> EvaluationDatasetResponse:
         sample_count = await self._eval_items.count_items(
@@ -1374,5 +2002,150 @@ class AlgoWorkspaceService(TenantAwareService):
             return await self._build_training_job_response(row)
         if resource_type == "fine_tune":
             return await self._build_fine_tune_response(row)
+        if resource_type == "experiment":
+            return await self._build_experiment_response(row)
+        if resource_type == "offline_evaluation":
+            payload = OfflineEvaluationResponse.model_validate(row).model_dump()
+            payload["result_summary"] = dict(payload.get("result_summary") or self._default_offline_evaluation_summary())
+            return OfflineEvaluationResponse(**payload)
+        if resource_type == "deployment":
+            payload = ModelDeploymentResponse.model_validate(row).model_dump()
+            payload["result_summary"] = dict(payload.get("result_summary") or self._default_deployment_summary())
+            return ModelDeploymentResponse(**payload)
         serializer = serializer_map[resource_type]
         return serializer.model_validate(row)
+
+    def _require_deployable_artifacts(self, result_summary: dict[str, Any] | None, label: str) -> None:
+        artifacts = list((result_summary or {}).get("artifacts") or [])
+        has_model_artifact = any(str(item.get("type") or "") in {"best_model", "checkpoint", "deployed_model"} for item in artifacts)
+        if not has_model_artifact:
+            raise ValidationError(f"{label} does not contain deployable artifacts")
+
+    def _default_offline_evaluation_summary(
+        self,
+        *,
+        status: str = "draft",
+        execution_mode: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "summary": {
+                "status": status,
+                "execution_mode": execution_mode,
+                "started_at": _iso_dt(started_at),
+                "completed_at": _iso_dt(completed_at),
+            },
+            "metrics": {},
+            "error_cases": [],
+            "artifacts": [],
+            "logs": [],
+        }
+
+    def _default_deployment_summary(
+        self,
+        *,
+        status: str = "draft",
+        execution_mode: str | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "summary": {
+                "status": status,
+                "execution_mode": execution_mode,
+                "started_at": _iso_dt(started_at),
+                "completed_at": _iso_dt(completed_at),
+            },
+            "runtime_registration": {},
+            "artifacts": [],
+            "logs": [],
+        }
+
+    def _default_generic_execution_summary(self, resource_type: str) -> dict[str, Any]:
+        if resource_type == "offline_evaluation":
+            return self._default_offline_evaluation_summary(status="queued")
+        if resource_type == "deployment":
+            return self._default_deployment_summary(status="queued")
+        if resource_type == "online_validation":
+            return {
+                "summary": {
+                    "status": "queued",
+                    "execution_mode": None,
+                    "started_at": None,
+                    "completed_at": None,
+                    "deployment_id": None,
+                    "validation_type": "shadow",
+                    "replay_source": "historical_tasks",
+                    "replay_count": 0,
+                },
+                "metrics": {},
+                "replay_samples": [],
+                "artifacts": [],
+                "logs": [],
+            }
+        return {"artifacts": [], "metrics": {}, "logs": []}
+
+    def _default_generic_completion_summary(self, resource_type: str, previous_summary: dict[str, Any] | None) -> dict[str, Any]:
+        if resource_type == "online_validation":
+            summary = dict((previous_summary or {}).get("summary") or {})
+            summary.update(
+                {
+                    "status": "completed",
+                    "completed_at": summary.get("completed_at"),
+                }
+            )
+            return {
+                **dict(previous_summary or {}),
+                "summary": summary,
+                "artifacts": list((previous_summary or {}).get("artifacts") or []),
+                "metrics": dict((previous_summary or {}).get("metrics") or {"status": "skeleton_ready"}),
+                "replay_samples": list((previous_summary or {}).get("replay_samples") or []),
+                "logs": list((previous_summary or {}).get("logs") or ["online validation skeleton execution completed"]),
+            }
+        return dict(previous_summary or self._default_generic_execution_summary(resource_type))
+
+
+async def run_algo_processing_pipeline(
+    *,
+    org_id: str,
+    user_id: str,
+    dataset_id: str,
+    processing_type: str,
+    resource_id: str,
+    job_id: str,
+    mode: str,
+) -> dict[str, str]:
+    async with get_session() as session:
+        service = AlgoWorkspaceService(session, org_id, user_id)
+        await service._run_processing(
+            processing_type=processing_type,
+            dataset_id=dataset_id,
+            resource_id=resource_id,
+            job_id=job_id,
+            mode=mode,
+        )
+    return {"status": "ok"}
+
+
+async def run_algo_resource_pipeline(
+    *,
+    org_id: str,
+    user_id: str,
+    resource_type: str,
+    resource_id: str,
+    mode: str,
+) -> dict[str, str]:
+    async with get_session() as session:
+        service = AlgoWorkspaceService(session, org_id, user_id)
+        if resource_type == "fine_tune":
+            await service._run_fine_tune_job(resource_id=resource_id, mode=mode)
+        elif resource_type == "offline_evaluation":
+            await service._run_offline_evaluation_job(resource_id=resource_id, mode=mode)
+        elif resource_type == "deployment":
+            await service._run_deployment_job(resource_id=resource_id, mode=mode)
+        elif resource_type == "training_job":
+            await service._run_training_job(resource_id=resource_id, mode=mode)
+        else:
+            await service._run_generic_resource(resource_type=resource_type, resource_id=resource_id, mode=mode)
+    return {"status": "ok"}

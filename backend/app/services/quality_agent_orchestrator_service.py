@@ -347,9 +347,9 @@ class QualityAgentOrchestratorService:
             or "chat"
         )
         sub_route = (
-            base_payload.get("sub_route")
+            (output.route_decision.sub_route if output.route_decision else None)
+            or base_payload.get("sub_route")
             or base_payload.get("intent")
-            or (output.route_decision.sub_route if output.route_decision else None)
             or "general_chat"
         )
         trace_id = base_payload.get("trace_id") or (

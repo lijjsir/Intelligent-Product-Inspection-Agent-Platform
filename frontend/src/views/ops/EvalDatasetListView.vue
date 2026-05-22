@@ -183,7 +183,7 @@ async function removeRow(id: string) {
 }
 
 function openDetail(id: string) {
-  router.push(`/ops/data/import/${id}?tab=eval-sets`);
+  router.push(`/ops/data/eval-sets/${id}`);
 }
 
 onMounted(async () => {

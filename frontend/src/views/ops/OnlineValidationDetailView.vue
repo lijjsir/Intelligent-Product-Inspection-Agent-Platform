@@ -1,8 +1,15 @@
 <script setup lang="ts">
+import { computed } from "vue";
+
 import AlgoResourceDetail from "@/components/business/algo/AlgoResourceDetail.vue";
 import { useOnlineValidationStore } from "@/stores/onlineValidation.store";
+import { buildOnlineValidationSummaryViewModel } from "@/utils/algoResultSummary";
 
 const store = useOnlineValidationStore();
+const current = computed(() => store.current);
+const resultSummary = computed(() => current.value?.result_summary || { summary: {}, metrics: {}, replay_samples: [], artifacts: [], logs: [] });
+const replaySamples = computed(() => resultSummary.value.replay_samples || []);
+const summaryView = computed(() => buildOnlineValidationSummaryViewModel(current.value));
 </script>
 
 <template>
@@ -15,5 +22,21 @@ const store = useOnlineValidationStore();
       { label: '实验', value: (item) => item?.experiment_id },
     ]"
     intro="查看在线验证任务的部署关联、执行状态和结果摘要。"
-  />
+    :highlights="summaryView.highlights"
+    :metrics="summaryView.metrics"
+    :artifacts="summaryView.artifacts"
+    :logs="summaryView.logs"
+  >
+    <section class="card-surface p-4">
+      <h3 class="mb-4">回放样本</h3>
+      <el-empty v-if="!replaySamples.length" description="暂无回放样本" />
+      <el-table v-else :data="replaySamples">
+        <el-table-column prop="task_id" label="任务 ID" min-width="180" />
+        <el-table-column prop="product_id" label="产品" min-width="140" />
+        <el-table-column prop="spec_code" label="规格" min-width="140" />
+        <el-table-column prop="verdict" label="结论" width="120" />
+        <el-table-column prop="overall_score" label="得分" width="120" />
+      </el-table>
+    </section>
+  </AlgoResourceDetail>
 </template>
