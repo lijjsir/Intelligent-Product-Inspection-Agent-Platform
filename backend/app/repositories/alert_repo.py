@@ -96,6 +96,26 @@ class AlertRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_stability(self, org_id: str | None, stability_id: str) -> list[AlertEvent]:
+        """Return all alerts linked to a stability report."""
+        stmt = select(AlertEvent).where(AlertEvent.stability_id == stability_id)
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def soft_delete(self, org_id: str | None, alert_id: str) -> None:
+        """Soft-delete an alert event."""
+        from datetime import datetime as dt
+        stmt = (
+            update(AlertEvent)
+            .where(AlertEvent.id == alert_id)
+            .values(deleted_at=dt.utcnow())
+        )
+        if org_id:
+            stmt = stmt.where(AlertEvent.org_id == org_id)
+        await self._session.execute(stmt)
+
     async def nullify_rule_id(self, org_id: str | None, rule_id: str) -> None:
         """Set rule_id to NULL on all alert_events referencing the given rule."""
         stmt = (

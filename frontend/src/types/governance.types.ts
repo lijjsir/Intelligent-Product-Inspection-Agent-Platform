@@ -163,16 +163,19 @@ export interface ModelQualityMetric {
   pass_rate: number;
   hallucination_rate: number;
   thumbs_down_rate: number;
+  thumbs_up_rate: number;
 }
 
 export interface QualityReport {
   total_results: number;
   hallucination_rate: number;
   thumbs_down_rate: number;
+  thumbs_up_rate: number;
   avg_risk_score: number;
   feedback_distribution: Record<string, number>;
   hallucination_trend: TrendPoint[];
   thumbs_down_trend: TrendPoint[];
+  thumbs_up_trend: TrendPoint[];
   model_metrics: ModelQualityMetric[];
   chat_score_count: number;
   chat_avg_trust_score: number;
@@ -196,6 +199,7 @@ export interface QualityTraceItem {
   total_tokens: number;
   feedback_count: number;
   thumbs_down_count: number;
+  thumbs_up_count: number;
   last_score_value: number | null;
   last_score_at: string | null;
   trust_score: number | null;

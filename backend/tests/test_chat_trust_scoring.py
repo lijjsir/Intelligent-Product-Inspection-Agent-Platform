@@ -879,6 +879,7 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
     assert report["total_results"] == 1
     assert report["hallucination_rate"] == 0.0
     assert report["thumbs_down_rate"] == 0.0
+    assert report["thumbs_up_rate"] == 0.0
     assert report["model_metrics"] == [
         {
             "model_key": "chat-model",
@@ -886,6 +887,7 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
             "pass_rate": 0.0,
             "hallucination_rate": 0.0,
             "thumbs_down_rate": 0.0,
+            "thumbs_up_rate": 0.0,
         }
     ]
     assert report["chat_score_count"] == 1

@@ -21,7 +21,7 @@ function goToLangfuseTraces() {
     <div class="hero">
       <div>
         <h2>AI 质量报告</h2>
-        <p>聚合幻觉率、点踩率、风险分与模型表现。</p>
+        <p>聚合幻觉率、点赞率、点踩率、风险分与模型表现。</p>
       </div>
       <el-button type="primary" @click="goToLangfuseTraces">跳转 Langfuse Trace</el-button>
     </div>
@@ -31,6 +31,7 @@ function goToLangfuseTraces() {
     <div class="flex gap-4" v-if="store.report">
       <div class="flex-1"><el-card shadow="never"><div class="metric-title">总结果数</div><div class="metric-value">{{ store.report.total_results }}</div></el-card></div>
       <div class="flex-1"><el-card shadow="never"><div class="metric-title">幻觉率</div><div class="metric-value warning">{{ (store.report.hallucination_rate * 100).toFixed(1) }}%</div></el-card></div>
+      <div class="flex-1"><el-card shadow="never"><div class="metric-title">点赞率</div><div class="metric-value success">{{ (store.report.thumbs_up_rate * 100).toFixed(1) }}%</div></el-card></div>
       <div class="flex-1"><el-card shadow="never"><div class="metric-title">点踩率</div><div class="metric-value danger">{{ (store.report.thumbs_down_rate * 100).toFixed(1) }}%</div></el-card></div>
     </div>
 
@@ -42,6 +43,7 @@ function goToLangfuseTraces() {
         <el-table-column label="通过率" width="120"><template #default="{ row }">{{ (row.pass_rate * 100).toFixed(1) }}%</template></el-table-column>
         <el-table-column label="幻觉率" width="120"><template #default="{ row }">{{ (row.hallucination_rate * 100).toFixed(1) }}%</template></el-table-column>
         <el-table-column label="点踩率" width="120"><template #default="{ row }">{{ (row.thumbs_down_rate * 100).toFixed(1) }}%</template></el-table-column>
+        <el-table-column label="点赞率" width="120"><template #default="{ row }">{{ (row.thumbs_up_rate * 100).toFixed(1) }}%</template></el-table-column>
       </el-table>
     </el-card>
 
@@ -50,6 +52,15 @@ function goToLangfuseTraces() {
         <el-card shadow="never">
           <template #header>幻觉率趋势</template>
           <el-table :data="store.report?.hallucination_trend || []" size="small">
+            <el-table-column prop="bucket" label="日期" />
+            <el-table-column label="值"><template #default="{ row }">{{ (row.value * 100).toFixed(1) }}%</template></el-table-column>
+          </el-table>
+        </el-card>
+      </div>
+      <div class="flex-1">
+        <el-card shadow="never">
+          <template #header>点赞率趋势</template>
+          <el-table :data="store.report?.thumbs_up_trend || []" size="small">
             <el-table-column prop="bucket" label="日期" />
             <el-table-column label="值"><template #default="{ row }">{{ (row.value * 100).toFixed(1) }}%</template></el-table-column>
           </el-table>

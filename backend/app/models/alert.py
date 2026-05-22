@@ -26,6 +26,7 @@ class AlertEvent(Base):
     suppressed_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     suppressed_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     action_note: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    deleted_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
