@@ -36,6 +36,15 @@ class StabilityRepository:
         await self._session.flush()
         return obj
 
+    async def soft_delete(self, stability_id: str) -> None:
+        from datetime import datetime as dt
+        from sqlalchemy import update
+        await self._session.execute(
+            update(StabilityReport)
+            .where(StabilityReport.id == stability_id)
+            .values(deleted_at=dt.utcnow())
+        )
+
     async def list_by_range(self, org_id: str | None, start_date=None, end_date=None) -> list[StabilityReport]:
         stmt = (
             select(StabilityReport)

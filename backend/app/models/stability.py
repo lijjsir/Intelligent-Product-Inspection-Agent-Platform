@@ -26,6 +26,7 @@ class StabilityReport(Base):
     handled_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     handle_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     handle_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

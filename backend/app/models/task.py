@@ -16,6 +16,7 @@ class InspectionTask(Base, TimestampMixin):
     spec_code: Mapped[str] = mapped_column(String(64))
     strategy_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     image_urls: Mapped[list] = mapped_column(JSON)
+    image_items: Mapped[list | None] = mapped_column("image_items", JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     priority: Mapped[int] = mapped_column(SmallInteger, default=5)
     meta_data: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)

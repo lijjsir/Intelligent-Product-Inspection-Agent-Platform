@@ -66,15 +66,15 @@ class QualityReportService(TenantAwareService):
         ]
 
     @staticmethod
-    def _build_feedback_trend(feedbacks):
-        totals: dict[str, dict[str, int]] = defaultdict(lambda: {"all": 0, "down": 0})
+    def _build_feedback_trend(feedbacks, feedback_type: str = "down"):
+        totals: dict[str, dict[str, int]] = defaultdict(lambda: {"all": 0, "target": 0})
         for item in feedbacks:
             bucket = item.created_at.strftime("%Y-%m-%d")
             totals[bucket]["all"] += 1
-            if item.feedback_type == "down":
-                totals[bucket]["down"] += 1
+            if item.feedback_type == feedback_type:
+                totals[bucket]["target"] += 1
         return [
-            {"bucket": bucket, "value": round(values["down"] / values["all"], 4) if values["all"] else 0.0}
+            {"bucket": bucket, "value": round(values["target"] / values["all"], 4) if values["all"] else 0.0}
             for bucket, values in sorted(totals.items())
         ]
 
@@ -320,6 +320,7 @@ class QualityReportService(TenantAwareService):
         review_model = None
         feedback_count = 0
         thumbs_down_count = 0
+        thumbs_up_count = 0
         last_score_value = None
         last_score_at = None
 
@@ -346,6 +347,8 @@ class QualityReportService(TenantAwareService):
                 feedback_count += 1
                 if value < 0.5:
                     thumbs_down_count += 1
+                else:
+                    thumbs_up_count += 1
                 last_score_value = value
                 last_score_at = s.get("timestamp") or s.get("createdAt")
 
@@ -384,6 +387,7 @@ class QualityReportService(TenantAwareService):
             "total_tokens": total_tokens,
             "feedback_count": feedback_count,
             "thumbs_down_count": thumbs_down_count,
+            "thumbs_up_count": thumbs_up_count,
             "last_score_value": last_score_value,
             "last_score_at": last_score_at,
             "trust_score": trust_score,
@@ -425,6 +429,7 @@ class QualityReportService(TenantAwareService):
         total_results = len(results) + len(chat_messages)
         hallucination_count = sum(1 for item in results if not self._has_citations(item.citations))
         thumbs_down_count = sum(1 for item in feedbacks if item.feedback_type == "down")
+        thumbs_up_count = sum(1 for item in feedbacks if item.feedback_type == "up")
         avg_risk_score = round(
             sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
             4,
@@ -452,6 +457,7 @@ class QualityReportService(TenantAwareService):
                     "pass_rate": round(sum(1 for item in model_results if hasattr(item, "verdict") and item.verdict == "pass") / result_count, 4) if result_count else 0.0,
                     "hallucination_rate": round(sum(1 for item in model_results if hasattr(item, "citations") and not self._has_citations(item.citations)) / result_count, 4) if result_count else 0.0,
                     "thumbs_down_rate": 0.0,
+                    "thumbs_up_rate": 0.0,
                 })
             else:
                 model_metrics.append({
@@ -460,16 +466,19 @@ class QualityReportService(TenantAwareService):
                     "pass_rate": 0.0,
                     "hallucination_rate": 0.0,
                     "thumbs_down_rate": 0.0,
+                    "thumbs_up_rate": 0.0,
                 })
 
         return {
             "total_results": total_results,
             "hallucination_rate": round(hallucination_count / total_results, 4) if total_results else 0.0,
             "thumbs_down_rate": round(thumbs_down_count / total_results, 4) if total_results else 0.0,
+            "thumbs_up_rate": round(thumbs_up_count / total_results, 4) if total_results else 0.0,
             "avg_risk_score": avg_risk_score,
             "feedback_distribution": dict(Counter((item.category or "uncategorized") for item in feedbacks)),
             "hallucination_trend": self._build_result_trend(results, lambda item: 0 if self._has_citations(item.citations) else 1),
-            "thumbs_down_trend": self._build_feedback_trend(feedbacks),
+            "thumbs_down_trend": self._build_feedback_trend(feedbacks, "down"),
+            "thumbs_up_trend": self._build_feedback_trend(feedbacks, "up"),
             "model_metrics": model_metrics,
             "chat_score_count": len(chat_scores),
             "chat_avg_trust_score": self._avg_chat_value(chat_scores, "trust_score"),
@@ -485,10 +494,12 @@ class QualityReportService(TenantAwareService):
             "total_results": 0,
             "hallucination_rate": 0.0,
             "thumbs_down_rate": 0.0,
+            "thumbs_up_rate": 0.0,
             "avg_risk_score": 0.0,
             "feedback_distribution": {},
             "hallucination_trend": [],
             "thumbs_down_trend": [],
+            "thumbs_up_trend": [],
             "model_metrics": [],
             "chat_score_count": 0,
             "chat_avg_trust_score": 0.0,
@@ -507,6 +518,7 @@ class QualityReportService(TenantAwareService):
             if item.get("hallucination_risk") is not None
         ]
         thumbs_down_count = sum(int(item.get("thumbs_down_count") or 0) for item in traces)
+        thumbs_up_count = sum(int(item.get("thumbs_up_count") or 0) for item in traces)
         chat_traces = [item for item in traces if item.get("source_type") == "chat"]
         trust_values = [
             float(item["trust_score"])
@@ -549,6 +561,10 @@ class QualityReportService(TenantAwareService):
                     sum(int(item.get("thumbs_down_count") or 0) for item in items) / result_count,
                     4,
                 ) if result_count else 0.0,
+                "thumbs_up_rate": round(
+                    sum(int(item.get("thumbs_up_count") or 0) for item in items) / result_count,
+                    4,
+                ) if result_count else 0.0,
             })
 
         return {
@@ -558,10 +574,12 @@ class QualityReportService(TenantAwareService):
                 4,
             ) if hallucination_values else 0.0,
             "thumbs_down_rate": round(thumbs_down_count / total_results, 4) if total_results else 0.0,
+            "thumbs_up_rate": round(thumbs_up_count / total_results, 4) if total_results else 0.0,
             "avg_risk_score": 0.0,
             "feedback_distribution": {},
             "hallucination_trend": cls._build_trace_value_trend(traces, "hallucination_risk", threshold=0.6),
             "thumbs_down_trend": cls._build_trace_count_trend(traces, "thumbs_down_count"),
+            "thumbs_up_trend": cls._build_trace_count_trend(traces, "thumbs_up_count"),
             "model_metrics": model_metrics,
             "chat_score_count": len(trust_values),
             "chat_avg_trust_score": round(sum(trust_values) / len(trust_values), 4) if trust_values else 0.0,
@@ -723,6 +741,7 @@ class QualityReportService(TenantAwareService):
             )
             total_tokens = sum(int(item.total_tokens or 0) for item in ledger_group)
             thumbs_down_count = sum(1 for item in feedback_group if item.feedback_type == "down")
+            thumbs_up_count = sum(1 for item in feedback_group if item.feedback_type == "up")
 
             trace_url = None
             if callable(build_trace_url):
@@ -745,6 +764,7 @@ class QualityReportService(TenantAwareService):
                     "total_tokens": total_tokens,
                     "feedback_count": len(feedback_group),
                     "thumbs_down_count": thumbs_down_count,
+                    "thumbs_up_count": thumbs_up_count,
                     "last_score_value": None if not latest_score else float(latest_score.get("value") or 0.0),
                     "last_score_at": None if not latest_score else latest_score.get("scored_at"),
                     "trust_score": None if not latest_score else float(latest_score.get("value") or 0.0),

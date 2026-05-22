@@ -10,6 +10,7 @@ class InspectionState(TypedDict, total=False):
     product_id: str
     spec_code: str
     image_urls: list[str]
+    image_items: list[dict[str, Any]]
     model_id: str
     model_config_id: str | None
     model_base_url: str | None
