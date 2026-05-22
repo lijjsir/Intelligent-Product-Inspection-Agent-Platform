@@ -35,6 +35,8 @@ async def _run_model_health_check() -> dict[str, int]:
                 status_count[health_status] += 1
 
         await session.commit()
+        for org_id in {str(getattr(model, "org_id", "") or "") for model in models if getattr(model, "org_id", None)}:
+            ModelConfigService.invalidate_runtime_cache(org_id)
         return {
             "checked": len(checked),
             "healthy": status_count["healthy"],

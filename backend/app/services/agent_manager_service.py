@@ -4,8 +4,8 @@ import logging
 from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest, NormalizedAttachment
-from agent.router import AgentManager
 from agent.router.contracts import AgentRouterOutput
+from agent.router.manager_provider import get_agent_manager
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class AgentManagerService:
     """
 
     def __init__(self) -> None:
-        self._manager = AgentManager()
+        self._manager = get_agent_manager()
 
     async def run_chat(self, payload: dict, db_session=None) -> AgentRouterOutput:
         request = NormalizedRequest(

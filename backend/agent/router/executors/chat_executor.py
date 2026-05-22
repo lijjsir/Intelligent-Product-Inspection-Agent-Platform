@@ -90,12 +90,33 @@ class ChatExecutor:
     # ── prompts ──
 
     @staticmethod
+    def _history_text(state: ManagerState) -> str:
+        if not state.history_messages:
+            return ""
+        lines = []
+        for m in state.history_messages[-10:]:
+            role = "用户" if m.get("role") == "user" else "助手"
+            content = str(m.get("content") or "")[:300]
+            if content:
+                lines.append(f"{role}：{content}")
+        return "\n".join(lines) if lines else ""
+
+    @staticmethod
     def _general_prompt(state: ManagerState) -> str:
-        return f"用户问题：{state.original_query}"
+        parts = []
+        hist = ChatExecutor._history_text(state)
+        if hist:
+            parts.append(f"对话历史：\n{hist}")
+        parts.append(f"用户问题：{state.original_query}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _compose_prompt(state: ManagerState) -> str:
-        parts = [f"用户问题：{state.original_query}"]
+        parts = []
+        hist = ChatExecutor._history_text(state)
+        if hist:
+            parts.append(f"对话历史：\n{hist}")
+        parts.append(f"用户问题：{state.original_query}")
         parts.append(f"场景：{state.surface}")
         if state.observations:
             obs_text = "\n".join(

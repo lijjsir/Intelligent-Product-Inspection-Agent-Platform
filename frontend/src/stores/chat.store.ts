@@ -141,6 +141,14 @@ export const useChatStore = defineStore("chat", () => {
     return Math.max(...messages.value.map((x) => x.seq_no));
   });
 
+  function pollingAfterSeq(messageId: string) {
+    const target = messages.value.find((item) => item.id === messageId);
+    if (target?.seq_no && target.seq_no > 0) {
+      return target.seq_no - 1;
+    }
+    return lastSeq.value;
+  }
+
   function sortMessages() {
     messages.value.sort((a, b) => {
       const ao = orderNo(a);
@@ -270,8 +278,8 @@ export const useChatStore = defineStore("chat", () => {
       }
       pollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, 0, 500);
-        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
         if (checkAndFinalizeByMessage(messageId)) {
           return;
@@ -311,8 +319,8 @@ export const useChatStore = defineStore("chat", () => {
       }
       trustPollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, 0, 500);
-        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
       } catch {
         // Keep score refresh quiet; the answer is already visible.

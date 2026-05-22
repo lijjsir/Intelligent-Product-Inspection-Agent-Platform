@@ -33,6 +33,20 @@ class AlertRepository:
         await self._session.flush()
         return alert
 
+    async def get_by_idempotency_key(self, idempotency_key: str) -> AlertEvent | None:
+        result = await self._session.execute(
+            select(AlertEvent).where(AlertEvent.idempotency_key == idempotency_key)
+        )
+        return result.scalar_one_or_none()
+
+    async def create_once(self, payload: dict) -> AlertEvent:
+        key = payload.get("idempotency_key")
+        if key:
+            existing = await self.get_by_idempotency_key(str(key))
+            if existing is not None:
+                return existing
+        return await self.create(payload)
+
     async def list_alerts(
         self,
         org_id: str | None,

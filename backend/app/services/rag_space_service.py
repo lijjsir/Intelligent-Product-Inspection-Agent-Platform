@@ -30,6 +30,7 @@ from app.schemas.rag_space import (
     RagSpaceDocumentListItem,
     RagSpaceResponse,
 )
+from app.services.file_storage_service import FileStorageService
 from app.services.object_storage.factory import build_object_storage
 
 

@@ -11,6 +11,7 @@ from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
 from app.repositories.model_config_repo import ModelConfigRepository
 from app.services.base import TenantAwareService
+from infra.cache.memory_cache import _model_config_cache
 
 
 def _fernet() -> Fernet:
@@ -43,6 +44,7 @@ class ModelConfigService(TenantAwareService):
         body.setdefault("health_message", None)
         created = await self._repo.create(body)
         await self._session.commit()
+        _model_config_cache.delete_prefix(f"models:{self._org_id}:")
         return created
 
     async def update_config(self, config_id: str, payload: dict[str, Any]):
@@ -53,16 +55,33 @@ class ModelConfigService(TenantAwareService):
             body["api_key_enc"] = _fernet().encrypt(str(value).encode("utf-8")).decode("utf-8") if value else None
         updated = await self._repo.save(model, body)
         await self._session.commit()
+        _model_config_cache.delete_prefix(f"models:{self._org_id}:")
         return updated
 
     async def delete_config(self, config_id: str) -> None:
         model = await self.get_config(config_id)
         await self._repo.delete(model)
         await self._session.commit()
+        _model_config_cache.delete_prefix(f"models:{self._org_id}:")
 
-    async def list_runtime_models(self) -> list[dict[str, Any]]:
+    async def list_runtime_models(self, model_type: str | None = None) -> list[dict[str, Any]]:
+        normalized_type = str(model_type or "all").strip().lower() or "all"
+        cache_key = f"models:{self._org_id}:{normalized_type}"
+        cached = _model_config_cache.get(cache_key)
+        if cached is not None:
+            return cached
         models = await self._repo.list_active(self._org_id)
-        return [self.to_runtime_payload(item) for item in models]
+        result = [
+            self.to_runtime_payload(item)
+            for item in models
+            if normalized_type == "all" or str(getattr(item, "model_type", "") or "").lower() == normalized_type
+        ]
+        _model_config_cache.set(cache_key, result, ttl_seconds=30)
+        return result
+
+    @staticmethod
+    def invalidate_runtime_cache(org_id: str) -> None:
+        _model_config_cache.delete_prefix(f"models:{org_id}:")
 
     @staticmethod
     def decrypt_api_key(value: str | None) -> str | None:

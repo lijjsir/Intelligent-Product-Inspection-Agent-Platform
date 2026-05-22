@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_ops import AgentDefinition, AgentRuntimeInstance
+from infra.cache.memory_cache import _runtime_guard_cache
 
 
 @dataclass
@@ -16,21 +16,21 @@ class RuntimeGuardResult:
     customer_message: str = ""
 
     @classmethod
-    def ok(cls) -> RuntimeGuardResult:
+    def ok(cls) -> "RuntimeGuardResult":
         return cls(allowed=True)
 
     @classmethod
-    def blocked(cls, reason: str, customer_message: str) -> RuntimeGuardResult:
+    def blocked(cls, reason: str, customer_message: str) -> "RuntimeGuardResult":
         return cls(allowed=False, reason=reason, customer_message=customer_message)
 
 
 class AgentRuntimeGuard:
-    """在执行前检查 Agent 运行时状态，确保暂停/停止操作真实生效。"""
+    """Checks whether the selected agent route is currently executable."""
 
     @staticmethod
     async def check(
         org_id: str,
-        selected_agent: str,  # "chat" | "inspection_task"
+        selected_agent: str,
         sub_route: str,
         session: AsyncSession,
     ) -> RuntimeGuardResult:
@@ -38,13 +38,30 @@ class AgentRuntimeGuard:
         if not subgraph_key:
             return RuntimeGuardResult.ok()
 
-        # 查询 Agent 定义
+        cache_key = f"runtime_guard:{org_id}:{selected_agent}:{sub_route}"
+        cached = _runtime_guard_cache.get(cache_key)
+        if isinstance(cached, RuntimeGuardResult):
+            return cached
+
+        result = await AgentRuntimeGuard._check_uncached(org_id, subgraph_key, session)
+        _runtime_guard_cache.set(cache_key, result, ttl_seconds=5)
+        return result
+
+    @staticmethod
+    async def _check_uncached(
+        org_id: str,
+        subgraph_key: str,
+        session: AsyncSession,
+    ) -> RuntimeGuardResult:
         def_result = await session.execute(
-            select(AgentDefinition).where(
+            select(AgentDefinition)
+            .where(
                 AgentDefinition.org_id == org_id,
                 AgentDefinition.subgraph_key == subgraph_key,
                 AgentDefinition.deleted_at.is_(None),
-            ).order_by(AgentDefinition.updated_at.desc()).limit(1)
+            )
+            .order_by(AgentDefinition.updated_at.desc())
+            .limit(1)
         )
         agent_def = def_result.scalar_one_or_none()
 
@@ -60,13 +77,15 @@ class AgentRuntimeGuard:
                 customer_message=f"{agent_def.name} 当前已暂停路由，请稍后重试或联系管理员恢复。",
             )
 
-        # 查询运行时实例
         rt_result = await session.execute(
-            select(AgentRuntimeInstance).where(
+            select(AgentRuntimeInstance)
+            .where(
                 AgentRuntimeInstance.org_id == org_id,
                 AgentRuntimeInstance.agent_id == agent_def.id,
                 AgentRuntimeInstance.deleted_at.is_(None),
-            ).order_by(AgentRuntimeInstance.updated_at.desc()).limit(1)
+            )
+            .order_by(AgentRuntimeInstance.updated_at.desc())
+            .limit(1)
         )
         runtime = rt_result.scalar_one_or_none()
 
@@ -84,13 +103,15 @@ class AgentRuntimeGuard:
         return RuntimeGuardResult.ok()
 
 
+def invalidate_runtime_guard_cache(org_id: str) -> None:
+    _runtime_guard_cache.delete_prefix(f"runtime_guard:{org_id}:")
+
+
 def _agent_to_subgraph_key(selected_agent: str, sub_route: str) -> str | None:
-    """将路由决策中的 agent+sub_route 映射到 subgraph_key"""
     if selected_agent == "chat":
         return "chat"
     if selected_agent == "inspection_task":
         return "inspection_task"
-    # 兜底：尝试从 sub_route 推断
     if sub_route in ("general_chat", "rag_qa"):
         return "chat"
     if sub_route in ("quality_qa", "task_create", "inspection_execute"):

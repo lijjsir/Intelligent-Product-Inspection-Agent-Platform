@@ -16,6 +16,7 @@ class TokenUsageLedger(Base):
     model_key: Mapped[str] = mapped_column(String(128), index=True)
     product_line: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(191), nullable=True, unique=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)

@@ -91,7 +91,6 @@ export const chatApi = {
       }
     };
     source.onmessage = consume;
-    source.addEventListener("message", consume as EventListener);
     return source;
   },
 };

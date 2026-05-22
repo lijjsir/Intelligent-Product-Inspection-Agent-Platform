@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from time import perf_counter
 from typing import Any
 
@@ -537,15 +538,8 @@ class InspectionTaskGraph:
             },
         )
 
-    async def _run_structured_inspection(self, request: NormalizedRequest) -> AgentOutput:
-        started_at = perf_counter()
-        runtime_profile = await resolve_runtime_profile(request.org_id, "quality_judgement")
-        contract_target = runtime_profile.get("quality_judgement.contract_inferencer")
-        planner_target = runtime_profile.get("quality_judgement.planner")
-        knowledge_target = runtime_profile.get("quality_judgement.knowledge_router")
-        synthesizer_target = runtime_profile.get("quality_judgement.evidence_synthesizer")
-        review_target = runtime_profile.get("quality_judgement.review_gate")
-
+    @staticmethod
+    def _parse_attachments(request: NormalizedRequest) -> list[dict[str, Any]]:
         parsed_files: list[dict[str, Any]] = []
         for attachment in request.attachments:
             if not attachment.url or attachment.kind == "image":
@@ -561,6 +555,19 @@ class InspectionTaskGraph:
                 "name": attachment.name or "attachment.txt", "kind": parsed.get("kind"),
                 "url": attachment.url, "text": parsed.get("text", ""), "summary": parsed,
             })
+        return parsed_files
+
+    async def _run_structured_inspection(self, request: NormalizedRequest) -> AgentOutput:
+        started_at = perf_counter()
+        runtime_profile, parsed_files = await asyncio.gather(
+            resolve_runtime_profile(request.org_id, "quality_judgement"),
+            asyncio.to_thread(self._parse_attachments, request),
+        )
+        contract_target = runtime_profile.get("quality_judgement.contract_inferencer")
+        planner_target = runtime_profile.get("quality_judgement.planner")
+        knowledge_target = runtime_profile.get("quality_judgement.knowledge_router")
+        synthesizer_target = runtime_profile.get("quality_judgement.evidence_synthesizer")
+        review_target = runtime_profile.get("quality_judgement.review_gate")
 
         structured_record = _extract_structured_record(request, parsed_files)
         product_family = detect_product_family(

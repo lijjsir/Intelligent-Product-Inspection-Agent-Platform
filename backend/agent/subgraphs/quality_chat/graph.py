@@ -389,7 +389,12 @@ async def history_loader(state: ChatState) -> ChatState:
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         rows = await repo.list_for_session(org_id=str(state["org_id"]), session_id=str(state["session_id"]), after_seq=0, limit=20)
-    state["history"] = [{"role": row.role, "content": row.content, "message_type": row.message_type, "payload": row.payload or {}} for row in rows[:-1] if row.content or row.payload]
+    current_user_seq_no = int((state.get("ext") or {}).get("current_user_seq_no") or 0)
+    if current_user_seq_no > 0:
+        rows = [row for row in rows if int(row.seq_no or 0) < current_user_seq_no]
+    else:
+        rows = rows[:-1]
+    state["history"] = [{"role": row.role, "content": row.content, "message_type": row.message_type, "payload": row.payload or {}} for row in rows if row.content or row.payload]
     return state
 
 
@@ -941,15 +946,6 @@ async def finalizer(state: ChatState) -> ChatState:
         payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
         _enqueue_trust_scoring(trust_request)
     state["response_payload"] = payload
-    async with get_session() as session:
-        repo = ChatMessageRepository(session)
-        await repo.update_assistant_message(org_id=str(state["org_id"]), message_id=str(state["assistant_message_id"]), content=str(payload.get("answer") or ""), message_type=str(payload.get("message_type") or "quality_answer"), payload=payload)
-        if trust_score:
-            await ChatMessageScoreRepository(session).upsert_by_message_version(trust_score)
-        await _persist_chat_token_usage(session, state)
-        await _persist_rag_query_log(session, state)
-        await session.commit()
-    await state["emit"]({"event": "message_final", "session_id": state["session_id"], "message_id": state["assistant_message_id"], "workflow_run_id": state["workflow_run_id"], "content": str(payload.get("answer") or ""), "payload": payload, "quality": state.get("quality") or {}})
     logger.info(
         "finalizer intent=%s trust_status=%s db_ms=%d total_ms=%d",
         state.get("intent"), (trust_score or {}).get("status", "none"), 0, round((perf_counter() - _t0) * 1000),
