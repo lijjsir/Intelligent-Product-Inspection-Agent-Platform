@@ -3,14 +3,18 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 import { useAlertStore } from "@/stores/alert.store";
+import { ALERT_SEVERITY_LABELS } from "@/constants/spec";
 import { useTaskStore } from "@/stores/task.store";
+import { useResultStore } from "@/stores/result.store";
 import type { InspectionTask } from "@/types/task.types";
 
 const router = useRouter();
 const analyticsStore = useAnalyticsStore();
 const alertStore = useAlertStore();
 const taskStore = useTaskStore();
+const resultStore = useResultStore();
 const loading = ref(false);
+const pendingReviewCount = ref(0);
 
 const overview = computed(() => analyticsStore.overview);
 const alerts = computed(() => alertStore.items);
@@ -66,7 +70,9 @@ async function fetchData() {
       analyticsStore.fetchOverview(),
       alertStore.fetchAlerts({ page: 1, size: 20, status: "open" }),
       taskStore.fetchTasks({ page: 1, size: 8 }),
+      resultStore.fetchResults({ page: 1, size: 1, verdict: "manual_required" }),
     ]);
+    pendingReviewCount.value = resultStore.total;
   } finally {
     loading.value = false;
   }
@@ -106,6 +112,11 @@ onMounted(fetchData);
         <span class="mc-label">待处理告警</span>
         <strong>{{ openAlerts.length }}</strong>
         <span class="mc-sub">{{ criticalAlerts.length }} 条严重</span>
+      </button>
+      <button class="metric-card primary" @click="go('/app/results?verdict=manual_required')">
+        <span class="mc-label">待人工审核</span>
+        <strong>{{ pendingReviewCount }}</strong>
+        <span class="mc-sub">需要专家复核</span>
       </button>
       <button class="metric-card" @click="go('/ops/analytics')">
         <span class="mc-label">分析中心通过率</span>
@@ -147,6 +158,10 @@ onMounted(fetchData);
           </div>
         </div>
         <div class="queue-list">
+          <button v-if="pendingReviewCount" class="queue-item primary" @click="go('/app/results?verdict=manual_required')">
+            <strong>{{ pendingReviewCount }} 条结果待人工审核</strong>
+            <span>需专家登录进行复核裁定</span>
+          </button>
           <button v-if="failedTasks.length" class="queue-item danger" @click="go('/ops/tasks?status=failed')">
             <strong>{{ failedTasks.length }} 个任务失败</strong>
             <span>查看任务详情和执行日志</span>
@@ -214,7 +229,7 @@ onMounted(fetchData);
 
 .metric-row {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -247,6 +262,10 @@ onMounted(fetchData);
 
 .metric-card.warning strong {
   color: #d97706;
+}
+
+.metric-card.primary strong {
+  color: #2563eb;
 }
 
 .mc-label {
@@ -344,6 +363,11 @@ onMounted(fetchData);
   border-color: #fde68a;
 }
 
+.queue-item.primary {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
 .quick-row {
   display: flex;
   gap: 8px;
@@ -352,7 +376,7 @@ onMounted(fetchData);
 
 @media (max-width: 1200px) {
   .metric-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .work-grid {

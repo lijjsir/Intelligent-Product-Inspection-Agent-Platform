@@ -254,6 +254,9 @@ export interface InspectionSpec {
   name: string;
   version: string;
   product_id: string | null;
+  product_family: string | null;
+  applicable_skus: string[] | null;
+  required_views: string[] | null;
   required_image_count: number;
   ai_gate_confidence_threshold: number;
   ai_gate_evidence_threshold: number;
@@ -281,6 +284,9 @@ export interface InspectionSpecPayload {
   name: string;
   version?: string;
   product_id?: string | null;
+  product_family?: string | null;
+  applicable_skus?: string[] | null;
+  required_views?: string[] | null;
   required_image_count?: number;
   ai_gate_confidence_threshold?: number;
   ai_gate_evidence_threshold?: number;

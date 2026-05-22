@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import type { InspectionSpec, InspectionSpecItemPayload, InspectionSpecPayload } from "@/types/governance.types";
 import { ROLE_ADMIN, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
+import { severityLabel, defectTypeLabel, dispositionLabel } from "@/constants/spec";
 import { useAuthStore } from "@/stores/auth.store";
 
 interface RuleForm {
@@ -33,6 +34,9 @@ const form = reactive({
   name: "",
   version: "v1",
   product_id: "",
+  product_family: "",
+  applicable_skus: "",
+  required_views: "",
   required_image_count: 1,
   ai_gate_confidence_threshold: 0.72,
   ai_gate_evidence_threshold: 0.5,
@@ -115,6 +119,9 @@ function openEdit(row: InspectionSpec) {
     name: row.name,
     version: row.version,
     product_id: row.product_id ?? "",
+    product_family: row.product_family ?? "",
+    applicable_skus: row.applicable_skus?.join(", ") ?? "",
+    required_views: row.required_views?.join(", ") ?? "",
     required_image_count: row.required_image_count,
     ai_gate_confidence_threshold: row.ai_gate_confidence_threshold,
     ai_gate_evidence_threshold: row.ai_gate_evidence_threshold,
@@ -146,6 +153,9 @@ async function duplicateSpec(row: InspectionSpec) {
     name: `${row.name}（副本）`,
     version: row.version,
     product_id: row.product_id,
+    product_family: row.product_family,
+    applicable_skus: row.applicable_skus,
+    required_views: row.required_views,
     required_image_count: row.required_image_count,
     ai_gate_confidence_threshold: row.ai_gate_confidence_threshold,
     ai_gate_evidence_threshold: row.ai_gate_evidence_threshold,
@@ -195,6 +205,9 @@ function buildPayload(): InspectionSpecPayload {
     name: form.name.trim(),
     version: form.version.trim() || "v1",
     product_id: form.product_id.trim() || null,
+    product_family: form.product_family.trim() || null,
+    applicable_skus: form.applicable_skus ? form.applicable_skus.split(",").map((s) => s.trim()).filter(Boolean) : null,
+    required_views: form.required_views ? form.required_views.split(",").map((s) => s.trim()).filter(Boolean) : null,
     required_image_count: Number(form.required_image_count),
     ai_gate_confidence_threshold: Number(form.ai_gate_confidence_threshold),
     ai_gate_evidence_threshold: Number(form.ai_gate_evidence_threshold),
@@ -317,7 +330,9 @@ onMounted(() => {
             <el-tag :type="row.org_id ? 'primary' : 'warning'">{{ formatScope(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="product_id" label="产品线" min-width="120" />
+        <el-table-column label="产品线" min-width="120">
+          <template #default="{ row }">{{ row.product_family || "未设置" }}</template>
+        </el-table-column>
         <el-table-column label="规则数" width="90">
           <template #default="{ row }">{{ row.items.length }}</template>
         </el-table-column>
@@ -359,7 +374,7 @@ onMounted(() => {
               <p class="preview-code">{{ previewing.spec_code }}</p>
               <h3>{{ previewing.name }}</h3>
               <p class="preview-meta">
-                {{ previewing.version }} · {{ formatScope(previewing) }} · {{ previewing.product_id || "未指定产品线" }}
+                {{ previewing.version }} · {{ formatScope(previewing) }} · {{ previewing.product_family || "未指定产品线" }}
               </p>
             </div>
             <div class="preview-tags">
@@ -376,6 +391,10 @@ onMounted(() => {
               <div class="preview-stat">
                 <span>必需图片数</span>
                 <strong>{{ previewing.required_image_count }}</strong>
+              </div>
+              <div class="preview-stat">
+                <span>必需视角</span>
+                <strong>{{ previewing.required_views?.join(", ") || "未设置" }}</strong>
               </div>
               <div class="preview-stat">
                 <span>置信度阈值</span>
@@ -395,9 +414,15 @@ onMounted(() => {
           <el-card shadow="never" class="preview-section">
             <template #header>规则项清单</template>
             <el-table :data="previewing.items" size="small">
-              <el-table-column prop="defect_type" label="缺陷类型" min-width="140" />
-              <el-table-column prop="severity" label="严重度" width="100" />
-              <el-table-column prop="disposition" label="处置方式" width="140" />
+              <el-table-column label="缺陷类型" min-width="140">
+                <template #default="{ row }">{{ defectTypeLabel(row.defect_type) }}</template>
+              </el-table-column>
+              <el-table-column label="严重度" width="100">
+                <template #default="{ row }">{{ severityLabel(row.severity) }}</template>
+              </el-table-column>
+              <el-table-column label="处置方式" width="140">
+                <template #default="{ row }">{{ dispositionLabel(row.disposition) }}</template>
+              </el-table-column>
               <el-table-column label="阈值" width="110">
                 <template #default="{ row }">{{ row.confidence_threshold.toFixed(2) }}</template>
               </el-table-column>
@@ -435,8 +460,17 @@ onMounted(() => {
             <el-form-item label="版本">
               <el-input v-model="form.version" placeholder="v1" />
             </el-form-item>
-            <el-form-item label="产品线">
+            <el-form-item label="产品ID">
               <el-input v-model="form.product_id" placeholder="如 screw-line-a" />
+            </el-form-item>
+            <el-form-item label="产品线">
+              <el-input v-model="form.product_family" placeholder="如 电子产品、食品饮料" />
+            </el-form-item>
+            <el-form-item label="适用SKU">
+              <el-input v-model="form.applicable_skus" placeholder="多个SKU用逗号分隔" />
+            </el-form-item>
+            <el-form-item label="必需视角">
+              <el-input v-model="form.required_views" placeholder="逗号分隔，如 front, rear, detail" />
             </el-form-item>
             <el-form-item label="标准范围">
               <el-segmented
@@ -488,9 +522,9 @@ onMounted(() => {
               <div class="rule-grid">
                 <el-input v-model="item.defect_type" placeholder="缺陷类型，如 scratch" />
                 <el-select v-model="item.severity" placeholder="严重度">
-                  <el-option label="critical" value="critical" />
-                  <el-option label="major" value="major" />
-                  <el-option label="minor" value="minor" />
+                  <el-option label="致命" value="critical" />
+                  <el-option label="严重" value="major" />
+                  <el-option label="轻微" value="minor" />
                 </el-select>
                 <el-select v-model="item.disposition" placeholder="处置方式">
                   <el-option label="fail" value="fail" />

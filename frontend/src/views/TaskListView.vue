@@ -128,6 +128,13 @@ function handleOpenCreate() {
   showCreateDialog.value = true;
 }
 
+function onSpecChange(specCode: string) {
+  const spec = activeSpecOptions.value.find((s) => s.spec_code === specCode);
+  if (spec) {
+    createForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
+}
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -254,7 +261,7 @@ watch(
           </el-select>
         </el-form-item>
         <el-form-item label="产品编号">
-          <el-input v-model="filters.product_id" placeholder="输入产品编号" clearable size="small" @keyup.enter="handleSearch" />
+          <el-input v-model="filters.product_id" placeholder="输入产品线" clearable size="small" @keyup.enter="handleSearch" />
         </el-form-item>
         <el-form-item v-if="filters.ids" label="任务集合">
           <el-input v-model="filters.ids" readonly size="small" />
@@ -270,7 +277,7 @@ watch(
       <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
         <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
-        <el-table-column prop="product_id" label="产品编号" width="150" />
+        <el-table-column prop="product_id" label="产品线" width="150" />
         <el-table-column prop="spec_code" label="检测标准" width="180" />
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
@@ -317,15 +324,15 @@ watch(
 
     <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
       <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
-        <el-form-item label="产品编号" prop="product_id">
-          <el-input v-model="createForm.product_id" placeholder="例如：P-1001" />
+        <el-form-item label="产品线" prop="product_id">
+          <el-input v-model="createForm.product_id" placeholder="选择标准后自动带入" />
         </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full">
+          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full" @change="onSpecChange">
             <el-option
               v-for="spec in activeSpecOptions"
               :key="spec.id"
-              :label="`${spec.spec_code} · ${spec.name}`"
+              :label="`${spec.spec_code} · ${spec.name} [${spec.product_family || '未分类'}]`"
               :value="spec.spec_code"
             />
           </el-select>

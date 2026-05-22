@@ -11,6 +11,8 @@ import {
   ROLE_ADMIN,
   ROLE_APP_DEVELOPER,
   ROLE_ALGORITHM_ENGINEER,
+  ROLE_PLATFORM_OPERATOR,
+  ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
 import type { User } from "@/types/user.types";
@@ -49,9 +51,11 @@ const resetPasswordForm = reactive({
 
 const roleMeta: Record<string, { label: string; tag: "danger" | "success" | "warning" | "info" }> = {
   [ROLE_ADMIN]: { label: "管理员", tag: "danger" },
-  [ROLE_USER]: { label: "普通用户", tag: "info" },
+  [ROLE_PLATFORM_OPERATOR]: { label: "平台运营", tag: "warning" },
   [ROLE_ALGORITHM_ENGINEER]: { label: "算法工程师", tag: "success" },
   [ROLE_APP_DEVELOPER]: { label: "应用开发者", tag: "warning" },
+  [ROLE_EXPERT]: { label: "专家", tag: "info" },
+  [ROLE_USER]: { label: "普通用户", tag: "info" },
 };
 
 const roleOptions = computed(() =>

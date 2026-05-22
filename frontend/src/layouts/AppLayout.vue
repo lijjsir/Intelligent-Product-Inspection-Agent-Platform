@@ -149,6 +149,7 @@ import {
   ROLE_ADMIN,
   ROLE_ALGORITHM_ENGINEER,
   ROLE_APP_DEVELOPER,
+  ROLE_PLATFORM_OPERATOR,
   ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
@@ -207,12 +208,14 @@ const roleLabel = computed(() => {
       return "系统管理员";
     case ROLE_APP_DEVELOPER:
       return "应用开发者";
+    case ROLE_PLATFORM_OPERATOR:
+      return "平台运营";
     case ROLE_ALGORITHM_ENGINEER:
       return "算法工程师";
     case ROLE_EXPERT:
-      return "终端用户-专业";
+      return "专家";
     case ROLE_USER:
-      return "终端用户-标准";
+      return "普通用户";
     default:
       return auth.role || "未识别角色";
   }

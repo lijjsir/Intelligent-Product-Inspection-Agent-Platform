@@ -84,14 +84,34 @@ function handleSizeChange(val: number) {
   pushQuery();
 }
 
-const getVerdictType = (verdict: string) => {
+const getVerdictType = (verdict: string): "info" | "success" | "danger" | "warning" => {
   const map: Record<string, "info" | "success" | "danger" | "warning"> = {
     pass: "success",
     fail: "danger",
     uncertain: "warning",
-    manual_required: "info",
+    manual_required: "danger",
   };
   return map[verdict] || "info";
+};
+
+const quickFilters = [
+  { label: "全部", verdict: "" as const, tag: "" },
+  { label: "待人工审核", verdict: "manual_required" as const, tag: "danger" },
+  { label: "通过", verdict: "pass" as const, tag: "success" },
+  { label: "不通过", verdict: "fail" as const, tag: "danger" },
+];
+
+function applyQuickFilter(v: Verdict | "") {
+  filters.value.verdict = v;
+  resetPage();
+  pushQuery();
+}
+
+const VERDICT_LABELS: Record<string, string> = {
+  pass: "通过",
+  fail: "不通过",
+  uncertain: "待定",
+  manual_required: "待人工审核",
 };
 </script>
 
@@ -99,18 +119,31 @@ const getVerdictType = (verdict: string) => {
   <div class="flex flex-col gap-5">
     <div>
       <h2 class="text-2xl font-bold text-zinc-900">检测结果列表</h2>
-      <p class="mt-2 text-sm text-zinc-500">支持按产品线、模型和结论筛选，用于承接分析中心钻取。</p>
+      <p class="mt-2 text-sm text-zinc-500">支持按产品线、模型和结论筛选。专家角色可在此进行人工复核裁定。</p>
+    </div>
+
+    <!-- 快捷筛选 -->
+    <div class="flex items-center gap-3 flex-wrap">
+      <el-button
+        v-for="qf in quickFilters"
+        :key="qf.verdict"
+        :type="filters.verdict === qf.verdict ? 'primary' : 'default'"
+        :plain="filters.verdict !== qf.verdict"
+        size="default"
+        @click="applyQuickFilter(qf.verdict)"
+      >
+        {{ qf.label }}
+      </el-button>
     </div>
 
     <div class="card-surface p-4">
       <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
         <el-form-item label="结论">
           <el-select v-model="filters.verdict" clearable class="!w-[160px]" size="small">
-            <el-option label="PASS" value="pass" />
-            <el-option label="FAIL" value="fail" />
-            <el-option label="UNCERTAIN" value="uncertain" />
-            <el-option label="MANUAL_REQUIRED" value="manual_required" />
-            <el-option label="UNCERTAIN" value="uncertain" />
+            <el-option label="通过" value="pass" />
+            <el-option label="不通过" value="fail" />
+            <el-option label="待定" value="uncertain" />
+            <el-option label="待人工审核" value="manual_required" />
           </el-select>
         </el-form-item>
         <el-form-item label="产品线">
@@ -137,7 +170,7 @@ const getVerdictType = (verdict: string) => {
         <el-table-column prop="llm_model" label="模型" min-width="180" show-overflow-tooltip />
         <el-table-column prop="verdict" label="结论" width="120">
           <template #default="scope">
-            <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{ scope.row.verdict.toUpperCase() }}</el-tag>
+            <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{ VERDICT_LABELS[scope.row.verdict] || scope.row.verdict }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="overall_score" label="分数" width="100">
