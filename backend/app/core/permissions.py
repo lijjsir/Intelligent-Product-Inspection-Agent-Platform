@@ -28,7 +28,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "stability": {ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR},
     "alert": {ROLE_PLATFORM_OPERATOR},
     "alert_rule": {ROLE_PLATFORM_OPERATOR},
-    "tool": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR},
+    "tool": {ROLE_ADMIN, ROLE_APP_DEVELOPER},
     "analytics": {ROLE_PLATFORM_OPERATOR},
     "audit": {ROLE_ADMIN},
     "model_config": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER},

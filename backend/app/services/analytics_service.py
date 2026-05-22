@@ -27,8 +27,15 @@ class AnalyticsService:
             end_date=end_date,
         )
         quality = QualityReportService.build_overview_quality_from_trace_items([] if error else traces)
-        for key in ("hallucination_rate", "hallucination_trend"):
-            if quality.get(key):
+        for key in (
+            "total_results",
+            "total_cost",
+            "pass_rate",
+            "hallucination_rate",
+            "hallucination_trend",
+            "pass_rate_trend",
+        ):
+            if quality.get(key) is not None:
                 overview[key] = quality[key]
         if quality.get("model_metrics"):
             overview["model_metrics"] = quality["model_metrics"]

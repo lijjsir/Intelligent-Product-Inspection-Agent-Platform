@@ -67,6 +67,7 @@ class ManagerPolicy:
             user_id=request.user_id,
             session_id=request.session_id,
             attachments=[item.model_dump() for item in request.attachments],
+            history_messages=list(ext.get("history_messages") or []),
             selected_rag_space=self._selected_rag_space(ext),
             rag_scope=dict(ext.get("rag_scope") or {}) or None,
             allowed_modes=allowed_modes,

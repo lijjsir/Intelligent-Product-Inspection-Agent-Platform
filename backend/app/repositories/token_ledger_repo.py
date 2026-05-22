@@ -18,12 +18,25 @@ class TokenLedgerRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_by_idempotency_key(self, idempotency_key: str) -> TokenUsageLedger | None:
+        stmt = select(TokenUsageLedger).where(TokenUsageLedger.idempotency_key == idempotency_key)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create(self, payload: dict) -> TokenUsageLedger:
         obj = TokenUsageLedger(**payload)
         self._session.add(obj)
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
         return obj
+
+    async def create_once(self, payload: dict) -> TokenUsageLedger:
+        key = payload.get("idempotency_key")
+        if key:
+            existing = await self.get_by_idempotency_key(str(key))
+            if existing is not None:
+                return existing
+        return await self.create(payload)
 
     async def list_filtered(
         self,

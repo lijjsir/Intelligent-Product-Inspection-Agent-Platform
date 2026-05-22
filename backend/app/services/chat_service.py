@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, AsyncIterator
 
 from fastapi import Header, Query
@@ -34,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 _ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
 _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
+
+
+@lru_cache(maxsize=1)
+def get_quality_agent_orchestrator() -> QualityAgentOrchestratorService:
+    return QualityAgentOrchestratorService()
 
 
 def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: asyncio.Task[None]) -> None:
@@ -80,7 +86,7 @@ class ChatService:
         self._org_id = org_id
         self._user_id = user_id
         self._current = current
-        self._orchestrator = QualityAgentOrchestratorService()
+        self._orchestrator = get_quality_agent_orchestrator()
 
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
@@ -222,6 +228,8 @@ class ChatService:
                 assistant_message_id=str(assistant_message.id),
                 request=payload.model_copy(update={"ext": ext_payload}),
                 workflow_run_id=workflow_run_id,
+                current_user_seq_no=int(user_message.seq_no or 0),
+                assistant_message_seq_no=int(assistant_message.seq_no or 0),
             )
         )
         _track_chat_workflow(workflow_run_id, str(assistant_message.id), workflow_task)
@@ -394,6 +402,8 @@ class ChatService:
         assistant_message_id: str,
         request: ChatMessageSendRequest,
         workflow_run_id: str,
+        current_user_seq_no: int,
+        assistant_message_seq_no: int,
     ) -> None:
         async def emit(event: dict[str, Any]) -> None:
             event.setdefault("ts", utcnow_iso())
@@ -411,6 +421,22 @@ class ChatService:
         try:
             ext_payload = dict(request.ext or {})
             ext_payload["emit"] = emit
+            ext_payload["current_user_seq_no"] = current_user_seq_no
+            ext_payload["assistant_message_seq_no"] = assistant_message_seq_no
+            ext_payload["idempotency_key"] = (
+                f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
+            )
+            # Load recent history (exclude current user message)
+            async with get_session() as hist_session:
+                hist_repo = ChatMessageRepository(hist_session)
+                hist_rows = await hist_repo.list_for_session(
+                    org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
+                )
+                ext_payload["history_messages"] = [
+                    {"role": m.role, "content": m.content}
+                    for m in hist_rows
+                    if int(m.seq_no or 0) < current_user_seq_no
+                ][-10:]
             await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),

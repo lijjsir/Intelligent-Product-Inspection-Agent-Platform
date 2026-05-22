@@ -27,6 +27,8 @@ describe("chat store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     sessionStorage.clear();
+    vi.clearAllMocks();
+    vi.useRealTimers();
     vi.stubGlobal("crypto", { randomUUID: () => "uuid-1" });
   });
 
@@ -118,5 +120,59 @@ describe("chat store", () => {
     expect(store.session?.id).toBe("session-1");
     expect(store.ragSpaces).toEqual([]);
     expect(store.ragSpacesError).toBe("RAG 空间尚未初始化，请先完成数据库迁移。");
+  });
+  it("merges fallback polling rows instead of replacing existing messages", async () => {
+    vi.useFakeTimers();
+    const { chatApi } = await import("@/api/chat.api");
+
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: { data: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" } },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.stream = vi.fn().mockRejectedValue(new Error("stream unavailable"));
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "hello",
+            payload: {},
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-1",
+        },
+      },
+    });
+    chatApi.listMessages = vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: "msg-assistant",
+            session_id: "session-1",
+            seq_no: 2,
+            role: "assistant",
+            message_type: "assistant_text",
+            content: "answer",
+            payload: { status: "completed" },
+            created_at: "",
+          },
+        ],
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("session");
+    await store.sendMessage({ message: "hello" });
+    await vi.advanceTimersByTimeAsync(1200);
+
+    expect(chatApi.listMessages).toHaveBeenCalledWith("session-1", 1, 500);
+    expect(store.messages.map((item) => item.id)).toEqual(["msg-user", "msg-assistant"]);
+    expect(store.messages[1].content).toBe("answer");
+    expect(store.messages[1].seq_no).toBe(2);
   });
 });

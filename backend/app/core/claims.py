@@ -91,21 +91,25 @@ def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
     return sorted(capabilities)
 
 
-def derive_workspaces(roles: list[str]) -> list[str]:
+def derive_workspaces(roles: list[str], plan_tier: str = PLAN_BASIC) -> list[str]:
     workspaces: list[str] = []
     if any(r in {ROLE_USER, ROLE_EXPERT} for r in roles):
         workspaces.append(WORKSPACE_APP)
     if any(r in {ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
         workspaces.append(WORKSPACE_OPS)
-    if ROLE_ADMIN in roles:
+    if ROLE_ADMIN in roles or (
+        ROLE_ALGORITHM_ENGINEER in roles and plan_tier == PLAN_ENTERPRISE
+    ):
         workspaces.append(WORKSPACE_GOVERNANCE)
     if not workspaces:
         workspaces.append(WORKSPACE_APP)
     return workspaces
 
 
-def derive_default_workspace(roles: list[str], workspaces: list[str]) -> str:
+def derive_default_workspace(roles: list[str], workspaces: list[str], plan_tier: str = PLAN_BASIC) -> str:
     if ROLE_ADMIN in roles:
+        return WORKSPACE_GOVERNANCE
+    if ROLE_ALGORITHM_ENGINEER in roles and plan_tier == PLAN_ENTERPRISE:
         return WORKSPACE_GOVERNANCE
     if ROLE_APP_DEVELOPER in roles:
         return WORKSPACE_OPS
@@ -119,12 +123,12 @@ def derive_default_workspace(roles: list[str], workspaces: list[str]) -> str:
 def build_auth_claims(primary_role: str, organization_plan: str | None = None) -> AuthClaims:
     roles = normalize_roles(role=primary_role)
     plan_tier = derive_plan_tier(organization_plan)
-    workspaces = derive_workspaces(roles)
+    workspaces = derive_workspaces(roles, plan_tier)
     return AuthClaims(
         role=primary_role,
         roles=roles,
         plan_tier=plan_tier,
         capabilities=derive_capabilities(plan_tier, roles),
         workspaces=workspaces,
-        default_workspace=derive_default_workspace(roles, workspaces),
+        default_workspace=derive_default_workspace(roles, workspaces, plan_tier),
     )

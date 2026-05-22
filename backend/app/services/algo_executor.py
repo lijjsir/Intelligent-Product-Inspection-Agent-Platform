@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,7 +43,7 @@ class LocalAlgoExecutor:
             "print(json.dumps({'resource_type': payload['resource_type'], 'resource_id': payload['resource_id'], 'status': 'ok', 'workdir': workdir}))"
         )
         proc = subprocess.run(
-            ["python3", "-c", script],
+            [sys.executable, "-c", script],
             input=json.dumps({"resource_type": resource_type, "resource_id": resource_id, "payload": payload}).encode("utf-8"),
             capture_output=True,
             check=True,

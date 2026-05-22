@@ -27,6 +27,7 @@ from app.repositories.task_repo import TaskRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.task_service import TaskService
+from app.services.chat_message_lifecycle_service import ChatMessageLifecycleService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,21 @@ class QualityAgentOrchestratorService:
 
         converted = convert(value)
         return None if converted is dropped else converted
+
+    @staticmethod
+    def _idempotency_key(request: NormalizedRequest, *parts: Any) -> str:
+        base = str(request.ext.get("idempotency_key") or "").strip()
+        if not base:
+            base = ":".join(
+                [
+                    str(request.org_id),
+                    str(request.session_id or ""),
+                    str(request.assistant_message_id or ""),
+                    str(request.workflow_run_id or request.request_id),
+                ]
+            )
+        suffix = ":".join(str(part) for part in parts if str(part))
+        return f"{base}:{suffix}" if suffix else base
 
     async def run_chat(self, payload: dict) -> dict:
         started_at = perf_counter()
@@ -210,34 +226,33 @@ class QualityAgentOrchestratorService:
                 )
 
         async with get_session() as session:
-            message_repo = ChatMessageRepository(session)
-            session_repo = ChatSessionRepository(session)
-            get_message = getattr(message_repo, "get", None)
-            current_message = (
-                await get_message(request.org_id, str(request.assistant_message_id))
-                if callable(get_message)
-                else None
+            lifecycle = ChatMessageLifecycleService(
+                session,
+                message_repository_cls=ChatMessageRepository,
+                session_repository_cls=ChatSessionRepository,
             )
-            current_payload = current_message.payload if current_message and isinstance(current_message.payload, dict) else {}
-            if current_payload.get("status") == "interrupted":
-                return False
-            await message_repo.update_assistant_message(
+            lifecycle_completed = await lifecycle.complete_turn(
                 org_id=request.org_id,
-                message_id=str(request.assistant_message_id),
+                user_id=str(request.user_id or ""),
+                session_id=str(request.session_id),
+                assistant_message_id=str(request.assistant_message_id),
                 content=str(output.answer or ""),
                 message_type=str(output.message_type or "assistant_text"),
                 payload=response_payload,
             )
-            await session_repo.touch(request.org_id, str(request.user_id or ""), str(request.session_id))
+            if not lifecycle_completed:
+                return False
 
             if output.route_decision:
                 rag_repo = RagAnalysisRepository(session, request.org_id)
-                for item in list(output.persistable_output.rag_queries or []):
+                for index, item in enumerate(list(output.persistable_output.rag_queries or [])):
                     metadata = dict(item.metadata or {})
                     metadata.setdefault("agent", output.route_decision.selected_agent)
                     metadata.setdefault("sub_route", output.route_decision.sub_route)
-                    await rag_repo.create_log(
+                    create_log = getattr(rag_repo, "create_log_once", rag_repo.create_log)
+                    await create_log(
                         {
+                            "idempotency_key": self._idempotency_key(request, "rag", index),
                             "task_id": None if not materialized else materialized["task_id"],
                             "session_id": str(request.session_id),
                             "user_id": str(request.user_id or ""),
@@ -269,18 +284,15 @@ class QualityAgentOrchestratorService:
         if output.route_decision:
             await self._record_route_decision_log(request, output)
 
-        if callable(emit):
-            await emit(
-                {
-                    "event": "message_final",
-                    "session_id": request.session_id,
-                    "message_id": request.assistant_message_id,
-                    "workflow_run_id": request.workflow_run_id,
-                    "content": str(output.answer or ""),
-                    "payload": response_payload,
-                    "quality": dict(output.quality or {}),
-                }
-            )
+        await ChatMessageLifecycleService.emit_final(
+            emit,
+            session_id=request.session_id,
+            assistant_message_id=request.assistant_message_id,
+            workflow_run_id=request.workflow_run_id,
+            content=str(output.answer or ""),
+            payload=response_payload,
+            quality=dict(output.quality or {}),
+        )
         return materialization_error is None
 
     async def _record_route_decision_log(
@@ -433,8 +445,6 @@ class QualityAgentOrchestratorService:
             alert_repo = AlertRepository(session)
             token_repo = TokenLedgerRepository(session)
             user_summary_repo = UserTokenUsageSummaryRepository(session)
-            token_repo = TokenLedgerRepository(session)
-            user_summary_repo = UserTokenUsageSummaryRepository(session)
             task_service = TaskService(session, request.org_id)
 
             reasoning_chain = dict(result_data.reasoning_chain or {})
@@ -583,8 +593,10 @@ class QualityAgentOrchestratorService:
 
             for item in persistable_output.alerts:
                 rule = available_rules.pop(0) if available_rules else None
-                await alert_repo.create(
+                create_alert = getattr(alert_repo, "create_once", alert_repo.create)
+                await create_alert(
                     {
+                        "idempotency_key": self._idempotency_key(request, "alert", item.title),
                         "id": str(uuid7()),
                         "org_id": request.org_id,
                         "rule_id": str(rule.id) if rule else None,
@@ -599,9 +611,16 @@ class QualityAgentOrchestratorService:
                 )
 
             if persist_usage:
-                for item in persistable_output.token_usage:
-                    ledger = await token_repo.create(
+                for index, item in enumerate(persistable_output.token_usage):
+                    create_ledger = getattr(token_repo, "create_once", token_repo.create)
+                    ledger_key = self._idempotency_key(request, "token", index, item.model_key)
+                    existing_ledger = None
+                    get_ledger = getattr(token_repo, "get_by_idempotency_key", None)
+                    if callable(get_ledger):
+                        existing_ledger = await get_ledger(ledger_key)
+                    ledger = existing_ledger or await create_ledger(
                         {
+                            "idempotency_key": ledger_key,
                             "id": str(uuid7()),
                             "org_id": request.org_id,
                             "user_id": str(request.user_id or "") or None,
@@ -617,7 +636,7 @@ class QualityAgentOrchestratorService:
                             "cost_amount": float(item.cost_amount or 0.0),
                         }
                     )
-                    if request.user_id:
+                    if request.user_id and existing_ledger is None:
                         await user_summary_repo.increment(
                             org_id=request.org_id,
                             user_id=str(request.user_id),
@@ -773,8 +792,10 @@ class QualityAgentOrchestratorService:
                     if await _legacy_rule_engine.is_in_cooldown(_rule, request.org_id):
                         continue
                     _triggered = True
-                    await alert_repo.create(
+                    create_alert = getattr(alert_repo, "create_once", alert_repo.create)
+                    await create_alert(
                         {
+                            "idempotency_key": self._idempotency_key(request, "legacy-alert", _rule.id),
                             "id": str(uuid7()),
                             "org_id": request.org_id,
                             "rule_id": str(_rule.id),
@@ -793,8 +814,10 @@ class QualityAgentOrchestratorService:
                     )
 
                 if not _triggered:
-                    await alert_repo.create(
+                    create_alert = getattr(alert_repo, "create_once", alert_repo.create)
+                    await create_alert(
                         {
+                            "idempotency_key": self._idempotency_key(request, "legacy-alert", "fallback"),
                             "id": str(uuid7()),
                             "org_id": request.org_id,
                             "rule_id": None,
@@ -814,8 +837,15 @@ class QualityAgentOrchestratorService:
 
             usage = self._legacy_usage(output)
             if usage["total_tokens"] > 0:
-                ledger = await token_repo.create(
+                create_ledger = getattr(token_repo, "create_once", token_repo.create)
+                ledger_key = self._idempotency_key(request, "legacy-token", usage["model_key"])
+                existing_ledger = None
+                get_ledger = getattr(token_repo, "get_by_idempotency_key", None)
+                if callable(get_ledger):
+                    existing_ledger = await get_ledger(ledger_key)
+                ledger = existing_ledger or await create_ledger(
                     {
+                        "idempotency_key": ledger_key,
                         "id": str(uuid7()),
                         "org_id": request.org_id,
                         "user_id": str(request.user_id or "") or None,
@@ -831,7 +861,7 @@ class QualityAgentOrchestratorService:
                         "cost_amount": float(usage["cost_amount"] or 0.0),
                     }
                 )
-                if request.user_id:
+                if request.user_id and existing_ledger is None:
                     await user_summary_repo.increment(
                         org_id=request.org_id,
                         user_id=str(request.user_id),

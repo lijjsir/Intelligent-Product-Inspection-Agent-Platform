@@ -8,6 +8,7 @@ from app.core.datetime import utcnow_iso
 from app.services.inspection_pipeline_service import run_inspection_pipeline
 from app.repositories.task_repo import TaskRepository
 from infra.database.session import get_session
+from infra.cache.memory_cache import _celery_worker_cache
 from worker.celery_app import celery_app
 from worker.tasks.inspection_task import run_inspection
 
@@ -23,7 +24,12 @@ def _inspect_celery_workers() -> bool:
 
 
 async def has_active_celery_worker() -> bool:
-    return await asyncio.to_thread(_inspect_celery_workers)
+    cached = _celery_worker_cache.get("worker_available")
+    if cached is not None:
+        return bool(cached)
+    result = await asyncio.to_thread(_inspect_celery_workers)
+    _celery_worker_cache.set("worker_available", bool(result), ttl_seconds=10)
+    return bool(result)
 
 
 async def launch_task_execution(task_id: str, org_id: str) -> dict[str, Any]:

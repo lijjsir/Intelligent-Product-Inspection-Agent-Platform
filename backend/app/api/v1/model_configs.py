@@ -113,6 +113,8 @@ async def check_all_models_health(
         if hs in status_count:
             status_count[hs] += 1
     await db.commit()
+    for org_id in {str(getattr(model, "org_id", "") or "") for model in models if getattr(model, "org_id", None)}:
+        ModelConfigService.invalidate_runtime_cache(org_id)
     return ResponseEnvelope(data=HealthCheckAllResult(
         checked=len(checked),
         healthy=status_count["healthy"],
@@ -135,4 +137,5 @@ async def check_single_model_health(
     repo = ModelConfigRepository(db)
     await repo.update_health(model, health_status=status, health_message=message)
     await db.commit()
+    ModelConfigService.invalidate_runtime_cache(current.org_id)
     return ResponseEnvelope(data=HealthCheckResult(health_status=status, health_message=message))

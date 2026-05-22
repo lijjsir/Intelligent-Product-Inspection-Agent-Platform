@@ -20,6 +20,7 @@ class ManagerState(BaseModel):
     session_id: str | None = None
 
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    history_messages: list[dict[str, Any]] = Field(default_factory=list)
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
 

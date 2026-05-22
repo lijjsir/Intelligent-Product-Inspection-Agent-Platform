@@ -7,6 +7,17 @@ from agent.router.manager_state import ManagerState
 
 
 class InspectionTaskExecutor:
+    def __init__(self) -> None:
+        self._graph = None
+
+    @property
+    def graph(self):
+        if self._graph is None:
+            from agent.subgraphs.inspection_task.graph import InspectionTaskGraph
+
+            self._graph = InspectionTaskGraph()
+        return self._graph
+
     async def execute(
         self,
         step: AgentPlanStep,
@@ -15,9 +26,7 @@ class InspectionTaskExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        from agent.subgraphs.inspection_task.graph import InspectionTaskGraph
-
-        output = await InspectionTaskGraph().run(
+        output = await self.graph.run(
             request,
             AgentRouteDecision(
                 selected_agent="inspection_task",
