@@ -1,15 +1,15 @@
 """add deployment command template to model configs
 
-Revision ID: 0050
-Revises: 0049
+Revision ID: 0055
+Revises: 0054
 Create Date: 2026-05-22 23:30:00.000000
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0050"
-down_revision = "0049"
+revision = "0055"
+down_revision = "0054"
 branch_labels = None
 depends_on = None
 
