@@ -87,7 +87,8 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            obj = await repo.create(self._org_id, self._user_id, title=title or "新会话")
+            default_title = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            obj = await repo.create(self._org_id, self._user_id, title=title or default_title)
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
 

@@ -389,7 +389,7 @@ export const useChatStore = defineStore("chat", () => {
     clearSavedSelectedRagSpace();
   }
 
-  async function createNewSession(title = "新会话") {
+  async function createNewSession(title?: string) {
     stopStreamForIdle();
     const { data } = await chatApi.createSession(title);
     session.value = data.data;

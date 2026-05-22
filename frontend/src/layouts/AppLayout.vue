@@ -217,7 +217,7 @@ function formatTime(ts?: string | null) {
 function sessionLabel(sessionId: string) {
   const found = chatStore.sessions.find((item) => item.id === sessionId);
   if (!found) return sessionId;
-  const title = found.title || `会话-${found.id.slice(-6)}`;
+  const title = found.title || "无";
   const ts = found.last_message_at || found.updated_at || found.created_at;
   return `${title} · ${formatTime(ts)}`;
 }
@@ -260,7 +260,7 @@ async function handleChatSessionChange(sessionId: string) {
 
 async function createChatSession() {
   try {
-    await chatStore.createNewSession("新会话");
+    await chatStore.createNewSession();
   } catch (error) {
     ElMessage.error("新建会话失败，请稍后重试。");
     console.error(error);
