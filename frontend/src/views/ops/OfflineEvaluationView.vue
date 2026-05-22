@@ -2,6 +2,7 @@
 import { onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
+import { useDeploymentStore } from "@/stores/deployment.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
 import { useExperimentStore } from "@/stores/experiment.store";
 import { useFineTuneStore } from "@/stores/fineTune.store";
@@ -12,6 +13,7 @@ const store = useOfflineEvaluationStore();
 const evalStore = useEvalDatasetStore();
 const trainingStore = useTrainingJobStore();
 const fineTuneStore = useFineTuneStore();
+const deploymentStore = useDeploymentStore();
 const experimentStore = useExperimentStore();
 const refs = reactive({
   eval_set_id: "",
@@ -40,15 +42,19 @@ onMounted(async () => {
     evalStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     trainingStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     fineTuneStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
+    deploymentStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
     experimentStore.fetchList({ page: 1, size: 100, keyword: "", status: "" }),
   ]);
   refs.eval_set_id = evalStore.items[0]?.id || "";
-  refs.target_id = trainingStore.items[0]?.id || "";
+  refs.target_id = trainingStore.items.find((item) => item.status === "completed")?.id
+    || fineTuneStore.items.find((item) => item.status === "completed")?.id
+    || deploymentStore.items.find((item) => item.status === "completed")?.id
+    || "";
 });
 </script>
 
 <template>
-  <div v-if="!evalStore.items.length || (!trainingStore.items.length && !fineTuneStore.items.length)" class="flex flex-col gap-5">
+  <div v-if="!evalStore.items.length || (!trainingStore.items.some((item) => item.status === 'completed') && !fineTuneStore.items.some((item) => item.status === 'completed') && !deploymentStore.items.some((item) => item.status === 'completed'))" class="flex flex-col gap-5">
     <section class="hero">
       <div>
         <h2>离线评测</h2>
@@ -78,12 +84,13 @@ onMounted(async () => {
         <el-select v-model="refs.target_type">
           <el-option label="training_job" value="training_job" />
           <el-option label="fine_tune" value="fine_tune" />
+          <el-option label="deployment" value="deployment" />
         </el-select>
       </el-form-item>
       <el-form-item label="目标资源">
         <el-select v-model="refs.target_id" placeholder="选择目标">
           <el-option
-            v-for="item in refs.target_type === 'training_job' ? trainingStore.items : fineTuneStore.items"
+            v-for="item in (refs.target_type === 'training_job' ? trainingStore.items : refs.target_type === 'fine_tune' ? fineTuneStore.items : deploymentStore.items).filter((row) => row.status === 'completed')"
             :key="item.id"
             :label="item.name"
             :value="item.id"

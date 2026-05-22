@@ -394,7 +394,30 @@ class DatasetService(TenantAwareService):
             }
         )
         await self._commit()
-        asyncio.create_task(self._run_data_import(dataset_id=dataset_id, job_id=job.id, upload_session_id=upload.id, bucket=bucket, object_key=object_key))
+        if await self._resolve_execution_mode() == "celery":
+            from worker.tasks.dataset_pipeline_task import run_dataset_import
+
+            run_dataset_import.delay(
+                {
+                    "dataset_id": dataset_id,
+                    "job_id": job.id,
+                    "upload_session_id": upload.id,
+                    "bucket": bucket,
+                    "object_key": object_key,
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                }
+            )
+        else:
+            asyncio.create_task(
+                self._run_data_import(
+                    dataset_id=dataset_id,
+                    job_id=job.id,
+                    upload_session_id=upload.id,
+                    bucket=bucket,
+                    object_key=object_key,
+                )
+            )
         return DatasetUploadCompleteResponse(
             session_id=upload.id,
             job=AsyncJobResponse.model_validate(job),
@@ -579,6 +602,12 @@ class DatasetService(TenantAwareService):
             raise NotFoundError("dataset not found")
         return dataset
 
+    async def _resolve_execution_mode(self) -> str:
+        result = has_active_celery_worker()
+        if hasattr(result, "__await__"):
+            result = await result
+        return "celery" if result else "local_background"
+
     @staticmethod
     def _ensure_dataset_supports(dataset: Dataset, sample_type: str) -> None:
         modality = str(dataset.modality or "image_text")
@@ -617,3 +646,25 @@ class DatasetService(TenantAwareService):
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
+
+
+async def run_dataset_import_pipeline(
+    *,
+    dataset_id: str,
+    job_id: str,
+    upload_session_id: str,
+    bucket: str,
+    object_key: str,
+    org_id: str,
+    user_id: str,
+) -> dict[str, str]:
+    async with get_session() as session:
+        service = DatasetService(session, org_id, user_id)
+        await service._run_data_import(
+            dataset_id=dataset_id,
+            job_id=job_id,
+            upload_session_id=upload_session_id,
+            bucket=bucket,
+            object_key=object_key,
+        )
+    return {"status": "ok"}

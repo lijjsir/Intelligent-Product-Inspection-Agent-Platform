@@ -31,6 +31,7 @@ import type {
   OfflineEvaluation,
   OfflineEvaluationCreateRequest,
   OfflineEvaluationListResponse,
+  OfflineEvaluationUpdateRequest,
   OnlineValidation,
   OnlineValidationCreateRequest,
   OnlineValidationListResponse,
@@ -207,7 +208,7 @@ export const algoWorkspaceApi = {
     return http.post<OfflineEvaluation>("/v1/offline-evaluations", payload);
   },
 
-  updateOfflineEvaluation(id: string, payload: Record<string, unknown>) {
+  updateOfflineEvaluation(id: string, payload: OfflineEvaluationUpdateRequest) {
     return http.patch<OfflineEvaluation>(`/v1/offline-evaluations/${id}`, payload);
   },
 

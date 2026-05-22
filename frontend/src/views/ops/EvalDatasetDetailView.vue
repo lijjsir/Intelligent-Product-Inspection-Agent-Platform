@@ -54,7 +54,7 @@ async function loadSourceSamples() {
 }
 
 function handleBack() {
-  router.push({ path: "/ops/data/import", query: { tab: "eval-sets" } });
+  router.push("/ops/data/eval-sets");
 }
 
 function previewSample(row: any) {

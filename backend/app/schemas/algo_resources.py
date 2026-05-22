@@ -142,6 +142,8 @@ class DatasetAugmentationProposalResponse(AlgoResourceResponse):
     source_sample_id: str | None = None
     augmentation_method: str | None = None
     augmentation_params: dict[str, Any] | None = None
+    created_sample_id: str | None = None
+    created_sample_ids: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -219,6 +221,21 @@ class ResourceModelRef(BaseModel):
     display_name: str
     model_key: str
     model_type: str
+
+
+class ExperimentRelatedResourceSummary(BaseModel):
+    id: str
+    name: str
+    status: ResourceStatus
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime | None = None
+
+
+class ExperimentRelatedResources(BaseModel):
+    training_jobs: list[ExperimentRelatedResourceSummary] = Field(default_factory=list)
+    fine_tunes: list[ExperimentRelatedResourceSummary] = Field(default_factory=list)
+    offline_evaluations: list[ExperimentRelatedResourceSummary] = Field(default_factory=list)
+    deployments: list[ExperimentRelatedResourceSummary] = Field(default_factory=list)
 
 
 class TrainingJobCreateRequest(AlgoResourceBase):
@@ -301,7 +318,7 @@ class ExperimentUpdateRequest(AlgoResourceUpdateRequest):
 
 
 class ExperimentResponse(AlgoResourceResponse):
-    pass
+    related_resources: ExperimentRelatedResources = Field(default_factory=ExperimentRelatedResources)
 
 
 class ModelDeploymentCreateRequest(AlgoResourceBase):

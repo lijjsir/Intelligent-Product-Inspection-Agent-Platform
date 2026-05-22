@@ -77,7 +77,7 @@ function populateForm(item: {
     <template #form-extra>
       <el-form-item label="训练任务">
         <el-select v-model="refs.training_job_id" placeholder="选择训练任务">
-          <el-option v-for="item in trainingStore.items" :key="item.id" :label="item.name" :value="item.id" />
+          <el-option v-for="item in trainingStore.items.filter((row) => row.status === 'completed')" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="基础模型">
