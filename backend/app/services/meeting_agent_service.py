@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid as _uuid
 from datetime import datetime
 from typing import Any
 
@@ -11,6 +12,14 @@ from app.services.stream_service import meeting_stream_broker
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
+
+
+def _is_valid_uuid(value: str) -> bool:
+    try:
+        _uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 # Track last agent message time per (room_id, agent_def_id) for cooldown
 _last_agent_message: dict[tuple[str, str], datetime] = {}
@@ -42,6 +51,9 @@ class MeetingAgentService:
 
         try:
             # Phase 1: read context (short-lived session)
+            if not _is_valid_uuid(agent_def_id):
+                logger.warning("invalid agent_def_id (not a UUID): %s", agent_def_id)
+                return
             async with get_session() as session:
                 repo = MeetingRepository(session)
                 agent_def = await repo.get_agent_definition(org_id, agent_def_id)
@@ -168,6 +180,8 @@ class MeetingAgentService:
             ]
 
             for ra in room_agents:
+                if not _is_valid_uuid(ra.agent_id):
+                    continue  # old topology subgraph_key, not a definition-based agent
                 agent_def = await repo.get_agent_definition(org_id, ra.agent_id)
                 if not agent_def or not agent_def.is_active:
                     continue
