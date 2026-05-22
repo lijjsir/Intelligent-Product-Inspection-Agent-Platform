@@ -41,11 +41,15 @@ class MeetingAgentService:
             await meeting_stream_broker.publish(room_id, event)
 
         try:
+            # Phase 1: read context (short-lived session)
             async with get_session() as session:
                 repo = MeetingRepository(session)
                 agent_def = await repo.get_agent_definition(org_id, agent_def_id)
                 if not agent_def:
                     logger.warning("agent definition not found: %s", agent_def_id)
+                    return
+                if not agent_def.is_active:
+                    logger.warning("agent definition is inactive: %s", agent_def_id)
                     return
 
                 context_msgs = await repo.list_messages(
@@ -60,25 +64,29 @@ class MeetingAgentService:
                     for msg in context_msgs
                 ]
 
-                adapter = self._factory.get_for_agent(agent_def)
+            adapter = self._factory.get_for_agent(agent_def)
 
-                await emit({
-                    "event": "agent_run_started",
-                    "room_id": room_id,
-                    "message_id": agent_message_id,
-                    "agent_id": agent_def_id,
-                    "agent_name": agent_name,
-                    "workflow_run_id": workflow_run_id,
-                })
+            await emit({
+                "event": "agent_run_started",
+                "room_id": room_id,
+                "message_id": agent_message_id,
+                "agent_id": agent_def_id,
+                "agent_name": agent_name,
+                "workflow_run_id": workflow_run_id,
+            })
 
-                full_content = await adapter.invoke(
-                    room_id=room_id,
-                    agent_def=agent_def,
-                    query=query,
-                    context_messages=context_dicts,
-                    emit=emit,
-                )
+            # Phase 2: LLM call (no session held)
+            full_content = await adapter.invoke(
+                room_id=room_id,
+                agent_def=agent_def,
+                query=query,
+                context_messages=context_dicts,
+                emit=emit,
+            )
 
+            # Phase 3: persist response (short-lived session)
+            async with get_session() as session:
+                repo = MeetingRepository(session)
                 await repo.create_message(
                     org_id=org_id,
                     room_id=room_id,
