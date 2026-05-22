@@ -15,7 +15,6 @@ from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from agent.rag.retriever import Retriever
 from agent.subgraphs.quality_chat.state import ChatState
-from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
 from app.core.config import settings
 from app.repositories.chat_repo import ChatMessageRepository
@@ -29,7 +28,6 @@ from app.services.chat_trust_scoring_service import (
 )
 from app.services.runtime_profile_service import build_runtime_prompt_section, resolve_runtime_profile
 from app.services.model_config_service import ModelConfigService
-from app.services.task_service import TaskService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -461,6 +459,8 @@ async def task_extractor(state: ChatState) -> ChatState:
 
 
 async def knowledge(state: ChatState) -> ChatState:
+    if state.get("retrieved_chunks"):
+        return state
     from agent.rag.rag_policy import RagPolicy
     rag_policy = RagPolicy()
     sub_route = state.get("sub_route", state.get("intent", "general_chat"))
@@ -682,70 +682,18 @@ async def task_executor(state: ChatState) -> ChatState:
     if state.get("action_state") != "task_create_requested":
         return state
     draft = dict(state.get("task_draft") or {})
-    metadata = {**dict(draft.get("metadata") or {}), "source": "chat", "chat_session_id": str(state["session_id"]), "chat_request_id": str(state.get("request_id") or "")}
-    try:
-        async with get_session() as session:
-            service = TaskService(session, str(state["org_id"]))
-            task = await service.create_task(
-                created_by=str(state["user_id"]),
-                product_id=str(draft.get("product_id") or ""),
-                spec_code=str(draft.get("spec_code") or ""),
-                image_urls=list(draft.get("image_urls") or []),
-                priority=int(draft.get("priority") or 5),
-                metadata=metadata,
-            )
-            await session.commit()
-        from app.services.task_execution_service import launch_task_execution
-        launch = await launch_task_execution(task_id=str(task.id), org_id=str(state["org_id"]))
-        state["created_task"] = {
-            "id": str(task.id),
-            "status": "running",
-            "product_id": str(task.product_id),
-            "spec_code": str(task.spec_code),
-            "priority": int(task.priority),
-            "image_count": len(task.image_urls or []),
-            "execution": launch,
-        }
-        state["action_state"] = "task_started"
-        state["pending_action"] = None
-        state["awaiting_confirmation"] = False
-        state["missing_slots"] = []
-        state["reasoning"] = {
-            "answer": "检测任务已创建并启动执行。\n\n"
-            f"任务 ID：{state['created_task']['id']}\n"
-            f"产品编号：{state['created_task']['product_id']}\n"
-            f"检测标准：{state['created_task']['spec_code']}\n"
-            f"执行方式：{launch['mode']}\n"
-            f"图片数量：{state['created_task']['image_count']}",
-            "summary": "任务已创建并启动",
-            "citations": [],
-        }
-        return state
-    except ValidationError as exc:
-        message = str(exc)
-        if "标准" in message and "spec_code" not in state["missing_slots"]:
-            state["missing_slots"] = ["spec_code", *[item for item in state["missing_slots"] if item != "spec_code"]]
-        state["action_state"] = "awaiting_task_details"
-        state["pending_action"] = "create_task"
-        state["awaiting_confirmation"] = False
-        state["reasoning"] = {
-            "answer": "任务还没有创建成功，因为任务信息校验未通过。\n\n"
-            f"原因：{message}\n\n当前草稿：\n{_format_task_draft(draft)}\n\n请直接补充或修正后再发送给我，我会重新整理。",
-            "summary": "任务信息校验未通过",
-            "citations": [],
-        }
-        return state
-    except Exception as exc:
-        state["action_state"] = "task_create_failed"
-        state["pending_action"] = "create_task"
-        state["awaiting_confirmation"] = False
-        state["reasoning"] = {
-            "answer": "任务创建或启动时出现了系统异常，暂时还没有成功提交。你稍后可以再次回复“确认”，或者直接修改任务信息后重新提交。",
-            "summary": "任务创建失败",
-            "citations": [],
-            "error": str(exc),
-        }
-        return state
+    state["created_task"] = None
+    state["action_state"] = "blocked"
+    state["pending_action"] = "create_task"
+    state["awaiting_confirmation"] = False
+    state["reasoning"] = {
+        "answer": "聊天页面不能创建或执行正式质量检测任务。\n\n"
+        f"当前草稿：\n{_format_task_draft(draft)}\n\n"
+        "请前往质量检测任务页面确认并提交，正式任务只会在那里创建、执行和落库。",
+        "summary": "聊天页已阻止正式任务创建",
+        "citations": [],
+    }
+    return state
 
 
 def _message_type_for_state(state: ChatState) -> str:

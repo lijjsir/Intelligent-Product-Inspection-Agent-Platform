@@ -38,6 +38,10 @@ class ResponseBuilder:
         prompt_version: str = "",
         workflow_version: str = "quality_chat_v2",
         selected_rag_space: dict[str, Any] | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
+        route_trace: dict[str, Any] | None = None,
+        capabilities_used: list[str] | None = None,
+        satisfied: bool | None = None,
     ) -> dict[str, Any]:
         ui_schema = UI_SCHEMA_MAP.get((agent, sub_route), "chat_text_v1")
 
@@ -68,6 +72,10 @@ class ResponseBuilder:
             "workflow_version": workflow_version,
             "prompt_version": prompt_version,
             "selected_rag_space": selected_rag_space,
+            "artifacts": list(artifacts or []),
+            "route_trace": route_trace,
+            "capabilities_used": list(capabilities_used or []),
+            "satisfied": satisfied,
             "status": "completed",
             "error": None,
         }

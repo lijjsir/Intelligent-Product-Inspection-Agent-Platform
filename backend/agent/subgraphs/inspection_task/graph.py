@@ -49,9 +49,9 @@ from agent.prompts.prompt_builder import PromptBuilder
 from agent.rag.rag_policy import RagPolicy
 from agent.tools.file_parsers import parse_file_content
 from app.services.runtime_profile_service import resolve_runtime_profile
-from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.model_config_service import ModelConfigService
+from app.services.object_storage.resolver import read_attachment_bytes
 from app.services.rag_retrieval_service import RagRetrievalService
 from infra.database.session import get_session
 
@@ -245,7 +245,7 @@ class InspectionTaskGraph:
     """
 
     def __init__(self) -> None:
-        self._storage = FileStorageService()
+        pass
 
     async def run(self, request: NormalizedRequest, route_decision: AgentRouteDecision) -> AgentOutput:
         if route_decision.sub_route == "quality_qa":
@@ -550,7 +550,9 @@ class InspectionTaskGraph:
         for attachment in request.attachments:
             if not attachment.url or attachment.kind == "image":
                 continue
-            payload = self._storage.file_bytes_from_url(attachment.url)
+            if not attachment.bucket or not attachment.object_key:
+                continue
+            payload = read_attachment_bytes(attachment.model_dump())
             if payload is None:
                 continue
             content, _ = payload

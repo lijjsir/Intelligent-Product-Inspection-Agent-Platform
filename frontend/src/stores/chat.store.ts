@@ -474,6 +474,9 @@ export const useChatStore = defineStore("chat", () => {
     const selected = getSelectedRagSpaceSnapshot();
     const ext: Record<string, unknown> = {
       ...(payload.ext || {}),
+      surface: ((payload.ext as Record<string, unknown>)?.surface as string) ?? "chat",
+      allowed_modes: (payload.ext as Record<string, unknown>)?.allowed_modes ?? ["answer", "report"],
+      forbidden_modes: (payload.ext as Record<string, unknown>)?.forbidden_modes ?? ["action"],
       ui_mode: ((payload.ext as Record<string, unknown>)?.ui_mode as string) ?? "auto",
       route_hints: (payload.ext as Record<string, unknown>)?.route_hints ?? undefined,
       attachments: [...pendingAttachments.value],

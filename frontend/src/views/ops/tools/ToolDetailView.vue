@@ -377,6 +377,7 @@ const versionForm = reactive({
 const bindingForm = reactive<BindingCreateRequest>({
   agent_id: "",
   tool_id: "",
+  tool_version_id: "",
   auto_call_enabled: true,
   approval_required: false,
 });

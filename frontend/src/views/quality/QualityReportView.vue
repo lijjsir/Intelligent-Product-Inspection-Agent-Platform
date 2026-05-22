@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useQualityStore } from "@/stores/quality.store";
 import AnalyticsTabNav from "@/components/business/analytics/AnalyticsTabNav.vue";
 
 const router = useRouter();
 const store = useQualityStore();
+const activeTab = ref<"overview" | "quality" | "tracing">("quality");
 
 onMounted(() => {
   store.fetchReport();
@@ -26,7 +27,7 @@ function goToLangfuseTraces() {
       <el-button type="primary" @click="goToLangfuseTraces">跳转 Langfuse Trace</el-button>
     </div>
 
-    <AnalyticsTabNav />
+    <AnalyticsTabNav :active-tab="activeTab" @change="activeTab = $event" />
 
     <div class="flex gap-4" v-if="store.report">
       <div class="flex-1"><el-card shadow="never"><div class="metric-title">总结果数</div><div class="metric-value">{{ store.report.total_results }}</div></el-card></div>

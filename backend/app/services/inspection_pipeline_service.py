@@ -20,7 +20,6 @@ from app.repositories.task_repo import TaskRepository
 from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
-from app.services.file_storage_service import FileStorageService
 from app.services.model_config_service import ModelConfigService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.stream_service import chat_stream_broker, stream_broker
@@ -28,17 +27,12 @@ from infra.database.session import get_session
 
 
 def _normalize_image_urls_for_runtime(image_urls: list[str] | None) -> list[str]:
-    storage = FileStorageService()
     normalized: list[str] = []
     for raw in image_urls or []:
         url = str(raw or "").strip()
         if not url:
             continue
-        if url.startswith(("http://", "https://", "data:")):
-            normalized.append(url)
-            continue
-        data_url = storage.to_data_url(url)
-        normalized.append(data_url or url)
+        normalized.append(url)
     return normalized
 
 

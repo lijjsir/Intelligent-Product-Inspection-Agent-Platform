@@ -8,7 +8,7 @@ import { modelConfigApi } from "@/api/model_config.api";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 import type { ModelConfig } from "@/types/governance.types";
 
-use([CanvasRenderer, BarChart, GridComponent, TooltipComponent]);
+use([CanvasRenderer, BarChart, GridComponent, TooltipComponent] as any);
 
 const analyticsStore = useAnalyticsStore();
 const loading = ref(false);

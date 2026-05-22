@@ -43,7 +43,7 @@ const graphKeyword = ref("");
 const graphEntityType = ref("");
 const alignmentMinScore = ref<number | null>(null);
 const alignmentOnlyConfirmed = ref(false);
-const augmentationHistory = ref<Array<Record<string, unknown>>>([]);
+const augmentationHistory = ref<any[]>([]);
 
 const kgForm = reactive({ name: "", entity_type: "Defect", description: "" });
 const kgRelationForm = reactive({ source_entity_id: "", target_entity_id: "", relation_type: "RELATED_TO" });

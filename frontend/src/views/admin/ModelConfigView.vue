@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useModelConfigStore } from "@/stores/model_config.store";
+import type { ModelConfigPayload, ModelType } from "@/types/governance.types";
 
 const store = useModelConfigStore();
 const drawerOpen = ref(false);
@@ -80,10 +81,12 @@ const apiKeyHint = computed(() => {
 });
 
 async function submit() {
-  const payload: Record<string, unknown> = {
+  const payload: ModelConfigPayload = {
+    provider: form.provider,
+    model_key: form.model_key,
     display_name: form.display_name,
     endpoint: form.endpoint,
-    model_type: form.model_type,
+    model_type: form.model_type as ModelType,
     priority: form.priority,
     rpm_limit: form.rpm_limit,
     input_price_per_million: form.input_price_per_million,
@@ -97,8 +100,6 @@ async function submit() {
     await store.updateOne(editingId.value, payload);
     ElMessage.success("模型配置已更新");
   } else {
-    payload.provider = form.provider;
-    payload.model_key = form.model_key;
     payload.api_key = form.api_key || undefined;
     const created = await store.createOne(payload);
     ElMessage.success("模型配置已创建");
