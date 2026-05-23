@@ -55,6 +55,7 @@ from app.services.inspection_standard_service import InspectionStandardService
 from app.services.model_config_service import ModelConfigService
 from app.services.object_storage.resolver import read_attachment_bytes
 from app.services.rag_retrieval_service import RagRetrievalService
+from app.services.system_rag_service import resolve_and_search_system_rag
 from infra.database.session import get_session
 
 # ── Helper functions (migrated from quality_judgement/graph.py) ──────────────
@@ -219,11 +220,20 @@ def _build_rag_summary(*, rag_space_id: str | None, rag_space_name: str | None,
                        rag_hits: list[dict[str, Any]], source_graph: str,
                        citation_coverage: float) -> dict[str, Any]:
     top_sources = []
+    rag_space_ids = []
+    rag_space_names = []
     for item in rag_hits:
         source = str(item.get("source") or "").strip()
         if source and source not in top_sources:
             top_sources.append(source)
+        space_id = str(item.get("rag_space_id") or "").strip()
+        space_name = str(item.get("rag_space_name") or "").strip()
+        if space_id and space_id not in rag_space_ids:
+            rag_space_ids.append(space_id)
+        if space_name and space_name not in rag_space_names:
+            rag_space_names.append(space_name)
     return {"rag_space_id": rag_space_id, "rag_space_name": rag_space_name,
+            "rag_space_ids": rag_space_ids, "rag_space_names": rag_space_names,
             "hit_count": len(rag_hits), "citation_coverage": round(citation_coverage, 4),
             "top_sources": top_sources[:5], "source_graph": source_graph}
 
@@ -313,10 +323,15 @@ class InspectionTaskGraph:
         if policy_decision.should_retrieve:
             retrieval_query = f"{request.query} {context.get('product_id') or ''} {context.get('spec_code') or ''}"
             async with get_session() as session:
-                rag_service = RagRetrievalService(session, org_id=request.org_id, user_id=request.user_id)
-                rag_result = await rag_service.search(
-                    rag_space_id=policy_decision.rag_space_id,
+                rag_result = await resolve_and_search_system_rag(
+                    session=session,
+                    org_id=request.org_id,
+                    user_id=request.user_id,
                     query=retrieval_query,
+                    product_family=context.get("product_family"),
+                    product_id=context.get("product_id"),
+                    spec_code=context.get("spec_code"),
+                    user_rag_space_id=policy_decision.rag_space_id,
                     top_k=policy_decision.top_k,
                     scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
                 )
@@ -328,6 +343,12 @@ class InspectionTaskGraph:
             rag_summary = {
                 "rag_space_id": rag_result.get("rag_space_id"),
                 "rag_space_name": rag_result.get("rag_space_name"),
+                "rag_space_ids": list(rag_result.get("rag_space_ids") or []),
+                "rag_space_names": list(rag_result.get("rag_space_names") or []),
+                "system_rag_space_ids": list(rag_result.get("system_rag_space_ids") or []),
+                "system_rag_space_names": list(rag_result.get("system_rag_space_names") or []),
+                "standard_binding_name": rag_result.get("standard_binding_name"),
+                "merged_rag_source_count": int(rag_result.get("merged_rag_source_count") or 0),
                 "hit_count": len(rag_hits),
                 "top_score": float(rag_hits[0].get("score") or 0.0) if rag_hits else 0.0,
                 "citation_coverage": 1.0 if rag_hits else 0.0,
@@ -655,10 +676,15 @@ class InspectionTaskGraph:
         )
         retrieval_top_k = int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4
         async with get_session() as session:
-            rag_retrieval_service = RagRetrievalService(session, org_id=request.org_id, user_id=request.user_id)
-            rag_result = await rag_retrieval_service.search(
-                rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
+            rag_result = await resolve_and_search_system_rag(
+                session=session,
+                org_id=request.org_id,
+                user_id=request.user_id,
                 query=retrieval_query,
+                product_family=product_family,
+                product_id=product_id,
+                spec_code=spec_code,
+                user_rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
                 top_k=retrieval_top_k,
                 scope_node_ids=list(request.ext.get("selected_rag_scope_node_ids") or []),
             )
@@ -678,6 +704,9 @@ class InspectionTaskGraph:
             "knowledge_router": {
                 "selected_rag_space_id": request.ext.get("selected_rag_space_id"),
                 "selected_rag_space_name": rag_result.get("rag_space_name"),
+                "system_rag_space_ids": list(rag_result.get("system_rag_space_ids") or []),
+                "system_rag_space_names": list(rag_result.get("system_rag_space_names") or []),
+                "standard_binding_name": rag_result.get("standard_binding_name"),
                 "query": retrieval_query, "hit_count": int(rag_result.get("hit_count") or 0),
                 "top_hits": list(rag_result.get("hits") or []),
                 "target_config": knowledge_target.summary() if knowledge_target else None,
@@ -736,6 +765,10 @@ class InspectionTaskGraph:
             rag_hits=rag_hits, source_graph="inspection_task",
             citation_coverage=float(ai_gate.get("evidence_score") or 0.0),
         )
+        rag_summary["system_rag_space_ids"] = list(rag_result.get("system_rag_space_ids") or [])
+        rag_summary["system_rag_space_names"] = list(rag_result.get("system_rag_space_names") or [])
+        rag_summary["standard_binding_name"] = rag_result.get("standard_binding_name")
+        rag_summary["merged_rag_source_count"] = int(rag_result.get("merged_rag_source_count") or 0)
         result_card = _build_result_card(
             product_id=product_id, product_family=product_family, product_name=product_name,
             spec_code=spec_code, verdict=verdict, overall_score=overall_score, risk_level=risk_level,
@@ -765,7 +798,7 @@ class InspectionTaskGraph:
                 f"RAG 已从 `{rag_summary['rag_space_name'] or rag_summary['rag_space_id']}` "
                 f"匹配到 {len(rag_hits)} 条证据片段。"
             )
-        elif request.ext.get("selected_rag_space_id"):
+        elif request.ext.get("selected_rag_space_id") or rag_result.get("system_rag_space_ids"):
             answer_lines.append("RAG 检索未从当前选定知识库中命中有效证据。")
         if expectation_check:
             answer_lines.append(

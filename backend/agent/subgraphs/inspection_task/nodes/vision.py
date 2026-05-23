@@ -90,6 +90,15 @@ async def run_vision(state: InspectionState) -> InspectionState:
                     observation_metadata={"stage": "vision", "image_index": img_idx, "image_count": 1},
                 )
                 img_defects = extract_defects(data)
+                if not img_defects and not _has_structured_defect_payload(data):
+                    state.setdefault("runtime_errors", []).append(
+                        {
+                            "stage": "vision",
+                            "image_index": img_idx,
+                            "model_id": state.get("model_id"),
+                            "message": "missing structured defects payload from vision model",
+                        }
+                    )
                 if isinstance(data, dict) and isinstance(data.get("image_summary"), str):
                     vision_summaries.append(f"[图{img_idx + 1}] {data.get('image_summary')}")
                 if isinstance(data, dict):

@@ -61,6 +61,7 @@ from app.schemas.agent_ops import (
     RouteAgentDescriptor,
     RouteRuleDescriptor,
     RouteSignalInfo,
+    ManagerIntentDescriptor,
     RouteSimulateRequest,
     RouteSimulateResponse,
     RouteEventItem,
@@ -362,6 +363,8 @@ class AgentOpsService:
         await self._log_audit("prompt_version", id, "delete")
 
     async def get_routing_strategy(self) -> RoutingStrategyOverviewResponse:
+        from agent.router.route_policy import AgentRoutePolicy
+
         all_topology = get_topology("all", include_root=True)
         root_node_ids = {
             node["id"]
@@ -383,26 +386,25 @@ class AgentOpsService:
         if route_mode not in {"legacy_only", "canary_non_pdf", "router_enabled"}:
             route_mode = "router_enabled"
 
+        engine_rules = AgentRoutePolicy.get_rules()
+
+        # Subgraphs: iterate all registered subgraphs, derive scenarios from engine rules
         subgraph_meta = {
             item["subgraph_key"]: item
             for item in get_registered_subgraphs()
         }
         subgraphs: list[RoutingSubgraphDescriptor] = []
-        scenario_map = {
-            "quality_judgement": [
-                "用户消息中出现创建任务、提交任务、task 等任务意图关键词",
-                "本轮请求携带图片附件，需要走旧任务流并自动回填任务表单图片",
-                "用户发送纯文本问答，不涉及创建任务",
-                "用户上传 txt、docx、xlsx、csv、json 等非图片文件，需要做结构化解析与质检",
-            ],
-        }
-        for key in ("quality_judgement",):
+        for key, meta in subgraph_meta.items():
             topology = get_topology(key, include_root=False)
-            meta = subgraph_meta.get(key, {})
             entry_node = next(
                 (edge["target"] for edge in topology["edges"] if edge["source"] == key),
                 key,
             )
+            scenarios = [
+                f"[P{r['priority']}] {r['name']}: {r['condition_summary']}"
+                for r in engine_rules
+                if r["target_agent"] == key
+            ]
             subgraphs.append(
                 RoutingSubgraphDescriptor(
                     subgraph_key=key,
@@ -411,103 +413,78 @@ class AgentOpsService:
                     entry_node=entry_node,
                     nodes=topology["nodes"],
                     edges=topology["edges"],
-                    typical_scenarios=scenario_map.get(key, []),
+                    typical_scenarios=scenarios,
                 )
             )
 
+        # Signals: from engine introspection
         signals = [
             RoutingSignalDescriptor(
-                key="has_task_keyword",
-                label="任务意图关键词",
-                description="从用户文本中识别是否包含创建任务、提交任务、task 等任务流关键词。",
-                source_stage="route_signal_builder",
-            ),
-            RoutingSignalDescriptor(
-                key="has_images",
-                label="图片附件",
-                description="请求中存在任意图片附件时，优先进入 legacy 视觉与任务桥接流程。",
-                source_stage="route_signal_builder",
-            ),
-            RoutingSignalDescriptor(
-                key="has_file_attachments",
-                label="文件附件",
-                description="存在非图片文件时，结合 request_kind 决定是否进入 LLM-native 文件质检流程。",
-                source_stage="route_signal_builder",
-            ),
-            RoutingSignalDescriptor(
-                key="request_kind",
-                label="请求类型",
-                description="区分 chat、task 等请求类别，作为文本类消息的兜底判断条件。",
-                source_stage="route_signal_builder",
-            ),
-            RoutingSignalDescriptor(
-                key="needs_external_knowledge",
-                label="外部知识需求",
-                description="标记是否显式选择了 RAG 空间，用于说明后续知识路由而非主路由分流。",
-                source_stage="route_signal_builder",
-            ),
+                key=s["key"],
+                label=s["label"],
+                description=s["description"],
+                source_stage=s["source_stage"],
+            )
+            for s in AgentRoutePolicy.get_signals()
         ]
 
+        # Priority rules: from engine introspection
         priority_rules = [
             RoutingPriorityRule(
-                order=1,
-                when="命中 has_task_keyword",
-                target_subgraph="quality_judgement",
-                reason="Task creation intent detected; route to quality judgement flow",
-                examples=["创建任务", "新建任务", "提交任务", "task"],
-            ),
-            RoutingPriorityRule(
-                order=2,
-                when="未命中任务意图且检测到 has_images",
-                target_subgraph="quality_judgement",
-                reason="Image attachment detected; route to quality vision workflow",
-                examples=["上传产品图片", "多张缺陷图片", "图片附件检测"],
-            ),
-            RoutingPriorityRule(
-                order=3,
-                when="前两条未命中，且检测到 has_file_attachments 或 request_kind=chat",
-                target_subgraph="quality_judgement",
-                reason="Text or non-image file detected; route to quality judgement flow",
-                examples=["文本问答", "txt/docx/xlsx/csv/json 文件", "非图片资料解析"],
-            ),
+                order=r["priority"],
+                when=r["condition_summary"],
+                target_subgraph=r["target_agent"],
+                reason=r["name"],
+                examples=r.get("examples", []),
+                stop_on_match=r.get("stop_on_match", True),
+            )
+            for r in engine_rules
         ]
 
-        decision_cards = [
-            RoutingDecisionCard(
-                key="task-intent",
-                title="任务意图优先",
-                target_subgraph="quality_judgement",
-                reason=priority_rules[0].reason,
-                priority_order=1,
-                matched_signals=["has_task_keyword"],
-                summary="一旦文本命中任务流关键词，直接进入 quality_judgement，后续图片/文件判断不再继续参与。",
-            ),
-            RoutingDecisionCard(
-                key="image-first",
-                title="图片走质量判定智能体",
-                target_subgraph="quality_judgement",
-                reason=priority_rules[1].reason,
-                priority_order=2,
-                matched_signals=["has_images"],
-                summary="图片输入需要兼容任务流与图片自动回填，因此在非任务关键词场景下优先进入 quality_judgement。",
-            ),
-            RoutingDecisionCard(
-                key="text-file-native",
-                title="文本与非图片文件走质量判定智能体",
-                target_subgraph="quality_judgement",
-                reason=priority_rules[2].reason,
-                priority_order=3,
-                matched_signals=["has_file_attachments", "request_kind"],
-                summary="纯文本或非图片文件会进入 quality_judgement，执行文件解析、契约推断、RAG 与结构化质检流程。",
-            ),
-        ]
+        # Decision cards: one per unique (target_agent, target_sub_route) from engine rules
+        def _derive_signals(rule: dict) -> list[str]:
+            summary = rule["condition_summary"]
+            result = []
+            if any(kw in summary for kw in ["task keyword", "task signal", "task_keyword", "Task Creation", "Detection Intent", "任务意图", "任务关键词", "创建任务", "任务创建"]):
+                result.append("has_task_keyword")
+            if any(kw in summary for kw in ["image", "Image", "图片"]):
+                result.append("has_images")
+            if any(kw in summary for kw in ["file", "xlsx", "csv", "json", "txt", "docx", "Structured File", "结构化文件"]):
+                result.append("has_structured_file")
+            if any(kw in summary for kw in ["quality", "Quality", "quality semantics", "质检语义", "质检问答"]):
+                result.append("has_quality_signal")
+            if any(kw in summary for kw in ["RAG", "knowledge", "Knowledge Base", "知识库"]):
+                result.append("has_rag_signal")
+                result.append("has_rag_space")
+            if any(kw in summary for kw in ["Ambiguous", "ambiguous", "vague", "short", "模糊", "短句"]):
+                result.append("is_ambiguous")
+            return result
 
+        seen_targets = set()
+        decision_cards = []
+        for r in engine_rules:
+            card_key = f"{r['target_agent']}-{r['target_sub_route']}"
+            if card_key not in seen_targets:
+                seen_targets.add(card_key)
+                decision_cards.append(
+                    RoutingDecisionCard(
+                        key=card_key,
+                        title=r["name"],
+                        target_subgraph=r["target_agent"],
+                        reason=r["name"],
+                        priority_order=r["priority"],
+                        matched_signals=_derive_signals(r),
+                        summary=r["condition_summary"],
+                    )
+                )
+
+        # DB-backed data
         routes, total = await self._route_repo.list_paged(filters={}, page=1, size=6)
         registered_intents = [str(item.intent_name) for item in routes]
 
         return RoutingStrategyOverviewResponse(
             route_mode=route_mode,
-            default_target="quality_judgement",
+            default_target="chat",
             root_graph=AgentTopologyResponse(
                 selected_subgraph="all",
                 nodes=root_nodes,
@@ -1146,48 +1123,70 @@ class AgentOpsService:
     # ============================================================
 
     async def get_routing_current(self) -> RoutingCurrentResponse:
-        """返回当前系统真实路由策略视图 — 基于 route_policy.py 的真实现有逻辑"""
+        """返回当前系统真实路由策略视图 — 基于 route_policy.py 和 manager_policy.py 的真实现有逻辑"""
+        from agent.router.route_policy import AgentRoutePolicy
+        from agent.router.manager_policy import ManagerPolicy
+
+        engine_agents = AgentRoutePolicy.get_agents()
+        engine_rules = AgentRoutePolicy.get_rules()
+        engine_signals = AgentRoutePolicy.get_signals()
+        manager_intents = ManagerPolicy.get_intents()
+
+        agents_out = [
+            RouteAgentDescriptor(key=a["key"], label=a["label"], sub_routes=a["sub_routes"])
+            for a in engine_agents
+        ]
+        manager_out = [
+            ManagerIntentDescriptor(
+                priority=m["priority"],
+                name=m["name"],
+                condition=m["condition"],
+                intent=m["intent"],
+                target_agent=m["target_agent"],
+                needs=m["needs"],
+                risk=m["risk"],
+                description=m["description"],
+            )
+            for m in manager_intents
+        ]
+        rules_out = [
+            RouteRuleDescriptor(
+                priority=r["priority"],
+                name=r["name"],
+                condition_summary=r["condition_summary"],
+                target_agent=r["target_agent"],
+                target_sub_route=r["target_sub_route"],
+                route_source=r["route_source"],
+                examples=r.get("examples", []),
+            )
+            for r in engine_rules
+        ]
+        signals_out = [
+            RouteSignalInfo(
+                key=s["key"],
+                label=s["label"],
+                description=s["description"],
+            )
+            for s in engine_signals
+        ]
+
         return RoutingCurrentResponse(
             mode="rule_first_with_model_fallback",
             mode_label="规则优先，模型兜底",
             default_agent="chat",
             default_sub_route="general_chat",
-            agents=[
-                RouteAgentDescriptor(key="chat", label="Quality Chat", sub_routes=["general_chat", "rag_qa"]),
-                RouteAgentDescriptor(key="inspection_task", label="Inspection Task Agent", sub_routes=["task_create", "inspection_execute", "quality_qa"]),
-            ],
-            rules=[
-                RouteRuleDescriptor(priority=1, name="手动指定检测Agent", condition_summary="前端 force_agent=inspection_task", target_agent="inspection_task", target_sub_route="task_create", route_source="manual", examples=["force_agent=inspection_task"]),
-                RouteRuleDescriptor(priority=2, name="手动指定聊天Agent", condition_summary="前端 force_agent=chat", target_agent="chat", target_sub_route="general_chat", route_source="manual", examples=["force_agent=chat"]),
-                RouteRuleDescriptor(priority=3, name="结构化文件+检测意图", condition_summary="xlsx/csv/json/txt/docx 等文件 + 检测/质检关键词", target_agent="inspection_task", target_sub_route="inspection_execute", examples=["上传Excel+创建检测任务"]),
-                RouteRuleDescriptor(priority=4, name="图片+检测意图", condition_summary="图片附件/URL + 检测/质检关键词", target_agent="inspection_task", target_sub_route="inspection_execute", examples=["图片+帮我检测是否合格"]),
-                RouteRuleDescriptor(priority=5, name="任务创建意图", condition_summary="纯文本含任务创建关键词（创建/新建/发起+任务/检测）", target_agent="inspection_task", target_sub_route="task_create", examples=["创建任务", "帮我检测这个产品"]),
-                RouteRuleDescriptor(priority=6, name="质检问答意图", condition_summary="含质量、质检、缺陷、合格、标准等语义关键词", target_agent="inspection_task", target_sub_route="quality_qa", examples=["这个算不算缺陷", "按照GB/T标准判定"]),
-                RouteRuleDescriptor(priority=7, name="RAG知识库问答", condition_summary="选中RAG空间 或 知识库检索意图", target_agent="chat", target_sub_route="rag_qa", examples=["根据知识库回答", "查一下文档里的标准"]),
-                RouteRuleDescriptor(priority=8, name="模糊输入兜底", condition_summary="短句/代词/无法明确分类的输入", target_agent="chat", target_sub_route="general_chat", examples=["这个呢", "看看"]),
-                RouteRuleDescriptor(priority=9, name="默认普通聊天", condition_summary="未命中以上规则的默认兜底", target_agent="chat", target_sub_route="general_chat", examples=["你好", "今天天气怎么样"]),
-            ],
-            signals=[
-                RouteSignalInfo(key="has_task_keyword", label="任务意图关键词", description="用户文本中包含创建任务、提交任务等关键词"),
-                RouteSignalInfo(key="has_images", label="图片附件", description="请求包含图片附件或图片URL"),
-                RouteSignalInfo(key="has_structured_file", label="结构化文件", description="请求包含xlsx/csv/json/txt/docx等文件"),
-                RouteSignalInfo(key="has_quality_signal", label="质检语义", description="文本包含质量、质检、缺陷、合格、标准等关键词"),
-                RouteSignalInfo(key="has_rag_space", label="RAG空间", description="用户选择了RAG知识空间"),
-                RouteSignalInfo(key="is_ambiguous", label="模糊输入", description="短句、代词多、无明确意图信号的输入"),
-            ],
-            rule_count=9,
-            active_agent_count=2,
+            agents=agents_out,
+            manager_intents=manager_out,
+            rules=rules_out,
+            signals=signals_out,
+            rule_count=len(engine_rules),
+            active_agent_count=len(engine_agents),
         )
 
     async def simulate_route(self, body: RouteSimulateRequest) -> RouteSimulateResponse:
         """调用真实路由决策逻辑，但不执行 Agent"""
         from agent.router.route_policy import AgentRoutePolicy
         from agent.router.contracts import AgentRouterInput
-
-        # Build route hints
-        route_hints = {}
-        if body.force_agent:
-            route_hints["force_agent"] = body.force_agent
 
         # Build attachments for signal detection
         attachments = []
@@ -1208,23 +1207,18 @@ class AgentOpsService:
             request_kind="chat",
             attachments=attachments,
             image_urls=[],
-            route_hints=route_hints,
             ext=ext,
         )
         decision = policy.decide(router_input)
 
-        # Map to rule name
-        rule_map = {
-            ("inspection_task", "inspection_execute"): ("结构化文件/图片 + 检测意图", 3),
-            ("inspection_task", "task_create"): ("任务创建意图", 5),
-            ("inspection_task", "quality_qa"): ("质检问答意图", 6),
-            ("chat", "rag_qa"): ("RAG知识库问答", 7),
-            ("chat", "general_chat"): ("默认普通聊天", 9),
-        }
-        rule_name, priority = rule_map.get(
-            (decision.selected_agent, decision.sub_route),
-            (decision.reason, 0),
+        # Use engine introspection for rule mapping and signal detection
+        rule_name, priority = AgentRoutePolicy.get_rule_for_decision(
+            decision.selected_agent,
+            decision.sub_route,
+            decision.route_source,
+            decision.fallback_agent or "",
         )
+        signals = policy.detect_signals(router_input)
 
         return RouteSimulateResponse(
             matched_rule_name=rule_name,
@@ -1233,13 +1227,7 @@ class AgentOpsService:
             selected_sub_route=decision.sub_route,
             route_source=decision.route_source,
             reason=decision.reason,
-            signals={
-                "has_task_keyword": bool(body.query and any(kw in body.query for kw in ["任务", "检测", "创建", "提交"])),
-                "has_images": body.has_image,
-                "has_structured_file": body.has_structured_file,
-                "has_quality_signal": bool(body.query and any(kw in body.query for kw in ["质量", "缺陷", "合格", "标准"])),
-                "has_rag_space": body.has_rag_space,
-            },
+            signals=signals,
             is_fallback=decision.fallback_agent == "model_classifier",
         )
 

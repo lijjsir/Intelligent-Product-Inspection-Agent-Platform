@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
     AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']
     AlgoResourcePage: typeof import('./src/components/business/algo/AlgoResourcePage.vue')['default']
     AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
@@ -32,6 +33,9 @@ declare module 'vue' {
     ElDialog: typeof import('element-plus/es')['ElDialog']
     ElDivider: typeof import('element-plus/es')['ElDivider']
     ElDrawer: typeof import('element-plus/es')['ElDrawer']
+    ElDropdown: typeof import('element-plus/es')['ElDropdown']
+    ElDropdownItem: typeof import('element-plus/es')['ElDropdownItem']
+    ElDropdownMenu: typeof import('element-plus/es')['ElDropdownMenu']
     ElEmpty: typeof import('element-plus/es')['ElEmpty']
     ElForm: typeof import('element-plus/es')['ElForm']
     ElFormItem: typeof import('element-plus/es')['ElFormItem']
@@ -40,6 +44,7 @@ declare module 'vue' {
     ElInputNumber: typeof import('element-plus/es')['ElInputNumber']
     ElOption: typeof import('element-plus/es')['ElOption']
     ElPagination: typeof import('element-plus/es')['ElPagination']
+    ElPopover: typeof import('element-plus/es')['ElPopover']
     ElProgress: typeof import('element-plus/es')['ElProgress']
     ElRadio: typeof import('element-plus/es')['ElRadio']
     ElRadioButton: typeof import('element-plus/es')['ElRadioButton']
@@ -66,6 +71,7 @@ declare module 'vue' {
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
     PassRateTrendChart: typeof import('./src/components/business/analytics/PassRateTrendChart.vue')['default']
+    PipelineNode: typeof import('./src/components/routing/PipelineNode.vue')['default']
     ProductLineSeriesChart: typeof import('./src/components/business/analytics/ProductLineSeriesChart.vue')['default']
     QualityReportPanel: typeof import('./src/components/business/analytics/QualityReportPanel.vue')['default']
     QualityTracingPanel: typeof import('./src/components/business/analytics/QualityTracingPanel.vue')['default']
@@ -74,6 +80,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
     ThumbsDownTrendChart: typeof import('./src/components/business/analytics/ThumbsDownTrendChart.vue')['default']
+    ThumbsUpTrendChart: typeof import('./src/components/business/analytics/ThumbsUpTrendChart.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

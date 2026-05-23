@@ -508,6 +508,41 @@ async def test_embedder_reports_missing_model_config_page_embedding_model():
         await embedder.embed("hello")
 
 
+@pytest.mark.asyncio
+async def test_embedder_falls_back_to_pseudo_vector_when_runtime_embedding_fails(monkeypatch):
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def embed(self, text, **kwargs):
+            raise RuntimeError("embedding api not supported")
+
+    monkeypatch.setattr("agent.rag.embedder.LLMClient", FakeLLMClient)
+
+    embedder = Embedder(
+        org_id="org-1",
+        runtime_models=[
+            {
+                "id": "embed-cfg",
+                "provider": "volcengine",
+                "model_key": "glm-4-7-251222",
+                "endpoint": "https://ark.example.com/api/v3",
+                "api_key": "secret",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            },
+        ],
+    )
+
+    vector = await embedder.embed("pseudo fallback sample")
+
+    assert isinstance(vector, list)
+    assert len(vector) == 256
+    assert any(abs(value) > 0 for value in vector)
+
+
 def test_quality_report_result_trend_handles_empty_citations():
     items = [
         FakeResult(datetime(2026, 3, 23, 10, 0, 0), {"items": ["doc-1"]}),
@@ -1133,6 +1168,86 @@ async def test_llm_client_chat_retries_without_response_format(monkeypatch):
     assert data["verdict"] == "pass"
     assert FakeHttpClient.calls[0]["json"]["response_format"] == {"type": "json_object"}
     assert "response_format" not in FakeHttpClient.calls[1]["json"]
+
+
+@pytest.mark.asyncio
+async def test_llm_client_chat_with_tools_adds_json_prompt_hint(monkeypatch):
+    class FakeObservation:
+        def update(self, **kwargs):
+            return None
+
+    class FakeObservationContext:
+        def __enter__(self):
+            return FakeObservation()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeTracer:
+        enabled = True
+
+        def create_trace_id(self):
+            return "trace-generated"
+
+        def observe(self, **kwargs):
+            return FakeObservationContext()
+
+        def current_observation_id(self):
+            return "obs-1"
+
+        def get_trace_url(self, trace_id):
+            return f"https://langfuse.local/trace/{trace_id}"
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+        request = object()
+
+        def json(self):
+            return {
+                "id": "resp-1",
+                "model": "chat-1",
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+            }
+
+    class FakeHttpClient:
+        calls: list[dict] = []
+
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, path, json=None, headers=None):
+            self.calls.append({"path": path, "json": json, "headers": headers})
+            return FakeResponse()
+
+    monkeypatch.setattr("agent.llm.client.LangfuseTracer", lambda: FakeTracer())
+    monkeypatch.setattr("agent.llm.client.httpx.AsyncClient", FakeHttpClient)
+
+    client = LLMClient(api_key="secret", base_url="https://example.com/api/v3", model_id="chat-1")
+    await client.chat_with_tools(
+        [{"role": "system", "content": "你是智能助手。可以使用工具。"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "web.search",
+                    "description": "search",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    )
+
+    payload = FakeHttpClient.calls[0]["json"]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["messages"][0]["role"] == "system"
+    assert "json" in payload["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

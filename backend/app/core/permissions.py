@@ -29,7 +29,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "alert": {ROLE_PLATFORM_OPERATOR},
     "alert_rule": {ROLE_PLATFORM_OPERATOR},
     "tool": {ROLE_ADMIN, ROLE_APP_DEVELOPER},
-    "analytics": {ROLE_PLATFORM_OPERATOR},
+    "analytics": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
     "audit": {ROLE_ADMIN},
     "model_config": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER},
     "model_config_read": {ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_PLATFORM_OPERATOR},
@@ -43,6 +43,7 @@ PERMISSIONS: Dict[str, Set[str]] = {
         ROLE_EXPERT,
     },
     "inspection_spec": {ROLE_ADMIN},
+    "inspection_standard_library": {ROLE_ADMIN},
     "billing": {ROLE_ADMIN},
     "feedback": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_USER, ROLE_EXPERT},
     "quality": {ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT},
@@ -53,6 +54,26 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "algo_workspace": {ROLE_ALGORITHM_ENGINEER},
     "meeting": {ROLE_USER, ROLE_EXPERT},
     "meeting_admin": {ROLE_ADMIN},
+    "organization": {ROLE_ADMIN},
+    "role_read": {ROLE_ADMIN},
+    "auth_log": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "audit_log": {ROLE_ADMIN},
+    "infrastructure": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "memory_governance": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "memory_policy": {ROLE_ADMIN},
+    "approval": {ROLE_ADMIN},
+    "approval_read": {
+        ROLE_ADMIN,
+        ROLE_ALGORITHM_ENGINEER,
+        ROLE_APP_DEVELOPER,
+        ROLE_PLATFORM_OPERATOR,
+    },
+    "approval_create": {
+        ROLE_ADMIN,
+        ROLE_ALGORITHM_ENGINEER,
+        ROLE_APP_DEVELOPER,
+        ROLE_PLATFORM_OPERATOR,
+    },
 }
 
 

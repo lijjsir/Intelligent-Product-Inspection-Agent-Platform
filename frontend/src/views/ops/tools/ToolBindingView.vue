@@ -67,8 +67,15 @@
 
     <el-dialog v-model="showCreateDialog" title="新增 Agent 绑定" width="480px" destroy-on-close>
       <el-form :model="createForm" label-position="top">
-        <el-form-item label="Agent ID">
-          <el-input v-model="createForm.agent_id" placeholder="输入 Agent ID" />
+        <el-form-item label="agent">
+          <el-select v-model="createForm.agent_id" placeholder="选择 Agent" filterable>
+            <el-option
+              v-for="agent in agentOpsStore.agents"
+              :key="agent.id"
+              :label="agent.name"
+              :value="agent.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="工具">
           <el-select v-model="createForm.tool_id" placeholder="选择工具" filterable>
@@ -120,9 +127,11 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useToolsStore } from "@/stores/tools.store";
+import { useAgentOpsStore } from "@/stores/agent-ops.store";
 import type { AgentToolBinding, BindingCreateRequest, BindingUpdateRequest } from "@/types/tools.types";
 
 const store = useToolsStore();
+const agentOpsStore = useAgentOpsStore();
 const loading = ref(false);
 const bindings = ref<AgentToolBinding[]>([]);
 const search = ref("");
@@ -166,14 +175,15 @@ async function loadBindings() {
   try {
     bindings.value = await store.fetchBindings();
     await store.fetchTools();
+    await agentOpsStore.fetchAgents({});
   } finally {
     loading.value = false;
   }
 }
 
 async function doCreateBinding() {
-  if (!createForm.agent_id.trim() || !createForm.tool_id) {
-    ElMessage.warning("请填写 Agent ID 并选择工具");
+  if (!createForm.agent_id || !createForm.tool_id) {
+    ElMessage.warning("请选择 Agent 和工具");
     return;
   }
   try {

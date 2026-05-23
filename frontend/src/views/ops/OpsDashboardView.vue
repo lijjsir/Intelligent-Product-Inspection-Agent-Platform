@@ -184,7 +184,7 @@ onMounted(fetchData);
       <el-button @click="go('/ops/analytics')">分析中心</el-button>
       <el-button @click="go('/ops/data-quality')">数据质量</el-button>
       <el-button @click="go('/ops/calls')">调用监控</el-button>
-      <el-button @click="go('/ops/inspection-specs')">检测标准</el-button>
+      <el-button @click="go('/ops/inspection-specs')">质检门槛</el-button>
     </section>
   </div>
 </template>

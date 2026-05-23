@@ -27,7 +27,7 @@ class AgentRouteDecision(BaseModel):
     confidence: float = 1.0
     reason: str = ""
     requires_confirmation: bool = False
-    route_source: Literal["manual", "rule", "model", "fallback", "manager"] = "rule"
+    route_source: Literal["rule", "manual", "model", "fallback", "manager"] = "rule"
     fallback_agent: str | None = None
 
 
