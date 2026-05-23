@@ -16,6 +16,13 @@ class ResultFeedback(Base):
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(16), nullable=True, server_default=None)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    assigned_to: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(String(24), nullable=True, server_default="result")
+    task_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

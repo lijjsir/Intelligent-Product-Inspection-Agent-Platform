@@ -134,7 +134,7 @@ async def delete_task(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("audit", current.role)  # 仅管理员可删除任务
+    require_role("task", current.role)
     service = TaskService(
         db,
         current.org_id,

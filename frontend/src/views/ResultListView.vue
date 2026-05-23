@@ -179,9 +179,10 @@ const VERDICT_LABELS: Record<string, string> = {
         <el-table-column prop="created_at" label="时间" min-width="180">
           <template #default="scope">{{ scope.row.created_at ? new Date(scope.row.created_at).toLocaleString() : '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="router.push(`/app/results/${scope.row.task_id}`)">详情</el-button>
+            <el-button link type="primary" size="small" @click="router.push(`/app/results/${scope.row.task_id}/evidence`)">证据溯源</el-button>
           </template>
         </el-table-column>
       </el-table>

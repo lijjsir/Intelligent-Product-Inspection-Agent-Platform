@@ -12,6 +12,7 @@ import {
 
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
+import { useChatStore } from "@/stores/chat.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import type { TaskStatus } from "@/types/task.types";
@@ -19,6 +20,7 @@ import type { TaskStatus } from "@/types/task.types";
 const router = useRouter();
 const route = useRoute();
 const taskStore = useTaskStore();
+const chatStore = useChatStore();
 const inspectionSpecStore = useInspectionSpecStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
@@ -34,6 +36,7 @@ const uploadFiles = ref<UploadUserFile[]>([]);
 const createForm = ref({
   product_id: "",
   spec_code: "",
+  rag_space_id: "",
   image_urls_input: "",
   priority: 5,
 });
@@ -124,7 +127,7 @@ function handleReset() {
 }
 
 function handleOpenCreate() {
-  createForm.value = { product_id: "", spec_code: "", image_urls_input: "", priority: 5 };
+  createForm.value = { product_id: "", spec_code: "", rag_space_id: "", image_urls_input: "", priority: 5 };
   uploadFiles.value = [];
   showCreateDialog.value = true;
 }
@@ -146,6 +149,7 @@ function handleOpenCreateFromDraft() {
     createForm.value = {
       product_id: String(draft.product_id || ""),
       spec_code: String(draft.spec_code || ""),
+      rag_space_id: "",
       image_urls_input: Array.isArray(draft.image_urls) ? draft.image_urls.filter(Boolean).join("\n") : "",
       priority: Number(draft.priority || 5),
     };
@@ -216,7 +220,7 @@ async function handleSubmitCreate() {
     const urlsFromText = parsedUrls.map((p) => p.url);
     const uploadFilesRaw = uploadFiles.value
       .map((item) => item.raw)
-      .filter((item): item is File => Boolean(item));
+      .filter((item): item is NonNullable<typeof item> => item != null) as File[];
     const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
     const allUrls = [...urlsFromText, ...dataUrls];
 
@@ -239,13 +243,28 @@ async function handleSubmitCreate() {
       }),
     );
 
+    const metadata: Record<string, unknown> = { source: "task_list" };
+    const selectedSpace = createForm.value.rag_space_id
+      ? chatStore.ragSpaces.find((s) => s.id === createForm.value.rag_space_id)
+      : null;
+    if (selectedSpace) {
+      metadata.selected_rag_space_id = selectedSpace.id;
+      metadata.selected_rag_space_name = selectedSpace.name;
+      metadata.selected_rag_space = {
+        id: selectedSpace.id,
+        name: selectedSpace.name,
+        description: selectedSpace.description,
+      };
+      metadata.selected_rag_scope_node_ids = [];
+    }
+
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
       image_urls: allUrls,
       image_items: imageItems,
       priority: createForm.value.priority,
-      metadata: { source: "task_list" },
+      metadata,
     });
     ElMessage.success("任务创建成功");
     showCreateDialog.value = false;
@@ -296,7 +315,7 @@ function handleCurrentChange(current: number) {
 
 onMounted(async () => {
   syncFromRoute();
-  await Promise.all([fetchData(), fetchSpecOptions()]);
+  await Promise.all([fetchData(), fetchSpecOptions(), chatStore.fetchRagSpaces()]);
   if (route.query.create === "1") {
     handleOpenCreateFromDraft();
   }
@@ -359,7 +378,6 @@ watch(
           </template>
         </el-table-column>
         <el-table-column prop="source_kind" label="来源" width="160" />
-        <el-table-column prop="source_graph" label="子图" width="150" />
         <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
@@ -370,14 +388,13 @@ watch(
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
             <el-button
-              v-if="isAdmin"
               link
               type="danger"
               size="small"
               :loading="deletingTaskId === row.id"
               @click="handleDeleteTask(row.id)"
             >
-              删除任务
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -411,6 +428,16 @@ watch(
         </el-form-item>
         <el-form-item label="产品线" prop="product_id">
           <div class="product-line-display">{{ createForm.product_id || '选择标准后自动填入' }}</div>
+        </el-form-item>
+        <el-form-item label="RAG空间">
+          <el-select v-model="createForm.rag_space_id" filterable clearable placeholder="选择RAG空间" class="!w-full">
+            <el-option
+              v-for="space in chatStore.ragSpaces"
+              :key="space.id"
+              :label="space.name"
+              :value="space.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="图片 URL" prop="image_urls_input">
           <el-input

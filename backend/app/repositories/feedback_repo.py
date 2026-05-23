@@ -1,7 +1,7 @@
 from collections import Counter
 from datetime import date, datetime
 
-from sqlalchemy import and_, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feedback import MessageFeedback, ResultFeedback
@@ -17,6 +17,12 @@ class FeedbackRepository:
                 ResultFeedback.result_id == result_id,
                 ResultFeedback.actor_id == actor_id,
             )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, feedback_id: str) -> ResultFeedback | None:
+        result = await self._session.execute(
+            select(ResultFeedback).where(ResultFeedback.id == feedback_id)
         )
         return result.scalar_one_or_none()
 
@@ -91,17 +97,32 @@ class FeedbackRepository:
         size: int,
         result_id: str | None = None,
         feedback_type: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        source_type: str | None = None,
+        category: str | None = None,
+        assigned_to: str | None = None,
     ) -> tuple[int, list[ResultFeedback]]:
         stmt = select(ResultFeedback).where(ResultFeedback.org_id == org_id)
         if result_id:
             stmt = stmt.where(ResultFeedback.result_id == result_id)
         if feedback_type:
             stmt = stmt.where(ResultFeedback.feedback_type == feedback_type)
-        result = await self._session.execute(stmt.order_by(ResultFeedback.created_at.desc()))
-        items = list(result.scalars().all())
-        total = len(items)
-        start = (page - 1) * size
-        return total, items[start : start + size]
+        if status:
+            stmt = stmt.where(ResultFeedback.status == status)
+        if severity:
+            stmt = stmt.where(ResultFeedback.severity == severity)
+        if source_type:
+            stmt = stmt.where(ResultFeedback.source_type == source_type)
+        if category:
+            stmt = stmt.where(ResultFeedback.category == category)
+        if assigned_to:
+            stmt = stmt.where(ResultFeedback.assigned_to == assigned_to)
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self._session.execute(count_stmt)).scalar() or 0
+        stmt = stmt.order_by(ResultFeedback.created_at.desc()).offset((page - 1) * size).limit(size)
+        result = await self._session.execute(stmt)
+        return total, list(result.scalars().all())
 
     async def list_by_range(self, org_id: str | None, start_date: date | None = None, end_date: date | None = None) -> list[ResultFeedback]:
         stmt = select(ResultFeedback)
@@ -118,3 +139,44 @@ class FeedbackRepository:
         items = await self.list_by_range(org_id, start_date, end_date)
         counter = Counter((item.category or "uncategorized") for item in items)
         return dict(counter)
+
+    async def summary(self, org_id: str) -> dict:
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        base = select(ResultFeedback).where(ResultFeedback.org_id == org_id)
+        today_new = (await self._session.execute(
+            select(func.count()).select_from(
+                base.where(ResultFeedback.created_at >= today_start).subquery()
+            )
+        )).scalar() or 0
+        pending_count = (await self._session.execute(
+            select(func.count()).select_from(
+                base.where(ResultFeedback.status == "pending").subquery()
+            )
+        )).scalar() or 0
+        high_risk_count = (await self._session.execute(
+            select(func.count()).select_from(
+                base.where(ResultFeedback.severity.in_(["high", "critical"])).subquery()
+            )
+        )).scalar() or 0
+        total = (await self._session.execute(
+            select(func.count()).select_from(base.subquery())
+        )).scalar() or 0
+        resolved = (await self._session.execute(
+            select(func.count()).select_from(
+                base.where(ResultFeedback.status == "resolved").subquery()
+            )
+        )).scalar() or 0
+        resolved_rate = round(resolved / total, 4) if total > 0 else 0.0
+        avg_hours_result = (await self._session.execute(
+            select(func.avg(func.timestampdiff(text("HOUR"), ResultFeedback.created_at, ResultFeedback.resolved_at)))
+            .where(ResultFeedback.org_id == org_id, ResultFeedback.resolved_at.isnot(None))
+        )).scalar()
+        avg_resolution_hours = round(float(avg_hours_result), 1) if avg_hours_result else None
+        return {
+            "today_new": today_new,
+            "pending_count": pending_count,
+            "high_risk_count": high_risk_count,
+            "resolved_rate": resolved_rate,
+            "avg_resolution_hours": avg_resolution_hours,
+        }

@@ -122,6 +122,11 @@ export interface BillingQuery {
   product_line?: string;
 }
 
+export type FeedbackSeverity = "low" | "medium" | "high" | "critical";
+export type FeedbackStatus = "pending" | "processing" | "resolved" | "closed" | "reopened";
+export type FeedbackSourceType = "result" | "chat" | "meeting";
+export type FeedbackCategory = "reliable" | "wrong_verdict" | "weak_evidence" | "bad_bbox" | "unclear_reasoning";
+
 export interface ResultFeedback {
   id: string;
   org_id: string;
@@ -129,8 +134,15 @@ export interface ResultFeedback {
   actor_id: string;
   feedback_type: "up" | "down";
   rating: number | null;
-  category: string | null;
+  category: FeedbackCategory | null;
   comment: string | null;
+  severity: FeedbackSeverity | null;
+  status: FeedbackStatus;
+  assigned_to: string | null;
+  resolution: string | null;
+  resolved_at: string | null;
+  source_type: FeedbackSourceType | null;
+  task_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -154,8 +166,11 @@ export interface MessageFeedback {
 export interface FeedbackSubmitPayload {
   feedback_type: "up" | "down";
   rating?: number | null;
-  category?: string | null;
+  category?: FeedbackCategory | null;
   comment?: string | null;
+  severity?: FeedbackSeverity | null;
+  source_type?: FeedbackSourceType | null;
+  task_id?: string | null;
 }
 
 export interface FeedbackQuery {
@@ -163,6 +178,56 @@ export interface FeedbackQuery {
   size?: number;
   result_id?: string;
   feedback_type?: "up" | "down";
+  status?: FeedbackStatus | null;
+  severity?: FeedbackSeverity | null;
+  source_type?: FeedbackSourceType | null;
+  category?: FeedbackCategory | null;
+  assigned_to?: string | null;
+}
+
+export interface FeedbackSummary {
+  today_new: number;
+  pending_count: number;
+  high_risk_count: number;
+  resolved_rate: number;
+  avg_resolution_hours: number | null;
+}
+
+export type ReportType = "single_task" | "batch_summary" | "quality_analysis" | "feedback_report" | "evidence_trace";
+export type ExportFormat = "pdf" | "docx" | "xlsx" | "csv" | "json";
+export type ExportJobStatus = "pending" | "running" | "success" | "failed" | "expired";
+
+export interface ExportJob {
+  id: string;
+  org_id: string;
+  actor_id: string;
+  report_name: string;
+  report_type: ReportType;
+  format: ExportFormat;
+  template: string | null;
+  config_json: string | null;
+  status: ExportJobStatus;
+  file_url: string | null;
+  file_size: number | null;
+  error_message: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExportJobCreatePayload {
+  report_name: string;
+  report_type: ReportType;
+  format?: ExportFormat;
+  template?: string;
+  config_json?: Record<string, unknown> | null;
+}
+
+export interface ExportJobQuery {
+  page?: number;
+  size?: number;
+  status?: ExportJobStatus | null;
+  report_type?: ReportType | null;
 }
 
 export interface MessageFeedbackQuery {
