@@ -43,9 +43,7 @@ export const ragSpaceApi = {
     for (const file of files) {
       form.append("files", file);
     }
-    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, form, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, form);
   },
 
   uploadDocumentsToNode(ragSpaceId: string, nodeId: string, files: File[]) {
@@ -53,9 +51,7 @@ export const ragSpaceApi = {
     for (const file of files) {
       form.append("files", file);
     }
-    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/nodes/${nodeId}/documents`, form, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/nodes/${nodeId}/documents`, form);
   },
 
   deleteNode(ragSpaceId: string, nodeId: string) {
