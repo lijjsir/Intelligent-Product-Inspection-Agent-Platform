@@ -14,8 +14,15 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return column_name in {c["name"] for c in inspector.get_columns(table_name)}
+
+
 def upgrade():
-    op.add_column("model_configs", sa.Column("deployment_command_template", sa.Text(), nullable=True))
+    if not _has_column("model_configs", "deployment_command_template"):
+        op.add_column("model_configs", sa.Column("deployment_command_template", sa.Text(), nullable=True))
 
 
 def downgrade():
