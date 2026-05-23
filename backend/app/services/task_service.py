@@ -72,9 +72,13 @@ class TaskService:
             deduped_urls = image_urls
 
         # Re-check hashes against recent tasks in this org to prevent cross-task duplicates.
-        existing_hashes = await self._repo.find_recent_image_hashes(
-            self._org_id, [item.hash for item in deduped]
-        )
+        find_recent_image_hashes = getattr(self._repo, "find_recent_image_hashes", None)
+        if callable(find_recent_image_hashes):
+            existing_hashes = await find_recent_image_hashes(
+                self._org_id, [item.hash for item in deduped]
+            )
+        else:
+            existing_hashes = set()
         if existing_hashes:
             deduped_items = [item for item in deduped if item.hash not in existing_hashes]
             deduped_urls = [item.url for item in deduped_items]

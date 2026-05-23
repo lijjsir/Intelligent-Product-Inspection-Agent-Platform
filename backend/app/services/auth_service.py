@@ -1,3 +1,4 @@
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import uuid
@@ -10,6 +11,7 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.organization_repo import OrganizationRepository
 from app.repositories.user_repo import UserRepository
+from app.services.auth_log_service import AuthLogService, _is_auth_logs_table_missing
 
 
 class AuthService:
@@ -17,21 +19,34 @@ class AuthService:
         self._session = session
         self._users = UserRepository(session)
         self._orgs = OrganizationRepository(session)
+        self._auth_logs = AuthLogService(session)
 
-    async def login(self, org_id: str, username: str, password: str) -> tuple[User, str, str]:
+    async def _record_login_log(self, **payload) -> None:
+        try:
+            await self._auth_logs.record_login(**payload)
+        except Exception as exc:
+            if _is_auth_logs_table_missing(exc):
+                return
+            raise
+
+    async def login(self, org_id: str, username: str, password: str, request: Request | None = None) -> tuple[User, str, str]:
         org = await self._orgs.get_by_id(org_id)
         if not org:
             org = await self._orgs.get_by_slug(org_id)
             if org:
                 org_id = org.id
         if not org or not org.is_active:
+            await self._record_login_log(org_id=org_id, username=username, request=request, success=False, detail="invalid organization")
             raise ForbiddenError("invalid organization")
         user = await self._users.get_by_username(org_id, username)
         if not user or not user.password_hash:
+            await self._record_login_log(org_id=org_id, username=username, request=request, success=False, detail="invalid credentials")
             raise ForbiddenError("invalid credentials")
         if not user.is_active:
+            await self._record_login_log(org_id=org_id, username=username, request=request, success=False, user_id=user.id, detail="user disabled")
             raise ForbiddenError("user disabled")
         if not verify_password(password, user.password_hash):
+            await self._record_login_log(org_id=org_id, username=username, request=request, success=False, user_id=user.id, detail="invalid credentials")
             raise ForbiddenError("invalid credentials")
         claims = build_auth_claims(user.role, getattr(org, "plan", None))
         access = create_access_token(
@@ -42,6 +57,7 @@ class AuthService:
             subject=user.id,
             extra=claims.as_token_extra(user.org_id),
         )
+        await self._record_login_log(org_id=org_id, username=user.username, request=request, success=True, user_id=user.id)
         return user, access, refresh
 
     async def register(

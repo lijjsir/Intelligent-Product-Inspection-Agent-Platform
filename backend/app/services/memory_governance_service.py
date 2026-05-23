@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.ids import uuid7
+from app.models.approval import Approval
 from app.models.memory import MemoryEvaluation, MemoryRollback
+from app.repositories.approval_repo import ApprovalRepository
 from app.repositories.memory_repo import (
     MemoryDependencyRepository,
     MemoryEvaluationRepository,
@@ -195,12 +197,14 @@ class MemoryRollbackService:
         self._event_repo = MemoryEventRepository(session, org_id)
         self._rollback_repo = MemoryRollbackRepository(session, org_id)
         self._dep_repo = MemoryDependencyRepository(session, org_id)
+        self._approval_repo = ApprovalRepository(session)
         self._vector = vector_service
 
     async def execute_rollback(
         self,
         root_memory_id: str,
         operator_id: str,
+        operator_role: str,
         workspace: str,
         trace_id: str,
         action: RollbackAction,
@@ -299,12 +303,27 @@ class MemoryRollbackService:
         )
         await self._event_repo.create(event)
 
+        approval_id = await self._create_followup_approval(
+            rollback_id=rollback_id,
+            root_memory_id=root_memory_id,
+            operator_id=operator_id,
+            operator_role=operator_role,
+            workspace=workspace,
+            action=action,
+            target_memory_ids=target_memory_ids,
+            reason=reason,
+            propagation_graph=propagation_graph,
+            affected_count=affected,
+            require_human_review=require_human_review,
+        )
+
         return MemoryRollbackResponse(
             rollback_id=rollback_id,
             root_memory_id=root_memory_id,
             action=action,
             affected_count=affected,
             review_status=review_status,
+            approval_id=approval_id,
             before_snapshot=before_snapshot,
             after_snapshot=after_snapshot,
         )
@@ -320,6 +339,72 @@ class MemoryRollbackService:
                     "confidence": float(mem.confidence) if mem.confidence else None,
                 }
         return snapshot
+
+    def _should_create_followup_approval(
+        self,
+        action: RollbackAction,
+        target_memory_ids: list[str],
+        require_human_review: bool,
+    ) -> bool:
+        if require_human_review:
+            return True
+        if action in {RollbackAction.DELETE, RollbackAction.PATCH, RollbackAction.BRANCH}:
+            return True
+        return len(target_memory_ids) >= 5
+
+    def _resolve_risk_level(
+        self,
+        action: RollbackAction,
+        target_memory_ids: list[str],
+        require_human_review: bool,
+    ) -> str:
+        if require_human_review or len(target_memory_ids) >= 10:
+            return "critical"
+        if action in {RollbackAction.DELETE, RollbackAction.PATCH, RollbackAction.BRANCH} or len(target_memory_ids) >= 5:
+            return "high"
+        return "medium"
+
+    async def _create_followup_approval(
+        self,
+        rollback_id: str,
+        root_memory_id: str,
+        operator_id: str,
+        operator_role: str,
+        workspace: str,
+        action: RollbackAction,
+        target_memory_ids: list[str],
+        reason: str,
+        propagation_graph: dict | None,
+        affected_count: int,
+        require_human_review: bool,
+    ) -> str | None:
+        if not self._should_create_followup_approval(action, target_memory_ids, require_human_review):
+            return None
+
+        approval = Approval(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            source_module="memory_governance",
+            source_id=rollback_id,
+            operation_summary=f"记忆回滚复核: {action.value} root={root_memory_id} affected={affected_count}",
+            risk_level=self._resolve_risk_level(action, target_memory_ids, require_human_review),
+            payload_json={
+                "rollback_id": rollback_id,
+                "workspace": workspace,
+                "root_memory_id": root_memory_id,
+                "action": action.value,
+                "target_memory_ids": target_memory_ids,
+                "affected_count": affected_count,
+                "reason": reason,
+                "propagation_graph_summary": propagation_graph,
+                "require_human_review": require_human_review,
+            },
+            requester_id=operator_id,
+            requester_role=operator_role,
+            status="pending",
+        )
+        await self._approval_repo.create(approval)
+        return approval.id
 
 
 class MemoryEvaluationService:

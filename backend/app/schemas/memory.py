@@ -276,6 +276,7 @@ class MemoryRollbackResponse(BaseModel):
     action: RollbackAction
     affected_count: int
     review_status: ReviewStatus
+    approval_id: str | None = None
     before_snapshot: dict | None = None
     after_snapshot: dict | None = None
 
