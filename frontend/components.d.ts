@@ -71,6 +71,7 @@ declare module 'vue' {
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
     PassRateTrendChart: typeof import('./src/components/business/analytics/PassRateTrendChart.vue')['default']
+    PipelineNode: typeof import('./src/components/routing/PipelineNode.vue')['default']
     ProductLineSeriesChart: typeof import('./src/components/business/analytics/ProductLineSeriesChart.vue')['default']
     QualityReportPanel: typeof import('./src/components/business/analytics/QualityReportPanel.vue')['default']
     QualityTracingPanel: typeof import('./src/components/business/analytics/QualityTracingPanel.vue')['default']
