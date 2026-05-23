@@ -431,12 +431,24 @@ export interface RouteSignalInfo {
   detected: boolean;
 }
 
+export interface ManagerIntentDescriptor {
+  priority: number;
+  name: string;
+  condition: string;
+  intent: string;
+  target_agent: string;
+  needs: string[];
+  risk: string;
+  description: string;
+}
+
 export interface RoutingCurrent {
   mode: string;
   mode_label: string;
   default_agent: string;
   default_sub_route: string;
   agents: RouteAgentDescriptor[];
+  manager_intents: ManagerIntentDescriptor[];
   rules: RouteRuleDescriptor[];
   signals: RouteSignalInfo[];
   rule_count: number;
@@ -448,7 +460,6 @@ export interface RouteSimulateRequest {
   has_image: boolean;
   has_structured_file: boolean;
   has_rag_space: boolean;
-  force_agent?: string;
 }
 
 export interface RouteSimulateResult {

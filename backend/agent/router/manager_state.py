@@ -53,6 +53,11 @@ class ManagerState(BaseModel):
     satisfaction_score: float = 0.0
     final_action: str = "continue"
 
+    selected_agent: str = ""
     executed_step_hashes: set[str] = Field(default_factory=set)
     route_plan_hashes: list[str] = Field(default_factory=list)
     last_artifact_counts: list[int] = Field(default_factory=list)
+
+    # Tool system — injected by ManagerDispatcher at execution time
+    available_tools: list[Any] = Field(default_factory=list, exclude=True)
+    tool_invoker: Any = Field(default=None, exclude=True)

@@ -46,14 +46,21 @@ class RagExecutor:
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
+                latency_ms = int(result.get("latency_ms") or 0)
             except Exception:
                 hits = []
+                latency_ms = 0
+        else:
+            latency_ms = 0
         citations = [
             {
                 "id": str(item.get("chunk_id") or item.get("id") or index),
                 "title": str(item.get("title") or item.get("document_name") or "RAG 片段"),
-                "source": "rag",
+                "source": str(item.get("source") or item.get("full_path") or "rag"),
+                "quote": str(item.get("quote") or item.get("text") or item.get("content") or "")[:220],
                 "score": item.get("score"),
+                "kind": "rag",
+                "ref": f"RAG-{index}",
             }
             for index, item in enumerate(hits, start=1)
         ]
@@ -63,6 +70,8 @@ class RagExecutor:
             {
                 "hit_count": len(hits),
                 "top_score": top_score,
+                "top_k": 5,
+                "latency_ms": latency_ms,
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
                 "hits": hits,

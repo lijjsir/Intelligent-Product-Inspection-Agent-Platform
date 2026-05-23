@@ -19,6 +19,9 @@ BUILTIN_MODULES = [
     "agent.tools.builtin.file_tools",
     "agent.tools.builtin.inspection_tools",
     "agent.tools.builtin.report_tools",
+    "agent.tools.builtin.quality_tools",
+    "agent.tools.builtin.data_tools",
+    "agent.tools.builtin.search_tools",
 ]
 
 

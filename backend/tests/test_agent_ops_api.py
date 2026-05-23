@@ -505,7 +505,7 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
 
     data = await svc.get_routing_strategy()
 
-    assert data.default_target == "quality_judgement"
+    assert data.default_target == "chat"
     assert data.root_graph.agent_name == "MemoryManagerGraph"
     assert {node.id for node in data.root_graph.nodes} >= {
         "request_intake",
@@ -515,16 +515,14 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
         "result_synthesizer",
         "quality_judgement",
     }
-    assert [rule.target_subgraph for rule in data.priority_rules] == [
-        "quality_judgement",
-        "quality_judgement",
-        "quality_judgement",
-    ]
-    assert [rule.order for rule in data.priority_rules] == [1, 2, 3]
-    assert data.decision_cards[0].matched_signals == ["has_task_keyword"]
-    assert data.decision_cards[1].matched_signals == ["has_images"]
-    assert data.decision_cards[2].matched_signals == ["has_file_attachments", "request_kind"]
-    assert {item.subgraph_key for item in data.subgraphs} == {"quality_judgement", "quality_judgement"}
+    # priority_rules now come from engine introspection (11 rules)
+    assert len(data.priority_rules) == 11
+    assert data.priority_rules[0].order == 1
+    assert data.priority_rules[0].target_subgraph == "inspection_task"
+    # decision_cards derived from engine rules
+    assert len(data.decision_cards) >= 1
+    # subgraphs now iterate all registered subgraphs
+    assert len(data.subgraphs) >= 1
     assert data.registered_route_count == 2
     assert data.registered_intents == ["chat", "quality_task_create"]
 

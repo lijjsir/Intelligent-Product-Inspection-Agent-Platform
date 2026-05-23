@@ -396,7 +396,7 @@ class RouteRuleDescriptor(BaseModel):
     condition_summary: str  # "图片附件 + 检测/质检意图"
     target_agent: str  # "chat" | "inspection_task"
     target_sub_route: str  # "inspection_execute"
-    route_source: str = "builtin"  # "builtin" | "manual"
+    route_source: str = "rule"
     examples: list[str] = Field(default_factory=list)
 
 
@@ -407,12 +407,24 @@ class RouteSignalInfo(BaseModel):
     detected: bool = False
 
 
+class ManagerIntentDescriptor(BaseModel):
+    priority: int
+    name: str
+    condition: str
+    intent: str
+    target_agent: str
+    needs: list[str] = Field(default_factory=list)
+    risk: str = "low"
+    description: str = ""
+
+
 class RoutingCurrentResponse(BaseModel):
     mode: str = "rule_first_with_model_fallback"
     mode_label: str = "规则优先，模型兜底"
     default_agent: str = "chat"
     default_sub_route: str = "general_chat"
     agents: list[RouteAgentDescriptor] = Field(default_factory=list)
+    manager_intents: list[ManagerIntentDescriptor] = Field(default_factory=list)
     rules: list[RouteRuleDescriptor] = Field(default_factory=list)
     signals: list[RouteSignalInfo] = Field(default_factory=list)
     rule_count: int = 0
@@ -424,7 +436,6 @@ class RouteSimulateRequest(BaseModel):
     has_image: bool = Field(default=False)
     has_structured_file: bool = Field(default=False)
     has_rag_space: bool = Field(default=False)
-    force_agent: Optional[str] = Field(default=None, description="手动强制指定 agent")
 
 
 class RouteSimulateResponse(BaseModel):
