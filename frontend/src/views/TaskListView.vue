@@ -234,7 +234,7 @@ async function handleSubmitCreate() {
           .join("");
         const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
         return { index: i, url, hash: urlHashHex, sample_number: sn };
-      }),
+      }));
 
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
