@@ -172,7 +172,7 @@ async function submitReview() {
                     </el-table-column>
                     <el-table-column prop="image_index" label="图片序号" width="90">
                       <template #default="{ row }">
-                        <el-tag v-if="row.image_index != null" type="primary" size="small">图{{ row.image_index + 1 }}</el-tag>
+                        <el-tag v-if="row.image_index != null" size="small">图{{ row.image_index + 1 }}</el-tag>
                         <span v-else class="text-gray-400">-</span>
                       </template>
                     </el-table-column>

@@ -12,7 +12,7 @@ const store = useFeedbackStore();
 
 const form = reactive({
   feedback_type: "up" as "up" | "down",
-  category: "",
+  category: "" as string | null,
   rating: 5,
   comment: "",
 });
@@ -23,7 +23,7 @@ async function submit(type: "up" | "down") {
   form.feedback_type = type;
   await store.submit(props.resultId, {
     feedback_type: form.feedback_type,
-    category: form.category || null,
+    category: (form.category || null) as any,
     rating: form.rating,
     comment: form.comment || null,
   });
@@ -39,6 +39,7 @@ async function submit(type: "up" | "down") {
     </div>
     <div class="controls">
       <el-select v-model="form.category" placeholder="反馈类型" clearable>
+        <el-option label="真实可靠" value="reliable" />
         <el-option label="判定错误" value="wrong_verdict" />
         <el-option label="证据不足" value="weak_evidence" />
         <el-option label="定位不准" value="bad_bbox" />
