@@ -53,7 +53,7 @@ async def run_task_pipeline(
 ):
     """启动指定任务的 AI 检测流水线，按 worker 可用性选择执行模式。"""
     require_role("task", current.role)
-    owner_user_id = current.user_id if current.role in (ROLE_USER, ROLE_EXPERT) else None
+    owner_user_id = current.user_id if current.role == ROLE_USER else None
     org_scope = current.org_id
     task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
@@ -75,7 +75,7 @@ async def stream_task_events(
         current.stream_resource != "task" or current.stream_resource_id != task_id
     ):
         raise ForbiddenError("invalid stream token")
-    owner_user_id = current.user_id if current.role in (ROLE_USER, ROLE_EXPERT) else None
+    owner_user_id = current.user_id if current.role == ROLE_USER else None
     org_scope = current.org_id
     task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:

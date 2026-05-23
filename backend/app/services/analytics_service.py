@@ -30,7 +30,10 @@ class AnalyticsService:
         for key in ("hallucination_rate", "hallucination_trend"):
             if quality.get(key):
                 overview[key] = quality[key]
-        if quality.get("model_metrics"):
+        if quality.get("model_metrics") and overview.get("model_metrics"):
+            db_cost_map = {m["model_key"]: m.get("total_cost", 0.0) for m in overview["model_metrics"]}
+            for m in quality["model_metrics"]:
+                m["total_cost"] = db_cost_map.get(m["model_key"], m.get("total_cost", 0.0))
             overview["model_metrics"] = quality["model_metrics"]
         return overview
 
