@@ -9,6 +9,7 @@ from app.schemas.common import PageParams
 
 
 ALLOWED_MODEL_TYPES = {"chat", "embedding", "multimodal"}
+ALLOWED_MODEL_SOURCE_TYPES = {"external", "local"}
 
 
 class ModelConfigCreate(BaseModel):
@@ -16,10 +17,11 @@ class ModelConfigCreate(BaseModel):
     provider: str
     model_key: str
     display_name: str
+    source_type: str = "external"
+    source_uri: str
     endpoint: str
     api_key: Optional[str] = None
     model_type: str = "chat"
-    training_command_template: Optional[str] = None
     fine_tune_command_template: Optional[str] = None
     offline_eval_command_template: Optional[str] = None
     deployment_command_template: Optional[str] = None
@@ -33,7 +35,7 @@ class ModelConfigCreate(BaseModel):
     output_price_per_million: Optional[float] = None
     is_active: bool = True
 
-    @field_validator("provider", "model_key", "display_name", "endpoint")
+    @field_validator("provider", "model_key", "display_name", "source_uri", "endpoint")
     @classmethod
     def _require_non_blank(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -49,13 +51,22 @@ class ModelConfigCreate(BaseModel):
             raise ValueError("unsupported model_type")
         return text
 
+    @field_validator("source_type")
+    @classmethod
+    def _validate_source_type(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if text not in ALLOWED_MODEL_SOURCE_TYPES:
+            raise ValueError("unsupported source_type")
+        return text
+
 
 class ModelConfigUpdate(BaseModel):
     display_name: Optional[str] = None
+    source_type: Optional[str] = None
+    source_uri: Optional[str] = None
     endpoint: Optional[str] = None
     api_key: Optional[str] = None
     model_type: Optional[str] = None
-    training_command_template: Optional[str] = None
     fine_tune_command_template: Optional[str] = None
     offline_eval_command_template: Optional[str] = None
     deployment_command_template: Optional[str] = None
@@ -71,7 +82,7 @@ class ModelConfigUpdate(BaseModel):
     health_status: Optional[str] = None
     health_message: Optional[str] = None
 
-    @field_validator("display_name", "endpoint", "model_type")
+    @field_validator("display_name", "source_uri", "endpoint", "model_type", "source_type")
     @classmethod
     def _normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -91,6 +102,16 @@ class ModelConfigUpdate(BaseModel):
             raise ValueError("unsupported model_type")
         return text
 
+    @field_validator("source_type")
+    @classmethod
+    def _validate_optional_source_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text not in ALLOWED_MODEL_SOURCE_TYPES:
+            raise ValueError("unsupported source_type")
+        return text
+
 
 class ModelConfigResponse(BaseModel):
     id: str
@@ -98,9 +119,10 @@ class ModelConfigResponse(BaseModel):
     provider: str
     model_key: str
     display_name: str
+    source_type: str
+    source_uri: str
     endpoint: str
     model_type: str
-    training_command_template: Optional[str] = None
     fine_tune_command_template: Optional[str] = None
     offline_eval_command_template: Optional[str] = None
     deployment_command_template: Optional[str] = None

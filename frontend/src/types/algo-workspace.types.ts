@@ -53,6 +53,12 @@ export interface RemoteExecutionSummary {
   status_path?: string | null;
   service_pid_path?: string | null;
   exit_code?: number | null;
+  last_polled_at?: string | null;
+  last_remote_status?: string | null;
+  last_log_tail?: string | null;
+  poll_error?: string | null;
+  status_file_state?: string | null;
+  poll_fail_count?: number | null;
 }
 
 export interface RuntimeRegistrationSummary {
@@ -68,6 +74,8 @@ export interface RuntimeRegistrationSummary {
   remote_pid?: string | null;
   available_at?: string | null;
   last_checked_at?: string | null;
+  last_health_checked_at?: string | null;
+  last_health_error?: string | null;
   leased_node_ids?: string[];
   gpu_indices_by_node?: Record<string, number[]>;
   inference_config?: Record<string, unknown>;
@@ -81,11 +89,12 @@ export interface TrainingExecutionSummary {
   started_at?: string | null;
   completed_at?: string | null;
   source_dataset_id?: string;
-  training_job_id?: string;
+  eval_set_id?: string | null;
   model_config_id?: string | null;
   model_key?: string | null;
   effective_hyperparameters?: Record<string, unknown>;
-  base_checkpoint?: string | null;
+  base_model_ref?: Record<string, unknown>;
+  lora?: Record<string, unknown>;
   lease?: GpuLeaseSummary;
   remote_execution?: RemoteExecutionSummary;
 }
@@ -209,6 +218,7 @@ export interface DeploymentResultSummary {
     completed_at?: string | null;
     source_type?: string;
     source_id?: string;
+    merge_mode?: "dynamic" | "static";
     lease?: GpuLeaseSummary;
     remote_execution?: RemoteExecutionSummary;
   };
@@ -376,19 +386,11 @@ export interface ResourceModelRef {
   model_type: string;
 }
 
-export interface TrainingJob extends AlgoExecutionResource {
+export interface FineTuneRun extends AlgoExecutionResource {
   source_dataset_id: string;
   model_config_id: string;
   model_config_ref?: ResourceModelRef | null;
   eval_set_id?: string | null;
-  experiment_id?: string | null;
-  result_summary?: TrainingResultSummaryRecord | null;
-}
-
-export interface FineTuneRun extends AlgoExecutionResource {
-  training_job_id: string;
-  model_config_id: string;
-  model_config_ref?: ResourceModelRef | null;
   experiment_id?: string | null;
   result_summary?: TrainingResultSummaryRecord | null;
 }
@@ -417,7 +419,6 @@ export interface ExperimentRelatedResourceSummary {
 
 export interface Experiment extends AlgoResourceBase {
   related_resources?: {
-    training_jobs: ExperimentRelatedResourceSummary[];
     fine_tunes: ExperimentRelatedResourceSummary[];
     offline_evaluations: ExperimentRelatedResourceSummary[];
     deployments: ExperimentRelatedResourceSummary[];
@@ -425,8 +426,9 @@ export interface Experiment extends AlgoResourceBase {
 }
 
 export interface Deployment extends AlgoExecutionResource {
-  source_type: "training_job" | "fine_tune";
+  source_type: "fine_tune";
   source_id: string;
+  merge_mode: "dynamic" | "static";
   experiment_id?: string | null;
   result_summary?: DeploymentResultSummaryRecord | null;
 }
@@ -466,7 +468,7 @@ export interface EvaluationDatasetItemListQuery extends PageParams {
   sample_type?: DatasetSampleType | "";
 }
 
-export interface TrainingJobCreateRequest {
+export interface FineTuneRunCreateRequest {
   name: string;
   description?: string;
   config_json?: Record<string, unknown>;
@@ -476,29 +478,13 @@ export interface TrainingJobCreateRequest {
   experiment_id?: string | null;
 }
 
-export interface TrainingJobUpdateRequest {
-  name?: string;
-  description?: string | null;
-  config_json?: Record<string, unknown>;
-  model_config_id?: string | null;
-  eval_set_id?: string | null;
-  experiment_id?: string | null;
-}
-
-export interface FineTuneRunCreateRequest {
-  name: string;
-  description?: string;
-  config_json?: Record<string, unknown>;
-  training_job_id: string;
-  model_config_id: string;
-  experiment_id?: string | null;
-}
-
 export interface FineTuneRunUpdateRequest {
   name?: string;
   description?: string | null;
   config_json?: Record<string, unknown>;
+  source_dataset_id?: string | null;
   model_config_id?: string | null;
+  eval_set_id?: string | null;
   experiment_id?: string | null;
 }
 
@@ -507,7 +493,7 @@ export interface OfflineEvaluationCreateRequest {
   description?: string;
   config_json?: Record<string, unknown>;
   eval_set_id: string;
-  target_type: "training_job" | "fine_tune" | "deployment";
+  target_type: "fine_tune" | "deployment";
   target_id: string;
   experiment_id?: string | null;
 }
@@ -537,14 +523,14 @@ export interface ModelDeploymentCreateRequest {
   name: string;
   description?: string;
   config_json?: Record<string, unknown>;
-  source_type: "training_job" | "fine_tune";
+  source_type: "fine_tune";
   source_id: string;
+  merge_mode?: "dynamic" | "static";
   experiment_id?: string | null;
 }
 
 export type EvaluationDatasetListResponse = PagedResponse<EvaluationDataset>;
 export type EvaluationDatasetItemListResponse = PagedResponse<EvaluationDatasetItem>;
-export type TrainingJobListResponse = PagedResponse<TrainingJob>;
 export type FineTuneRunListResponse = PagedResponse<FineTuneRun>;
 export type OfflineEvaluationListResponse = PagedResponse<OfflineEvaluation>;
 export type OnlineValidationListResponse = PagedResponse<OnlineValidation>;

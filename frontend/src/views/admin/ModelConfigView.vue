@@ -14,10 +14,11 @@ const form = reactive({
   provider: "volcengine",
   model_key: "",
   display_name: "",
+  source_type: "external",
+  source_uri: "",
   endpoint: "",
   api_key: "",
   model_type: "chat",
-  training_command_template: "",
   fine_tune_command_template: "",
   offline_eval_command_template: "",
   deployment_command_template: "",
@@ -38,6 +39,11 @@ const modelTypeOptions = [
   { label: "multimodal", value: "multimodal" },
 ];
 
+const sourceTypeOptions = [
+  { label: "external", value: "external" },
+  { label: "local", value: "local" },
+];
+
 function resetForm() {
   editingId.value = "";
   editingHasApiKey.value = false;
@@ -45,10 +51,11 @@ function resetForm() {
     provider: "volcengine",
     model_key: "",
     display_name: "",
+    source_type: "external",
+    source_uri: "",
     endpoint: "",
     api_key: "",
     model_type: "chat",
-    training_command_template: "",
     fine_tune_command_template: "",
     offline_eval_command_template: "",
     deployment_command_template: "",
@@ -76,10 +83,11 @@ function openEdit(row: any) {
     provider: row.provider,
     model_key: row.model_key,
     display_name: row.display_name,
+    source_type: row.source_type,
+    source_uri: row.source_uri,
     endpoint: row.endpoint,
     api_key: "",
     model_type: row.model_type,
-    training_command_template: row.training_command_template || "",
     fine_tune_command_template: row.fine_tune_command_template || "",
     offline_eval_command_template: row.offline_eval_command_template || "",
     deployment_command_template: row.deployment_command_template || "",
@@ -114,9 +122,10 @@ async function submit() {
   }
   const payload: Record<string, unknown> = {
     display_name: form.display_name,
+    source_type: form.source_type,
+    source_uri: form.source_uri,
     endpoint: form.endpoint,
     model_type: form.model_type,
-    training_command_template: form.training_command_template || null,
     fine_tune_command_template: form.fine_tune_command_template || null,
     offline_eval_command_template: form.offline_eval_command_template || null,
     deployment_command_template: form.deployment_command_template || null,
@@ -212,12 +221,12 @@ onMounted(() => {
   <div class="flex flex-col gap-5">
     <div class="hero">
       <div>
-        <h2>模型配置</h2>
-        <p>治理层维护多模型路由、优先级与健康状态。</p>
+        <h2>Base Model 注册</h2>
+        <p>维护可用于 LoRA 微调的基础模型来源、命令模板与健康状态。</p>
       </div>
       <div class="flex gap-3">
         <el-button @click="checkAll" :loading="checkingAll">全部检测</el-button>
-        <el-button type="primary" @click="openCreate">新增模型</el-button>
+        <el-button type="primary" @click="openCreate">新增 Base Model</el-button>
       </div>
     </div>
 
@@ -225,11 +234,14 @@ onMounted(() => {
       <el-table :data="store.items" v-loading="store.loading">
         <el-table-column prop="display_name" label="名称" min-width="150" />
         <el-table-column prop="model_key" label="模型标识" min-width="150" />
+        <el-table-column label="来源" min-width="220">
+          <template #default="{ row }">{{ row.source_type }} / {{ row.source_uri }}</template>
+        </el-table-column>
         <el-table-column prop="provider" label="提供方" width="110" />
         <el-table-column label="GPU 模板" width="110">
           <template #default="{ row }">
-            <el-tag :type="row.training_command_template || row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? 'success' : 'info'">
-              {{ row.training_command_template || row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? "已配置" : "未配置" }}
+            <el-tag :type="row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? 'success' : 'info'">
+              {{ row.fine_tune_command_template || row.offline_eval_command_template || row.deployment_command_template ? "已配置" : "未配置" }}
             </el-tag>
           </template>
         </el-table-column>
@@ -264,7 +276,7 @@ onMounted(() => {
       </el-table>
     </el-card>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑模型配置' : '新增模型配置'" size="500px">
+    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑 Base Model' : '新增 Base Model'" size="500px">
       <el-form label-position="top">
         <el-form-item label="提供方">
           <el-input v-model="form.provider" :disabled="isEditing" />
@@ -274,6 +286,14 @@ onMounted(() => {
           <div v-if="isEditing" class="field-hint">编辑时不支持修改提供方或模型标识；如需变更请新建模型配置。</div>
         </el-form-item>
         <el-form-item label="展示名称"><el-input v-model="form.display_name" /></el-form-item>
+        <el-form-item label="来源类型">
+          <el-select v-model="form.source_type" placeholder="选择来源类型">
+            <el-option v-for="item in sourceTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="来源地址">
+          <el-input v-model="form.source_uri" placeholder="HuggingFace/ModelScope ID 或本地路径" />
+        </el-form-item>
         <el-form-item label="接口地址"><el-input v-model="form.endpoint" /></el-form-item>
         <el-form-item label="API Key">
           <el-input v-model="form.api_key" type="password" show-password />
@@ -285,14 +305,14 @@ onMounted(() => {
           </el-select>
         </el-form-item>
         <el-divider content-position="left">GPU 作业模板</el-divider>
-        <el-form-item label="训练命令模板">
-          <el-input v-model="form.training_command_template" type="textarea" :rows="4" placeholder="python train.py --dataset {dataset_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
-        </el-form-item>
         <el-form-item label="微调命令模板">
-          <el-input v-model="form.fine_tune_command_template" type="textarea" :rows="4" placeholder="python finetune.py --training-job {training_job_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
+          <el-input v-model="form.fine_tune_command_template" type="textarea" :rows="4" placeholder="python finetune.py --dataset {dataset_id} --eval-set {eval_set_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
         </el-form-item>
         <el-form-item label="离线评测命令模板">
           <el-input v-model="form.offline_eval_command_template" type="textarea" :rows="4" placeholder="python evaluate.py --eval-set {eval_set_id} --output {artifact_output_dir} --gpus {gpu_indices}" />
+        </el-form-item>
+        <el-form-item label="部署命令模板">
+          <el-input v-model="form.deployment_command_template" type="textarea" :rows="4" placeholder="python serve.py --model {model_config_id} --output {artifact_output_dir} --port 8000 --gpus {gpu_indices}" />
         </el-form-item>
         <el-form-item label="运行时环境 JSON">
           <el-input v-model="form.runtime_env_json" type="textarea" :rows="6" />

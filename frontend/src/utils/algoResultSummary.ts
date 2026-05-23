@@ -12,7 +12,6 @@ import type {
   SummaryLogItem,
   SummaryMetricItem,
   TrainingArtifact,
-  TrainingJob,
   TrainingResultSummaryRecord,
 } from "@/types/algo-workspace.types";
 
@@ -111,7 +110,7 @@ function appendGpuSummary(
   }
 }
 
-export function buildTrainingSummaryViewModel(resource: TrainingJob | FineTuneRun | null | undefined): ResourceSummaryViewModel {
+export function buildTrainingSummaryViewModel(resource: FineTuneRun | null | undefined): ResourceSummaryViewModel {
   const resultSummary = (resource?.result_summary || {}) as TrainingResultSummaryRecord;
   const summary = isRecord(resultSummary.summary) ? resultSummary.summary : {};
   const metrics = isRecord(resultSummary.metrics) ? resultSummary.metrics : {};
@@ -120,14 +119,25 @@ export function buildTrainingSummaryViewModel(resource: TrainingJob | FineTuneRu
     { label: "最佳验证精度", value: metricSummary.best_val_accuracy ?? "-" },
     { label: "最终训练损失", value: metricSummary.final_train_loss ?? "-" },
   ];
-  if (summary.base_checkpoint) {
-    highlights.push({ label: "基础检查点", value: summary.base_checkpoint });
-  }
   if (summary.effective_hyperparameters) {
     highlights.push({
       label: "有效超参数",
       value: compactValue(summary.effective_hyperparameters),
       hint: JSON.stringify(summary.effective_hyperparameters),
+    });
+  }
+  if (summary.base_model_ref) {
+    highlights.push({
+      label: "Base Model",
+      value: compactValue(summary.base_model_ref),
+      hint: JSON.stringify(summary.base_model_ref),
+    });
+  }
+  if (summary.lora) {
+    highlights.push({
+      label: "LoRA",
+      value: compactValue(summary.lora),
+      hint: JSON.stringify(summary.lora),
     });
   }
 
@@ -224,6 +234,7 @@ export function buildDeploymentSummaryViewModel(resource: Deployment | null | un
   const highlights: SummaryHighlightItem[] = [
     { label: "运行状态", value: runtimeRegistration.service_status || runtimeRegistration.status || "-" },
     { label: "模型标识", value: runtimeRegistration.model_key || "-" },
+    { label: "合并模式", value: summary.merge_mode || resource?.merge_mode || "-" },
     { label: "服务入口", value: runtimeRegistration.endpoint || "-" },
     { label: "服务提供方", value: runtimeRegistration.provider || "-" },
   ];
@@ -261,7 +272,6 @@ export function buildExperimentSummaryViewModel(resource: Experiment | null | un
   const artifacts = Array.isArray(resultSummary.artifacts) ? resultSummary.artifacts : [];
   const summary = isRecord(resultSummary.summary) ? resultSummary.summary : {};
   const highlights: SummaryHighlightItem[] = [
-    { label: "训练任务数", value: metrics.training_jobs ?? 0 },
     { label: "微调任务数", value: metrics.fine_tunes ?? 0 },
     { label: "离线评测数", value: metrics.offline_evaluations ?? 0 },
     { label: "部署记录数", value: metrics.deployments ?? 0 },

@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import import_module
@@ -43,6 +44,18 @@ def _mask_secret(value: str | None) -> str | None:
     if len(text) <= 8:
         return "*" * len(text)
     return f"{text[:4]}...{text[-4:]}"
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 @dataclass(slots=True)
@@ -141,6 +154,22 @@ class SshExecutionService:
     def execute_detached(self, *, host: str, port: int, username: str, password: str | None, private_key: str | None, command: str) -> dict[str, Any]:
         wrapped = f"bash -lc {shlex.quote(command)}"
         return self.execute(host=host, port=port, username=username, password=password, private_key=private_key, command=wrapped)
+
+    def execute_json(self, *, host: str, port: int, username: str, password: str | None, private_key: str | None, command: str) -> dict[str, Any]:
+        result = self.execute(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key=private_key,
+            command=command,
+        )
+        if int(result.get("exit_code") or 0) != 0:
+            raise ValidationError(result.get("stderr") or result.get("stdout") or "remote command failed")
+        try:
+            return json.loads(str(result.get("stdout") or "{}") or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValidationError(f"invalid remote json payload: {exc}") from exc
 
     def read_tail(self, *, host: str, port: int, username: str, password: str | None, private_key: str | None, path: str, lines: int = 40) -> str:
         result = self.execute(
@@ -328,11 +357,30 @@ class GpuNodeService(TenantAwareService):
             return "offline"
         return current_status or "online"
 
+    @staticmethod
+    def _probe_metadata(metadata_json: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(metadata_json, dict):
+            return {}
+        value = metadata_json.get("probe")
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _merge_probe_metadata(metadata_json: dict[str, Any] | None, probe: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(metadata_json or {})
+        merged["probe"] = _json_safe(probe)
+        return merged
+
     def _serialize_node(self, node: GpuComputeNode) -> GpuComputeNodeResponse:
         data = GpuComputeNodeResponse.model_validate(node).model_dump()
         data["status"] = self._status_from_timestamp(node.last_heartbeat, str(node.status or "offline"))
         data["has_ssh_password"] = bool(getattr(node, "ssh_password_enc", None))
         data["has_ssh_private_key"] = bool(getattr(node, "ssh_private_key_enc", None))
+        probe = self._probe_metadata(getattr(node, "metadata_json", None))
+        data["last_probe_at"] = probe.get("last_probe_at")
+        data["last_probe_error"] = probe.get("last_probe_error")
+        data["probe_status"] = probe.get("probe_status")
+        data["hardware_summary"] = probe.get("hardware_summary")
+        data["gpu_devices"] = list(probe.get("gpu_devices") or [])
         return GpuComputeNodeResponse(**data)
 
     async def list_nodes(self) -> list[GpuComputeNodeResponse]:
@@ -351,6 +399,15 @@ class GpuNodeService(TenantAwareService):
             raise ValidationError("gpu node name or host already exists")
         if not payload.ssh_password and not payload.ssh_private_key:
             raise ValidationError("ssh_password or ssh_private_key is required")
+        success, message = self._ssh.test_connection(
+            host=payload.host,
+            port=payload.ssh_port,
+            username=payload.ssh_username,
+            password=payload.ssh_password,
+            private_key=payload.ssh_private_key,
+        )
+        if not success:
+            raise ValidationError(f"ssh validation failed: {message}")
         bitmap = self._build_bitmap(payload.total_gpu_count)
         created = await self._nodes.create(
             {
@@ -371,7 +428,16 @@ class GpuNodeService(TenantAwareService):
                 "status": "offline",
                 "last_heartbeat": None,
                 "load_score": 0.0,
-                "metadata_json": payload.metadata_json or {},
+                "metadata_json": self._merge_probe_metadata(
+                    payload.metadata_json or {},
+                    {
+                        "probe_status": "validated",
+                        "last_probe_at": _utcnow(),
+                        "last_probe_error": None,
+                        "hardware_summary": None,
+                        "gpu_devices": [],
+                    },
+                ),
             }
         )
         await self._session.commit()
@@ -457,34 +523,162 @@ class GpuNodeService(TenantAwareService):
         row = await self._nodes.get(org_id=self._org_id, node_id=node_id)
         if row is None:
             raise NotFoundError("gpu node not found")
+        return await self.probe_node(node_id)
+
+    def _probe_node(self, *, row: GpuComputeNode) -> dict[str, Any]:
         password = self.decrypt_secret(row.ssh_password_enc)
         private_key = self.decrypt_secret(row.ssh_private_key_enc)
-        cpu_cmd = "top -bn1 | awk '/Cpu\\(s\\)/ {print 100 - $8}'"
-        mem_cmd = "free | awk '/Mem:/ {printf(\"%.2f\", $3/$2*100)}'"
-        gpu_cmd = "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | awk '{sum+=$1; count++} END {if(count>0) printf \"%.2f\", sum/count; else print \"0\"}'"
-        metrics: dict[str, Any] = {}
-        for key, command in {"cpu_usage": cpu_cmd, "memory_usage": mem_cmd, "gpu_usage": gpu_cmd}.items():
-            result = self._ssh.execute(
+        success, message = self._ssh.test_connection(
+            host=row.host,
+            port=row.ssh_port,
+            username=row.ssh_username,
+            password=password,
+            private_key=private_key,
+        )
+        probe_time = _utcnow()
+        if not success:
+            return {
+                "ok": False,
+                "probe_time": probe_time,
+                "status": "offline",
+                "probe_status": "ssh_failed",
+                "error": message,
+            }
+        probe_script = r"""python3 - <<'PY'
+import json
+import platform
+import socket
+import subprocess
+
+def run(command: str) -> str:
+    proc = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or command)
+    return proc.stdout.strip()
+
+def run_optional(command: str, default: str = "") -> str:
+    proc = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return default
+    return proc.stdout.strip()
+
+payload = {
+    "cpu_usage": float(run("top -bn1 | awk '/Cpu\\(s\\)/ {print 100 - $8}'") or 0.0),
+    "memory_usage": float(run("free | awk '/Mem:/ {printf(\"%.2f\", $3/$2*100)}'") or 0.0),
+    "gpu_usage": 0.0,
+    "hardware_summary": {
+        "hostname": socket.gethostname(),
+        "os": platform.platform(),
+        "kernel": platform.release(),
+        "driver_version": run_optional("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n 1", ""),
+        "cuda_version": run_optional("nvidia-smi | awk -F'CUDA Version: ' 'NF>1 {print $2}' | awk '{print $1}' | head -n 1", ""),
+    },
+    "gpu_devices": [],
+}
+
+gpu_lines = run_optional("nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu --format=csv,noheader,nounits", "")
+if gpu_lines:
+    total = 0.0
+    count = 0
+    devices = []
+    for line in gpu_lines.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 5:
+            continue
+        util = float(parts[4] or 0.0)
+        total += util
+        count += 1
+        devices.append({
+            "index": int(parts[0]),
+            "name": parts[1],
+            "memory_total_mb": float(parts[2] or 0.0),
+            "memory_used_mb": float(parts[3] or 0.0),
+            "utilization_gpu": util,
+        })
+    payload["gpu_devices"] = devices
+    payload["gpu_usage"] = round(total / count, 2) if count else 0.0
+
+print(json.dumps(payload, ensure_ascii=False))
+PY"""
+        try:
+            payload = self._ssh.execute_json(
                 host=row.host,
                 port=row.ssh_port,
                 username=row.ssh_username,
                 password=password,
                 private_key=private_key,
-                command=command,
+                command=probe_script,
             )
-            if int(result.get("exit_code") or 0) != 0:
-                raise ValidationError(f"failed to refresh {key}: {result.get('stderr') or result.get('stdout') or 'unknown error'}")
-            metrics[key] = round(float(str(result.get("stdout") or "0").strip() or 0), 2)
-        updated = await self.heartbeat(
-            row.id,
-            GpuNodeHeartbeatRequest(
-                cpu_usage=float(metrics.get("cpu_usage") or 0.0),
-                memory_usage=float(metrics.get("memory_usage") or 0.0),
-                gpu_usage=float(metrics.get("gpu_usage") or 0.0),
-                gpu_bitmap=row.gpu_bitmap,
-            ),
-        )
-        return updated, metrics
+        except ValidationError as exc:
+            return {
+                "ok": False,
+                "probe_time": probe_time,
+                "status": "error",
+                "probe_status": "probe_failed",
+                "error": str(exc),
+            }
+        return {
+            "ok": True,
+            "probe_time": probe_time,
+            "status": "online",
+            "probe_status": "ok",
+            "error": None,
+            "payload": payload,
+        }
+
+    async def probe_node(self, node_id: str) -> tuple[GpuComputeNodeResponse, dict[str, Any]]:
+        row = await self._nodes.get(org_id=self._org_id, node_id=node_id)
+        if row is None:
+            raise NotFoundError("gpu node not found")
+        result = self._probe_node(row=row)
+        probe_meta = {
+            "last_probe_at": result["probe_time"],
+            "last_probe_error": result.get("error"),
+            "probe_status": result.get("probe_status"),
+            "hardware_summary": (result.get("payload") or {}).get("hardware_summary"),
+            "gpu_devices": list((result.get("payload") or {}).get("gpu_devices") or []),
+        }
+        update_payload: dict[str, Any] = {
+            "status": result["status"],
+            "metadata_json": self._merge_probe_metadata(row.metadata_json, probe_meta),
+        }
+        if result.get("ok"):
+            payload = result.get("payload") or {}
+            gpu_bitmap = row.gpu_bitmap or self._build_bitmap(row.total_gpu_count)
+            available_gpu_count = gpu_bitmap.count("0")
+            update_payload.update(
+                {
+                    "cpu_usage": round(float(payload.get("cpu_usage") or 0.0), 2),
+                    "memory_usage": round(float(payload.get("memory_usage") or 0.0), 2),
+                    "gpu_usage": round(float(payload.get("gpu_usage") or 0.0), 2),
+                    "last_heartbeat": result["probe_time"],
+                    "load_score": GpuSchedulingService._compute_load_score(
+                        cpu_usage=float(payload.get("cpu_usage") or 0.0),
+                        memory_usage=float(payload.get("memory_usage") or 0.0),
+                        total_gpu_count=int(row.total_gpu_count or 0),
+                        available_gpu_count=available_gpu_count,
+                    ),
+                }
+            )
+        await self._nodes.save(row, update_payload)
+        await self._session.commit()
+        return self._serialize_node(row), {
+            "probe_status": result.get("probe_status"),
+            "error": result.get("error"),
+            **((result.get("payload") or {}) if result.get("ok") else {}),
+        }
+
+    async def poll_nodes(self) -> dict[str, int]:
+        rows = await self._nodes.list(org_id=self._org_id)
+        counts = {"online": 0, "offline": 0, "error": 0, "disabled": 0}
+        for row in rows:
+            if str(row.status or "").lower() == "disabled":
+                counts["disabled"] += 1
+                continue
+            serialized, _ = await self.probe_node(row.id)
+            key = str(serialized.status or "offline")
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
     async def allocate_leases(self, *, resource_type: str, resource_id: str, requested_gpu_count: int) -> GpuLeaseRecord:
         record = await self._scheduling.allocate(
@@ -655,7 +849,13 @@ class GpuJobRunner:
 
     async def collect_remote_status(self, *, node: GpuComputeNode, remote: RemoteExecutionRecord) -> dict[str, Any]:
         if not settings.gpu_enable_real_execution:
-            return {"status": "succeeded", "exit_code": 0, "log_tail": "simulated execution complete"}
+            return {
+                "status": "succeeded",
+                "exit_code": 0,
+                "log_tail": "simulated execution complete",
+                "status_file_state": "ok",
+                "poll_error": None,
+            }
         password = self._service.decrypt_secret(node.ssh_password_enc)
         private_key = self._service.decrypt_secret(node.ssh_private_key_enc)
         status_result = self._ssh.execute(
@@ -671,8 +871,20 @@ class GpuJobRunner:
                 "status": "missing",
                 "exit_code": status_result.get("exit_code"),
                 "error": status_result.get("stderr") or "missing status file",
+                "status_file_state": "missing",
+                "poll_error": status_result.get("stderr") or "missing status file",
             }
-        data = json.loads(str(status_result.get("stdout") or "{}") or "{}")
+        try:
+            data = json.loads(str(status_result.get("stdout") or "{}") or "{}")
+        except json.JSONDecodeError as exc:
+            return {
+                "status": "running",
+                "exit_code": None,
+                "error": f"invalid status file: {exc}",
+                "status_file_state": "invalid_json",
+                "poll_error": f"invalid status file: {exc}",
+                "log_tail": "",
+            }
         if self._ssh.exists(
             host=node.host,
             port=node.ssh_port,
@@ -691,6 +903,8 @@ class GpuJobRunner:
             )
         else:
             data["log_tail"] = ""
+        data["status_file_state"] = "ok"
+        data["poll_error"] = data.get("error") if str(data.get("status") or "").strip().lower() not in {"running", "succeeded", "completed"} else None
         return data
 
     async def terminate_remote_job(self, *, node: GpuComputeNode, remote: RemoteExecutionRecord) -> None:
