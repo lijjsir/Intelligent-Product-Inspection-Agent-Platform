@@ -21,13 +21,11 @@ from app.models.algo_resources import (
     ModelDeployment,
     OfflineEvaluation,
     OnlineValidation,
-    TrainingJob,
 )
 
 
 RESOURCE_MODEL_MAP: dict[str, Any] = {
     "evaluation_dataset": EvaluationDataset,
-    "training_job": TrainingJob,
     "fine_tune": FineTuneRun,
     "offline_evaluation": OfflineEvaluation,
     "online_validation": OnlineValidation,

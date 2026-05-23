@@ -36,10 +36,6 @@ import type {
   OnlineValidation,
   OnlineValidationCreateRequest,
   OnlineValidationListResponse,
-  TrainingJob,
-  TrainingJobCreateRequest,
-  TrainingJobListResponse,
-  TrainingJobUpdateRequest,
 } from "@/types/algo-workspace.types";
 
 const processingBase = (datasetId: string, type: DatasetProcessingType) =>
@@ -149,34 +145,6 @@ export const algoWorkspaceApi = {
 
   removeEvalDataset(id: string) {
     return http.delete<{ deleted: boolean }>(`/v1/eval-datasets/${id}`);
-  },
-
-  listTrainingJobs(query: AlgoListQuery) {
-    return http.get<TrainingJobListResponse>("/v1/training-jobs", { params: query });
-  },
-
-  getTrainingJob(id: string) {
-    return http.get<TrainingJob>(`/v1/training-jobs/${id}`);
-  },
-
-  createTrainingJob(payload: TrainingJobCreateRequest) {
-    return http.post<TrainingJob>("/v1/training-jobs", payload);
-  },
-
-  updateTrainingJob(id: string, payload: TrainingJobUpdateRequest) {
-    return http.patch<TrainingJob>(`/v1/training-jobs/${id}`, payload);
-  },
-
-  launchTrainingJob(id: string) {
-    return http.post<AlgoResourceActionResponse>(`/v1/training-jobs/${id}/launch`);
-  },
-
-  cancelTrainingJob(id: string) {
-    return http.post<AlgoResourceActionResponse>(`/v1/training-jobs/${id}/cancel`);
-  },
-
-  removeTrainingJob(id: string) {
-    return http.delete<{ deleted: boolean }>(`/v1/training-jobs/${id}`);
   },
 
   listFineTunes(query: AlgoListQuery) {

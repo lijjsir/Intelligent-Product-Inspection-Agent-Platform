@@ -1,5 +1,21 @@
 export type GpuNodeStatus = "online" | "offline" | "error" | "disabled";
 
+export interface GpuDeviceSnapshot {
+  index: number;
+  name: string;
+  memory_total_mb?: number | null;
+  memory_used_mb?: number | null;
+  utilization_gpu?: number | null;
+}
+
+export interface GpuHardwareSummary {
+  hostname?: string | null;
+  os?: string | null;
+  kernel?: string | null;
+  driver_version?: string | null;
+  cuda_version?: string | null;
+}
+
 export interface GpuComputeNode {
   id: string;
   org_id: string;
@@ -16,6 +32,11 @@ export interface GpuComputeNode {
   gpu_usage?: number | null;
   status: GpuNodeStatus;
   last_heartbeat?: string | null;
+  last_probe_at?: string | null;
+  last_probe_error?: string | null;
+  probe_status?: string | null;
+  hardware_summary?: GpuHardwareSummary | null;
+  gpu_devices?: GpuDeviceSnapshot[];
   load_score?: number | null;
   metadata_json?: Record<string, unknown> | null;
   has_ssh_password: boolean;

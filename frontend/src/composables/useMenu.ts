@@ -137,7 +137,6 @@ function getAlgorithmEngineerMenu(): MenuStructure {
   return [
     { title: "数据接入", path: "/ops/data/import" },
     { title: "测试集管理", path: "/ops/data/eval-sets" },
-    { title: "训练任务", path: "/ops/training/jobs" },
     { title: "微调管理", path: "/ops/training/fine-tune" },
     { title: "离线评测", path: "/ops/eval/offline" },
     { title: "在线验证", path: "/ops/eval/online" },

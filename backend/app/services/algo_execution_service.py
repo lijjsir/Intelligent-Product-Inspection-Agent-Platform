@@ -37,8 +37,9 @@ class ExecutionModelRef:
     model_key: str | None
     display_name: str | None
     endpoint: str | None
+    source_type: str | None = None
+    source_uri: str | None = None
     model_type: str | None = None
-    training_command_template: str | None = None
     fine_tune_command_template: str | None = None
     offline_eval_command_template: str | None = None
     deployment_command_template: str | None = None
@@ -68,95 +69,12 @@ def _merge_gpu_execution(
 
 class TrainingRunner:
     @staticmethod
-    def run_training(
-        *,
-        resource_id: str,
-        resource_name: str,
-        source_dataset_id: str,
-        model_ref: ExecutionModelRef | None,
-        config_json: dict[str, Any] | None,
-        execution_mode: str,
-        started_at: datetime | None,
-        completed_at: datetime | None,
-        lease: dict[str, Any] | None = None,
-        remote_execution: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        executor = LocalAlgoExecutor(build_object_storage())
-        rng = _stable_rng("training", resource_id, source_dataset_id, model_ref.model_key if model_ref else "")
-        hyperparameters = dict((config_json or {}).get("hyperparameters") or {})
-        epochs = int(hyperparameters.get("epochs") or 5)
-        learning_rate = float(hyperparameters.get("learning_rate") or 0.001)
-        batch_size = int(hyperparameters.get("batch_size") or 16)
-        metrics = TrainingRunner._build_metrics(rng=rng, epochs=epochs, stage="training")
-        artifacts_prefix = f"training-jobs/{resource_id}"
-        execution_details = executor.run_job(
-            resource_type="training-jobs",
-            resource_id=resource_id,
-            payload={"source_dataset_id": source_dataset_id, "config_json": config_json or {}},
-        )
-        report = executor.upload_json_artifact(
-            resource_type="training-jobs",
-            resource_id=resource_id,
-            file_name="training-report.json",
-            payload={"metrics": metrics, "execution": execution_details},
-        )
-        artifacts = [
-            {
-                "type": "checkpoint",
-                "name": "last_checkpoint",
-                "path": _artifact_path(artifacts_prefix, "checkpoint-last.bin"),
-                "epoch": epochs,
-            },
-            {
-                "type": "best_model",
-                "name": "best_model",
-                "path": _artifact_path(artifacts_prefix, "best-model.bin"),
-                "metric": "val_accuracy",
-                "score": metrics["summary"]["best_val_accuracy"],
-            },
-            {
-                "type": "training_report",
-                "name": report.name,
-                "path": report.path,
-                "download_url": report.download_url,
-                **(report.meta or {}),
-            },
-        ]
-        logs = [
-            f"training job {resource_name} started",
-            f"dataset={source_dataset_id} model={model_ref.model_key if model_ref else 'unknown'}",
-            f"executor workdir={execution_details.get('workdir') or 'n/a'}",
-            f"effective hyperparameters: lr={learning_rate}, batch_size={batch_size}, epochs={epochs}",
-            f"best validation accuracy={metrics['summary']['best_val_accuracy']}",
-            "training completed successfully",
-        ]
-        return _merge_gpu_execution({
-            "summary": {
-                "status": "completed",
-                "execution_mode": execution_mode,
-                "started_at": _iso(started_at),
-                "completed_at": _iso(completed_at),
-                "source_dataset_id": source_dataset_id,
-                "model_config_id": model_ref.id if model_ref else None,
-                "model_key": model_ref.model_key if model_ref else None,
-                "effective_hyperparameters": {
-                    "learning_rate": learning_rate,
-                    "batch_size": batch_size,
-                    "epochs": epochs,
-                },
-            },
-            "artifacts": artifacts,
-            "metrics": metrics,
-            "logs": logs,
-        }, lease=lease, remote_execution=remote_execution)
-
-    @staticmethod
     def run_fine_tune(
         *,
         resource_id: str,
         resource_name: str,
-        training_job_id: str,
-        base_training_summary: dict[str, Any] | None,
+        source_dataset_id: str,
+        eval_set_id: str | None,
         model_ref: ExecutionModelRef | None,
         config_json: dict[str, Any] | None,
         execution_mode: str,
@@ -166,41 +84,42 @@ class TrainingRunner:
         remote_execution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         executor = LocalAlgoExecutor(build_object_storage())
-        rng = _stable_rng("fine-tune", resource_id, training_job_id, model_ref.model_key if model_ref else "")
-        base_hyperparameters = dict(((base_training_summary or {}).get("summary") or {}).get("effective_hyperparameters") or {})
+        rng = _stable_rng("fine-tune", resource_id, source_dataset_id, model_ref.model_key if model_ref else "")
         hyperparameters = dict((config_json or {}).get("hyperparameters") or {})
-        base_learning_rate = float(base_hyperparameters.get("learning_rate") or 0.001)
-        learning_rate = float(hyperparameters.get("learning_rate") or round(base_learning_rate * 0.1, 6))
+        lora_config = dict((config_json or {}).get("lora") or {})
+        learning_rate = float(hyperparameters.get("learning_rate") or 0.0001)
         epochs = int(hyperparameters.get("epochs") or 3)
-        batch_size = int(hyperparameters.get("batch_size") or base_hyperparameters.get("batch_size") or 8)
-        metrics = TrainingRunner._build_metrics(rng=rng, epochs=epochs, stage="fine_tune", base_accuracy=((base_training_summary or {}).get("metrics") or {}).get("summary", {}).get("best_val_accuracy"))
-        base_checkpoint = TrainingRunner._find_artifact_path(base_training_summary, "checkpoint")
+        batch_size = int(hyperparameters.get("batch_size") or 8)
+        metrics = TrainingRunner._build_metrics(rng=rng, epochs=epochs, stage="fine_tune")
         artifacts_prefix = f"fine-tunes/{resource_id}"
         execution_details = executor.run_job(
             resource_type="fine-tunes",
             resource_id=resource_id,
-            payload={"training_job_id": training_job_id, "config_json": config_json or {}, "base_checkpoint": base_checkpoint},
+            payload={
+                "source_dataset_id": source_dataset_id,
+                "eval_set_id": eval_set_id,
+                "config_json": config_json or {},
+                "base_model": {
+                    "model_config_id": model_ref.id if model_ref else None,
+                    "model_key": model_ref.model_key if model_ref else None,
+                    "source_type": model_ref.source_type if model_ref else None,
+                    "source_uri": model_ref.source_uri if model_ref else None,
+                },
+            },
         )
         report = executor.upload_json_artifact(
             resource_type="fine-tunes",
             resource_id=resource_id,
             file_name="fine-tune-report.json",
-            payload={"metrics": metrics, "training_job_id": training_job_id, "execution": execution_details},
+            payload={"metrics": metrics, "source_dataset_id": source_dataset_id, "execution": execution_details},
         )
         artifacts = [
             {
-                "type": "checkpoint",
-                "name": "fine_tune_checkpoint",
-                "path": _artifact_path(artifacts_prefix, "checkpoint-last.bin"),
+                "type": "adapter",
+                "name": "lora_adapter",
+                "path": _artifact_path(artifacts_prefix, "adapter.safetensors"),
                 "epoch": epochs,
-                "base_checkpoint": base_checkpoint,
-            },
-            {
-                "type": "best_model",
-                "name": "fine_tune_best_model",
-                "path": _artifact_path(artifacts_prefix, "best-model.bin"),
-                "metric": "val_accuracy",
-                "score": metrics["summary"]["best_val_accuracy"],
+                "base_model": model_ref.model_key if model_ref else None,
             },
             {
                 "type": "training_report",
@@ -211,10 +130,11 @@ class TrainingRunner:
             },
         ]
         logs = [
-            f"fine tune {resource_name} started from training job {training_job_id}",
-            f"base checkpoint={base_checkpoint or 'missing'}",
+            f"fine tune {resource_name} started",
+            f"dataset={source_dataset_id} base_model={model_ref.model_key if model_ref else 'unknown'}",
             f"executor workdir={execution_details.get('workdir') or 'n/a'}",
             f"effective hyperparameters: lr={learning_rate}, batch_size={batch_size}, epochs={epochs}",
+            f"lora: rank={lora_config.get('rank') or '-'}, alpha={lora_config.get('alpha') or '-'}, dropout={lora_config.get('dropout') or '-'}",
             f"best validation accuracy={metrics['summary']['best_val_accuracy']}",
             "fine tune completed successfully",
         ]
@@ -224,15 +144,22 @@ class TrainingRunner:
                 "execution_mode": execution_mode,
                 "started_at": _iso(started_at),
                 "completed_at": _iso(completed_at),
-                "training_job_id": training_job_id,
+                "source_dataset_id": source_dataset_id,
+                "eval_set_id": eval_set_id,
                 "model_config_id": model_ref.id if model_ref else None,
                 "model_key": model_ref.model_key if model_ref else None,
+                "base_model_ref": {
+                    "provider": model_ref.provider if model_ref else None,
+                    "display_name": model_ref.display_name if model_ref else None,
+                    "source_type": model_ref.source_type if model_ref else None,
+                    "source_uri": model_ref.source_uri if model_ref else None,
+                },
                 "effective_hyperparameters": {
                     "learning_rate": learning_rate,
                     "batch_size": batch_size,
                     "epochs": epochs,
                 },
-                "base_checkpoint": base_checkpoint,
+                "lora": lora_config,
             },
             "artifacts": artifacts,
             "metrics": metrics,
@@ -391,6 +318,7 @@ class DeploymentManager:
         resource_name: str,
         source_type: str,
         source_id: str,
+        merge_mode: str,
         source_summary: dict[str, Any] | None,
         model_ref: ExecutionModelRef | None,
         config_json: dict[str, Any] | None,
@@ -400,7 +328,7 @@ class DeploymentManager:
     ) -> dict[str, Any]:
         executor = LocalAlgoExecutor(build_object_storage())
         runtime_registry = AlgoRuntimeRegistry()
-        best_model_path = TrainingRunner._find_artifact_path(source_summary, "best_model") or TrainingRunner._find_artifact_path(source_summary, "checkpoint")
+        adapter_path = TrainingRunner._find_artifact_path(source_summary, "adapter")
         service_config = dict((config_json or {}).get("service_config") or {})
         inference_config = {
             "max_batch_size": int(service_config.get("max_batch_size") or 8),
@@ -418,7 +346,7 @@ class DeploymentManager:
         execution_details = executor.run_job(
             resource_type="deployments",
             resource_id=resource_id,
-            payload={"source_type": source_type, "source_id": source_id, "inference_config": inference_config},
+            payload={"source_type": source_type, "source_id": source_id, "merge_mode": merge_mode, "inference_config": inference_config},
         )
         manifest = executor.upload_json_artifact(
             resource_type="deployments",
@@ -427,6 +355,7 @@ class DeploymentManager:
             payload={
                 "source_type": source_type,
                 "source_id": source_id,
+                "merge_mode": merge_mode,
                 "model_key": model_ref.model_key if model_ref else None,
                 "provider": model_ref.provider if model_ref else None,
                 "inference_config": inference_config,
@@ -445,9 +374,9 @@ class DeploymentManager:
         }
         artifacts = [
             {
-                "type": "deployed_model",
+                "type": "adapter_bundle" if merge_mode == "dynamic" else "merged_model",
                 "name": "runtime_model",
-                "path": best_model_path,
+                "path": adapter_path if merge_mode == "dynamic" else _artifact_path(f"deployments/{resource_id}", "merged-model.bin"),
             },
             {
                 "type": "deployment_manifest",
@@ -460,6 +389,7 @@ class DeploymentManager:
         logs = [
             f"deployment {resource_name} started",
             f"source={source_type}:{source_id}",
+            f"merge_mode={merge_mode}",
             f"serving model={model_ref.model_key if model_ref else 'unknown'}",
             f"executor workdir={execution_details.get('workdir') or 'n/a'}",
             f"endpoint={runtime_registration['endpoint']}",
@@ -473,6 +403,7 @@ class DeploymentManager:
                 "completed_at": _iso(completed_at),
                 "source_type": source_type,
                 "source_id": source_id,
+                "merge_mode": merge_mode,
             },
             "runtime_registration": runtime_registration,
             "artifacts": artifacts,
