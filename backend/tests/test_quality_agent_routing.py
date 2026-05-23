@@ -67,16 +67,11 @@ def test_route_policy_image_quality_question_waits_for_formal_submission():
     assert decision.sub_route == "quality_qa"
 
 
-def test_route_policy_forced_inspection_without_subroute_keeps_task_draft_gate():
-    decision = AgentRoutePolicy().decide(
-        AgentRouterInput(
-            query="创建质检任务，产品编号 001",
-            ext={"route_hints": {"force_agent": "inspection_task"}},
-        )
-    )
+def test_route_policy_exposes_no_manual_override_rules():
+    rules = AgentRoutePolicy.get_rules()
 
-    assert decision.selected_agent == "inspection_task"
-    assert decision.sub_route == "task_create"
+    assert [rule["priority"] for rule in rules] == list(range(1, len(rules) + 1))
+    assert all(rule["route_source"] == "rule" for rule in rules)
 
 
 def test_route_policy_keeps_city_question_in_general_chat():

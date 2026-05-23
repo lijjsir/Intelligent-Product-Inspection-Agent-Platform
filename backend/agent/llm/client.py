@@ -73,12 +73,7 @@ class LLMClient:
         observation_name: str = "llm.chat",
         observation_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload = {
-            "model": self._model_id,
-            "messages": messages,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-        }
+        payload = self._build_chat_payload(messages, temperature=temperature)
         return await self._post_json(
             "/chat/completions",
             payload,
@@ -86,6 +81,93 @@ class LLMClient:
             observation_type="generation",
             observation_metadata=observation_metadata,
         )
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        temperature: float = 0.2,
+        observation_name: str = "llm.chat_with_tools",
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._build_chat_payload(
+            messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+        raw = await self._post_json(
+            "/chat/completions", payload,
+            observation_name=observation_name,
+            observation_type="generation",
+            observation_metadata=observation_metadata,
+            parse_choices_content=False,
+        )
+        choices = raw.get("choices") or []
+        if not choices:
+            return {"finish_reason": "stop", "content": None, "tool_calls": None}
+
+        choice = choices[0] or {}
+        message = choice.get("message") or {}
+        finish_reason = choice.get("finish_reason", "stop")
+
+        tool_calls = None
+        raw_tool_calls = message.get("tool_calls") or []
+        if raw_tool_calls:
+            tool_calls = []
+            for tc in raw_tool_calls:
+                fn = (tc if isinstance(tc, dict) else {}).get("function") or {}
+                tool_calls.append({
+                    "id": (tc if isinstance(tc, dict) else {}).get("id", ""),
+                    "name": fn.get("name", ""),
+                    "arguments": self._parse_tool_args(fn.get("arguments", "{}")),
+                })
+
+        content = message.get("content") or None
+        meta = {"id": raw.get("id"), "model": raw.get("model"), "usage": raw.get("usage"),
+                "finish_reason": finish_reason}
+        pricing_meta = self._build_pricing_meta()
+        if pricing_meta:
+            meta["pricing"] = pricing_meta
+
+        return {
+            "finish_reason": finish_reason,
+            "content": content,
+            "tool_calls": tool_calls,
+            "__meta__": meta,
+        }
+
+    @staticmethod
+    def _parse_tool_args(args: str | dict) -> dict[str, Any]:
+        if isinstance(args, dict):
+            return args
+        try:
+            return json.loads(args)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def _build_chat_payload(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self._model_id,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
+        else:
+            payload["response_format"] = {"type": "json_object"}
+        return self._ensure_json_prompt_hint(payload)
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -282,6 +364,7 @@ class LLMClient:
         observation_name: str,
         observation_type: str,
         observation_metadata: dict[str, Any] | None = None,
+        parse_choices_content: bool = True,
     ) -> dict[str, Any]:
         if not self._api_key and self._provider != "local_openai":
             raise RuntimeError(f"api key is not configured for provider '{self._provider}' in model config page")
@@ -390,7 +473,7 @@ class LLMClient:
             meta["langfuse"] = langfuse_meta
 
         choices = data.get("choices") or []
-        if choices:
+        if parse_choices_content and choices:
             content = ((choices[0] or {}).get("message") or {}).get("content")
             if isinstance(content, str):
                 parsed = self._extract_json_object(content)
@@ -494,6 +577,33 @@ class LLMClient:
             return False
         detail = response.text.lower()
         return "response_format.type" in detail and "json_object" in detail and "not supported by this model" in detail
+
+    @staticmethod
+    def _ensure_json_prompt_hint(payload: dict[str, Any]) -> dict[str, Any]:
+        response_format = payload.get("response_format")
+        if not isinstance(response_format, dict) or response_format.get("type") != "json_object":
+            return payload
+
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return payload
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and re.search(r"\bjson\b", content, flags=re.I):
+                return payload
+
+        next_payload = dict(payload)
+        next_payload["messages"] = [
+            {
+                "role": "system",
+                "content": "When responding with message content, return valid json.",
+            },
+            *messages,
+        ]
+        return next_payload
 
     @staticmethod
     def _safe_update_observation(observation: Any, **kwargs) -> None:

@@ -50,6 +50,112 @@ class Understanding:
 
 
 class ManagerPolicy:
+
+    @staticmethod
+    def get_intents() -> list[dict[str, Any]]:
+        """Return the intent-understanding rules in priority order (mirrors understand())."""
+        return [
+            {
+                "priority": 1,
+                "name": "RAG 入库请求",
+                "condition": "命中 RAG_INGEST_PATTERNS（加入/写入/导入知识库）",
+                "intent": "rag_ingest",
+                "target_agent": "chat",
+                "needs": ["rag.ingest"],
+                "risk": "high",
+                "stop_on_match": True,
+                "description": "请求把文件写入 RAG 空间，需要显式确认且不能在聊天页直接执行",
+            },
+            {
+                "priority": 2,
+                "name": "聊天页任务意图拦截",
+                "condition": "surface=chat 且命中 TASK_PATTERNS（创建/发起任务等）",
+                "intent": "action_blocked",
+                "target_agent": "chat",
+                "needs": ["chat.response.compose"],
+                "risk": "medium",
+                "stop_on_match": True,
+                "description": "阻止聊天页正式业务动作，提示用户前往质量检测任务页面",
+            },
+            {
+                "priority": 3,
+                "name": "检测页任务执行",
+                "condition": "surface=quality_task 且命中 TASK_PATTERNS",
+                "intent": "inspection_execute",
+                "target_agent": "inspection_task",
+                "needs": ["quality.inspection.execute"],
+                "risk": "high",
+                "stop_on_match": True,
+                "description": "正式执行质量检测任务（需确认 action_intent）",
+            },
+            {
+                "priority": 4,
+                "name": "图片理解",
+                "condition": "附件包含 image 类型",
+                "intent": "image_understanding",
+                "target_agent": "inspection_task",
+                "needs": ["image.understanding", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "对图片进行非正式理解和初步判断（非正式检测）",
+            },
+            {
+                "priority": 5,
+                "name": "文档/文件处理",
+                "condition": "附件包含 document 或 structured_file 类型",
+                "intent": "file_summary / file_qa",
+                "target_agent": "chat",
+                "needs": ["file.summary", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "处理聊天上传文件：命中 SUMMARY_PATTERNS 则总结，否则文件问答",
+            },
+            {
+                "priority": 6,
+                "name": "报告/任务状态查询",
+                "condition": "命中 REPORT_PATTERNS（报告/上次检测/检测结果/任务状态等）",
+                "intent": "quality_report_query",
+                "target_agent": "inspection_task",
+                "needs": ["quality.report.query", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "只读查询质量检测报告或任务状态",
+            },
+            {
+                "priority": 7,
+                "name": "RAG 知识库问答",
+                "condition": "已选择 RAG 空间，或命中 RAG_PATTERNS（知识库/RAG/根据资料/AQL/标准等）",
+                "intent": "rag_qa",
+                "target_agent": "chat",
+                "needs": ["rag.retrieve", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "基于可用知识源检索证据并回答",
+            },
+            {
+                "priority": 8,
+                "name": "数据分析",
+                "condition": "命中 DATA_PATTERNS（数据分析/统计/趋势等）",
+                "intent": "data_analysis",
+                "target_agent": "chat",
+                "needs": ["data.analysis", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "预留数据分析 Agent 只读分析能力",
+            },
+            {
+                "priority": 9,
+                "name": "默认普通聊天",
+                "condition": "未命中以上所有规则",
+                "intent": "general_chat",
+                "target_agent": "chat",
+                "needs": ["chat.general"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "回答普通聊天问题，无特殊能力需求",
+            },
+        ]
+
     def initialize_state(self, request: NormalizedRequest) -> ManagerState:
         ext = dict(request.ext or {})
         surface = self._surface(request)
@@ -135,7 +241,7 @@ class ManagerPolicy:
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
-        if self._matches(query, RAG_PATTERNS):
+        if state.selected_rag_space or self._matches(query, RAG_PATTERNS):
             return Understanding(
                 goal="基于可用知识源检索证据并回答",
                 intent="rag_qa",

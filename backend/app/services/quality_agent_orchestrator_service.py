@@ -4,6 +4,7 @@ from datetime import date, datetime
 import logging
 from time import perf_counter
 from typing import Any
+import uuid
 
 from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
 from agent.llm.pricing import ModelPricing
@@ -11,6 +12,7 @@ from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
 from app.core.config import settings
+from app.models.tool import ToolExecution
 from app.models.task import InspectionTask
 from app.repositories.agent_management_repo import AgentExecutionMetricsRepository
 from app.repositories.agent_ops_repo import (
@@ -25,6 +27,7 @@ from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
+from app.repositories.tool_repo import ToolRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.task_service import TaskService
 from app.services.chat_message_lifecycle_service import ChatMessageLifecycleService
@@ -278,6 +281,18 @@ class QualityAgentOrchestratorService:
                             "metadata_json": metadata,
                         }
                     )
+                await self._persist_rag_tool_executions(
+                    session,
+                    request=request,
+                    output=output,
+                    materialized_task_id=None if not materialized else str(materialized["task_id"]),
+                )
+                await self._persist_file_tool_executions(
+                    session,
+                    request=request,
+                    output=output,
+                    materialized_task_id=None if not materialized else str(materialized["task_id"]),
+                )
 
             await session.commit()
 
@@ -294,6 +309,137 @@ class QualityAgentOrchestratorService:
             quality=dict(output.quality or {}),
         )
         return materialization_error is None
+
+    async def _persist_rag_tool_executions(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        materialized_task_id: str | None,
+    ) -> None:
+        rag_queries = list(output.persistable_output.rag_queries or [])
+        if not rag_queries:
+            return
+        try:
+            tool_repo = ToolRepository(session)
+            tool = await tool_repo.get_by_tool_key(request.org_id, "rag.standard_search")
+            if not tool:
+                return
+            for index, item in enumerate(rag_queries):
+                execution_id = str(uuid.uuid5(uuid.NAMESPACE_URL, self._idempotency_key(request, "tool-rag", index)))
+                existing = await session.get(ToolExecution, execution_id)
+                if existing is not None:
+                    continue
+                metadata = dict(item.metadata or {})
+                status = "success" if int(item.hit_count or 0) >= 0 else "failed"
+                input_payload = {
+                    "query": item.query,
+                    "rag_space_id": item.rag_space_id,
+                    "top_k": int(item.top_k or 0),
+                }
+                output_payload = {
+                    "hit_count": int(item.hit_count or 0),
+                    "hit_rate": float(item.hit_rate or 0.0),
+                    "citation_coverage": float(item.citation_coverage or 0.0),
+                    "top_score": float(item.top_score or 0.0),
+                    "top_sources": list(metadata.get("top_sources") or []),
+                }
+                await tool_repo.create_execution(
+                    ToolExecution(
+                        id=execution_id,
+                        task_id=materialized_task_id or str(uuid.uuid5(uuid.NAMESPACE_URL, f"{request.workflow_run_id or request.request_id}:tool-rag-task")),
+                        org_id=request.org_id,
+                        tool_id=str(tool.id),
+                        tool_name=str(tool.display_name or "标准知识库检索"),
+                        call_index=index,
+                        input_payload=input_payload,
+                        output_payload=output_payload,
+                        status=status,
+                        error_message=None,
+                        latency_ms=int(item.latency_ms or 0),
+                        agent_id=None,
+                        trace_id=item.trace_id or request.workflow_run_id or request.request_id,
+                        execution_type="runtime",
+                        input_redacted=input_payload,
+                        output_redacted=output_payload,
+                    )
+                )
+        except Exception:
+            logger.debug("rag tool execution log write skipped", exc_info=True)
+
+    async def _persist_file_tool_executions(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        materialized_task_id: str | None,
+    ) -> None:
+        parsed_files: list[dict[str, Any]] = []
+        for artifact in self._response_artifacts(output):
+            if str(artifact.get("type") or "") not in {"file_summary", "file_answer"}:
+                continue
+            content = artifact.get("content")
+            if not isinstance(content, dict):
+                continue
+            for item in list(content.get("parsed_files") or []):
+                if isinstance(item, dict):
+                    parsed_files.append(item)
+        if not parsed_files:
+            return
+        try:
+            tool_repo = ToolRepository(session)
+            tool = await tool_repo.get_by_tool_key(request.org_id, "file.parse")
+            if not tool:
+                return
+            trace_id = request.workflow_run_id or request.request_id
+            for index, item in enumerate(parsed_files):
+                execution_id = str(uuid.uuid5(uuid.NAMESPACE_URL, self._idempotency_key(request, "tool-file-parse", index)))
+                existing = await session.get(ToolExecution, execution_id)
+                if existing is not None:
+                    continue
+                file_name = str(item.get("name") or f"attachment-{index + 1}")
+                input_payload = {
+                    "file_name": file_name,
+                    "file_url": str(item.get("url") or ""),
+                    "content_type": str(item.get("content_type") or ""),
+                }
+                output_payload = {
+                    "kind": item.get("kind"),
+                    "text_length": len(str(item.get("text") or "")),
+                    "summary": str(item.get("summary") or "")[:500],
+                }
+                await tool_repo.create_execution(
+                    ToolExecution(
+                        id=execution_id,
+                        task_id=materialized_task_id or str(uuid.uuid5(uuid.NAMESPACE_URL, f"{trace_id}:tool-file-task")),
+                        org_id=request.org_id,
+                        tool_id=str(tool.id),
+                        tool_name=str(tool.display_name or "文件内容解析"),
+                        call_index=index,
+                        input_payload=input_payload,
+                        output_payload=output_payload,
+                        status="success",
+                        error_message=None,
+                        latency_ms=0,
+                        agent_id=None,
+                        trace_id=trace_id,
+                        execution_type="runtime",
+                        input_redacted=input_payload,
+                        output_redacted=output_payload,
+                    )
+                )
+        except Exception:
+            logger.debug("file tool execution log write skipped", exc_info=True)
+
+    @staticmethod
+    def _response_artifacts(output: AgentOutput) -> list[dict[str, Any]]:
+        raw_state = output.raw_state if isinstance(output.raw_state, dict) else {}
+        payload = raw_state.get("response_payload")
+        if not isinstance(payload, dict):
+            return []
+        return [item for item in list(payload.get("artifacts") or []) if isinstance(item, dict)]
 
     async def _record_route_decision_log(
         self,

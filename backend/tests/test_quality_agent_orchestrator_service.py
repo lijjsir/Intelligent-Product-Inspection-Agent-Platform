@@ -425,8 +425,12 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
 async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(monkeypatch):
     updates: list[dict] = []
     rag_logs: list[dict] = []
+    tool_logs: list[object] = []
 
     class FakeSession:
+        async def get(self, model, key):
+            return None
+
         async def commit(self):
             return None
 
@@ -457,10 +461,27 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
             rag_logs.append(data)
             return None
 
+    class FakeTool:
+        id = "tool-rag"
+        display_name = "标准知识库检索"
+
+    class FakeToolRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_tool_key(self, org_id: str, tool_key: str):
+            assert tool_key == "rag.standard_search"
+            return FakeTool()
+
+        async def create_execution(self, execution):
+            tool_logs.append(execution)
+            return execution
+
     monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
     monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
     monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
     monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+    monkeypatch.setattr(orchestrator_mod, "ToolRepository", FakeToolRepository)
 
     request = NormalizedRequest(
         request_id="req-rag-detail",
@@ -522,6 +543,120 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
     assert rag_logs[0]["trace_id"] == "trace-rag-detail"
     assert rag_logs[0]["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
     assert rag_logs[0]["metadata_json"]["used_citations"][0]["id"] == "rag-1"
+    assert len(tool_logs) == 1
+    assert tool_logs[0].tool_name == "标准知识库检索"
+    assert tool_logs[0].input_payload["query"] == "苹果划痕 3mm 标准"
+    assert tool_logs[0].output_payload["hit_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_writes_file_parse_tool_execution(monkeypatch):
+    updates: list[dict] = []
+    tool_logs: list[object] = []
+
+    class FakeSession:
+        async def get(self, model, key):
+            return None
+
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+    class FakeTool:
+        id = "tool-file"
+        display_name = "文件内容解析"
+
+    class FakeToolRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_tool_key(self, org_id: str, tool_key: str):
+            assert tool_key == "file.parse"
+            return FakeTool()
+
+        async def create_execution(self, execution):
+            tool_logs.append(execution)
+            return execution
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+    monkeypatch.setattr(orchestrator_mod, "ToolRepository", FakeToolRepository)
+
+    request = NormalizedRequest(
+        request_id="req-file-tool",
+        workflow_run_id="wf-file-tool",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="file_answer",
+        answer="文件内容：我叫 tgg。",
+        summary="file parsed",
+        route_decision=RouteDecision(
+            mode="router_enabled",
+            selected_agent="chat",
+            sub_route="file_qa",
+            intent="file_qa",
+            reason="file attachment detected",
+        ),
+        raw_state={
+            "response_payload": {
+                "artifacts": [
+                    {
+                        "type": "file_answer",
+                        "content": {
+                            "parsed_files": [
+                                {
+                                    "name": "222.pdf",
+                                    "url": "/uploads/chat_attachments/222.pdf",
+                                    "content_type": "application/pdf",
+                                    "kind": "pdf",
+                                    "text": "我叫 tgg，重庆这个地方很美丽。",
+                                    "summary": "我叫 tgg，重庆这个地方很美丽。",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is True
+    assert updates[0]["content"] == "文件内容：我叫 tgg。"
+    assert len(tool_logs) == 1
+    assert tool_logs[0].tool_name == "文件内容解析"
+    assert tool_logs[0].input_payload["file_name"] == "222.pdf"
+    assert tool_logs[0].output_payload["kind"] == "pdf"
+    assert tool_logs[0].output_payload["text_length"] > 0
 
 
 @pytest.mark.asyncio
