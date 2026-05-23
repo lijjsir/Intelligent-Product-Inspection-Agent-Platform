@@ -62,7 +62,7 @@ INSPECTION_NODE_SPECS = {
     "inspection.vision_node": NodeSpec(
         node_key="inspection.vision_node",
         accepted_input_kinds=["image"],
-        required_model_types=["vision", "multimodal"],
+        required_model_types=["vision", "multimodal", "chat"],
         mode="report",
         output_artifact_types=["image_understanding"],
     ),
