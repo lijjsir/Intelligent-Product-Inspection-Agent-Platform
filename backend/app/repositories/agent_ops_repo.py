@@ -379,6 +379,23 @@ class RagAnalysisRepository(AgentOpsRepository):
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
         return obj
 
+    async def get_log_by_idempotency_key(self, idempotency_key: str) -> RagQueryLog | None:
+        result = await self._session.execute(
+            select(RagQueryLog).where(
+                RagQueryLog.org_id == self._org_id,
+                RagQueryLog.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create_log_once(self, data: dict) -> RagQueryLog:
+        key = data.get("idempotency_key")
+        if key:
+            existing = await self.get_log_by_idempotency_key(str(key))
+            if existing is not None:
+                return existing
+        return await self.create_log(data)
+
 
 class AgentRuntimeRepository(AgentOpsRepository):
     async def get_by_agent_id(self, agent_id: str) -> AgentRuntimeInstance | None:

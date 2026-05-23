@@ -62,6 +62,11 @@ class GpuComputeNodeResponse(BaseModel):
     gpu_usage: float | None = None
     status: str
     last_heartbeat: datetime | None = None
+    last_probe_at: datetime | None = None
+    last_probe_error: str | None = None
+    probe_status: str | None = None
+    hardware_summary: dict[str, Any] | None = None
+    gpu_devices: list[dict[str, Any]] = Field(default_factory=list)
     load_score: float | None = None
     metadata_json: dict[str, Any] | None = None
     has_ssh_password: bool = False

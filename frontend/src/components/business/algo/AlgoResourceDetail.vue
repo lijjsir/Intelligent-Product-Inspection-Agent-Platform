@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
@@ -30,6 +30,8 @@ const props = withDefaults(defineProps<{
   rawConfig?: unknown;
   rawResource?: unknown;
   collapseRawByDefault?: boolean;
+  autoRefreshWhenRunning?: boolean;
+  autoRefreshIntervalMs?: number;
 }>(), {
   relationSections: () => [],
   highlights: () => [],
@@ -37,6 +39,8 @@ const props = withDefaults(defineProps<{
   artifacts: () => [],
   logs: () => [],
   collapseRawByDefault: true,
+  autoRefreshWhenRunning: false,
+  autoRefreshIntervalMs: 15000,
 });
 
 const route = useRoute();
@@ -46,6 +50,7 @@ const current = computed(() => props.store.current);
 const actionLoading = ref("");
 const configExpanded = ref(!props.collapseRawByDefault);
 const resourceExpanded = ref(!props.collapseRawByDefault);
+let pollingTimer: ReturnType<typeof setInterval> | null = null;
 
 function statusTagType(status?: string | null) {
   if (status === "completed") return "success";
@@ -77,6 +82,23 @@ function formatValue(value: unknown) {
 async function load() {
   if (!resourceId.value) return;
   await props.store.fetchOne(resourceId.value);
+}
+
+function stopPolling() {
+  if (pollingTimer) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+  }
+}
+
+function syncPolling() {
+  stopPolling();
+  if (!props.autoRefreshWhenRunning) return;
+  const status = String(current.value?.status || "");
+  if (!["queued", "running"].includes(status) || !resourceId.value) return;
+  pollingTimer = setInterval(() => {
+    load().catch(() => {});
+  }, Math.max(Number(props.autoRefreshIntervalMs || 15000), 3000));
 }
 
 async function handleLaunch() {
@@ -126,6 +148,9 @@ async function handleDelete() {
 
 onMounted(load);
 watch(() => route.params.id, load);
+watch(() => current.value?.status, syncPolling, { immediate: true });
+watch(() => props.autoRefreshWhenRunning, syncPolling);
+onBeforeUnmount(stopPolling);
 </script>
 
 <template>

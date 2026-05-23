@@ -141,6 +141,14 @@ export const useChatStore = defineStore("chat", () => {
     return Math.max(...messages.value.map((x) => x.seq_no));
   });
 
+  function pollingAfterSeq(messageId: string) {
+    const target = messages.value.find((item) => item.id === messageId);
+    if (target?.seq_no && target.seq_no > 0) {
+      return target.seq_no - 1;
+    }
+    return lastSeq.value;
+  }
+
   function sortMessages() {
     messages.value.sort((a, b) => {
       const ao = orderNo(a);
@@ -270,8 +278,8 @@ export const useChatStore = defineStore("chat", () => {
       }
       pollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, 0, 500);
-        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
         if (checkAndFinalizeByMessage(messageId)) {
           return;
@@ -311,8 +319,8 @@ export const useChatStore = defineStore("chat", () => {
       }
       trustPollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, 0, 500);
-        messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
       } catch {
         // Keep score refresh quiet; the answer is already visible.
@@ -474,6 +482,9 @@ export const useChatStore = defineStore("chat", () => {
     const selected = getSelectedRagSpaceSnapshot();
     const ext: Record<string, unknown> = {
       ...(payload.ext || {}),
+      surface: ((payload.ext as Record<string, unknown>)?.surface as string) ?? "chat",
+      allowed_modes: (payload.ext as Record<string, unknown>)?.allowed_modes ?? ["answer", "report"],
+      forbidden_modes: (payload.ext as Record<string, unknown>)?.forbidden_modes ?? ["action"],
       ui_mode: ((payload.ext as Record<string, unknown>)?.ui_mode as string) ?? "auto",
       route_hints: (payload.ext as Record<string, unknown>)?.route_hints ?? undefined,
       attachments: [...pendingAttachments.value],

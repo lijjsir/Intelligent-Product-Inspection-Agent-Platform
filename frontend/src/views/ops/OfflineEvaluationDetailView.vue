@@ -29,6 +29,7 @@ watch(() => route.params.id, load);
       title="离线评测详情"
       :store="store"
       back-path="/ops/eval/offline"
+      :auto-refresh-when-running="true"
       :relation-sections="[
         { label: '评测集', value: (item) => item?.eval_set_id },
         { label: '目标类型', value: (item) => item?.target_type },
@@ -44,6 +45,7 @@ watch(() => route.params.id, load);
       <section v-if="current?.execution_mode === 'gpu_ssh'" class="card-surface p-4">
         <h3 class="mb-3">GPU 执行信息</h3>
         <p class="text-sm text-slate-600">当前离线评测运行在 GPU 节点上，分配节点、GPU 槽位和远端命令摘要已汇总到上方指标区。</p>
+        <pre class="mt-4 overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(current?.result_summary?.remote_execution || {}, null, 2) }}</pre>
       </section>
       <section v-if="summaryView.artifacts.length" class="card-surface p-4">
         <h3 class="mb-4">评测报告</h3>

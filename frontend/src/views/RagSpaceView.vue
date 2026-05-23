@@ -632,8 +632,8 @@ onMounted(async () => {
             :props="{ children: 'children', label: 'name' }"
             class="rag-tree"
             @node-click="selectNode"
-            @node-expand="(_data, node) => updateExpandedKeys(node.data.id, true)"
-            @node-collapse="(_data, node) => updateExpandedKeys(node.data.id, false)"
+            @node-expand="(_data: any, node: any) => updateExpandedKeys(node.data.id, true)"
+            @node-collapse="(_data: any, node: any) => updateExpandedKeys(node.data.id, false)"
           >
             <template #default="{ data }">
               <div class="rag-node-row">

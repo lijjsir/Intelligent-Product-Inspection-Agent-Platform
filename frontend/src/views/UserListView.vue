@@ -264,7 +264,7 @@ function getRoleTag(role: string) {
           <template #default="{ row }">
             <el-select
               :model-value="row.role"
-              @change="(value) => handleRoleChange(row, value)"
+              @change="(value: string) => handleRoleChange(row, value)"
               :disabled="row.id === authStore.userId"
               size="small"
               class="!w-[148px]"
@@ -282,7 +282,7 @@ function getRoleTag(role: string) {
           <template #default="{ row }">
             <el-switch
               :model-value="row.is_active"
-              @change="(value) => handleStatusChange(row, value)"
+              @change="(value: boolean) => handleStatusChange(row, value)"
               :disabled="row.id === authStore.userId"
               size="small"
             />

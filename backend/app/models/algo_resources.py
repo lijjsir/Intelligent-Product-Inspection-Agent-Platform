@@ -136,8 +136,8 @@ class EvaluationDatasetItem(Base, TimestampMixin):
     payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
-class TrainingJob(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixin):
-    __tablename__ = "training_jobs"
+class FineTuneRun(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixin):
+    __tablename__ = "fine_tune_runs"
 
     source_dataset_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     model_config_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
@@ -145,19 +145,11 @@ class TrainingJob(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixin):
     experiment_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
 
 
-class FineTuneRun(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixin):
-    __tablename__ = "fine_tune_runs"
-
-    training_job_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    model_config_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    experiment_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-
-
 class OfflineEvaluation(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixin):
     __tablename__ = "offline_evaluations"
 
     eval_set_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
-    target_type: Mapped[str] = mapped_column(String(64), nullable=False, default="training_job")
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False, default="fine_tune")
     target_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     experiment_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
 
@@ -180,4 +172,5 @@ class ModelDeployment(Base, TimestampMixin, AlgoResourceMixin, AlgoExecutionMixi
 
     source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="fine_tune")
     source_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    merge_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="dynamic")
     experiment_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)

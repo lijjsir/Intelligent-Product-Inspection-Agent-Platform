@@ -459,10 +459,80 @@ async def test_finalizer_marks_trust_scoring_reviewing_and_enqueues_once(monkeyp
 
     assert updated["response_payload"]["trust_scoring"]["status"] == "reviewing"
     assert updated["response_payload"]["trust_scoring"]["trust_score"] is None
-    assert updates[0]["payload"]["trust_scoring"]["trace_url"].endswith("/trace-1")
-    assert scores[0]["status"] == "reviewing"
-    assert events[-1]["payload"]["trust_scoring"]["status"] == "reviewing"
+    assert updates == []
+    assert scores == []
+    assert events == []
     assert queued_payloads == [state["trust_scoring_payload"]]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
+    captured_payloads: list[dict] = []
+
+    class FakeMessage:
+        def __init__(self, role: str, content: str, seq_no: int):
+            self.role = role
+            self.content = content
+            self.seq_no = seq_no
+
+    class FakeRepo:
+        def __init__(self, _session):
+            pass
+
+        async def list_for_session(self, *, org_id, session_id, after_seq=0, limit=20):
+            return [
+                FakeMessage("user", "old question", 1),
+                FakeMessage("assistant", "old answer", 2),
+                FakeMessage("user", "current question", 3),
+                FakeMessage("assistant", "", 4),
+            ]
+
+    class FakeSession:
+        pass
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeBroker:
+        async def publish(self, _session_id: str, _event: dict):
+            return None
+
+    class FakeOrchestrator:
+        async def run_chat(self, payload: dict):
+            captured_payloads.append(payload)
+            return {}
+
+    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
+    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+    service._orchestrator = FakeOrchestrator()
+
+    await service._run_workflow(
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
+        workflow_run_id="workflow-1",
+        current_user_seq_no=3,
+        assistant_message_seq_no=4,
+    )
+
+    ext = captured_payloads[0]["ext"]
+    assert ext["current_user_seq_no"] == 3
+    assert ext["assistant_message_seq_no"] == 4
+    assert ext["history_messages"] == [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+    ]
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():

@@ -20,9 +20,10 @@ def _to_response(model) -> ModelConfigResponse:
         provider=model.provider,
         model_key=model.model_key,
         display_name=model.display_name,
+        source_type=getattr(model, "source_type", "external"),
+        source_uri=getattr(model, "source_uri", ""),
         endpoint=model.endpoint,
         model_type=model.model_type,
-        training_command_template=getattr(model, "training_command_template", None),
         fine_tune_command_template=getattr(model, "fine_tune_command_template", None),
         offline_eval_command_template=getattr(model, "offline_eval_command_template", None),
         deployment_command_template=getattr(model, "deployment_command_template", None),
@@ -113,6 +114,8 @@ async def check_all_models_health(
         if hs in status_count:
             status_count[hs] += 1
     await db.commit()
+    for org_id in {str(getattr(model, "org_id", "") or "") for model in models if getattr(model, "org_id", None)}:
+        ModelConfigService.invalidate_runtime_cache(org_id)
     return ResponseEnvelope(data=HealthCheckAllResult(
         checked=len(checked),
         healthy=status_count["healthy"],
@@ -135,4 +138,5 @@ async def check_single_model_health(
     repo = ModelConfigRepository(db)
     await repo.update_health(model, health_status=status, health_message=message)
     await db.commit()
+    ModelConfigService.invalidate_runtime_cache(current.org_id)
     return ResponseEnvelope(data=HealthCheckResult(health_status=status, health_message=message))

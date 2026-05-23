@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
@@ -67,12 +68,12 @@ class FakeResource:
     model_config_id: str | None = None
     model_config: dict | None = None
     experiment_id: str | None = None
-    training_job_id: str | None = None
     target_type: str | None = None
     target_id: str | None = None
     deployment_id: str | None = None
     source_type: str | None = None
     source_id: str | None = None
+    merge_mode: str = "dynamic"
     execution_mode: str | None = None
     executor_job_id: str | None = None
     started_at: datetime | None = None
@@ -493,7 +494,27 @@ class FakeSession:
 
 
 class FakeModelConfig:
-    def __init__(self, id: str, org_id: str, display_name: str, model_key: str, model_type: str = "chat", is_active: bool = True, provider: str = "openai", endpoint: str = "https://example.invalid/model", priority: int = 100):
+    def __init__(
+        self,
+        id: str,
+        org_id: str,
+        display_name: str,
+        model_key: str,
+        model_type: str = "chat",
+        is_active: bool = True,
+        provider: str = "openai",
+        endpoint: str = "https://example.invalid/model",
+        priority: int = 100,
+        source_type: str = "external",
+        source_uri: str | None = None,
+        fine_tune_command_template: str | None = None,
+        offline_eval_command_template: str | None = None,
+        deployment_command_template: str | None = None,
+        runtime_env_json: dict | None = None,
+        default_gpu_request: int | None = None,
+        default_cpu_request: int | None = None,
+        default_memory_gb: int | None = None,
+    ):
         self.id = id
         self.org_id = org_id
         self.display_name = display_name
@@ -503,6 +524,15 @@ class FakeModelConfig:
         self.provider = provider
         self.endpoint = endpoint
         self.priority = priority
+        self.source_type = source_type
+        self.source_uri = source_uri or f"{source_type}://{model_key}"
+        self.fine_tune_command_template = fine_tune_command_template
+        self.offline_eval_command_template = offline_eval_command_template
+        self.deployment_command_template = deployment_command_template
+        self.runtime_env_json = runtime_env_json
+        self.default_gpu_request = default_gpu_request
+        self.default_cpu_request = default_cpu_request
+        self.default_memory_gb = default_memory_gb
 
 
 class FakeModelConfigRepo:
@@ -647,31 +677,54 @@ async def test_create_eval_dataset_rejects_foreign_sample(service):
 
 
 @pytest.mark.asyncio
-async def test_create_training_job_requires_existing_dataset(service):
+async def test_create_fine_tune_requires_existing_dataset_and_persists_lora_config(service):
     svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
-    created = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 1",
+    eval_set = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="微调评测集",
             source_dataset_id="ds-1",
+            sample_ids=["sample-1"],
+        )
+    )
+    created = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调任务 1",
+            source_dataset_id="ds-1",
+            eval_set_id=eval_set.id,
             model_config_id="mc-1",
+            config_json={
+                "hyperparameters": {"epochs": 4, "learning_rate": 0.0002},
+                "lora": {
+                    "rank": 16,
+                    "alpha": 32,
+                    "target_modules": ["q_proj", "v_proj"],
+                    "dropout": 0.05,
+                },
+            },
         )
     )
 
     assert created.source_dataset_id == "ds-1"
+    assert created.eval_set_id == eval_set.id
     assert created.model_config_id == "mc-1"
+    assert created.config_json is not None
+    assert created.config_json["lora"]["rank"] == 16
+    assert created.config_json["lora"]["target_modules"] == ["q_proj", "v_proj"]
+    assert created.model_config_ref is not None
+    assert created.model_config_ref.model_key == "train-model"
     assert created.status == "draft"
     assert session.commit_count >= 1
 
 
 @pytest.mark.asyncio
-async def test_create_training_job_rejects_inactive_dataset(service):
+async def test_create_fine_tune_rejects_inactive_dataset(service):
     svc, *_ = service
 
     with pytest.raises(ValidationError):
-        await svc.create_training_job(
-            algo_mod.TrainingJobCreateRequest(
-                name="训练任务 inactive",
+        await svc.create_fine_tune(
+            algo_mod.FineTuneRunCreateRequest(
+                name="微调任务 inactive",
                 source_dataset_id="ds-2",
                 model_config_id="mc-1",
             )
@@ -679,77 +732,48 @@ async def test_create_training_job_rejects_inactive_dataset(service):
 
 
 @pytest.mark.asyncio
-async def test_training_job_launch_cancel_and_result_summary(service):
-    svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
-    created = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 2",
-            source_dataset_id="ds-1",
-            model_config_id="mc-1",
-        )
-    )
-
-    launched = await svc.launch_training_job(created.id)
-    assert launched.status == "queued"
-
-    row = await svc.get_generic_resource(resource_type="training_job", resource_id=created.id)
-    assert row.result_summary["artifacts"] == []
-    assert row.result_summary["metrics"] == {}
-    assert row.result_summary["logs"] == []
-
-    cancelled = await svc.cancel_training_job(created.id)
-    assert cancelled.status == "cancelled"
-    assert session.commit_count >= 3
-
-
-@pytest.mark.asyncio
 async def test_remaining_algo_resources_commit_and_validate_relations(service):
     svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 3",
+    experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验 A"))
+    eval_set = await svc.create_evaluation_dataset(
+        algo_mod.EvaluationDatasetCreateRequest(
+            name="评测集 B",
             source_dataset_id="ds-1",
-            model_config_id="mc-1",
+            sample_ids=["sample-1"],
         )
     )
-    experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验 A"))
-    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
-    training_row.status = "completed"
-    training_row.result_summary = {
-        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
-        "artifacts": [{"type": "checkpoint", "path": "local://train/checkpoint.bin"}],
-        "metrics": {"summary": {"best_val_accuracy": 0.9}},
-        "logs": [],
-    }
     fine_tune = await svc.create_fine_tune(
         algo_mod.FineTuneRunCreateRequest(
             name="微调 A",
-            training_job_id=training_job.id,
+            source_dataset_id="ds-1",
+            eval_set_id=eval_set.id,
             model_config_id="mc-2",
             experiment_id=experiment.id,
+            config_json={"lora": {"rank": 8, "alpha": 16, "target_modules": ["q_proj"], "dropout": 0.1}},
         )
     )
     fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
     fine_tune_row.status = "completed"
     fine_tune_row.result_summary = {
-        "summary": {"model_config_id": "mc-2", "model_key": "tune-model"},
-        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "summary": {
+            "model_config_id": "mc-2",
+            "model_key": "tune-model",
+            "source_dataset_id": "ds-1",
+            "eval_set_id": eval_set.id,
+            "base_model_ref": {"display_name": "Tune Model", "source_type": "external", "source_uri": "external://tune-model"},
+            "lora": {"rank": 8, "alpha": 16, "target_modules": ["q_proj"], "dropout": 0.1},
+        },
+        "artifacts": [{"type": "adapter", "path": "local://fine/adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.93}},
         "logs": [],
     }
     offline = await svc.create_offline_evaluation(
         algo_mod.OfflineEvaluationCreateRequest(
             name="离线评测 A",
-            eval_set_id=(await svc.create_evaluation_dataset(
-                algo_mod.EvaluationDatasetCreateRequest(
-                    name="评测集 B",
-                    source_dataset_id="ds-1",
-                    sample_ids=["sample-1"],
-                )
-            )).id,
-            target_type="training_job",
-            target_id=training_job.id,
+            eval_set_id=eval_set.id,
+            target_type="fine_tune",
+            target_id=fine_tune.id,
             experiment_id=experiment.id,
         )
     )
@@ -758,13 +782,14 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
             name="部署 A",
             source_type="fine_tune",
             source_id=fine_tune.id,
+            merge_mode="dynamic",
             experiment_id=experiment.id,
         )
     )
     deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
     deployment_row.status = "completed"
     deployment_row.result_summary = {
-        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id},
+        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id, "merge_mode": "dynamic"},
         "runtime_registration": {
             "source_type": "fine_tune",
             "source_id": fine_tune.id,
@@ -774,7 +799,10 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
             "inference_config": {},
             "status": "registered",
         },
-        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "artifacts": [
+            {"type": "adapter_bundle", "path": "local://fine/adapter.safetensors"},
+            {"type": "deployment_manifest", "path": "local://deploy/manifest.json"},
+        ],
         "logs": [],
     }
     online = await svc.create_online_validation(
@@ -785,10 +813,12 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
         )
     )
 
-    assert fine_tune.training_job_id == training_job.id
+    assert fine_tune.source_dataset_id == "ds-1"
     assert fine_tune.model_config_id == "mc-2"
-    assert offline.target_id == training_job.id
+    assert fine_tune.eval_set_id == eval_set.id
+    assert offline.target_id == fine_tune.id
     assert deployment.source_id == fine_tune.id
+    assert deployment.merge_mode == "dynamic"
     assert online.deployment_id == deployment.id
     assert session.commit_count >= 6
 
@@ -797,18 +827,19 @@ async def test_remaining_algo_resources_commit_and_validate_relations(service):
 async def test_online_validation_requires_completed_deployment_and_stable_replay_summary(service):
     svc, _algo_repo, _eval_item_repo, _job_repo, _kg_repo, session, *_ = service
 
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 online",
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调任务 online",
             source_dataset_id="ds-1",
             model_config_id="mc-1",
+            config_json={"lora": {"rank": 4, "alpha": 8, "target_modules": ["q_proj"], "dropout": 0.0}},
         )
     )
-    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
-    training_row.status = "completed"
-    training_row.result_summary = {
-        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
-        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+    fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
+    fine_tune_row.status = "completed"
+    fine_tune_row.result_summary = {
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model", "source_dataset_id": "ds-1"},
+        "artifacts": [{"type": "adapter", "path": "local://fine/best-adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.91}},
         "logs": [],
     }
@@ -816,8 +847,8 @@ async def test_online_validation_requires_completed_deployment_and_stable_replay
     deployment = await svc.create_deployment(
         algo_mod.ModelDeploymentCreateRequest(
             name="部署 B",
-            source_type="training_job",
-            source_id=training_job.id,
+            source_type="fine_tune",
+            source_id=fine_tune.id,
         )
     )
 
@@ -832,17 +863,20 @@ async def test_online_validation_requires_completed_deployment_and_stable_replay
     deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
     deployment_row.status = "completed"
     deployment_row.result_summary = {
-        "summary": {"source_type": "training_job", "source_id": training_job.id},
+        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id, "merge_mode": "dynamic"},
         "runtime_registration": {
-            "source_type": "training_job",
-            "source_id": training_job.id,
+            "source_type": "fine_tune",
+            "source_id": fine_tune.id,
             "model_key": "train-model",
             "provider": "openai",
             "endpoint_placeholder": "https://deployments.invalid/train-model",
             "inference_config": {},
             "status": "registered",
         },
-        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "artifacts": [
+            {"type": "adapter_bundle", "path": "local://fine/best-adapter.safetensors"},
+            {"type": "deployment_manifest", "path": "local://deploy/manifest.json"},
+        ],
         "logs": [],
     }
 
@@ -873,36 +907,20 @@ async def test_experiment_detail_includes_related_resource_summary(service):
 
     experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验追踪"))
 
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 summary",
-            source_dataset_id="ds-1",
-            model_config_id="mc-1",
-            experiment_id=experiment.id,
-        )
-    )
-    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
-    training_row.status = "completed"
-    training_row.result_summary = {
-        "summary": {"status": "completed", "model_config_id": "mc-1"},
-        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
-        "metrics": {"summary": {"best_val_accuracy": 0.93}},
-        "logs": [],
-    }
-
     fine_tune = await svc.create_fine_tune(
         algo_mod.FineTuneRunCreateRequest(
             name="微调任务 summary",
-            training_job_id=training_job.id,
+            source_dataset_id="ds-1",
             model_config_id="mc-2",
             experiment_id=experiment.id,
+            config_json={"lora": {"rank": 8, "alpha": 16, "target_modules": ["q_proj"], "dropout": 0.1}},
         )
     )
     fine_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
     fine_row.status = "completed"
     fine_row.result_summary = {
-        "summary": {"status": "completed", "model_config_id": "mc-2"},
-        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "summary": {"status": "completed", "model_config_id": "mc-2", "source_dataset_id": "ds-1"},
+        "artifacts": [{"type": "adapter", "path": "local://fine/best-adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.95}},
         "logs": [],
     }
@@ -939,13 +957,14 @@ async def test_experiment_detail_includes_related_resource_summary(service):
             name="部署 summary",
             source_type="fine_tune",
             source_id=fine_tune.id,
+            merge_mode="static",
             experiment_id=experiment.id,
         )
     )
     deployment_row = await svc._require_generic_resource(resource_type="deployment", resource_id=deployment.id)
     deployment_row.status = "completed"
     deployment_row.result_summary = {
-        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id},
+        "summary": {"source_type": "fine_tune", "source_id": fine_tune.id, "merge_mode": "static"},
         "runtime_registration": {
             "source_type": "fine_tune",
             "source_id": fine_tune.id,
@@ -955,7 +974,10 @@ async def test_experiment_detail_includes_related_resource_summary(service):
             "inference_config": {},
             "status": "registered",
         },
-        "artifacts": [{"type": "deployment_manifest", "path": "local://deploy/manifest.json"}],
+        "artifacts": [
+            {"type": "merged_model", "path": "local://deploy/merged-model.bin"},
+            {"type": "deployment_manifest", "path": "local://deploy/manifest.json"},
+        ],
         "logs": [],
     }
 
@@ -963,11 +985,9 @@ async def test_experiment_detail_includes_related_resource_summary(service):
     summary = response.result_summary or {}
     related = response.related_resources
 
-    assert summary["summary"]["训练任务数"] == 1
     assert summary["summary"]["微调任务数"] == 1
     assert summary["summary"]["离线评测数"] == 1
     assert summary["summary"]["部署数"] == 1
-    assert len(related.training_jobs) == 1
     assert len(related.fine_tunes) == 1
     assert len(related.offline_evaluations) == 1
     assert len(related.deployments) == 1
@@ -975,13 +995,13 @@ async def test_experiment_detail_includes_related_resource_summary(service):
 
 
 @pytest.mark.asyncio
-async def test_training_and_fine_tune_reject_embedding_model_config(service):
+async def test_fine_tune_rejects_embedding_model_config(service):
     svc, *_ = service
 
     with pytest.raises(ValidationError):
-        await svc.create_training_job(
-            algo_mod.TrainingJobCreateRequest(
-                name="训练任务 embed",
+        await svc.create_fine_tune(
+            algo_mod.FineTuneRunCreateRequest(
+                name="微调 embed",
                 source_dataset_id="ds-1",
                 model_config_id="mc-embed",
             )
@@ -1200,21 +1220,14 @@ async def test_get_generic_resource_not_found(service):
 
 
 @pytest.mark.asyncio
-async def test_create_fine_tune_rejects_incomplete_training_job(service):
+async def test_create_fine_tune_rejects_missing_eval_set(service):
     svc, *_ = service
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 pending",
-            source_dataset_id="ds-1",
-            model_config_id="mc-1",
-        )
-    )
-
-    with pytest.raises(ValidationError):
+    with pytest.raises(NotFoundError):
         await svc.create_fine_tune(
             algo_mod.FineTuneRunCreateRequest(
                 name="微调失败",
-                training_job_id=training_job.id,
+                source_dataset_id="ds-1",
+                eval_set_id="missing-eval",
                 model_config_id="mc-2",
             )
         )
@@ -1230,62 +1243,64 @@ async def test_create_offline_evaluation_rejects_incomplete_target(service):
             sample_ids=["sample-1"],
         )
     )
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 pending eval",
-            source_dataset_id="ds-1",
-            model_config_id="mc-1",
-        )
-    )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(NotFoundError):
         await svc.create_offline_evaluation(
             algo_mod.OfflineEvaluationCreateRequest(
                 name="离线评测失败",
                 eval_set_id=eval_set.id,
-                target_type="training_job",
-                target_id=training_job.id,
+                target_type="fine_tune",
+                target_id="missing-fine-tune",
             )
         )
 
 
 @pytest.mark.asyncio
-async def test_create_deployment_accepts_training_job_and_rejects_missing_artifact(service):
+async def test_create_deployment_rejects_non_fine_tune_source_and_missing_artifact(service):
     svc, *_ = service
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 deploy",
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调 deploy",
             source_dataset_id="ds-1",
             model_config_id="mc-1",
         )
     )
-    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
-    training_row.status = "completed"
-    training_row.result_summary = {"artifacts": [], "metrics": {}, "logs": []}
+    fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
+    fine_tune_row.status = "completed"
+    fine_tune_row.result_summary = {"artifacts": [], "metrics": {}, "logs": []}
+
+    with pytest.raises(PydanticValidationError):
+        algo_mod.ModelDeploymentCreateRequest(
+            name="部署失败1",
+            source_type="deployment",
+            source_id="dp-1",
+        )
 
     with pytest.raises(ValidationError):
         await svc.create_deployment(
             algo_mod.ModelDeploymentCreateRequest(
-                name="部署失败",
-                source_type="training_job",
-                source_id=training_job.id,
+                name="部署失败2",
+                source_type="fine_tune",
+                source_id=fine_tune.id,
             )
         )
 
-    training_row.result_summary = {
+    fine_tune_row.result_summary = {
         "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
-        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "artifacts": [{"type": "adapter", "path": "local://fine/adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.91}},
         "logs": [],
     }
     created = await svc.create_deployment(
         algo_mod.ModelDeploymentCreateRequest(
             name="部署成功",
-            source_type="training_job",
-            source_id=training_job.id,
+            source_type="fine_tune",
+            source_id=fine_tune.id,
+            merge_mode="static",
         )
     )
-    assert created.source_type == "training_job"
+    assert created.source_type == "fine_tune"
+    assert created.merge_mode == "static"
 
 
 @pytest.mark.asyncio
@@ -1377,18 +1392,18 @@ async def test_apply_augmentation_creates_augmented_samples_and_history(service)
 @pytest.mark.asyncio
 async def test_delete_generic_resource_rejects_running_status(service):
     svc, *_ = service
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务 running",
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调任务 running",
             source_dataset_id="ds-1",
             model_config_id="mc-1",
         )
     )
-    row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
     row.status = "running"
 
     with pytest.raises(ValidationError):
-        await svc.delete_training_job(training_job.id)
+        await svc.delete_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
 
 
 @pytest.mark.asyncio
@@ -1413,27 +1428,27 @@ async def test_snapshot_items_survive_source_sample_deletion(service):
 async def test_experiment_detail_includes_related_resources(service):
     svc, *_ = service
     experiment = await svc.create_experiment(algo_mod.ExperimentCreateRequest(name="实验聚合"))
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练任务聚合",
+    fine_tune = await svc.create_fine_tune(
+        algo_mod.FineTuneRunCreateRequest(
+            name="微调任务聚合",
             source_dataset_id="ds-1",
             model_config_id="mc-1",
             experiment_id=experiment.id,
         )
     )
-    row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
+    row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
     row.status = "completed"
     row.result_summary = {
-        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
-        "artifacts": [{"type": "best_model", "path": "local://train/best-model.bin"}],
+        "summary": {"model_config_id": "mc-1", "model_key": "train-model", "source_dataset_id": "ds-1"},
+        "artifacts": [{"type": "adapter", "path": "local://fine/best-adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.92}},
         "logs": [],
     }
 
     detail = await svc.get_generic_resource(resource_type="experiment", resource_id=experiment.id)
 
-    assert detail.related_resources.training_jobs
-    assert detail.related_resources.training_jobs[0].id == training_job.id
+    assert detail.related_resources.fine_tunes
+    assert detail.related_resources.fine_tunes[0].id == fine_tune.id
 
 
 @pytest.mark.asyncio
@@ -1446,34 +1461,20 @@ async def test_p0_chain_create_flow_success(service):
             sample_ids=["sample-1", "sample-2"],
         )
     )
-    training_job = await svc.create_training_job(
-        algo_mod.TrainingJobCreateRequest(
-            name="训练链路",
-            source_dataset_id="ds-1",
-            model_config_id="mc-1",
-            eval_set_id=eval_set.id,
-        )
-    )
-    training_row = await svc._require_generic_resource(resource_type="training_job", resource_id=training_job.id)
-    training_row.status = "completed"
-    training_row.result_summary = {
-        "summary": {"model_config_id": "mc-1", "model_key": "train-model"},
-        "artifacts": [{"type": "checkpoint", "path": "local://train/checkpoint.bin"}],
-        "metrics": {"summary": {"best_val_accuracy": 0.89}},
-        "logs": [],
-    }
     fine_tune = await svc.create_fine_tune(
         algo_mod.FineTuneRunCreateRequest(
             name="微调链路",
-            training_job_id=training_job.id,
+            source_dataset_id="ds-1",
+            eval_set_id=eval_set.id,
             model_config_id="mc-2",
+            config_json={"lora": {"rank": 8, "alpha": 16, "target_modules": ["q_proj"], "dropout": 0.1}},
         )
     )
     fine_tune_row = await svc._require_generic_resource(resource_type="fine_tune", resource_id=fine_tune.id)
     fine_tune_row.status = "completed"
     fine_tune_row.result_summary = {
-        "summary": {"model_config_id": "mc-2", "model_key": "tune-model"},
-        "artifacts": [{"type": "best_model", "path": "local://fine/best-model.bin"}],
+        "summary": {"model_config_id": "mc-2", "model_key": "tune-model", "source_dataset_id": "ds-1", "eval_set_id": eval_set.id},
+        "artifacts": [{"type": "adapter", "path": "local://fine/adapter.safetensors"}],
         "metrics": {"summary": {"best_val_accuracy": 0.93}},
         "logs": [],
     }
@@ -1490,59 +1491,48 @@ async def test_p0_chain_create_flow_success(service):
             name="部署链路",
             source_type="fine_tune",
             source_id=fine_tune.id,
+            merge_mode="dynamic",
         )
     )
 
     assert eval_set.sample_count == 2
-    assert training_job.eval_set_id == eval_set.id
-    assert fine_tune.training_job_id == training_job.id
+    assert fine_tune.source_dataset_id == "ds-1"
+    assert fine_tune.eval_set_id == eval_set.id
     assert offline.target_id == fine_tune.id
     assert deployment.source_id == fine_tune.id
+    assert deployment.merge_mode == "dynamic"
 
 
 @pytest.mark.asyncio
 async def test_execution_helpers_generate_stable_result_summary_structures():
-    training_summary = algo_mod.TrainingRunner.run_training(
-        resource_id="tj-1",
-        resource_name="训练任务",
-        source_dataset_id="ds-1",
-        model_ref=algo_mod.ExecutionModelRef(
-            id="mc-1",
-            provider="openai",
-            model_key="train-model",
-            display_name="Train Model",
-            endpoint="https://example.invalid/train",
-            model_type="chat",
-        ),
-        config_json={"hyperparameters": {"epochs": 4, "learning_rate": 0.001}},
-        execution_mode="local_background",
-        started_at=datetime(2026, 5, 21, 10, 0, 0),
-        completed_at=datetime(2026, 5, 21, 10, 5, 0),
-    )
-    assert training_summary["summary"]["status"] == "completed"
-    assert training_summary["artifacts"]
-    assert "train_loss" in training_summary["metrics"]
-
     fine_tune_summary = algo_mod.TrainingRunner.run_fine_tune(
         resource_id="ft-1",
         resource_name="微调任务",
-        training_job_id="tj-1",
-        base_training_summary=training_summary,
+        source_dataset_id="ds-1",
+        eval_set_id="eval-1",
         model_ref=algo_mod.ExecutionModelRef(
             id="mc-2",
             provider="openai",
             model_key="tune-model",
             display_name="Tune Model",
             endpoint="https://example.invalid/tune",
+            source_type="external",
+            source_uri="external://tune-model",
             model_type="multimodal",
         ),
-        config_json={"hyperparameters": {"epochs": 2}},
+        config_json={
+            "hyperparameters": {"epochs": 2},
+            "lora": {"rank": 8, "alpha": 16, "target_modules": ["q_proj", "v_proj"], "dropout": 0.05},
+        },
         execution_mode="local_background",
         started_at=datetime(2026, 5, 21, 10, 10, 0),
         completed_at=datetime(2026, 5, 21, 10, 12, 0),
     )
-    assert fine_tune_summary["summary"]["base_checkpoint"]
-    assert fine_tune_summary["artifacts"]
+    assert fine_tune_summary["summary"]["source_dataset_id"] == "ds-1"
+    assert fine_tune_summary["summary"]["eval_set_id"] == "eval-1"
+    assert fine_tune_summary["summary"]["base_model_ref"]["source_uri"] == "external://tune-model"
+    assert fine_tune_summary["summary"]["lora"]["target_modules"] == ["q_proj", "v_proj"]
+    assert fine_tune_summary["artifacts"][0]["type"] == "adapter"
 
     offline_summary = algo_mod.EvaluationEngine.run_offline_evaluation(
         resource_id="oe-1",
@@ -1565,6 +1555,7 @@ async def test_execution_helpers_generate_stable_result_summary_structures():
         resource_name="部署任务",
         source_type="fine_tune",
         source_id="ft-1",
+        merge_mode="static",
         source_summary=fine_tune_summary,
         model_ref=algo_mod.ExecutionModelRef(
             id="mc-2",
@@ -1572,6 +1563,8 @@ async def test_execution_helpers_generate_stable_result_summary_structures():
             model_key="tune-model",
             display_name="Tune Model",
             endpoint="https://example.invalid/tune",
+            source_type="external",
+            source_uri="external://tune-model",
             model_type="multimodal",
         ),
         config_json={"service_config": {"max_batch_size": 8, "max_concurrency": 16, "timeout_ms": 5000}},
@@ -1580,4 +1573,45 @@ async def test_execution_helpers_generate_stable_result_summary_structures():
         completed_at=datetime(2026, 5, 21, 10, 35, 0),
     )
     assert deployment_summary["runtime_registration"]["status"] == "available"
-    assert deployment_summary["artifacts"]
+    assert deployment_summary["summary"]["merge_mode"] == "static"
+    assert deployment_summary["artifacts"][0]["type"] == "merged_model"
+
+
+@pytest.mark.asyncio
+async def test_update_gpu_running_summary_persists_remote_poll_diagnostics(service):
+    svc, algo_repo, _eval_item_repo, _job_repo, _kg_repo, _session, *_ = service
+
+    row = await algo_repo.create(
+        model=algo_mod.FineTuneRun,
+        payload={
+            "org_id": "org-1",
+            "created_by": "user-1",
+            "name": "gpu ft",
+            "status": "running",
+            "execution_mode": "gpu_ssh",
+            "result_summary": {
+                "summary": {"status": "running"},
+                "remote_execution": {"host": "10.0.0.10"},
+                "logs": [],
+            },
+        },
+    )
+
+    await svc._update_gpu_running_summary(
+        row=row,
+        summary=dict(row.result_summary or {}),
+        remote_status={
+            "status": "running",
+            "status_file_state": "ok",
+            "poll_error": "temporary ssh read error",
+            "log_tail": "tail output",
+            "exit_code": 0,
+        },
+    )
+
+    remote = row.result_summary["remote_execution"]
+    assert remote["last_remote_status"] == "running"
+    assert remote["status_file_state"] == "ok"
+    assert remote["poll_error"] == "temporary ssh read error"
+    assert remote["last_log_tail"] == "tail output"
+    assert remote["poll_fail_count"] == 1

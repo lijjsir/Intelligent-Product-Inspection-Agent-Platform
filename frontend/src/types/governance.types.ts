@@ -4,9 +4,10 @@ export interface ModelConfig {
   provider: string;
   model_key: string;
   display_name: string;
+  source_type: "external" | "local";
+  source_uri: string;
   endpoint: string;
   model_type: string;
-  training_command_template?: string | null;
   fine_tune_command_template?: string | null;
   offline_eval_command_template?: string | null;
   deployment_command_template?: string | null;
@@ -31,10 +32,11 @@ export interface ModelConfigPayload {
   provider: string;
   model_key: string;
   display_name: string;
+  source_type?: "external" | "local";
+  source_uri: string;
   endpoint: string;
   api_key?: string | null;
   model_type?: ModelType;
-  training_command_template?: string | null;
   fine_tune_command_template?: string | null;
   offline_eval_command_template?: string | null;
   deployment_command_template?: string | null;

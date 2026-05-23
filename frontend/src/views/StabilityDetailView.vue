@@ -6,7 +6,7 @@ import { ElMessage } from 'element-plus'
 import { CanvasRenderer } from 'echarts/renderers'
 import { RadarChart } from 'echarts/charts'
 import { LegendComponent, RadarComponent, TitleComponent, TooltipComponent } from 'echarts/components'
-import { init, type ECharts, type EChartsOption, use } from 'echarts/core'
+import { init, type ECharts, type EChartsCoreOption, use } from 'echarts/core'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,7 +18,7 @@ const taskId = route.params.id as string
 const radarChartRef = ref<HTMLElement | null>(null)
 let chartInstance: ECharts | null = null
 
-use([CanvasRenderer, RadarChart, RadarComponent, LegendComponent, TitleComponent, TooltipComponent])
+use([CanvasRenderer, RadarChart, RadarComponent, LegendComponent, TitleComponent, TooltipComponent] as any)
 
 const getRiskType = (level: string) => {
   const map: Record<string, "info"|"primary"|"success"|"danger"|"warning"> = {
@@ -75,7 +75,7 @@ async function renderChart() {
 
   chartInstance ??= init(radarChartRef.value)
   const report = store.current
-  const option: EChartsOption = {
+  const option: EChartsCoreOption = {
     title: {
       text: 'AI Agent 五维稳定性雷达',
       left: 'center'

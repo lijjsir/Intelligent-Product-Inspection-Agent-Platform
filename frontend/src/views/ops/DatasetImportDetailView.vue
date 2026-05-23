@@ -45,7 +45,7 @@ const graphKeyword = ref("");
 const graphEntityType = ref("");
 const alignmentMinScore = ref<number | null>(null);
 const alignmentOnlyConfirmed = ref(false);
-const augmentationHistory = ref<Array<Record<string, unknown>>>([]);
+const augmentationHistory = ref<any[]>([]);
 const exportFormatOptions: Array<{ label: string; value: DatasetExportFormat }> = [
   { label: "VLM-JSON", value: "vlm-json" },
   { label: "COCO", value: "coco" },

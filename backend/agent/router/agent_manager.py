@@ -4,21 +4,19 @@ import logging
 from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentRouteDecision, AgentRouterInput, AgentRouterOutput
+from agent.router.contracts import AgentRouterOutput
+from agent.router.manager_loop import ManagerLoop
 from agent.router.route_policy import AgentRoutePolicy
 
 logger = logging.getLogger(__name__)
 
 
 class AgentManager:
-    """统一入口路由，将请求分发给 QualityChatAgent 或 InspectionTaskAgent。
-
-    AgentManager 只负责路由和分发，不直接执行业务。
-    具体执行由 QualityChatGraph 和 InspectionTaskGraph 各自的 .run() 方法完成。
-    """
+    """统一入口路由，通过 ManagerLoop 调度 capability-level route plan。"""
 
     def __init__(self) -> None:
         self._route_policy = AgentRoutePolicy()
+        self._loop = ManagerLoop()
         self._chat_agent = None
         self._task_agent = None
 
@@ -37,66 +35,7 @@ class AgentManager:
         return self._task_agent
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
-        router_input = AgentRouterInput(
-            query=request.query,
-            request_kind=request.request_kind,
-            attachments=[item.model_dump() for item in request.attachments],
-            image_urls=request.image_urls,
-            route_hints=request.route_hints,
-            ext=request.ext,
-        )
-
-        decision = self._route_policy.decide(router_input)
-        if decision.fallback_agent == "model_classifier":
-            decision = await self._route_policy.decide_with_model(
-                router_input,
-                llm_client=await self._build_model_classifier_client(request),
-            )
-
-        # ===== 运行时守卫检查 =====
-        if db_session is not None:
-            from agent.router.runtime_guard import AgentRuntimeGuard
-            guard_result = await AgentRuntimeGuard.check(
-                org_id=str(request.org_id),
-                selected_agent=decision.selected_agent,
-                sub_route=decision.sub_route,
-                session=db_session,
-            )
-            if not guard_result.allowed:
-                return AgentRouterOutput(
-                    route_decision=decision,
-                    agent_output={
-                        "message_type": "agent_unavailable",
-                        "answer": guard_result.customer_message,
-                    },
-                    status="blocked",
-                    degrade_reason=guard_result.reason,
-                )
-        # ===== 守卫结束 =====
-
-        try:
-            if decision.selected_agent == "inspection_task":
-                agent_output = await self.task_agent.run(request, decision)
-            else:
-                agent_output = await self.chat_agent.run(request, decision)
-        except Exception as exc:
-            logger.exception("Agent execution failed: agent=%s sub_route=%s", decision.selected_agent, decision.sub_route)
-            return AgentRouterOutput(
-                route_decision=decision,
-                agent_output={
-                    "message_type": "agent_route_failed",
-                    "answer": f"Agent 执行失败：{str(exc)}",
-                    "route_decision": decision.model_dump(),
-                },
-                status="failed",
-                degrade_reason=str(exc),
-            )
-
-        return AgentRouterOutput(
-            route_decision=decision,
-            agent_output=agent_output if isinstance(agent_output, dict) else agent_output.model_dump(),
-            status="completed",
-        )
+        return await self._loop.run(request, db_session=db_session)
 
     async def _build_model_classifier_client(self, request: NormalizedRequest):
         try:
@@ -124,4 +63,3 @@ class AgentManager:
         except Exception:
             logger.debug("model classifier client unavailable; using rule fallback", exc_info=True)
             return None
-

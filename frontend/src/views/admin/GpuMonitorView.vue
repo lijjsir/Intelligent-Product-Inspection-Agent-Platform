@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 import { useGpuInfraStore } from "@/stores/gpu-infra.store";
+import type { GpuComputeNode } from "@/types/gpu-infra.types";
 
 const store = useGpuInfraStore();
 const drawerOpen = ref(false);
 const editingId = ref("");
 const testingId = ref("");
 const refreshingId = ref("");
+const search = ref("");
+const statusFilter = ref("all");
+const autoRefresh = ref(false);
+const detailNode = ref<GpuComputeNode | null>(null);
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
 const form = reactive({
   name: "",
   host: "",
@@ -26,6 +32,22 @@ const summaryCards = computed(() => [
   { label: "GPU 总数", value: store.totalGpuCount },
   { label: "已分配 GPU", value: store.allocatedGpuCount },
 ]);
+
+const filteredItems = computed(() =>
+  store.items.filter((item) => {
+    const keyword = search.value.trim().toLowerCase();
+    const statusMatched = statusFilter.value === "all" || item.status === statusFilter.value;
+    const keywordMatched = !keyword || item.name.toLowerCase().includes(keyword) || item.host.toLowerCase().includes(keyword);
+    return statusMatched && keywordMatched;
+  }),
+);
+
+const detailDrawerOpen = computed({
+  get: () => Boolean(detailNode.value),
+  set: (open: boolean) => {
+    if (!open) detailNode.value = null;
+  },
+});
 
 function resetForm() {
   editingId.value = "";
@@ -125,9 +147,39 @@ async function toggleEnabled(row: any) {
   ElMessage.success(row.status === "disabled" ? "节点已启用" : "节点已禁用");
 }
 
+function openDetail(row: GpuComputeNode) {
+  detailNode.value = row;
+}
+
+function statusText(row: GpuComputeNode) {
+  if (row.status === "disabled") return "已禁用";
+  if (row.probe_status === "ssh_failed") return "SSH 失败";
+  if (row.probe_status === "probe_failed") return "探针失败";
+  if (row.status === "offline") return "离线/心跳超时";
+  if (row.status === "online") return "在线";
+  return row.status;
+}
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function syncAutoRefresh() {
+  stopAutoRefresh();
+  if (!autoRefresh.value) return;
+  refreshTimer = setInterval(() => {
+    store.fetchAll().catch(() => {});
+  }, 15000);
+}
+
 onMounted(() => {
   store.fetchAll();
 });
+watch(autoRefresh, syncAutoRefresh);
+onBeforeUnmount(stopAutoRefresh);
 </script>
 
 <template>
@@ -138,6 +190,7 @@ onMounted(() => {
         <p class="mt-2 text-sm text-zinc-500">管理 SSH 裸机 GPU 节点，供训练、微调和离线评测调度使用。</p>
       </div>
       <div class="flex gap-3">
+        <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动刷新" />
         <el-button @click="store.fetchAll()" :loading="store.loading">刷新列表</el-button>
         <el-button type="primary" @click="openCreate">新增节点</el-button>
       </div>
@@ -151,13 +204,23 @@ onMounted(() => {
     </section>
 
     <el-card shadow="never">
-      <el-table :data="store.items" v-loading="store.loading">
+      <div class="mb-4 flex flex-wrap gap-3">
+        <el-input v-model="search" placeholder="按节点名或主机搜索" clearable class="max-w-sm" />
+        <el-select v-model="statusFilter" class="w-44">
+          <el-option label="全部状态" value="all" />
+          <el-option label="在线" value="online" />
+          <el-option label="离线" value="offline" />
+          <el-option label="错误" value="error" />
+          <el-option label="禁用" value="disabled" />
+        </el-select>
+      </div>
+      <el-table :data="filteredItems" v-loading="store.loading">
         <el-table-column prop="name" label="节点名" min-width="140" />
         <el-table-column prop="host" label="主机" min-width="160" />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.status === 'online' ? 'success' : row.status === 'disabled' ? 'info' : row.status === 'error' ? 'danger' : 'warning'">
-              {{ row.status }}
+              {{ statusText(row) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -173,10 +236,14 @@ onMounted(() => {
           <template #default="{ row }">{{ row.memory_usage ?? "-" }}</template>
         </el-table-column>
         <el-table-column prop="last_heartbeat" label="最后心跳" min-width="180" />
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="最近探针" min-width="180">
+          <template #default="{ row }">{{ row.last_probe_at || "-" }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="testConnection(row.id)" :loading="testingId === row.id">测试连接</el-button>
             <el-button link type="primary" @click="refreshMetrics(row.id)" :loading="refreshingId === row.id">刷新指标</el-button>
+            <el-button link type="primary" @click="openDetail(row)">详情</el-button>
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button link type="warning" @click="toggleEnabled(row)">{{ row.status === "disabled" ? "启用" : "禁用" }}</el-button>
             <el-button link type="danger" @click="remove(row.id)">删除</el-button>
@@ -199,6 +266,35 @@ onMounted(() => {
       <template #footer>
         <el-button @click="drawerOpen = false">取消</el-button>
         <el-button type="primary" @click="submit">保存</el-button>
+      </template>
+    </el-drawer>
+
+    <el-drawer v-model="detailDrawerOpen" title="节点详情" size="560px" @close="detailNode = null">
+      <template v-if="detailNode">
+        <div class="flex flex-col gap-4">
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="节点">{{ detailNode.name }}</el-descriptions-item>
+            <el-descriptions-item label="主机">{{ detailNode.host }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ statusText(detailNode) }}</el-descriptions-item>
+            <el-descriptions-item label="最近探针">{{ detailNode.last_probe_at || "-" }}</el-descriptions-item>
+            <el-descriptions-item label="最近错误">{{ detailNode.last_probe_error || "-" }}</el-descriptions-item>
+          </el-descriptions>
+          <el-card shadow="never">
+            <template #header>主机摘要</template>
+            <pre class="overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(detailNode.hardware_summary || {}, null, 2) }}</pre>
+          </el-card>
+          <el-card shadow="never">
+            <template #header>GPU 明细</template>
+            <el-empty v-if="!(detailNode.gpu_devices || []).length" description="暂无 GPU 明细" />
+            <el-table v-else :data="detailNode.gpu_devices || []">
+              <el-table-column prop="index" label="卡号" width="80" />
+              <el-table-column prop="name" label="型号" min-width="180" />
+              <el-table-column prop="memory_total_mb" label="总显存(MB)" width="120" />
+              <el-table-column prop="memory_used_mb" label="已用显存(MB)" width="120" />
+              <el-table-column prop="utilization_gpu" label="利用率" width="100" />
+            </el-table>
+          </el-card>
+        </div>
       </template>
     </el-drawer>
   </div>

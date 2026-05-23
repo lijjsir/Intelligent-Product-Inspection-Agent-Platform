@@ -1,9 +1,11 @@
 ﻿from contextlib import asynccontextmanager
 
 import pytest
+from types import SimpleNamespace
 
 from agent.contracts import (
     AgentOutput,
+    AlertEvent,
     ClarificationRequest,
     NormalizedRequest,
     PersistableOutput,
@@ -13,6 +15,7 @@ from agent.contracts import (
     RouteSignals,
     StabilityAggregate,
     TaskAggregate,
+    TokenUsageEvent,
 )
 from app.services import quality_agent_orchestrator_service as orchestrator_mod
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
@@ -286,9 +289,63 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
     assert "缺失字段：spec_code" in updates[0]["content"]
     assert touches == [{"org_id": "org-1", "user_id": "user-1", "session_id": "session-1"}]
     assert any(event["event"] == "message_final" for event in events)
+    assert sum(1 for event in events if event["event"] == "message_final") == 1
     final_event = next(event for event in events if event["event"] == "message_final")
     assert final_event["content"] == output.answer
     assert final_event["payload"]["message_type"] == "task_action"
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_does_not_overwrite_interrupted_message_or_emit_final(monkeypatch):
+    events: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, _org_id: str, _message_id: str):
+            return SimpleNamespace(payload={"status": "interrupted"})
+
+        async def update_assistant_message(self, **_kwargs):
+            raise AssertionError("interrupted assistant message must not be overwritten")
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, *_args, **_kwargs):
+            raise AssertionError("interrupted turn must not touch session")
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    request = NormalizedRequest(
+        request_id="req-interrupted",
+        workflow_run_id="wf-interrupted",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        ext={"emit": fake_emit},
+    )
+    output = AgentOutput(message_type="assistant_text", answer="late answer")
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is False
+    assert events == []
 
 
 @pytest.mark.asyncio
@@ -465,3 +522,247 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
     assert rag_logs[0]["trace_id"] == "trace-rag-detail"
     assert rag_logs[0]["metadata_json"]["retrieved_chunks"][0]["chunk_id"] == "chunk-1"
     assert rag_logs[0]["metadata_json"]["used_citations"][0]["id"] == "rag-1"
+
+
+@pytest.mark.asyncio
+async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
+    updates: list[dict] = []
+    rag_logs: dict[str, dict] = {}
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, _org_id: str, _message_id: str):
+            return None
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_log_once(self, data: dict):
+            rag_logs.setdefault(data["idempotency_key"], data)
+            return rag_logs[data["idempotency_key"]]
+
+        async def create_log(self, data: dict):
+            return await self.create_log_once(data)
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+
+    request = NormalizedRequest(
+        request_id="req-idempotent-rag",
+        workflow_run_id="wf-idempotent-rag",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        ext={"idempotency_key": "org-1:session-1:assistant-1:wf-idempotent-rag"},
+    )
+    output = AgentOutput(
+        message_type="assistant_text",
+        answer="done",
+        route_decision=RouteDecision(
+            mode="router_enabled",
+            selected_agent="chat",
+            sub_route="rag_qa",
+            intent="rag_qa",
+            reason="test",
+        ),
+        persistable_output=PersistableOutput(
+            rag_queries=[
+                RagQueryLog(
+                    query="same query",
+                    rag_space_id="space-1",
+                    top_k=3,
+                    hit_count=1,
+                    source_graph="chat",
+                )
+            ]
+        ),
+    )
+
+    service = QualityAgentOrchestratorService()
+    first = await service._persist_chat_result(request, output)
+    second = await service._persist_chat_result(request, output)
+
+    assert first is True
+    assert second is True
+    assert len(updates) == 2
+    assert len(rag_logs) == 1
+    assert next(iter(rag_logs)).endswith(":rag:0")
+
+
+@pytest.mark.asyncio
+async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert(monkeypatch):
+    alerts: dict[str, dict] = {}
+    ledgers: dict[str, SimpleNamespace] = {}
+    summary_increments: list[dict] = []
+    task_store = {"task": None}
+
+    class FakeSession:
+        async def flush(self):
+            return None
+
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeTaskRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_chat_materialization_key(self, *_args):
+            return task_store["task"]
+
+        async def update_status(self, _org_id: str, _task_id: str, status: str):
+            task_store["task"].status = status
+
+    class FakeTaskService:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_task(self, **kwargs):
+            task_store["task"] = SimpleNamespace(
+                id="task-1",
+                product_id=kwargs["product_id"],
+                spec_code=kwargs["spec_code"],
+                image_urls=kwargs["image_urls"],
+                priority=kwargs["priority"],
+                meta_data=kwargs["metadata"],
+                status="created",
+            )
+            return task_store["task"]
+
+    class FakeResultRepository:
+        def __init__(self, _session):
+            pass
+
+        async def upsert_by_task(self, _payload: dict):
+            return SimpleNamespace(id="result-1")
+
+    class FakeStabilityRepository:
+        def __init__(self, _session):
+            pass
+
+        async def upsert_by_task(self, _payload: dict):
+            return SimpleNamespace(id="stability-1")
+
+    class FakeAlertRepository:
+        def __init__(self, _session):
+            pass
+
+        async def create_once(self, data: dict):
+            alerts.setdefault(data["idempotency_key"], data)
+            return alerts[data["idempotency_key"]]
+
+        async def create(self, data: dict):
+            return await self.create_once(data)
+
+    class FakeTokenLedgerRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_idempotency_key(self, key: str):
+            return ledgers.get(key)
+
+        async def create_once(self, data: dict):
+            ledger = ledgers.setdefault(
+                data["idempotency_key"],
+                SimpleNamespace(created_at="created-at", **data),
+            )
+            return ledger
+
+        async def create(self, data: dict):
+            return await self.create_once(data)
+
+    class FakeUserTokenUsageSummaryRepository:
+        def __init__(self, _session):
+            pass
+
+        async def increment(self, **kwargs):
+            summary_increments.append(kwargs)
+
+    class FakeRuleEngineService:
+        def __init__(self, _session):
+            pass
+
+        async def evaluate_and_get_matches(self, **_kwargs):
+            return []
+
+        async def is_in_cooldown(self, *_args, **_kwargs):
+            return False
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "TaskRepository", FakeTaskRepository)
+    monkeypatch.setattr(orchestrator_mod, "TaskService", FakeTaskService)
+    monkeypatch.setattr(orchestrator_mod, "ResultRepository", FakeResultRepository)
+    monkeypatch.setattr(orchestrator_mod, "StabilityRepository", FakeStabilityRepository)
+    monkeypatch.setattr(orchestrator_mod, "AlertRepository", FakeAlertRepository)
+    monkeypatch.setattr(orchestrator_mod, "TokenLedgerRepository", FakeTokenLedgerRepository)
+    monkeypatch.setattr(orchestrator_mod, "UserTokenUsageSummaryRepository", FakeUserTokenUsageSummaryRepository)
+    monkeypatch.setattr("app.services.rule_engine_service.RuleEngineService", FakeRuleEngineService)
+
+    request = NormalizedRequest(
+        request_id="req-idempotent-materialize",
+        workflow_run_id="wf-idempotent-materialize",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        ext={"idempotency_key": "org-1:session-1:assistant-1:wf-idempotent-materialize"},
+    )
+    persistable = PersistableOutput(
+        task=TaskAggregate(product_id="P-1", spec_code="STD-1", status="done"),
+        result=ResultAggregate(verdict="pass", overall_score=0.95),
+        stability=StabilityAggregate(risk_level="low", risk_score=0.1),
+        alerts=[AlertEvent(severity="warning", title="review", message="check")],
+        token_usage=[TokenUsageEvent(model_key="chat-model", prompt_tokens=2, completion_tokens=3, total_tokens=5)],
+    )
+
+    service = QualityAgentOrchestratorService()
+    first = await service._materialize_structured_output(
+        request,
+        persistable,
+        source_graph="inspection_task",
+        source_kind="structured",
+        persist_usage=True,
+    )
+    second = await service._materialize_structured_output(
+        request,
+        persistable,
+        source_graph="inspection_task",
+        source_kind="structured",
+        persist_usage=True,
+    )
+
+    assert first["task_id"] == second["task_id"] == "task-1"
+    assert len(alerts) == 1
+    assert len(ledgers) == 1
+    assert len(summary_increments) == 1
+    assert next(iter(alerts)).endswith(":alert:review")
+    assert next(iter(ledgers)).endswith(":token:0:chat-model")
