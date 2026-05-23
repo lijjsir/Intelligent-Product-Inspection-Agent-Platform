@@ -1,4 +1,6 @@
-from sqlalchemy import func, or_, select
+from __future__ import annotations
+
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
@@ -73,3 +75,20 @@ class UserRepository:
         self._session.add(user)
         await self._session.flush()
         return user
+
+    async def list_by_org_id(self, org_id: str) -> list[User]:
+        result = await self._session.execute(
+            select(User).where(User.org_id == org_id).order_by(User.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def bulk_update_org(self, user_ids: list[str], org_id: str | None) -> int:
+        if not user_ids:
+            return 0
+        result = await self._session.execute(
+            update(User)
+            .where(User.id.in_(user_ids))
+            .values(org_id=org_id)
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)

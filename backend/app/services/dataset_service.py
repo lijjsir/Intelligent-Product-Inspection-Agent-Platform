@@ -417,20 +417,38 @@ class DatasetService(TenantAwareService):
                 }
             )
         else:
-            asyncio.create_task(
-                self._run_data_import(
-                    dataset_id=dataset_id,
-                    job_id=job.id,
-                    upload_session_id=upload.id,
-                    bucket=bucket,
-                    object_key=object_key,
-                )
+            self._schedule_background_import(
+                dataset_id=dataset_id,
+                job_id=job.id,
+                upload_session_id=upload.id,
+                bucket=bucket,
+                object_key=object_key,
             )
         return DatasetUploadCompleteResponse(
             session_id=upload.id,
             job=AsyncJobResponse.model_validate(job),
             dataset=await self._build_detail(dataset),
         )
+
+    def _schedule_background_import(
+        self,
+        *,
+        dataset_id: str,
+        job_id: str,
+        upload_session_id: str,
+        bucket: str,
+        object_key: str,
+    ) -> None:
+        coro = self._run_data_import(
+            dataset_id=dataset_id,
+            job_id=job_id,
+            upload_session_id=upload_session_id,
+            bucket=bucket,
+            object_key=object_key,
+        )
+        task = asyncio.create_task(coro)
+        if task is None:
+            coro.close()
 
     async def _run_data_import(self, *, dataset_id: str, job_id: str, upload_session_id: str, bucket: str, object_key: str) -> None:
         await asyncio.sleep(0)
