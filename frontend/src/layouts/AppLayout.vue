@@ -216,10 +216,11 @@ function formatTime(ts?: string | null) {
 
 function sessionLabel(sessionId: string) {
   const found = chatStore.sessions.find((item) => item.id === sessionId);
-  if (!found) return sessionId;
-  const title = found.title || "无";
-  const ts = found.last_message_at || found.updated_at || found.created_at;
-  return `${title} · ${formatTime(ts)}`;
+  if (!found) {
+    if (chatStore.session?.id === sessionId) return chatStore.session.title || "无";
+    return sessionId;
+  }
+  return found.title || "无";
 }
 
 function normalizeActiveNames(value: string | string[]) {

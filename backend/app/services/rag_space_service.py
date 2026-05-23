@@ -125,7 +125,7 @@ class RagSpaceService:
 
     async def list_spaces(self, limit: int = 200) -> list[RagSpaceResponse]:
         try:
-            rows = await self._spaces.list_for_org(org_id=self._org_id, owner_user_id=self._user_id, limit=limit)
+            rows = await self._spaces.list_for_org(org_id=self._org_id, owner_user_id=None, limit=limit)
             return [RagSpaceResponse.model_validate(row) for row in rows]
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)

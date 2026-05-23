@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 def _scope_org_id(current: CurrentUser) -> str | None:
-    if ROLE_ADMIN in current.roles or ROLE_PLATFORM_OPERATOR in current.roles:
+    if ROLE_ADMIN in current.roles:
         return None
     return current.org_id
 
