@@ -151,6 +151,34 @@ async def test_create_task_returns_serializable_task(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_task_preserves_rag_metadata(monkeypatch):
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+
+    session = FakeSession()
+    service = TaskService(session=session, org_id="org-1")
+    metadata = {
+        "selected_rag_space_id": "user-rag-1",
+        "selected_rag_space_name": "用户知识库",
+        "selected_rag_scope_node_ids": ["folder-1"],
+        "selected_rag_space": {"id": "user-rag-1", "name": "用户知识库"},
+        "structured_record": {"product_id": "screw", "spec_code": "STD-1"},
+    }
+
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png"],
+        priority=5,
+        metadata=metadata,
+    )
+
+    assert task.meta_data == metadata
+
+
+@pytest.mark.asyncio
 async def test_create_task_rejects_missing_active_spec(monkeypatch):
     monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
     monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)

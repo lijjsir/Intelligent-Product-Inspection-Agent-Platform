@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { useRoute } from "vue-router";
 import {
   Delete,
   Document,
@@ -16,6 +17,7 @@ import { ragSpaceApi } from "@/api/rag-space.api";
 import { useChatStore } from "@/stores/chat.store";
 import type { RagNode } from "@/types/rag-space.types";
 
+const route = useRoute();
 const chatStore = useChatStore();
 
 const treeLoading = ref(false);
@@ -199,6 +201,13 @@ function resolveNodeIcon(node: RagNode) {
 
 async function ensureSelectedSpace() {
   await chatStore.fetchRagSpaces();
+  const requestedSpaceId = String(route.query.spaceId || "").trim();
+  if (requestedSpaceId && chatStore.ragSpaces.some((item) => item.id === requestedSpaceId)) {
+    if (chatStore.selectedRagSpaceId !== requestedSpaceId) {
+      chatStore.selectRagSpace(requestedSpaceId);
+    }
+    return;
+  }
   if (!chatStore.selectedRagSpaceId && chatStore.ragSpaces.length > 0) {
     chatStore.selectRagSpace(chatStore.ragSpaces[0].id);
   }

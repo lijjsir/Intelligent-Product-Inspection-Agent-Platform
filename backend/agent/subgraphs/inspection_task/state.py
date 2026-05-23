@@ -9,8 +9,14 @@ class InspectionState(TypedDict, total=False):
     org_id: str
     product_id: str
     spec_code: str
+    product_family: str | None
     image_urls: list[str]
     image_items: list[dict[str, Any]]
+    selected_rag_space_id: str | None
+    selected_rag_space_name: str | None
+    selected_rag_space: dict[str, Any] | None
+    selected_rag_scope_node_ids: list[str]
+    structured_record: dict[str, Any]
     model_id: str
     model_config_id: str | None
     model_base_url: str | None
@@ -24,6 +30,7 @@ class InspectionState(TypedDict, total=False):
     defects: list[dict[str, Any]]
     knowledge_docs: list[dict[str, Any]]
     citations: list[dict[str, Any]]
+    rag_summary: dict[str, Any]
     reasoning_chain: dict[str, Any]
     conclusion: dict[str, Any]
     standard_evaluation: dict[str, Any]

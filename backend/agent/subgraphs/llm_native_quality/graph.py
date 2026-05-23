@@ -38,6 +38,7 @@ from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.object_storage.resolver import read_attachment_bytes
 from app.services.rag_retrieval_service import RagRetrievalService
+from app.services.system_rag_service import resolve_and_search_system_rag
 from infra.database.session import get_session
 
 
@@ -205,13 +206,23 @@ def _build_rag_summary(
     citation_coverage: float,
 ) -> dict[str, Any]:
     top_sources = []
+    rag_space_ids = []
+    rag_space_names = []
     for item in rag_hits:
         source = str(item.get("source") or "").strip()
         if source and source not in top_sources:
             top_sources.append(source)
+        space_id = str(item.get("rag_space_id") or "").strip()
+        space_name = str(item.get("rag_space_name") or "").strip()
+        if space_id and space_id not in rag_space_ids:
+            rag_space_ids.append(space_id)
+        if space_name and space_name not in rag_space_names:
+            rag_space_names.append(space_name)
     return {
         "rag_space_id": rag_space_id,
         "rag_space_name": rag_space_name,
+        "rag_space_ids": rag_space_ids,
+        "rag_space_names": rag_space_names,
         "hit_count": len(rag_hits),
         "citation_coverage": round(citation_coverage, 4),
         "top_sources": top_sources[:5],
@@ -371,14 +382,15 @@ class LLMNativeQualitySubgraph:
             structured_record=structured_record,
         )
         async with get_session() as session:
-            rag_retrieval_service = RagRetrievalService(
-                session,
+            rag_result = await resolve_and_search_system_rag(
+                session=session,
                 org_id=request.org_id,
                 user_id=request.user_id,
-            )
-            rag_result = await rag_retrieval_service.search(
-                rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
                 query=retrieval_query,
+                product_family=product_family,
+                product_id=product_id,
+                spec_code=spec_code,
+                user_rag_space_id=str(request.ext.get("selected_rag_space_id") or "") or None,
                 top_k=int(knowledge_target.config_payload.get("retrieval_top_k") if knowledge_target else 4) or 4,
             )
 
@@ -401,6 +413,9 @@ class LLMNativeQualitySubgraph:
             "knowledge_router": {
                 "selected_rag_space_id": request.ext.get("selected_rag_space_id"),
                 "selected_rag_space_name": rag_result.get("rag_space_name"),
+                "system_rag_space_ids": list(rag_result.get("system_rag_space_ids") or []),
+                "system_rag_space_names": list(rag_result.get("system_rag_space_names") or []),
+                "standard_binding_name": rag_result.get("standard_binding_name"),
                 "query": retrieval_query,
                 "hit_count": int(rag_result.get("hit_count") or 0),
                 "top_hits": list(rag_result.get("hits") or []),
@@ -472,6 +487,10 @@ class LLMNativeQualitySubgraph:
             source_graph="llm_native_quality",
             citation_coverage=float(ai_gate.get("evidence_score") or 0.0),
         )
+        rag_summary["system_rag_space_ids"] = list(rag_result.get("system_rag_space_ids") or [])
+        rag_summary["system_rag_space_names"] = list(rag_result.get("system_rag_space_names") or [])
+        rag_summary["standard_binding_name"] = rag_result.get("standard_binding_name")
+        rag_summary["merged_rag_source_count"] = int(rag_result.get("merged_rag_source_count") or 0)
         result_card = _build_result_card(
             product_id=product_id,
             product_family=product_family,
@@ -500,7 +519,7 @@ class LLMNativeQualitySubgraph:
             answer_lines.append(
                 f"RAG matched {len(rag_hits)} evidence chunk(s) from `{rag_summary['rag_space_name'] or rag_summary['rag_space_id']}`."
             )
-        elif request.ext.get("selected_rag_space_id"):
+        elif request.ext.get("selected_rag_space_id") or rag_result.get("system_rag_space_ids"):
             answer_lines.append("RAG retrieval returned no matching evidence from the selected knowledge space.")
         if expectation_check:
             answer_lines.append(

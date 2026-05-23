@@ -76,7 +76,8 @@ function getAdminMenu(): MenuStructure {
         { title: "用户管理", path: "/governance/admin/users" },
         { title: "权限与组织", path: "/governance/admin/roles-orgs" },
         { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
-        { title: "检测标准", path: "/governance/admin/inspection-specs" },
+        { title: "检测标准", path: "/governance/admin/inspection-standards" },
+        { title: "质检门槛", path: "/governance/admin/inspection-specs" },
         { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
         { title: "记忆治理", path: "/governance/memory" },
@@ -134,7 +135,7 @@ function getPlatformOperatorMenu(): MenuStructure {
       items: [
         { title: "Agent 查看", path: "/ops/agents" },
         { title: "稳定性查看", path: "/ops/stability" },
-        { title: "检测标准查看", path: "/ops/inspection-specs" },
+        { title: "质检门槛查看", path: "/ops/inspection-specs" },
       ],
     },
     { title: "个人设置", path: "/app/profile" },

@@ -7,7 +7,7 @@ export const opsRoutes = [
   { path: "dashboard", name: "ops-dashboard", component: () => import("@/views/ops/OpsDashboardView.vue"), meta: { title: "平台运维工作台", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Analytics
-  { path: "analytics", name: "ops-analytics", component: () => import("@/views/AnalyticsView.vue"), meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "analytics", name: "ops-analytics", component: () => import("@/views/AnalyticsView.vue"), meta: { title: "分析中心", roles: [ROLE_ADMIN, ROLE_PLATFORM_OPERATOR] } },
   { path: "analytics/behavior", name: "ops-analytics-behavior", component: Placeholder, meta: { title: "用户行为分析", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Alerts
@@ -29,7 +29,7 @@ export const opsRoutes = [
   // Cross-domain readonly
   { path: "agents", name: "ops-agents", component: () => import("@/views/ops/AgentManageView.vue"), meta: { title: "Agent 查看", roles: [ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },
   { path: "stability", name: "ops-stability", component: () => import("@/views/StabilityOverviewView.vue"), meta: { title: "稳定性查看", roles: [ROLE_PLATFORM_OPERATOR] } },
-  { path: "inspection-specs", name: "ops-inspection-specs", component: () => import("@/views/admin/InspectionSpecView.vue"), meta: { title: "检测标准查看", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "inspection-specs", name: "ops-inspection-specs", component: () => import("@/views/admin/InspectionSpecView.vue"), meta: { title: "质检门槛查看", roles: [ROLE_PLATFORM_OPERATOR] } },
   { path: "tasks", name: "ops-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务查看", roles: [ROLE_PLATFORM_OPERATOR] } },
   { path: "tasks/:id", name: "ops-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_PLATFORM_OPERATOR] } },
 

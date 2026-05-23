@@ -25,6 +25,7 @@ from app.models.inspection_spec import (
     SpecAggregationRule,
     SpecChangeLog,
 )
+from app.models.inspection_standard_library import InspectionStandardLibrary
 from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
@@ -95,6 +96,7 @@ __all__ = [
     "MessageFeedback",
     "InspectionSpec",
     "InspectionSpecItem",
+    "InspectionStandardLibrary",
     "DefectTaxonomy",
     "ProductZoneMap",
     "SpecAggregationRule",

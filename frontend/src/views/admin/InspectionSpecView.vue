@@ -173,7 +173,7 @@ async function duplicateSpec(row: InspectionSpec) {
     })),
   };
   await store.createOne(payload);
-  ElMessage.success("检测标准已复制为草稿副本");
+  ElMessage.success("质检门槛已复制为草稿副本");
 }
 
 function addRule() {
@@ -220,7 +220,7 @@ function buildPayload(): InspectionSpecPayload {
 
 function validatePayload(payload: InspectionSpecPayload) {
   if (!payload.spec_code || !payload.name) {
-    throw new Error("请填写标准编码和标准名称");
+    throw new Error("请填写门槛编码和门槛名称");
   }
   if (payload.items.some((item) => !item.defect_type)) {
     throw new Error("每条规则都需要填写缺陷类型");
@@ -233,22 +233,22 @@ async function submit() {
 
   if (editingId.value) {
     await store.updateOne(editingId.value, payload);
-    ElMessage.success("检测标准已更新");
+    ElMessage.success("质检门槛已更新");
   } else {
     await store.createOne(payload);
-    ElMessage.success("检测标准已创建");
+    ElMessage.success("质检门槛已创建");
   }
   drawerOpen.value = false;
 }
 
 async function remove(id: string) {
-  await ElMessageBox.confirm("删除后将移除该标准及其规则项，是否继续？", "删除标准", {
+  await ElMessageBox.confirm("删除后将移除该门槛及其规则项，是否继续？", "删除质检门槛", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
     type: "warning",
   });
   await store.removeOne(id);
-  ElMessage.success("检测标准已删除");
+  ElMessage.success("质检门槛已删除");
 }
 
 function formatScope(row: InspectionSpec) {
@@ -270,20 +270,20 @@ onMounted(() => {
   <div class="flex flex-col gap-5">
     <section class="hero">
       <div>
-        <p class="eyebrow">Inspection Governance</p>
-        <h2>检测标准配置</h2>
-        <p>维护缺陷判定标准、AI 门禁阈值和自动放行策略，支撑 `inspection_specs` 主链路。</p>
+        <p class="eyebrow">Quality Gate</p>
+        <h2>质检门槛配置</h2>
+        <p>维护缺陷判定标准、AI 门槛阈值和自动放行策略，支撑 `inspection_specs` 主链路。</p>
       </div>
-      <el-button type="primary" @click="openCreate">新增标准</el-button>
+      <el-button type="primary" @click="openCreate">新增门槛</el-button>
     </section>
 
     <section class="metrics">
       <el-card shadow="never" class="metric-card">
-        <span class="metric-label">筛选后标准</span>
+        <span class="metric-label">筛选后门槛</span>
         <strong class="metric-value">{{ filteredItems.length }}</strong>
       </el-card>
       <el-card shadow="never" class="metric-card">
-        <span class="metric-label">启用标准</span>
+        <span class="metric-label">启用门槛</span>
         <strong class="metric-value">{{ activeCount }}</strong>
       </el-card>
       <el-card shadow="never" class="metric-card">
@@ -300,8 +300,8 @@ onMounted(() => {
       <template #header>
         <div class="card-header">
           <div>
-            <h3>标准列表</h3>
-            <p>支持全局标准与组织标准共存，默认按当前治理视角展示。</p>
+            <h3>门槛列表</h3>
+            <p>支持全局门槛与组织门槛共存，默认按当前治理视角展示。</p>
           </div>
         </div>
       </template>
@@ -322,8 +322,8 @@ onMounted(() => {
       </div>
 
       <el-table :data="filteredItems" v-loading="store.loading">
-        <el-table-column prop="spec_code" label="标准编码" min-width="160" />
-        <el-table-column prop="name" label="标准名称" min-width="180" />
+        <el-table-column prop="spec_code" label="门槛编码" min-width="160" />
+        <el-table-column prop="name" label="门槛名称" min-width="180" />
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="范围" width="100">
           <template #default="{ row }">
@@ -366,7 +366,7 @@ onMounted(() => {
       </el-table>
     </el-card>
 
-    <el-drawer v-model="previewOpen" title="标准详情预览" size="680px">
+    <el-drawer v-model="previewOpen" title="门槛详情预览" size="680px">
       <template v-if="previewing">
         <div class="preview-panel">
           <section class="preview-hero">
@@ -446,16 +446,16 @@ onMounted(() => {
       </template>
     </el-drawer>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑检测标准' : '新增检测标准'" size="760px">
+    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑质检门槛' : '新增质检门槛'" size="760px">
       <div class="drawer-body">
         <el-card shadow="never" class="drawer-section">
-          <template #header>标准主信息</template>
+          <template #header>门槛主信息</template>
           <el-form label-position="top" class="grid-form">
-            <el-form-item label="标准编码">
+            <el-form-item label="门槛编码">
               <el-input v-model="form.spec_code" placeholder="如 SCREW-A-2026-V1" />
             </el-form-item>
-            <el-form-item label="标准名称">
-              <el-input v-model="form.name" placeholder="请输入标准名称" />
+            <el-form-item label="门槛名称">
+              <el-input v-model="form.name" placeholder="请输入门槛名称" />
             </el-form-item>
             <el-form-item label="版本">
               <el-input v-model="form.version" placeholder="v1" />
@@ -472,12 +472,12 @@ onMounted(() => {
             <el-form-item label="必需视角">
               <el-input v-model="form.required_views" placeholder="逗号分隔，如 front, rear, detail" />
             </el-form-item>
-            <el-form-item label="标准范围">
+            <el-form-item label="门槛范围">
               <el-segmented
                 v-model="scopeMode"
                 :options="[
-                  { label: '组织标准', value: 'org' },
-                  { label: '全局标准', value: 'global', disabled: !canManageGlobal },
+                  { label: '组织门槛', value: 'org' },
+                  { label: '全局门槛', value: 'global', disabled: !canManageGlobal },
                 ]"
               />
             </el-form-item>

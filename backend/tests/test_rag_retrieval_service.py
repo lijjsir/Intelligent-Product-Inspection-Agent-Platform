@@ -105,3 +105,34 @@ async def test_rag_retrieval_service_caches_space_and_result(monkeypatch):
 
     assert first["hits"] == second["hits"]
     assert calls == {"space": 1, "retrieve": 1}
+
+
+@pytest.mark.asyncio
+async def test_rag_retrieval_service_search_many_merges_and_dedupes(monkeypatch):
+    class FakeSpaceRepo:
+        async def get(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+            class Space:
+                id = rag_space_id
+                name = f"space-{rag_space_id}"
+                updated_at = "version-1"
+
+            return Space()
+
+    class FakeRetriever:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            rag_space_id = payload_filter["rag_space_id"]
+            if rag_space_id == "space-1":
+                return [{"id": "chunk-1", "title": "doc1", "quote": "same", "document_id": "doc-1", "chunk_index": 1, "score": 0.9}]
+            return [{"id": "chunk-2", "title": "doc2", "quote": "other", "document_id": "doc-2", "chunk_index": 1, "score": 0.8}]
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda session: FakeSpaceRepo())
+    monkeypatch.setattr("app.services.rag_retrieval_service.Retriever", FakeRetriever)
+
+    service = RagRetrievalService(FakeSession(), org_id="org-1", user_id="user-1")
+    result = await service.search_many(rag_space_ids=["space-1", "space-1", "space-2"], query="food", top_k=4)
+
+    assert result["rag_space_ids"] == ["space-1", "space-2"]
+    assert result["hit_count"] == 2

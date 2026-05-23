@@ -508,6 +508,41 @@ async def test_embedder_reports_missing_model_config_page_embedding_model():
         await embedder.embed("hello")
 
 
+@pytest.mark.asyncio
+async def test_embedder_falls_back_to_pseudo_vector_when_runtime_embedding_fails(monkeypatch):
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def embed(self, text, **kwargs):
+            raise RuntimeError("embedding api not supported")
+
+    monkeypatch.setattr("agent.rag.embedder.LLMClient", FakeLLMClient)
+
+    embedder = Embedder(
+        org_id="org-1",
+        runtime_models=[
+            {
+                "id": "embed-cfg",
+                "provider": "volcengine",
+                "model_key": "glm-4-7-251222",
+                "endpoint": "https://ark.example.com/api/v3",
+                "api_key": "secret",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            },
+        ],
+    )
+
+    vector = await embedder.embed("pseudo fallback sample")
+
+    assert isinstance(vector, list)
+    assert len(vector) == 256
+    assert any(abs(value) > 0 for value in vector)
+
+
 def test_quality_report_result_trend_handles_empty_citations():
     items = [
         FakeResult(datetime(2026, 3, 23, 10, 0, 0), {"items": ["doc-1"]}),

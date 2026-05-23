@@ -20,6 +20,7 @@ from app.api.v1 import (
     gpu_nodes,
     organizations,
     inspection_specs,
+    inspection_standards,
     infrastructure,
     langfuse_proxy,
     memory,
@@ -61,6 +62,7 @@ router.include_router(admin_meetings.router, tags=["admin-meetings"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
+router.include_router(inspection_standards.router, prefix="/inspection-standards", tags=["inspection-standards"])
 router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(infrastructure.router, prefix="/infrastructure", tags=["infrastructure"])

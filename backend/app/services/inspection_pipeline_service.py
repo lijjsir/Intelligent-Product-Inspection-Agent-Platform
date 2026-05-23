@@ -49,13 +49,24 @@ def _build_runtime_state(
     timeline_seed: list[dict[str, Any]],
 ) -> InspectionState:
     """根据任务记录和选中的运行时模型构造图执行的初始状态。"""
+    metadata = dict(task.meta_data or {})
+    structured_record = metadata.get("structured_record") if isinstance(metadata.get("structured_record"), dict) else {}
+    selected_rag_space = metadata.get("selected_rag_space") if isinstance(metadata.get("selected_rag_space"), dict) else None
     return {
         "task_id": task.id,
         "org_id": task.org_id,
         "product_id": task.product_id,
         "spec_code": task.spec_code,
+        "product_family": str(metadata.get("product_family") or structured_record.get("product_family") or "").strip().lower() or None,
         "image_urls": _normalize_image_urls_for_runtime(task.image_urls or []),
         "image_items": list(task.image_items or []),
+        "selected_rag_space_id": str(metadata.get("selected_rag_space_id") or "") or None,
+        "selected_rag_space_name": str(metadata.get("selected_rag_space_name") or "") or None,
+        "selected_rag_space": selected_rag_space,
+        "selected_rag_scope_node_ids": [
+            str(item).strip() for item in list(metadata.get("selected_rag_scope_node_ids") or []) if str(item).strip()
+        ],
+        "structured_record": structured_record,
         "model_id": str(runtime.get("model_id") or "unknown"),
         "model_config_id": runtime.get("model_config_id"),
         "model_base_url": runtime.get("base_url"),
@@ -67,6 +78,7 @@ def _build_runtime_state(
         "timeline": list(timeline_seed),
         "usage_events": [],
         "runtime_errors": [],
+        "rag_summary": {},
     }
 
 
@@ -411,6 +423,10 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
 
             conclusion = state.get("conclusion") or {}
             reasoning_chain = dict(state.get("reasoning_chain") or {})
+            if state.get("rag_summary"):
+                reasoning_chain["rag_summary"] = dict(state.get("rag_summary") or {})
+            if state.get("structured_record"):
+                reasoning_chain["structured_record"] = dict(state.get("structured_record") or {})
             standard_evaluation = await standard_service.evaluate(
                 spec_code=task.spec_code,
                 image_urls=task.image_urls or [],
