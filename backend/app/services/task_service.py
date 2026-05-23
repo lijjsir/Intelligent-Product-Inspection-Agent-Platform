@@ -185,7 +185,7 @@ class TaskService:
 
     @property
     def _owner_user_id(self) -> str | None:
-        if self._actor_role in (ROLE_USER, ROLE_EXPERT):
+        if self._actor_role == ROLE_USER:
             return self._actor_user_id
         return None
 

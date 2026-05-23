@@ -10,8 +10,9 @@ import uuid
 from collections.abc import Sequence
 
 from alembic import op
-from sqlalchemy import Boolean, Column, DateTime, String, Text, JSON, text
+from sqlalchemy import Boolean, Column, String, Text, JSON, text
 from sqlalchemy.dialects.mysql import BINARY
+from sqlalchemy.dialects import mysql
 
 
 revision: str = "0053"
@@ -32,9 +33,9 @@ def upgrade() -> None:
         Column("participation_strategy", JSON, nullable=True),
         Column("is_active", Boolean, nullable=False, server_default=text("1")),
         Column("created_by", BINARY(16), nullable=True, index=True),
-        Column("created_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP(3)")),
-        Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
-        Column("deleted_at", DateTime, nullable=True),
+        Column("created_at", mysql.DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)")),
+        Column("updated_at", mysql.DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
+        Column("deleted_at", mysql.DATETIME(fsp=3), nullable=True),
     )
 
     # Seed default agent: use a zero UUID for org_id (system-wide default)
