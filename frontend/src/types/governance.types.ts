@@ -181,16 +181,19 @@ export interface ModelQualityMetric {
   pass_rate: number;
   hallucination_rate: number;
   thumbs_down_rate: number;
+  thumbs_up_rate: number;
 }
 
 export interface QualityReport {
   total_results: number;
   hallucination_rate: number;
   thumbs_down_rate: number;
+  thumbs_up_rate: number;
   avg_risk_score: number;
   feedback_distribution: Record<string, number>;
   hallucination_trend: TrendPoint[];
   thumbs_down_trend: TrendPoint[];
+  thumbs_up_trend: TrendPoint[];
   model_metrics: ModelQualityMetric[];
   chat_score_count: number;
   chat_avg_trust_score: number;
@@ -214,6 +217,7 @@ export interface QualityTraceItem {
   total_tokens: number;
   feedback_count: number;
   thumbs_down_count: number;
+  thumbs_up_count: number;
   last_score_value: number | null;
   last_score_at: string | null;
   trust_score: number | null;
@@ -252,6 +256,255 @@ export interface QualityTraceDeleteResult {
   local_scores_removed?: number;
 }
 
+export interface RoleItem {
+  key: string;
+  label: string;
+}
+
+export interface RolesPermissionMatrix {
+  resources: string[];
+  matrix: Record<string, string[]>;
+}
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  settings?: Record<string, unknown> | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+  user_count: number;
+}
+
+export interface OrganizationCreatePayload {
+  name: string;
+  slug: string;
+  plan: string;
+  settings?: Record<string, unknown> | null;
+}
+
+export interface OrganizationUpdatePayload {
+  name?: string;
+  slug?: string;
+  plan?: string;
+  settings?: Record<string, unknown> | null;
+  is_active?: boolean;
+}
+
+export interface OrganizationUserItem {
+  id: string;
+  username: string;
+  role: string;
+  is_active: boolean;
+}
+
+export interface OrganizationUsersResponse {
+  organization: {
+    id: string;
+    name: string;
+  };
+  users: OrganizationUserItem[];
+  total: number;
+}
+
+export interface OrganizationUserAssignmentPayload {
+  user_ids: string[];
+  action: "assign" | "remove";
+}
+
+export interface AuthLog {
+  id: string;
+  org_id: string;
+  user_id?: string | null;
+  username?: string | null;
+  event_type: string;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  success: boolean;
+  detail?: string | null;
+  occurred_at?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  org_id: string;
+  actor_id: string;
+  actor_role: string;
+  resource_type: string;
+  resource_id?: string | null;
+  action: string;
+  payload_hash?: string | null;
+  request_id?: string | null;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  result_code?: number | null;
+  occurred_at?: string;
+}
+
+export interface InfrastructureComponent {
+  name: string;
+  kind: string;
+  status: "healthy" | "degraded" | "unhealthy" | "unknown" | string;
+  latency_ms?: number | null;
+  detail?: string | null;
+  last_check_at?: string | null;
+}
+
+export interface InfrastructureStatus {
+  components: InfrastructureComponent[];
+  overall_status: "healthy" | "degraded" | "unhealthy" | "unknown" | string;
+  checked_at: string;
+}
+
+export interface MemorySearchQueryPayload {
+  org_id: string;
+  workspace: "governance" | "ops" | "app";
+  query: string;
+  user_id?: string | null;
+  top_k?: number;
+  scope_filter?: {
+    memory_type?: string[];
+    product_line?: string | null;
+    rag_space_id?: string | null;
+    task_id?: string | null;
+  };
+}
+
+export interface MemorySearchItem {
+  memory_id: string;
+  memory_type: string;
+  summary: string;
+  score: number;
+  confidence?: number | null;
+  trust_score?: number | null;
+  usage_policy?: string;
+  warnings?: string[];
+}
+
+export interface MemorySearchResult {
+  memory_context: {
+    items: MemorySearchItem[];
+    warnings: string[];
+    degraded: boolean;
+  };
+  items: MemorySearchItem[];
+  degraded: boolean;
+  warnings: string[];
+}
+
+export interface MemoryEventItem {
+  event_id: string;
+  event_type: string;
+  memory_id?: string | null;
+  trace_id?: string | null;
+  source_kind?: string | null;
+  created_at?: string | null;
+}
+
+export interface MemoryPropagationNode {
+  memory_id: string;
+  classification: string;
+  depth: number;
+  edge_type?: string | null;
+  affected_by: string[];
+}
+
+export interface MemoryPropagationGraph {
+  root_memory_id: string;
+  nodes: MemoryPropagationNode[];
+  direct_contaminated: string[];
+  indirect_contaminated: string[];
+  suspected: string[];
+  clean_boundary: string[];
+}
+
+export interface MemoryRollbackPayload {
+  org_id: string;
+  workspace: "governance" | "ops";
+  operator_id: string;
+  trace_id: string;
+  root_memory_id: string;
+  rollback_action: "delete" | "degrade" | "isolate" | "patch" | "branch";
+  target_memory_ids: string[];
+  reason: string;
+  require_human_review?: boolean;
+  propagation_graph?: Record<string, unknown> | null;
+}
+
+export interface MemoryRollbackResult {
+  rollback_id: string;
+  root_memory_id: string;
+  action: string;
+  affected_count: number;
+  review_status: string;
+  approval_id?: string | null;
+  before_snapshot?: Record<string, unknown> | null;
+  after_snapshot?: Record<string, unknown> | null;
+}
+
+export interface MemoryEvaluationPayload {
+  org_id: string;
+  workspace?: "governance";
+  rollback_id: string;
+  task_id?: string | null;
+  trace_id?: string | null;
+  scenario?: string | null;
+}
+
+export interface MemoryEvaluationResult {
+  evaluation_id: string;
+  rollback_id: string;
+  scenario?: string | null;
+  metrics?: Record<string, unknown> | null;
+  replay_result?: Record<string, unknown> | null;
+  conclusion?: string | null;
+}
+
+export interface MemoryPolicy {
+  policy_key: string;
+  policy_type: string;
+  workspace: string;
+  config?: Record<string, unknown> | null;
+  status: string;
+  version: number;
+  updated_at?: string | null;
+}
+
+export interface MemoryPolicyUpsertPayload {
+  workspace: "governance" | "ops" | "app";
+  policy_type: "write_gate" | "retrieval" | "rollback" | "audit";
+  config: Record<string, unknown>;
+  status?: string;
+}
+
+export interface Approval {
+  id: string;
+  org_id: string;
+  source_module: string;
+  source_id?: string | null;
+  operation_summary: string;
+  risk_level: "low" | "medium" | "high" | "critical" | string;
+  payload_json?: Record<string, unknown> | null;
+  requester_id: string;
+  requester_role: string;
+  reviewer_id?: string | null;
+  review_comment?: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled" | string;
+  created_at: string;
+  reviewed_at?: string | null;
+}
+
+export interface ApprovalListQuery {
+  page?: number;
+  size?: number;
+  status?: string;
+  source_module?: string;
+  risk_level?: string;
+  requester_id?: string;
+}
+
 export interface InspectionSpecItem {
   id: string;
   defect_type: string;
@@ -272,6 +525,9 @@ export interface InspectionSpec {
   name: string;
   version: string;
   product_id: string | null;
+  product_family: string | null;
+  applicable_skus: string[] | null;
+  required_views: string[] | null;
   required_image_count: number;
   ai_gate_confidence_threshold: number;
   ai_gate_evidence_threshold: number;
@@ -299,6 +555,9 @@ export interface InspectionSpecPayload {
   name: string;
   version?: string;
   product_id?: string | null;
+  product_family?: string | null;
+  applicable_skus?: string[] | null;
+  required_views?: string[] | null;
   required_image_count?: number;
   ai_gate_confidence_threshold?: number;
   ai_gate_evidence_threshold?: number;

@@ -91,7 +91,8 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            obj = await repo.create(self._org_id, self._user_id, title=title or "新会话")
+            default_title = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            obj = await repo.create(self._org_id, self._user_id, title=title or default_title)
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
 
@@ -128,12 +129,18 @@ class ChatService:
             return deleted
 
     async def create_stream_session(self, *, resource: str, resource_id: str) -> StreamSessionResponse:
-        require_role("chat" if resource == "chat" else "task", self._current.role)
+        require_role("chat" if resource in ("chat", "meeting") else "task", self._current.role)
         async with get_session() as session:
             if resource == "chat":
                 session_repo = ChatSessionRepository(session)
                 if not await session_repo.get(self._org_id, self._user_id, resource_id):
                     raise NotFoundError("chat session not found")
+            elif resource == "meeting":
+                from app.repositories.meeting_repo import MeetingRepository
+                meeting_repo = MeetingRepository(session)
+                member = await meeting_repo.get_member(self._org_id, resource_id, self._user_id)
+                if not member:
+                    raise ForbiddenError("you are not a member of this meeting room")
             else:
                 task_repo = TaskRepository(session)
                 owner_user_id = self._user_id if self._current.role in (ROLE_USER, ROLE_EXPERT) else None

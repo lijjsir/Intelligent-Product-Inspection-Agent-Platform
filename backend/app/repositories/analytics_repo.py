@@ -48,7 +48,7 @@ class AnalyticsRepository:
         total_cost = round(sum(float(item.cost_amount or 0.0) for item in ledgers), 4)
         pass_rate = round(sum(1 for item in results if item.verdict == "pass") / total_results, 4) if total_results else 0.0
         hallucination_rate = (
-            round(sum(1 for item in results if self._is_empty_citations(item.citations)) / total_results, 4)
+            round(sum(1 for item in results if self._is_empty_citations(item.citations, item.reasoning_chain)) / total_results, 4)
             if total_results
             else 0.0
         )
@@ -84,7 +84,7 @@ class AnalyticsRepository:
             "hallucination_trend": self._build_ratio_trend(
                 results,
                 lambda item: item.created_at,
-                lambda item: self._is_empty_citations(item.citations),
+                lambda item: self._is_empty_citations(item.citations, item.reasoning_chain),
             ),
             "risk_distribution_trend": self._build_risk_distribution_trend(stabilities, lambda item: item.created_at),
             "risk_distribution": self._build_distribution(
@@ -434,7 +434,7 @@ class AnalyticsRepository:
             "has_result": result is not None,
             "verdict": str(result.verdict) if result is not None else None,
             "overall_score": float(result.overall_score or 0.0) if result is not None else None,
-            "hallucination_flag": self._is_empty_citations(result.citations) if result is not None else False,
+            "hallucination_flag": self._is_empty_citations(result.citations, result.reasoning_chain) if result is not None else False,
             "llm_model": str(result.llm_model) if result is not None else None,
             "latency_ms": int(result.latency_ms or 0) if result is not None and result.latency_ms is not None else None,
             "tokens_used": sum(int(item.total_tokens or 0) for item in ledgers),
@@ -760,8 +760,10 @@ class AnalyticsRepository:
 
     @staticmethod
     def _hallucination_case_expr():
+        trust_risk = func.json_extract(InspectionResult.reasoning_chain, "$.trust_scoring.hallucination_risk")
         items_len = func.coalesce(func.json_length(func.json_extract(InspectionResult.citations, "$.items")), 0)
         return case(
+            (trust_risk.isnot(None), case((trust_risk >= 0.6, 1.0), else_=0.0)),
             (InspectionResult.citations.is_(None), 1.0),
             (items_len == 0, 1.0),
             else_=0.0,
@@ -849,7 +851,7 @@ class AnalyticsRepository:
         metrics: list[dict] = []
         for model_key, model_results in sorted(grouped.items()):
             result_count = len(model_results)
-            hallucinations = sum(1 for item in model_results if cls._is_empty_citations(item.citations))
+            hallucinations = sum(1 for item in model_results if cls._is_empty_citations(item.citations, item.reasoning_chain))
             total_tokens = sum(
                 int(ledger.total_tokens or 0)
                 for result in model_results
@@ -913,7 +915,25 @@ class AnalyticsRepository:
         return series
 
     @staticmethod
-    def _is_empty_citations(citations: object) -> bool:
+    def _extract_trust_hallucination_risk(reasoning_chain: object) -> float | None:
+        if not isinstance(reasoning_chain, dict):
+            return None
+        trust = reasoning_chain.get("trust_scoring")
+        if not isinstance(trust, dict):
+            return None
+        risk = trust.get("hallucination_risk")
+        if risk is None:
+            return None
+        try:
+            return float(risk)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_empty_citations(citations: object, reasoning_chain: object = None) -> bool:
+        trust_risk = AnalyticsRepository._extract_trust_hallucination_risk(reasoning_chain)
+        if trust_risk is not None:
+            return trust_risk >= 0.6
         if citations is None:
             return True
         if isinstance(citations, dict):

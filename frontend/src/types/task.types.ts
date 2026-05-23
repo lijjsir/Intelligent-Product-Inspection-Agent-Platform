@@ -2,6 +2,22 @@ import type { PageParams } from "./common.types";
 
 export type TaskStatus = "pending" | "queued" | "running" | "done" | "failed" | "reviewing" | "archived";
 
+export interface ImageItem {
+  index: number;
+  url: string;
+  hash: string;
+  sample_number?: number | null;
+}
+
+export interface DefectItem {
+  type: string;
+  confidence: number;
+  bbox: [number, number, number, number];
+  description: string;
+  image_index?: number;
+  image_hash?: string;
+}
+
 export interface InspectionTask {
   id: string;
   org_id: string;
@@ -11,6 +27,7 @@ export interface InspectionTask {
   status: TaskStatus;
   priority: number;
   image_urls?: string[];
+  image_items?: ImageItem[] | null;
   source_kind?: string | null;
   source_graph?: string | null;
   has_result?: boolean;
@@ -26,6 +43,7 @@ export interface TaskCreate {
   product_id: string;
   spec_code: string;
   image_urls: string[];
+  image_items?: ImageItem[];
   priority?: number;
   metadata?: Record<string, unknown>;
 }

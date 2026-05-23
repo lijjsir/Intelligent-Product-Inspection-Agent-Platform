@@ -4,6 +4,7 @@ import { useAlertStore } from "@/stores/alert.store";
 import { usePagination } from "@/composables/usePagination";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { AlertStatus } from "@/types/alert.types";
+import { severityLabel, SEVERITY_TAG_TYPES } from "@/constants/spec";
 
 const store = useAlertStore();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
@@ -67,10 +68,7 @@ function handleResolve(id: string) {
 const canAct = (status: string) => status === "open" || status === "acknowledged";
 
 const getSeverityType = (severity: string) => {
-  const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
-    info: "info", warning: "warning", error: "danger", critical: "danger",
-  };
-  return map[severity] || "info";
+  return (SEVERITY_TAG_TYPES[severity] as "info"|"danger"|"warning") || "info";
 };
 
 const getStatusLabel = (status: string) => {
@@ -123,7 +121,7 @@ const getStatusType = (status: string) => {
         <el-table-column prop="alert_type" label="类型" width="140" />
         <el-table-column prop="severity" label="严重程度" width="110">
           <template #default="{ row }">
-            <el-tag :type="getSeverityType(row.severity)" disable-transitions>{{ row.severity.toUpperCase() }}</el-tag>
+            <el-tag :type="getSeverityType(row.severity)" disable-transitions>{{ severityLabel(row.severity) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">

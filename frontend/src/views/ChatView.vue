@@ -38,7 +38,7 @@ const taskForm = ref({
 });
 
 const taskRules: FormRules = {
-  product_id: [{ required: true, message: "请输入产品编号", trigger: "blur" }],
+  product_id: [{ required: true, message: "请选择检测标准以自动填入产品线", trigger: "blur" }],
   spec_code: [{ required: true, message: "请选择或输入检测标准", trigger: "blur" }],
   image_urls_input: [
     {
@@ -127,6 +127,13 @@ function buildTaskDraft(message: ChatMessage): ChatTaskDraft | null {
 
 function canConfirmTask(message: ChatMessage) {
   return canConfirmTaskAction(message);
+}
+
+function onTaskSpecChange(specCode: string) {
+  const spec = specOptions.value.find((s) => s.spec_code === specCode);
+  if (spec) {
+    taskForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
 }
 
 function fillTaskForm(message: ChatMessage) {
@@ -521,6 +528,12 @@ async function retryFromAssistantMessage(message: ChatMessage) {
     ElMessage.warning("没有找到可重试的上一条用户消息。");
     return;
   }
+  const sourceRag = source.payload?.selected_rag_space;
+  if (sourceRag?.id) {
+    chatStore.selectRagSpace(sourceRag.id);
+  } else {
+    chatStore.clearSelectedRagSpace();
+  }
   try {
     await chatStore.sendMessage({
       message: source.content,
@@ -735,7 +748,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <div class="task-title">{{ taskCardTitle(message) }}</div>
                 <div class="task-grid">
                   <span>任务 ID</span><span>{{ message.payload.created_task.id }}</span>
-                  <span>产品编号</span><span>{{ message.payload.created_task.product_id }}</span>
+                  <span>产品线</span><span>{{ message.payload.created_task.product_id }}</span>
                   <span>检测标准</span><span>{{ message.payload.created_task.spec_code }}</span>
                   <span>图片数量</span><span>{{ message.payload.created_task.image_count }}</span>
                 </div>
@@ -819,11 +832,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     <!-- Task dialog -->
     <el-dialog v-model="taskDialogVisible" :title="taskSourceMessage ? '编辑检测信息' : '整理质检任务草稿'" width="640px" destroy-on-close @closed="resetTaskDialog">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-position="top">
-        <el-form-item label="产品编号" prop="product_id">
-          <el-input v-model="taskForm.product_id" placeholder="例如：P-1001" />
-        </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select v-model="taskForm.spec_code" filterable allow-create default-first-option placeholder="选择或输入检测标准" class="!w-full">
+          <el-select v-model="taskForm.spec_code" filterable allow-create default-first-option placeholder="选择或输入检测标准" class="!w-full" @change="onTaskSpecChange">
             <el-option v-for="spec in filteredSpecOptions" :key="spec.id" :label="`${spec.spec_code} · ${spec.name}`" :value="spec.spec_code" />
           </el-select>
           <div class="task-form-toolbar">
@@ -843,6 +853,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <span>&#x81EA;&#x52A8;&#x653E;&#x884C;</span><strong v-if="selectedTaskSpec.auto_pass_enabled">&#x5F00;&#x542F;</strong><strong v-else>&#x5173;&#x95ED;</strong>
               <span>&#x7F6E;&#x4FE1;&#x5EA6;&#x95E8;&#x9650;</span><strong>{{ selectedTaskSpec.ai_gate_confidence_threshold.toFixed(2) }}</strong>
             </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="产品线">
+          <div class="task-spec-preview-grid" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px 12px;background:#f9fafb">
+            <span>产品线</span><strong>{{ taskForm.product_id || '选择标准后自动填入' }}</strong>
           </div>
         </el-form-item>
         <el-form-item label="检测图片" prop="image_urls_input">

@@ -52,6 +52,27 @@ PERMISSIONS: Dict[str, Set[str]] = {
     "dataset": {ROLE_ALGORITHM_ENGINEER},
     "algo_workspace": {ROLE_ALGORITHM_ENGINEER},
     "meeting": {ROLE_USER, ROLE_EXPERT},
+    "meeting_admin": {ROLE_ADMIN},
+    "organization": {ROLE_ADMIN},
+    "role_read": {ROLE_ADMIN},
+    "auth_log": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "audit_log": {ROLE_ADMIN},
+    "infrastructure": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "memory_governance": {ROLE_ADMIN, ROLE_PLATFORM_OPERATOR},
+    "memory_policy": {ROLE_ADMIN},
+    "approval": {ROLE_ADMIN},
+    "approval_read": {
+        ROLE_ADMIN,
+        ROLE_ALGORITHM_ENGINEER,
+        ROLE_APP_DEVELOPER,
+        ROLE_PLATFORM_OPERATOR,
+    },
+    "approval_create": {
+        ROLE_ADMIN,
+        ROLE_ALGORITHM_ENGINEER,
+        ROLE_APP_DEVELOPER,
+        ROLE_PLATFORM_OPERATOR,
+    },
 }
 
 

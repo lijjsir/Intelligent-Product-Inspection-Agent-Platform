@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.permissions import require_role
 from app.schemas.common import ResponseEnvelope
 from app.schemas.memory import (
     MemoryEvaluationRequest,
@@ -55,6 +56,7 @@ async def write_candidate(
     db=Depends(get_db),
 ):
     """Submit a candidate memory through the write gate."""
+    require_role("memory_governance", current.role)
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
@@ -76,6 +78,7 @@ async def search_memory(
     db=Depends(get_db),
 ):
     """Controlled retrieval with MySQL permission filter -> Qdrant semantic recall -> verify -> rerank."""
+    require_role("memory_governance", current.role)
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
@@ -100,6 +103,7 @@ async def list_events(
     db=Depends(get_db),
 ):
     """List memory events for the current org."""
+    require_role("memory_governance", current.role)
     service = _get_memory_service(db, current.org_id)
     events = await service.get_events(
         memory_id=memory_id,
@@ -131,6 +135,7 @@ async def build_propagation_graph(
     db=Depends(get_db),
 ):
     """Build contamination propagation subgraph from dependency edges."""
+    require_role("memory_governance", current.role)
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
@@ -157,6 +162,7 @@ async def execute_rollback(
     db=Depends(get_db),
 ):
     """Execute a rollback action on contaminated memories."""
+    require_role("memory_governance", current.role)
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
@@ -168,6 +174,7 @@ async def execute_rollback(
     resp = await svc.execute_rollback(
         root_memory_id=body.root_memory_id,
         operator_id=body.operator_id,
+        operator_role=current.role,
         workspace=body.workspace.value,
         trace_id=body.trace_id,
         action=body.rollback_action,
@@ -190,6 +197,7 @@ async def replay_evaluation(
     db=Depends(get_db),
 ):
     """Run recovery verification after a rollback."""
+    require_role("memory_governance", current.role)
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
@@ -216,6 +224,7 @@ async def upsert_policy(
     db=Depends(get_db),
 ):
     """Upsert a memory governance policy."""
+    require_role("memory_policy", current.role)
     from app.repositories.memory_repo import MemoryPolicyRepository
     from app.core.ids import uuid7
     from app.models.memory import MemoryPolicy
@@ -266,6 +275,7 @@ async def list_policies(
     db=Depends(get_db),
 ):
     """List memory policies for the current org."""
+    require_role("memory_governance", current.role)
     from app.repositories.memory_repo import MemoryPolicyRepository
 
     repo = MemoryPolicyRepository(db, current.org_id)

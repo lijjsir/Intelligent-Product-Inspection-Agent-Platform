@@ -37,7 +37,10 @@ class AnalyticsService:
         ):
             if quality.get(key) is not None:
                 overview[key] = quality[key]
-        if quality.get("model_metrics"):
+        if quality.get("model_metrics") is not None:
+            db_cost_map = {m["model_key"]: m.get("total_cost", 0.0) for m in overview["model_metrics"]}
+            for m in quality["model_metrics"]:
+                m["total_cost"] = db_cost_map.get(m["model_key"], m.get("total_cost", 0.0))
             overview["model_metrics"] = quality["model_metrics"]
         return overview
 

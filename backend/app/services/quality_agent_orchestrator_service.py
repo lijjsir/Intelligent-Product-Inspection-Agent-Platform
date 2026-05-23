@@ -740,7 +740,7 @@ class QualityAgentOrchestratorService:
             for item in persistable_output.alerts:
                 rule = available_rules.pop(0) if available_rules else None
                 create_alert = getattr(alert_repo, "create_once", alert_repo.create)
-                await create_alert(
+                created_alert = await create_alert(
                     {
                         "idempotency_key": self._idempotency_key(request, "alert", item.title),
                         "id": str(uuid7()),
@@ -755,6 +755,12 @@ class QualityAgentOrchestratorService:
                         "channels": rule.notification_channels if (rule and rule.notification_channels) else {"ui": True},
                     }
                 )
+                qa_alert_id = str(getattr(created_alert, "id", None) or created_alert.get("id"))
+                try:
+                    from worker.tasks.alert_dispatch_task import dispatch_alert
+                    dispatch_alert.delay(qa_alert_id)
+                except Exception:
+                    _logger.exception("Failed to enqueue dispatch for alert %s", qa_alert_id)
 
             if persist_usage:
                 for index, item in enumerate(persistable_output.token_usage):
@@ -958,6 +964,11 @@ class QualityAgentOrchestratorService:
                             "channels": _rule.notification_channels or {"ui": True},
                         }
                     )
+                    try:
+                        from worker.tasks.alert_dispatch_task import dispatch_alert
+                        dispatch_alert.delay(_legacy_alert_id)
+                    except Exception:
+                        _logger.exception("Failed to enqueue dispatch for legacy alert %s", _legacy_alert_id)
 
                 if not _triggered:
                     create_alert = getattr(alert_repo, "create_once", alert_repo.create)
@@ -980,6 +991,11 @@ class QualityAgentOrchestratorService:
                             "channels": {"ui": True},
                         }
                     )
+                    try:
+                        from worker.tasks.alert_dispatch_task import dispatch_alert
+                        dispatch_alert.delay(_legacy_fallback_id)
+                    except Exception:
+                        _logger.exception("Failed to enqueue dispatch for legacy fallback alert %s", _legacy_fallback_id)
 
             usage = self._legacy_usage(output)
             if usage["total_tokens"] > 0:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.ids import uuid7
@@ -40,6 +40,39 @@ class MeetingRoomMember(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(24), nullable=False, default="member")
 
 
+class MeetingRoomAgent(Base, TimestampMixin):
+    __tablename__ = "meeting_room_agents"
+    __table_args__ = (
+        UniqueConstraint("room_id", "agent_id", name="uq_meeting_room_agents_room_agent"),
+        Index("idx_meeting_room_agents_room", "room_id"),
+        Index("idx_meeting_room_agents_org_room", "org_id", "room_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    agent_id: Mapped[str] = mapped_column(String(64), index=True)
+    added_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    role: Mapped[str] = mapped_column(String(24), nullable=False, default="participant")
+
+
+class MeetingAgentDefinition(Base, TimestampMixin):
+    __tablename__ = "meeting_agent_definitions"
+    __table_args__ = (
+        Index("idx_mad_org_active", "org_id", "is_active"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False, default="deepseek-chat")
+    adapter_type: Mapped[str] = mapped_column(String(32), nullable=False, default="llm")
+    participation_strategy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[str | None] = mapped_column(UUIDBinary, index=True, nullable=True)
+
+
 class MeetingMessage(Base, TimestampMixin):
     __tablename__ = "meeting_messages"
     __table_args__ = (
@@ -54,3 +87,6 @@ class MeetingMessage(Base, TimestampMixin):
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     seq_no: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    message_type: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    mentions: Mapped[dict | None] = mapped_column(JSON, nullable=True)

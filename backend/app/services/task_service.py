@@ -3,12 +3,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ValidationError
 from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER
 from app.models.task import InspectionTask
+from app.repositories.alert_repo import AlertRepository
 from app.repositories.inspection_spec_repo import InspectionSpecRepository
 from app.repositories.organization_repo import OrganizationRepository
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
+from app.repositories.chat_score_repo import ChatMessageScoreRepository
+from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.services.audit_service import AuditService
+from app.schemas.task import ImageItem
+
+
+def _dedup_image_items(items: list[ImageItem]) -> list[ImageItem]:
+    """Remove duplicate images by hash, keeping first occurrence."""
+    seen: set[str] = set()
+    result: list[ImageItem] = []
+    for item in items:
+        if item.hash not in seen:
+            seen.add(item.hash)
+            result.append(item)
+    return result
 
 
 class TaskService:
@@ -38,6 +53,7 @@ class TaskService:
         image_urls: list[str],
         priority: int,
         metadata: dict | None,
+        image_items: list[ImageItem] | None = None,
     ) -> InspectionTask:
         normalized_spec_code = str(spec_code).strip()
         if not normalized_spec_code:
@@ -47,12 +63,42 @@ class TaskService:
         if not spec:
             raise ValidationError(f"检测标准 {normalized_spec_code} 不存在或未启用")
 
+        # Build or normalize image_items with hash-based dedup.
+        if image_items:
+            deduped = _dedup_image_items(image_items)
+            deduped_urls = [item.url for item in deduped]
+        else:
+            deduped = [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)]
+            deduped_urls = image_urls
+
+        # Re-check hashes against recent tasks in this org to prevent cross-task duplicates.
+        find_recent_image_hashes = getattr(self._repo, "find_recent_image_hashes", None)
+        if callable(find_recent_image_hashes):
+            existing_hashes = await find_recent_image_hashes(
+                self._org_id, [item.hash for item in deduped]
+            )
+        else:
+            existing_hashes = set()
+        if existing_hashes:
+            deduped_items = [item for item in deduped if item.hash not in existing_hashes]
+            deduped_urls = [item.url for item in deduped_items]
+        else:
+            deduped_items = deduped
+
+        # Re-index remaining images sequentially.
+        deduped_items = [
+            ImageItem(index=i, url=item.url, hash=item.hash)
+            for i, item in enumerate(deduped_items)
+        ]
+        deduped_urls = [item.url for item in deduped_items]
+
         task = InspectionTask(
             org_id=self._org_id,
             created_by=created_by,
             product_id=product_id,
             spec_code=normalized_spec_code,
-            image_urls=image_urls,
+            image_urls=deduped_urls,
+            image_items=[item.model_dump() for item in deduped_items],
             priority=priority,
             meta_data=metadata,
             status="pending",
@@ -103,6 +149,37 @@ class TaskService:
             return None
         if str(task.status) == "running":
             raise ValidationError("运行中的任务不能删除")
+
+        # Cascade soft-delete related records.
+        from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
+        from sqlalchemy import text
+
+        result_repo = ResultRepository(self._session)
+        stability_repo = StabilityRepository(self._session)
+        alert_repo = AlertRepository(self._session)
+        chat_score_repo = ChatMessageScoreRepository(self._session)
+        token_repo = TokenLedgerRepository(self._session)
+
+        result = await result_repo.get_by_task(self._org_id, task_id)
+        stability = await stability_repo.get_by_task(self._org_id, task_id)
+
+        if result:
+            await result_repo.soft_delete(str(result.id))
+        if stability:
+            await stability_repo.soft_delete(str(stability.id))
+            # Also soft-delete alerts linked to this stability report.
+            alerts = await alert_repo.list_by_stability(self._org_id, str(stability.id))
+            for alert in alerts:
+                await alert_repo.soft_delete(self._org_id, str(alert.id))
+        # Soft-delete chat scores tied to this task.
+        await self._session.execute(
+            text(
+                "UPDATE chat_message_scores SET deleted_at = NOW() "
+                "WHERE task_id = :task_id AND deleted_at IS NULL"
+            ),
+            {"task_id": task_id},
+        )
+
         deleted = await self._repo.soft_delete(
             org_id=self._task_scope_org_id,
             task_id=task_id,
@@ -112,7 +189,7 @@ class TaskService:
 
     @property
     def _owner_user_id(self) -> str | None:
-        if self._actor_role in (ROLE_USER, ROLE_EXPERT):
+        if self._actor_role == ROLE_USER:
             return self._actor_user_id
         return None
 

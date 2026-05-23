@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from agent.contracts.quality_contracts import NormalizedRequest
@@ -40,7 +40,7 @@ def artifact(
         content=content,
         citations=list(citations or []),
         confidence=confidence,
-        created_at=datetime.utcnow().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
 
 

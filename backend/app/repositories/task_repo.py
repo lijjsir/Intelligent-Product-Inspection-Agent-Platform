@@ -142,6 +142,24 @@ class TaskRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
+    async def find_recent_image_hashes(self, org_id: str, hashes: list[str]) -> set[str]:
+        """Return the subset of `hashes` that already appear in recent (non-deleted) tasks."""
+        if not hashes:
+            return set()
+        from sqlalchemy import text as sa_text
+        hash_list = ", ".join(f":h{i}" for i in range(len(hashes)))
+        params = {f"h{i}": h for i, h in enumerate(hashes)}
+        params["org_id"] = org_id
+        rows = await self._session.execute(
+            sa_text(
+                f"SELECT DISTINCT jt.hash_val FROM inspection_tasks AS t "
+                f"CROSS JOIN JSON_TABLE(t.image_items, '$[*]' COLUMNS(hash_val VARCHAR(128) PATH '$.hash')) AS jt "
+                f"WHERE t.org_id = :org_id AND t.deleted_at IS NULL AND jt.hash_val IN ({hash_list})"
+            ),
+            params,
+        )
+        return {row[0] for row in rows.fetchall()}
+
     async def soft_delete(
         self,
         org_id: str | None,

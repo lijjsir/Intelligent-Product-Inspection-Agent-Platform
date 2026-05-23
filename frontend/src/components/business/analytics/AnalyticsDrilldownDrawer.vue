@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ModelDrilldown, ProductLineDrilldown, TaskDrilldown } from "@/types/analytics.types";
+import { ALERT_SEVERITY_LABELS } from "@/constants/spec";
 
 interface Props {
   visible: boolean;
@@ -65,7 +66,7 @@ defineEmits<Emits>();
           <template #header>最近告警</template>
           <div v-if="taskDrilldown.alert_summaries.length === 0" class="empty-copy">暂无告警</div>
           <div v-for="item in taskDrilldown.alert_summaries" :key="`${item.title}-${item.created_at}`" class="alert-summary">
-            <strong>{{ item.severity.toUpperCase() }}</strong>
+            <strong>{{ ALERT_SEVERITY_LABELS[item.severity] || item.severity }}</strong>
             <span>{{ item.title }}</span>
             <small>{{ item.status }} · {{ new Date(item.created_at).toLocaleString() }}</small>
           </div>

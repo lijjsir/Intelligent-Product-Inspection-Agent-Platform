@@ -1,14 +1,14 @@
 """drop redundant composite agent indexes
 
-Revision ID: 0052
-Revises: 0051
+Revision ID: 0057
+Revises: 0056
 Create Date: 2026-05-23 03:37:27.902609
 """
 
 from alembic import op
 
-revision = "0052"
-down_revision = "0051"
+revision = "0057"
+down_revision = "0056"
 branch_labels = None
 depends_on = None
 
