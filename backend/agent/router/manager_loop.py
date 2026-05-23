@@ -187,6 +187,7 @@ class ManagerLoop:
         message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
         raw_payload = self._payload(state, answer=answer, message_type=message_type)
+        persistable_output = self._persistable_output(state, answer=answer, sub_route=sub_route)
         agent_output = {
             "message_type": message_type,
             "answer": answer,
@@ -197,7 +198,7 @@ class ManagerLoop:
             "action_state": "blocked" if status == "blocked" else state.final_action,
             "task_draft": None,
             "created_task": None,
-            "persistable_output": {},
+            "persistable_output": persistable_output,
             "raw_state": {"response_payload": raw_payload, "manager_state": self._state_dump(state)},
             **raw_payload,
         }
@@ -389,15 +390,78 @@ class ManagerLoop:
         for artifact in reversed(state.artifacts):
             if artifact.type == "rag_hits":
                 content = dict(artifact.content or {})
+                hits = [dict(item) for item in list(content.get("hits") or []) if isinstance(item, dict)]
+                top_sources = ManagerLoop._top_sources(hits, artifact.citations)
+                hit_count = int(content.get("hit_count") or len(hits))
+                citation_coverage = min(1.0, len(artifact.citations) / hit_count) if hit_count else 0.0
                 return {
                     "rag_space_id": content.get("rag_space_id"),
                     "rag_space_name": content.get("rag_space_name"),
-                    "hit_count": int(content.get("hit_count") or 0),
-                    "citation_coverage": 0.0,
-                    "top_sources": [],
+                    "hit_count": hit_count,
+                    "citation_coverage": citation_coverage,
+                    "top_sources": top_sources,
                     "source_graph": "manager",
                 }
         return None
+
+    @staticmethod
+    def _persistable_output(state: ManagerState, *, answer: str, sub_route: str) -> dict[str, Any]:
+        rag_queries: list[dict[str, Any]] = []
+        for artifact in state.artifacts:
+            if artifact.type != "rag_hits":
+                continue
+            content = dict(artifact.content or {})
+            hits = [dict(item) for item in list(content.get("hits") or []) if isinstance(item, dict)]
+            hit_count = int(content.get("hit_count") or len(hits))
+            top_k = max(int(content.get("top_k") or 5), 1)
+            citations = [dict(item) for item in list(artifact.citations or []) if isinstance(item, dict)]
+            top_sources = ManagerLoop._top_sources(hits, citations)
+            coverage = min(1.0, len(citations) / hit_count) if hit_count else 0.0
+            trace_id = str(state.workflow_run_id or state.request_id or "")
+            rag_queries.append(
+                {
+                    "query": state.original_query,
+                    "rag_space_id": content.get("rag_space_id"),
+                    "top_k": top_k,
+                    "hit_count": hit_count,
+                    "hit_rate": round(min(1.0, hit_count / top_k), 4) if hit_count else 0.0,
+                    "citation_coverage": round(coverage, 4),
+                    "latency_ms": int(content.get("latency_ms") or 0),
+                    "source_graph": "manager",
+                    "agent_name": "chat",
+                    "sub_route": sub_route,
+                    "trace_id": trace_id,
+                    "top_score": float(content.get("top_score") or 0.0),
+                    "metadata": {
+                        "intent": state.route_plan.reason if state.route_plan else sub_route,
+                        "empty_recall": hit_count == 0,
+                        "top_score": float(content.get("top_score") or 0.0),
+                        "top_sources": top_sources[:5],
+                        "evidence_found": hit_count > 0,
+                        "evidence_used": bool(citations),
+                        "verdict_impacted": False,
+                        "retrieval_config": {
+                            "rag_space_id": content.get("rag_space_id"),
+                            "rag_space_name": content.get("rag_space_name"),
+                            "top_k": top_k,
+                            "scope_node_ids": list((state.rag_scope or {}).get("scope_node_ids") or []),
+                        },
+                        "retrieved_chunks": hits,
+                        "used_citations": citations,
+                        "answer": answer or None,
+                    },
+                }
+            )
+        return {"rag_queries": rag_queries}
+
+    @staticmethod
+    def _top_sources(hits: list[dict[str, Any]], citations: list[dict[str, Any]]) -> list[str]:
+        sources: list[str] = []
+        for item in [*hits, *citations]:
+            source = str(item.get("source") or item.get("full_path") or item.get("title") or "").strip()
+            if source and source not in sources:
+                sources.append(source)
+        return sources
 
     @staticmethod
     def _plan_hash(plan: AgentRoutePlan) -> str:

@@ -16,6 +16,8 @@ from agent.router.executors import (
 )
 from agent.router.executors.base import observation
 from agent.router.manager_state import ManagerState
+from agent.tools import get_registry
+from agent.tools.invoker import ToolInvoker
 
 
 class ManagerDispatcher:
@@ -37,6 +39,26 @@ class ManagerDispatcher:
         request: NormalizedRequest,
         db_session=None,
     ) -> tuple[list[AgentObservation], list[AgentArtifact]]:
+        registry = get_registry()
+        invoker = ToolInvoker(registry, db_session=db_session)
+
+        # Expose tools + invoker to executors via state
+        surface = str(getattr(state, "surface", "") or plan.surface or "chat")
+        agent = state.selected_agent or ""
+        allowed_modes = list(getattr(state, "allowed_modes", []) or [])
+
+        # Force web search when user enables the toggle
+        request_ext = dict(getattr(request, "ext", {}) or {})
+        force_web_search = bool(request_ext.get("force_web_search"))
+
+        available_tools = registry.list_for(agent=agent, surface=surface, allowed_modes=allowed_modes)
+        if force_web_search and "web.search" in registry:
+            # Ensure web.search is first in the tool list so model prioritizes it
+            web_spec = registry.get("web.search")
+            available_tools = [web_spec] + [t for t in available_tools if t.name != "web.search"]
+        state.available_tools = available_tools
+        state.tool_invoker = invoker
+
         observations: list[AgentObservation] = []
         artifacts: list[AgentArtifact] = []
         completed: set[str] = set()

@@ -64,7 +64,7 @@ watch(() => route.params.id, load);
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">合并模式</div>
-          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ current?.merge_mode || runtimeRegistration.merge_mode || "-" }}</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ current?.merge_mode || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">入口</div>

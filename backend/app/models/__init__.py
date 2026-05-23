@@ -9,6 +9,8 @@ from app.models.alert import AlertEvent
 from app.models.alert_rule import AlertRule
 from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolSyncEvent, ToolVersion
 from app.models.audit import AuditLog, AuditOutbox
+from app.models.auth_log import AuthLog
+from app.models.approval import Approval
 from app.models.model_config import ModelConfig
 from app.models.gpu_infra import GpuComputeNode, GpuJobLease
 from app.models.token_ledger import TokenUsageLedger
@@ -23,6 +25,7 @@ from app.models.inspection_spec import (
     SpecAggregationRule,
     SpecChangeLog,
 )
+from app.models.inspection_standard_library import InspectionStandardLibrary
 from app.models.agent_ops import (
     AgentDefinition,
     AgentRouteLog,
@@ -82,6 +85,8 @@ __all__ = [
     "ToolExecution",
     "AuditLog",
     "AuditOutbox",
+    "AuthLog",
+    "Approval",
     "ModelConfig",
     "GpuComputeNode",
     "GpuJobLease",
@@ -91,6 +96,7 @@ __all__ = [
     "MessageFeedback",
     "InspectionSpec",
     "InspectionSpecItem",
+    "InspectionStandardLibrary",
     "DefectTaxonomy",
     "ProductZoneMap",
     "SpecAggregationRule",

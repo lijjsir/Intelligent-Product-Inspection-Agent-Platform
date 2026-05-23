@@ -164,6 +164,13 @@ function handleOpenCreateFromDraft() {
   }
 }
 
+function onSpecChange(specCode: string) {
+  const spec = activeSpecOptions.value.find((s) => s.spec_code === specCode);
+  if (spec) {
+    createForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
+}
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -220,6 +227,7 @@ async function handleSubmitCreate() {
     const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
     const allUrls = [...urlsFromText, ...dataUrls];
 
+    // Build image_items with content hashes for uploaded files.
     const imageItems = await Promise.all(
       allUrls.map(async (url, i) => {
         const uploadFile = uploadFilesRaw[i - urlsFromText.length];
@@ -227,6 +235,7 @@ async function handleSubmitCreate() {
           const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
           return { index: i, url, hash: await fileToHash(uploadFile), sample_number: sn };
         }
+        // For URL-only entries, hash the URL string.
         const msgUint8 = new TextEncoder().encode(url);
         const urlHash = await crypto.subtle.digest("SHA-256", msgUint8);
         const urlHashHex = Array.from(new Uint8Array(urlHash))
@@ -234,7 +243,8 @@ async function handleSubmitCreate() {
           .join("");
         const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
         return { index: i, url, hash: urlHashHex, sample_number: sn };
-      }));
+      }),
+    );
 
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),

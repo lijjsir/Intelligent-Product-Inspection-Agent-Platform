@@ -22,6 +22,7 @@ const inspectionSpecStore = useInspectionSpecStore();
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
+const webSearchEnabled = ref(false);
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -248,7 +249,6 @@ async function submitTaskDialog() {
       message: msg,
       ext: {
         ui_mode: "inspection",
-        route_hints: { force_agent: "inspection_task", force_sub_route: "task_create" },
         product_id: pid || undefined,
         spec_code: spec || undefined,
       },
@@ -268,6 +268,7 @@ async function sendMessage() {
       metadata: undefined,
       ext: {
         ui_mode: "auto",
+        force_web_search: webSearchEnabled.value || undefined,
       },
     });
     input.value = "";
@@ -344,6 +345,26 @@ function shareChatMessage(message: ChatMessage) {
 
 function messageAttachments(message: ChatMessage): ChatAttachment[] {
   return [...(message.payload?.attachment_echo || [])];
+}
+
+const RAG_CITE_RE = /\[RAG-(\d+)\]/g;
+
+function renderRagCitations(content: string): Array<{ type: "text" | "cite"; value: string }> {
+  const segments: Array<{ type: "text" | "cite"; value: string }> = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  RAG_CITE_RE.lastIndex = 0;
+  while ((match = RAG_CITE_RE.exec(content)) !== null) {
+    if (match.index > last) {
+      segments.push({ type: "text", value: content.slice(last, match.index) });
+    }
+    segments.push({ type: "cite", value: match[1] });
+    last = match.index + match[0].length;
+  }
+  if (last < content.length) {
+    segments.push({ type: "text", value: content.slice(last) });
+  }
+  return segments.length > 0 ? segments : [{ type: "text", value: content }];
 }
 
 async function interruptCurrentResponse(silent = false) {
@@ -602,6 +623,16 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :value="space.id"
           />
         </el-select>
+        <el-tooltip :content="webSearchEnabled ? '联网搜索已开启：Agent 必须使用网络检索' : '联网搜索已关闭：Agent 自行判断'" placement="bottom">
+          <el-button
+            size="small"
+            :type="webSearchEnabled ? 'primary' : 'default'"
+            :icon="Promotion"
+            @click="webSearchEnabled = !webSearchEnabled"
+          >
+            {{ webSearchEnabled ? '联网搜索·开' : '联网搜索' }}
+          </el-button>
+        </el-tooltip>
         <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
           &#x9644;&#x4EF6; {{ chatStore.pendingAttachments.length }}
         </el-tag>
@@ -653,7 +684,10 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
               <div v-else class="bubble-text">
-                {{ message.content }}
+                <template v-for="(seg, si) in renderRagCitations(message.content)" :key="si">
+                  <span v-if="seg.type === 'text'">{{ seg.value }}</span>
+                  <span v-else class="rag-cite" :title="`RAG 引用 #${seg.value}`">RAG-{{ seg.value }}</span>
+                </template>
                 <span v-if="message.message_type === 'streaming' && chatStore.loading" class="cursor-blink">&nbsp;</span>
               </div>
 
@@ -677,6 +711,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <div class="rc-grid">
                   <div class="rc-item"><span>总体得分</span><strong>{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong></div>
                   <div class="rc-item"><span>RAG 空间</span><strong>{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong></div>
+                  <div class="rc-item"><span>系统标准</span><strong>{{ message.payload.rag_summary?.standard_binding_name || "未命中" }}</strong></div>
+                  <div class="rc-item"><span>系统标准空间</span><strong>{{ message.payload.rag_summary?.system_rag_space_names?.join(" / ") || "无" }}</strong></div>
+                  <div class="rc-item"><span>合并来源数</span><strong>{{ message.payload.rag_summary?.merged_rag_source_count ?? 0 }}</strong></div>
                   <div class="rc-item"><span>引用数量</span><strong>{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong></div>
                   <div class="rc-item"><span>引用覆盖率</span><strong>{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong></div>
                 </div>
@@ -942,6 +979,28 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   border-bottom-left-radius: 4px;
 }
 .bubble-text { white-space: pre-wrap; }
+.rag-cite {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 2px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: linear-gradient(135deg, #dbeafe, #ede9fe);
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+  cursor: help;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+.bubble.user .rag-cite {
+  background: linear-gradient(135deg, rgba(219,234,254,.25), rgba(237,233,254,.25));
+  color: #c7d2fe;
+  border-color: rgba(199,210,254,.3);
+}
 
 .bubble-edit {
   display: flex;

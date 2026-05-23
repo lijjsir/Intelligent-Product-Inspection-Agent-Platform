@@ -37,6 +37,7 @@ def test_algorithm_engineer_owns_model_config_control():
 
 def test_role_specific_resources_do_not_bleed_between_workspaces():
     require_role("tool", ROLE_APP_DEVELOPER)
+    require_role("analytics", ROLE_ADMIN)
     require_role("analytics", ROLE_PLATFORM_OPERATOR)
     require_role("meeting", ROLE_USER)
     require_role("meeting", ROLE_EXPERT)

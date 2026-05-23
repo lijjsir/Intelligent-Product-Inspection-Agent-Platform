@@ -57,6 +57,188 @@ GENERAL_RAG_PATTERNS = [
 class AgentRoutePolicy:
     """Rule-based route policy. Ambiguous inputs can fall back to the model classifier."""
 
+    # ── Introspection API (keep in sync with decide() below) ──
+
+    @staticmethod
+    def get_signals() -> list[dict[str, Any]]:
+        """Return metadata for every signal the engine detects."""
+        return [
+            {
+                "key": "has_task_keyword",
+                "label": "任务意图关键词",
+                "description": "检测文本中的任务创建意图关键词（创建任务、新建任务、发起检测、提交任务等），驱动规则 1/2/4。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "has_images",
+                "label": "图片附件",
+                "description": "检测请求中的图片附件（.png/.jpg/.jpeg/.webp/.gif）或图片 URL，驱动规则 2/3。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "has_structured_file",
+                "label": "结构化文件",
+                "description": "检测非图片文件（xlsx/csv/json/txt/docx/jsonl/md），驱动规则 1。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "has_quality_signal",
+                "label": "质检语义",
+                "description": "检测质量/质检/缺陷/合格/标准/划痕/瑕疵等语义关键词，驱动规则 1/3/5。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "has_rag_signal",
+                "label": "知识库检索意图",
+                "description": "检测知识库检索意图（总结文档、搜索知识库、根据文档回答等），驱动规则 6。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "has_rag_space",
+                "label": "RAG 空间已选",
+                "description": "用户显式选择了 RAG 知识空间，驱动规则 6。",
+                "source_stage": "route_signal_builder",
+            },
+            {
+                "key": "is_ambiguous",
+                "label": "模糊输入",
+                "description": "检测短句（<4 字）、代词为主、无明确意图信号的输入，触发规则 7 模型兜底。",
+                "source_stage": "route_signal_builder",
+            },
+        ]
+
+    @staticmethod
+    def get_rules() -> list[dict[str, Any]]:
+        """Return the structured auto-routing rule definitions in priority order (mirrors decide())."""
+        return [
+            {
+                "priority": 1,
+                "name": "结构化文件 + 检测意图",
+                "condition_summary": "xlsx/csv/json/txt/docx/jsonl/md 文件 + 任务/质检信号",
+                "target_agent": "inspection_task",
+                "target_sub_route": "inspection_execute",
+                "route_source": "rule",
+                "examples": ["上传 Excel + 创建检测任务", "csv 文件 + 质量检测"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 2,
+                "name": "图片 + 任务创建意图",
+                "condition_summary": "图片附件/URL + 任务意图关键词信号",
+                "target_agent": "inspection_task",
+                "target_sub_route": "task_create",
+                "route_source": "rule",
+                "examples": ["图片 + 帮我检测", "图片 + 创建任务"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 3,
+                "name": "图片 + 质检问答",
+                "condition_summary": "图片附件/URL + 质检语义信号",
+                "target_agent": "inspection_task",
+                "target_sub_route": "quality_qa",
+                "route_source": "rule",
+                "examples": ["图片 + 这个算不算缺陷", "图片 + 质量判定问题"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 4,
+                "name": "任务创建意图（纯文本）",
+                "condition_summary": "任务意图关键词信号存在，无质检语义",
+                "target_agent": "inspection_task",
+                "target_sub_route": "task_create",
+                "route_source": "rule",
+                "examples": ["创建任务", "帮我检测这个产品"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 5,
+                "name": "质检问答意图（纯文本）",
+                "condition_summary": "质检语义信号存在",
+                "target_agent": "inspection_task",
+                "target_sub_route": "quality_qa",
+                "route_source": "rule",
+                "examples": ["这个算不算缺陷", "按照 GB/T 标准判定"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 6,
+                "name": "RAG 知识库问答",
+                "condition_summary": "RAG 空间已选 或 知识库检索意图信号",
+                "target_agent": "chat",
+                "target_sub_route": "rag_qa",
+                "route_source": "rule",
+                "examples": ["根据知识库回答", "查一下文档里的标准"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 7,
+                "name": "模糊输入兜底",
+                "condition_summary": "短句/代词/无法明确分类的输入",
+                "target_agent": "chat",
+                "target_sub_route": "general_chat",
+                "route_source": "rule",
+                "examples": ["这个呢", "看看"],
+                "stop_on_match": True,
+            },
+            {
+                "priority": 8,
+                "name": "默认普通聊天",
+                "condition_summary": "未命中以上所有规则",
+                "target_agent": "chat",
+                "target_sub_route": "general_chat",
+                "route_source": "rule",
+                "examples": ["你好", "今天天气怎么样"],
+                "stop_on_match": True,
+            },
+        ]
+
+    @staticmethod
+    def get_agents() -> list[dict[str, Any]]:
+        """Return the agents the engine dispatches to."""
+        return [
+            {
+                "key": "chat",
+                "label": "Quality Chat",
+                "sub_routes": ["general_chat", "rag_qa"],
+            },
+            {
+                "key": "inspection_task",
+                "label": "Inspection Task Agent",
+                "sub_routes": ["task_create", "inspection_execute", "quality_qa"],
+            },
+        ]
+
+    @staticmethod
+    def get_rule_for_decision(selected_agent: str, sub_route: str, route_source: str = "rule", fallback_agent: str = "") -> tuple[str, int]:
+        """Map a routing decision back to the rule name and priority that produced it."""
+        rules = AgentRoutePolicy.get_rules()
+        for rule in rules:
+            if rule["target_agent"] != selected_agent:
+                continue
+            if rule["route_source"] != route_source:
+                continue
+            target_sub = rule["target_sub_route"]
+            if target_sub == sub_route:
+                # Distinguish ambiguous fallback (rule 7) from default (rule 8) for chat/general_chat
+                if sub_route == "general_chat" and selected_agent == "chat":
+                    if fallback_agent == "model_classifier":
+                        if "模糊" in rule["name"] or "Ambiguous" in rule["name"]:
+                            return (rule["name"], rule["priority"])
+                        continue
+                    else:
+                        if "默认" in rule["name"] or "Default" in rule["name"]:
+                            return (rule["name"], rule["priority"])
+                        continue
+                return (rule["name"], rule["priority"])
+        # fallback: match on sub_route only
+        for rule in rules:
+            if rule["target_sub_route"] == sub_route:
+                return (rule["name"], rule["priority"])
+        return ("Unknown rule", 0)
+
+    # ── Private signal detectors ──
+
     def _has_quality_signal(self, query: str) -> bool:
         return any(p.search(query) for p in QUALITY_QA_PATTERNS)
 
@@ -80,6 +262,33 @@ class AgentRoutePolicy:
             ]
         ]
         return any(p.search(query.strip()) for p in ambiguous_patterns)
+
+    def detect_signals(self, input_data: AgentRouterInput) -> dict[str, bool]:
+        """Detect all signals for a given input (mirrors the pre-routing logic in decide())."""
+        query = str(input_data.query or "").strip()
+        attachments = list(input_data.attachments or [])
+        image_urls = list(input_data.image_urls or [])
+        ext = dict(input_data.ext or {})
+
+        has_structured_file = False
+        has_image_attachment = False
+        for item in attachments:
+            name = str(item.get("name") or "").lower()
+            suffix = name.rsplit(".", 1)[-1] if "." in name else ""
+            if suffix in STRUCTURED_FILE_EXTENSIONS:
+                has_structured_file = True
+            if suffix in IMAGE_EXTENSIONS or item.get("kind") == "image":
+                has_image_attachment = True
+
+        return {
+            "has_task_keyword": any(p.search(query) for p in TASK_INTENT_PATTERNS),
+            "has_images": bool(has_image_attachment or image_urls),
+            "has_structured_file": has_structured_file,
+            "has_quality_signal": self._has_quality_signal(query),
+            "has_rag_signal": self._has_general_rag_signal(query),
+            "has_rag_space": self._has_selected_rag_space(ext),
+            "is_ambiguous": self._is_ambiguous(query),
+        }
 
     def decide(self, input_data: AgentRouterInput) -> AgentRouteDecision:
         query = str(input_data.query or "").strip()

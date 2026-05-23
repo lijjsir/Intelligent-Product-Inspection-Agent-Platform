@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 
 from app.api.v1.deps import get_db
 from app.core.config import settings
@@ -47,11 +47,12 @@ def _build_session_response(
 @router.post("/token", response_model=ResponseEnvelope[AuthSessionResponse])
 async def login(
     payload: LoginRequest,
+    request: Request,
     x_org_id: str = Header(..., alias="X-Org-Id"),
     db=Depends(get_db),
 ):
     service = AuthService(db)
-    user, access, refresh = await service.login(x_org_id, payload.username, payload.password)
+    user, access, refresh = await service.login(x_org_id, payload.username, payload.password, request)
     data = _build_session_response(access, refresh, user.id, user.username, user.org_id, user.role)
 
     return ResponseEnvelope(data=data)

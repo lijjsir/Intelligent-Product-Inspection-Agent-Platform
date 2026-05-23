@@ -68,6 +68,12 @@ export interface ChatExpectationCheck {
 export interface ChatRagSummary {
   rag_space_id?: string | null;
   rag_space_name?: string | null;
+  rag_space_ids?: string[];
+  rag_space_names?: string[];
+  system_rag_space_ids?: string[];
+  system_rag_space_names?: string[];
+  standard_binding_name?: string | null;
+  merged_rag_source_count?: number;
   hit_count: number;
   citation_coverage: number;
   top_sources: string[];

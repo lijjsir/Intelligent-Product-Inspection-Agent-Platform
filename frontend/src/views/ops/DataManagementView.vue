@@ -33,8 +33,8 @@ const modules = [
     color: "#d97706",
   },
   {
-    title: "检测标准",
-    description: "维护检测标准、缺陷分类和质量阈值，作为 RAG 与判定流程的业务基线。",
+    title: "质检门槛",
+    description: "维护缺陷判定规则、AI 门槛阈值和自动放行策略，作为质检门禁配置基线。",
     icon: DocumentChecked,
     route: "governance-inspection-specs",
     color: "#dc2626",
@@ -51,7 +51,7 @@ function navigateTo(routeName: string) {
     <div class="page-header">
       <h1>治理工作台</h1>
       <p class="mt-2 text-sm text-zinc-500">
-        围绕 Agent、Prompt、路由策略和检测标准的统一治理入口。
+        围绕 Agent、Prompt、路由策略和质检门槛的统一治理入口。
       </p>
     </div>
 

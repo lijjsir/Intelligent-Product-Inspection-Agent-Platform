@@ -91,6 +91,14 @@ class FileStorageService:
         path = url
         if "://" in url:
             path = urlparse(url).path or ""
+        api_prefix = "/api/v1/files/"
+        if path.startswith(api_prefix):
+            suffix = path[len(api_prefix) :].strip("/")
+            parts = suffix.split("/", 1)
+            if len(parts) == 2:
+                _bucket, object_key = parts
+                local_url = f"{prefix}/{object_key.lstrip('/')}"
+                return self.file_bytes_from_url(local_url)
         if not path.startswith(prefix):
             return None
         relative_path = path[len(prefix) :].lstrip("/").replace("/", os.sep)
