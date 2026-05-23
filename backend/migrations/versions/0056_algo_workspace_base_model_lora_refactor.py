@@ -1,7 +1,7 @@
 """refactor algo workspace to base-model lora flow
 
-Revision ID: 0051_algo_workspace_base_model_lora_refactor
-Revises: 0050
+Revision ID: 0056
+Revises: 0055
 Create Date: 2026-05-23 00:00:00
 """
 
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import mysql
 
 
 # revision identifiers, used by Alembic.
-revision = "0051_algo_workspace_base_model_lora_refactor"
-down_revision = "0050"
+revision = "0056"
+down_revision = "0055"
 branch_labels = None
 depends_on = None
 

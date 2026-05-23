@@ -1,4 +1,4 @@
-from sqlalchemy import String, DECIMAL, Text, DateTime, text
+from sqlalchemy import Float, String, DECIMAL, Text, DateTime, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,8 @@ class StabilityReport(Base):
     confidence_score: Mapped[float] = mapped_column(DECIMAL(5, 4))
     traceability_score: Mapped[float] = mapped_column(DECIMAL(5, 4))
     anomaly_score: Mapped[float] = mapped_column(DECIMAL(5, 4))
+    hallucination_risk: Mapped[float | None] = mapped_column(Float, nullable=True)
+    overconfidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     risk_score: Mapped[float] = mapped_column(DECIMAL(5, 2))
     risk_level: Mapped[str] = mapped_column(String(16))
     dimension_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -26,6 +28,7 @@ class StabilityReport(Base):
     handled_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     handle_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     handle_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
@@ -33,12 +33,22 @@ class ChatSessionRepository:
         return result.scalar_one_or_none()
 
     async def list_for_user(self, org_id: str, user_id: str, limit: int = 100) -> list[ChatSession]:
+        has_message = (
+            select(ChatMessage.id)
+            .where(
+                ChatMessage.session_id == ChatSession.id,
+                ChatMessage.deleted_at.is_(None),
+            )
+            .correlate(ChatSession)
+            .limit(1)
+        )
         result = await self._session.execute(
             select(ChatSession)
             .where(
                 ChatSession.org_id == org_id,
                 ChatSession.user_id == user_id,
                 ChatSession.deleted_at.is_(None),
+                exists(has_message),
             )
             .order_by(ChatSession.last_message_at.desc(), ChatSession.updated_at.desc())
             .limit(limit)

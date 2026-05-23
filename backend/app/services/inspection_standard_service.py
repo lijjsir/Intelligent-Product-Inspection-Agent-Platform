@@ -88,7 +88,7 @@ class InspectionStandardService:
             counts[defect_type] = counts.get(defect_type, 0) + 1
             matched = False
             for item in items:
-                if item.defect_type != defect_type:
+                if not cls._defect_type_matches(item.defect_type, defect_type):
                     continue
                 if confidence < float(item.confidence_threshold or 0.0):
                     continue
@@ -150,6 +150,27 @@ class InspectionStandardService:
             "ai_gate": ai_gate,
             "spec": cls._serialize_spec(spec),
         }
+
+    @staticmethod
+    def _defect_type_matches(spec_type: str, ai_type: str) -> bool:
+        """精确或模糊匹配缺陷类型：支持完整路径、末段简名、通用名。"""
+        if spec_type == ai_type:
+            return True
+        ai_normalized = ai_type.strip().lower()
+        spec_normalized = spec_type.strip().lower()
+        if spec_normalized == ai_normalized:
+            return True
+        # 末段匹配：AI 输出 crack → 命中 bottle.exterior.crack
+        spec_parts = spec_normalized.rsplit(".", 1)
+        if len(spec_parts) == 2 and spec_parts[1] == ai_normalized:
+            return True
+        # 全段包含：AI 输出 exterior.crack → 命中 bottle.exterior.crack
+        if spec_normalized.endswith(ai_normalized):
+            return True
+        # 关键词包含：AI 输出 scratch → 命中 surface_scratch
+        if ai_normalized in spec_normalized:
+            return True
+        return False
 
     @staticmethod
     def _build_ai_gate(

@@ -579,6 +579,7 @@ def test_quality_trace_builder_aggregates_tokens_and_scores():
             "total_tokens": 150,
             "feedback_count": 2,
             "thumbs_down_count": 1,
+            "thumbs_up_count": 1,
             "last_score_value": 1.0,
             "last_score_at": "2026-03-24T11:00:00",
             "trust_score": 1.0,

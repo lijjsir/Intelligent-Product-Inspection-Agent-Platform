@@ -44,8 +44,8 @@ const canCreateTask = computed(() => hasRole(["user", "expert"]));
 
 const rules: FormRules = {
   product_id: [
-    { required: true, message: "产品编号不能为空", trigger: "blur" },
-    { max: 64, message: "产品编号不能超过 64 个字符", trigger: "blur" },
+    { required: true, message: "请选择检测标准以自动填入产品线", trigger: "blur" },
+    { max: 64, message: "产品线不能超过 64 个字符", trigger: "blur" },
   ],
   spec_code: [{ required: true, message: "请选择检测标准", trigger: "change" }],
   image_urls_input: [
@@ -157,6 +157,13 @@ function handleOpenCreateFromDraft() {
   }
 }
 
+function onSpecChange(specCode: string) {
+  const spec = activeSpecOptions.value.find((s) => s.spec_code === specCode);
+  if (spec) {
+    createForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
+}
+
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -164,6 +171,14 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(new Error("图片读取失败"));
     reader.readAsDataURL(file);
   });
+}
+
+async function fileToHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function handleUploadChange(_file: UploadFile, files: UploadFiles) {
@@ -184,20 +199,51 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    const urlsFromText = createForm.value.image_urls_input
-      .split(/[\n,]+/)
+    // Parse URL lines with optional #N prefix for sample number
+    const urlLines = createForm.value.image_urls_input
+      .split(/[\n]+/)
       .map((item) => item.trim())
       .filter(Boolean);
-    const dataUrls = await Promise.all(
-      uploadFiles.value
-        .map((item) => item.raw)
-        .filter((item): item is NonNullable<typeof item> => item != null)
-        .map((item) => fileToDataUrl(item as File)),
+    const parsedUrls: { url: string; sample_number?: number }[] = [];
+    for (const line of urlLines) {
+      const match = line.match(/^#(\d+)\s+(.+)$/);
+      if (match) {
+        parsedUrls.push({ url: match[2].trim(), sample_number: parseInt(match[1]) });
+      } else {
+        parsedUrls.push({ url: line });
+      }
+    }
+    const urlsFromText = parsedUrls.map((p) => p.url);
+    const uploadFilesRaw = uploadFiles.value
+      .map((item) => item.raw)
+      .filter((item): item is File => Boolean(item));
+    const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
+    const allUrls = [...urlsFromText, ...dataUrls];
+
+    // Build image_items with content hashes for uploaded files.
+    const imageItems = await Promise.all(
+      allUrls.map(async (url, i) => {
+        const uploadFile = uploadFilesRaw[i - urlsFromText.length];
+        if (uploadFile && i >= urlsFromText.length) {
+          const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
+          return { index: i, url, hash: await fileToHash(uploadFile), sample_number: sn };
+        }
+        // For URL-only entries, hash the URL string.
+        const msgUint8 = new TextEncoder().encode(url);
+        const urlHash = await crypto.subtle.digest("SHA-256", msgUint8);
+        const urlHashHex = Array.from(new Uint8Array(urlHash))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
+        return { index: i, url, hash: urlHashHex, sample_number: sn };
+      }),
     );
+
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
-      image_urls: [...urlsFromText, ...dataUrls],
+      image_urls: allUrls,
+      image_items: imageItems,
       priority: createForm.value.priority,
       metadata: { source: "task_list" },
     });
@@ -289,7 +335,7 @@ watch(
           </el-select>
         </el-form-item>
         <el-form-item label="产品编号">
-          <el-input v-model="filters.product_id" placeholder="输入产品编号" clearable size="small" @keyup.enter="handleSearch" />
+          <el-input v-model="filters.product_id" placeholder="输入产品线" clearable size="small" @keyup.enter="handleSearch" />
         </el-form-item>
         <el-form-item v-if="filters.ids" label="任务集合">
           <el-input v-model="filters.ids" readonly size="small" />
@@ -305,7 +351,7 @@ watch(
       <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
         <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
-        <el-table-column prop="product_id" label="产品编号" width="150" />
+        <el-table-column prop="product_id" label="产品线" width="150" />
         <el-table-column prop="spec_code" label="检测标准" width="180" />
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
@@ -324,6 +370,7 @@ watch(
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
             <el-button
+              v-if="isAdmin"
               link
               type="danger"
               size="small"
@@ -352,11 +399,8 @@ watch(
 
     <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
       <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
-        <el-form-item label="产品编号" prop="product_id">
-          <el-input v-model="createForm.product_id" placeholder="例如：P-1001" />
-        </el-form-item>
         <el-form-item label="检测标准" prop="spec_code">
-          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full">
+          <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full" @change="onSpecChange">
             <el-option
               v-for="spec in activeSpecOptions"
               :key="spec.id"
@@ -365,13 +409,16 @@ watch(
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="产品线" prop="product_id">
+          <div class="product-line-display">{{ createForm.product_id || '选择标准后自动填入' }}</div>
+        </el-form-item>
         <el-form-item label="图片 URL" prop="image_urls_input">
           <el-input
             v-model="createForm.image_urls_input"
             type="textarea"
             :rows="4"
             resize="none"
-            placeholder="每行一个 URL，也可以同时上传本地图片"
+            placeholder="每行一个URL；批量标号加 #N 前缀，如：#1 https://a.jpg"
           />
         </el-form-item>
         <el-form-item label="上传图片">
@@ -427,5 +474,17 @@ watch(
 }
 .list-table :deep(.el-table__body tr:hover > td) {
   @apply bg-zinc-50;
+}
+
+.product-line-display {
+  height: 32px;
+  line-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f3f4f6;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
 }
 </style>

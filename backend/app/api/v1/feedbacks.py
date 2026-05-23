@@ -18,7 +18,6 @@ async def submit_feedback(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
     service = FeedbackService(db, current.org_id)
     item = await service.submit(result_id, current.user_id, payload.model_dump())
     return ResponseEnvelope(data=FeedbackResponse.model_validate(item))
@@ -51,7 +50,6 @@ async def submit_message_feedback(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
     service = FeedbackService(db, current.org_id)
     item = await service.submit_message_feedback(target_type, target_id, current.user_id, payload.model_dump())
     return ResponseEnvelope(data=MessageFeedbackResponse.model_validate(item))

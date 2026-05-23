@@ -214,7 +214,7 @@ function metaAlertTitle() {
       </el-table-column>
       <el-table-column prop="total_tokens" label="Token" width="80" />
       <el-table-column label="反馈" width="90">
-        <template #default="{ row }">{{ row.feedback_count ?? 0 }} / {{ row.thumbs_down_count ?? 0 }} 踩</template>
+        <template #default="{ row }">{{ row.thumbs_up_count ?? 0 }} 赞 / {{ row.thumbs_down_count ?? 0 }} 踩</template>
       </el-table-column>
       <el-table-column label="同步" width="90">
         <template #default="{ row }">

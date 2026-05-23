@@ -9,6 +9,8 @@ from app.models.alert import AlertEvent
 from app.models.alert_rule import AlertRule
 from app.models.tool import AgentToolBinding, ToolDefinition, ToolExecution, ToolRuntimeEvent, ToolSyncEvent, ToolVersion
 from app.models.audit import AuditLog, AuditOutbox
+from app.models.auth_log import AuthLog
+from app.models.approval import Approval
 from app.models.model_config import ModelConfig
 from app.models.gpu_infra import GpuComputeNode, GpuJobLease
 from app.models.token_ledger import TokenUsageLedger
@@ -52,7 +54,7 @@ from app.models.algo_resources import (
     Experiment,
     ModelDeployment,
 )
-from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomMember
+from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
@@ -82,6 +84,8 @@ __all__ = [
     "ToolExecution",
     "AuditLog",
     "AuditOutbox",
+    "AuthLog",
+    "Approval",
     "ModelConfig",
     "GpuComputeNode",
     "GpuJobLease",
@@ -127,6 +131,7 @@ __all__ = [
     "Experiment",
     "ModelDeployment",
     "MeetingRoom",
+    "MeetingRoomAgent",
     "MeetingRoomMember",
     "MeetingMessage",
     "RagSpace",

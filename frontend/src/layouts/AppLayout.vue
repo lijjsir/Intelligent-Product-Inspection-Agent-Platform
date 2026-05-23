@@ -125,6 +125,7 @@ import {
   ROLE_ADMIN,
   ROLE_ALGORITHM_ENGINEER,
   ROLE_APP_DEVELOPER,
+  ROLE_PLATFORM_OPERATOR,
   ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
@@ -182,12 +183,14 @@ const roleLabel = computed(() => {
       return "系统管理员";
     case ROLE_APP_DEVELOPER:
       return "应用开发者";
+    case ROLE_PLATFORM_OPERATOR:
+      return "平台运营";
     case ROLE_ALGORITHM_ENGINEER:
       return "算法工程师";
     case ROLE_EXPERT:
-      return "终端用户-专业";
+      return "专家";
     case ROLE_USER:
-      return "终端用户-标准";
+      return "普通用户";
     default:
       return auth.role || "未识别角色";
   }
@@ -213,10 +216,11 @@ function formatTime(ts?: string | null) {
 
 function sessionLabel(sessionId: string) {
   const found = chatStore.sessions.find((item) => item.id === sessionId);
-  if (!found) return sessionId;
-  const title = found.title || `会话-${found.id.slice(-6)}`;
-  const ts = found.last_message_at || found.updated_at || found.created_at;
-  return `${title} · ${formatTime(ts)}`;
+  if (!found) {
+    if (chatStore.session?.id === sessionId) return chatStore.session.title || "无";
+    return sessionId;
+  }
+  return found.title || "无";
 }
 
 function normalizeActiveNames(value: string | string[]) {
@@ -257,7 +261,7 @@ async function handleChatSessionChange(sessionId: string) {
 
 async function createChatSession() {
   try {
-    await chatStore.createNewSession("新会话");
+    await chatStore.createNewSession();
   } catch (error) {
     ElMessage.error("新建会话失败，请稍后重试。");
     console.error(error);

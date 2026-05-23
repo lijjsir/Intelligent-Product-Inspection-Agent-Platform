@@ -25,7 +25,7 @@ services:
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
-      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local-secret
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
       PIAP_LANGFUSE_PROJECT_ID: piap-local
@@ -38,7 +38,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_healthy
+        condition: service_started
       qdrant:
         condition: service_started
     ports:
@@ -80,7 +80,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_healthy
+        condition: service_started
       qdrant:
         condition: service_started
     volumes:
@@ -119,7 +119,7 @@ services:
       MYSQL_USER: piap
       MYSQL_PASSWORD: piap
     ports:
-      - "127.0.0.1:13306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -133,7 +133,7 @@ services:
     image: redis:7
     container_name: piap-redis
     ports:
-      - "127.0.0.1:16379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -163,12 +163,6 @@ services:
       - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -352,4 +346,3 @@ volumes:
   langfuse_clickhouse_logs:
   langfuse_minio_data:
   langfuse_redis_data:
-
