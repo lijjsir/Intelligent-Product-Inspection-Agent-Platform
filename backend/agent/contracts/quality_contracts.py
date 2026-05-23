@@ -12,6 +12,8 @@ class NormalizedAttachment(BaseModel):
     content_type: str | None = None
     size_bytes: int | None = None
     kind: str = "file"
+    bucket: str | None = None
+    object_key: str | None = None
 
 
 class ClarificationRequest(BaseModel):
@@ -62,6 +64,14 @@ class RouteDecision(BaseModel):
         "quality_qa",
         "task_create",
         "inspection_execute",
+        "image_understanding",
+        "file_summary",
+        "file_qa",
+        "quality_report_query",
+        "quality_task_status",
+        "action_blocked",
+        "data_analysis",
+        "rag_ingest",
     ] = "general_chat"
     reason: str = ""
     intent: str = ""

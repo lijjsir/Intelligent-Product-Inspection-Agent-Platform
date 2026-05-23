@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, AsyncIterator
 
 from fastapi import Header, Query
@@ -28,14 +29,17 @@ from app.schemas.user import CurrentUser
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
 from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
-from app.services.task_execution_service import launch_task_execution
-from app.services.task_service import TaskService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
 
 _ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
 _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
+
+
+@lru_cache(maxsize=1)
+def get_quality_agent_orchestrator() -> QualityAgentOrchestratorService:
+    return QualityAgentOrchestratorService()
 
 
 def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: asyncio.Task[None]) -> None:
@@ -82,7 +86,7 @@ class ChatService:
         self._org_id = org_id
         self._user_id = user_id
         self._current = current
-        self._orchestrator = QualityAgentOrchestratorService()
+        self._orchestrator = get_quality_agent_orchestrator()
 
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
@@ -231,6 +235,8 @@ class ChatService:
                 assistant_message_id=str(assistant_message.id),
                 request=payload.model_copy(update={"ext": ext_payload}),
                 workflow_run_id=workflow_run_id,
+                current_user_seq_no=int(user_message.seq_no or 0),
+                assistant_message_seq_no=int(assistant_message.seq_no or 0),
             )
         )
         _track_chat_workflow(workflow_run_id, str(assistant_message.id), workflow_task)
@@ -342,60 +348,54 @@ class ChatService:
         session_id: str,
         payload: ChatTaskSubmitRequest,
     ) -> ChatMessageResponse:
+        content = (
+            "聊天页面不能创建或执行正式质量检测任务。\n\n"
+            "请前往质量检测任务页面提交正式检测；聊天页只保留任务草稿、解释和辅助分析。"
+        )
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             if not await session_repo.get(self._org_id, self._user_id, session_id):
                 raise NotFoundError("chat session not found")
 
-            task_service = TaskService(session, self._org_id)
-            task_metadata = {
-                "source": "chat_submit",
-                "chat_session_id": session_id,
-                "chat_source_message_id": payload.source_message_id,
-                **dict(payload.metadata or {}),
-            }
-            task = await task_service.create_task(
-                created_by=self._user_id,
-                product_id=payload.product_id.strip(),
-                spec_code=payload.spec_code.strip(),
-                image_urls=[item for item in payload.image_urls if item],
-                priority=payload.priority,
-                metadata=task_metadata,
-            )
-            await session.commit()
-
-        launch = await launch_task_execution(task_id=str(task.id), org_id=self._org_id)
-        async with get_session() as session:
-            session_repo = ChatSessionRepository(session)
             message_repo = ChatMessageRepository(session)
-            content = (
-                "检测任务已创建并启动执行。\n\n"
-                f"任务 ID：{task.id}\n"
-                f"产品编号：{task.product_id}\n"
-                f"检测标准：{task.spec_code}\n"
-                f"执行方式：{launch['mode']}\n"
-                f"图片数量：{len(task.image_urls or [])}"
-            )
             message = await message_repo.create(
                 session_id=session_id,
                 org_id=self._org_id,
                 user_id=None,
                 role="assistant",
                 content=content,
-                message_type="task_result",
+                message_type="action_blocked",
                 payload={
                     "answer": content,
-                    "summary": "任务已创建并启动执行",
-                    "action_state": "task_started",
-                    "created_task": {
-                        "id": str(task.id),
-                        "status": str(launch.get("status") or "queued"),
-                        "product_id": str(task.product_id),
-                        "spec_code": str(task.spec_code),
-                        "priority": int(task.priority),
-                        "image_count": len(task.image_urls or []),
+                    "summary": "聊天页禁止正式质检 action",
+                    "message_type": "action_blocked",
+                    "action_state": "blocked",
+                    "task_draft": {
+                        "product_id": payload.product_id.strip(),
+                        "spec_code": payload.spec_code.strip(),
+                        "image_urls": [item for item in payload.image_urls if item],
+                        "priority": payload.priority,
+                        "metadata": {
+                            "source": "chat_draft",
+                            "chat_source_message_id": payload.source_message_id,
+                            **dict(payload.metadata or {}),
+                        },
                     },
-                    "execution": launch,
+                    "task_form_defaults": {
+                        "product_id": payload.product_id.strip(),
+                        "spec_code": payload.spec_code.strip(),
+                        "image_urls": [item for item in payload.image_urls if item],
+                        "priority": payload.priority,
+                        "metadata": dict(payload.metadata or {}),
+                    },
+                    "created_task": None,
+                    "ui_schema": "chat_answer_v2",
+                    "route_trace": {
+                        "surface": "chat",
+                        "capabilities_used": [],
+                        "satisfied": False,
+                        "errors": [{"message": "chat surface forbids action"}],
+                    },
                 },
             )
             await session_repo.touch(self._org_id, self._user_id, session_id)
@@ -409,6 +409,8 @@ class ChatService:
         assistant_message_id: str,
         request: ChatMessageSendRequest,
         workflow_run_id: str,
+        current_user_seq_no: int,
+        assistant_message_seq_no: int,
     ) -> None:
         async def emit(event: dict[str, Any]) -> None:
             event.setdefault("ts", utcnow_iso())
@@ -426,6 +428,22 @@ class ChatService:
         try:
             ext_payload = dict(request.ext or {})
             ext_payload["emit"] = emit
+            ext_payload["current_user_seq_no"] = current_user_seq_no
+            ext_payload["assistant_message_seq_no"] = assistant_message_seq_no
+            ext_payload["idempotency_key"] = (
+                f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
+            )
+            # Load recent history (exclude current user message)
+            async with get_session() as hist_session:
+                hist_repo = ChatMessageRepository(hist_session)
+                hist_rows = await hist_repo.list_for_session(
+                    org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
+                )
+                ext_payload["history_messages"] = [
+                    {"role": m.role, "content": m.content}
+                    for m in hist_rows
+                    if int(m.seq_no or 0) < current_user_seq_no
+                ][-10:]
             await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),

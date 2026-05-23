@@ -36,6 +36,7 @@ from agent.tools.file_parsers import parse_file_content
 from app.services.dspy_runtime_service import resolve_dspy_runtime_profile
 from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
+from app.services.object_storage.resolver import read_attachment_bytes
 from app.services.rag_retrieval_service import RagRetrievalService
 from infra.database.session import get_session
 
@@ -254,7 +255,7 @@ def _build_result_card(
 
 class LLMNativeQualitySubgraph:
     def __init__(self) -> None:
-        self._storage = FileStorageService()
+        pass
 
     async def run(self, request: NormalizedRequest) -> AgentOutput:
         started_at = perf_counter()
@@ -268,7 +269,11 @@ class LLMNativeQualitySubgraph:
         for attachment in request.attachments:
             if not attachment.url or attachment.kind == "image":
                 continue
-            payload = self._storage.file_bytes_from_url(attachment.url)
+            payload = None
+            if attachment.bucket and attachment.object_key:
+                payload = read_attachment_bytes(attachment.model_dump())
+            if payload is None:
+                payload = FileStorageService().file_bytes_from_url(attachment.url)
             if payload is None:
                 continue
             content, _ = payload

@@ -45,11 +45,23 @@ class AuthService:
         return user, access, refresh
 
     async def register(
-        self, create_org: bool, org_name: str, org_slug: str,
-        username: str, email: str, password: str, role: str = "admin",
+        self, create_org: bool | str = True, org_name: str | None = None, org_slug: str | None = None,
+        username: str | None = None, email: str | None = None, password: str | None = None, role: str = "admin",
     ) -> tuple[User, str, str]:
         from app.core.exceptions import NotFoundError
         from app.core.permissions import ensure_valid_role
+        if not isinstance(create_org, bool):
+            password = email
+            email = username
+            username = org_slug
+            org_slug = org_name
+            org_name = str(create_org)
+            create_org = True
+        org_name = str(org_name or "")
+        org_slug = str(org_slug or "")
+        username = str(username or "")
+        email = str(email or "")
+        password = str(password or "")
         ensure_valid_role(role)
 
         if create_org:

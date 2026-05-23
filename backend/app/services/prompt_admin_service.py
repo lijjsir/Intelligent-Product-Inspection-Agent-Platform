@@ -20,6 +20,7 @@ from app.schemas.prompt_admin import (
     SyncScanResponse,
     DiffResponse,
 )
+from infra.cache.memory_cache import _prompt_cache
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ _resolver_cache: dict[str, str] = {}
 
 def invalidate_resolver_cache(org_id: str, prompt_key: str) -> None:
     _resolver_cache.pop(f"{org_id}:{prompt_key}", None)
+    _prompt_cache.delete(f"prompt:{org_id}:{prompt_key}")
 
 
 class PromptAdminService:
@@ -336,6 +338,10 @@ class PromptResolver:
 
     async def get(self, prompt_key: str, *, org_id: str) -> str:
         cache_key = f"{org_id}:{prompt_key}"
+        ttl_cache_key = f"prompt:{org_id}:{prompt_key}"
+        cached = _prompt_cache.get(ttl_cache_key)
+        if cached is not None:
+            return str(cached)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -353,10 +359,12 @@ class PromptResolver:
                 content = d.code_default_content or ""
 
         self._cache[cache_key] = content
+        _prompt_cache.set(ttl_cache_key, content, ttl_seconds=120)
         return content
 
     def invalidate(self, org_id: str, prompt_key: str):
         self._cache.pop(f"{org_id}:{prompt_key}", None)
+        _prompt_cache.delete(f"prompt:{org_id}:{prompt_key}")
 
 
 # ── Code prompt loader ──

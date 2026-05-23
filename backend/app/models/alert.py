@@ -18,6 +18,7 @@ class AlertEvent(Base):
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="open")
     channels: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(191), nullable=True, unique=True)
     dispatched_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     ack_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     ack_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)

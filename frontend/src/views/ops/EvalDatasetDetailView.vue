@@ -211,7 +211,7 @@ watch(
         :page-size="sampleQuery.size"
         :current-page="sampleQuery.page"
         :total="evalStore.detailTotal"
-        @current-change="(page) => { sampleQuery.page = page; loadSamples(); }"
+        @current-change="(page: number) => { sampleQuery.page = page; loadSamples(); }"
       />
     </section>
 

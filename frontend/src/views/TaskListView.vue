@@ -14,6 +14,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
+import type { TaskStatus } from "@/types/task.types";
 
 const router = useRouter();
 const route = useRoute();
@@ -87,7 +88,7 @@ async function fetchData() {
   await taskStore.fetchTasks({
     page: page.value,
     size: pageSize.value,
-    status: filters.value.status || undefined,
+    status: (filters.value.status || undefined) as TaskStatus | undefined,
     product_id: filters.value.product_id || undefined,
     ids: filters.value.ids || undefined,
   });
@@ -132,6 +133,34 @@ function onSpecChange(specCode: string) {
   const spec = activeSpecOptions.value.find((s) => s.spec_code === specCode);
   if (spec) {
     createForm.value.product_id = spec.product_family || spec.product_id || "";
+  }
+}
+
+function handleOpenCreateFromDraft() {
+  const raw = sessionStorage.getItem("piap_quality_task_draft");
+  sessionStorage.removeItem("piap_quality_task_draft");
+  if (!raw) {
+    handleOpenCreate();
+    return;
+  }
+  try {
+    const draft = JSON.parse(raw) as {
+      product_id?: string;
+      spec_code?: string;
+      image_urls?: string[];
+      priority?: number;
+    };
+    createForm.value = {
+      product_id: String(draft.product_id || ""),
+      spec_code: String(draft.spec_code || ""),
+      image_urls_input: Array.isArray(draft.image_urls) ? draft.image_urls.filter(Boolean).join("\n") : "",
+      priority: Number(draft.priority || 5),
+    };
+    uploadFiles.value = [];
+    showCreateDialog.value = true;
+  } catch (error) {
+    console.error(error);
+    handleOpenCreate();
   }
 }
 
@@ -191,7 +220,6 @@ async function handleSubmitCreate() {
     const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
     const allUrls = [...urlsFromText, ...dataUrls];
 
-    // Build image_items with content hashes for uploaded files.
     const imageItems = await Promise.all(
       allUrls.map(async (url, i) => {
         const uploadFile = uploadFilesRaw[i - urlsFromText.length];
@@ -199,7 +227,6 @@ async function handleSubmitCreate() {
           const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
           return { index: i, url, hash: await fileToHash(uploadFile), sample_number: sn };
         }
-        // For URL-only entries, hash the URL string.
         const msgUint8 = new TextEncoder().encode(url);
         const urlHash = await crypto.subtle.digest("SHA-256", msgUint8);
         const urlHashHex = Array.from(new Uint8Array(urlHash))
@@ -208,7 +235,6 @@ async function handleSubmitCreate() {
         const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
         return { index: i, url, hash: urlHashHex, sample_number: sn };
       }),
-    );
 
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
@@ -268,6 +294,9 @@ function handleCurrentChange(current: number) {
 onMounted(async () => {
   syncFromRoute();
   await Promise.all([fetchData(), fetchSpecOptions()]);
+  if (route.query.create === "1") {
+    handleOpenCreateFromDraft();
+  }
 });
 
 watch(
@@ -275,6 +304,9 @@ watch(
   async () => {
     syncFromRoute();
     await fetchData();
+    if (route.query.create === "1" && !showCreateDialog.value) {
+      handleOpenCreateFromDraft();
+    }
   },
 );
 </script>
@@ -284,7 +316,7 @@ watch(
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <h2 class="text-2xl font-bold text-zinc-900">任务管理</h2>
-        <p class="mt-2 text-sm text-zinc-500">这里展示所有真实物化后的检测任务。聊天终态、聊天提交和手动创建都会进入同一任务主表。</p>
+        <p class="mt-2 text-sm text-zinc-500">这里展示所有真实物化后的检测任务。正式创建和执行只在质量检测任务页面完成。</p>
       </div>
       <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
     </div>

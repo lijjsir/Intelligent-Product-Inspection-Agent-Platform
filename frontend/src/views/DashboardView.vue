@@ -22,7 +22,7 @@ const riskRef = ref<HTMLElement | null>(null);
 let trendChart: ECharts | null = null;
 let riskChart: ECharts | null = null;
 
-use([CanvasRenderer, LineChart, PieChart, GridComponent, LegendComponent, TooltipComponent]);
+use([CanvasRenderer, LineChart, PieChart, GridComponent, LegendComponent, TooltipComponent] as any);
 
 const overview = computed(() => analyticsStore.overview);
 const openAlerts = computed(() => alertStore.items.slice(0, 5));

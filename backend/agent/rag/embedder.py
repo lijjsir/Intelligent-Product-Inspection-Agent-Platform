@@ -5,6 +5,7 @@ from typing import Any
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from app.services.model_config_service import ModelConfigService
+from infra.cache.memory_cache import _embedding_cache, stable_cache_key
 from infra.database.session import get_session
 
 
@@ -31,18 +32,26 @@ class Embedder:
         self._llm: LLMClient | None = None
 
     async def embed(self, text: str) -> list[float]:
-        llm = await self._client()
-        return await llm.embed(
+        runtime = await self._resolve_runtime()
+        normalized_text = " ".join(str(text or "").strip().lower().split())
+        cache_key = stable_cache_key("embedding", runtime.get("model_id"), normalized_text)
+        cached = _embedding_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
+        llm = await self._client(runtime)
+        embedding = await llm.embed(
             text,
             observation_name="rag.query_embedding",
             observation_metadata={"component": "retriever"},
         )
+        _embedding_cache.set(cache_key, list(embedding), ttl_seconds=1800)
+        return embedding
 
-    async def _client(self) -> LLMClient:
+    async def _client(self, runtime: dict[str, Any] | None = None) -> LLMClient:
         if self._llm is not None:
             return self._llm
 
-        runtime = await self._resolve_runtime()
+        runtime = runtime or await self._resolve_runtime()
         model_id = str(runtime.get("model_id") or "")
         self._llm = LLMClient(
             api_key=runtime.get("api_key"),

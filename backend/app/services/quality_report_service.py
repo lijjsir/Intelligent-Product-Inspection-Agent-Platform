@@ -432,8 +432,7 @@ class QualityReportService(TenantAwareService):
             )
             if not error:
                 return self._build_report_from_trace_items(traces)
-            logger.warning("Langfuse report source unavailable, returning empty remote-first report: %s", error)
-            return self._empty_report()
+            logger.warning("Langfuse report source unavailable, falling back to local report: %s", error)
 
         results = await self._result_repo.list_by_range(self._org_id, start_date, end_date)
         feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)

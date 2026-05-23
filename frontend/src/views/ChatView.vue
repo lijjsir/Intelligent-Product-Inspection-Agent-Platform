@@ -9,9 +9,8 @@ import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
-import type { ChatAttachment, ChatMessage, ChatMessagePayload, ChatTaskDraft, ChatMode, ChatUiSchema } from "@/types/chat.types";
+import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { TaskCreate } from "@/types/task.types";
-import { agentLabel as payloadAgentLabel } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -23,7 +22,6 @@ const inspectionSpecStore = useInspectionSpecStore();
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
-const chatMode = ref<ChatMode>("auto");
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -58,11 +56,7 @@ const taskRules: FormRules = {
 };
 
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
-const composerPlaceholder = computed(() =>
-  chatMode.value === "inspection"
-    ? "可以先问 Agent：这张图按什么标准识别？还缺哪些任务信息？确认后再提交正式质检任务。"
-    : "输入消息，Enter 发送，Shift+Enter 换行",
-);
+const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
 const streamStatusText = computed(() => {
   if (!chatStore.loading) return "";
   if (chatStore.streamPhase === "connecting") return "正在建立连接...";
@@ -104,40 +98,6 @@ function roleLabel(role: ChatMessage["role"]) {
   return "系统";
 }
 
-function intentLabel(intent?: string) {
-  switch (intent) {
-    case "smalltalk": return "闲聊";
-    case "general_qa": return "普通问答";
-    case "quality_qa": return "质量问答";
-    case "task_create": return "任务创建";
-    case "task_followup": return "任务跟进";
-    case "structured_inspection": return "结构化检测";
-    case "rag_qa": return "RAG 问答";
-    default: return "";
-  }
-}
-
-function agentLabel(message: ChatMessage) {
-  return payloadAgentLabel(message.payload);
-}
-
-function resolveUiSchema(message: ChatMessage): ChatUiSchema {
-  if (message.payload?.ui_schema) return message.payload.ui_schema as ChatUiSchema;
-  if (message.message_type === "task_result") return "task_result_v1";
-  if (message.message_type === "task_action") return "task_action_v1";
-  if (message.message_type === "quality_answer") return "quality_answer_v1";
-  if (message.payload?.citations?.length) return "rag_answer_v1";
-  return "chat_text_v1";
-}
-
-function resolveAgent(payload: ChatMessagePayload | null | undefined): string {
-  return payload?.agent || "";
-}
-
-function resolveSubRoute(payload: ChatMessagePayload | null | undefined): string {
-  return payload?.sub_route || payload?.intent || "";
-}
-
 function verdictTagType(verdict?: string | null) {
   if (verdict === "pass") return "success";
   if (verdict === "fail") return "danger";
@@ -156,36 +116,8 @@ function materializationTagType(status?: string | null) {
   return "info";
 }
 
-function trustTagType(level?: string | null) {
-  if (level === "low") return "success";
-  if (level === "medium") return "warning";
-  return "danger";
-}
-
-function trustStatusText(status?: string | null) {
-  if (status === "scored") return "已评审";
-  if (status === "rule_only") return "规则评审";
-  if (status === "reviewing") return "评审中";
-  if (status === "failed") return "评审失败";
-  return "未评审";
-}
-
 function parseImageUrls(value: string) {
   return value.split(/\r?\n|,|;/).map((item) => item.trim()).filter(Boolean);
-}
-
-function inspectionSubRouteForMessage(message: string) {
-  const text = message.trim();
-  const asksQuestion = /[?？]/.test(text) || /(怎么|如何|为什么|依据|识别|判定|结果|合格|缺陷|风险|能不能|是否|算不算)/.test(text);
-  const asksTask = /(创建|新建|发起|提交|启动|开始|确认).{0,12}(任务|检测|质检)/.test(text) || /(任务草稿|质检任务|检测任务)/.test(text);
-  if (asksQuestion && !asksTask) return "quality_qa";
-  return "task_create";
-}
-
-function implicitAttachmentQuestion() {
-  return chatMode.value === "inspection"
-    ? "请先根据图片整理质检任务草稿，说明识别依据和还缺少的信息，先不要创建正式任务。"
-    : "请先查看附件并说明你能识别到的信息。";
 }
 
 function buildTaskDraft(message: ChatMessage): ChatTaskDraft | null {
@@ -276,15 +208,14 @@ async function submitTaskPayload(payload: TaskCreate, sourceMessageId?: string |
     ElMessage.warning("\u68c0\u6d4b\u4efb\u52a1\u4fe1\u606f\u8fd8\u4e0d\u5b8c\u6574\uff0c\u8bf7\u5148\u8865\u5168\u8868\u5355\u3002");
     return;
   }
-  taskSubmitting.value = true;
-  try {
-    const createdMessage = await chatStore.submitTask({ source_message_id: sourceMessageId || undefined, product_id: payload.product_id, spec_code: payload.spec_code, image_urls: payload.image_urls, priority: payload.priority ?? 5, metadata: payload.metadata });
-    if (createdMessage?.payload?.created_task?.id) ensureTaskStream(createdMessage.payload.created_task.id);
-    ElMessage.success("\u68c0\u6d4b\u4efb\u52a1\u5df2\u521b\u5efa\u5e76\u5f00\u59cb\u6267\u884c\u3002");
-  } catch (error) {
-    ElMessage.error("\u4efb\u52a1\u521b\u5efa\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002");
-    console.error(error);
-  } finally { taskSubmitting.value = false; }
+  const draft = {
+    ...payload,
+    priority: payload.priority ?? 5,
+    metadata: { ...(payload.metadata || {}), source: "chat_draft", chat_source_message_id: sourceMessageId || undefined },
+  };
+  sessionStorage.setItem("piap_quality_task_draft", JSON.stringify(draft));
+  ElMessage.info("\u804a\u5929\u9875\u53ea\u4fdd\u7559\u4efb\u52a1\u8349\u7a3f\uff0c\u8bf7\u5728\u8d28\u91cf\u68c0\u6d4b\u4efb\u52a1\u9875\u786e\u8ba4\u5e76\u63d0\u4ea4\u6b63\u5f0f\u68c0\u6d4b\u3002");
+  await router.push({ path: "/app/tasks", query: { create: "1", source: "chat" } });
 }
 
 async function createTaskFromMessage(message: ChatMessage, useDialogState: boolean) {
@@ -330,19 +261,13 @@ async function submitTaskDialog() {
 
 async function sendMessage() {
   if (!canSend.value) return;
-  const message = input.value.trim() || implicitAttachmentQuestion();
-  const routeHints = chatMode.value === "inspection"
-    ? { force_agent: "inspection_task", force_sub_route: inspectionSubRouteForMessage(message) }
-    : chatMode.value === "chat"
-      ? { force_agent: "chat" }
-      : undefined;
+  const message = input.value.trim() || "请先查看附件并说明你能识别到的信息。";
   try {
     await chatStore.sendMessage({
       message,
       metadata: undefined,
       ext: {
-        ui_mode: chatMode.value,
-        route_hints: routeHints,
+        ui_mode: "auto",
       },
     });
     input.value = "";
@@ -401,17 +326,6 @@ const handleTaskDialogPaste = async (event: ClipboardEvent) => {
   }
 };
 
-function openTraceUrl(url: string) {
-  const idx = url.lastIndexOf("/traces/");
-  if (idx >= 0) {
-    const traceId = url.slice(idx + "/traces/".length);
-    if (traceId) {
-      window.open(`/api/v1/langfuse/redirect?trace_id=${encodeURIComponent(traceId)}`, "_blank", "noopener,noreferrer");
-      return;
-    }
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
-}
 function removePendingAttachment(id: string) { chatStore.removePendingAttachment(id); }
 
 async function copyToClipboard(text: string, successText = "已复制") {
@@ -475,7 +389,7 @@ async function saveEditedMessage(message: ChatMessage) {
     await chatStore.sendMessage({
       message: editingContent.value.trim(),
       metadata: { edited_from_message_id: message.id },
-      ext: { ui_mode: chatMode.value },
+      ext: { ui_mode: "auto" },
     });
     editingMessageId.value = "";
     editingContent.value = "";
@@ -603,7 +517,7 @@ async function retryFromAssistantMessage(message: ChatMessage) {
     await chatStore.sendMessage({
       message: source.content,
       ext: {
-        ui_mode: chatMode.value,
+        ui_mode: "auto",
       },
     });
   } catch (error) {
@@ -660,9 +574,6 @@ onBeforeUnmount(() => { chatStore.stopStream(); disposeTaskStreams(); });
 watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(() => chatStore.messages.map((item) => item.id).join(","), loadMessageReactions);
-watch(chatMode, async (mode) => {
-  if (mode === "inspection") await ensureInspectionSpecsLoaded(true);
-});
 watch(latestTokenCountedMessageId, async (messageId) => {
   if (!messageId || messageId === syncedUsageMessageId.value) return;
   syncedUsageMessageId.value = messageId;
@@ -675,34 +586,25 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <el-segmented
-          v-model="chatMode"
-          size="small"
-          :options="[
-            { label: '自动识别', value: 'auto' },
-            { label: '聊天/知识库', value: 'chat' },
-            { label: '质检/任务', value: 'inspection' },
-          ]"
-        />
-        <el-select
-          :model-value="chatStore.selectedRagSpaceId || undefined"
-          clearable filterable placeholder="知识库 (可选)"
-          size="small" class="rag-select"
-          @update:model-value="(value: string) => (value ? chatStore.selectRagSpace(value) : chatStore.clearSelectedRagSpace())"
-        >
-          <el-option label="不使用知识库" value="" />
-          <el-option v-for="space in chatStore.ragSpaces" :key="space.id" :label="`${space.name} (${space.file_count})`" :value="space.id" />
-        </el-select>
         <span class="token-badge">Token: {{ totalTokenText }}</span>
-        <el-tag v-if="chatStore.selectedRagSpace" size="small" effect="plain" type="success" class="rag-tag">
-          {{ chatStore.selectedRagSpace.name }}
-        </el-tag>
+        <el-select
+          v-model="chatStore.selectedRagSpaceId"
+          placeholder="选择知识库"
+          clearable
+          size="small"
+          class="rag-select"
+          @change="(val: string) => val ? chatStore.selectRagSpace(val) : chatStore.clearSelectedRagSpace()"
+        >
+          <el-option
+            v-for="space in chatStore.ragSpaces"
+            :key="space.id"
+            :label="space.name"
+            :value="space.id"
+          />
+        </el-select>
         <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
           &#x9644;&#x4EF6; {{ chatStore.pendingAttachments.length }}
         </el-tag>
-        <el-button v-if="chatMode === 'inspection'" size="small" type="primary" plain @click="openManualTaskDialog">
-          &#x65B0;&#x5EFA;&#x8D28;&#x68C0;&#x4EFB;&#x52A1;
-        </el-button>
 </div>
     </div>
 
@@ -720,9 +622,6 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           <div class="empty-icon">&#x1F4AC;</div>
           <div class="empty-title">&#x5F00;&#x59CB;&#x5BF9;&#x8BDD;</div>
           <div class="empty-desc">&#x53D1;&#x9001;&#x4E00;&#x6761;&#x6D88;&#x606F;&#xFF0C;&#x667A;&#x80FD;&#x52A9;&#x624B;&#x5C06;&#x4E3A;&#x4F60;&#x89E3;&#x7B54;&#x95EE;&#x9898;</div>
-          <el-button v-if="chatMode === 'inspection'" type="primary" plain @click="openManualTaskDialog">
-            &#x65B0;&#x5EFA;&#x8D28;&#x68C0;&#x4EFB;&#x52A1;
-          </el-button>
         </div>
 
         <div v-else class="message-group">
@@ -761,31 +660,6 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <!-- Attachments -->
               <div v-if="message.payload?.attachment_echo?.length" class="bubble-attachments">
                 <a v-for="att in message.payload.attachment_echo" :key="att.id" :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
-              </div>
-
-              <!-- Tags -->
-              <div v-if="agentLabel(message) || message.payload?.intent || message.payload?.selected_rag_space || message.payload?.citations?.length" class="bubble-tags">
-                <el-tag v-if="agentLabel(message)" size="small" effect="plain" type="info">Agent: {{ agentLabel(message) }}</el-tag>
-                <el-tag v-if="message.payload?.intent" size="small" effect="plain" type="primary">{{ intentLabel(message.payload.intent) }}</el-tag>
-                <el-tag v-if="message.payload?.selected_rag_space" size="small" effect="plain" type="success">RAG: {{ message.payload.selected_rag_space.name }}</el-tag>
-                <el-tag v-if="message.payload?.citations?.length" size="small" effect="plain" type="info">引用 {{ message.payload.citations.length }}</el-tag>
-                <el-tag v-if="message.payload?.trust_scoring" size="small" effect="plain" :type="trustTagType(message.payload.trust_scoring.risk_level)">
-                  可信 {{ message.payload.trust_scoring.trust_score == null ? trustStatusText(message.payload.trust_scoring.status) : `${(message.payload.trust_scoring.trust_score * 100).toFixed(0)}%` }}
-                </el-tag>
-                <el-button
-                  v-if="message.payload?.trust_scoring?.trace_url"
-                  size="small" link type="primary"
-                  @click="openTraceUrl(message.payload.trust_scoring.trace_url)"
-                >
-                  Trace
-                </el-button>
-              </div>
-
-              <!-- Trust details -->
-              <div v-if="message.payload?.trust_scoring && message.role === 'assistant'" class="trust-detail">
-                <span>幻觉风险: {{ message.payload.trust_scoring.hallucination_risk == null ? "-" : (message.payload.trust_scoring.hallucination_risk * 100).toFixed(0) + "%" }}</span>
-                <span>过度自信: {{ message.payload.trust_scoring.overconfidence == null ? "-" : (message.payload.trust_scoring.overconfidence * 100).toFixed(0) + "%" }}</span>
-                <span>引用: {{ message.payload.trust_scoring.has_citation ? "有" : "无" }}</span>
               </div>
 
               <!-- Result card -->
@@ -869,7 +743,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <el-alert v-if="message.payload?.missing_slots?.length" type="info" :closable="false" show-icon title="任务信息还不完整，请补充后再提交。" />
                 <div class="task-actions-btns">
                   <el-button size="small" @click="openTaskDialog(message)">{{ canConfirmTask(message) ? "编辑检测信息" : "补全任务信息" }}</el-button>
-                  <el-button v-if="canConfirmTask(message)" size="small" type="primary" :loading="taskSubmitting" @click="createTaskFromMessage(message, false)">确认提交并执行</el-button>
+                  <el-button v-if="canConfirmTask(message)" size="small" type="primary" :loading="taskSubmitting" @click="createTaskFromMessage(message, false)">前往任务页确认</el-button>
                 </div>
               </div>
             </div>
@@ -968,7 +842,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       </el-form>
       <template #footer>
         <el-button @click="resetTaskDialog">取消</el-button>
-        <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">{{ taskSourceMessage ? "确认提交并执行" : "发送给 Agent 整理草稿" }}</el-button>
+        <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">{{ taskSourceMessage ? "前往任务页确认提交" : "发送给 Agent 整理草稿" }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1000,8 +874,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   gap: 10px;
   flex-wrap: wrap;
 }
-.rag-select { width: 220px; }
 .token-badge { font-size: 12px; color: #6b7280; white-space: nowrap; }
+.rag-select { width: 180px; }
 
 /* ── Alert ── */
 .alert-bar { margin: 0 12px; border-radius: 10px; }
@@ -1117,17 +991,6 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 .att-link:hover { background: #d1d5db; }
 .bubble.user .att-link { background: rgba(255,255,255,0.15); color: #e5e7eb; }
-
-.bubble-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
-
-.trust-detail {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  margin-top: 8px;
-  font-size: 11px;
-  color: #6b7280;
-}
 
 /* ── Result card ── */
 .result-card {

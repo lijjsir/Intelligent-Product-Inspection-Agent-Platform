@@ -15,7 +15,7 @@ const props = defineProps<Props>();
 const chartRef = ref<HTMLElement | null>(null);
 let chart: ECharts | null = null;
 
-use([CanvasRenderer, LineChart, GridComponent, LegendComponent, TooltipComponent]);
+use([CanvasRenderer, LineChart, GridComponent, LegendComponent, TooltipComponent] as any);
 
 function handleResize() {
   chart?.resize();

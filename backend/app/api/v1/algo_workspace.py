@@ -26,8 +26,6 @@ from app.schemas.algo_resources import (
     OfflineEvaluationUpdateRequest,
     OnlineValidationCreateRequest,
     OnlineValidationUpdateRequest,
-    TrainingJobCreateRequest,
-    TrainingJobUpdateRequest,
 )
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
@@ -340,49 +338,6 @@ async def update_eval_dataset(resource_id: str, payload: EvaluationDatasetUpdate
 @router.delete("/eval-datasets/{resource_id}", response_model=ResponseEnvelope)
 async def delete_eval_dataset(resource_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
     await _svc(current, db).delete_generic_resource(resource_type="evaluation_dataset", resource_id=resource_id)
-    return ResponseEnvelope(data={"deleted": True})
-
-
-@router.get("/training-jobs", response_model=ResponseEnvelope)
-async def list_training_jobs(
-    page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
-    keyword: str | None = Query(default=None),
-    status_text: str | None = Query(default=None, alias="status"),
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    return ResponseEnvelope(data=await _svc(current, db).list_generic_resources(resource_type="training_job", page=page, size=size, keyword=keyword, status=status_text))
-
-
-@router.post("/training-jobs", response_model=ResponseEnvelope, status_code=status.HTTP_201_CREATED)
-async def create_training_job(payload: TrainingJobCreateRequest, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    return ResponseEnvelope(data=await _svc(current, db).create_training_job(payload))
-
-
-@router.get("/training-jobs/{resource_id}", response_model=ResponseEnvelope)
-async def get_training_job(resource_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    return ResponseEnvelope(data=await _svc(current, db).get_generic_resource(resource_type="training_job", resource_id=resource_id))
-
-
-@router.patch("/training-jobs/{resource_id}", response_model=ResponseEnvelope)
-async def update_training_job(resource_id: str, payload: TrainingJobUpdateRequest, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    return ResponseEnvelope(data=await _svc(current, db).update_training_job(resource_id, payload))
-
-
-@router.post("/training-jobs/{resource_id}/launch", response_model=ResponseEnvelope, status_code=status.HTTP_202_ACCEPTED)
-async def launch_training_job(resource_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    return ResponseEnvelope(data=await _svc(current, db).launch_training_job(resource_id))
-
-
-@router.post("/training-jobs/{resource_id}/cancel", response_model=ResponseEnvelope)
-async def cancel_training_job(resource_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    return ResponseEnvelope(data=await _svc(current, db).cancel_training_job(resource_id))
-
-
-@router.delete("/training-jobs/{resource_id}", response_model=ResponseEnvelope)
-async def delete_training_job(resource_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
-    await _svc(current, db).delete_training_job(resource_id)
     return ResponseEnvelope(data={"deleted": True})
 
 

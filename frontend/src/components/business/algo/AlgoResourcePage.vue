@@ -14,12 +14,12 @@ const props = defineProps<{
     loading: boolean;
     current: TItem | null;
     fetchList: (query: AlgoListQuery) => Promise<any>;
-    fetchOne: (id: string) => Promise<TItem>;
-    createOne: (payload: Record<string, unknown>) => Promise<TItem>;
-    updateOne?: (id: string, payload: Record<string, unknown>) => Promise<TItem>;
+    fetchOne: (id: string) => Promise<any>;
+    createOne: (payload: any) => Promise<any>;
+    updateOne?: (id: string, payload: any) => Promise<any>;
     removeOne: (id: string) => Promise<void>;
-    launchOne?: (id: string) => Promise<TItem>;
-    cancelOne?: (id: string) => Promise<TItem>;
+    launchOne?: (id: string) => Promise<any>;
+    cancelOne?: (id: string) => Promise<any>;
     detailPath?: (id: string) => string;
   };
   buildPayload: (form: { name: string; description: string; config_json: string }) => Record<string, unknown>;

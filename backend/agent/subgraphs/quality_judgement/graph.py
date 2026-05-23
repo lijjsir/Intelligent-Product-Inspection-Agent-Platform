@@ -35,7 +35,6 @@ from agent.subgraphs.quality_judgement.product_adapters import (
     score_from_record,
 )
 from agent.tools.file_parsers import parse_file_content
-from app.services.file_storage_service import FileStorageService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.rag_retrieval_service import RagRetrievalService
 from infra.database.session import get_session
@@ -225,7 +224,6 @@ class QualityJudgementSubgraph:
 
     def __init__(self) -> None:
         self._chat_graph = QualityChatGraph()
-        self._storage = FileStorageService()
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentOutput:
         from agent.router import AgentManager

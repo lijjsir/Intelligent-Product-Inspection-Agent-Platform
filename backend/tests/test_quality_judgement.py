@@ -43,8 +43,8 @@ expected_decision=PASS
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -68,6 +68,10 @@ expected_decision=PASS
         "agent.subgraphs.quality_judgement.graph.InspectionStandardService.evaluate",
         fake_evaluate,
     )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
+    )
 
     output = await QualityJudgementSubgraph().run(
         NormalizedRequest(
@@ -82,6 +86,8 @@ expected_decision=PASS
                     name="screw_pass_01.txt",
                     url="/uploads/native/screw_pass_01.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -114,8 +120,8 @@ expected_decision=FAIL
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -152,6 +158,8 @@ expected_decision=FAIL
                     name="screw_fail_02.txt",
                     url="/uploads/native/screw_fail_02.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -181,8 +189,8 @@ expected_decision=PASS
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -250,6 +258,8 @@ expected_decision=PASS
                     name="screw_pass_02.txt",
                     url="/uploads/native/screw_pass_02.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -307,8 +317,8 @@ async def test_quality_judgement_supports_food_records_and_real_rag_summary(monk
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -378,6 +388,8 @@ async def test_quality_judgement_supports_food_records_and_real_rag_summary(monk
                     name="1.txt",
                     url="/uploads/native/1.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -443,8 +455,8 @@ async def test_quality_judgement_supports_electronics_records_with_default_spec(
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -504,6 +516,8 @@ async def test_quality_judgement_supports_electronics_records_with_default_spec(
                     name="adapter.txt",
                     url="/uploads/native/adapter.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -568,8 +582,8 @@ async def test_quality_judgement_maps_electronics_failures_to_electronics_rules(
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     async def fake_evaluate(self, **kwargs):
@@ -616,6 +630,8 @@ async def test_quality_judgement_maps_electronics_failures_to_electronics_rules(
                     name="power_strip.txt",
                     url="/uploads/native/power_strip.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )
@@ -645,8 +661,8 @@ async def test_quality_judgement_returns_task_action_for_unknown_product_family(
 """.strip()
 
     monkeypatch.setattr(
-        "agent.subgraphs.quality_judgement.graph.FileStorageService.file_bytes_from_url",
-        lambda self, url: (file_text.encode("utf-8"), "text/plain"),
+        "agent.subgraphs.inspection_task.graph.read_attachment_bytes",
+        lambda attachment: (file_text.encode("utf-8"), "text/plain"),
     )
 
     output = await QualityJudgementSubgraph().run(
@@ -662,6 +678,8 @@ async def test_quality_judgement_returns_task_action_for_unknown_product_family(
                     name="chemical.txt",
                     url="/uploads/native/chemical.txt",
                     kind="file",
+                    bucket="chat-attachments",
+                    object_key="chat_attachments/test_file.txt",
                 )
             ],
         )

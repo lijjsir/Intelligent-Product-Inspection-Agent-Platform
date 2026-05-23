@@ -11,6 +11,7 @@ from agent.topology_catalog import (
     get_route_topology,
     get_topology,
 )
+from agent.router.runtime_guard import invalidate_runtime_guard_cache
 from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.repositories.agent_ops_repo import (
@@ -944,6 +945,7 @@ class AgentOpsService:
             "operator_id": self._actor_id,
         })
         await self._session.flush()
+        invalidate_runtime_guard_cache(self._org_id)
 
         return await self._build_runtime_response(runtime, agent)
 
@@ -971,6 +973,7 @@ class AgentOpsService:
             "operator_id": self._actor_id,
         })
         await self._session.flush()
+        invalidate_runtime_guard_cache(self._org_id)
 
         return await self._build_runtime_response(runtime, agent)
 
@@ -1321,4 +1324,3 @@ class AgentOpsService:
             by_agent=by_agent,
             by_rule=by_rule,
         )
-

@@ -59,7 +59,7 @@ class ModelHealthChecker:
             )
             if fallback_status is not None:
                 return fallback_status, fallback_message
-            return "unhealthy", self._missing_model_key_message(model_key, model_ids)
+            return "unhealthy", self._missing_model_key_message(model_key, set())
 
     async def _probe_runtime_model(
         self,

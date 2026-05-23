@@ -30,9 +30,11 @@ watch(() => route.params.id, load);
     title="部署详情"
     :store="store"
     back-path="/ops/deployments"
+    :auto-refresh-when-running="true"
     :relation-sections="[
       { label: '来源类型', value: (item) => item?.source_type },
       { label: '来源资源', value: (item) => item?.source_id },
+      { label: '合并模式', value: (item) => item?.merge_mode },
       { label: '实验', value: (item) => item?.experiment_id },
     ]"
     intro="查看部署运行时注册信息、推理配置和产出清单。"
@@ -46,7 +48,7 @@ watch(() => route.params.id, load);
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">状态</div>
-          <div class="mt-2 text-base font-semibold text-slate-900">{{ runtimeRegistration.service_status || runtimeRegistration.status || "-" }}</div>
+          <div class="mt-2 text-base font-semibold text-slate-900">{{ runtimeRegistration.service_status || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">来源</div>
@@ -59,6 +61,10 @@ watch(() => route.params.id, load);
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">模型版本</div>
           <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.model_version || "-" }}</div>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div class="text-sm text-slate-500">合并模式</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ current?.merge_mode || runtimeRegistration.merge_mode || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">入口</div>
@@ -76,6 +82,8 @@ watch(() => route.params.id, load);
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">健康检查</div>
           <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ healthUrl || "-" }}</div>
+          <div class="mt-2 text-xs text-slate-500">最近检查：{{ runtimeRegistration.last_health_checked_at || runtimeRegistration.last_checked_at || "-" }}</div>
+          <div class="mt-1 text-xs text-rose-600">{{ runtimeRegistration.last_health_error || "" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">推理地址</div>
@@ -84,6 +92,10 @@ watch(() => route.params.id, load);
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
           <div class="text-sm text-slate-500">推理配置</div>
           <pre class="mt-2 overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(runtimeRegistration.inference_config || {}, null, 2) }}</pre>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2 xl:col-span-3">
+          <div class="text-sm text-slate-500">远端执行诊断</div>
+          <pre class="mt-2 overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(current?.result_summary?.remote_execution || {}, null, 2) }}</pre>
         </div>
       </div>
     </section>

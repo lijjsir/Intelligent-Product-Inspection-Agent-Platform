@@ -109,6 +109,8 @@ class ChatAttachmentPayload(BaseModel):
     content_type: str | None = None
     size_bytes: int = 0
     kind: str = "file"
+    bucket: str | None = None
+    object_key: str | None = None
 
 
 class AttachmentUploadResponse(BaseModel):
