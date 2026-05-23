@@ -9,3 +9,4 @@ export * from "./log-center.api";
 export * from "./infrastructure.api";
 export * from "./memory-governance.api";
 export * from "./approval.api";
+export * from "./inspection-standard.api";

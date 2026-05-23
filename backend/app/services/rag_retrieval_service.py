@@ -102,3 +102,83 @@ class RagRetrievalService:
             "hit_count": len(selected),
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
         }
+
+    async def search_many(
+        self,
+        *,
+        rag_space_ids: list[str],
+        query: str,
+        top_k: int = 4,
+        scope_node_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        started_at = perf_counter()
+        unique_space_ids = [str(item).strip() for item in rag_space_ids if str(item).strip()]
+        unique_space_ids = list(dict.fromkeys(unique_space_ids))
+        if not unique_space_ids:
+            return {
+                "rag_space_id": None,
+                "rag_space_name": None,
+                "rag_space_ids": [],
+                "rag_space_names": [],
+                "hits": [],
+                "hit_count": 0,
+                "latency_ms": 0.0,
+                "source_count": 0,
+            }
+
+        results = []
+        for rag_space_id in unique_space_ids:
+            search_kwargs = {
+                "rag_space_id": rag_space_id,
+                "query": query,
+                "top_k": top_k,
+            }
+            if scope_node_ids:
+                search_kwargs["scope_node_ids"] = scope_node_ids
+            result = await self.search(**search_kwargs)
+            for hit in list(result.get("hits") or []):
+                hit["rag_space_id"] = result.get("rag_space_id")
+                hit["rag_space_name"] = result.get("rag_space_name")
+            results.append(result)
+
+        all_hits: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
+        rag_space_names: list[str] = []
+        for result in results:
+            rag_space_name = str(result.get("rag_space_name") or "").strip()
+            if rag_space_name and rag_space_name not in rag_space_names:
+                rag_space_names.append(rag_space_name)
+            for hit in list(result.get("hits") or []):
+                dedupe_key = (
+                    str(hit.get("document_id") or ""),
+                    str(hit.get("chunk_index") or ""),
+                    str(hit.get("quote") or ""),
+                )
+                if dedupe_key in seen_keys:
+                    continue
+                seen_keys.add(dedupe_key)
+                all_hits.append(hit)
+
+        all_hits.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0.0),
+                str(item.get("rag_space_name") or ""),
+                str(item.get("source") or ""),
+            )
+        )
+        selected = all_hits[: max(1, top_k)]
+        hit_space_ids = []
+        for item in all_hits:
+            rag_space_id = str(item.get("rag_space_id") or "").strip()
+            if rag_space_id and rag_space_id not in hit_space_ids:
+                hit_space_ids.append(rag_space_id)
+        return {
+            "rag_space_id": selected[0].get("rag_space_id") if selected else None,
+            "rag_space_name": selected[0].get("rag_space_name") if selected else None,
+            "rag_space_ids": [str(item.get("rag_space_id") or "") for item in results if str(item.get("rag_space_id") or "").strip()],
+            "rag_space_names": rag_space_names,
+            "hits": selected,
+            "hit_count": len(selected),
+            "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+            "source_count": len(hit_space_ids),
+        }

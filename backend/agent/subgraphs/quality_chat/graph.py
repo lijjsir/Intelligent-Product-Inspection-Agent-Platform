@@ -28,6 +28,7 @@ from app.services.chat_trust_scoring_service import (
 )
 from app.services.runtime_profile_service import build_runtime_prompt_section, resolve_runtime_profile
 from app.services.model_config_service import ModelConfigService
+from app.services.system_rag_service import resolve_and_search_system_rag
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -483,19 +484,24 @@ async def knowledge(state: ChatState) -> ChatState:
         state["retrieval_metrics"] = {"skipped": True, "reason": policy_decision.reason}
         return state
 
-    trace_id = str((state.get("trace") or {}).get("trace_id") or "")
-    payload_filter: dict[str, Any] = {"org_id": str(state["org_id"]), "user_id": str(state["user_id"])}
-    if policy_decision.rag_space_id:
-        payload_filter["rag_space_id"] = policy_decision.rag_space_id
     scope_node_ids = _selected_rag_scope_node_ids(state.get("ext") or {})
-    if scope_node_ids:
-        payload_filter["ancestor_node_ids"] = scope_node_ids
-    retriever = Retriever(trace_id=trace_id or None, task_id=str(state["session_id"]), org_id=str(state["org_id"]))
     knowledge_payload = _runtime_target_payload(state, "quality_judgement.knowledge")
     top_k = max(1, min(8, int(knowledge_payload.get("retrieval_top_k") or knowledge_payload.get("top_k") or policy_decision.top_k)))
-    started_at = perf_counter()
-    docs = await retriever.retrieve(str(state["query"]), top_k=top_k, payload_filter=payload_filter)
-    latency_ms = round((perf_counter() - started_at) * 1000)
+    async with get_session() as session:
+        rag_result = await resolve_and_search_system_rag(
+            session=session,
+            org_id=str(state["org_id"]),
+            user_id=str(state["user_id"]),
+            query=str(state["query"]),
+            product_family=str(state.get("metadata", {}).get("product_family") or "").strip() or None,
+            product_id=str(state.get("metadata", {}).get("product_id") or "").strip() or None,
+            spec_code=str(state.get("metadata", {}).get("spec_code") or "").strip() or None,
+            user_rag_space_id=policy_decision.rag_space_id,
+            scope_node_ids=scope_node_ids,
+            top_k=top_k,
+        )
+    docs = list(rag_result.get("hits") or [])
+    latency_ms = round(float(rag_result.get("latency_ms") or 0.0))
     citations = [{"id": doc.get("id"), "title": doc.get("title"), "source": doc.get("source"), "score": float(doc.get("score") or 0.0), "quote": str(doc.get("quote") or doc.get("text") or "")[:180]} for doc in docs]
     state["retrieved_chunks"] = docs
     state["citations"] = citations
@@ -506,7 +512,12 @@ async def knowledge(state: ChatState) -> ChatState:
         "top_score": float(docs[0]["score"]) if docs else 0.0,
         "skipped": False,
         "latency_ms": latency_ms,
-        "rag_space_id": policy_decision.rag_space_id,
+        "rag_space_id": rag_result.get("rag_space_id"),
+        "rag_space_ids": list(rag_result.get("rag_space_ids") or []),
+        "rag_space_names": list(rag_result.get("rag_space_names") or []),
+        "system_rag_space_ids": list(rag_result.get("system_rag_space_ids") or []),
+        "system_rag_space_names": list(rag_result.get("system_rag_space_names") or []),
+        "standard_binding_name": rag_result.get("standard_binding_name"),
         "top_k": top_k,
     }
     return state
@@ -1048,4 +1059,3 @@ class ChatGraph:
             result.get("intent"), len(str(result.get("query") or "")), round((perf_counter() - _t_graph) * 1000),
         )
         return result
-

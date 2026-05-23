@@ -505,6 +505,35 @@ export interface ApprovalListQuery {
   requester_id?: string;
 }
 
+export interface InspectionStandardRagSpace {
+  id: string;
+  name: string;
+  document_count: number;
+  status?: string | null;
+}
+
+export interface InspectionStandardLibraryItem {
+  id: string;
+  org_id: string | null;
+  name: string;
+  product_family: string;
+  description?: string | null;
+  rag_space_ids: string[];
+  rag_spaces: InspectionStandardRagSpace[];
+  total_document_count: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InspectionStandardPayload {
+  name: string;
+  product_family: string;
+  description?: string | null;
+  rag_space_ids: string[];
+  is_active?: boolean;
+}
+
 export interface InspectionSpecItem {
   id: string;
   defect_type: string;

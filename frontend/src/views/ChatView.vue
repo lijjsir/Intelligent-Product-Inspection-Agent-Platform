@@ -711,6 +711,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <div class="rc-grid">
                   <div class="rc-item"><span>总体得分</span><strong>{{ Number(message.payload.result_card.overall_score || 0).toFixed(2) }}</strong></div>
                   <div class="rc-item"><span>RAG 空间</span><strong>{{ message.payload.rag_summary?.rag_space_name || message.payload.rag_summary?.rag_space_id || "未使用" }}</strong></div>
+                  <div class="rc-item"><span>系统标准</span><strong>{{ message.payload.rag_summary?.standard_binding_name || "未命中" }}</strong></div>
+                  <div class="rc-item"><span>系统标准空间</span><strong>{{ message.payload.rag_summary?.system_rag_space_names?.join(" / ") || "无" }}</strong></div>
+                  <div class="rc-item"><span>合并来源数</span><strong>{{ message.payload.rag_summary?.merged_rag_source_count ?? 0 }}</strong></div>
                   <div class="rc-item"><span>引用数量</span><strong>{{ message.payload.rag_summary?.hit_count ?? 0 }}</strong></div>
                   <div class="rc-item"><span>引用覆盖率</span><strong>{{ ((message.payload.rag_summary?.citation_coverage ?? 0) * 100).toFixed(1) }}%</strong></div>
                 </div>
