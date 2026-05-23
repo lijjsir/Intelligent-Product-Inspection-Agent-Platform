@@ -14,13 +14,31 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table_name: str, column_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return column_name in {c["name"] for c in inspector.get_columns(table_name)}
+
+
+def _has_index(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return index_name in {i["name"] for i in inspector.get_indexes(table_name)}
+
+
 def upgrade():
-    op.add_column("token_usage_ledger", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
-    op.create_index("uq_token_usage_ledger_idempotency_key", "token_usage_ledger", ["idempotency_key"], unique=True)
-    op.add_column("alert_events", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
-    op.create_index("uq_alert_events_idempotency_key", "alert_events", ["idempotency_key"], unique=True)
-    op.add_column("rag_query_logs", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
-    op.create_index("uq_rag_query_logs_idempotency_key", "rag_query_logs", ["idempotency_key"], unique=True)
+    if not _has_column("token_usage_ledger", "idempotency_key"):
+        op.add_column("token_usage_ledger", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
+    if not _has_index("token_usage_ledger", "uq_token_usage_ledger_idempotency_key"):
+        op.create_index("uq_token_usage_ledger_idempotency_key", "token_usage_ledger", ["idempotency_key"], unique=True)
+    if not _has_column("alert_events", "idempotency_key"):
+        op.add_column("alert_events", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
+    if not _has_index("alert_events", "uq_alert_events_idempotency_key"):
+        op.create_index("uq_alert_events_idempotency_key", "alert_events", ["idempotency_key"], unique=True)
+    if not _has_column("rag_query_logs", "idempotency_key"):
+        op.add_column("rag_query_logs", sa.Column("idempotency_key", sa.String(length=191), nullable=True))
+    if not _has_index("rag_query_logs", "uq_rag_query_logs_idempotency_key"):
+        op.create_index("uq_rag_query_logs_idempotency_key", "rag_query_logs", ["idempotency_key"], unique=True)
 
 
 def downgrade():

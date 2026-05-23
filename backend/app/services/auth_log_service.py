@@ -51,6 +51,7 @@ class AuthLogService:
             return await self._repo.write(log)
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
+                await self._repo._session.rollback()
                 return log
             raise
 
@@ -78,6 +79,7 @@ class AuthLogService:
             )
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
+                await self._repo._session.rollback()
                 raise ServiceUnavailableError(AUTH_LOGS_MISSING_MESSAGE) from exc
             raise
 

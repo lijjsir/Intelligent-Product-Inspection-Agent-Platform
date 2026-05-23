@@ -26,6 +26,7 @@ class AuthService:
             await self._auth_logs.record_login(**payload)
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
+                await self._session.rollback()
                 return
             raise
 
@@ -36,7 +37,7 @@ class AuthService:
             if org:
                 org_id = org.id
         if not org or not org.is_active:
-            await self._record_login_log(org_id=org_id, username=username, request=request, success=False, detail="invalid organization")
+            await self._record_login_log(org_id=org_id if org else "00000000-0000-0000-0000-000000000000", username=username, request=request, success=False, detail="invalid organization")
             raise ForbiddenError("invalid organization")
         user = await self._users.get_by_username(org_id, username)
         if not user or not user.password_hash:

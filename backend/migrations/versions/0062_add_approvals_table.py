@@ -17,7 +17,15 @@ branch_labels = None
 depends_on = None
 
 
+def _has_table(table_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return table_name in inspector.get_table_names()
+
+
 def upgrade():
+    if _has_table("approvals"):
+        return
     op.create_table(
         "approvals",
         sa.Column("id", UUIDBinary(length=16), nullable=False),
