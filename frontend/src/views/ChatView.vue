@@ -507,6 +507,12 @@ async function retryFromAssistantMessage(message: ChatMessage) {
     ElMessage.warning("没有找到可重试的上一条用户消息。");
     return;
   }
+  const sourceRag = source.payload?.selected_rag_space;
+  if (sourceRag?.id) {
+    chatStore.selectRagSpace(sourceRag.id);
+  } else {
+    chatStore.clearSelectedRagSpace();
+  }
   try {
     await chatStore.sendMessage({
       message: source.content,
