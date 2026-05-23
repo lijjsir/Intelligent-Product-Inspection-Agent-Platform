@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
     AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']
     AlgoResourcePage: typeof import('./src/components/business/algo/AlgoResourcePage.vue')['default']
     AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
@@ -74,6 +75,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
     ThumbsDownTrendChart: typeof import('./src/components/business/analytics/ThumbsDownTrendChart.vue')['default']
+    ThumbsUpTrendChart: typeof import('./src/components/business/analytics/ThumbsUpTrendChart.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']
