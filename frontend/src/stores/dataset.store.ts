@@ -97,6 +97,11 @@ export const useDatasetStore = defineStore("dataset", () => {
     return data.data;
   }
 
+  async function uploadVideoSamples(datasetId: string, files: File[]) {
+    const { data } = await datasetApi.uploadVideoSamples(datasetId, files);
+    return data.data;
+  }
+
   async function removeSample(datasetId: string, sampleId: string) {
     await datasetApi.removeSample(datasetId, sampleId);
     samples.value = samples.value.filter((item) => item.id !== sampleId);
@@ -128,6 +133,7 @@ export const useDatasetStore = defineStore("dataset", () => {
     fetchSamples,
     createTextSample,
     uploadImageSamples,
+    uploadVideoSamples,
     removeSample,
     $reset,
   };

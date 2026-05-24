@@ -56,6 +56,16 @@ export const datasetApi = {
     });
   },
 
+  uploadVideoSamples(datasetId: string, files: File[]) {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    return http.post<DatasetSample[]>(`/v1/datasets/${datasetId}/samples/videos`, form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+
   initUploadSession(datasetId: string, payload: DatasetUploadInitRequest) {
     return http.post<DatasetUploadInitResponse>(`/v1/datasets/${datasetId}/upload/init`, payload);
   },

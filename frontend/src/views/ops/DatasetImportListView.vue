@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { usePagination } from "@/composables/usePagination";
 import { useDatasetStore } from "@/stores/dataset.store";
 import type { DatasetCreateRequest, DatasetModality } from "@/types/dataset.types";
+import { datasetModalityLabel, normalizeDatasetModality } from "@/utils/dataset-modality";
 
 const route = useRoute();
 const router = useRouter();
@@ -21,13 +22,19 @@ const filters = reactive({
 const dialogVisible = ref(false);
 const saving = ref(false);
 const editingId = ref("");
+const createAndUpload = ref(true);
 const form = reactive<DatasetCreateRequest>({
   name: "",
   description: "",
-  modality: "image_text",
+  modality: "image+text",
   tags: [],
 });
+const modalitySelection = ref<string[]>(["image", "text"]);
 const tagsInput = ref("");
+
+watch(modalitySelection, () => {
+  syncFormModality();
+});
 
 const activeCount = computed(() => store.items.filter((item) => item.status === "active").length);
 const totalSamples = computed(() => store.items.reduce((sum, item) => sum + item.sample_count, 0));
@@ -93,17 +100,17 @@ function formatBytes(value: number) {
 }
 
 function modalityLabel(value: DatasetModality) {
-  if (value === "image") return "图片";
-  if (value === "text") return "文本";
-  return "图片 + 文本";
+  return datasetModalityLabel(value);
 }
 
 function resetForm() {
   editingId.value = "";
   form.name = "";
   form.description = "";
-  form.modality = "image_text";
+  form.modality = "image+text";
   form.tags = [];
+  modalitySelection.value = ["image", "text"];
+  createAndUpload.value = true;
   tagsInput.value = "";
 }
 
@@ -116,10 +123,15 @@ function openEdit(row: any) {
   editingId.value = row.id;
   form.name = row.name;
   form.description = row.description || "";
-  form.modality = row.modality;
+  form.modality = normalizeDatasetModality(row.modality || "image+text");
+  modalitySelection.value = form.modality.split("+");
   form.tags = [...(row.tags || [])];
   tagsInput.value = form.tags.join(", ");
   dialogVisible.value = true;
+}
+
+function syncFormModality() {
+  form.modality = normalizeDatasetModality(modalitySelection.value);
 }
 
 function parseTags() {
@@ -134,6 +146,11 @@ async function submit() {
     ElMessage.warning("请填写数据集名称");
     return;
   }
+  syncFormModality();
+  if (!form.modality) {
+    ElMessage.warning("至少选择一种数据模态");
+    return;
+  }
   parseTags();
   saving.value = true;
   try {
@@ -146,13 +163,18 @@ async function submit() {
       });
       ElMessage.success("数据集已更新");
     } else {
-      await store.createDataset({
+      const created = await store.createDataset({
         name: form.name.trim(),
         description: form.description?.trim() || "",
         modality: form.modality,
         tags: form.tags,
       });
       ElMessage.success("数据集已创建");
+      if (createAndUpload.value) {
+        dialogVisible.value = false;
+        router.push(`/ops/data/import/${created.id}?tab=samples`);
+        return;
+      }
     }
     dialogVisible.value = false;
     await fetchData();
@@ -229,7 +251,11 @@ watch(
           <el-select v-model="filters.modality" clearable placeholder="全部模态" class="!w-[180px]">
             <el-option label="图片" value="image" />
             <el-option label="文本" value="text" />
-            <el-option label="图片 + 文本" value="image_text" />
+            <el-option label="视频" value="video" />
+            <el-option label="图片 + 视频" value="image+video" />
+            <el-option label="图片 + 文本" value="image+text" />
+            <el-option label="视频 + 文本" value="video+text" />
+            <el-option label="图片 + 视频 + 文本" value="image+video+text" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
@@ -264,7 +290,7 @@ watch(
           <template #default="{ row }">
             <div class="compact-stack">
               <span>总数 {{ row.sample_count }}</span>
-              <span>图 {{ row.image_sample_count }} / 文 {{ row.text_sample_count }}</span>
+              <span>图 {{ row.image_sample_count }} / 视 {{ row.video_sample_count }} / 文 {{ row.text_sample_count }}</span>
             </div>
           </template>
         </el-table-column>
@@ -311,14 +337,17 @@ watch(
           <el-input v-model="form.description" type="textarea" :rows="3" maxlength="2000" show-word-limit />
         </el-form-item>
         <el-form-item label="支持模态">
-          <el-radio-group v-model="form.modality">
-            <el-radio value="image">图片</el-radio>
-            <el-radio value="text">文本</el-radio>
-            <el-radio value="image_text">图片 + 文本</el-radio>
-          </el-radio-group>
+          <el-checkbox-group v-model="modalitySelection">
+            <el-checkbox value="image">图片</el-checkbox>
+            <el-checkbox value="video">视频</el-checkbox>
+            <el-checkbox value="text">文本</el-checkbox>
+          </el-checkbox-group>
         </el-form-item>
         <el-form-item label="标签">
           <el-input v-model="tagsInput" placeholder="用逗号分隔，例如：缺陷, OLED, 训练集" />
+        </el-form-item>
+        <el-form-item v-if="!editingId" label="创建后操作">
+          <el-switch v-model="createAndUpload" active-text="创建后立即添加数据" />
         </el-form-item>
       </el-form>
       <template #footer>
