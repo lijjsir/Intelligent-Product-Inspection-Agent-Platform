@@ -2,9 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useGpuInfraStore } from "@/stores/gpu-infra.store";
 import type { GpuComputeNode } from "@/types/gpu-infra.types";
 
+const AUTO_REFRESH_STORAGE_KEY = "piap_gpu_monitor_auto_refresh";
 const store = useGpuInfraStore();
 const drawerOpen = ref(false);
 const editingId = ref("");
@@ -12,7 +14,7 @@ const testingId = ref("");
 const refreshingId = ref("");
 const search = ref("");
 const statusFilter = ref("all");
-const autoRefresh = ref(false);
+const autoRefresh = ref(readAutoRefreshPreference());
 const detailNode = ref<GpuComputeNode | null>(null);
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 const form = reactive({
@@ -48,6 +50,16 @@ const detailDrawerOpen = computed({
     if (!open) detailNode.value = null;
   },
 });
+
+function readAutoRefreshPreference() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "true";
+}
+
+function persistAutoRefreshPreference(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(enabled));
+}
 
 function resetForm() {
   editingId.value = "";
@@ -171,30 +183,35 @@ function syncAutoRefresh() {
   stopAutoRefresh();
   if (!autoRefresh.value) return;
   refreshTimer = setInterval(() => {
-    store.fetchAll().catch(() => {});
+    store.fetchAll({ silent: true }).catch(() => {});
   }, 15000);
 }
 
 onMounted(() => {
   store.fetchAll();
 });
-watch(autoRefresh, syncAutoRefresh);
+watch(
+  autoRefresh,
+  (enabled) => {
+    persistAutoRefreshPreference(enabled);
+    syncAutoRefresh();
+  },
+  { immediate: true },
+);
 onBeforeUnmount(stopAutoRefresh);
 </script>
 
 <template>
   <div class="flex flex-col gap-5">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h2 class="text-2xl font-bold text-zinc-900">GPU 调度</h2>
-        <p class="mt-2 text-sm text-zinc-500">管理 SSH 裸机 GPU 节点，供训练、微调和离线评测调度使用。</p>
-      </div>
-      <div class="flex gap-3">
-        <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动刷新" />
-        <el-button @click="store.fetchAll()" :loading="store.loading">刷新列表</el-button>
-        <el-button type="primary" @click="openCreate">新增节点</el-button>
-      </div>
-    </div>
+    <AlgoWorkspaceHero title="GPU 调度" description="管理 SSH 裸机 GPU 节点，供训练、微调和离线评测调度使用。">
+      <template #actions>
+        <div class="flex gap-3">
+          <el-switch v-model="autoRefresh" active-text="自动刷新" inactive-text="手动刷新" />
+          <el-button @click="store.fetchAll()" :loading="store.loading">刷新列表</el-button>
+          <el-button type="primary" @click="openCreate">新增节点</el-button>
+        </div>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="grid gap-4 md:grid-cols-4">
       <el-card v-for="item in summaryCards" :key="item.label" shadow="never">

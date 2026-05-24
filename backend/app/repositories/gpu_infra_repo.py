@@ -51,6 +51,20 @@ class GpuComputeNodeRepository:
         )
         return list(rows)
 
+    async def list_all(self) -> list[GpuComputeNode]:
+        rows = (
+            (
+                await self._session.execute(
+                    select(GpuComputeNode)
+                    .where(GpuComputeNode.deleted_at.is_(None))
+                    .order_by(GpuComputeNode.org_id.asc(), GpuComputeNode.updated_at.desc(), GpuComputeNode.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
     async def list_online(self, *, org_id: str) -> list[GpuComputeNode]:
         rows = (
             (

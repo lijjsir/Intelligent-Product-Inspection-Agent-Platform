@@ -2,6 +2,7 @@
 import { onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
 import { useExperimentStore } from "@/stores/experiment.store";
@@ -83,12 +84,7 @@ function populateForm(item: {
 
 <template>
   <div v-if="!datasetStore.items.length" class="flex flex-col gap-5">
-    <section class="hero">
-      <div>
-        <h2>微调管理</h2>
-        <p>管理 LoRA 微调任务，直接绑定源数据集与 Base Model。</p>
-      </div>
-    </section>
+    <AlgoWorkspaceHero title="微调管理" description="管理 LoRA 微调任务，直接绑定源数据集与 Base Model。" />
     <section class="card-surface p-8 text-center text-zinc-500">
       暂无可用数据集，请先到“数据接入”准备训练数据。
     </section>

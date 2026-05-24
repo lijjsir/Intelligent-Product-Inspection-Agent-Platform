@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDeploymentStore } from "@/stores/deployment.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
 import { useExperimentStore } from "@/stores/experiment.store";
@@ -54,12 +55,7 @@ const availableTargets = computed(() =>
 
 <template>
   <div v-if="!evalStore.items.length || (!fineTuneStore.items.some((item) => item.status === 'completed') && !deploymentStore.items.some((item) => item.status === 'completed'))" class="flex flex-col gap-5">
-    <section class="hero">
-      <div>
-        <h2>离线评测</h2>
-        <p>维护离线评测任务，关联评测集与微调或部署目标。</p>
-      </div>
-    </section>
+    <AlgoWorkspaceHero title="离线评测" description="维护离线评测任务，关联评测集与微调或部署目标。" />
     <section class="card-surface p-8 text-center text-zinc-500">
       请先准备评测集，以及至少一个已完成的微调或部署资源。
     </section>

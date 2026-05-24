@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useModelConfigStore } from "@/stores/model_config.store";
 import type { ModelConfigPayload, ModelType } from "@/types/governance.types";
 
@@ -219,16 +221,14 @@ onMounted(() => {
 
 <template>
   <div class="flex flex-col gap-5">
-    <div class="hero">
-      <div>
-        <h2>Base Model 注册</h2>
-        <p>维护可用于 LoRA 微调的基础模型来源、命令模板与健康状态。</p>
-      </div>
-      <div class="flex gap-3">
-        <el-button @click="checkAll" :loading="checkingAll">全部检测</el-button>
-        <el-button type="primary" @click="openCreate">新增 Base Model</el-button>
-      </div>
-    </div>
+    <AlgoWorkspaceHero title="Base Model 注册" description="维护可用于 LoRA 微调的基础模型来源、命令模板与健康状态。">
+      <template #actions>
+        <div class="flex gap-3">
+          <el-button @click="checkAll" :loading="checkingAll">全部检测</el-button>
+          <el-button type="primary" @click="openCreate">新增 Base Model</el-button>
+        </div>
+      </template>
+    </AlgoWorkspaceHero>
 
     <el-card shadow="never">
       <el-table :data="store.items" v-loading="store.loading">

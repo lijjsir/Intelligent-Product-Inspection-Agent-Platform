@@ -680,6 +680,19 @@ PY"""
             counts[key] = counts.get(key, 0) + 1
         return counts
 
+    async def poll_all_nodes(self) -> dict[str, int]:
+        rows = await self._nodes.list_all()
+        counts = {"online": 0, "offline": 0, "error": 0, "disabled": 0}
+        for row in rows:
+            if str(row.status or "").lower() == "disabled":
+                counts["disabled"] += 1
+                continue
+            scoped = GpuNodeService(self._session, str(row.org_id), self._user_id or str(row.created_by or "system"))
+            serialized, _ = await scoped.probe_node(row.id)
+            key = str(serialized.status or "offline")
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
     async def allocate_leases(self, *, resource_type: str, resource_id: str, requested_gpu_count: int) -> GpuLeaseRecord:
         record = await self._scheduling.allocate(
             org_id=self._org_id,

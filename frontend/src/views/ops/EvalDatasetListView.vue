@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
 import type { AlgoResourceStatus } from "@/types/algo-workspace.types";
@@ -204,13 +205,14 @@ watch(sourceDatasetId, async (next, prev) => {
 
 <template>
   <div class="eval-page">
-    <section class="hero">
-      <div>
-        <h2>测试集管理</h2>
-        <p>基于现有数据集创建私有评测集快照，支持后续追加和移除样本。</p>
-      </div>
-      <el-button type="primary" @click="openCreate">新增评测集</el-button>
-    </section>
+    <AlgoWorkspaceHero
+      title="测试集管理"
+      description="基于现有数据集创建私有评测集快照，支持后续追加和移除样本。"
+    >
+      <template #actions>
+        <el-button type="primary" @click="openCreate">新增评测集</el-button>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="card-surface p-4">
       <div class="toolbar">
@@ -327,27 +329,6 @@ watch(sourceDatasetId, async (next, prev) => {
   display: flex;
   flex-direction: column;
   gap: 20px;
-}
-
-.hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  padding: 24px;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #eef6ee, #fff7eb);
-}
-
-.hero h2 {
-  margin: 0 0 8px;
-  font-size: 28px;
-  color: #17212c;
-}
-
-.hero p {
-  margin: 0;
-  color: #526071;
 }
 
 .toolbar {

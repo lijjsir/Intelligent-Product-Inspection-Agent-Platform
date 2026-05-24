@@ -2781,4 +2781,6 @@ async def poll_gpu_nodes_pipeline(
 ) -> dict[str, int]:
     async with get_session() as session:
         service = GpuNodeService(session, org_id, user_id)
-        return await service.poll_nodes()
+        if org_id:
+            return await service.poll_nodes()
+        return await service.poll_all_nodes()
