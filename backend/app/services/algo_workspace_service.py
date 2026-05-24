@@ -716,7 +716,7 @@ class AlgoWorkspaceService(TenantAwareService):
         )
         job_type = PROCESSING_JOB_TYPE_MAP[processing_type]
         latest_job = next((job for job in jobs if job.job_type == job_type and job.deleted_at is None), None)
-        summary = dict((resource.result_summary if resource else {}) or self._default_processing_summary(processing_type))
+        summary = self._build_processing_summary(resource=resource, processing_type=processing_type)
         phases = list(summary.get("phases") or self._default_phases(processing_type))
         warnings = list(summary.get("warnings") or [])
         return DatasetProcessingStatusResponse(
@@ -745,8 +745,11 @@ class AlgoWorkspaceService(TenantAwareService):
         only_confirmed: bool | None = None,
         sample_id: str | None = None,
     ) -> DatasetProcessingResultsResponse:
-        resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type=processing_type)
-        summary = dict(resource.result_summary or self._default_processing_summary(processing_type))
+        await self._require_dataset(dataset_id)
+        resource = await self._find_processing_resource(dataset_id=dataset_id, processing_type=processing_type)
+        summary = self._build_processing_summary(resource=resource, processing_type=processing_type)
+        if resource is None:
+            return DatasetProcessingResultsResponse(summary=summary)
         if processing_type == "kg":
             entities = await self._kg_repo.list_entities(org_id=self._org_id, knowledge_graph_id=resource.id, created_by=self._user_id)
             relations = await self._kg_repo.list_relations(org_id=self._org_id, knowledge_graph_id=resource.id, created_by=self._user_id)
@@ -859,7 +862,10 @@ class AlgoWorkspaceService(TenantAwareService):
         return None
 
     async def get_processing_subgraph(self, *, dataset_id: str, entity_type: str | None = None, keyword: str | None = None) -> dict[str, Any]:
-        resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
+        await self._require_dataset(dataset_id)
+        resource = await self._find_processing_resource(dataset_id=dataset_id, processing_type="kg")
+        if resource is None:
+            return {"nodes": [], "edges": [], "stats": {"entity_count": 0, "relation_count": 0, "entity_types": {}}}
         entities = await self._kg_repo.list_entities(org_id=self._org_id, knowledge_graph_id=resource.id, created_by=self._user_id)
         relations = await self._kg_repo.list_relations(org_id=self._org_id, knowledge_graph_id=resource.id, created_by=self._user_id)
         if entity_type:
@@ -1138,7 +1144,10 @@ class AlgoWorkspaceService(TenantAwareService):
         return {"created_sample_ids": created_ids, "proposal_ids": proposal_ids, "history": history_entries}
 
     async def get_augmentation_history(self, *, dataset_id: str) -> dict[str, Any]:
-        resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="augmentation")
+        await self._require_dataset(dataset_id)
+        resource = await self._find_processing_resource(dataset_id=dataset_id, processing_type="augmentation")
+        if resource is None:
+            return {"batch_id": "", "history": []}
         history = await self._proposal_repo.list_history(org_id=self._org_id, dataset_id=dataset_id, created_by=self._user_id)
         return {
             "batch_id": resource.id,
@@ -1909,6 +1918,12 @@ class AlgoWorkspaceService(TenantAwareService):
         return await self._resolve_execution_mode()
 
     async def _require_processing_resource(self, *, dataset_id: str, processing_type: str):
+        resource = await self._find_processing_resource(dataset_id=dataset_id, processing_type=processing_type)
+        if resource is None:
+            raise NotFoundError(f"{processing_type} resource not found")
+        return resource
+
+    async def _find_processing_resource(self, *, dataset_id: str, processing_type: str):
         await self._require_dataset(dataset_id)
         model = PROCESSING_MODEL_MAP[processing_type]
         rows, _ = await self._resources.list_for_owner(
@@ -1920,7 +1935,7 @@ class AlgoWorkspaceService(TenantAwareService):
             extra_filters=[model.dataset_id == dataset_id],
         )
         if not rows:
-            raise NotFoundError(f"{processing_type} resource not found")
+            return None
         return rows[0]
 
     async def _resolve_eval_item_payloads(
@@ -2532,6 +2547,22 @@ class AlgoWorkspaceService(TenantAwareService):
         if processing_type == "augmentation":
             return {**base, "proposals": []}
         return {**base, "artifact": None}
+
+    @classmethod
+    def _build_processing_summary(cls, *, resource, processing_type: str) -> dict[str, Any]:
+        summary = dict((resource.result_summary if resource else {}) or cls._default_processing_summary(processing_type))
+        if resource is None:
+            summary_block = dict(summary.get("summary") or {})
+            summary_block["status"] = "idle"
+            summary_block.setdefault("current_stats", {})
+            summary_block.setdefault("degraded_mode", False)
+            summary_block.setdefault("degraded_reason", None)
+            summary["summary"] = summary_block
+            summary["current_stats"] = dict(summary.get("current_stats") or {})
+            summary["warnings"] = list(summary.get("warnings") or [])
+            summary["phases"] = list(summary.get("phases") or cls._default_phases(processing_type))
+            summary["progress"] = 0
+        return summary
 
     @staticmethod
     def _default_phases(processing_type: str) -> list[dict[str, Any]]:

@@ -71,6 +71,49 @@ class DatasetRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_name(
+        self,
+        *,
+        org_id: str,
+        owner_user_id: str,
+        name: str,
+        exclude_dataset_id: str | None = None,
+    ) -> Dataset | None:
+        conditions = [
+            Dataset.org_id == org_id,
+            Dataset.created_by == owner_user_id,
+            Dataset.name == name,
+            Dataset.deleted_at.is_(None),
+        ]
+        if exclude_dataset_id:
+            conditions.append(Dataset.id != exclude_dataset_id)
+        result = await self._session.execute(select(Dataset).where(*conditions).limit(1))
+        return result.scalar_one_or_none()
+
+    async def get_deleted_by_name(
+        self,
+        *,
+        org_id: str,
+        owner_user_id: str,
+        name: str,
+        exclude_dataset_id: str | None = None,
+    ) -> Dataset | None:
+        conditions = [
+            Dataset.org_id == org_id,
+            Dataset.created_by == owner_user_id,
+            Dataset.name == name,
+            Dataset.deleted_at.is_not(None),
+        ]
+        if exclude_dataset_id:
+            conditions.append(Dataset.id != exclude_dataset_id)
+        result = await self._session.execute(
+            select(Dataset)
+            .where(*conditions)
+            .order_by(Dataset.deleted_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def save(self, obj: Dataset, payload: dict) -> Dataset:
         for key, value in payload.items():
             setattr(obj, key, value)
@@ -80,6 +123,7 @@ class DatasetRepository:
 
     async def soft_delete(self, obj: Dataset) -> Dataset:
         obj.deleted_at = utcnow()
+        obj.name = f"{obj.name}__deleted__{obj.id[:8]}"
         await self._session.flush()
         return obj
 
@@ -91,6 +135,7 @@ class DatasetRepository:
             select(
                 func.count(DatasetSample.id).label("sample_count"),
                 func.sum(func.if_(DatasetSample.sample_type == "image", 1, 0)).label("image_count"),
+                func.sum(func.if_(DatasetSample.sample_type == "video", 1, 0)).label("video_count"),
                 func.sum(func.if_(DatasetSample.sample_type == "text", 1, 0)).label("text_count"),
                 func.coalesce(func.sum(DatasetSample.size_bytes), 0).label("uploaded_bytes"),
             ).where(
@@ -98,9 +143,10 @@ class DatasetRepository:
                 DatasetSample.deleted_at.is_(None),
             )
         )
-        sample_count, image_count, text_count, uploaded_bytes = counts.one()
+        sample_count, image_count, video_count, text_count, uploaded_bytes = counts.one()
         obj.sample_count = int(sample_count or 0)
         obj.image_sample_count = int(image_count or 0)
+        obj.video_sample_count = int(video_count or 0)
         obj.text_sample_count = int(text_count or 0)
         obj.uploaded_bytes = int(uploaded_bytes or 0)
         await self._session.flush()

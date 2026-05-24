@@ -1,4 +1,4 @@
-import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
 
 export const governanceRoutes = [
   // Admin section

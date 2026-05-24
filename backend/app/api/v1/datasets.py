@@ -142,6 +142,20 @@ async def upload_image_samples(
     return ResponseEnvelope(data=data)
 
 
+@router.post("/{dataset_id}/samples/videos", response_model=ResponseEnvelope[list[DatasetSampleResponse]], status_code=status.HTTP_201_CREATED)
+async def upload_video_samples(
+    dataset_id: str,
+    files: list[UploadFile] = File(...),
+    current: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    require_role("dataset", current.role)
+    service = DatasetService(db, current.org_id, current.user_id)
+    data = await service.upload_video_samples(dataset_id=dataset_id, files=files)
+    await db.commit()
+    return ResponseEnvelope(data=data)
+
+
 @router.post("/{dataset_id}/upload/init", response_model=ResponseEnvelope[DatasetUploadInitResponse], status_code=status.HTTP_201_CREATED)
 async def init_dataset_upload(
     dataset_id: str,
