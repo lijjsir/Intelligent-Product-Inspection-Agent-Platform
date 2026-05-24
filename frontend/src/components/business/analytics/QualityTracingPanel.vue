@@ -26,8 +26,12 @@ const riskyCount = computed(
 
 onMounted(() => refreshTraces());
 
-function refreshTraces() {
-  return store.fetchTraces({ source: source.value });
+function refreshTraces(includeRemote = false) {
+  return store.fetchTraces({ source: source.value, include_remote: includeRemote });
+}
+
+function refreshRemoteTraces() {
+  return refreshTraces(true);
 }
 
 function extractTraceId(traceUrl: string): string {
@@ -109,7 +113,7 @@ function langfuseStatus(row: QualityTraceItem) {
 }
 
 function canOpenLangfuse(row: QualityTraceItem) {
-  return langfuseStatus(row) === "synced" && !!row.trace_url;
+  return !!row.trace_url;
 }
 
 function langfuseStatusType(row: QualityTraceItem) {
@@ -138,6 +142,9 @@ function metaAlertTitle() {
   const meta = traceMeta.value;
   if (!meta) return "";
   if (meta.langfuse_status === "ok") {
+    if (meta.canonical_source === "local_fast") {
+      return "Langfuse 已连接，当前先展示本地快速记录；需要时再做远端校验";
+    }
     return meta.canonical_source === "langfuse"
       ? "Langfuse 已连接，列表以远端 Trace 为准"
       : "Langfuse 已连接，当前无远端 Trace，显示本地记录";
@@ -174,8 +181,9 @@ function metaAlertTitle() {
         <span class="qt-summary-label">风险记录</span>
       </div>
       <div class="qt-spacer" />
-      <el-segmented v-model="source" size="small" :options="sourceOptions" @change="refreshTraces" />
+      <el-segmented v-model="source" size="small" :options="sourceOptions" @change="() => refreshTraces()" />
       <el-button size="small" @click="refreshTraces">刷新</el-button>
+      <el-button size="small" plain @click="refreshRemoteTraces">远端校验</el-button>
     </div>
 
     <el-table

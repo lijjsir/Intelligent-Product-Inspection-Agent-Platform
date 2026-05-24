@@ -99,7 +99,7 @@ function markOverviewLoaded() {
       <div>
         <p class="eyebrow">PIAP Intelligence Desk</p>
         <h2>分析中心</h2>
-        <p class="subtitle">这里统一查看通过率、幻觉率、风险演化和质量追踪；模型 Token 与成本统一在调用监控查看。</p>
+        <p class="subtitle">这里统一查看通过率、幻觉率、风险演化和质量追踪；模型 Token 与成本统一在模型用量查看。</p>
         <div class="scope-row">
           <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
           <el-tag v-if="dateRange" type="info" effect="plain">

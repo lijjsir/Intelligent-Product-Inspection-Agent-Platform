@@ -162,7 +162,7 @@ onMounted(() => {
 
       <el-card v-if="severityDistribution.length" shadow="never" class="panel-card">
         <template #header>
-          <div class="card-head"><strong>严重度分布</strong><span>当前页面告警按严重度统计</span></div>
+          <div class="card-head"><strong>告警分布</strong><span>按当前筛选结果统计告警严重度分布</span></div>
         </template>
         <div class="distro-list">
           <div v-for="s in severityDistribution" :key="s.key" class="distro-row">

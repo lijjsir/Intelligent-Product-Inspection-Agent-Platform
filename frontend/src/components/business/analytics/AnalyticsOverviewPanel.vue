@@ -240,7 +240,7 @@ function goToProductLineTaskList(productLine: string) {
         <div class="card-head">
           <div>
             <strong>模型质量简表</strong>
-            <span>这里只看通过率和幻觉率；Token 与成本已统一到调用监控</span>
+            <span>这里只看通过率和幻觉率；Token 与成本已统一到模型用量</span>
           </div>
         </div>
       </template>

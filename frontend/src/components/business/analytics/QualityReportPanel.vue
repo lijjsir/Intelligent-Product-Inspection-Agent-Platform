@@ -37,16 +37,16 @@ const summaryCards = computed(() => {
       tone: r.chat_avg_trust_score >= 0.8 ? "success" : r.chat_avg_trust_score >= 0.6 ? "warning" : "danger",
     },
     {
-      label: "聊天幻觉率",
-      value: formatRate(r.chat_hallucination_rate),
-      sub: "可信度评分中判为高幻觉风险的占比",
-      tone: r.chat_hallucination_rate <= 0.05 ? "success" : "danger",
+      label: "聊天幻觉风险",
+      value: formatRate(r.chat_avg_hallucination_risk),
+      sub: `高风险占比 ${formatRate(r.chat_hallucination_rate)}`,
+      tone: r.chat_avg_hallucination_risk >= 0.6 ? "danger" : r.chat_avg_hallucination_risk >= 0.3 ? "warning" : "success",
     },
     {
-      label: "过度自信率",
-      value: formatRate(r.chat_overconfidence_rate),
-      sub: "可信度评分中判为高自信风险的占比",
-      tone: r.chat_overconfidence_rate <= 0.1 ? "success" : "warning",
+      label: "过度自信风险",
+      value: formatRate(r.chat_avg_overconfidence),
+      sub: `高风险占比 ${formatRate(r.chat_overconfidence_rate)}`,
+      tone: r.chat_avg_overconfidence >= 0.6 ? "danger" : r.chat_avg_overconfidence >= 0.3 ? "warning" : "success",
     },
     {
       label: "引用率",
@@ -86,6 +86,9 @@ const metaTitle = computed(() => {
   const r = report.value;
   if (!meta) return "";
   if (meta.langfuse_status === "ok") {
+    if (meta.canonical_source === "local_fast") {
+      return `Langfuse 已连接 · 当前先展示本地快速记录 · 可评估消息 ${r?.chat_score_count ?? 0}/${r?.chat_message_count ?? 0}`;
+    }
     return `Langfuse 已连接 · 远端 ${meta.item_count || 0} 条 Trace · 可评估消息 ${r?.chat_score_count ?? 0}/${r?.chat_message_count ?? 0}`;
   }
   if (meta.langfuse_status === "error") {
@@ -116,7 +119,7 @@ const metaType = computed(() => {
 
     <section>
       <h3 class="section-title">聊天质量评估</h3>
-      <p class="section-desc">把可信度评分、反馈覆盖率和模型表现分开看，避免把“反馈占比”误读成“全量结果占比”。</p>
+      <p class="section-desc">这里同时展示平均风险和高风险占比，避免“明明有风险却看到 0%”的误读。</p>
       <div class="card-grid">
         <div v-for="card in summaryCards" :key="card.label" class="qr-card" :class="card.tone">
           <span class="qr-card-label">{{ card.label }}</span>
