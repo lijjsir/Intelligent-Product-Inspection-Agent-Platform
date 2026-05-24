@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 import { useAlertStore } from "@/stores/alert.store";
-import { ALERT_SEVERITY_LABELS } from "@/constants/spec";
 import { useTaskStore } from "@/stores/task.store";
 import { useResultStore } from "@/stores/result.store";
 import type { InspectionTask } from "@/types/task.types";
@@ -25,6 +24,11 @@ const runningTasks = computed(() => recentTasks.value.filter((item) => ["queued"
 const failedTasks = computed(() => recentTasks.value.filter((item) => item.status === "failed"));
 const completedWithoutResult = computed(() => recentTasks.value.filter((item) => item.status === "done" && !item.has_result));
 const passRate = computed(() => overview.value ? `${(overview.value.pass_rate * 100).toFixed(1)}%` : "-");
+const riskSummary = computed(() => {
+  if (criticalAlerts.value.length || failedTasks.value.length) return "优先处理告警和失败任务";
+  if (completedWithoutResult.value.length || runningTasks.value.length) return "重点盯执行队列和结果落库";
+  return "今天的队列状态稳定，可以转去分析中心看趋势";
+});
 const healthTone = computed(() => {
   if (criticalAlerts.value.length || failedTasks.value.length) return "danger";
   if (completedWithoutResult.value.length || runningTasks.value.length) return "warning";
@@ -33,17 +37,20 @@ const healthTone = computed(() => {
 const healthLabel = computed(() => {
   if (healthTone.value === "danger") return "需要处理";
   if (healthTone.value === "warning") return "运行中";
-  return "正常";
+  return "稳定";
 });
+
 const quickLinks = [
   { label: "任务查看", path: "/ops/tasks" },
   { label: "分析中心", path: "/ops/analytics" },
   { label: "告警管理", path: "/ops/alerts" },
-  { label: "调用监控", path: "/ops/calls" },
-  { label: "数据质量", path: "/ops/data-quality" },
-  { label: "业务报表", path: "/ops/reports" },
+  { label: "模型用量", path: "/ops/calls" },
+];
+
+const supportLinks = [
   { label: "Agent 查看", path: "/ops/agents" },
   { label: "质检门槛查看", path: "/ops/inspection-specs" },
+  { label: "个人设置", path: "/app/profile" },
 ];
 
 function statusType(status: string) {
@@ -62,7 +69,13 @@ function formatTime(value?: string | null) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function go(path: string) {
@@ -95,20 +108,37 @@ onMounted(fetchData);
 
 <template>
   <div class="ops-shell" v-loading="loading">
-    <section class="ops-header">
-      <div>
-        <p class="eyebrow">Platform Ops</p>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Platform Ops Desk</p>
         <h2>平台运维工作台</h2>
-        <p class="sub">聚焦今天要处理的任务、告警和数据缺口；长期趋势留在分析中心。</p>
+        <p class="sub">
+          先在这里处理今天要动作的任务、告警和人工审核，再去分析中心看趋势、去模型用量看 Token 和成本。
+        </p>
+
+        <div class="hero-pill-row">
+          <span class="hero-pill">总任务 {{ taskStore.total.toLocaleString() }}</span>
+          <span class="hero-pill">待处理告警 {{ openAlerts.length }}</span>
+          <span class="hero-pill">分析中心通过率 {{ passRate }}</span>
+        </div>
       </div>
-      <el-tag :type="healthTone" effect="dark" size="large">{{ healthLabel }}</el-tag>
+
+      <div class="hero-side">
+        <el-tag :type="healthTone" effect="dark" size="large" class="health-tag">{{ healthLabel }}</el-tag>
+        <p class="hero-note">{{ riskSummary }}</p>
+        <div class="hero-actions">
+          <el-button v-for="item in quickLinks" :key="item.path" @click="go(item.path)">
+            {{ item.label }}
+          </el-button>
+        </div>
+      </div>
     </section>
 
     <section class="metric-row">
       <button class="metric-card" @click="go('/ops/tasks')">
-        <span class="mc-label">可见任务总数</span>
+        <span class="mc-label">任务总数</span>
         <strong>{{ taskStore.total.toLocaleString() }}</strong>
-        <span class="mc-sub">点击查看具体任务</span>
+        <span class="mc-sub">进入任务查看做逐条排查</span>
       </button>
       <button class="metric-card" @click="go('/ops/tasks?status=running')">
         <span class="mc-label">执行中任务</span>
@@ -118,22 +148,22 @@ onMounted(fetchData);
       <button class="metric-card danger" @click="go('/ops/tasks?status=failed')">
         <span class="mc-label">失败任务</span>
         <strong>{{ failedTasks.length }}</strong>
-        <span class="mc-sub">需要排查执行日志</span>
+        <span class="mc-sub">优先检查执行链路和日志</span>
       </button>
       <button class="metric-card warning" @click="go('/ops/alerts')">
         <span class="mc-label">待处理告警</span>
         <strong>{{ openAlerts.length }}</strong>
-        <span class="mc-sub">{{ criticalAlerts.length }} 条严重</span>
+        <span class="mc-sub">{{ criticalAlerts.length }} 条高优先级</span>
       </button>
       <button class="metric-card primary" @click="go('/app/results?verdict=manual_required')">
         <span class="mc-label">待人工审核</span>
         <strong>{{ pendingReviewCount }}</strong>
-        <span class="mc-sub">需要专家复核</span>
+        <span class="mc-sub">需要专家进入结果页复核</span>
       </button>
       <button class="metric-card" @click="go('/ops/analytics')">
         <span class="mc-label">分析中心通过率</span>
         <strong>{{ passRate }}</strong>
-        <span class="mc-sub">趋势、分布和模型对比</span>
+        <span class="mc-sub">趋势、风险和质量追踪统一查看</span>
       </button>
     </section>
 
@@ -141,11 +171,12 @@ onMounted(fetchData);
       <div class="panel">
         <div class="panel-head">
           <div>
-            <h3>最近质检任务</h3>
-            <p>这里解释“总任务数”背后是哪几个任务。</p>
+            <h3>最近任务</h3>
+            <p>把上面的大盘数字落到具体任务，方便直接点进详情。</p>
           </div>
           <el-button size="small" type="primary" plain @click="go('/ops/tasks')">全部任务</el-button>
         </div>
+
         <el-table :data="recentTasks" size="small" class="task-table" @row-click="goTask">
           <el-table-column prop="id" label="任务 ID" min-width="220" show-overflow-tooltip />
           <el-table-column prop="product_id" label="产品" width="120" />
@@ -165,35 +196,56 @@ onMounted(fetchData);
       <div class="panel side-panel">
         <div class="panel-head compact">
           <div>
-            <h3>待处理事项</h3>
-            <p>工作台只放需要动作的队列。</p>
+            <h3>待处理队列</h3>
+            <p>这里只放需要动作的项目，不再堆趋势型信息。</p>
           </div>
         </div>
+
         <div class="queue-list">
-          <button v-if="pendingReviewCount" class="queue-item primary" @click="go('/app/results?verdict=manual_required')">
+          <button
+            v-if="pendingReviewCount"
+            class="queue-item primary"
+            @click="go('/app/results?verdict=manual_required')"
+          >
             <strong>{{ pendingReviewCount }} 条结果待人工审核</strong>
-            <span>需专家登录进行复核裁定</span>
+            <span>进入结果列表做最终复核和裁定</span>
           </button>
-          <button v-if="failedTasks.length" class="queue-item danger" @click="go('/ops/tasks?status=failed')">
+
+          <button
+            v-if="failedTasks.length"
+            class="queue-item danger"
+            @click="go('/ops/tasks?status=failed')"
+          >
             <strong>{{ failedTasks.length }} 个任务失败</strong>
-            <span>查看任务详情和执行日志</span>
+            <span>建议先看任务详情，再对照告警管理排查</span>
           </button>
-          <button v-if="completedWithoutResult.length" class="queue-item warning" @click="go('/ops/tasks?status=done')">
-            <strong>{{ completedWithoutResult.length }} 个完成任务缺少结果</strong>
-            <span>核对结果落库和稳定性报告</span>
+
+          <button
+            v-if="completedWithoutResult.length"
+            class="queue-item warning"
+            @click="go('/ops/tasks?status=done')"
+          >
+            <strong>{{ completedWithoutResult.length }} 个任务完成但未落结果</strong>
+            <span>重点核对结果入库和后续链路</span>
           </button>
+
           <button v-for="alert in openAlerts.slice(0, 5)" :key="alert.id" class="queue-item" @click="go('/ops/alerts')">
             <strong>{{ alert.title }}</strong>
             <span>{{ alert.severity }} · {{ formatTime(alert.created_at) }}</span>
           </button>
-          <el-empty v-if="!failedTasks.length && !completedWithoutResult.length && !openAlerts.length" description="暂无待处理事项" :image-size="56" />
+
+          <el-empty
+            v-if="!pendingReviewCount && !failedTasks.length && !completedWithoutResult.length && !openAlerts.length"
+            description="当前没有待处理事项"
+            :image-size="56"
+          />
         </div>
       </div>
     </section>
 
-    <section class="quick-row">
-      <el-button @click="fetchData">刷新</el-button>
-      <el-button v-for="item in quickLinks" :key="item.path" @click="go(item.path)">
+    <section class="support-row">
+      <el-button @click="fetchData">刷新数据</el-button>
+      <el-button v-for="item in supportLinks" :key="item.path" plain @click="go(item.path)">
         {{ item.label }}
       </el-button>
     </section>
@@ -203,39 +255,99 @@ onMounted(fetchData);
 <style scoped>
 .ops-shell {
   display: grid;
-  gap: 16px;
-  padding: 20px;
+  gap: 18px;
+  padding: 24px;
 }
 
-.ops-header {
+.hero {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 20px 22px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 24px;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 30%),
+    linear-gradient(135deg, #11263d 0%, #173f5f 48%, #0f766e 100%);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+.hero-copy {
+  max-width: 780px;
 }
 
 .eyebrow {
-  margin: 0 0 6px;
-  color: #64748b;
+  margin: 0 0 8px;
   font-size: 12px;
-  font-weight: 700;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
+  opacity: 0.76;
 }
 
-.ops-header h2 {
+.hero h2 {
   margin: 0;
-  color: #0f172a;
-  font-size: 24px;
+  font-size: 40px;
 }
 
 .sub {
-  margin: 8px 0 0;
-  color: #64748b;
+  margin: 12px 0 0;
+  color: rgba(248, 250, 252, 0.84);
+  line-height: 1.7;
+}
+
+.hero-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.hero-pill {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   font-size: 13px;
+  color: rgba(248, 250, 252, 0.92);
+}
+
+.hero-side {
+  display: flex;
+  min-width: 280px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.health-tag {
+  border-radius: 999px;
+  padding-inline: 12px;
+}
+
+.hero-note {
+  margin: 0;
+  text-align: right;
+  color: rgba(248, 250, 252, 0.82);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hero-actions :deep(.el-button) {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+
+.hero-actions :deep(.el-button:hover) {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .metric-row {
@@ -247,18 +359,21 @@ onMounted(fetchData);
 .metric-card {
   display: grid;
   gap: 4px;
-  min-height: 112px;
-  padding: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
+  min-height: 120px;
+  padding: 18px;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
   text-align: left;
   cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
 .metric-card:hover {
-  border-color: #93c5fd;
-  background: #f8fafc;
+  transform: translateY(-2px);
+  border-color: rgba(59, 130, 246, 0.24);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.08);
 }
 
 .metric-card strong {
@@ -288,6 +403,7 @@ onMounted(fetchData);
 .mc-sub {
   color: #94a3b8;
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .work-grid {
@@ -298,10 +414,11 @@ onMounted(fetchData);
 
 .panel {
   min-width: 0;
-  padding: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
+  padding: 18px;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
 }
 
 .panel-head {
@@ -319,13 +436,14 @@ onMounted(fetchData);
 .panel h3 {
   margin: 0;
   color: #0f172a;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .panel p {
   margin: 4px 0 0;
   color: #64748b;
   font-size: 12px;
+  line-height: 1.6;
 }
 
 .task-table {
@@ -334,19 +452,20 @@ onMounted(fetchData);
 
 .queue-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .queue-item {
   display: grid;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 14px;
   background: #f8fafc;
   text-align: left;
   cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
 }
 
 .queue-item:hover {
@@ -362,6 +481,7 @@ onMounted(fetchData);
 .queue-item span {
   color: #64748b;
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .queue-item.danger {
@@ -379,7 +499,7 @@ onMounted(fetchData);
   border-color: #bfdbfe;
 }
 
-.quick-row {
+.support-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -395,13 +515,26 @@ onMounted(fetchData);
   }
 }
 
-@media (max-width: 680px) {
+@media (max-width: 780px) {
   .ops-shell {
-    padding: 12px;
+    padding: 14px;
   }
 
-  .ops-header {
+  .hero {
     flex-direction: column;
+  }
+
+  .hero-side {
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .hero-note {
+    text-align: left;
+  }
+
+  .hero-actions {
+    justify-content: flex-start;
   }
 
   .metric-row {

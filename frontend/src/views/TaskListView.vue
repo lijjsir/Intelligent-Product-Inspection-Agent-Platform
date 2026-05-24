@@ -43,6 +43,14 @@ const createForm = ref({
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
 const isAdmin = computed(() => hasRole("admin"));
 const canCreateTask = computed(() => hasRole(["user", "expert"]));
+const isOpsView = computed(() => route.path.startsWith("/ops/"));
+const listBasePath = computed(() => (isOpsView.value ? "/ops/tasks" : "/app/tasks"));
+const pageTitle = computed(() => (isOpsView.value ? "任务查看" : "任务管理"));
+const pageDescription = computed(() =>
+  isOpsView.value
+    ? "这里查看平台侧已经物化的任务和执行状态，筛选、排查和跳转都保持在运维入口。"
+    : "这里展示用户侧创建和执行的检测任务，也可以继续新建任务。"
+);
 
 const rules: FormRules = {
   product_id: [
@@ -109,7 +117,7 @@ async function fetchSpecOptions() {
 function handleSearch() {
   resetPage();
   router.push({
-    path: "/app/tasks",
+    path: listBasePath.value,
     query: {
       ...(filters.value.status ? { status: filters.value.status } : {}),
       ...(filters.value.product_id ? { product_id: filters.value.product_id } : {}),
@@ -122,7 +130,7 @@ function handleSearch() {
 function handleReset() {
   filters.value = { status: "", product_id: "", ids: "" };
   resetPage();
-  router.push({ path: "/app/tasks", query: { page: "1" } });
+  router.push({ path: listBasePath.value, query: { page: "1" } });
 }
 
 function handleOpenCreate() {
@@ -336,8 +344,8 @@ watch(
   <div class="flex flex-col gap-5">
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
-        <h2 class="text-2xl font-bold text-zinc-900">任务管理</h2>
-        <p class="mt-2 text-sm text-zinc-500">这里展示所有真实物化后的检测任务。正式创建和执行只在质量检测任务页面完成。</p>
+        <h2 class="text-2xl font-bold text-zinc-900">{{ pageTitle }}</h2>
+        <p class="mt-2 text-sm text-zinc-500">{{ pageDescription }}</p>
       </div>
       <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
     </div>
@@ -385,7 +393,7 @@ watch(
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="router.push(`/app/tasks/${row.id}`)">查看详情</el-button>
+            <el-button link type="primary" size="small" @click="router.push(`${listBasePath}/${row.id}`)">查看详情</el-button>
             <el-button
               link
               type="danger"

@@ -384,6 +384,8 @@ class QualityReportResponse(BaseModel):
     chat_unscored_count: int = 0
     chat_scored_rate: float = 0.0
     chat_avg_trust_score: float = 0.0
+    chat_avg_hallucination_risk: float = 0.0
+    chat_avg_overconfidence: float = 0.0
     chat_hallucination_rate: float = 0.0
     chat_overconfidence_rate: float = 0.0
     chat_citation_rate: float = 0.0

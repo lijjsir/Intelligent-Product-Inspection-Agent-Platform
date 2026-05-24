@@ -22,7 +22,7 @@ export const useQualityStore = defineStore("quality", () => {
     }
   }
 
-  async function fetchTraces(params?: { source?: "all" | "inspection" | "chat"; limit?: number }) {
+  async function fetchTraces(params?: { source?: "all" | "inspection" | "chat"; limit?: number; include_remote?: boolean }) {
     tracesLoading.value = true;
     try {
       const { data } = await qualityApi.listTraces(params);

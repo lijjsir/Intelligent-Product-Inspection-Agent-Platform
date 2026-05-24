@@ -15,16 +15,16 @@ export const opsRoutes = [
 
 
   // Call monitor
-  { path: "calls", name: "ops-calls", component: () => import("@/views/ops/ModelMonitorView.vue"), meta: { title: "调用监控", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "calls", name: "ops-calls", component: () => import("@/views/ops/ModelMonitorView.vue"), meta: { title: "模型用量", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Data quality
-  { path: "data-quality", name: "ops-data-quality", component: () => import("@/views/ops/DataQualityView.vue"), meta: { title: "数据质量", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "data-quality", name: "ops-data-quality", redirect: { name: "ops-analytics", query: { tab: "quality" } }, meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Cost is part of the model call monitor now; keep the old URL as a safe redirect.
-  { path: "cost", name: "ops-cost", redirect: { name: "ops-calls" }, meta: { title: "调用监控", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
+  { path: "cost", name: "ops-cost", redirect: { name: "ops-calls" }, meta: { title: "模型用量", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Reports
-  { path: "reports", name: "ops-reports", component: () => import("@/views/ops/BizReportView.vue"), meta: { title: "业务报表", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "reports", name: "ops-reports", redirect: { name: "ops-analytics" }, meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Cross-domain readonly views exposed as top-level ops entries.
   { path: "agents", name: "ops-agents", component: () => import("@/views/ops/AgentManageView.vue"), meta: { title: "Agent 查看", roles: [ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },

@@ -63,6 +63,9 @@ describe("useMenu", () => {
     expect(titles).not.toContain("告警规则");
     expect(titles).toContain("Agent 查看");
     expect(titles).toContain("质检门槛查看");
+    expect(titles).toContain("模型用量");
+    expect(titles).not.toContain("数据质量");
+    expect(titles).not.toContain("业务报表");
     expect(titles).not.toContain("成本分析");
     expect(titles).not.toContain("稳定性查看");
     expect(titles).not.toContain("记忆治理");

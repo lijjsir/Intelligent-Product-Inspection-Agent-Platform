@@ -39,12 +39,13 @@ async def get_quality_report(
 async def list_quality_traces(
     limit: int = Query(default=100, ge=1, le=500),
     source: str = Query(default="all", pattern="^(all|inspection|chat)$"),
+    include_remote: bool = Query(default=False, description="Hydrate remote Langfuse traces on demand; default stays fast with local records"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     require_role("quality", current.role)
     service = QualityReportService(db, _scope_org_id(current))
-    result = await service.list_traces_with_meta(limit=limit, source=source)
+    result = await service.list_traces_with_meta(limit=limit, source=source, include_remote=include_remote)
     return ResponseEnvelope(
         data=QualityTraceListResponse(
             items=[QualityTraceItem(**item) for item in result["items"]],

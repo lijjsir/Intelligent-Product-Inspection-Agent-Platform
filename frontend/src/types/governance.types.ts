@@ -270,6 +270,8 @@ export interface QualityReport {
   chat_unscored_count: number;
   chat_scored_rate: number;
   chat_avg_trust_score: number;
+  chat_avg_hallucination_risk: number;
+  chat_avg_overconfidence: number;
   chat_hallucination_rate: number;
   chat_overconfidence_rate: number;
   chat_citation_rate: number;

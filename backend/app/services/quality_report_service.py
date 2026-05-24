@@ -180,11 +180,11 @@ class QualityReportService(TenantAwareService):
             for bucket, values in sorted(totals.items())
         ]
 
-    async def list_traces(self, limit: int = 100, source: str = "all") -> list[dict]:
-        result = await self.list_traces_with_meta(limit=limit, source=source)
+    async def list_traces(self, limit: int = 100, source: str = "all", include_remote: bool = True) -> list[dict]:
+        result = await self.list_traces_with_meta(limit=limit, source=source, include_remote=include_remote)
         return result["items"]
 
-    async def list_traces_with_meta(self, limit: int = 100, source: str = "all") -> dict:
+    async def list_traces_with_meta(self, limit: int = 100, source: str = "all", include_remote: bool = True) -> dict:
         api_client = LangfuseApiClient()
         meta: dict = {
             "langfuse_enabled": api_client.enabled,
@@ -193,7 +193,7 @@ class QualityReportService(TenantAwareService):
             "source": source,
             "canonical_source": "local",
         }
-        if api_client.enabled:
+        if api_client.enabled and include_remote:
             meta["canonical_source"] = "langfuse"
             traces, error = await self._fetch_traces_from_langfuse(source=source, limit=limit, api_client=api_client)
             local_traces = await self._list_traces_from_mysql(
@@ -214,6 +214,18 @@ class QualityReportService(TenantAwareService):
             meta["canonical_source"] = "hybrid" if local_traces else "langfuse"
             meta["item_count"] = len(merged_traces)
             return {"items": merged_traces, "meta": meta}
+
+        if api_client.enabled:
+            traces = await self._list_traces_from_mysql(
+                limit=limit,
+                source=source,
+                api_client=api_client,
+                langfuse_available=False,
+            )
+            meta["langfuse_status"] = "ok"
+            meta["canonical_source"] = "local_fast"
+            meta["item_count"] = len(traces)
+            return {"items": traces, "meta": meta}
 
         traces = await self._list_traces_from_mysql(
             limit=limit,
@@ -779,6 +791,8 @@ class QualityReportService(TenantAwareService):
             "chat_unscored_count": 0,
             "chat_scored_rate": 0.0,
             "chat_avg_trust_score": 0.0,
+            "chat_avg_hallucination_risk": 0.0,
+            "chat_avg_overconfidence": 0.0,
             "chat_hallucination_rate": 0.0,
             "chat_overconfidence_rate": 0.0,
             "chat_citation_rate": 0.0,
@@ -888,6 +902,10 @@ class QualityReportService(TenantAwareService):
             "chat_unscored_count": max(chat_message_count - len(trust_values), 0),
             "chat_scored_rate": round(len(trust_values) / chat_message_count, 4) if chat_message_count else 0.0,
             "chat_avg_trust_score": round(sum(trust_values) / len(trust_values), 4) if trust_values else 0.0,
+            "chat_avg_hallucination_risk": round(sum(chat_hallucination_values) / len(chat_hallucination_values), 4)
+            if chat_hallucination_values else 0.0,
+            "chat_avg_overconfidence": round(sum(overconfidence_values) / len(overconfidence_values), 4)
+            if overconfidence_values else 0.0,
             "chat_hallucination_rate": round(
                 sum(1 for value in chat_hallucination_values if value >= 0.6) / len(chat_hallucination_values),
                 4,
@@ -1444,9 +1462,9 @@ class QualityReportService(TenantAwareService):
                 trace["langfuse_synced"] = False
                 trace["trace_url"] = None
             else:
-                trace["langfuse_status"] = "unknown"
-                trace["langfuse_synced"] = False
-                trace["trace_url"] = None
+                trace["langfuse_status"] = "synced" if trace.get("langfuse_synced") else "unknown"
+                if trace.get("langfuse_synced") is None:
+                    trace["langfuse_synced"] = trace["langfuse_status"] == "synced"
 
             normalized.append(trace)
         return normalized
