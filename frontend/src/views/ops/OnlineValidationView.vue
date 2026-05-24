@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDeploymentStore } from "@/stores/deployment.store";
 import { useExperimentStore } from "@/stores/experiment.store";
 import { useOnlineValidationStore } from "@/stores/onlineValidation.store";
@@ -43,12 +44,7 @@ onMounted(async () => {
 
 <template>
   <div v-if="!completedDeployments.length" class="flex flex-col gap-5">
-    <section class="hero">
-      <div>
-        <h2>在线验证</h2>
-        <p>围绕部署记录创建在线验证任务骨架，跟踪状态与结果占位。</p>
-      </div>
-    </section>
+    <AlgoWorkspaceHero title="在线验证" description="围绕部署记录创建在线验证任务骨架，跟踪状态与结果占位。" />
     <section class="card-surface p-8 text-center text-zinc-500">
       暂无可用部署记录，请先到“部署记录”创建上游资源。
     </section>

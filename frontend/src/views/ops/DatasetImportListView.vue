@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { usePagination } from "@/composables/usePagination";
 import { useDatasetStore } from "@/stores/dataset.store";
 import type { DatasetCreateRequest, DatasetModality } from "@/types/dataset.types";
@@ -214,14 +215,14 @@ watch(
 
 <template>
   <div class="dataset-page">
-    <section class="dataset-hero">
-      <div>
-        <p class="eyebrow">Algorithm Workspace</p>
-        <h2>数据接入</h2>
-        <p>面向算法工程师管理训练前样本，先打通图片与文本的手动接入、浏览和预处理闭环。</p>
-      </div>
-      <el-button type="primary" @click="openCreate">新建数据集</el-button>
-    </section>
+    <AlgoWorkspaceHero
+      title="数据接入"
+      description="面向算法工程师管理训练前样本，先打通图片与文本的手动接入、浏览和预处理闭环。"
+    >
+      <template #actions>
+        <el-button type="primary" @click="openCreate">新建数据集</el-button>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="metric-grid">
       <article class="metric-card">
@@ -363,40 +364,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 20px;
-}
-
-.dataset-hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 28px 30px;
-  border-radius: 24px;
-  background:
-    radial-gradient(circle at top right, rgba(14, 116, 144, 0.16), transparent 28%),
-    linear-gradient(135deg, #fffdf8 0%, #f0f9ff 100%);
-  border: 1px solid rgba(14, 116, 144, 0.12);
-}
-
-.dataset-hero h2 {
-  margin: 4px 0 8px;
-  font-size: 28px;
-  color: #0f172a;
-}
-
-.dataset-hero p {
-  margin: 0;
-  max-width: 760px;
-  color: #475569;
-  line-height: 1.7;
-}
-
-.eyebrow {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #0f766e;
-  font-weight: 700;
 }
 
 .metric-grid {

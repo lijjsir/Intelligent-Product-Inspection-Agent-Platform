@@ -86,6 +86,46 @@ services:
     volumes:
       - ./backend:/app/backend
 
+  celery-beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: piap-celery-beat
+    working_dir: /app/backend
+    command: python -m celery -A worker.celery_app.celery_app beat -l info
+    environment:
+      PYTHONPATH: /app/backend
+      PIAP_DB_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_REDIS_URL: redis://redis:6379/0
+      PIAP_CELERY_BROKER_URL: redis://redis:6379/0
+      PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PIAP_S3_ENDPOINT: http://minio:9000
+      PIAP_S3_ACCESS_KEY: piap
+      PIAP_S3_SECRET_KEY: piap_password
+      PIAP_OBJECT_STORAGE_BACKEND: minio
+      PIAP_RAG_STORAGE_BUCKET: rag-docs
+      PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+      PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_PROJECT_ID: piap-local
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    volumes:
+      - ./backend:/app/backend
+
 
   frontend:
     build:

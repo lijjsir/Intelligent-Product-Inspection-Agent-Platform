@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import type {
   SummaryArtifactItem,
   SummaryHighlightItem,
@@ -155,13 +156,14 @@ onBeforeUnmount(stopPolling);
 
 <template>
   <div class="detail-page">
-    <section class="hero">
-      <div class="hero-header">
-        <div class="hero-copy">
-          <el-button link type="primary" @click="props.backPath ? router.push(props.backPath) : router.back()">返回</el-button>
-          <h2>{{ current?.name || title }}</h2>
-          <p>{{ current?.description || props.intro || "资源详情页，展示基础信息、执行状态和结果摘要。" }}</p>
-        </div>
+    <AlgoWorkspaceHero
+      :title="current?.name || title"
+      :description="current?.description || props.intro || '资源详情页，展示基础信息、执行状态和结果摘要。'"
+      :back-path="props.backPath"
+      back-text="返回列表"
+      show-back
+    >
+      <template #actions>
         <div class="hero-actions">
           <el-button
             v-if="store.launchOne && ['draft', 'failed'].includes(current?.status || '')"
@@ -181,8 +183,8 @@ onBeforeUnmount(stopPolling);
           </el-button>
           <el-button type="danger" :loading="actionLoading === 'delete'" @click="handleDelete">删除</el-button>
         </div>
-      </div>
-    </section>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="detail-grid" v-loading="store.loading">
       <article class="card-surface p-5">
@@ -332,41 +334,10 @@ onBeforeUnmount(stopPolling);
   gap: 20px;
 }
 
-.hero {
-  padding: 24px;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #f4f8ef, #fff6e8);
-}
-
-.hero-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-}
-
-.hero-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .hero-actions {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.hero h2 {
-  margin: 0;
-  font-size: 28px;
-  color: #17212c;
-}
-
-.hero p {
-  margin: 0;
-  color: #536171;
-  max-width: 72ch;
 }
 
 .detail-grid,
@@ -653,7 +624,6 @@ onBeforeUnmount(stopPolling);
 }
 
 @media (max-width: 767px) {
-  .hero-header,
   .overview-list > div,
   .section-head,
   .summary-head,

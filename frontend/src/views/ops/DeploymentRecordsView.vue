@@ -2,6 +2,7 @@
 import { onMounted, reactive } from "vue";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDeploymentStore } from "@/stores/deployment.store";
 import { useExperimentStore } from "@/stores/experiment.store";
 import { useFineTuneStore } from "@/stores/fineTune.store";
@@ -42,12 +43,7 @@ onMounted(async () => {
 
 <template>
   <div v-if="!fineTuneStore.items.some((item) => item.status === 'completed')" class="flex flex-col gap-5">
-    <section class="hero">
-      <div>
-        <h2>部署记录</h2>
-        <p>管理模型部署任务，支持动态加载或静态合并。</p>
-      </div>
-    </section>
+    <AlgoWorkspaceHero title="部署记录" description="管理模型部署任务，支持动态加载或静态合并。" />
     <section class="card-surface p-8 text-center text-zinc-500">
       暂无可用微调任务，请先到“微调管理”创建上游资源。
     </section>

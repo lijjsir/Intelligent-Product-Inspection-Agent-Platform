@@ -61,6 +61,9 @@ class FakeNodeRepo:
     async def list(self, *, org_id: str):
         return [row for row in self.rows if row.org_id == org_id and row.deleted_at is None]
 
+    async def list_all(self):
+        return [row for row in self.rows if row.deleted_at is None]
+
     async def list_online(self, *, org_id: str):
         return [row for row in self.rows if row.org_id == org_id and row.deleted_at is None and row.status == "online"]
 
@@ -234,3 +237,41 @@ async def test_poll_nodes_skips_disabled_and_marks_offline_on_ssh_failure(servic
     assert first_row.status == "offline"
     assert counts["disabled"] == 1
     assert counts["offline"] == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_all_nodes_scans_across_orgs(monkeypatch):
+    session = FakeSession()
+    node_repo = FakeNodeRepo(None)
+    lease_repo = FakeLeaseRepo(None)
+    ssh = FakeSshService()
+
+    monkeypatch.setattr(gpu_mod, "GpuComputeNodeRepository", lambda session: node_repo)
+    monkeypatch.setattr(gpu_mod, "GpuJobLeaseRepository", lambda session: lease_repo)
+    monkeypatch.setattr(gpu_mod, "SshExecutionService", lambda: ssh)
+
+    primary = gpu_mod.GpuNodeService(session, "org-1", "user-1")
+    secondary = gpu_mod.GpuNodeService(session, "org-2", "user-2")
+
+    await primary.create_node(
+        gpu_mod.GpuComputeNodeCreateRequest(
+            name="gpu-1",
+            host="10.0.0.10",
+            ssh_username="root",
+            ssh_password="secret",
+            total_gpu_count=1,
+        )
+    )
+    await secondary.create_node(
+        gpu_mod.GpuComputeNodeCreateRequest(
+            name="gpu-2",
+            host="10.0.0.11",
+            ssh_username="root",
+            ssh_password="secret",
+            total_gpu_count=1,
+        )
+    )
+
+    counts = await gpu_mod.GpuNodeService(session, "", "system").poll_all_nodes()
+
+    assert counts["online"] == 2
