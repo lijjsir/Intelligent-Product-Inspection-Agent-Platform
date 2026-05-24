@@ -7,7 +7,6 @@ from agent.subgraphs.inspection_task.state import InspectionState
 from agent.subgraphs.quality_judgement.product_adapters import (
     build_defects,
     expected_verdict_from_record,
-    score_from_record,
 )
 from app.core.datetime import utcnow_iso
 
@@ -28,7 +27,7 @@ def _is_valid_conclusion_payload(data: object) -> bool:
 
 
 async def run_reasoning(state: InspectionState) -> InspectionState:
-    """结合缺陷信息和检索到的证据，生成结构化的质检结论。"""
+    """结合缺陷信息、结构化记录和检索到的 RAG 证据，生成综合质检结论。"""
     now = utcnow_iso()
     structured_record = state.get("structured_record") or {}
     product_family = str(state.get("product_family") or "").strip().lower()
@@ -40,30 +39,23 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
             state["defects"] = structured_defects
     docs = state.get("knowledge_docs") or []
     expected_verdict = expected_verdict_from_record(structured_record, product_family or "general") if structured_record else None
-    if structured_record:
-        conclusion = {
-            "verdict": expected_verdict or ("pass" if not defects else "fail"),
-            "overall_score": score_from_record(defects, expected_verdict),
-            "reasoning_chain": {
-                "source": "structured_record",
-                "structured_record": structured_record,
-                "expected_verdict": expected_verdict,
-                "rag_summary": state.get("rag_summary") or {},
-            },
-        }
-        state["reasoning_chain"] = conclusion["reasoning_chain"]
-        state["conclusion"] = conclusion
-        state.setdefault("timeline", []).append(
-            {"stage": "reasoning", "message": f"结构化推理完成，结论 {conclusion['verdict']}", "ts": now}
-        )
-        return state
 
-    prompt = {
+    prompt: dict = {
         "task_id": state.get("task_id"),
         "defects": defects,
         "docs": [{"id": d.get("id"), "score": d.get("score"), "text": (d.get("text") or "")[:300]} for d in docs],
-        "instruction": '输出 JSON: {"verdict":"pass|fail|uncertain","overall_score":0-1,"reasoning_chain":{...}}',
     }
+    if structured_record:
+        prompt["structured_record"] = structured_record
+        prompt["expected_verdict"] = expected_verdict
+        prompt["instruction"] = (
+            "结合 structured_record（结构化检验标准）、docs（RAG 知识库检索到的参考标准/说明文档）"
+            "和 defects（视觉检测到的缺陷），综合判断后输出 JSON: "
+            '{"verdict":"pass|fail|uncertain","overall_score":0-1,"reasoning_chain":{...}}。'
+            "当 RAG 文档中的标准与 structured_record 不一致时，以 RAG 文档中的较新标准为准。"
+        )
+    else:
+        prompt["instruction"] = '输出 JSON: {"verdict":"pass|fail|uncertain","overall_score":0-1,"reasoning_chain":{...}}'
     client = LLMClient(
         api_key=state.get("model_api_key"),
         base_url=state.get("model_base_url"),

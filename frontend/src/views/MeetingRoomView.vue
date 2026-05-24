@@ -58,7 +58,7 @@ async function submitMeetingFeedback(message: MeetingMessage, feedbackType: "up"
     await feedbackApi.submitMessage("meeting", message.id, {
       feedback_type: feedbackType,
       rating: feedbackType === "up" ? 5 : 1,
-      category: feedbackType === "up" ? "meeting_helpful" : "meeting_not_helpful",
+      category: (feedbackType === "up" ? "meeting_helpful" : "meeting_not_helpful") as any,
       comment: `meeting_room:${message.room_id}`,
     });
     ElMessage.success(feedbackType === "up" ? "已点赞" : "已点踩");

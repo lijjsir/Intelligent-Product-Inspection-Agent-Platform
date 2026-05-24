@@ -12,8 +12,9 @@ from typing import Any
 from fastapi import UploadFile
 
 from app.core.config import settings
+from app.core.dataset_modality import dataset_supports_sample_type
 from app.core.datetime import utcnow, utcnow_iso
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.dataset import Dataset, DatasetSample
 from app.repositories.dataset_repo import DatasetAsyncJobRepository, DatasetRepository, DatasetSampleRepository, DatasetUploadSessionRepository
 from app.schemas.common import PagedResponse
@@ -44,6 +45,19 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/webp",
     "image/gif",
     "image/bmp",
+}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+ALLOWED_VIDEO_CONTENT_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/x-matroska",
+    "video/webm",
+    "video/x-m4v",
+}
+MEDIA_CONTENT_TYPE_BY_SAMPLE_TYPE = {
+    "image": "image/*",
+    "video": "video/*",
 }
 TEXT_SIDECAR_EXTENSIONS = {".txt"}
 ANNOTATION_SIDECAR_EXTENSIONS = {".json"}
@@ -93,6 +107,7 @@ class DatasetService(TenantAwareService):
         body["tags"] = [str(item).strip() for item in body.get("tags") or [] if str(item).strip()]
         body["org_id"] = self._org_id
         body["created_by"] = self._user_id
+        await self._ensure_dataset_name_available(body["name"])
         created = await self._datasets.create(body)
         return await self._build_detail(created)
 
@@ -105,6 +120,7 @@ class DatasetService(TenantAwareService):
         updates = payload.model_dump(exclude_unset=True)
         if "name" in updates:
             updates["name"] = str(updates["name"]).strip()
+            await self._ensure_dataset_name_available(updates["name"], exclude_dataset_id=dataset_id)
         if "description" in updates:
             updates["description"] = (updates["description"] or "").strip() or None
         if "tags" in updates and updates["tags"] is not None:
@@ -196,55 +212,17 @@ class DatasetService(TenantAwareService):
         created_rows: list[DatasetSample] = []
         total_bytes = 0
         for upload in files:
-            raw_name = Path(upload.filename or "image.bin").name
-            suffix = Path(raw_name).suffix.lower()
-            if suffix not in ALLOWED_IMAGE_EXTENSIONS:
-                raise ValidationError(f"unsupported image file: {raw_name}")
             content = await upload.read()
-            if not content:
-                raise ValidationError(f"empty image file: {raw_name}")
-            content_type = upload.content_type or ""
-            if content_type and content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
-                raise ValidationError(f"unsupported content type: {content_type}")
-
-            checksum = hashlib.sha256(content).hexdigest()
-            object_key = f"datasets/{self._org_id}/{dataset_id}/{checksum[:12]}-{raw_name}"
-            self._storage.ensure_bucket(self._dataset_bucket)
-            stored = self._storage.put_bytes(
-                bucket=self._dataset_bucket,
-                object_key=object_key,
-                data=content,
-                content_type=content_type or None,
+            created_rows.append(
+                await self._store_media_sample(
+                    dataset_id=dataset_id,
+                    sample_type="image",
+                    filename=Path(upload.filename or "image.bin").name,
+                    content=content,
+                    content_type=upload.content_type or "",
+                    source_metadata={"original_filename": Path(upload.filename or "image.bin").name},
+                )
             )
-            try:
-                created_rows.append(
-                    await self._samples.create(
-                        {
-                            "org_id": self._org_id,
-                            "dataset_id": dataset_id,
-                            "created_by": self._user_id,
-                            "sample_type": "image",
-                            "sample_name": raw_name,
-                            "text_content": None,
-                            "content_type": stored.get("content_type") or content_type or None,
-                            "size_bytes": int(stored.get("size_bytes") or len(content)),
-                            "checksum_sha256": checksum,
-                            "storage_backend": self._storage.backend_name,
-                            "bucket": stored.get("bucket") or self._dataset_bucket,
-                            "object_key": stored.get("object_key") or object_key,
-                            "file_url": stored.get("url"),
-                            "annotation_data": None,
-                            "source_metadata": {"original_filename": raw_name},
-                            "preview_text": raw_name,
-                        }
-                    )
-                )
-            except Exception:
-                self._storage.delete_object(
-                    bucket=stored.get("bucket") or self._dataset_bucket,
-                    object_key=stored.get("object_key") or object_key,
-                )
-                raise
             total_bytes += len(content)
 
         await self._datasets.recalculate_counters(dataset_id=dataset_id)
@@ -257,6 +235,42 @@ class DatasetService(TenantAwareService):
                 "status": "completed",
                 "payload_json": {"file_count": len(created_rows)},
                 "result_summary": {"created": len(created_rows), "sample_type": "image", "uploaded_bytes": total_bytes},
+            }
+        )
+        return [self._serialize_sample(row) for row in created_rows]
+
+    async def upload_video_samples(self, *, dataset_id: str, files: list[UploadFile]) -> list[DatasetSampleResponse]:
+        dataset = await self._require_dataset(dataset_id)
+        self._ensure_dataset_supports(dataset, "video")
+        if not files:
+            raise ValidationError("no files uploaded")
+
+        created_rows: list[DatasetSample] = []
+        total_bytes = 0
+        for upload in files:
+            content = await upload.read()
+            created_rows.append(
+                await self._store_media_sample(
+                    dataset_id=dataset_id,
+                    sample_type="video",
+                    filename=Path(upload.filename or "video.bin").name,
+                    content=content,
+                    content_type=upload.content_type or "",
+                    source_metadata={"original_filename": Path(upload.filename or "video.bin").name},
+                )
+            )
+            total_bytes += len(content)
+
+        await self._datasets.recalculate_counters(dataset_id=dataset_id)
+        await self._jobs.create(
+            {
+                "org_id": self._org_id,
+                "dataset_id": dataset_id,
+                "created_by": self._user_id,
+                "job_type": "video_batch_upload",
+                "status": "completed",
+                "payload_json": {"file_count": len(created_rows)},
+                "result_summary": {"created": len(created_rows), "sample_type": "video", "uploaded_bytes": total_bytes},
             }
         )
         return [self._serialize_sample(row) for row in created_rows]
@@ -498,6 +512,19 @@ class DatasetService(TenantAwareService):
             )
             if job is None or upload is None:
                 return
+            dataset = await service._datasets.get(
+                org_id=self._org_id,
+                dataset_id=dataset_id,
+                owner_user_id=self._user_id,
+            )
+            if dataset is None:
+                job.status = "failed"
+                job.error_message = "dataset not found"
+                job.result_summary = {"status": "failed", "warnings": ["dataset not found"]}
+                upload.status = "failed"
+                upload.error_message = "dataset not found"
+                await session.commit()
+                return
             stored = service._storage.get_bytes(bucket=bucket, object_key=object_key)
             if stored is None:
                 job.status = "failed"
@@ -512,21 +539,34 @@ class DatasetService(TenantAwareService):
             try:
                 with zipfile.ZipFile(io.BytesIO(content)) as archive:
                     members = [info for info in archive.infolist() if not info.is_dir()]
-                    image_entries: dict[str, tuple[Any, bytes]] = {}
+                    media_entries: dict[str, dict[str, Any]] = {}
                     sidecar_entries: list[Any] = []
                     for info in members:
                         filename = Path(info.filename).name
                         suffix = Path(filename).suffix.lower()
                         stem = Path(filename).stem
-                        if suffix in ALLOWED_IMAGE_EXTENSIONS:
-                            image_entries[stem] = (info, archive.read(info))
+                        sample_type = self._resolve_sample_type_from_suffix(suffix)
+                        if sample_type:
+                            media_entries[stem] = {
+                                "info": info,
+                                "content": archive.read(info),
+                                "sample_type": sample_type,
+                                "filename": filename,
+                            }
                             continue
                         sidecar_entries.append(info)
 
-                    for stem, (info, sample_bytes) in image_entries.items():
-                        filename = Path(info.filename).name
+                    for stem, media in media_entries.items():
+                        info = media["info"]
+                        sample_bytes = media["content"]
+                        sample_type = media["sample_type"]
+                        filename = media["filename"]
                         if not sample_bytes:
-                            warnings.append(f"skipped empty image file: {info.filename}")
+                            warnings.append(f"skipped empty {sample_type} file: {info.filename}")
+                            skipped_files += 1
+                            continue
+                        if not dataset_supports_sample_type(dataset.modality, sample_type):
+                            warnings.append(f"skipped unsupported {sample_type} for dataset modality: {info.filename}")
                             skipped_files += 1
                             continue
                         text_content = None
@@ -569,49 +609,34 @@ class DatasetService(TenantAwareService):
                                 sidecar_annotation_filename = sidecar.filename
                                 annotation_sidecar_attached += 1
 
-                        checksum = hashlib.sha256(sample_bytes).hexdigest()
-                        object_key_item = f"datasets/{self._org_id}/{dataset_id}/{checksum[:12]}-{filename}"
-                        service._storage.ensure_bucket(service._dataset_bucket)
-                        stored_image = service._storage.put_bytes(
-                            bucket=service._dataset_bucket,
-                            object_key=object_key_item,
-                            data=sample_bytes,
-                            content_type="image/*",
-                        )
-                        await service._samples.create(
-                            {
-                                "org_id": self._org_id,
-                                "dataset_id": dataset_id,
-                                "created_by": self._user_id,
-                                "sample_type": "image",
-                                "sample_name": filename,
-                                "text_content": text_content,
-                                "content_type": stored_image.get("content_type") or "image/*",
-                                "size_bytes": int(stored_image.get("size_bytes") or len(sample_bytes)),
-                                "checksum_sha256": checksum,
-                                "storage_backend": service._storage.backend_name,
-                                "bucket": stored_image.get("bucket") or service._dataset_bucket,
-                                "object_key": stored_image.get("object_key") or object_key_item,
-                                "file_url": stored_image.get("url"),
-                                "annotation_data": annotation_data,
-                                "source_metadata": {
-                                    "original_filename": info.filename,
-                                    "upload_session_id": upload.id,
-                                    "sidecar_text_filename": sidecar_text_filename,
-                                    "sidecar_annotation_filename": sidecar_annotation_filename,
-                                },
-                                "preview_text": preview_text,
-                            }
+                        await service._store_media_sample(
+                            dataset_id=dataset_id,
+                            sample_type=sample_type,
+                            filename=filename,
+                            content=sample_bytes,
+                            content_type=MEDIA_CONTENT_TYPE_BY_SAMPLE_TYPE[sample_type],
+                            text_content=text_content,
+                            annotation_data=annotation_data,
+                            preview_text=preview_text,
+                            source_metadata={
+                                "original_filename": info.filename,
+                                "upload_session_id": upload.id,
+                                "sidecar_text_filename": sidecar_text_filename,
+                                "sidecar_annotation_filename": sidecar_annotation_filename,
+                            },
                         )
                         created_sample_count += 1
-                        created_image_count += 1
+                        if sample_type == "image":
+                            created_image_count += 1
+                        elif sample_type == "text":
+                            created_text_count += 1
                         total_bytes += len(sample_bytes)
 
                     for sidecar in sidecar_entries:
                         sidecar_name = Path(sidecar.filename).name
                         sidecar_suffix = Path(sidecar_name).suffix.lower()
                         sidecar_stem = Path(sidecar_name).stem
-                        if sidecar_stem in image_entries:
+                        if sidecar_stem in media_entries:
                             continue
                         if sidecar_suffix in IGNORED_TEXT_EXTENSIONS:
                             warnings.append(f"skipped orphan sidecar file: {sidecar.filename}")
@@ -619,15 +644,13 @@ class DatasetService(TenantAwareService):
                             continue
                         warnings.append(f"skipped unsupported file: {sidecar.filename}")
                         skipped_files += 1
-                dataset = await service._datasets.get(org_id=self._org_id, dataset_id=dataset_id, owner_user_id=self._user_id)
-                if dataset is None:
-                    raise NotFoundError("dataset not found")
                 await service._datasets.recalculate_counters(dataset_id=dataset_id)
                 job.status = "completed"
                 job.result_summary = {
                     "status": "completed",
                     "created_samples": created_sample_count,
                     "image_samples": created_image_count,
+                    "video_samples": created_sample_count - created_image_count - created_text_count,
                     "text_samples": created_text_count,
                     "text_sidecar_attached": text_sidecar_attached,
                     "annotation_sidecar_attached": annotation_sidecar_attached,
@@ -713,16 +736,107 @@ class DatasetService(TenantAwareService):
             result = await result
         return "celery" if result else "local_background"
 
+    async def _ensure_dataset_name_available(self, name: str, exclude_dataset_id: str | None = None) -> None:
+        existing = await self._datasets.get_by_name(
+            org_id=self._org_id,
+            owner_user_id=self._user_id,
+            name=name,
+            exclude_dataset_id=exclude_dataset_id,
+        )
+        if existing is not None:
+            raise ConflictError("dataset name already exists")
+        deleted = await self._datasets.get_deleted_by_name(
+            org_id=self._org_id,
+            owner_user_id=self._user_id,
+            name=name,
+            exclude_dataset_id=exclude_dataset_id,
+        )
+        if deleted is not None:
+            await self._datasets.save(deleted, {"name": f"{deleted.name}__deleted__{deleted.id[:8]}"})
+
     @staticmethod
     def _ensure_dataset_supports(dataset: Dataset, sample_type: str) -> None:
-        modality = str(dataset.modality or "image_text")
-        if modality == "image_text":
+        modality = str(dataset.modality or "")
+        if dataset_supports_sample_type(modality, sample_type):
             return
-        if modality != sample_type:
-            raise ValidationError(f"dataset modality {modality} does not support {sample_type} samples")
+        raise ValidationError(f"dataset modality {modality} does not support {sample_type} samples")
+
+    @staticmethod
+    def _resolve_sample_type_from_suffix(suffix: str) -> str | None:
+        normalized = str(suffix or "").lower()
+        if normalized in ALLOWED_IMAGE_EXTENSIONS:
+            return "image"
+        if normalized in ALLOWED_VIDEO_EXTENSIONS:
+            return "video"
+        return None
+
+    async def _store_media_sample(
+        self,
+        *,
+        dataset_id: str,
+        sample_type: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        text_content: str | None = None,
+        annotation_data: dict | list | None = None,
+        preview_text: str | None = None,
+        source_metadata: dict[str, Any] | None = None,
+    ) -> DatasetSample:
+        raw_name = Path(filename or f"{sample_type}.bin").name
+        suffix = Path(raw_name).suffix.lower()
+        if sample_type == "image":
+            if suffix not in ALLOWED_IMAGE_EXTENSIONS:
+                raise ValidationError(f"unsupported image file: {raw_name}")
+            if content_type and content_type not in ALLOWED_IMAGE_CONTENT_TYPES and content_type != "image/*":
+                raise ValidationError(f"unsupported content type: {content_type}")
+        elif sample_type == "video":
+            if suffix not in ALLOWED_VIDEO_EXTENSIONS:
+                raise ValidationError(f"unsupported video file: {raw_name}")
+            if content_type and content_type not in ALLOWED_VIDEO_CONTENT_TYPES and content_type != "video/*":
+                raise ValidationError(f"unsupported content type: {content_type}")
+        if not content:
+            raise ValidationError(f"empty {sample_type} file: {raw_name}")
+
+        checksum = hashlib.sha256(content).hexdigest()
+        object_key = f"datasets/{self._org_id}/{dataset_id}/{checksum[:12]}-{raw_name}"
+        self._storage.ensure_bucket(self._dataset_bucket)
+        stored = self._storage.put_bytes(
+            bucket=self._dataset_bucket,
+            object_key=object_key,
+            data=content,
+            content_type=content_type or None,
+        )
+        try:
+            return await self._samples.create(
+                {
+                    "org_id": self._org_id,
+                    "dataset_id": dataset_id,
+                    "created_by": self._user_id,
+                    "sample_type": sample_type,
+                    "sample_name": raw_name,
+                    "text_content": text_content,
+                    "content_type": stored.get("content_type") or content_type or None,
+                    "size_bytes": int(stored.get("size_bytes") or len(content)),
+                    "checksum_sha256": checksum,
+                    "storage_backend": self._storage.backend_name,
+                    "bucket": stored.get("bucket") or self._dataset_bucket,
+                    "object_key": stored.get("object_key") or object_key,
+                    "file_url": stored.get("url"),
+                    "annotation_data": annotation_data,
+                    "source_metadata": source_metadata or {"original_filename": raw_name},
+                    "preview_text": preview_text or (text_content[:200] if text_content else raw_name),
+                }
+            )
+        except Exception:
+            self._storage.delete_object(
+                bucket=stored.get("bucket") or self._dataset_bucket,
+                object_key=stored.get("object_key") or object_key,
+            )
+            raise
 
     def _delete_sample_object(self, sample: DatasetSample) -> None:
-        if sample.sample_type != "image":
+        if sample.sample_type not in {"image", "video"}:
             return
         bucket = sample.bucket or self._dataset_bucket
         object_key = sample.object_key or ""
@@ -743,6 +857,7 @@ class DatasetService(TenantAwareService):
             status=row.status,
             sample_count=int(row.sample_count or 0),
             image_sample_count=int(row.image_sample_count or 0),
+            video_sample_count=int(row.video_sample_count or 0),
             text_sample_count=int(row.text_sample_count or 0),
             uploaded_bytes=int(row.uploaded_bytes or 0),
             knowledge_graph_status=row.knowledge_graph_status,

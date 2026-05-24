@@ -9,8 +9,6 @@ from app.repositories.organization_repo import OrganizationRepository
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
-from app.repositories.chat_score_repo import ChatMessageScoreRepository
-from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.services.audit_service import AuditService
 from app.schemas.task import ImageItem
 
@@ -150,15 +148,9 @@ class TaskService:
         if str(task.status) == "running":
             raise ValidationError("运行中的任务不能删除")
 
-        # Cascade soft-delete related records.
-        from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
-        from sqlalchemy import text
-
         result_repo = ResultRepository(self._session)
         stability_repo = StabilityRepository(self._session)
         alert_repo = AlertRepository(self._session)
-        chat_score_repo = ChatMessageScoreRepository(self._session)
-        token_repo = TokenLedgerRepository(self._session)
 
         result = await result_repo.get_by_task(self._org_id, task_id)
         stability = await stability_repo.get_by_task(self._org_id, task_id)
@@ -167,18 +159,9 @@ class TaskService:
             await result_repo.soft_delete(str(result.id))
         if stability:
             await stability_repo.soft_delete(str(stability.id))
-            # Also soft-delete alerts linked to this stability report.
             alerts = await alert_repo.list_by_stability(self._org_id, str(stability.id))
             for alert in alerts:
                 await alert_repo.soft_delete(self._org_id, str(alert.id))
-        # Soft-delete chat scores tied to this task.
-        await self._session.execute(
-            text(
-                "UPDATE chat_message_scores SET deleted_at = NOW() "
-                "WHERE task_id = :task_id AND deleted_at IS NULL"
-            ),
-            {"task_id": task_id},
-        )
 
         deleted = await self._repo.soft_delete(
             org_id=self._task_scope_org_id,

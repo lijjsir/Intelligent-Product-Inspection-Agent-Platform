@@ -17,6 +17,7 @@ from app.api.v1 import (
     billing,
     datasets,
     feedbacks,
+    exports,
     gpu_nodes,
     organizations,
     inspection_specs,
@@ -70,6 +71,7 @@ router.include_router(auth_logs.router, prefix="/auth-logs", tags=["auth-logs"])
 router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
 router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
+router.include_router(exports.router, prefix="/exports", tags=["exports"])
 router.include_router(gpu_nodes.router, tags=["gpu-nodes"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])

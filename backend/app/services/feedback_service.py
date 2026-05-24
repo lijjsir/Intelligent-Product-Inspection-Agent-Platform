@@ -37,6 +37,10 @@ class FeedbackService(TenantAwareService):
                 "rating": payload.get("rating"),
                 "category": payload.get("category"),
                 "comment": payload.get("comment"),
+                "severity": payload.get("severity"),
+                "status": "pending",
+                "source_type": payload.get("source_type", "result"),
+                "task_id": payload.get("task_id") or (str(result.task_id) if result.task_id else None),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -61,8 +65,39 @@ class FeedbackService(TenantAwareService):
         self._queue_score_sync(score_event)
         return feedback
 
-    async def list_feedbacks(self, page: int, size: int, result_id: str | None = None, feedback_type: str | None = None):
-        return await self._repo.list_feedbacks(self._org_id, page, size, result_id, feedback_type)
+    async def list_feedbacks(self, page: int, size: int, result_id: str | None = None, feedback_type: str | None = None, status: str | None = None, severity: str | None = None, source_type: str | None = None, category: str | None = None, assigned_to: str | None = None):
+        return await self._repo.list_feedbacks(self._org_id, page, size, result_id, feedback_type, status, severity, source_type, category, assigned_to)
+
+    async def get_detail(self, feedback_id: str):
+        fb = await self._repo.get_by_id(feedback_id)
+        if not fb or fb.org_id != self._org_id:
+            raise NotFoundError("feedback not found")
+        return fb
+
+    async def update_status(self, feedback_id: str, status: str, resolution: str | None = None):
+        fb = await self._repo.get_by_id(feedback_id)
+        if not fb or fb.org_id != self._org_id:
+            raise NotFoundError("feedback not found")
+        fb.status = status
+        if resolution:
+            fb.resolution = resolution
+        if status == "resolved":
+            fb.resolved_at = utcnow()
+        await self._session.flush()
+        return fb
+
+    async def assign(self, feedback_id: str, assigned_to: str):
+        fb = await self._repo.get_by_id(feedback_id)
+        if not fb or fb.org_id != self._org_id:
+            raise NotFoundError("feedback not found")
+        fb.assigned_to = assigned_to
+        if fb.status == "pending":
+            fb.status = "processing"
+        await self._session.flush()
+        return fb
+
+    async def summary(self):
+        return await self._repo.summary(self._org_id)
 
     async def submit_message_feedback(self, target_type: str, target_id: str, actor_id: str, payload: dict):
         normalized_type = target_type.strip().lower()

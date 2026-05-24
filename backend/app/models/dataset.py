@@ -26,6 +26,7 @@ class Dataset(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     image_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    video_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     text_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     knowledge_graph_status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")

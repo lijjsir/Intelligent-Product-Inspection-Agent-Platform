@@ -1,11 +1,65 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import PageParams
+
+
+class FeedbackCategory(str, Enum):
+    reliable = "reliable"
+    wrong_verdict = "wrong_verdict"
+    weak_evidence = "weak_evidence"
+    bad_bbox = "bad_bbox"
+    unclear_reasoning = "unclear_reasoning"
+
+
+class FeedbackSeverity(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class FeedbackStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    resolved = "resolved"
+    closed = "closed"
+    reopened = "reopened"
+
+
+class FeedbackSourceType(str, Enum):
+    result = "result"
+    chat = "chat"
+    meeting = "meeting"
+
+
+class ReportType(str, Enum):
+    single_task = "single_task"
+    batch_summary = "batch_summary"
+    quality_analysis = "quality_analysis"
+    feedback_report = "feedback_report"
+    evidence_trace = "evidence_trace"
+
+
+class ExportFormat(str, Enum):
+    pdf = "pdf"
+    docx = "docx"
+    xlsx = "xlsx"
+    csv = "csv"
+    json = "json"
+
+
+class ExportJobStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    success = "success"
+    failed = "failed"
+    expired = "expired"
 
 
 ALLOWED_MODEL_TYPES = {"chat", "embedding", "multimodal"}
@@ -218,13 +272,38 @@ class CurrentUserTokenUsageResponse(BaseModel):
 class FeedbackSubmit(BaseModel):
     feedback_type: str = Field(pattern="^(up|down)$")
     rating: Optional[int] = Field(default=None, ge=1, le=5)
-    category: Optional[str] = None
+    category: Optional[FeedbackCategory] = None
     comment: Optional[str] = None
+    severity: Optional[FeedbackSeverity] = None
+    source_type: Optional[FeedbackSourceType] = FeedbackSourceType.result
+    task_id: Optional[str] = None
 
 
 class FeedbackQuery(PageParams):
     result_id: Optional[str] = None
     feedback_type: Optional[str] = None
+    status: Optional[str] = None
+    severity: Optional[str] = None
+    source_type: Optional[str] = None
+    category: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+
+class FeedbackSummaryResponse(BaseModel):
+    today_new: int = 0
+    pending_count: int = 0
+    high_risk_count: int = 0
+    resolved_rate: float = 0.0
+    avg_resolution_hours: Optional[float] = None
+
+
+class FeedbackStatusUpdate(BaseModel):
+    status: FeedbackStatus
+    resolution: Optional[str] = None
+
+
+class FeedbackAssignPayload(BaseModel):
+    assigned_to: str
 
 
 class MessageFeedbackQuery(BaseModel):
@@ -241,6 +320,13 @@ class FeedbackResponse(BaseModel):
     rating: Optional[int] = None
     category: Optional[str] = None
     comment: Optional[str] = None
+    severity: Optional[str] = None
+    status: str = "pending"
+    assigned_to: Optional[str] = None
+    resolution: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    source_type: Optional[str] = "result"
+    task_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -344,3 +430,36 @@ class QualityTraceItem(BaseModel):
 class QualityTraceListResponse(BaseModel):
     items: list[QualityTraceItem]
     meta: QualityTraceMeta
+
+
+class ExportJobCreate(BaseModel):
+    report_name: str = Field(min_length=1, max_length=256)
+    report_type: ReportType
+    format: ExportFormat = ExportFormat.pdf
+    template: Optional[str] = "standard"
+    config_json: Optional[dict] = None
+
+
+class ExportJobResponse(BaseModel):
+    id: str
+    org_id: str
+    actor_id: str
+    report_name: str
+    report_type: str
+    format: str
+    template: Optional[str] = None
+    config_json: Optional[str] = None
+    status: str
+    file_url: Optional[str] = None
+    file_size: Optional[int] = None
+    error_message: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ExportJobQuery(PageParams):
+    status: Optional[str] = None
+    report_type: Optional[str] = None

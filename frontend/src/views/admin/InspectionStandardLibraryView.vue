@@ -162,7 +162,7 @@ onMounted(loadAll);
         <el-table-column label="绑定空间" min-width="220">
           <template #default="{ row }">
             <div class="space-list">
-              <el-tag v-for="space in row.rag_spaces" :key="space.id" type="primary" effect="plain">{{ space.name }}</el-tag>
+              <el-tag v-for="space in row.rag_spaces" :key="space.id" effect="plain">{{ space.name }}</el-tag>
             </div>
           </template>
         </el-table-column>

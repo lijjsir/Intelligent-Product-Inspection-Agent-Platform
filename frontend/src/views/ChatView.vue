@@ -501,7 +501,7 @@ async function submitChatFeedback(message: ChatMessage, feedbackType: "up" | "do
     await feedbackApi.submitMessage("chat", message.id, {
       feedback_type: feedbackType,
       rating: feedbackType === "up" ? 5 : 1,
-      category: feedbackType === "up" ? "helpful" : "not_helpful",
+      category: (feedbackType === "up" ? "helpful" : "not_helpful") as any,
       comment: `chat_message:${message.message_type}`,
     });
     const resultId = resolveResultId(message);
@@ -509,7 +509,7 @@ async function submitChatFeedback(message: ChatMessage, feedbackType: "up" | "do
       await feedbackApi.submit(resultId, {
         feedback_type: feedbackType,
         rating: feedbackType === "up" ? 5 : 1,
-        category: feedbackType === "up" ? "chat_helpful" : "chat_not_helpful",
+        category: (feedbackType === "up" ? "chat_helpful" : "chat_not_helpful") as any,
         comment: `from_chat_message:${message.id}`,
       });
     }
