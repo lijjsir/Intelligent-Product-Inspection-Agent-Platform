@@ -38,6 +38,7 @@ from app.models.agent_ops import (
 from app.models.agent_management import AgentConfigVersion, AgentExecutionMetrics
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
 from app.models.dataset import Dataset, DatasetAsyncJob, DatasetSample, DatasetUploadSession
+from app.models.export_job import ExportJob
 from app.models.algo_resources import (
     DatasetKnowledgeGraph,
     DatasetKgEntity,
@@ -117,6 +118,7 @@ __all__ = [
     "DatasetSample",
     "DatasetAsyncJob",
     "DatasetUploadSession",
+    "ExportJob",
     "DatasetKnowledgeGraph",
     "DatasetKgEntity",
     "DatasetKgRelation",

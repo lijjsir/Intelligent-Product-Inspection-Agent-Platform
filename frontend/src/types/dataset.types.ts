@@ -1,8 +1,8 @@
 import type { PageParams, PagedResponse } from "./common.types";
 
-export type DatasetModality = "image" | "text" | "image_text";
+export type DatasetModality = string;
 export type DatasetStatus = "active" | "archived";
-export type DatasetSampleType = "image" | "text";
+export type DatasetSampleType = "image" | "text" | "video";
 
 export interface AsyncJob {
   id: string;
@@ -29,6 +29,7 @@ export interface Dataset {
   status: string;
   sample_count: number;
   image_sample_count: number;
+  video_sample_count: number;
   text_sample_count: number;
   uploaded_bytes: number;
   knowledge_graph_status: string;

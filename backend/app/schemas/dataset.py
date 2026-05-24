@@ -5,19 +5,25 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.dataset_modality import normalize_dataset_modality
 from app.schemas.common import PagedResponse
 
 
-DatasetModality = Literal["image", "text", "image_text"]
+DatasetModality = str
 DatasetStatus = Literal["active", "archived"]
-DatasetSampleType = Literal["image", "text"]
+DatasetSampleType = Literal["image", "text", "video"]
 
 
 class DatasetCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
-    modality: DatasetModality = "image_text"
+    modality: DatasetModality = "image+text"
     tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("modality")
+    @classmethod
+    def _normalize_modality(cls, value: str) -> str:
+        return normalize_dataset_modality(value)
 
 
 class DatasetUpdateRequest(BaseModel):
@@ -26,6 +32,13 @@ class DatasetUpdateRequest(BaseModel):
     modality: DatasetModality | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     status: DatasetStatus | None = None
+
+    @field_validator("modality")
+    @classmethod
+    def _normalize_modality(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return normalize_dataset_modality(value)
 
 
 class DatasetListQuery(BaseModel):
@@ -47,6 +60,7 @@ class DatasetListItem(BaseModel):
     status: str
     sample_count: int
     image_sample_count: int
+    video_sample_count: int
     text_sample_count: int
     uploaded_bytes: int
     knowledge_graph_status: str

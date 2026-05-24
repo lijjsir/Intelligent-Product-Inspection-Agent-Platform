@@ -20,6 +20,7 @@ import type {
   KnowledgeGraphEntity,
 } from "@/types/algo-workspace.types";
 import type { AsyncJob, DatasetSample, DatasetSampleType } from "@/types/dataset.types";
+import { datasetModalityLabel, datasetSupportsSampleType } from "@/utils/dataset-modality";
 
 const route = useRoute();
 const router = useRouter();
@@ -34,8 +35,17 @@ const samplePage = ref(1);
 const sampleSize = ref(12);
 const sampleTotal = ref(0);
 const zipFile = ref<File | null>(null);
+const imageFiles = ref<File[]>([]);
+const videoFiles = ref<File[]>([]);
+const textSampleForm = reactive({
+  sample_name: "",
+  text_content: "",
+});
 const importLoading = ref(false);
 const importPolling = ref(false);
+const imageUploadLoading = ref(false);
+const videoUploadLoading = ref(false);
+const textUploadLoading = ref(false);
 const latestImportJob = ref<AsyncJob | null>(null);
 const previewVisible = ref(false);
 const previewPayload = ref<DatasetSample | null>(null);
@@ -173,7 +183,9 @@ function parseOptionalJson(text: string) {
 }
 
 function sampleTypeLabel(type?: DatasetSampleType | null) {
-  return type === "image" ? "图片" : "文本";
+  if (type === "image") return "图片";
+  if (type === "video") return "视频";
+  return "文本";
 }
 
 function formatImportJobSummary(resultSummary: unknown) {
@@ -181,12 +193,14 @@ function formatImportJobSummary(resultSummary: unknown) {
   const record = resultSummary as Record<string, unknown>;
   const createdSamples = record.created_samples;
   const imageSamples = record.image_samples;
+  const videoSamples = record.video_samples;
   const textSidecars = record.text_sidecar_attached;
   const annotationSidecars = record.annotation_sidecar_attached;
   const skippedCount = record.skipped_files;
   const parts = [
     createdSamples !== undefined ? `已导入: ${createdSamples}` : null,
     imageSamples !== undefined ? `图片: ${imageSamples}` : null,
+    videoSamples !== undefined ? `视频: ${videoSamples}` : null,
     textSidecars !== undefined ? `文本侧车: ${textSidecars}` : null,
     annotationSidecars !== undefined ? `标注侧车: ${annotationSidecars}` : null,
     skippedCount !== undefined ? `已跳过: ${skippedCount}` : null,
@@ -198,6 +212,20 @@ function handleZipChange(event: Event) {
   const target = event.target as HTMLInputElement | null;
   zipFile.value = target?.files?.[0] || null;
 }
+
+function handleImageChange(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  imageFiles.value = Array.from(target?.files || []);
+}
+
+function handleVideoChange(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  videoFiles.value = Array.from(target?.files || []);
+}
+
+const canUploadImage = computed(() => datasetSupportsSampleType(dataset.value?.modality, "image"));
+const canUploadVideo = computed(() => datasetSupportsSampleType(dataset.value?.modality, "video"));
+const canUploadText = computed(() => datasetSupportsSampleType(dataset.value?.modality, "text"));
 
 async function fetchDataset() {
   if (!datasetId.value) return;
@@ -354,6 +382,53 @@ async function submitZipUpload() {
     await refreshAll();
   } finally {
     importLoading.value = false;
+  }
+}
+
+async function submitImageUpload() {
+  if (!datasetId.value || !imageFiles.value.length) return;
+  imageUploadLoading.value = true;
+  try {
+    await datasetStore.uploadImageSamples(datasetId.value, imageFiles.value);
+    imageFiles.value = [];
+    ElMessage.success("图片样本已上传");
+    await refreshAll();
+  } finally {
+    imageUploadLoading.value = false;
+  }
+}
+
+async function submitVideoUpload() {
+  if (!datasetId.value || !videoFiles.value.length) return;
+  videoUploadLoading.value = true;
+  try {
+    await datasetStore.uploadVideoSamples(datasetId.value, videoFiles.value);
+    videoFiles.value = [];
+    ElMessage.success("视频样本已上传");
+    await refreshAll();
+  } finally {
+    videoUploadLoading.value = false;
+  }
+}
+
+async function submitTextSample() {
+  if (!datasetId.value) return;
+  if (!textSampleForm.text_content.trim()) {
+    ElMessage.warning("请填写文本内容");
+    return;
+  }
+  textUploadLoading.value = true;
+  try {
+    await datasetStore.createTextSample(datasetId.value, {
+      sample_name: textSampleForm.sample_name.trim() || undefined,
+      text_content: textSampleForm.text_content.trim(),
+    });
+    textSampleForm.sample_name = "";
+    textSampleForm.text_content = "";
+    ElMessage.success("文本样本已添加");
+    await refreshAll();
+  } finally {
+    textUploadLoading.value = false;
   }
 }
 
@@ -535,7 +610,7 @@ watch(activeTab, (value) => {
         <p>{{ dataset?.description || "围绕一个数据集完成接入、图谱、对齐、增强与导出。" }}</p>
       </div>
       <div class="hero-meta">
-        <el-tag effect="plain">{{ dataset?.modality || "-" }}</el-tag>
+        <el-tag effect="plain">{{ datasetModalityLabel(dataset?.modality) }}</el-tag>
         <el-tag :type="statusTagType(dataset?.status)" effect="light">{{ dataset?.status || "-" }}</el-tag>
         <div class="hero-bytes">{{ formatBytes(dataset?.uploaded_bytes) }}</div>
       </div>
@@ -549,6 +624,10 @@ watch(activeTab, (value) => {
       <article class="metric-card">
         <span>图片样本</span>
         <strong>{{ dataset?.image_sample_count || 0 }}</strong>
+      </article>
+      <article class="metric-card">
+        <span>视频样本</span>
+        <strong>{{ dataset?.video_sample_count || 0 }}</strong>
       </article>
       <article class="metric-card">
         <span>文本样本</span>
@@ -634,7 +713,7 @@ watch(activeTab, (value) => {
       <article class="card-surface panel">
         <div class="panel-head">
           <h3>ZIP 导入</h3>
-          <span class="hint">支持图片及同名 .txt / .json 侧车</span>
+          <span class="hint">支持图片/视频批量包，并识别同名 .txt / .json 侧车</span>
         </div>
         <input type="file" accept=".zip" @change="handleZipChange" />
         <div class="action-row">
@@ -648,6 +727,48 @@ watch(activeTab, (value) => {
         </div>
       </article>
 
+      <article v-if="canUploadImage" class="card-surface panel">
+        <div class="panel-head">
+          <h3>图片直传</h3>
+          <span class="hint">支持 PNG、JPG、JPEG、WEBP、GIF、BMP</span>
+        </div>
+        <input type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp" multiple @change="handleImageChange" />
+        <div class="action-row">
+          <el-button type="primary" :loading="imageUploadLoading" @click="submitImageUpload">上传图片</el-button>
+          <span class="hint" v-if="imageFiles.length">已选择 {{ imageFiles.length }} 个文件</span>
+        </div>
+      </article>
+
+      <article v-if="canUploadVideo" class="card-surface panel">
+        <div class="panel-head">
+          <h3>视频上传</h3>
+          <span class="hint">支持 MP4、MOV、AVI、MKV、WEBM、M4V</span>
+        </div>
+        <input type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" multiple @change="handleVideoChange" />
+        <div class="action-row">
+          <el-button type="primary" :loading="videoUploadLoading" @click="submitVideoUpload">上传视频</el-button>
+          <span class="hint" v-if="videoFiles.length">已选择 {{ videoFiles.length }} 个文件</span>
+        </div>
+      </article>
+
+      <article v-if="canUploadText" class="card-surface panel">
+        <div class="panel-head">
+          <h3>文本直录</h3>
+          <span class="hint">适合投诉描述、检验备注、标注文本等快速录入</span>
+        </div>
+        <el-form label-position="top">
+          <el-form-item label="样本名称">
+            <el-input v-model="textSampleForm.sample_name" placeholder="可选，例如：case-001.txt" />
+          </el-form-item>
+          <el-form-item label="文本内容">
+            <el-input v-model="textSampleForm.text_content" type="textarea" :rows="6" placeholder="输入文本样本内容" />
+          </el-form-item>
+          <div class="action-row">
+            <el-button type="primary" :loading="textUploadLoading" @click="submitTextSample">添加文本</el-button>
+          </div>
+        </el-form>
+      </article>
+
       <article class="card-surface panel">
         <div class="panel-head">
           <h3>样本列表</h3>
@@ -657,6 +778,7 @@ watch(activeTab, (value) => {
           <el-input v-model="sampleFilters.keyword" clearable placeholder="搜索样本名或预览" />
           <el-select v-model="sampleFilters.sample_type" clearable placeholder="全部样本" @change="fetchSamples">
             <el-option label="图片" value="image" />
+            <el-option label="视频" value="video" />
             <el-option label="文本" value="text" />
           </el-select>
         </div>
@@ -890,6 +1012,12 @@ watch(activeTab, (value) => {
             <div><span>类型</span><strong>{{ sampleTypeLabel(previewPayload.sample_type) }}</strong></div>
             <div><span>大小</span><strong>{{ formatBytes(previewPayload.size_bytes) }}</strong></div>
           </div>
+          <video
+            v-if="previewPayload.sample_type === 'video' && previewPayload.download_url"
+            class="preview-video"
+            :src="previewPayload.download_url"
+            controls
+          />
           <pre class="preview-code">{{ JSON.stringify(previewPayload, null, 2) }}</pre>
         </div>
       </template>
@@ -938,6 +1066,13 @@ watch(activeTab, (value) => {
 .hero-bytes {
   color: #0f766e;
   font-weight: 600;
+}
+
+.preview-video {
+  width: 100%;
+  max-height: 360px;
+  border-radius: 16px;
+  background: #000;
 }
 
 .metric-strip {
