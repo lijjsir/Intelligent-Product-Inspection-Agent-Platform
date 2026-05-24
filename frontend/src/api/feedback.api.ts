@@ -26,8 +26,8 @@ export const feedbackApi = {
   updateStatus(id: string, payload: { status: string; resolution?: string }) {
     return http.patch<ResultFeedback>(`/v1/feedbacks/${id}/status`, payload);
   },
-  assign(id: string, payload: { assigned_to: string }) {
-    return http.patch<ResultFeedback>(`/v1/feedbacks/${id}/assign`, payload);
+  delete(id: string) {
+    return http.delete<{ deleted: boolean; feedback_id: string }>(`/v1/feedbacks/${id}`);
   },
   submitMessage(targetType: MessageFeedbackTargetType, targetId: string, payload: FeedbackSubmitPayload) {
     return http.post<MessageFeedback>(`/v1/feedbacks/messages/${targetType}/${targetId}`, payload);

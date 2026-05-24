@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { EChartsCoreOption } from "echarts/core";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { datasetApi } from "@/api/dataset.api";
 import { useECharts } from "@/composables/useECharts";
 import { useDatasetStore } from "@/stores/dataset.store";
@@ -603,18 +604,20 @@ watch(activeTab, (value) => {
 
 <template>
   <div class="workspace-detail">
-    <section class="hero card-surface">
-      <div class="hero-copy">
-        <el-button link type="primary" @click="router.push('/ops/data/import')">返回列表</el-button>
-        <h2>{{ dataset?.name || "数据接入工作台" }}</h2>
-        <p>{{ dataset?.description || "围绕一个数据集完成接入、图谱、对齐、增强与导出。" }}</p>
-      </div>
-      <div class="hero-meta">
-        <el-tag effect="plain">{{ datasetModalityLabel(dataset?.modality) }}</el-tag>
-        <el-tag :type="statusTagType(dataset?.status)" effect="light">{{ dataset?.status || "-" }}</el-tag>
-        <div class="hero-bytes">{{ formatBytes(dataset?.uploaded_bytes) }}</div>
-      </div>
-    </section>
+    <AlgoWorkspaceHero
+      :title="dataset?.name || '数据接入工作台'"
+      :description="dataset?.description || '围绕一个数据集完成接入、图谱、对齐、增强与导出。'"
+      back-path="/ops/data/import"
+      show-back
+    >
+      <template #aside>
+        <div class="hero-meta">
+          <el-tag effect="plain">{{ datasetModalityLabel(dataset?.modality) }}</el-tag>
+          <el-tag :type="statusTagType(dataset?.status)" effect="light">{{ dataset?.status || "-" }}</el-tag>
+          <div class="hero-bytes">{{ formatBytes(dataset?.uploaded_bytes) }}</div>
+        </div>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="metric-strip">
       <article class="metric-card">
@@ -1032,30 +1035,6 @@ watch(activeTab, (value) => {
   gap: 16px;
 }
 
-.hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 24px;
-}
-
-.hero-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.hero-copy h2 {
-  margin: 0;
-  font-size: 28px;
-  color: #18181b;
-}
-
-.hero-copy p {
-  margin: 0;
-  color: #52525b;
-}
-
 .hero-meta {
   display: flex;
   flex-direction: column;
@@ -1323,10 +1302,6 @@ watch(activeTab, (value) => {
   .export-grid,
   .processing-grid {
     grid-template-columns: 1fr;
-  }
-
-  .hero {
-    flex-direction: column;
   }
 
   .hero-meta {

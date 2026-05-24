@@ -33,6 +33,7 @@ class RagExecutor:
         hits: list[dict[str, Any]] = []
         rag_space_name = str((state.selected_rag_space or {}).get("name") or "").strip()
         top_score = 0.0
+        retrieval_meta: dict[str, Any] = {}
         if db_session is not None and rag_space_id:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
@@ -43,6 +44,7 @@ class RagExecutor:
                     top_k=5,
                     scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
                 )
+                retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
@@ -72,6 +74,9 @@ class RagExecutor:
                 "top_score": top_score,
                 "top_k": 5,
                 "latency_ms": latency_ms,
+                "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
+                "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
+                "score_threshold": retrieval_meta.get("score_threshold"),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
                 "hits": hits,

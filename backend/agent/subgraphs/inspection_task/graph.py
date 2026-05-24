@@ -769,6 +769,9 @@ class InspectionTaskGraph:
         rag_summary["system_rag_space_names"] = list(rag_result.get("system_rag_space_names") or [])
         rag_summary["standard_binding_name"] = rag_result.get("standard_binding_name")
         rag_summary["merged_rag_source_count"] = int(rag_result.get("merged_rag_source_count") or 0)
+        rag_summary["candidate_count"] = int(rag_result.get("candidate_count") or len(rag_hits))
+        rag_summary["rejected_count"] = int(rag_result.get("rejected_count") or 0)
+        rag_summary["score_threshold"] = rag_result.get("score_threshold")
         result_card = _build_result_card(
             product_id=product_id, product_family=product_family, product_name=product_name,
             spec_code=spec_code, verdict=verdict, overall_score=overall_score, risk_level=risk_level,
@@ -838,6 +841,10 @@ class InspectionTaskGraph:
                 workflow_version="inspection_task_v1",
                 prompt_version=runtime_profile.active_prompt_version,
                 route_subgraph="inspection_task",
+                trust_score=trust_scores.get("trust_score"),
+                hallucination_risk=trust_scores.get("hallucination_risk"),
+                overconfidence=trust_scores.get("overconfidence"),
+                has_citation=bool(trust_scores.get("has_citation")),
             ),
             rag_queries=[RagQueryLog(
                 query=retrieval_query,
@@ -858,6 +865,9 @@ class InspectionTaskGraph:
                          "evidence_found": bool(rag_hits),
                          "evidence_used": bool(rag_used_citations),
                          "verdict_impacted": bool(verdict_rule_hits),
+                         "candidate_count": int(rag_result.get("candidate_count") or len(rag_hits)),
+                         "rejected_count": int(rag_result.get("rejected_count") or 0),
+                         "score_threshold": rag_result.get("score_threshold"),
                          "rag_space_name": rag_result.get("rag_space_name"),
                          "top_sources": rag_summary["top_sources"],
                          "rule_hits": verdict_rule_hits,
@@ -865,6 +875,7 @@ class InspectionTaskGraph:
                              "rag_space_id": str(rag_result.get("rag_space_id") or "") or None,
                              "rag_space_name": str(rag_result.get("rag_space_name") or "") or None,
                              "top_k": retrieval_top_k,
+                             "score_threshold": rag_result.get("score_threshold"),
                              "scope_node_ids": list(request.ext.get("selected_rag_scope_node_ids") or []),
                          },
                          "retrieved_chunks": rag_hits,
@@ -960,13 +971,33 @@ class InspectionGraph:
         Maintains backward compatibility with the original agent/graph/ API.
         """
         if on_event:
-            for node_name in ("planner", "vision", "knowledge", "reasoning", "finalizer"):
+            result = state
+
+            async def run_stage(node_name: str, node: NodeFn) -> None:
+                nonlocal result
+                timeline_before = len(result.get("timeline") or [])
                 await on_event({"type": "stage_start", "stage": node_name})
-                # Run the graph one node at a time so we can emit events
-                # For the full graph run we use ainvoke and emit at boundaries
-            result = await self._graph.ainvoke(state)
-            for node_name in ("planner", "vision", "knowledge", "reasoning", "finalizer"):
-                await on_event({"type": "stage_end", "stage": node_name, "timeline": result.get("timeline", [])[-1:] if result.get("timeline") else []})
+                result = await node(result)
+                timeline = result.get("timeline") or []
+                await on_event(
+                    {
+                        "type": "stage_end",
+                        "stage": node_name,
+                        "timeline": timeline[timeline_before:],
+                    }
+                )
+
+            await run_stage("planner", plan)
+            await run_stage("vision", run_vision)
+            if self._should_continue(result) == "end":
+                return result
+            await run_stage("knowledge", run_knowledge)
+            if self._should_continue(result) == "end":
+                return result
+            await run_stage("reasoning", run_reasoning)
+            if self._should_continue(result) == "end":
+                return result
+            await run_stage("finalizer", finalize)
             return result
 
         return await self._graph.ainvoke(state)

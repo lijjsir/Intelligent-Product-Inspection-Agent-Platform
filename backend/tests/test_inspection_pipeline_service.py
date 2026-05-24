@@ -97,6 +97,7 @@ def test_normalize_image_urls_for_runtime_converts_api_file_urls(monkeypatch):
 
 class _PipelineTask:
     def __init__(self):
+        image_path = Path(__file__).parents[2] / "test_data" / "test_image.png"
         self.id = "task-1"
         self.org_id = "org-1"
         self.created_by = "user-1"
@@ -104,12 +105,7 @@ class _PipelineTask:
         self.spec_code = "SCREW-A-2026-V1"
         self.status = "pending"
         self.priority = 5
-        self.image_urls = [
-            str(
-                Path("/home/newuser/programs/Intelligent-Product-Inspection-Agent-Platform")
-                / "Snipaste_2026-05-20_15-36-36.png"
-            )
-        ]
+        self.image_urls = [str(image_path)]
         self.image_items = [{"index": 0, "url": self.image_urls[0], "hash": "img-hash-1"}]
         self.meta_data = {
             "product_family": "screw",
@@ -260,6 +256,17 @@ class _FakeEventRepo:
         return SimpleNamespace(**payload)
 
 
+class _FakeRagAnalysisRepo:
+    logs: list[dict] = []
+
+    def __init__(self, _session, org_id):
+        self.org_id = org_id
+
+    async def create_log_once(self, payload):
+        self.logs.append(dict(payload))
+        return SimpleNamespace(**payload)
+
+
 class _FakeInspectionSpecRepo:
     def __init__(self, _session):
         self.spec = SimpleNamespace(
@@ -297,7 +304,7 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     from contextlib import asynccontextmanager
     from app.services import inspection_pipeline_service as pipeline_mod
 
-    image_path = Path("/home/newuser/programs/Intelligent-Product-Inspection-Agent-Platform/Snipaste_2026-05-20_15-36-36.png")
+    image_path = Path(__file__).parents[2] / "test_data" / "test_image.png"
     assert image_path.exists()
 
     task_repo = _FakeTaskRepo(None)
@@ -306,6 +313,7 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     alert_repo = _FakeAlertRepo(None)
     token_repo = _FakeTokenLedgerRepo(None)
     user_token_repo = _FakeUserTokenUsageRepo(None)
+    _FakeRagAnalysisRepo.logs = []
 
     @asynccontextmanager
     async def fake_get_session():
@@ -351,6 +359,9 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
             "hit_count": 2,
             "latency_ms": 8.5,
             "source_count": 2,
+            "candidate_count": 3,
+            "rejected_count": 1,
+            "score_threshold": 0.55,
             "system_rag_space_ids": ["system-rag-1"],
             "system_rag_space_names": ["系统标准库"],
             "standard_binding_name": "螺丝国家标准",
@@ -382,6 +393,7 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     monkeypatch.setattr(pipeline_mod, "LLMGateway", lambda: _FakeGateway())
     monkeypatch.setattr(pipeline_mod, "LangfuseTracer", lambda: _FakeTrace())
     monkeypatch.setattr(pipeline_mod, "TaskExecutionEventRepository", _FakeEventRepo)
+    monkeypatch.setattr(pipeline_mod, "RagAnalysisRepository", _FakeRagAnalysisRepo)
     monkeypatch.setattr(pipeline_mod, "analyze", fake_analyze)
     monkeypatch.setattr(pipeline_mod, "should_trigger", lambda _stability: False)
     monkeypatch.setattr("app.services.inspection_standard_service.InspectionSpecRepository", _FakeInspectionSpecRepo)
@@ -398,6 +410,20 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     async def fake_chat(self, messages, temperature=0.1, observation_name=None, observation_metadata=None):
         if observation_name == "inspection.vision":
             return {"defects": [], "image_summary": "螺丝外观完整，无可见异常。"}
+        if observation_name == "inspection.reasoning":
+            return {
+                "verdict": "pass",
+                "overall_score": 0.98,
+                "reasoning_chain": {"llm_reason": "视觉与标准证据均支持通过。"},
+                "__meta__": {
+                    "model": "test-model",
+                    "usage": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 30,
+                        "total_tokens": 150,
+                    },
+                },
+            }
         raise AssertionError(f"unexpected llm observation {observation_name}")
 
     monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient.chat", fake_chat)
@@ -408,7 +434,12 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     assert task_repo.status_updates == ["running", "done"]
     assert result_repo.saved_payload is not None
     assert result_repo.saved_payload["verdict"] == "pass"
+    assert result_repo.saved_payload["latency_ms"] > 0
     reasoning_chain = result_repo.saved_payload["reasoning_chain"]
+    assert reasoning_chain["trace"]["trust_score"] is not None
+    assert reasoning_chain["trace"]["hallucination_risk"] is not None
+    assert reasoning_chain["trace"]["overconfidence"] is not None
+    assert reasoning_chain["trace"]["has_citation"] is True
     assert reasoning_chain["standard_evaluation"]["verdict"] == "pass"
     assert reasoning_chain["rag_summary"]["system_rag_space_ids"] == ["system-rag-1"]
     assert reasoning_chain["rag_summary"]["standard_binding_name"] == "螺丝国家标准"
@@ -419,3 +450,13 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     assert len(citations) >= 2
     assert stability_repo.saved_payload is not None
     assert stability_repo.saved_payload["risk_level"] == "low"
+    assert len(_FakeRagAnalysisRepo.logs) == 1
+    rag_log = _FakeRagAnalysisRepo.logs[0]
+    assert rag_log["task_id"] == "task-1"
+    assert rag_log["source_graph"] == "inspection_task"
+    assert rag_log["sub_route"] == "task_execution"
+    assert rag_log["hit_count"] == 2
+    assert rag_log["top_score"] == 0.95
+    assert rag_log["metadata_json"]["candidate_count"] == 3
+    assert rag_log["metadata_json"]["rejected_count"] == 1
+    assert rag_log["metadata_json"]["evidence_used"] is True

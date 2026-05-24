@@ -9,6 +9,7 @@ import type {
 } from "@/types/meeting.types";
 
 export const useMeetingStore = defineStore("meeting", () => {
+
   // ── State ──────────────────────────────────────────────────────
 
   const rooms = ref<MeetingRoom[]>([]);

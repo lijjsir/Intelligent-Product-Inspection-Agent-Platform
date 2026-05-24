@@ -13,6 +13,7 @@ export interface MenuItem {
   path: string;
   icon?: string;
   placeholder?: boolean;
+  activeMatchPaths?: string[];
 }
 
 export interface MenuGroup {

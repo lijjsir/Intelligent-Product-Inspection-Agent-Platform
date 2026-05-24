@@ -13,14 +13,15 @@ export const useGpuInfraStore = defineStore("gpu-infra", () => {
   const availableGpuCount = computed(() => items.value.reduce((sum, item) => sum + (item.available_gpu_count || 0), 0));
   const allocatedGpuCount = computed(() => totalGpuCount.value - availableGpuCount.value);
 
-  async function fetchAll() {
-    loading.value = true;
+  async function fetchAll(options?: { silent?: boolean }) {
+    const silent = Boolean(options?.silent);
+    if (!silent) loading.value = true;
     try {
       const { data } = await gpuInfraApi.list();
       items.value = data.data;
       return data.data;
     } finally {
-      loading.value = false;
+      if (!silent) loading.value = false;
     }
   }
 

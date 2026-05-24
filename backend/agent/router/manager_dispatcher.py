@@ -47,16 +47,18 @@ class ManagerDispatcher:
         agent = state.selected_agent or ""
         allowed_modes = list(getattr(state, "allowed_modes", []) or [])
 
-        # Force web search when user enables the toggle
         request_ext = dict(getattr(request, "ext", {}) or {})
-        force_web_search = bool(request_ext.get("force_web_search"))
+        forced_tool_names: list[str] = []
+        if request_ext.get("force_web_search"):
+            forced_tool_names.append("web.search")
 
         available_tools = registry.list_for(agent=agent, surface=surface, allowed_modes=allowed_modes)
-        if force_web_search and "web.search" in registry:
-            # Ensure web.search is first in the tool list so model prioritizes it
+        if "web.search" in forced_tool_names and "web.search" in registry:
+            # User explicitly selected web search; put it first so the tool loop can force it.
             web_spec = registry.get("web.search")
             available_tools = [web_spec] + [t for t in available_tools if t.name != "web.search"]
         state.available_tools = available_tools
+        state.forced_tool_names = forced_tool_names
         state.tool_invoker = invoker
 
         observations: list[AgentObservation] = []

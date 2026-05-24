@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useEvalDatasetStore } from "@/stores/evalDataset.store";
 import type { DatasetSample, DatasetSampleType } from "@/types/dataset.types";
 
 const route = useRoute();
-const router = useRouter();
 const evalStore = useEvalDatasetStore();
 const datasetStore = useDatasetStore();
 
@@ -51,10 +51,6 @@ async function loadSourceSamples() {
     size: sourceSampleQuery.size,
     sample_type: sourceSampleQuery.sample_type || undefined,
   });
-}
-
-function handleBack() {
-  router.push("/ops/data/eval-sets");
 }
 
 function previewSample(row: any) {
@@ -121,17 +117,26 @@ watch(
 
 <template>
   <div class="detail-page">
-    <section class="detail-topbar">
-      <div class="flex flex-col gap-2">
-        <el-button link type="primary" @click="handleBack">返回评测集列表</el-button>
-        <h2>{{ evalStore.current?.name || "评测集详情" }}</h2>
-        <p>{{ evalStore.current?.description || "查看评测集快照样本，并继续增删样本。" }}</p>
-      </div>
-      <div class="detail-tags">
-        <el-tag>来源数据集：{{ evalStore.current?.source_dataset_id || "-" }}</el-tag>
-        <el-tag type="success">样本数：{{ evalStore.current?.sample_count || 0 }}</el-tag>
-      </div>
-    </section>
+    <AlgoWorkspaceHero
+      :title="evalStore.current?.name || '评测集详情'"
+      :description="evalStore.current?.description || '查看评测集快照样本，并继续增删样本。'"
+      back-path="/ops/data/eval-sets"
+      back-text="返回评测集列表"
+      show-back
+    >
+      <template #aside>
+        <div class="hero-meta">
+          <el-tag>来源数据集：{{ evalStore.current?.source_dataset_id || "-" }}</el-tag>
+          <div class="hero-stat">
+            <span>样本数</span>
+            <strong>{{ evalStore.current?.sample_count || 0 }}</strong>
+          </div>
+        </div>
+      </template>
+      <template #actions>
+        <el-button type="primary" @click="openAppendDrawer">追加样本</el-button>
+      </template>
+    </AlgoWorkspaceHero>
 
     <section class="detail-grid">
       <article class="overview-card">
@@ -161,7 +166,7 @@ watch(
       <article class="overview-card">
         <div class="section-head">
           <h3>快照预览</h3>
-          <el-button type="primary" @click="openAppendDrawer">追加样本</el-button>
+          <span class="section-note">展示评测集当前保存的快照样本。</span>
         </div>
         <div class="preview-grid" v-if="(evalStore.current?.samples_preview || []).length">
           <div v-for="item in evalStore.current?.samples_preview || []" :key="item.id" class="preview-card">
@@ -294,31 +299,33 @@ watch(
   gap: 20px;
 }
 
-.detail-topbar {
+.hero-meta {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  padding: 24px;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #f4f8ef, #fff6e8);
-}
-
-.detail-topbar h2 {
-  margin: 0;
-  font-size: 28px;
-  color: #17212c;
-}
-
-.detail-topbar p {
-  margin: 0;
-  color: #536171;
-}
-
-.detail-tags {
-  display: flex;
-  gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  align-items: center;
+}
+
+.hero-stat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(14, 116, 144, 0.14);
+  color: #334155;
+}
+
+.hero-stat span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.hero-stat strong {
+  font-size: 16px;
+  color: #0f172a;
 }
 
 .detail-grid {
@@ -361,6 +368,11 @@ watch(
   justify-content: space-between;
   gap: 12px;
   align-items: center;
+}
+
+.section-note {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .preview-grid {
@@ -445,5 +457,23 @@ watch(
   margin: 6px 0 0;
   color: #5c6978;
   font-size: 13px;
+}
+
+@media (max-width: 767px) {
+  .hero-meta {
+    justify-content: flex-start;
+  }
+
+  .detail-grid,
+  .overview-metrics,
+  .preview-grid,
+  .append-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

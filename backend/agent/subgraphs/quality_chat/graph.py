@@ -283,7 +283,14 @@ def _fallback_answer(query: str, docs: list[dict[str, Any]], citations: list[dic
 
 def _rag_answer_fallback(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
     if not docs:
-        return {"answer": "当前知识库没有检索到足够相关的内容。", "summary": "RAG 未检索到依据", "citations": citations}
+        return {
+            "answer": (
+                "当前知识库没有检索到可引用依据；同时模型本次未生成有效回复，"
+                f"因此暂时无法可靠回答“{query}”。请稍后重试或补充知识库资料。"
+            ),
+            "summary": "RAG 未命中且模型回复兜底失败",
+            "citations": citations,
+        }
     top = docs[0]
     excerpt = str(top.get("text") or "").strip()
     if len(excerpt) > 220:
@@ -518,6 +525,9 @@ async def knowledge(state: ChatState) -> ChatState:
         "system_rag_space_ids": list(rag_result.get("system_rag_space_ids") or []),
         "system_rag_space_names": list(rag_result.get("system_rag_space_names") or []),
         "standard_binding_name": rag_result.get("standard_binding_name"),
+        "candidate_count": int(rag_result.get("candidate_count") or len(docs)),
+        "rejected_count": int(rag_result.get("rejected_count") or 0),
+        "score_threshold": rag_result.get("score_threshold"),
         "top_k": top_k,
     }
     return state
@@ -850,10 +860,14 @@ async def _persist_rag_query_log(session, state: ChatState) -> None:
                 "evidence_found": evidence_found,
                 "evidence_used": evidence_used,
                 "verdict_impacted": verdict_impacted,
+                "candidate_count": int(metrics.get("candidate_count") or hit_count),
+                "rejected_count": int(metrics.get("rejected_count") or 0),
+                "score_threshold": metrics.get("score_threshold"),
                 "retrieval_config": {
                     "rag_space_id": metrics.get("rag_space_id"),
                     "rag_space_name": str((((state.get("ext") or {}).get("selected_rag_space") or {}).get("name") or "")).strip() or None,
                     "top_k": top_k,
+                    "score_threshold": metrics.get("score_threshold"),
                     "scope_node_ids": _selected_rag_scope_node_ids(state.get("ext") or {}),
                 },
                 "retrieved_chunks": retrieved_chunks,

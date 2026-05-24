@@ -72,6 +72,63 @@ async def test_rag_retrieval_service_returns_chunk_hits_with_scope_filters(monke
 
 
 @pytest.mark.asyncio
+async def test_rag_retrieval_service_filters_hits_below_score_threshold(monkeypatch):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+
+    class FakeRetriever:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            return [
+                {"id": "relevant", "title": "doc", "text": "relevant hit", "score": 0.72},
+                {"id": "irrelevant", "title": "doc", "text": "irrelevant candidate", "score": 0.31},
+            ]
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda session: FakeSpaceRepo())
+    monkeypatch.setattr("app.services.rag_retrieval_service.Retriever", FakeRetriever)
+    monkeypatch.setattr("app.services.rag_retrieval_service.settings.rag_score_threshold", 0.55)
+
+    service = RagRetrievalService(FakeSession(), org_id="org-1", user_id="user-1")
+    result = await service.search(rag_space_id="space-1", query="anything", top_k=2)
+
+    assert result["hit_count"] == 1
+    assert result["candidate_count"] == 2
+    assert result["rejected_count"] == 1
+    assert result["score_threshold"] == 0.55
+    assert [hit["id"] for hit in result["hits"]] == ["relevant"]
+
+
+@pytest.mark.asyncio
+async def test_rag_retrieval_service_returns_empty_when_all_candidates_are_below_threshold(monkeypatch):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+
+    class FakeRetriever:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            return [
+                {"id": "weak-1", "title": "doc", "text": "weak", "score": 0.3},
+                {"id": "weak-2", "title": "doc", "text": "weak", "score": 0.42},
+            ]
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda session: FakeSpaceRepo())
+    monkeypatch.setattr("app.services.rag_retrieval_service.Retriever", FakeRetriever)
+    monkeypatch.setattr("app.services.rag_retrieval_service.settings.rag_score_threshold", 0.55)
+
+    service = RagRetrievalService(FakeSession(), org_id="org-1", user_id="user-1")
+    result = await service.search(rag_space_id="space-1", query="unrelated", top_k=2)
+
+    assert result["hits"] == []
+    assert result["hit_count"] == 0
+    assert result["candidate_count"] == 2
+    assert result["rejected_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_rag_retrieval_service_caches_space_and_result(monkeypatch):
     _rag_space_cache.clear()
     _rag_result_cache.clear()

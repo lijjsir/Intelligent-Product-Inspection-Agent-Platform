@@ -31,3 +31,22 @@ class TaskExecutionEventRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def list_after(
+        self,
+        org_id: str,
+        task_id: str,
+        *,
+        after_id: str | None = None,
+        limit: int = 50,
+    ) -> list[TaskExecutionEvent]:
+        stmt = select(TaskExecutionEvent).where(
+            TaskExecutionEvent.org_id == org_id,
+            TaskExecutionEvent.task_id == task_id,
+        )
+        if after_id:
+            stmt = stmt.where(TaskExecutionEvent.id > after_id)
+        result = await self._session.execute(
+            stmt.order_by(TaskExecutionEvent.id.asc()).limit(limit)
+        )
+        return list(result.scalars().all())

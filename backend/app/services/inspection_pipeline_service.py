@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
+from time import perf_counter
 import traceback
 from typing import Any
 
@@ -14,6 +16,7 @@ from app.core.datetime import utcnow, utcnow_iso
 from app.core.ids import uuid7
 from app.models.task import InspectionTask
 from app.repositories.alert_repo import AlertRepository
+from app.repositories.agent_ops_repo import RagAnalysisRepository
 from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
@@ -24,8 +27,12 @@ from app.repositories.user_token_usage_repo import UserTokenUsageSummaryReposito
 from app.services.model_config_service import ModelConfigService
 from app.services.inspection_standard_service import InspectionStandardService
 from app.services.file_storage_service import FileStorageService
+from app.services.result_trace_utils import build_trace_metrics
 from app.services.stream_service import chat_stream_broker, stream_broker
 from infra.database.session import get_session
+
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_image_urls_for_runtime(image_urls: list[str] | None) -> list[str]:
@@ -148,6 +155,96 @@ async def _record_token_usage(
             cost_amount=cost_amount,
         )
     return total_tokens
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def _persist_rag_query_log(
+    session,
+    *,
+    task: InspectionTask,
+    state: InspectionState,
+    standard_evaluation: dict[str, Any],
+) -> None:
+    query = str(state.get("rag_retrieval_query") or "").strip()
+    if not query:
+        return
+
+    summary = dict(state.get("rag_summary") or {})
+    docs = [item for item in list(state.get("knowledge_docs") or []) if isinstance(item, dict)]
+    citations = [item for item in list(state.get("citations") or []) if isinstance(item, dict)]
+    top_k = int(state.get("rag_top_k") or summary.get("top_k") or 5)
+    hit_count = int(summary.get("hit_count") or len(docs))
+    hit_rate = round(min(1.0, hit_count / max(top_k, 1)), 4)
+    top_score = _float_or_zero(docs[0].get("score") if docs else summary.get("top_score"))
+    rag_space_ids = [str(item) for item in list(summary.get("rag_space_ids") or []) if str(item).strip()]
+    selected_rag_space_id = str(state.get("selected_rag_space_id") or "").strip()
+    system_rag_space_ids = [str(item) for item in list(summary.get("system_rag_space_ids") or []) if str(item).strip()]
+    if not selected_rag_space_id and not rag_space_ids and not system_rag_space_ids:
+        return
+    rag_space_id = selected_rag_space_id or str(summary.get("rag_space_id") or "").strip() or (rag_space_ids[0] if rag_space_ids else None)
+    top_sources = list(summary.get("top_sources") or [])
+    verdict = str(standard_evaluation.get("verdict") or "").strip()
+
+    metadata = {
+        "product_id": task.product_id,
+        "spec_code": task.spec_code,
+        "product_family": state.get("product_family"),
+        "verdict": verdict or None,
+        "top_score": top_score,
+        "evidence_found": hit_count > 0,
+        "evidence_used": bool(citations),
+        "verdict_impacted": bool(citations and verdict),
+        "candidate_count": int(summary.get("candidate_count") or hit_count),
+        "rejected_count": int(summary.get("rejected_count") or 0),
+        "score_threshold": summary.get("score_threshold"),
+        "rag_space_ids": rag_space_ids,
+        "rag_space_names": list(summary.get("rag_space_names") or []),
+        "system_rag_space_ids": system_rag_space_ids,
+        "system_rag_space_names": list(summary.get("system_rag_space_names") or []),
+        "standard_binding_name": summary.get("standard_binding_name"),
+        "top_sources": top_sources,
+        "rule_hits": list(standard_evaluation.get("reasons") or []),
+        "retrieval_config": {
+            "rag_space_id": rag_space_id,
+            "rag_space_ids": rag_space_ids,
+            "top_k": top_k,
+            "score_threshold": summary.get("score_threshold"),
+            "scope_node_ids": list(state.get("selected_rag_scope_node_ids") or []),
+        },
+        "retrieved_chunks": docs,
+        "used_citations": citations,
+        "source": "task_execution",
+    }
+
+    repo = RagAnalysisRepository(session, str(task.org_id))
+    create_log = getattr(repo, "create_log_once", None) or repo.create_log
+    await create_log(
+        {
+            "idempotency_key": f"inspection_pipeline:{task.id}:{state.get('trace_id') or 'trace'}",
+            "task_id": task.id,
+            "session_id": _linked_chat_session_id(task) or None,
+            "user_id": task.created_by,
+            "query": query,
+            "rag_space_id": rag_space_id,
+            "top_k": top_k,
+            "hit_count": hit_count,
+            "hit_rate": hit_rate,
+            "citation_coverage": hit_rate if citations else 0.0,
+            "latency_ms": int(_float_or_zero(summary.get("latency_ms"))),
+            "source_graph": "inspection_task",
+            "agent_name": "inspection_task",
+            "sub_route": "task_execution",
+            "trace_id": str(state.get("trace_id") or "") or None,
+            "top_score": top_score,
+            "metadata_json": metadata,
+        }
+    )
 
 
 async def _append_chat_result_summary(
@@ -352,6 +449,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             await stream_broker.publish(task_id, event)
 
         await emit({"type": "status", "status": "running", "message": "任务开始执行"})
+        pipeline_started_at = perf_counter()
 
         try:
             runtime_models = await model_config_service.list_runtime_models()
@@ -408,6 +506,7 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                         "type": "model_failover",
                         "from_model_id": runtime.get("model_id"),
                         "from_model_config_id": runtime.get("model_config_id"),
+                        "message": f"模型 {runtime.get('model_id')} 调用失败，切换备用模型",
                         "reason": detail,
                     }
                 )
@@ -420,6 +519,15 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
 
             if state is None:
                 raise RuntimeError("inspection graph did not produce a state")
+
+            await emit(
+                {
+                    "type": "model_selected",
+                    "model_id": state.get("model_id"),
+                    "model_config_id": state.get("model_config_id"),
+                    "provider": state.get("model_provider"),
+                }
+            )
 
             conclusion = state.get("conclusion") or {}
             reasoning_chain = dict(state.get("reasoning_chain") or {})
@@ -437,14 +545,35 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 overall_score=float(conclusion.get("overall_score") or 0.5),
             )
             state["standard_evaluation"] = standard_evaluation
+            await emit(
+                {
+                    "type": "standard_gate",
+                    "spec_code": task.spec_code,
+                    "verdict": standard_evaluation.get("verdict"),
+                    "reasons": standard_evaluation.get("reasons") or [],
+                }
+            )
             reasoning_chain["standard_evaluation"] = standard_evaluation
+            citations = list(state.get("citations") or [])
+            trace_metrics = build_trace_metrics(
+                reasoning_chain=reasoning_chain,
+                input_text=str(state.get("structured_record") or task.meta_data or task.spec_code or ""),
+                output_text=str(
+                    standard_evaluation.get("summary")
+                    or conclusion.get("verdict")
+                    or ""
+                ),
+                citations=citations,
+            )
             reasoning_chain["trace"] = {
                 "trace_id": state.get("trace_id"),
                 "trace_url": trace.get("trace_url"),
                 "task_id": task.id,
                 "org_id": task.org_id,
                 "model_key": state.get("model_id"),
+                **trace_metrics,
             }
+            latency_ms = max(1, int(round((perf_counter() - pipeline_started_at) * 1000)))
             result_payload = {
                 "id": str(uuid7()),
                 "task_id": task.id,
@@ -452,14 +581,24 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "verdict": standard_evaluation.get("verdict") or conclusion.get("verdict") or "uncertain",
                 "overall_score": float(conclusion.get("overall_score") or 0.5),
                 "defects": state.get("defects") or [],
-                "citations": {"items": state.get("citations") or []},
+                "citations": {"items": citations},
                 "reasoning_chain": reasoning_chain,
                 "llm_model": state.get("model_id") or "unknown",
                 "prompt_version": "phase3-v1",
                 "tokens_used": 0,
-                "latency_ms": None,
+                "latency_ms": latency_ms,
             }
             result = await result_repo.upsert_by_task(result_payload)
+            await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
+            try:
+                await _persist_rag_query_log(
+                    session,
+                    task=task,
+                    state=state,
+                    standard_evaluation=standard_evaluation,
+                )
+            except Exception:
+                logger.exception("failed to persist inspection rag query log task_id=%s", task.id)
 
             usage_events = state.get("usage_events") or []
             total_tokens = await _record_token_usage(
@@ -503,6 +642,13 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 "created_at": utcnow(),
             }
             stability_obj = await stability_repo.upsert_by_task(stability_payload)
+            await emit(
+                {
+                    "type": "stability",
+                    "risk_level": stability_obj.risk_level,
+                    "risk_score": float(stability_obj.risk_score),
+                }
+            )
 
             if should_trigger(stability):
                 from app.services.rule_engine_service import RuleEngineService
@@ -602,30 +748,6 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
 
 
             await emit({"type": "status", "status": "done"})
-            await emit(
-                {
-                    "type": "model_selected",
-                    "model_id": state.get("model_id"),
-                    "model_config_id": state.get("model_config_id"),
-                    "provider": state.get("model_provider"),
-                }
-            )
-            await emit(
-                {
-                    "type": "standard_gate",
-                    "spec_code": task.spec_code,
-                    "verdict": standard_evaluation.get("verdict"),
-                    "reasons": standard_evaluation.get("reasons") or [],
-                }
-            )
-            await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
-            await emit(
-                {
-                    "type": "stability",
-                    "risk_level": stability_obj.risk_level,
-                    "risk_score": float(stability_obj.risk_score),
-                }
-            )
             if linked_chat_session_id:
                 await _append_chat_result_summary(
                     org_id=org_id,

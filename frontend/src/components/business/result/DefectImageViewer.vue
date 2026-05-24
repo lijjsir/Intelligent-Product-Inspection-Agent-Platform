@@ -26,6 +26,7 @@ const canvasRef = ref<HTMLCanvasElement>()
 const containerRef = ref<HTMLDivElement>()
 const imageLoaded = ref(false)
 const scale = ref(1)
+let resizeObserver: ResizeObserver | null = null
 
 // Colors for different defect types
 const DEFECT_COLORS: Record<string, string> = {
@@ -194,24 +195,19 @@ watch(() => [props.imageUrl, props.defects, props.normalized], () => {
 }, { deep: true })
 
 onMounted(() => {
-  if (props.imageUrl) {
+  if (props.imageUrl && containerRef.value) {
     drawImageAndDefects()
+    resizeObserver = new ResizeObserver(() => {
+      if (props.imageUrl) drawImageAndDefects()
+    })
+    resizeObserver.observe(containerRef.value)
   }
 })
 
-// Handle window resize
-const handleResize = () => {
-  if (props.imageUrl) {
-    drawImageAndDefects()
-  }
-}
-
-window.addEventListener('resize', handleResize)
-
-// Cleanup
 import { onUnmounted } from 'vue'
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 </script>
 

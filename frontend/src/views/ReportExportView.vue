@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useExportStore } from "@/stores/export.store";
+import { taskApi } from "@/api/task.api";
+import { TOKEN_KEY, ORG_ID_KEY, readStoredValue } from "@/utils/auth-session";
 import { usePagination } from "@/composables/usePagination";
 import type { ExportFormat, ExportJob, ExportJobStatus, ReportType } from "@/types/governance.types";
+import type { InspectionTask } from "@/types/task.types";
 
 const exportStore = useExportStore();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
@@ -37,6 +40,8 @@ const templates = [
 const failureDetailVisible = ref(false);
 const activeFailureJob = ref<ExportJob | null>(null);
 const failedJobDeletingId = ref<string | null>(null);
+const taskOptions = ref<InspectionTask[]>([]);
+const taskLoading = ref(false);
 
 const form = ref({
   report_name: "",
@@ -106,7 +111,56 @@ const canNext = computed(() => {
 
 onMounted(() => {
   fetchHistory();
+  fetchTaskOptions();
 });
+
+const pollTimer = ref<ReturnType<typeof setInterval> | null>(null);
+
+const hasPendingJobs = computed(() =>
+  exportStore.jobs.some((j) => j.status === "pending" || j.status === "running")
+);
+
+function startPolling() {
+  stopPolling();
+  pollTimer.value = setInterval(() => fetchHistory(), 3000);
+}
+
+function stopPolling() {
+  if (pollTimer.value !== null) {
+    clearInterval(pollTimer.value);
+    pollTimer.value = null;
+  }
+}
+
+watch(
+  () => [mainTab.value, hasPendingJobs.value] as const,
+  ([tab, pending]) => {
+    if (tab === "history" && pending) {
+      startPolling();
+    } else {
+      stopPolling();
+    }
+  },
+);
+
+onBeforeUnmount(() => stopPolling());
+
+async function fetchTaskOptions(keyword?: string) {
+  const queryText = keyword?.trim() || "";
+  const looksLikeTaskId = /^[0-9a-f-]{8,}$/i.test(queryText);
+  taskLoading.value = true;
+  try {
+    const { data } = await taskApi.list({
+      page: 1,
+      size: 100,
+      ids: looksLikeTaskId ? queryText : undefined,
+      product_id: queryText && !looksLikeTaskId ? queryText : undefined,
+    });
+    taskOptions.value = data.data.items;
+  } finally {
+    taskLoading.value = false;
+  }
+}
 
 async function fetchHistory() {
   await exportStore.fetchJobs({ page: page.value, size: pageSize.value });
@@ -173,7 +227,15 @@ async function handleGenerate() {
 }
 
 async function handleDelete(id: string) {
-  await ElMessageBox.confirm("确认删除此导出记录？", "删除确认", { type: "warning" });
+  try {
+    await ElMessageBox.confirm("确认删除此导出记录？", "删除确认", {
+      type: "warning",
+      confirmButtonText: "确认删除",
+      cancelButtonText: "取消",
+    });
+  } catch {
+    return; // user cancelled
+  }
   deletingId.value = id;
   try {
     await exportStore.removeJob(id);
@@ -206,8 +268,37 @@ function formatSize(bytes: number | null) {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
-function downloadFile(url: string) {
-  window.open(url, "_blank");
+function taskOptionLabel(task: InspectionTask) {
+  const status = task.status ? ` · ${task.status}` : "";
+  return `${task.product_id || "未命名产品"} · ${task.spec_code || "未配置标准"}${status} · ${shortId(task.id)}`;
+}
+
+function shortId(id: string) {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+async function downloadFile(row: ExportJob) {
+  try {
+    const token = readStoredValue(TOKEN_KEY);
+    const orgId = readStoredValue(ORG_ID_KEY);
+    const url = `/api/v1/exports/${row.id}/download`;
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (orgId) headers["X-Org-Id"] = orgId;
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `${row.report_name || 'report'}.${row.format || 'pdf'}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+  } catch {
+    ElMessage.error("下载失败，请重试");
+  }
 }
 
 function showFailureDetail(row: ExportJob) {
@@ -284,7 +375,29 @@ async function handleRegenerate(row: ExportJob) {
 
                 <template v-if="form.report_type === 'single_task'">
                   <el-form-item label="任务 ID" required>
-                    <el-input v-model="form.task_id" placeholder="请输入任务 ID" />
+                    <el-select
+                      v-model="form.task_id"
+                      placeholder="请选择任务"
+                      filterable
+                      clearable
+                      remote
+                      reserve-keyword
+                      :remote-method="fetchTaskOptions"
+                      :loading="taskLoading"
+                      class="!w-full"
+                    >
+                      <el-option
+                        v-for="task in taskOptions"
+                        :key="task.id"
+                        :label="taskOptionLabel(task)"
+                        :value="task.id"
+                      >
+                        <div class="flex items-center justify-between gap-4">
+                          <span class="truncate">{{ task.product_id || "未命名产品" }} · {{ task.spec_code || "未配置标准" }}</span>
+                          <span class="text-xs text-zinc-400 shrink-0">{{ task.status }} · {{ shortId(task.id) }}</span>
+                        </div>
+                      </el-option>
+                    </el-select>
                   </el-form-item>
                   <el-collapse>
                     <el-collapse-item title="基础内容" name="basic">
@@ -436,7 +549,7 @@ async function handleRegenerate(row: ExportJob) {
           </el-table-column>
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button v-if="row.status === 'success' && row.file_url" link type="primary" size="small" @click="downloadFile(row.file_url)">下载</el-button>
+              <el-button v-if="row.status === 'success'" link type="primary" size="small" @click="downloadFile(row)">下载</el-button>
               <el-button v-if="row.status === 'failed'" link type="warning" size="small" @click="showFailureDetail(row)">失败原因</el-button>
               <el-button v-if="row.status === 'failed' || row.status === 'expired'" link type="primary" size="small" @click="handleRegenerate(row)">重新生成</el-button>
               <el-button link type="danger" size="small" :loading="deletingId === row.id" @click="handleDelete(row.id)">删除</el-button>
@@ -468,7 +581,7 @@ async function handleRegenerate(row: ExportJob) {
             >
               <div class="font-semibold text-sm">{{ t.label }}</div>
               <div class="text-xs text-zinc-400 mt-1">{{ t.desc }}</div>
-              <el-tag size="small" class="mt-2" :type="t.key === 'standard' ? '' : t.key === 'audit' ? 'warning' : 'info'">
+              <el-tag size="small" class="mt-2" :type="t.key === 'standard' ? 'primary' : t.key === 'audit' ? 'warning' : 'info'">
                 {{ t.key === 'standard' ? '默认' : t.key === 'audit' ? '审计' : '简洁' }}
               </el-tag>
             </div>

@@ -491,6 +491,9 @@ class LLMNativeQualitySubgraph:
         rag_summary["system_rag_space_names"] = list(rag_result.get("system_rag_space_names") or [])
         rag_summary["standard_binding_name"] = rag_result.get("standard_binding_name")
         rag_summary["merged_rag_source_count"] = int(rag_result.get("merged_rag_source_count") or 0)
+        rag_summary["candidate_count"] = int(rag_result.get("candidate_count") or len(rag_hits))
+        rag_summary["rejected_count"] = int(rag_result.get("rejected_count") or 0)
+        rag_summary["score_threshold"] = rag_result.get("score_threshold")
         result_card = _build_result_card(
             product_id=product_id,
             product_family=product_family,
@@ -584,6 +587,10 @@ class LLMNativeQualitySubgraph:
                 workflow_version="quality_agent_root_v1",
                 prompt_version=runtime_profile.active_prompt_version,
                 route_subgraph="llm_native_quality",
+                trust_score=trust_scores.get("trust_score"),
+                hallucination_risk=trust_scores.get("hallucination_risk"),
+                overconfidence=trust_scores.get("overconfidence"),
+                has_citation=bool(trust_scores.get("has_citation")),
             ),
             rag_queries=[
                 RagQueryLog(
@@ -603,6 +610,9 @@ class LLMNativeQualitySubgraph:
                         "spec_code": spec_code,
                         "verdict": verdict,
                         "expectation_matched": None if not expectation_check else expectation_check["matched"],
+                        "candidate_count": int(rag_result.get("candidate_count") or len(rag_hits)),
+                        "rejected_count": int(rag_result.get("rejected_count") or 0),
+                        "score_threshold": rag_result.get("score_threshold"),
                         "rag_space_name": rag_result.get("rag_space_name"),
                         "top_sources": rag_summary["top_sources"],
                         "rule_hits": list(dict.fromkeys(result_card["failed_rules"])),

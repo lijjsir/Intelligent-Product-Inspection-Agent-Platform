@@ -15,6 +15,7 @@ from app.models.agent_ops import (
     PromptVersion,
     RagQueryLog,
 )
+from app.core.config import settings
 
 T = TypeVar("T")
 
@@ -245,6 +246,7 @@ class IntentRouteRepository(AgentOpsRepository):
 class RagAnalysisRepository(AgentOpsRepository):
     async def get_rag_stats(self, days: int = 90) -> dict:
         cutoff_date = utcnow() - timedelta(days=days)
+        score_threshold = max(0.0, min(1.0, float(settings.rag_score_threshold)))
 
         filters = [
             RagQueryLog.created_at >= cutoff_date,
@@ -253,11 +255,17 @@ class RagAnalysisRepository(AgentOpsRepository):
         if self._org_id is not None:
             filters.insert(0, RagQueryLog.org_id == self._org_id)
 
+        relevant_score = func.coalesce(RagQueryLog.top_score, 0.0) >= score_threshold
+        empty_recall = (RagQueryLog.hit_count == 0) | (func.coalesce(RagQueryLog.top_score, 0.0) < score_threshold)
         stmt = select(
             func.count().label("total_queries"),
-            func.coalesce(func.avg(RagQueryLog.hit_rate), 0.0).label("avg_hit_rate"),
-            func.coalesce(func.avg(RagQueryLog.citation_coverage), 0.0).label("citation_coverage"),
-            func.sum(case((RagQueryLog.hit_count == 0, 1), else_=0)).label("empty_recall_count"),
+            func.coalesce(func.avg(case((relevant_score, RagQueryLog.hit_rate), else_=0.0)), 0.0).label(
+                "avg_hit_rate"
+            ),
+            func.coalesce(func.avg(case((relevant_score, RagQueryLog.citation_coverage), else_=0.0)), 0.0).label(
+                "citation_coverage"
+            ),
+            func.sum(case((empty_recall, 1), else_=0)).label("empty_recall_count"),
             func.coalesce(func.avg(RagQueryLog.latency_ms), 0.0).label("avg_latency_ms"),
         ).where(*filters)
 
