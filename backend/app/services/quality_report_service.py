@@ -22,6 +22,7 @@ import json
 import logging
 
 from agent.llm.langfuse_tracer import LangfuseTracer
+from agent.llm.pricing import ModelPricing
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.feedback_repo import FeedbackRepository
 from app.repositories.result_repo import ResultRepository
@@ -29,6 +30,7 @@ from app.repositories.stability_repo import StabilityRepository
 from app.repositories.chat_score_repo import ChatMessageScoreRepository
 from app.repositories.chat_repo import ChatMessageRepository
 from app.services.base import TenantAwareService
+from app.services.chat_trust_scoring_service import combine_trust_scores, score_output_rule
 from app.services.langfuse_api_client import LangfuseApiClient, LangfuseApiError
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,88 @@ class QualityReportService(TenantAwareService):
         if isinstance(citations, list):
             return bool(citations)
         return True
+
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _first_float(cls, *values, default: float = 0.5) -> float:
+        for value in values:
+            parsed = cls._safe_float(value)
+            if parsed is not None:
+                return parsed
+        return default
+
+    @staticmethod
+    def _safe_bool(value) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+        return bool(value)
+
+    @classmethod
+    def _chat_score_values_from_payload(cls, payload: dict | None) -> dict:
+        payload = dict(payload or {})
+        return {
+            "trust_score": cls._safe_float(payload.get("trust_score")),
+            "hallucination_risk": cls._safe_float(payload.get("hallucination_risk")),
+            "overconfidence": cls._safe_float(payload.get("overconfidence")),
+            "has_citation": cls._safe_bool(payload.get("has_citation")),
+        }
+
+    @classmethod
+    def _chat_score_values_from_row(cls, score) -> dict:
+        values = cls._chat_score_values_from_payload(
+            {
+                "trust_score": getattr(score, "trust_score", None),
+                "hallucination_risk": getattr(score, "hallucination_risk", None),
+                "overconfidence": getattr(score, "overconfidence", None),
+                "has_citation": getattr(score, "has_citation", None),
+            }
+        )
+        if values["trust_score"] is not None:
+            return values
+
+        combined = getattr(score, "combined_scores", None)
+        if isinstance(combined, dict):
+            values = cls._chat_score_values_from_payload(combined)
+            if values["trust_score"] is not None:
+                return values
+
+        rule_score = getattr(score, "rule_scores", None)
+        llm_score = getattr(score, "llm_scores", None)
+        if not isinstance(rule_score, dict):
+            return values
+        if not isinstance(llm_score, dict):
+            llm_score = {}
+        llm_score = {
+            "hallucination_risk_llm": cls._first_float(
+                llm_score.get("hallucination_risk_llm"),
+                rule_score.get("hallucination_risk"),
+            ),
+            "overconfidence_llm": cls._first_float(
+                llm_score.get("overconfidence_llm"),
+                rule_score.get("overconfidence"),
+            ),
+            "has_citation_llm": 1 if cls._safe_bool(llm_score.get("has_citation_llm", rule_score.get("has_citation"))) else 0,
+        }
+        try:
+            combined = combine_trust_scores(rule_score=rule_score, llm_score=llm_score)
+        except Exception:
+            return values
+        return cls._chat_score_values_from_payload(combined)
 
     @staticmethod
     def _build_result_trend(results, mapper):
@@ -318,6 +402,98 @@ class QualityReportService(TenantAwareService):
             return False
         return True
 
+    @classmethod
+    def _first_optional_float(cls, *values) -> float | None:
+        for value in values:
+            parsed = cls._safe_float(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _safe_int(value) -> int:
+        if value is None:
+            return 0
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _langfuse_usage_tokens(cls, observation: dict) -> dict[str, int]:
+        usage = observation.get("usage") if isinstance(observation.get("usage"), dict) else {}
+        usage_details = observation.get("usageDetails") if isinstance(observation.get("usageDetails"), dict) else {}
+
+        prompt_tokens = max(
+            cls._safe_int(usage.get("prompt_tokens")),
+            cls._safe_int(usage.get("promptTokens")),
+            cls._safe_int(usage.get("input_tokens")),
+            cls._safe_int(usage.get("input")),
+            cls._safe_int(usage_details.get("prompt_tokens")),
+            cls._safe_int(usage_details.get("promptTokens")),
+            cls._safe_int(usage_details.get("input_tokens")),
+            cls._safe_int(usage_details.get("input")),
+        )
+        completion_tokens = max(
+            cls._safe_int(usage.get("completion_tokens")),
+            cls._safe_int(usage.get("completionTokens")),
+            cls._safe_int(usage.get("output_tokens")),
+            cls._safe_int(usage.get("output")),
+            cls._safe_int(usage_details.get("completion_tokens")),
+            cls._safe_int(usage_details.get("completionTokens")),
+            cls._safe_int(usage_details.get("output_tokens")),
+            cls._safe_int(usage_details.get("output")),
+        )
+        total_tokens = max(
+            cls._safe_int(usage.get("total")),
+            cls._safe_int(usage.get("total_tokens")),
+            cls._safe_int(usage.get("totalTokens")),
+            cls._safe_int(usage_details.get("total")),
+            cls._safe_int(usage_details.get("total_tokens")),
+            cls._safe_int(usage_details.get("totalTokens")),
+            prompt_tokens + completion_tokens,
+        )
+        if total_tokens > 0 and prompt_tokens + completion_tokens <= 0:
+            prompt_tokens = total_tokens
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    @classmethod
+    def _langfuse_observation_cost(cls, observation: dict, *, model_key: str, usage: dict[str, int]) -> float:
+        cost_details = observation.get("costDetails") if isinstance(observation.get("costDetails"), dict) else {}
+        direct_cost = cls._first_optional_float(
+            observation.get("totalCost"),
+            observation.get("calculatedTotalCost"),
+            observation.get("cost"),
+            cost_details.get("total"),
+            cost_details.get("totalCost"),
+            cost_details.get("total_cost"),
+        )
+        if direct_cost is not None and direct_cost > 0:
+            return float(direct_cost)
+
+        split_cost = sum(
+            float(value or 0.0)
+            for value in (
+                cls._safe_float(cost_details.get("input")),
+                cls._safe_float(cost_details.get("output")),
+                cls._safe_float(cost_details.get("prompt")),
+                cls._safe_float(cost_details.get("completion")),
+            )
+            if value is not None
+        )
+        if split_cost > 0:
+            return round(split_cost, 6)
+
+        return ModelPricing.estimate_cost(
+            model_key,
+            usage["prompt_tokens"],
+            usage["completion_tokens"],
+        )
+
     async def _enrich_with_local_business_data(self, items: list[dict]) -> None:
         """Fill verdict / feedback_count / citations from piap-mysql for traces
         whose Langfuse metadata is missing these business fields."""
@@ -410,13 +586,10 @@ class QualityReportService(TenantAwareService):
                 last_score_value = value
                 last_score_at = scored_at
 
-        total_tokens = sum(
-            int((o.get("usage") or {}).get("total", 0))
-            for o in observation_dicts if o.get("type") == "GENERATION"
-        )
+        generation_observations = [o for o in observation_dicts if o.get("type") == "GENERATION"]
         model_key = ""
-        for o in observation_dicts:
-            if o.get("type") == "GENERATION" and o.get("model"):
+        for o in generation_observations:
+            if o.get("model"):
                 model_key = str(o["model"])
                 break
         if not model_key:
@@ -426,6 +599,27 @@ class QualityReportService(TenantAwareService):
                 if o.get("model"):
                     model_key = str(o["model"])
                     break
+
+        usage_items = [QualityReportService._langfuse_usage_tokens(o) for o in generation_observations]
+        total_tokens = sum(item["total_tokens"] for item in usage_items)
+        trace_cost = QualityReportService._first_optional_float(
+            trace.get("totalCost"),
+            trace.get("total_cost"),
+            trace.get("totalCostUsd"),
+        )
+        total_cost = float(trace_cost or 0.0)
+        if total_cost <= 0:
+            total_cost = round(
+                sum(
+                    QualityReportService._langfuse_observation_cost(
+                        observation,
+                        model_key=str(observation.get("model") or model_key or ""),
+                        usage=usage,
+                    )
+                    for observation, usage in zip(generation_observations, usage_items)
+                ),
+                6,
+            )
 
         trace_url = None
         if api_client and api_client.enabled:
@@ -457,10 +651,10 @@ class QualityReportService(TenantAwareService):
             "langfuse_status": "synced",
             "langfuse_synced": True,
             "created_at": trace.get("timestamp"),
-            "total_cost": float(trace.get("totalCost") or 0.0),
+            "total_cost": total_cost,
         }
 
-    async def build_report(self, start_date=None, end_date=None, source: str = "all"):
+    async def build_report(self, start_date=None, end_date=None, source: str = "all", include_remote: bool = False):
         api_client = LangfuseApiClient()
         stabilities = await self._stability_repo.list_by_range(self._org_id, start_date, end_date)
         result_feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)
@@ -491,7 +685,7 @@ class QualityReportService(TenantAwareService):
                 if item.get("source_type") == "chat" and item.get("assistant_message_id")
             }
         )
-        if api_client.enabled:
+        if include_remote and api_client.enabled:
             traces, error = await self._fetch_traces_from_langfuse(
                 source=source,
                 limit=1000,
@@ -721,9 +915,11 @@ class QualityReportService(TenantAwareService):
             model_metrics.append({
                 "model_key": metric["model_key"],
                 "result_count": metric["result_count"],
+                "call_count": metric.get("call_count", metric["result_count"]),
                 "pass_rate": metric["pass_rate"],
                 "hallucination_rate": metric["hallucination_rate"],
                 "avg_tokens": round(total_tokens / result_count, 2) if result_count else 0.0,
+                "total_tokens": total_tokens,
                 "total_cost": total_cost,
             })
         return {
@@ -959,6 +1155,7 @@ class QualityReportService(TenantAwareService):
                 trace_url = build_trace_url(trace_id)
             if not trace_url:
                 trace_url = getattr(score, "trace_url", None)
+            score_values = QualityReportService._chat_score_values_from_row(score)
             traces.append(
                 {
                     "source_type": "chat",
@@ -975,12 +1172,12 @@ class QualityReportService(TenantAwareService):
                     "feedback_count": len(feedback_group),
                     "thumbs_down_count": sum(1 for item in feedback_group if item.feedback_type == "down"),
                     "thumbs_up_count": sum(1 for item in feedback_group if item.feedback_type == "up"),
-                    "last_score_value": None if getattr(score, "trust_score", None) is None else float(score.trust_score),
-                    "last_score_at": getattr(score, "langfuse_synced_at", None),
-                    "trust_score": None if getattr(score, "trust_score", None) is None else float(score.trust_score),
-                    "hallucination_risk": None if getattr(score, "hallucination_risk", None) is None else float(score.hallucination_risk),
-                    "overconfidence": None if getattr(score, "overconfidence", None) is None else float(score.overconfidence),
-                    "has_citation": getattr(score, "has_citation", None),
+                    "last_score_value": score_values["trust_score"],
+                    "last_score_at": getattr(score, "langfuse_synced_at", None) or getattr(score, "updated_at", None) or getattr(score, "created_at", None),
+                    "trust_score": score_values["trust_score"],
+                    "hallucination_risk": score_values["hallucination_risk"],
+                    "overconfidence": score_values["overconfidence"],
+                    "has_citation": score_values["has_citation"],
                     "score_status": getattr(score, "status", None),
                     "review_model": getattr(score, "review_model", None),
                     "langfuse_status": "local_only",
@@ -995,6 +1192,26 @@ class QualityReportService(TenantAwareService):
                 continue
             payload = msg.payload or {}
             llm_meta = payload.get("llm_meta") or {}
+            trust_payload = dict(payload.get("trust_scoring") or {})
+            score_values = QualityReportService._chat_score_values_from_payload(trust_payload)
+            score_status = str(trust_payload.get("status") or "unscored")
+            if score_values["trust_score"] is None and str(getattr(msg, "content", "") or "").strip():
+                citations = [dict(item) for item in list(payload.get("citations") or []) if isinstance(item, dict)]
+                rule_score = score_output_rule(
+                    input_text="",
+                    output_text=str(getattr(msg, "content", "") or ""),
+                    citations=citations,
+                )
+                combined = combine_trust_scores(
+                    rule_score=rule_score,
+                    llm_score={
+                        "hallucination_risk_llm": float(rule_score["hallucination_risk"]),
+                        "overconfidence_llm": float(rule_score["overconfidence"]),
+                        "has_citation_llm": int(rule_score["has_citation"]),
+                    },
+                )
+                score_values = QualityReportService._chat_score_values_from_payload(combined)
+                score_status = "rule_estimate" if score_status == "unscored" else score_status
             trace_id = str(llm_meta.get("langfuse", {}).get("trace_id") or msg.id)
             ledger_group = ledger_by_trace.get(trace_id, [])
             feedback_group = feedbacks_by_message.get(str(msg.id), [])
@@ -1015,13 +1232,13 @@ class QualityReportService(TenantAwareService):
                     "feedback_count": len(feedback_group),
                     "thumbs_down_count": sum(1 for item in feedback_group if item.feedback_type == "down"),
                     "thumbs_up_count": sum(1 for item in feedback_group if item.feedback_type == "up"),
-                    "last_score_value": None,
+                    "last_score_value": score_values["trust_score"],
                     "last_score_at": None,
-                    "trust_score": None,
-                    "hallucination_risk": None,
-                    "overconfidence": None,
-                    "has_citation": None,
-                    "score_status": "unscored",
+                    "trust_score": score_values["trust_score"],
+                    "hallucination_risk": score_values["hallucination_risk"],
+                    "overconfidence": score_values["overconfidence"],
+                    "has_citation": score_values["has_citation"],
+                    "score_status": score_status,
                     "review_model": None,
                     "langfuse_status": "local_only",
                     "langfuse_synced": False,

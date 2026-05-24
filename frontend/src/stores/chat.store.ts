@@ -19,6 +19,7 @@ const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 35000;
+const CHAT_INSPECTION_CONTEXT_ENABLED = false;
 
 const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
   scope: "unavailable",
@@ -27,6 +28,7 @@ const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
   recent_tasks: [],
   recent_failures: [],
   latest_task: null,
+  selected_tasks: [],
 };
 
 function resolveErrorMessage(error: unknown, fallback: string) {
@@ -353,7 +355,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function fetchRagSpaces() {
     try {
-      const { data } = await ragSpaceApi.list(200);
+      const { data } = await ragSpaceApi.list(200, { suppressErrorToast: true });
       ragSpaces.value = data.data;
       ragSpacesError.value = "";
       if (selectedRagSpaceId.value && !ragSpaces.value.some((item) => item.id === selectedRagSpaceId.value)) {
@@ -372,7 +374,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function fetchInspectionContext() {
     try {
-      const { data } = await chatApi.getInspectionContext();
+      const { data } = await chatApi.getInspectionContext({ suppressErrorToast: true });
       inspectionContext.value = {
         ...EMPTY_INSPECTION_CONTEXT,
         ...(data.data || {}),
@@ -380,8 +382,9 @@ export const useChatStore = defineStore("chat", () => {
         recent_tasks: data.data?.recent_tasks || [],
         recent_failures: data.data?.recent_failures || [],
         latest_task: data.data?.latest_task || null,
+        selected_tasks: data.data?.selected_tasks || [],
       };
-      inspectionContextError.value = "";
+      inspectionContextError.value = data.data?.error || "";
       return inspectionContext.value;
     } catch (error) {
       inspectionContext.value = { ...EMPTY_INSPECTION_CONTEXT };
@@ -484,7 +487,9 @@ export const useChatStore = defineStore("chat", () => {
       } catch {
         // RAG metadata initialization should not block ordinary chat usage.
       }
-      await fetchInspectionContext();
+      if (CHAT_INSPECTION_CONTEXT_ENABLED) {
+        await fetchInspectionContext();
+      }
       const savedSessionId = getSavedSession();
       const saved = savedSessionId ? sessions.value.find((x) => x.id === savedSessionId) : null;
       if (saved && saved.last_message_at != null) {

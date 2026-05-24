@@ -26,9 +26,11 @@ class NamedValue(BaseModel):
 class ModelAnalyticsMetric(BaseModel):
     model_key: str
     result_count: int
+    call_count: int = 0
     pass_rate: float
     hallucination_rate: float
     avg_tokens: float
+    total_tokens: int = 0
     total_cost: float
 
 

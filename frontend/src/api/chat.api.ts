@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import { streamApi } from "./stream.api";
 import type {
   ChatAttachment,
@@ -27,8 +27,8 @@ export const chatApi = {
     });
   },
 
-  getInspectionContext() {
-    return http.get<ChatInspectionContext>("/v1/chat/inspection-context");
+  getInspectionContext(config?: ApiRequestConfig) {
+    return http.get<ChatInspectionContext>("/v1/chat/inspection-context", config);
   },
 
   sendMessage(sessionId: string, payload: ChatMessageSendRequest) {

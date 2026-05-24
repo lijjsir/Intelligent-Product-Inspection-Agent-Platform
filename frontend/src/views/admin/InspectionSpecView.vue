@@ -54,6 +54,12 @@ const isReadonly = computed(() => {
   const allRoles = [...auth.roles, auth.role].filter(Boolean);
   return allRoles.includes(ROLE_PLATFORM_OPERATOR) && !allRoles.includes(ROLE_ADMIN);
 });
+const pageTitle = computed(() => (isReadonly.value ? "质检门槛查看" : "质检门槛配置"));
+const pageSubtitle = computed(() =>
+  isReadonly.value
+    ? "平台运维仅查看门槛、规则、AI 阈值和自动放行策略；新增、编辑、复制、删除仍归管理员治理。"
+    : "维护缺陷判定标准、AI 门槛阈值和自动放行策略，支撑 `inspection_specs` 主链路。",
+);
 const productOptions = computed(() =>
   Array.from(new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[])).sort(),
 );
@@ -102,6 +108,10 @@ function resetForm() {
 }
 
 function openCreate() {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
   resetForm();
   drawerOpen.value = true;
 }
@@ -112,6 +122,10 @@ function openPreview(row: InspectionSpec) {
 }
 
 function openEdit(row: InspectionSpec) {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
   editingId.value = row.id;
   scopeMode.value = row.org_id ? "org" : "global";
   Object.assign(form, {
@@ -147,6 +161,10 @@ function buildDuplicateCode(row: InspectionSpec) {
 }
 
 async function duplicateSpec(row: InspectionSpec) {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
   const payload: InspectionSpecPayload = {
     org_id: row.org_id,
     spec_code: buildDuplicateCode(row),
@@ -177,10 +195,12 @@ async function duplicateSpec(row: InspectionSpec) {
 }
 
 function addRule() {
+  if (isReadonly.value) return;
   form.items.push(buildDefaultRule());
 }
 
 function removeRule(index: number) {
+  if (isReadonly.value) return;
   if (form.items.length <= 1) {
     ElMessage.warning("至少保留一条规则");
     return;
@@ -228,6 +248,10 @@ function validatePayload(payload: InspectionSpecPayload) {
 }
 
 async function submit() {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
   const payload = buildPayload();
   validatePayload(payload);
 
@@ -242,6 +266,10 @@ async function submit() {
 }
 
 async function remove(id: string) {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
   await ElMessageBox.confirm("删除后将移除该门槛及其规则项，是否继续？", "删除质检门槛", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
@@ -271,10 +299,10 @@ onMounted(() => {
     <section class="hero">
       <div>
         <p class="eyebrow">Quality Gate</p>
-        <h2>质检门槛配置</h2>
-        <p>维护缺陷判定标准、AI 门槛阈值和自动放行策略，支撑 `inspection_specs` 主链路。</p>
+        <h2>{{ pageTitle }}</h2>
+        <p>{{ pageSubtitle }}</p>
       </div>
-      <el-button type="primary" @click="openCreate">新增门槛</el-button>
+      <el-button v-if="!isReadonly" type="primary" @click="openCreate">新增门槛</el-button>
     </section>
 
     <section class="metrics">
@@ -305,6 +333,15 @@ onMounted(() => {
           </div>
         </div>
       </template>
+
+      <el-alert
+        v-if="isReadonly"
+        title="平台运维在这里做配置核对和排障定位；门槛新增、编辑、复制、删除请由管理员在治理后台完成。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="readonly-alert"
+      />
 
       <div class="filters">
         <el-select v-model="filters.productId" clearable placeholder="按产品线筛选" style="width: 220px">
@@ -436,6 +473,7 @@ onMounted(() => {
       <template #footer>
         <el-button @click="previewOpen = false">关闭</el-button>
         <el-button
+          v-if="!isReadonly"
           type="primary"
           @click="
             previewing && (previewOpen = false, openEdit(previewing))
@@ -621,6 +659,10 @@ onMounted(() => {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.readonly-alert {
   margin-bottom: 16px;
 }
 

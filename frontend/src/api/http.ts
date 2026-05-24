@@ -16,6 +16,10 @@ export interface ApiEnvelope<T> {
   };
 }
 
+export interface ApiRequestConfig extends AxiosRequestConfig {
+  suppressErrorToast?: boolean;
+}
+
 const instance: AxiosInstance = axios.create({
   baseURL: apiBase,
   timeout: 15000,
@@ -81,6 +85,7 @@ instance.interceptors.response.use(
     const serverMessage = response?.data?.message;
     const requestUrl = String(error?.config?.url || "");
     const isLoginTokenRequest = requestUrl.includes("/v1/auth/token");
+    const suppressToast = Boolean((error?.config as ApiRequestConfig | undefined)?.suppressErrorToast);
     if (response) {
       if (response.status === 401) {
         if (isLoginTokenRequest) {
@@ -90,19 +95,19 @@ instance.interceptors.response.use(
         clearStoredAuthSession();
         if (!handlingAuthFailure) {
           handlingAuthFailure = true;
-          showToast(serverMessage || "登录已失效，请重新登录");
+          if (!suppressToast) showToast(serverMessage || "登录已失效，请重新登录");
           redirectToLogin();
         }
       } else if (response.status === 403) {
-        showToast(serverMessage || "当前请求被后端拒绝，请检查组织 ID、账号和权限");
+        if (!suppressToast) showToast(serverMessage || "当前请求被后端拒绝，请检查组织 ID、账号和权限");
       } else {
-        showToast(serverMessage || "请求失败");
+        if (!suppressToast) showToast(serverMessage || "请求失败");
       }
     } else {
       if (isLoginTokenRequest) {
         showToast("后端连接失败，登录接口不可达，请确认后端服务和端口已启动");
       } else {
-        showToast("后端连接失败，请确认后端服务和端口已启动");
+        if (!suppressToast) showToast("后端连接失败，请确认后端服务和端口已启动");
       }
     }
     return Promise.reject(error);
@@ -110,11 +115,11 @@ instance.interceptors.response.use(
 );
 
 export const http = {
-  get: <T>(url: string, config?: AxiosRequestConfig) => instance.get<ApiEnvelope<T>>(url, config),
-  post: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => instance.post<ApiEnvelope<T>>(url, data, config),
-  put: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => instance.put<ApiEnvelope<T>>(url, data, config),
-  patch: <T>(url: string, data?: unknown, config?: AxiosRequestConfig) => instance.patch<ApiEnvelope<T>>(url, data, config),
-  delete: <T>(url: string, config?: AxiosRequestConfig) => instance.delete<ApiEnvelope<T>>(url, config),
+  get: <T>(url: string, config?: ApiRequestConfig) => instance.get<ApiEnvelope<T>>(url, config),
+  post: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.post<ApiEnvelope<T>>(url, data, config),
+  put: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.put<ApiEnvelope<T>>(url, data, config),
+  patch: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.patch<ApiEnvelope<T>>(url, data, config),
+  delete: <T>(url: string, config?: ApiRequestConfig) => instance.delete<ApiEnvelope<T>>(url, config),
 };
 
 export default instance;

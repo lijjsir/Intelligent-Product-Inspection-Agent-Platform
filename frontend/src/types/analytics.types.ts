@@ -19,9 +19,11 @@ export interface NamedValue {
 export interface ModelAnalyticsMetric {
   model_key: string;
   result_count: number;
+  call_count?: number;
   pass_rate: number;
   hallucination_rate: number;
   avg_tokens: number;
+  total_tokens?: number;
   total_cost: number;
 }
 

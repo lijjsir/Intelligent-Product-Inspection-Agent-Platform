@@ -2,7 +2,7 @@ import { http } from "./http";
 import type { QualityReport, QualityTraceDeleteResult, QualityTraceListResponse } from "@/types/governance.types";
 
 export const qualityApi = {
-  getReport(params?: { start_date?: string; end_date?: string; source?: "all" | "inspection" | "chat" }) {
+  getReport(params?: { start_date?: string; end_date?: string; source?: "all" | "inspection" | "chat"; include_remote?: boolean }) {
     return http.get<QualityReport>("/v1/quality/report", { params });
   },
   listTraces(params?: { source?: "all" | "inspection" | "chat"; limit?: number }) {

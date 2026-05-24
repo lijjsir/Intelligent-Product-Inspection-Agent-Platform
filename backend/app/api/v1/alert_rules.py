@@ -22,7 +22,7 @@ async def list_alert_rules(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("alert_rule", current.role)
+    require_role("alert_rule_read", current.role)
     service = AlertRuleService(db, _scope_org_id(current))
     skip = (query.page - 1) * query.size
     total, items = await service.list_rules(skip, query.size, query.severity, query.enabled)
@@ -56,7 +56,7 @@ async def get_alert_rule(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("alert_rule", current.role)
+    require_role("alert_rule_read", current.role)
     service = AlertRuleService(db, _scope_org_id(current))
     rule = await service.get(rule_id)
     if not rule:

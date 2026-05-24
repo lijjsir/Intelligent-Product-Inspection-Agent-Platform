@@ -59,7 +59,12 @@ describe("useMenu", () => {
 
     expect(groupTitles).not.toContain("治理工具");
     expect(groupTitles).not.toContain("运维诊断");
-    expect(groupTitles).toContain("只读巡检");
+    expect(groupTitles).not.toContain("只读巡检");
+    expect(titles).not.toContain("告警规则");
+    expect(titles).toContain("Agent 查看");
+    expect(titles).toContain("质检门槛查看");
+    expect(titles).not.toContain("成本分析");
+    expect(titles).not.toContain("稳定性查看");
     expect(titles).not.toContain("记忆治理");
     expect(titles).not.toContain("存储/基础设施");
     expect(titles).not.toContain("日志中心");
@@ -81,6 +86,16 @@ describe("useMenu", () => {
       "Agent 绑定",
       "执行监控",
     ]);
+  });
+
+  it("keeps alert rule configuration in admin governance", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_ADMIN;
+    auth.roles = [ROLE_ADMIN];
+
+    const titles = flattenTitles();
+
+    expect(titles).toContain("告警规则");
   });
 
   it("keeps tool management routes accessible to admins", () => {

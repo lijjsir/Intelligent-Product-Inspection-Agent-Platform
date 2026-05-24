@@ -24,13 +24,19 @@ async def overview(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     product_lines: str | None = Query(default=None, description="comma-separated product line names"),
+    include_remote: bool = Query(default=False, description="Include live Langfuse trace hydration; disabled by default for fast ops pages"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     require_role("analytics", current.role)
     service = AnalyticsService(db, _scope_org_id(current))
     pl_list = [p.strip() for p in product_lines.split(",") if p.strip()] if product_lines else None
-    stats = await service.overview(start_date=start_date, end_date=end_date, product_lines=pl_list)
+    stats = await service.overview(
+        start_date=start_date,
+        end_date=end_date,
+        product_lines=pl_list,
+        include_remote=include_remote,
+    )
 
     return ResponseEnvelope(data=OverviewStats(**stats))
 

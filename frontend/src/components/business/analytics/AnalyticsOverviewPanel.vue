@@ -239,8 +239,8 @@ function goToProductLineTaskList(productLine: string) {
       <template #header>
         <div class="card-head">
           <div>
-            <strong>模型性能对比</strong>
-            <span>点击某一行可查看模型详情</span>
+            <strong>模型质量简表</strong>
+            <span>这里只看通过率和幻觉率；Token 与成本已统一到调用监控</span>
           </div>
         </div>
       </template>

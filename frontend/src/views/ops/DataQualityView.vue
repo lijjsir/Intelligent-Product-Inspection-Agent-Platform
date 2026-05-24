@@ -14,7 +14,6 @@ const loading = ref(false);
 
 const overview = computed(() => analyticsStore.overview);
 const alertDistribution = computed(() => overview.value?.alert_distribution ?? []);
-const modelMetrics = computed(() => overview.value?.model_metrics ?? []);
 const passRateTrend = computed(() => overview.value?.pass_rate_trend ?? []);
 const hallucinationTrend = computed(() => overview.value?.hallucination_trend ?? []);
 
@@ -59,12 +58,6 @@ function formatRate(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function formatTokens(value: number | null | undefined) {
-  if (value == null || value <= 0) return "-";
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return `${value.toFixed(0)}`;
-}
-
 function statusColor(value: number) {
   if (value >= 0.85) return "#16a34a";
   if (value >= 0.7) return "#d97706";
@@ -81,14 +74,26 @@ function renderMiniCharts() {
     passChart ??= init(passTrendRef.value);
     passChart.setOption({
       animationDuration: 400,
-      grid: { left: 40, right: 8, top: 8, bottom: 24 },
-      xAxis: { type: "category", data: passRateTrend.value.map((p: any) => p.date ?? p.bucket ?? ""), show: false },
-      yAxis: { type: "value", min: 0, max: 1, show: false },
+      tooltip: { trigger: "axis", valueFormatter: (value: number) => formatRate(value) },
+      grid: { left: 46, right: 18, top: 24, bottom: 34 },
+      xAxis: {
+        type: "category",
+        data: passRateTrend.value.map((p: any) => p.date ?? p.bucket ?? ""),
+        axisLabel: { color: "#64748b" },
+      },
+      yAxis: {
+        type: "value",
+        min: 0,
+        max: 1,
+        axisLabel: { color: "#64748b", formatter: (value: number) => `${Math.round(value * 100)}%` },
+        splitLine: { lineStyle: { color: "rgba(25,42,70,0.08)" } },
+      },
       series: [{
+        name: "通过率",
         type: "line",
         data: passRateTrend.value.map((p: any) => p.value),
         smooth: true,
-        showSymbol: false,
+        symbolSize: 6,
         lineStyle: { color: "#22c55e", width: 2 },
         areaStyle: { color: "rgba(34,197,94,0.12)" },
       }],
@@ -99,14 +104,26 @@ function renderMiniCharts() {
     halluChart ??= init(halluTrendRef.value);
     halluChart.setOption({
       animationDuration: 400,
-      grid: { left: 40, right: 8, top: 8, bottom: 24 },
-      xAxis: { type: "category", data: hallucinationTrend.value.map((p: any) => p.date ?? p.bucket ?? ""), show: false },
-      yAxis: { type: "value", min: 0, max: 1, show: false },
+      tooltip: { trigger: "axis", valueFormatter: (value: number) => formatRate(value) },
+      grid: { left: 46, right: 18, top: 24, bottom: 34 },
+      xAxis: {
+        type: "category",
+        data: hallucinationTrend.value.map((p: any) => p.date ?? p.bucket ?? ""),
+        axisLabel: { color: "#64748b" },
+      },
+      yAxis: {
+        type: "value",
+        min: 0,
+        max: 1,
+        axisLabel: { color: "#64748b", formatter: (value: number) => `${Math.round(value * 100)}%` },
+        splitLine: { lineStyle: { color: "rgba(25,42,70,0.08)" } },
+      },
       series: [{
+        name: "幻觉率",
         type: "line",
         data: hallucinationTrend.value.map((p: any) => p.value),
         smooth: true,
-        showSymbol: false,
+        symbolSize: 6,
         lineStyle: { color: "#f59e0b", width: 2 },
         areaStyle: { color: "rgba(245,158,11,0.12)" },
       }],
@@ -143,11 +160,11 @@ onUnmounted(() => {
     <section class="hero">
       <p class="eyebrow">Data Quality</p>
       <h2>数据质量</h2>
-      <p class="sub">聚焦结果质量、告警和模型效果，不再重复展示风险分布和成本，避免跨页口径打架。</p>
+      <p class="sub">聚焦结果质量、告警和质量趋势；模型维度的 Token、成本和质量对比统一进入调用监控。</p>
     </section>
 
     <el-alert
-      title="风险分布与风险趋势已统一收口到“稳定性查看”页面；成本指标已收口到“成本分析”页面。"
+      title="风险趋势统一放在分析中心；模型 Token、成本和模型质量对比统一放在调用监控。"
       type="info"
       :closable="false"
     />
@@ -223,41 +240,6 @@ onUnmounted(() => {
         <div ref="halluTrendRef" class="mini-chart" />
       </el-card>
     </section>
-
-    <el-card v-if="modelMetrics.length" shadow="never" class="table-card">
-      <template #header>
-        <div class="card-head">
-          <strong>模型质量对比</strong>
-          <span>这里只保留质量效果和 Token 水位，不再重复展示成本</span>
-        </div>
-      </template>
-      <el-table :data="modelMetrics" size="small" empty-text="暂无模型数据">
-        <el-table-column prop="model_key" label="模型 Key" min-width="180" show-overflow-tooltip />
-        <el-table-column label="结果数" width="100">
-          <template #default="{ row }">{{ (row.result_count ?? 0).toLocaleString() }}</template>
-        </el-table-column>
-        <el-table-column label="通过率" width="100">
-          <template #default="{ row }">
-            <span v-if="row.result_count" :style="{ color: statusColor(row.pass_rate) }" class="font-semibold">
-              {{ formatRate(row.pass_rate) }}
-            </span>
-            <span v-else class="text-zinc-400">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="幻觉率" width="100">
-          <template #default="{ row }">
-            <span :style="{ color: row.hallucination_rate > 0.1 ? '#dc2626' : '#18181b' }" class="font-semibold">
-              {{ formatRate(row.hallucination_rate) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="平均 Token" width="120">
-          <template #default="{ row }">
-            {{ formatTokens(row.avg_tokens) }}
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
 
     <div class="refresh-row">
       <el-button :loading="loading" @click="fetchData">刷新数据</el-button>
@@ -340,7 +322,7 @@ onUnmounted(() => {
   gap: 16px;
 }
 
-.mini-chart { width: 100%; height: 160px; }
+.mini-chart { width: 100%; height: 260px; }
 
 .table-card {
   border-radius: 20px;

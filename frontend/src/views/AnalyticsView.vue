@@ -51,12 +51,8 @@ async function fetchAll() {
   const params = dateRange.value
     ? { start_date: formatDate(dateRange.value[0]), end_date: formatDate(dateRange.value[1]) }
     : undefined;
-  await Promise.allSettled([
-    qualityStore.fetchReport(params),
-    qualityStore.fetchTraces({ source: "all", limit: 100 }),
-  ]);
+  await qualityStore.fetchReport(params).catch(() => undefined);
   loaded.value.quality = true;
-  loaded.value.tracing = true;
 }
 
 function overviewParams() {
@@ -103,7 +99,7 @@ function markOverviewLoaded() {
       <div>
         <p class="eyebrow">PIAP Intelligence Desk</p>
         <h2>分析中心</h2>
-        <p class="subtitle">这里统一查看通过率、幻觉率、风险演化、模型成本和质量追踪，统计口径与任务和稳定性页完全一致。</p>
+        <p class="subtitle">这里统一查看通过率、幻觉率、风险演化和质量追踪；模型 Token 与成本统一在调用监控查看。</p>
         <div class="scope-row">
           <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
           <el-tag v-if="dateRange" type="info" effect="plain">

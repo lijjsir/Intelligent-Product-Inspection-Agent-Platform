@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { inspectionSpecApi } from "@/api/inspection_spec.api";
+import type { ApiRequestConfig } from "@/api/http";
 import type { InspectionSpec, InspectionSpecPayload } from "@/types/governance.types";
 
 export const useInspectionSpecStore = defineStore("inspection-spec", () => {
@@ -9,10 +10,10 @@ export const useInspectionSpecStore = defineStore("inspection-spec", () => {
   const loading = ref(false);
   const count = computed(() => items.value.length);
 
-  async function fetchAll() {
+  async function fetchAll(config?: ApiRequestConfig) {
     loading.value = true;
     try {
-      const { data } = await inspectionSpecApi.list();
+      const { data } = await inspectionSpecApi.list(config);
       items.value = data.data;
     } finally {
       loading.value = false;

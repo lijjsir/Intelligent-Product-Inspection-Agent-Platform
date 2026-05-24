@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { billingApi } from "@/api/billing.api";
+import type { ApiRequestConfig } from "@/api/http";
 import type { BillingQuery, BillingSummary, CurrentUserTokenUsage } from "@/types/governance.types";
 
 export const useBillingStore = defineStore("billing", () => {
@@ -21,10 +22,10 @@ export const useBillingStore = defineStore("billing", () => {
     }
   }
 
-  async function fetchMyUsage() {
+  async function fetchMyUsage(config?: ApiRequestConfig) {
     myUsageLoading.value = true;
     try {
-      const { data } = await billingApi.getMyUsage();
+      const { data } = await billingApi.getMyUsage(config);
       myUsage.value = data.data;
     } finally {
       myUsageLoading.value = false;
@@ -33,4 +34,3 @@ export const useBillingStore = defineStore("billing", () => {
 
   return { current, myUsage, loading, myUsageLoading, filters, fetchSummary, fetchMyUsage };
 });
-

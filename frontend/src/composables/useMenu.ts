@@ -78,6 +78,7 @@ function getAdminMenu(): MenuStructure {
         { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
         { title: "质检门槛", path: "/governance/admin/inspection-specs" },
+        { title: "告警规则", path: "/governance/admin/alert-rules" },
         { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
         { title: "记忆治理", path: "/governance/memory" },
@@ -117,17 +118,9 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "告警管理", path: "/ops/alerts" },
     { title: "调用监控", path: "/ops/calls" },
     { title: "数据质量", path: "/ops/data-quality" },
-    { title: "成本分析", path: "/ops/cost" },
     { title: "业务报表", path: "/ops/reports" },
-    {
-      title: "只读巡检",
-      icon: "View",
-      items: [
-        { title: "Agent 查看", path: "/ops/agents" },
-        { title: "稳定性查看", path: "/ops/stability" },
-        { title: "质检门槛查看", path: "/ops/inspection-specs" },
-      ],
-    },
+    { title: "Agent 查看", path: "/ops/agents" },
+    { title: "质检门槛查看", path: "/ops/inspection-specs" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

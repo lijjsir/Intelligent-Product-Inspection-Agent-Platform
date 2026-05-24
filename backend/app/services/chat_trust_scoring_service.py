@@ -305,7 +305,6 @@ class ChatTrustScoringService:
             combined=combined,
             status=status,
         )
-        scored = status == "scored"
         return {
             "org_id": org_id,
             "session_id": session_id,
@@ -319,11 +318,11 @@ class ChatTrustScoringService:
             "review_model": self._review_model,
             "rule_scores": rule_score,
             "llm_scores": llm_score,
-            "combined_scores": combined if scored else None,
-            "trust_score": combined["trust_score"] if scored else None,
-            "hallucination_risk": combined["hallucination_risk"] if scored else None,
-            "overconfidence": combined["overconfidence"] if scored else None,
-            "has_citation": bool(combined["has_citation"]) if scored else None,
+            "combined_scores": combined,
+            "trust_score": combined["trust_score"],
+            "hallucination_risk": combined["hallucination_risk"],
+            "overconfidence": combined["overconfidence"],
+            "has_citation": bool(combined["has_citation"]),
             "status": status,
             "langfuse_synced_at": synced_at,
         }

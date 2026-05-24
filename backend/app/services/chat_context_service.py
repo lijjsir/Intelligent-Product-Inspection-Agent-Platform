@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,8 +29,42 @@ class ChatContextService:
         *,
         recent_limit: int = 6,
         summary_window: int = 12,
+        selected_task_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         owner_user_id = self._owner_scope_user_id()
+        stmt = self._base_context_stmt(owner_user_id)
+        result = await self._session.execute(
+            stmt.order_by(InspectionTask.created_at.desc()).limit(max(recent_limit, summary_window))
+        )
+        rows = result.all()
+        tasks = [self._serialize_row(task, inspection_result, stability) for task, inspection_result, stability in rows]
+
+        selected_tasks = await self._load_selected_tasks(owner_user_id, selected_task_ids or [])
+
+        if not tasks and not selected_tasks:
+            return {
+                "scope": "user_recent_tasks" if owner_user_id else "org_recent_tasks",
+                "summary_window": 0,
+                "stats": {},
+                "recent_tasks": [],
+                "recent_failures": [],
+                "latest_task": None,
+                "selected_tasks": [],
+            }
+
+        summary_items = tasks[:summary_window]
+        recent_items = tasks[:recent_limit]
+        return {
+            "scope": "user_recent_tasks" if owner_user_id else "org_recent_tasks",
+            "summary_window": len(summary_items),
+            "stats": self._build_stats(summary_items),
+            "recent_tasks": recent_items,
+            "recent_failures": self._recent_failures(summary_items),
+            "latest_task": recent_items[0] if recent_items else None,
+            "selected_tasks": selected_tasks,
+        }
+
+    def _base_context_stmt(self, owner_user_id: str | None):
         stmt = (
             select(InspectionTask, InspectionResult, StabilityReport)
             .outerjoin(
@@ -49,36 +84,40 @@ class ChatContextService:
                 InspectionTask.product_id != "chat_quality",
                 InspectionTask.spec_code != "CHAT-QUALITY-QA",
             )
-            .order_by(InspectionTask.created_at.desc())
-            .limit(max(recent_limit, summary_window))
         )
         if owner_user_id:
             stmt = stmt.where(InspectionTask.created_by == owner_user_id)
+        return stmt
 
-        result = await self._session.execute(stmt)
+    async def _load_selected_tasks(
+        self,
+        owner_user_id: str | None,
+        task_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        normalized_ids = self._valid_uuid_ids(task_ids)[:8]
+        if not normalized_ids:
+            return []
+        result = await self._session.execute(
+            self._base_context_stmt(owner_user_id)
+            .where(InspectionTask.id.in_(normalized_ids))
+            .order_by(InspectionTask.created_at.desc())
+        )
         rows = result.all()
-        tasks = [self._serialize_row(task, inspection_result, stability) for task, inspection_result, stability in rows]
+        return [self._serialize_row(task, inspection_result, stability) for task, inspection_result, stability in rows]
 
-        if not tasks:
-            return {
-                "scope": "user_recent_tasks" if owner_user_id else "org_recent_tasks",
-                "summary_window": 0,
-                "stats": {},
-                "recent_tasks": [],
-                "recent_failures": [],
-                "latest_task": None,
-            }
-
-        summary_items = tasks[:summary_window]
-        recent_items = tasks[:recent_limit]
-        return {
-            "scope": "user_recent_tasks" if owner_user_id else "org_recent_tasks",
-            "summary_window": len(summary_items),
-            "stats": self._build_stats(summary_items),
-            "recent_tasks": recent_items,
-            "recent_failures": self._recent_failures(summary_items),
-            "latest_task": recent_items[0] if recent_items else None,
-        }
+    @staticmethod
+    def _valid_uuid_ids(values: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            try:
+                value = str(UUID(str(item).strip()))
+            except (TypeError, ValueError):
+                continue
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
 
     def _owner_scope_user_id(self) -> str | None:
         if self._role == ROLE_USER:
@@ -125,8 +164,10 @@ class ChatContextService:
         inspection_result: InspectionResult | None,
         stability: StabilityReport | None,
     ) -> dict[str, Any]:
-        reasoning_chain = dict(getattr(inspection_result, "reasoning_chain", {}) or {})
-        defects = dict(getattr(inspection_result, "defects", {}) or {})
+        raw_reasoning_chain = getattr(inspection_result, "reasoning_chain", {}) if inspection_result else {}
+        raw_defects = getattr(inspection_result, "defects", {}) if inspection_result else {}
+        reasoning_chain = raw_reasoning_chain if isinstance(raw_reasoning_chain, dict) else {}
+        defects = raw_defects if isinstance(raw_defects, dict) else {}
         failed_rules = defects.get("failed_rules") if isinstance(defects.get("failed_rules"), list) else []
         return {
             "task_id": str(task.id),

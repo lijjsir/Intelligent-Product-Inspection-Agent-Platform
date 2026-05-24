@@ -8,7 +8,7 @@ export const useAnalyticsStore = defineStore("analytics", () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  async function fetchOverview(params?: { start_date?: string; end_date?: string; product_lines?: string }) {
+  async function fetchOverview(params?: { start_date?: string; end_date?: string; product_lines?: string; include_remote?: boolean }) {
     loading.value = true;
     error.value = null;
     try {
