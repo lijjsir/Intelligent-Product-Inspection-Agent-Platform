@@ -22,16 +22,30 @@ const detailVisible = ref(false);
 const selectedRecord = ref<RagAnalysisItem | null>(null);
 const detailError = ref("");
 const chartTab = ref<"trend" | "latency">("trend");
+const recordMode = ref<"task" | "chat" | "all">("all");
 
 const { chartRef: trendChartRef, setOption: setTrendOption } = useECharts();
 const { chartRef: latencyChartRef, setOption: setLatencyOption } = useECharts();
 
 let refreshTimer: number | null = null;
 
-const stats = computed(() => ragAnalysis.value?.stats || { total_queries: 0, avg_hit_rate: 0, avg_citation_coverage: 0, empty_recall_count: 0, avg_latency_ms: 0 });
-
-const spaceOptions = computed(() => ragAnalysis.value?.space_options || ragAnalysis.value?.space_breakdown?.map(i => ({ key: i.key, label: i.label })) || []);
-const sourceAgentOptions = computed(() => ragAnalysis.value?.source_agent_options || ragAnalysis.value?.source_agent_breakdown?.map(i => ({ key: i.key, label: i.label })) || []);
+const spaceOptions = computed(() => {
+  const byMode = new Map<string, string>();
+  for (const item of modeSourceItems.value) {
+    if (item.rag_space_id) byMode.set(item.rag_space_id, item.rag_space_name || item.rag_space_id);
+  }
+  if (byMode.size) {
+    return Array.from(byMode.entries()).map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }
+  return ragAnalysis.value?.space_options || ragAnalysis.value?.space_breakdown?.map(i => ({ key: i.key, label: i.label })) || [];
+});
+const sourceAgentOptions = computed(() => {
+  const byMode = new Set(modeSourceItems.value.map(item => item.source_agent).filter(Boolean) as string[]);
+  if (byMode.size) {
+    return Array.from(byMode).sort().map(label => ({ key: label, label }));
+  }
+  return ragAnalysis.value?.source_agent_options || ragAnalysis.value?.source_agent_breakdown?.map(i => ({ key: i.key, label: i.label })) || [];
+});
 
 function percent(value: number) { return `${(value * 100).toFixed(1)}%`; }
 function formatLatency(value: number | null | undefined) { return `${Math.round(Number(value || 0))} ms`; }
@@ -42,6 +56,25 @@ function truncateText(value: string | null | undefined, length = 96) { const raw
 function summarizeChunk(chunk: Record<string, unknown>) { return String(chunk.title || chunk.document_name || chunk.source_name || chunk.chunk_id || chunk.id || "未命名分片").trim() || "未命名分片"; }
 function summarizeCitation(citation: Record<string, unknown>) { return String(citation.title || citation.document_name || citation.source_name || citation.chunk_id || citation.id || "引用").trim() || "引用"; }
 
+function isTaskRagRecord(item: RagAnalysisItem) {
+  const graph = String(item.source_graph || "").toLowerCase();
+  const agent = String(item.source_agent || "").toLowerCase();
+  const route = String(item.sub_route || "").toLowerCase();
+  return graph === "inspection_task" || agent.includes("inspection") || ["task_execution", "inspection_execute", "task_create", "quality_qa"].includes(route);
+}
+
+function isChatRagRecord(item: RagAnalysisItem) {
+  if (isTaskRagRecord(item)) return false;
+  const graph = String(item.source_graph || "").toLowerCase();
+  const agent = String(item.source_agent || "").toLowerCase();
+  const route = String(item.sub_route || "").toLowerCase();
+  return graph === "chat" || agent.includes("chat") || ["rag_qa", "general_chat"].includes(route);
+}
+
+function recordModeLabel(item: RagAnalysisItem) {
+  return isTaskRagRecord(item) ? "任务 RAG" : "聊天 RAG";
+}
+
 function toFallbackTraceDetail(item: RagAnalysisItem): RagTraceDetailResponse {
   return {
     trace_id: item.trace_id || `fallback:${item.created_at}:${item.query || ""}`,
@@ -51,18 +84,50 @@ function toFallbackTraceDetail(item: RagAnalysisItem): RagTraceDetailResponse {
     latency_ms: item.latency_ms, top_score: item.top_score ?? null, product_family: null,
     expectation_matched: item.expectation_matched ?? null, evidence_found: item.evidence_found,
     evidence_used: item.evidence_used, verdict_impacted: item.verdict_impacted,
+    candidate_count: item.candidate_count || item.hit_count, rejected_count: item.rejected_count || 0,
+    score_threshold: item.score_threshold ?? null,
     retrieval_config: {}, retrieved_chunks: [], used_citations: [], rule_hits: item.rule_hits,
     verdict: item.verdict || null, answer: null, result: null, top_sources: item.top_sources, created_at: item.created_at,
   };
 }
 
+const allRecentItems = computed(() => ragAnalysis.value?.recent_items || []);
+const taskItems = computed(() => allRecentItems.value.filter(isTaskRagRecord));
+const chatItems = computed(() => allRecentItems.value.filter(isChatRagRecord));
+const modeSourceItems = computed(() => {
+  if (recordMode.value === "task") return taskItems.value;
+  if (recordMode.value === "chat") return chatItems.value;
+  return allRecentItems.value;
+});
+
+const recordModeOptions = computed(() => [
+  { key: "all" as const, label: "全部", count: allRecentItems.value.length },
+  { key: "task" as const, label: "任务 RAG", count: taskItems.value.length },
+  { key: "chat" as const, label: "聊天 RAG", count: chatItems.value.length },
+]);
+
 const filteredItems = computed(() => {
-  const items = ragAnalysis.value?.recent_items || [];
+  const items = modeSourceItems.value;
   return items.filter(item => {
     if (selectedSpace.value && item.rag_space_id !== selectedSpace.value) return false;
     if (selectedSourceAgent.value && item.source_agent !== selectedSourceAgent.value) return false;
     return true;
   });
+});
+
+const stats = computed(() => {
+  const items = filteredItems.value;
+  const total = items.length;
+  if (!total) {
+    return { total_queries: 0, avg_hit_rate: 0, avg_citation_coverage: 0, empty_recall_count: 0, avg_latency_ms: 0 };
+  }
+  return {
+    total_queries: total,
+    avg_hit_rate: items.reduce((sum, item) => sum + Number(item.hit_rate || 0), 0) / total,
+    avg_citation_coverage: items.reduce((sum, item) => sum + Number(item.citation_coverage || 0), 0) / total,
+    empty_recall_count: items.filter(item => !item.evidence_found || Number(item.hit_count || 0) <= 0).length,
+    avg_latency_ms: items.reduce((sum, item) => sum + Number(item.latency_ms || 0), 0) / total,
+  };
 });
 
 function aggregateBreakdown(items: RagAnalysisItem[], keyFn: (i: RagAnalysisItem) => string | null | undefined, labelFn: (i: RagAnalysisItem) => string | null | undefined): RagAnalysisBreakdownItem[] {
@@ -82,11 +147,11 @@ const filteredSpaceBreakdown = computed(() => aggregateBreakdown(filteredItems.v
 const filteredSourceAgentBreakdown = computed(() => aggregateBreakdown(filteredItems.value, i => i.source_agent || null, i => i.source_agent || null));
 
 const statCards = computed(() => [
-  { label: "总检索数", value: stats.value.total_queries, hint: "近 90 天" },
-  { label: "平均命中率", value: percent(stats.value.avg_hit_rate), hint: "语义匹配精度" },
-  { label: "平均引用覆盖率", value: percent(stats.value.avg_citation_coverage), hint: "证据被引用比例" },
-  { label: "空召回次数", value: stats.value.empty_recall_count, hint: "无有效命中" },
-  { label: "平均延迟", value: formatLatency(stats.value.avg_latency_ms), hint: "检索耗时" },
+  { label: "总检索数", value: stats.value.total_queries, hint: "当前范围" },
+  { label: "平均命中率", value: percent(stats.value.avg_hit_rate), hint: "当前范围" },
+  { label: "平均引用覆盖率", value: percent(stats.value.avg_citation_coverage), hint: "当前范围" },
+  { label: "空召回次数", value: stats.value.empty_recall_count, hint: "当前范围" },
+  { label: "平均延迟", value: formatLatency(stats.value.avg_latency_ms), hint: "当前范围" },
 ]);
 
 const traceabilityCards = computed(() => {
@@ -102,7 +167,32 @@ const traceabilityCards = computed(() => {
 });
 
 const hasData = computed(() => filteredItems.value.length > 0);
-const recentEvidenceItems = computed(() => (ragAnalysis.value?.evidence_impact || []).slice(0, 8));
+const recentEvidenceItems = computed(() => {
+  const map = new Map<string, { rule_key: string; verdicts: Set<string>; source_count: number; query_count: number; sources: Set<string> }>();
+  for (const item of filteredItems.value) {
+    for (const rule of item.rule_hits || []) {
+      if (!rule) continue;
+      const aggregate = map.get(rule) || { rule_key: rule, verdicts: new Set<string>(), source_count: 0, query_count: 0, sources: new Set<string>() };
+      aggregate.query_count += 1;
+      if (item.verdict) aggregate.verdicts.add(item.verdict);
+      for (const source of item.top_sources || []) {
+        if (source) aggregate.sources.add(source);
+      }
+      aggregate.source_count = aggregate.sources.size;
+      map.set(rule, aggregate);
+    }
+  }
+  return Array.from(map.values())
+    .map(item => ({
+      rule_key: item.rule_key,
+      verdicts: Array.from(item.verdicts),
+      source_count: item.source_count,
+      query_count: item.query_count,
+      sources: Array.from(item.sources).slice(0, 5),
+    }))
+    .sort((a, b) => b.query_count - a.query_count)
+    .slice(0, 8);
+});
 
 const activeDetail = computed<RagTraceDetailResponse | null>(() => {
   if (!selectedRecord.value) return null;
@@ -200,6 +290,7 @@ function startAutoRefresh() { if (refreshTimer !== null) return; refreshTimer = 
 function stopAutoRefresh() { if (refreshTimer !== null) { window.clearInterval(refreshTimer); refreshTimer = null; } }
 
 watch(() => [filteredItems.value, selectedSpace.value, selectedSourceAgent.value], () => updateCharts(), { deep: true });
+watch(recordMode, () => { selectedSpace.value = ""; selectedSourceAgent.value = ""; });
 watch(chartTab, () => { setTimeout(() => updateVisibleChart(), 50); });
 watch(detailVisible, (v) => { if (!v) detailError.value = ""; });
 
@@ -226,6 +317,24 @@ onBeforeUnmount(() => { stopAutoRefresh(); });
           </el-select>
           <el-button v-if="selectedSpace || selectedSourceAgent" size="small" @click="selectedSpace=''; selectedSourceAgent=''">重置</el-button>
         </div>
+      </div>
+    </div>
+
+    <div class="bg-white border border-zinc-200 rounded-xl p-3 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2">
+        <button
+          v-for="option in recordModeOptions"
+          :key="option.key"
+          class="px-3 py-1.5 text-sm font-semibold rounded-lg border transition-colors"
+          :class="recordMode === option.key ? 'bg-zinc-900 text-white border-zinc-900' : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-400'"
+          @click="recordMode = option.key"
+        >
+          {{ option.label }}
+          <span class="ml-1 text-xs opacity-75">{{ option.count }}</span>
+        </button>
+      </div>
+      <div class="text-xs text-zinc-400">
+        当前展示 {{ filteredItems.length }} 条记录，统计、图表和证据链均按当前范围计算
       </div>
     </div>
 
@@ -319,7 +428,23 @@ onBeforeUnmount(() => { stopAutoRefresh(); });
       <div class="text-sm font-semibold text-zinc-900 mb-3">最近检索轨迹</div>
       <el-table :data="filteredItems" stripe max-height="420" empty-text="暂无检索记录" @row-click="openRecordDetail" style="cursor:pointer">
         <el-table-column label="Query" min-width="200">
-          <template #default="{ row }"><span class="text-sm text-zinc-800 line-clamp-2">{{ row.query || "-" }}</span></template>
+          <template #default="{ row }">
+            <template v-if="isTaskRagRecord(row)">
+              <span class="text-xs text-zinc-400">任务ID：</span>
+              <span class="text-sm text-zinc-800">{{ row.task_id || "-" }}</span>
+            </template>
+            <span v-else class="text-sm text-zinc-800 line-clamp-2">{{ row.query || "-" }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="记录类型" width="120">
+          <template #default="{ row }">
+            <el-tag size="small" :type="isTaskRagRecord(row) ? 'warning' : 'primary'" effect="light">
+              {{ recordModeLabel(row) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="任务/会话" width="150" show-overflow-tooltip>
+          <template #default="{ row }">{{ isTaskRagRecord(row) ? row.task_id : (row.session_id || row.task_id || "-") }}</template>
         </el-table-column>
         <el-table-column label="RAG 空间" width="140" show-overflow-tooltip>
           <template #default="{ row }">{{ row.rag_space_name || row.rag_space_id || "-" }}</template>
@@ -329,6 +454,12 @@ onBeforeUnmount(() => { stopAutoRefresh(); });
         </el-table-column>
         <el-table-column label="子路由" width="130">
           <template #default="{ row }"><code class="text-xs bg-zinc-100 px-1 rounded">{{ row.sub_route || "-" }}</code></template>
+        </el-table-column>
+        <el-table-column label="命中/候选" width="110">
+          <template #default="{ row }">{{ row.hit_count || 0 }} / {{ row.candidate_count || row.hit_count || 0 }}</template>
+        </el-table-column>
+        <el-table-column label="Top Score" width="100">
+          <template #default="{ row }">{{ formatScore(row.top_score) }}</template>
         </el-table-column>
         <el-table-column label="证据链" width="200">
           <template #default="{ row }">
@@ -371,6 +502,9 @@ onBeforeUnmount(() => { stopAutoRefresh(); });
               ['子路由', activeDetail.sub_route || '-'],
               ['Verdict', activeDetail.verdict || '-'],
               ['命中数 / top_k', `${activeDetail.hit_count} / ${activeDetail.top_k || 0}`],
+              ['候选 / 过滤', `${activeDetail.candidate_count || activeDetail.hit_count || 0} / ${activeDetail.rejected_count || 0}`],
+              ['相关阈值', activeDetail.score_threshold ?? '-'],
+              ['Top Score', formatScore(activeDetail.top_score)],
               ['命中率', percent(activeDetail.hit_rate)],
               ['引用覆盖率', percent(activeDetail.citation_coverage)],
               ['延迟', formatLatency(activeDetail.latency_ms)],

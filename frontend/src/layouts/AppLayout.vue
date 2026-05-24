@@ -28,8 +28,7 @@
                   <RouterLink
                     v-if="!item.placeholder"
                     :to="item.path"
-                    class="nav-link"
-                    active-class="nav-link-active"
+                    :class="['nav-link', { 'nav-link-active': isMenuItemActive(item) }]"
                   >
                     <span>{{ item.title }}</span>
                   </RouterLink>
@@ -46,8 +45,7 @@
             <RouterLink
               v-if="!entry.placeholder"
               :to="entry.path"
-              class="nav-link"
-              active-class="nav-link-active"
+              :class="['nav-link', { 'nav-link-active': isMenuItemActive(entry) }]"
             >
               <span>{{ entry.title }}</span>
             </RouterLink>
@@ -129,7 +127,7 @@ import {
   ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
-import { isMenuGroup, resolveMenuGroupLandingPath, useMenu, type MenuGroup } from "@/composables/useMenu";
+import { isMenuGroup, resolveMenuGroupLandingPath, useMenu, type MenuGroup, type MenuItem } from "@/composables/useMenu";
 
 const router = useRouter();
 const route = useRoute();
@@ -227,6 +225,22 @@ function normalizeActiveNames(value: string | string[]) {
   return Array.isArray(value) ? value : [value].filter(Boolean);
 }
 
+function isPathActive(targetPath: string) {
+  return route.path === targetPath || route.path.startsWith(`${targetPath}/`);
+}
+
+function isMenuItemActive(item: MenuItem) {
+  const matchPaths = [item.path, ...(item.activeMatchPaths || [])];
+  return matchPaths.some((path) => isPathActive(path));
+}
+
+function syncActiveMenuGroups() {
+  activeNames.value = menu.value
+    .filter((entry): entry is MenuGroup => isMenuGroup(entry))
+    .filter((group) => group.items.some((item) => isMenuItemActive(item)))
+    .map((group) => group.title);
+}
+
 function handleGroupCollapseChange(group: MenuGroup, value: string | string[]) {
   const nextNames = normalizeActiveNames(value);
   const landingPath = resolveMenuGroupLandingPath(group);
@@ -281,6 +295,7 @@ async function deleteChatSession() {
 watch(
   () => route.path,
   () => {
+    syncActiveMenuGroups();
     if (!showChatControls.value) {
       chatStore.stopStream();
       return;
@@ -289,6 +304,14 @@ watch(
     ensureChatTopbarState().catch((error) => {
       console.error(error);
     });
+  },
+  { immediate: true },
+);
+
+watch(
+  menu,
+  () => {
+    syncActiveMenuGroups();
   },
   { immediate: true },
 );

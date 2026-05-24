@@ -3,7 +3,6 @@ import { ref } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
 import type {
   FeedbackQuery,
-  FeedbackSeverity,
   FeedbackStatus,
   FeedbackSubmitPayload,
   FeedbackSummary,
@@ -65,16 +64,15 @@ export const useFeedbackStore = defineStore("feedback", () => {
     return data.data;
   }
 
-  async function assign(id: string, assignedTo: string) {
-    const { data } = await feedbackApi.assign(id, { assigned_to: assignedTo });
-    const idx = items.value.findIndex((i) => i.id === id);
-    if (idx !== -1) items.value[idx] = data.data;
-    if (currentDetail.value?.id === id) currentDetail.value = data.data;
-    return data.data;
+  async function deleteFeedback(id: string) {
+    await feedbackApi.delete(id);
+    items.value = items.value.filter((item) => item.id !== id);
+    total.value = Math.max(0, total.value - 1);
+    if (currentDetail.value?.id === id) currentDetail.value = null;
   }
 
   return {
     items, total, loading, summary, submittedResultIds, currentDetail,
-    fetchSummary, fetchList, fetchDetail, submit, updateStatus, assign,
+    fetchSummary, fetchList, fetchDetail, submit, updateStatus, deleteFeedback,
   };
 });

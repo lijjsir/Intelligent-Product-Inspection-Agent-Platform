@@ -755,6 +755,21 @@ class QualityAgentOrchestratorService:
             task_service = TaskService(session, request.org_id)
 
             reasoning_chain = dict(result_data.reasoning_chain or {})
+            trust_scoring = dict(reasoning_chain.get("trust_scoring") or {})
+            trace_merged = {
+                **(dict(reasoning_chain.get("trace") or {})),
+                **(persistable_output.quality_trace.model_dump(exclude_none=True) if persistable_output.quality_trace else {}),
+            }
+            if trust_scoring.get("trust_score") is not None:
+                trace_merged.setdefault("trust_score", trust_scoring["trust_score"])
+            if trust_scoring.get("hallucination_risk") is not None:
+                trace_merged.setdefault("hallucination_risk", trust_scoring["hallucination_risk"])
+            if trust_scoring.get("overconfidence") is not None:
+                trace_merged.setdefault("overconfidence", trust_scoring["overconfidence"])
+            if "has_citation" in trust_scoring:
+                has_cit = trust_scoring["has_citation"]
+                if isinstance(has_cit, bool) or isinstance(has_cit, (int, float)):
+                    trace_merged.setdefault("has_citation", bool(has_cit) if isinstance(has_cit, bool) else float(has_cit) > 0)
             structured_record = dict(reasoning_chain.get("structured_record") or {})
             task_image_urls = list(request.image_urls or [])
             if not task_image_urls:
@@ -825,11 +840,7 @@ class QualityAgentOrchestratorService:
                     "citations": dict(result_data.citations or {}),
                     "reasoning_chain": {
                         **reasoning_chain,
-                        "trace": (
-                            persistable_output.quality_trace.model_dump(exclude_none=True)
-                            if persistable_output.quality_trace
-                            else {}
-                        ),
+                        "trace": trace_merged,
                     },
                     "llm_model": str(result_data.llm_model or "quality_judgement"),
                     "prompt_version": str(

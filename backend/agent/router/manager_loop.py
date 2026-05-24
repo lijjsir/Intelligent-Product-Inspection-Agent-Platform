@@ -211,15 +211,17 @@ class ManagerLoop:
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
         message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
-        raw_payload = self._payload(state, answer=answer, message_type=message_type)
+        citations = self._citations(state, answer=answer)
+        rag_summary = self._rag_summary(state, answer=answer)
+        raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
         persistable_output = self._persistable_output(state, answer=answer, sub_route=sub_route)
         agent_output = {
             "message_type": message_type,
             "answer": answer,
             "summary": summary,
-            "citations": self._citations(state),
+            "citations": citations,
             "quality": {},
-            "rag_summary": self._rag_summary(state),
+            "rag_summary": rag_summary,
             "action_state": "blocked" if status == "blocked" else state.final_action,
             "task_draft": None,
             "created_task": None,
@@ -251,7 +253,15 @@ class ManagerLoop:
                 return dict(art.content or {})
         return None
 
-    def _payload(self, state: ManagerState, *, answer: str, message_type: str) -> dict[str, Any]:
+    def _payload(
+        self,
+        state: ManagerState,
+        *,
+        answer: str,
+        message_type: str,
+        citations: list[dict[str, Any]],
+        rag_summary: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         artifacts = [item.model_dump() for item in state.artifacts]
         steps = [step.model_dump() for step in (state.route_plan.steps if state.route_plan else [])]
         capabilities_used = [
@@ -279,13 +289,13 @@ class ManagerLoop:
             "trace_id": state.trace_id,
             "trace_url": state.trace_url,
             "artifacts": artifacts,
-            "citations": self._citations(state),
+            "citations": citations,
             "route_trace": route_trace,
             "ui_schema": "chat_answer_v2",
             "capabilities_used": capabilities_used,
             "satisfied": state.satisfied,
             "selected_rag_space": state.selected_rag_space,
-            "rag_summary": self._rag_summary(state),
+            "rag_summary": rag_summary,
             "created_task": None,
             "llm_meta": state.llm_metas[-1] if state.llm_metas else None,
             "llm_usage": list(state.llm_usage_events),
@@ -407,22 +417,26 @@ class ManagerLoop:
                 return artifact
         return None
 
-    @staticmethod
-    def _citations(state: ManagerState) -> list[dict[str, Any]]:
+    @classmethod
+    def _citations(cls, state: ManagerState, *, answer: str = "") -> list[dict[str, Any]]:
         citations: list[dict[str, Any]] = []
         for artifact in state.artifacts:
-            citations.extend(artifact.citations)
+            if artifact.type == "rag_hits":
+                citations.extend(cls._used_citations_from_answer(answer, artifact.citations))
+            else:
+                citations.extend(artifact.citations)
         return citations
 
-    @staticmethod
-    def _rag_summary(state: ManagerState) -> dict[str, Any] | None:
+    @classmethod
+    def _rag_summary(cls, state: ManagerState, *, answer: str = "") -> dict[str, Any] | None:
         for artifact in reversed(state.artifacts):
             if artifact.type == "rag_hits":
                 content = dict(artifact.content or {})
                 hits = [dict(item) for item in list(content.get("hits") or []) if isinstance(item, dict)]
-                top_sources = ManagerLoop._top_sources(hits, artifact.citations)
+                citations = cls._used_citations_from_answer(answer, artifact.citations)
+                top_sources = ManagerLoop._top_sources(hits, citations)
                 hit_count = int(content.get("hit_count") or len(hits))
-                citation_coverage = min(1.0, len(artifact.citations) / hit_count) if hit_count else 0.0
+                citation_coverage = min(1.0, len(citations) / hit_count) if hit_count else 0.0
                 return {
                     "rag_space_id": content.get("rag_space_id"),
                     "rag_space_name": content.get("rag_space_name"),
@@ -432,6 +446,34 @@ class ManagerLoop:
                     "source_graph": "manager",
                 }
         return None
+
+    @classmethod
+    def _used_citations_from_answer(cls, answer: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        text = str(answer or "")
+        if not text:
+            return []
+        used: list[dict[str, Any]] = []
+        for index, citation in enumerate(citations, start=1):
+            if cls._answer_uses_citation(text, citation, index):
+                used.append(dict(citation))
+        return used
+
+    @staticmethod
+    def _answer_uses_citation(answer: str, citation: dict[str, Any], index: int) -> bool:
+        tokens = {
+            f"RAG-{index}",
+            f"RAG－{index}",
+            f"RAG {index}",
+        }
+        ref = str(citation.get("ref") or "").strip()
+        if ref:
+            tokens.add(ref)
+        citation_id = str(citation.get("id") or "").strip()
+        if citation_id.lower().startswith("rag-"):
+            suffix = citation_id.split("-", 1)[1]
+            if suffix:
+                tokens.add(f"RAG-{suffix}")
+        return any(token and token in answer for token in tokens)
 
     @staticmethod
     def _persistable_output(state: ManagerState, *, answer: str, sub_route: str) -> dict[str, Any]:
@@ -443,7 +485,8 @@ class ManagerLoop:
             hits = [dict(item) for item in list(content.get("hits") or []) if isinstance(item, dict)]
             hit_count = int(content.get("hit_count") or len(hits))
             top_k = max(int(content.get("top_k") or 5), 1)
-            citations = [dict(item) for item in list(artifact.citations or []) if isinstance(item, dict)]
+            all_citations = [dict(item) for item in list(artifact.citations or []) if isinstance(item, dict)]
+            citations = ManagerLoop._used_citations_from_answer(answer, all_citations)
             top_sources = ManagerLoop._top_sources(hits, citations)
             coverage = min(1.0, len(citations) / hit_count) if hit_count else 0.0
             trace_id = str(state.workflow_run_id or state.request_id or "")
@@ -469,10 +512,14 @@ class ManagerLoop:
                         "evidence_found": hit_count > 0,
                         "evidence_used": bool(citations),
                         "verdict_impacted": False,
+                        "candidate_count": int(content.get("candidate_count") or hit_count),
+                        "rejected_count": int(content.get("rejected_count") or 0),
+                        "score_threshold": content.get("score_threshold"),
                         "retrieval_config": {
                             "rag_space_id": content.get("rag_space_id"),
                             "rag_space_name": content.get("rag_space_name"),
                             "top_k": top_k,
+                            "score_threshold": content.get("score_threshold"),
                             "scope_node_ids": list((state.rag_scope or {}).get("scope_node_ids") or []),
                         },
                         "retrieved_chunks": hits,

@@ -39,7 +39,7 @@ class ExportJobRepository:
         result = await self._session.execute(stmt)
         return total, list(result.scalars().all())
 
-    async def update_status(self, job_id: str, status: str, file_url: str | None = None, file_size: int | None = None, error_message: str | None = None) -> ExportJob | None:
+    async def update_status(self, job_id: str, status: str, file_url: str | None = None, file_size: int | None = None, error_message: str | None = None, expires_at=None) -> ExportJob | None:
         job = await self.get_by_id(job_id)
         if not job:
             return None
@@ -50,6 +50,8 @@ class ExportJobRepository:
             job.file_size = file_size
         if error_message:
             job.error_message = error_message
+        if expires_at is not None:
+            job.expires_at = expires_at
         await self._session.flush()
         return job
 

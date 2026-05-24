@@ -207,6 +207,9 @@ export interface RagAnalysisItem {
   evidence_found: boolean;
   evidence_used: boolean;
   verdict_impacted: boolean;
+  candidate_count?: number;
+  rejected_count?: number;
+  score_threshold?: number | null;
   top_sources: string[];
   rule_hits: string[];
   created_at: string;
@@ -231,6 +234,9 @@ export interface RagTraceDetailResponse {
   evidence_found: boolean;
   evidence_used: boolean;
   verdict_impacted: boolean;
+  candidate_count?: number;
+  rejected_count?: number;
+  score_threshold?: number | null;
   retrieval_config: Record<string, unknown>;
   retrieved_chunks: Record<string, unknown>[];
   used_citations: Record<string, unknown>[];

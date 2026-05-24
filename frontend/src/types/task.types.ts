@@ -66,6 +66,7 @@ export interface TaskStatusResponse {
 }
 
 export interface TaskStreamEvent {
+  id?: string;
   type: string;
   stage?: string;
   message?: string;

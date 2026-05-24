@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import DefectImageViewer from "@/components/business/result/DefectImageViewer.vue";
@@ -17,9 +17,11 @@ const { hasRole } = usePermission();
 
 const loading = ref(true);
 const reviewing = ref(false);
-const taskId = route.params.id as string;
 const reviewForm = ref<ReviewSubmit>({ verdict: "", note: "" });
 const canReview = computed(() => hasRole(["expert"]));
+const currentTaskId = computed(() => String(route.params.id || ""));
+const currentResult = computed(() => store.current?.task_id === currentTaskId.value ? store.current : null);
+const currentTask = computed(() => taskStore.current?.id === currentTaskId.value ? taskStore.current : null);
 
 const verdictOptions = [
   { label: "合格 (Pass)", value: "pass" },
@@ -38,7 +40,7 @@ function resolveTaskImageUrl(value?: string | null) {
 }
 
 const taskImages = computed(() => {
-  return (taskStore.current?.image_urls || []).map((item) => resolveTaskImageUrl(item)).filter(Boolean);
+  return (currentTask.value?.image_urls || []).map((item) => resolveTaskImageUrl(item)).filter(Boolean);
 });
 
 const getVerdictType = (verdict: string) => {
@@ -51,7 +53,10 @@ const getVerdictType = (verdict: string) => {
   return map[verdict] || "info";
 };
 
-onMounted(async () => {
+async function loadResultDetail(taskId: string) {
+  loading.value = true;
+  if (store.current?.task_id !== taskId) store.current = null;
+  if (taskStore.current?.id !== taskId) taskStore.current = null;
   try {
     await Promise.all([
       store.fetchByTask(taskId),
@@ -66,14 +71,18 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
-});
+}
+
+watch(currentTaskId, (id) => {
+  if (id) void loadResultDetail(id);
+}, { immediate: true });
 
 function goBack() {
   router.back();
 }
 
 const sampleLabels = computed(() => {
-  const items = taskStore.current?.image_items;
+  const items = currentTask.value?.image_items;
   if (!items || !items.length) return {} as Record<number, string>;
   const map: Record<number, string> = {};
   for (const item of items) {
@@ -90,10 +99,10 @@ function sampleLabel(imageIndex?: number | null): string {
 }
 
 async function submitReview() {
-  if (!store.current || !reviewForm.value.verdict) return;
+  if (!currentResult.value || !reviewForm.value.verdict) return;
   reviewing.value = true;
   try {
-    const { data } = await resultApi.review(store.current.id, reviewForm.value);
+    const { data } = await resultApi.review(currentResult.value.id, reviewForm.value);
     if (store.current) {
       store.current.verdict = data.data.verdict;
       store.current.reviewed_by = data.data.reviewed_by;
@@ -116,7 +125,7 @@ async function submitReview() {
       <el-button @click="goBack" class="mb-4">
         &larr; 返回
       </el-button>
-      <div v-if="store.current" class="title-area">
+      <div v-if="currentResult" class="title-area">
         <h2 class="text-2xl font-bold text-zinc-900">分析结果大盘</h2>
         <el-tag :type="getVerdictType(store.current.verdict)" size="large" class="ml-4">
           判定结论: {{ store.current.verdict.toUpperCase() }}
@@ -124,7 +133,7 @@ async function submitReview() {
       </div>
     </div>
 
-    <div v-if="store.current" class="content">
+    <div v-if="currentResult" class="content">
       <div class="flex gap-5">
         <!-- 侧边摘要面板 -->
         <div>

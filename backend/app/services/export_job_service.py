@@ -19,7 +19,7 @@ class ExportJobService(TenantAwareService):
         config_json = payload.get("config_json")
         if isinstance(config_json, dict):
             config_json = json.dumps(config_json, ensure_ascii=False)
-        return await self._repo.create({
+        job = await self._repo.create({
             "id": str(uuid7()),
             "org_id": self._org_id,
             "actor_id": actor_id,
@@ -32,6 +32,18 @@ class ExportJobService(TenantAwareService):
             "created_at": now,
             "updated_at": now,
         })
+
+        import asyncio
+        from worker.tasks.report_generate_task import generate_report_task
+
+        task_payload = {"job_id": job.id, "org_id": self._org_id}
+        try:
+            generate_report_task.delay(task_payload)
+        except Exception:
+            from app.services.report_generation_service import generate_report as _run
+            asyncio.create_task(_run(job_id=job.id, org_id=self._org_id))
+
+        return job
 
     async def get_detail(self, job_id: str):
         job = await self._repo.get_by_id(job_id)

@@ -55,6 +55,107 @@ def test_agent_ops_admin_scope_is_global_for_rag_analysis():
     assert agent_ops_api_mod._use_global_scope(user) is False
 
 
+def test_chat_rag_effectiveness_requires_answer_citation_marker():
+    item = {
+        "source_graph": "chat",
+        "sub_route": "rag_qa",
+        "hit_count": 1,
+        "top_score": 0.72,
+        "metadata": {
+            "evidence_used": True,
+            "answer": "This answer did not include the retrieved citation marker.",
+            "used_citations": [{"id": "rag-1", "ref": "RAG-1"}],
+        },
+    }
+
+    found, used, impacted = agent_ops_mod.AgentOpsService._derive_rag_effectiveness(item)
+
+    assert found is True
+    assert used is False
+    assert impacted is False
+
+
+def test_chat_rag_effectiveness_counts_real_answer_citation_marker():
+    item = {
+        "source_graph": "chat",
+        "sub_route": "rag_qa",
+        "hit_count": 1,
+        "top_score": 0.72,
+        "metadata": {
+            "answer": "This answer cites the retrieved evidence. [RAG-1]",
+            "used_citations": [{"id": "rag-1", "ref": "RAG-1"}],
+        },
+    }
+
+    found, used, _impacted = agent_ops_mod.AgentOpsService._derive_rag_effectiveness(item)
+
+    assert found is True
+    assert used is True
+
+
+def test_rag_effectiveness_treats_low_score_log_as_not_found(monkeypatch):
+    monkeypatch.setattr("app.services.agent_ops_service.settings.rag_score_threshold", 0.55)
+    item = {
+        "source_graph": "chat",
+        "sub_route": "rag_qa",
+        "hit_count": 1,
+        "top_score": 0.31,
+        "metadata": {
+            "evidence_found": True,
+            "answer": "This answer cites [RAG-1], but retrieval was below threshold.",
+            "used_citations": [{"id": "rag-1", "ref": "RAG-1"}],
+        },
+    }
+
+    found, used, _impacted = agent_ops_mod.AgentOpsService._derive_rag_effectiveness(item)
+
+    assert found is False
+    assert used is False
+
+
+def test_effective_rag_metrics_zero_low_score_rows_for_charts(monkeypatch):
+    monkeypatch.setattr("app.services.agent_ops_service.settings.rag_score_threshold", 0.55)
+    item = {
+        "hit_count": 2,
+        "hit_rate": 0.4,
+        "citation_coverage": 1.0,
+        "top_score": 0.31,
+        "metadata": {"score_threshold": 0.55},
+    }
+
+    assert agent_ops_mod.AgentOpsService._effective_rag_metrics(item, evidence_used=True) == (0, 0.0, 0.0)
+
+
+def test_effective_rag_metrics_zero_coverage_when_answer_did_not_use_rag():
+    item = {
+        "hit_count": 2,
+        "hit_rate": 0.4,
+        "citation_coverage": 1.0,
+        "top_score": 0.72,
+        "metadata": {"score_threshold": 0.55},
+    }
+
+    assert agent_ops_mod.AgentOpsService._effective_rag_metrics(item, evidence_used=False) == (2, 0.4, 0.0)
+
+
+def test_inspection_rag_effectiveness_keeps_structured_citations():
+    item = {
+        "source_graph": "inspection_task",
+        "sub_route": "inspection_execute",
+        "hit_count": 1,
+        "top_score": 0.72,
+        "metadata": {
+            "answer": "Structured inspection result may not use chat citation markers.",
+            "used_citations": [{"id": "rag-1", "kind": "rag"}],
+        },
+    }
+
+    found, used, _impacted = agent_ops_mod.AgentOpsService._derive_rag_effectiveness(item)
+
+    assert found is True
+    assert used is True
+
+
 @pytest.mark.asyncio
 async def test_set_runtime_status_dedupes_runtime_key_before_stop():
     class FakeRuntimeRepo:
@@ -515,10 +616,14 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
         "result_synthesizer",
         "quality_judgement",
     }
-    # priority_rules now come from engine introspection (11 rules)
-    assert len(data.priority_rules) == 11
+    from agent.router.route_policy import AgentRoutePolicy
+
+    engine_rules = AgentRoutePolicy.get_rules()
+    assert len(data.priority_rules) == len(engine_rules)
     assert data.priority_rules[0].order == 1
     assert data.priority_rules[0].target_subgraph == "inspection_task"
+    assert [item.order for item in data.priority_rules] == [rule["priority"] for rule in engine_rules]
+    assert {item.target_subgraph for item in data.priority_rules} >= {"inspection_task", "chat"}
     # decision_cards derived from engine rules
     assert len(data.decision_cards) >= 1
     # subgraphs now iterate all registered subgraphs
@@ -790,7 +895,9 @@ async def test_get_rag_analysis_normalizes_legacy_quality_rows_to_chat_agent():
     assert data.recent_items[0].source_agent == "Quality Chat"
     assert data.recent_items[0].sub_route == "rag_qa"
     assert data.recent_items[0].evidence_found is True
-    assert data.recent_items[0].evidence_used is True
+    assert data.recent_items[0].evidence_used is False
+    assert data.recent_items[0].hit_rate == 0.25
+    assert data.recent_items[0].citation_coverage == 0.0
     assert data.recent_items[0].verdict_impacted is False
 
 

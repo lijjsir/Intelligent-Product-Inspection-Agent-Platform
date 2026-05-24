@@ -364,7 +364,7 @@ onMounted(() => {
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="范围" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.org_id ? '' : 'warning'">{{ formatScope(row) }}</el-tag>
+            <el-tag :type="row.org_id ? 'primary' : 'warning'">{{ formatScope(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="产品线" min-width="120">

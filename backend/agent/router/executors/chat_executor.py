@@ -80,7 +80,12 @@ class ChatExecutor:
             return observation(step, status="success", summary=answer), []
 
         if step.capability_key == "chat.response.compose":
-            answer = await self._call_model(state, request, self._compose_prompt(state))
+            answer = await self._call_model(
+                state,
+                request,
+                self._compose_prompt(state),
+                use_tools=True,
+            )
             if answer is None:
                 fallback = self._build_fallback(state)
                 art = artifact("composed_response", "chat", {"answer": fallback, "summary": fallback, "message_type": "assistant_text", "status": "degraded", "surface": state.surface, "blocked": False})

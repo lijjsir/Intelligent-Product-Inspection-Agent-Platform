@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import cast
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.topology_catalog import (
@@ -14,6 +15,7 @@ from agent.topology_catalog import (
 from agent.router.runtime_guard import invalidate_runtime_guard_cache
 from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
+from app.models.result import InspectionResult
 from app.repositories.agent_ops_repo import (
     AgentDefinitionRepository,
     AgentRuntimeRepository,
@@ -160,16 +162,177 @@ class AgentOpsService:
         retrieved_chunks = [chunk for chunk in list(metadata.get("retrieved_chunks") or []) if isinstance(chunk, dict)]
         used_citations = [citation for citation in list(metadata.get("used_citations") or []) if isinstance(citation, dict)]
         rule_hits = [str(rule) for rule in list(metadata.get("rule_hits") or []) if str(rule).strip()]
+        source_key = cls._derive_rag_source_key(item)
+        answer = cls._clean_rag_text(metadata.get("answer")) or ""
         evidence_found = metadata.get("evidence_found")
         if evidence_found is None:
-            evidence_found = bool(int(item.get("hit_count") or 0) > 0 or retrieved_chunks or top_sources)
-        evidence_used = metadata.get("evidence_used")
-        if evidence_used is None:
-            evidence_used = bool(used_citations)
+            evidence_found = cls._rag_log_is_relevant(item)
+        else:
+            evidence_found = bool(evidence_found) and cls._rag_log_is_relevant(item)
+        if source_key == "chat" or cls._normalize_rag_sub_route(item.get("sub_route") or metadata.get("sub_route")) == "rag_qa":
+            evidence_used = cls._chat_answer_uses_rag_citations(answer, used_citations)
+        else:
+            evidence_used = metadata.get("evidence_used")
+            if evidence_used is None:
+                evidence_used = bool(used_citations)
         verdict_impacted = metadata.get("verdict_impacted")
         if verdict_impacted is None:
             verdict_impacted = bool(rule_hits)
-        return bool(evidence_found), bool(evidence_used), bool(verdict_impacted)
+        evidence_found = bool(evidence_found)
+        return evidence_found, bool(evidence_found and evidence_used), bool(evidence_found and verdict_impacted)
+
+    @staticmethod
+    def _chat_answer_uses_rag_citations(answer: str, citations: list[dict]) -> bool:
+        if not answer or not citations:
+            return False
+        for index, citation in enumerate(citations, start=1):
+            tokens = {
+                f"RAG-{index}",
+                f"RAG－{index}",
+                f"RAG {index}",
+            }
+            ref = str(citation.get("ref") or "").strip()
+            if ref:
+                tokens.add(ref)
+            citation_id = str(citation.get("id") or "").strip()
+            if citation_id.lower().startswith("rag-"):
+                suffix = citation_id.split("-", 1)[1]
+                if suffix:
+                    tokens.add(f"RAG-{suffix}")
+            if any(token and token in answer for token in tokens):
+                return True
+        return False
+
+    @staticmethod
+    def _rag_score_threshold() -> float:
+        try:
+            return max(0.0, min(1.0, float(settings.rag_score_threshold)))
+        except (TypeError, ValueError):
+            return 0.55
+
+    @classmethod
+    def _rag_log_is_relevant(cls, item: dict) -> bool:
+        if int(item.get("hit_count") or 0) <= 0:
+            return False
+        metadata = dict(item.get("metadata") or {})
+        threshold = metadata.get("score_threshold")
+        try:
+            score_threshold = max(0.0, min(1.0, float(threshold)))
+        except (TypeError, ValueError):
+            score_threshold = cls._rag_score_threshold()
+        try:
+            top_score = float(item.get("top_score") or metadata.get("top_score") or 0.0)
+        except (TypeError, ValueError):
+            top_score = 0.0
+        return top_score >= score_threshold
+
+    @classmethod
+    def _effective_rag_metrics(cls, item: dict, *, evidence_used: bool) -> tuple[int, float, float]:
+        if not cls._rag_log_is_relevant(item):
+            return 0, 0.0, 0.0
+        hit_count = int(item.get("hit_count") or 0)
+        hit_rate = float(item.get("hit_rate") or 0.0)
+        citation_coverage = float(item.get("citation_coverage") or 0.0) if evidence_used else 0.0
+        return hit_count, hit_rate, citation_coverage
+
+    async def _backfill_inspection_rag_logs_from_results(self) -> None:
+        if not hasattr(self._session, "execute"):
+            return
+        rows = await self._session.execute(
+            select(InspectionResult)
+            .where(
+                InspectionResult.org_id == self._org_id,
+                InspectionResult.deleted_at.is_(None),
+            )
+            .order_by(InspectionResult.created_at.desc())
+            .limit(100)
+        )
+        repo = RagAnalysisRepository(self._session, self._org_id)
+        create_log = getattr(repo, "create_log_once", None) or repo.create_log
+        for result in rows.scalars().all():
+            chain = dict(result.reasoning_chain or {})
+            summary = dict(chain.get("rag_summary") or {})
+            if not summary:
+                continue
+            rag_space_ids = [str(item) for item in list(summary.get("rag_space_ids") or []) if str(item).strip()]
+            system_rag_space_ids = [
+                str(item) for item in list(summary.get("system_rag_space_ids") or []) if str(item).strip()
+            ]
+            if not rag_space_ids and not system_rag_space_ids:
+                continue
+            citations_payload = result.citations if isinstance(result.citations, dict) else {}
+            citations = [
+                dict(item) for item in list(citations_payload.get("items") or []) if isinstance(item, dict)
+            ]
+            top_k = int(summary.get("top_k") or max(int(summary.get("hit_count") or len(citations) or 0), 1))
+            hit_count = int(summary.get("hit_count") or len(citations) or 0)
+            trace = dict(chain.get("trace") or {})
+            trace_id = self._clean_rag_text(trace.get("trace_id")) or str(result.id)
+            query = self._clean_rag_text(summary.get("query")) or f"任务检测 {result.task_id} 标准证据检索"
+            top_sources = [
+                str(source) for source in list(summary.get("top_sources") or []) if str(source).strip()
+            ]
+            top_score = 0.0
+            try:
+                top_score = float(summary.get("top_score") or 0.0)
+            except (TypeError, ValueError):
+                top_score = 0.0
+            if citations:
+                try:
+                    top_score = max(top_score, max(float(item.get("score") or 0.0) for item in citations))
+                except (TypeError, ValueError):
+                    pass
+            if top_score <= 0.0 and hit_count > 0:
+                top_score = 1.0
+            await create_log(
+                {
+                    "idempotency_key": f"inspection_pipeline:{result.task_id}:{trace_id}",
+                    "task_id": str(result.task_id),
+                    "session_id": None,
+                    "user_id": None,
+                    "query": query,
+                    "rag_space_id": rag_space_ids[0] if rag_space_ids else system_rag_space_ids[0],
+                    "top_k": top_k,
+                    "hit_count": hit_count,
+                    "hit_rate": round(min(1.0, hit_count / max(top_k, 1)), 4),
+                    "citation_coverage": round(min(1.0, len(citations) / max(hit_count, 1)), 4) if citations else 0.0,
+                    "latency_ms": int(summary.get("latency_ms") or 0),
+                    "source_graph": "inspection_task",
+                    "agent_name": "inspection_task",
+                    "sub_route": "task_execution",
+                    "trace_id": trace_id,
+                    "top_score": top_score,
+                    "metadata_json": {
+                        "verdict": result.verdict,
+                        "top_score": top_score,
+                        "evidence_found": hit_count > 0,
+                        "evidence_used": bool(citations),
+                        "verdict_impacted": bool(citations),
+                        "candidate_count": int(summary.get("candidate_count") or hit_count),
+                        "rejected_count": int(summary.get("rejected_count") or 0),
+                        "score_threshold": summary.get("score_threshold"),
+                        "rag_space_ids": rag_space_ids,
+                        "rag_space_names": list(summary.get("rag_space_names") or []),
+                        "system_rag_space_ids": system_rag_space_ids,
+                        "system_rag_space_names": list(summary.get("system_rag_space_names") or []),
+                        "standard_binding_name": summary.get("standard_binding_name"),
+                        "top_sources": top_sources,
+                        "rule_hits": [],
+                        "retrieval_config": {
+                            "rag_space_ids": rag_space_ids,
+                            "top_k": top_k,
+                            "score_threshold": summary.get("score_threshold"),
+                        },
+                        "retrieved_chunks": citations,
+                        "used_citations": citations,
+                        "result": {
+                            "verdict": result.verdict,
+                            "overall_score": float(result.overall_score or 0.0),
+                        },
+                        "source": "inspection_result_backfill",
+                    },
+                }
+            )
 
     async def _sync_registered_agents(self) -> None:
         catalog_subgraph_keys = {str(item["subgraph_key"]) for item in get_registered_subgraphs()}
@@ -535,6 +698,8 @@ class AgentOpsService:
         await self._log_audit("intent_route", id, "delete")
 
     async def get_rag_analysis(self, *, global_scope: bool = False) -> RagAnalysisResponse:
+        if not global_scope:
+            await self._backfill_inspection_rag_logs_from_results()
         rag_repo = RagAnalysisRepository(self._session, None if global_scope else self._org_id)
         stats_data = await rag_repo.get_rag_stats()
         recent_items_data = await rag_repo.get_recent_rag_items(limit=200)
@@ -592,16 +757,18 @@ class AgentOpsService:
                 rag_space_id = None
             return rag_space_id, rag_space_name
 
-        recent_items = [
-            RagAnalysisItem(
+        def build_recent_item(item: dict) -> RagAnalysisItem:
+            evidence_found, evidence_used, verdict_impacted = self._derive_rag_effectiveness(item)
+            hit_count, hit_rate, citation_coverage = self._effective_rag_metrics(item, evidence_used=evidence_used)
+            return RagAnalysisItem(
                 task_id=item["task_id"],
                 session_id=item.get("session_id"),
                 query=item.get("query"),
                 rag_space_id=resolve_rag_space(item)[0],
                 rag_space_name=resolve_rag_space(item)[1],
-                hit_count=item.get("hit_count", 0),
-                hit_rate=item["hit_rate"],
-                citation_coverage=item["citation_coverage"],
+                hit_count=hit_count,
+                hit_rate=hit_rate,
+                citation_coverage=citation_coverage,
                 latency_ms=item["latency_ms"],
                 source_agent=self._resolve_rag_source_agent(item, source_display_map=source_display_map)[0],
                 source_graph=self._resolve_rag_source_agent(item, source_display_map=source_display_map)[1],
@@ -611,15 +778,18 @@ class AgentOpsService:
                 product_id=str((item.get("metadata") or {}).get("product_id") or "") or None,
                 verdict=str((item.get("metadata") or {}).get("verdict") or "") or None,
                 expectation_matched=(item.get("metadata") or {}).get("expectation_matched"),
-                evidence_found=self._derive_rag_effectiveness(item)[0],
-                evidence_used=self._derive_rag_effectiveness(item)[1],
-                verdict_impacted=self._derive_rag_effectiveness(item)[2],
+                evidence_found=evidence_found,
+                evidence_used=evidence_used,
+                verdict_impacted=verdict_impacted,
+                candidate_count=int((item.get("metadata") or {}).get("candidate_count") or item.get("hit_count") or 0),
+                rejected_count=int((item.get("metadata") or {}).get("rejected_count") or 0),
+                score_threshold=(item.get("metadata") or {}).get("score_threshold"),
                 top_sources=[str(source) for source in list((item.get("metadata") or {}).get("top_sources") or []) if str(source)],
                 rule_hits=[str(rule) for rule in list((item.get("metadata") or {}).get("rule_hits") or []) if str(rule)],
                 created_at=item["created_at"],
             )
-            for item in recent_items_data
-        ]
+
+        recent_items = [build_recent_item(item) for item in recent_items_data]
 
         source_agent_option_names = {
             name for name in agent_name_map.values() if name
@@ -699,7 +869,7 @@ class AgentOpsService:
             space_breakdown=build_breakdown(space_map),
             source_agent_breakdown=build_breakdown(source_agent_map),
             evidence_impact=evidence_impact,
-            recent_items=recent_items[:30],
+            recent_items=recent_items[:100],
         )
 
     async def get_rag_trace_detail(
@@ -753,6 +923,7 @@ class AgentOpsService:
             source_display_map=source_display_map,
         )
         evidence_found, evidence_used, verdict_impacted = self._derive_rag_effectiveness(item)
+        hit_count, hit_rate, citation_coverage = self._effective_rag_metrics(item, evidence_used=evidence_used)
 
         return RagTraceDetailResponse(
             trace_id=self._clean_rag_text(item.get("trace_id")) or trace_id,
@@ -763,9 +934,9 @@ class AgentOpsService:
             source_graph=source_graph,
             sub_route=sub_route,
             top_k=int(item.get("top_k") or 0),
-            hit_count=int(item.get("hit_count") or 0),
-            hit_rate=float(item.get("hit_rate") or 0.0),
-            citation_coverage=float(item.get("citation_coverage") or 0.0),
+            hit_count=hit_count,
+            hit_rate=hit_rate,
+            citation_coverage=citation_coverage,
             latency_ms=float(item.get("latency_ms") or 0.0),
             top_score=float(item.get("top_score")) if item.get("top_score") is not None else None,
             product_family=self._clean_rag_text(metadata.get("product_family")),
@@ -773,6 +944,9 @@ class AgentOpsService:
             evidence_found=evidence_found,
             evidence_used=evidence_used,
             verdict_impacted=verdict_impacted,
+            candidate_count=int(metadata.get("candidate_count") or item.get("hit_count") or 0),
+            rejected_count=int(metadata.get("rejected_count") or 0),
+            score_threshold=metadata.get("score_threshold"),
             retrieval_config=dict(metadata.get("retrieval_config") or {}),
             retrieved_chunks=[
                 dict(chunk) for chunk in list(metadata.get("retrieved_chunks") or []) if isinstance(chunk, dict)

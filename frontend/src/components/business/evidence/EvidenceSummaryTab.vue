@@ -82,7 +82,7 @@ function scorePercent(s: number) {
           <span class="metric-label">Token 消耗</span>
         </div>
         <div class="metric-item">
-          <span class="metric-value">{{ result.latency_ms ? `${result.latency_ms}ms` : '-' }}</span>
+          <span class="metric-value">{{ result.latency_ms != null ? `${result.latency_ms}ms` : '-' }}</span>
           <span class="metric-label">推理耗时</span>
         </div>
         <div class="metric-item">

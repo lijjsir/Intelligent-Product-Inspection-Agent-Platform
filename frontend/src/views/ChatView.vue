@@ -371,6 +371,65 @@ function messageAttachments(message: ChatMessage): ChatAttachment[] {
   return [...(message.payload?.attachment_echo || [])];
 }
 
+// ── Typewriter effect ────────────────────────────────────────────
+const typewriterPos = ref<Record<string, number>>({});
+const typewriterTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+function getDisplayedContent(message: ChatMessage): string {
+  if (message.role !== "assistant") return message.content;
+  const pos = typewriterPos.value[message.id];
+  if (pos === undefined) {
+    // streaming but timer not yet started → show empty, avoid flash
+    return message.message_type === "streaming" ? "" : message.content;
+  }
+  return message.content.slice(0, pos);
+}
+
+function ensureTypewriter(msgId: string) {
+  if (typewriterTimers.has(msgId)) return;
+  if (typewriterPos.value[msgId] === undefined) {
+    typewriterPos.value[msgId] = 0;
+  }
+  const TICK_MS = 20; // ~50 chars/sec
+  const timer = setInterval(() => {
+    const msg = chatStore.messages.find((m) => m.id === msgId);
+    if (!msg) { disposeTypewriter(msgId); return; }
+    const target = msg.content.length;
+    const current = typewriterPos.value[msgId] ?? 0;
+    if (current >= target) {
+      if (msg.message_type !== "streaming") disposeTypewriter(msgId);
+      return;
+    }
+    typewriterPos.value[msgId] = current + 1;
+  }, TICK_MS);
+  typewriterTimers.set(msgId, timer);
+}
+
+function disposeTypewriter(msgId: string) {
+  const timer = typewriterTimers.get(msgId);
+  if (timer) { clearInterval(timer); typewriterTimers.delete(msgId); }
+  delete typewriterPos.value[msgId];
+}
+
+function disposeAllTypewriters() {
+  for (const timer of typewriterTimers.values()) clearInterval(timer);
+  typewriterTimers.clear();
+  typewriterPos.value = {};
+}
+
+// Only START typewriters — never stop them from the watch.
+// The timer self-destructs when content is fully revealed AND streaming ended.
+watch(
+  () =>
+    chatStore.messages
+      .filter((m) => m.role === "assistant" && m.message_type === "streaming")
+      .map((m) => m.id),
+  (ids) => { for (const id of ids) ensureTypewriter(id); },
+  { deep: false, immediate: true },
+);
+
+onBeforeUnmount(() => disposeAllTypewriters());
+
 const RAG_CITE_RE = /\[RAG-(\d+)\]/g;
 
 function renderRagCitations(content: string): Array<{ type: "text" | "cite"; value: string }> {
@@ -720,7 +779,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
               <div v-else class="bubble-text">
-                <template v-for="(seg, si) in renderRagCitations(message.content)" :key="si">
+                <template v-for="(seg, si) in renderRagCitations(getDisplayedContent(message))" :key="si">
                   <span v-if="seg.type === 'text'">{{ seg.value }}</span>
                   <span v-else class="rag-cite" :title="`RAG 引用 #${seg.value}`">RAG-{{ seg.value }}</span>
                 </template>
