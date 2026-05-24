@@ -47,8 +47,8 @@ from app.services.agent_ops_service import AgentOpsService
 router = APIRouter(prefix="/agent-ops", tags=["Agent Operations"])
 
 
-def _build_service(current: CurrentUser, db) -> AgentOpsService:
-    require_role("agent_ops", current.role)
+def _build_service(current: CurrentUser, db, permission: str = "agent_ops_read") -> AgentOpsService:
+    require_role(permission, current.role)
     return AgentOpsService(db, current.org_id, current.user_id)
 
 
@@ -75,7 +75,7 @@ async def create_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         data = await svc.create_agent(body)
     except ValueError as exc:
@@ -117,7 +117,7 @@ async def update_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         data = await svc.update_agent(id, body)
     except ValueError as exc:
@@ -133,7 +133,7 @@ async def delete_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         await svc.delete_agent(id)
     except ValueError as exc:
@@ -157,7 +157,7 @@ async def import_runtime_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         name = body.get("name")
         if not name:
@@ -187,7 +187,7 @@ async def create_prompt(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     data = await svc.create_prompt(body)
     return ResponseEnvelope(data=data)
 
@@ -209,7 +209,7 @@ async def update_prompt(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         data = await svc.update_prompt(id, body)
     except ValueError as exc:
@@ -225,7 +225,7 @@ async def delete_prompt(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         await svc.delete_prompt(id)
     except ValueError as exc:
@@ -303,7 +303,7 @@ async def create_route(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         data = await svc.create_route(body)
     except ValueError as exc:
@@ -328,7 +328,7 @@ async def update_route(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         data = await svc.update_route(id, body)
     except ValueError as exc:
@@ -344,7 +344,7 @@ async def delete_route(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         await svc.delete_route(id)
     except ValueError as exc:
@@ -399,7 +399,7 @@ async def start_runtime_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         return ResponseEnvelope(data=await svc.set_runtime_status(runtime_key, status="running"))
     except ValueError as exc:
@@ -412,7 +412,7 @@ async def stop_runtime_agent(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         return ResponseEnvelope(data=await svc.set_runtime_status(runtime_key, status="stopped"))
     except ValueError as exc:
@@ -437,7 +437,7 @@ async def pause_agent_route(
     db=Depends(get_db),
 ):
     """暂停 Agent 路由 — 该 Agent 不再接收新请求"""
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     return ResponseEnvelope(data=await svc.pause_route(runtime_key, body.reason))
 
 
@@ -448,7 +448,7 @@ async def resume_agent_route(
     db=Depends(get_db),
 ):
     """恢复 Agent 路由 — 该 Agent 重新接收请求"""
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     return ResponseEnvelope(data=await svc.resume_route(runtime_key))
 
 
@@ -481,7 +481,7 @@ async def batch_update_status(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         result = await svc.batch_update_status(body.agent_ids, body.is_active)
         return ResponseEnvelope(data=BatchOperationResponse(**result))
@@ -495,7 +495,7 @@ async def batch_delete(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         result = await svc.batch_delete(body.agent_ids)
         return ResponseEnvelope(data=BatchOperationResponse(**result))
@@ -524,7 +524,7 @@ async def create_config_version(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         config = body.model_dump(exclude_none=True)
         result = await svc.create_config_version(id, config)
@@ -555,7 +555,7 @@ async def rollback_config(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    svc = _build_service(current, db)
+    svc = _build_service(current, db, "agent_ops")
     try:
         result = await svc.rollback_config(id, body.version)
         return ResponseEnvelope(data=result)

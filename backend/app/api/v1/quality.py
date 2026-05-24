@@ -20,6 +20,7 @@ async def get_quality_report(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
     source: str = Query(default="all", pattern="^(all|inspection|chat)$"),
+    include_remote: bool = Query(default=False, description="Include live Langfuse trace hydration; disabled by default for fast report loading"),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -29,6 +30,7 @@ async def get_quality_report(
         start_date=None if not start_date else __import__("datetime").date.fromisoformat(start_date),
         end_date=None if not end_date else __import__("datetime").date.fromisoformat(end_date),
         source=source,
+        include_remote=include_remote,
     )
     return ResponseEnvelope(data=QualityReportResponse(**data))
 
@@ -57,7 +59,7 @@ async def delete_quality_trace(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("quality", current.role)
+    require_role("quality_delete", current.role)
     service = QualityReportService(db, _scope_org_id(current))
     result = await service.delete_trace(trace_id)
     return ResponseEnvelope(data=result)

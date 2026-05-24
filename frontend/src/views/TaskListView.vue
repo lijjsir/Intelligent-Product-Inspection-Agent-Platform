@@ -99,7 +99,7 @@ async function fetchData() {
 
 async function fetchSpecOptions() {
   try {
-    await inspectionSpecStore.fetchAll();
+    await inspectionSpecStore.fetchAll({ suppressErrorToast: true });
   } catch (error) {
     console.error(error);
     ElMessage.warning("检测标准列表加载失败，手动创建任务时可能无法直接选择标准。");

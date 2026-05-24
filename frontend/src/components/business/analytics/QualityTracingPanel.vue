@@ -2,9 +2,12 @@
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useQualityStore } from "@/stores/quality.store";
+import { useAuthStore } from "@/stores/auth.store";
+import { ROLE_ADMIN } from "@/constants/roles";
 import type { QualityTraceItem } from "@/types/governance.types";
 
 const store = useQualityStore();
+const auth = useAuthStore();
 const source = ref<"all" | "inspection" | "chat">("all");
 const deleting = ref<string | null>(null);
 
@@ -15,6 +18,7 @@ const sourceOptions = [
 ];
 
 const traceMeta = computed(() => store.traceMeta);
+const canDeleteTrace = computed(() => auth.role === ROLE_ADMIN || auth.roles.includes(ROLE_ADMIN));
 const syncedCount = computed(() => store.traces.filter((item) => langfuseStatus(item) === "synced").length);
 const riskyCount = computed(
   () => store.traces.filter((item) => item.thumbs_down_count > 0 || (item.hallucination_risk ?? 0) >= 0.6).length,
@@ -45,6 +49,10 @@ function openLangfuseTrace(row: QualityTraceItem) {
 }
 
 async function handleDeleteTrace(row: QualityTraceItem) {
+  if (!canDeleteTrace.value) {
+    ElMessage.warning("Trace 删除属于管理员治理动作，平台运维仅可查看和跳转");
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       "确定要删除此 Trace 吗？会先删除 Langfuse 远端记录，成功后再清理本地关联数据。",
@@ -172,7 +180,7 @@ function metaAlertTitle() {
 
     <el-table
       :data="store.traces"
-      v-loading="store.loading"
+      v-loading="store.tracesLoading"
       empty-text="暂无 Trace 数据，执行检测或聊天后会出现"
       size="small"
       class="qt-table"
@@ -226,7 +234,7 @@ function metaAlertTitle() {
           <el-button size="small" link type="primary" :disabled="!canOpenLangfuse(row)" @click="openLangfuseTrace(row)">
             Langfuse
           </el-button>
-          <el-button size="small" link type="danger" :loading="deleting === row.trace_id" @click="handleDeleteTrace(row)">
+          <el-button v-if="canDeleteTrace" size="small" link type="danger" :loading="deleting === row.trace_id" @click="handleDeleteTrace(row)">
             删除
           </el-button>
         </template>

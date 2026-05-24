@@ -12,7 +12,7 @@ import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
-import type { TaskCreate } from "@/types/task.types";
+import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -25,6 +25,8 @@ const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
 const webSearchEnabled = ref(false);
+const inspectionContextEnabled = false;
+const selectedInspectionTasks = ref<InspectionTask[]>([]);
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -271,6 +273,8 @@ async function sendMessage() {
       ext: {
         ui_mode: "auto",
         force_web_search: webSearchEnabled.value || undefined,
+        inspection_context_enabled: inspectionContextEnabled,
+        selected_inspection_task_ids: inspectionContextEnabled ? selectedInspectionTasks.value.map((task) => task.id) : [],
       },
     });
     input.value = "";
@@ -285,6 +289,17 @@ function appendInspectionContextReference(value: string) {
   if (!text) return;
   input.value = input.value.trim() ? `${input.value.trim()}\n\n${text}` : text;
   ElMessage.success("已把任务引用加入输入框");
+}
+
+function toggleSelectedInspectionTask(task: InspectionTask) {
+  const exists = selectedInspectionTasks.value.some((item) => item.id === task.id);
+  selectedInspectionTasks.value = exists
+    ? selectedInspectionTasks.value.filter((item) => item.id !== task.id)
+    : [...selectedInspectionTasks.value, task].slice(-8);
+}
+
+function clearSelectedInspectionTasks() {
+  selectedInspectionTasks.value = [];
 }
 
 const onInputKeydown = async (event: KeyboardEvent) => {
@@ -593,7 +608,7 @@ function syncTaskStreamsFromMessages() {
 onMounted(async () => {
   try { await chatStore.initForChatPage(); } catch (error) { ElMessage.error("聊天初始化失败，请刷新页面后重试。"); console.error(error); }
   await ensureInspectionSpecsLoaded();
-  try { await billingStore.fetchMyUsage(); } catch { /* non-blocking */ }
+  try { await billingStore.fetchMyUsage({ suppressErrorToast: true }); } catch { /* non-blocking */ }
   await scrollToBottom();
   syncTaskStreamsFromMessages();
   await loadMessageReactions();
@@ -607,7 +622,7 @@ watch(() => chatStore.messages.map((item) => item.id).join(","), loadMessageReac
 watch(latestTokenCountedMessageId, async (messageId) => {
   if (!messageId || messageId === syncedUsageMessageId.value) return;
   syncedUsageMessageId.value = messageId;
-  try { await billingStore.fetchMyUsage(); } catch { /* non-blocking */ }
+  try { await billingStore.fetchMyUsage({ suppressErrorToast: true }); } catch { /* non-blocking */ }
 });
 </script>
 
@@ -656,11 +671,15 @@ watch(latestTokenCountedMessageId, async (messageId) => {
     />
 
     <ChatInspectionContextPanel
+      v-if="inspectionContextEnabled"
       class="inspection-context-strip"
       :context="chatStore.inspectionContext"
       :error="chatStore.inspectionContextError"
+      :selected-task-ids="selectedInspectionTasks.map((task) => task.id)"
       @refresh="chatStore.fetchInspectionContext"
       @reference="appendInspectionContextReference"
+      @toggle-task="toggleSelectedInspectionTask"
+      @clear-selected="clearSelectedInspectionTasks"
     />
 
     <!-- Chat area -->

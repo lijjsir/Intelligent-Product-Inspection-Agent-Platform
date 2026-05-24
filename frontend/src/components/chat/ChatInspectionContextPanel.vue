@@ -1,20 +1,33 @@
 <script setup lang="ts">
-import { ArrowDown, DocumentChecked, Refresh } from "@element-plus/icons-vue";
+import { ArrowDown, DocumentChecked, Refresh, Search } from "@element-plus/icons-vue";
 import { computed, ref } from "vue";
 
+import { taskApi } from "@/api/task.api";
 import type { ChatInspectionContext, ChatInspectionTaskContext } from "@/types/chat.types";
+import type { InspectionTask, TaskStatus } from "@/types/task.types";
 
 const props = defineProps<{
   context: ChatInspectionContext;
   error?: string;
+  selectedTaskIds?: string[];
 }>();
 
 const emit = defineEmits<{
   (e: "refresh"): void;
   (e: "reference", value: string): void;
+  (e: "toggle-task", value: InspectionTask): void;
+  (e: "clear-selected"): void;
 }>();
 
 const expanded = ref(false);
+const taskDialogVisible = ref(false);
+const taskLoading = ref(false);
+const taskLoadError = ref("");
+const taskRows = ref<InspectionTask[]>([]);
+const taskTotal = ref(0);
+const taskPage = ref(1);
+const taskStatusFilter = ref<TaskStatus | "">("");
+const productFilter = ref("");
 
 const stats = computed(() => props.context.stats || {});
 const visibleTasks = computed(() => {
@@ -28,6 +41,8 @@ const failedCount = computed(() => {
 });
 const highRiskCount = computed(() => (stats.value.risk_high || 0) + (stats.value.risk_critical || 0));
 const scopeLabel = computed(() => (props.context.scope === "user_recent_tasks" ? "我的任务" : "组织任务"));
+const selectedIdSet = computed(() => new Set(props.selectedTaskIds || []));
+const selectedCount = computed(() => selectedIdSet.value.size);
 
 function taskTitle(task: ChatInspectionTaskContext) {
   return [task.product_id, task.spec_code].filter(Boolean).join(" / ") || task.task_id || "未命名任务";
@@ -63,6 +78,62 @@ function buildReference(task: ChatInspectionTaskContext) {
   if (task.trace_id) lines.push(`- Trace：${task.trace_id}`);
   return lines.join("\n");
 }
+
+function plainTaskTitle(task: InspectionTask) {
+  return [task.product_id, task.spec_code].filter(Boolean).join(" / ") || task.id;
+}
+
+function buildTaskReference(task: InspectionTask) {
+  return [
+    "请重点参考这个质检任务：",
+    `- 任务 ID：${task.id}`,
+    `- 产品/标准：${plainTaskTitle(task)}`,
+    `- 状态：${task.status}`,
+    `- 优先级：${task.priority}`,
+    task.has_result ? `- 结果 ID：${task.result_id || "已生成"}` : "- 结果：暂无",
+    task.has_stability ? `- 稳定性报告 ID：${task.stability_id || "已生成"}` : "- 稳定性报告：暂无",
+  ].join("\n");
+}
+
+async function loadTaskOptions() {
+  taskLoading.value = true;
+  taskLoadError.value = "";
+  try {
+    const { data } = await taskApi.list(
+      {
+        page: taskPage.value,
+        size: 10,
+        status: taskStatusFilter.value || undefined,
+        product_id: productFilter.value.trim() || undefined,
+      },
+      { suppressErrorToast: true },
+    );
+    taskRows.value = data.data.items;
+    taskTotal.value = data.data.total;
+  } catch (error) {
+    taskRows.value = [];
+    taskTotal.value = 0;
+    taskLoadError.value = error instanceof Error ? error.message : "任务列表暂不可用";
+  } finally {
+    taskLoading.value = false;
+  }
+}
+
+async function openTaskDialog() {
+  taskDialogVisible.value = true;
+  if (!taskRows.value.length) {
+    await loadTaskOptions();
+  }
+}
+
+async function searchTasks() {
+  taskPage.value = 1;
+  await loadTaskOptions();
+}
+
+function toggleTask(task: InspectionTask) {
+  emit("toggle-task", task);
+}
 </script>
 
 <template>
@@ -75,6 +146,15 @@ function buildReference(task: ChatInspectionTaskContext) {
         <div class="context-title">
           <span>质检上下文</span>
           <el-tag size="small" effect="plain">{{ scopeLabel }}</el-tag>
+          <el-tag
+            v-if="selectedCount"
+            size="small"
+            effect="dark"
+            closable
+            @close="emit('clear-selected')"
+          >
+            已选择 {{ selectedCount }}
+          </el-tag>
         </div>
         <div v-if="error" class="context-sub danger-text">{{ error }}</div>
         <div v-else-if="hasTasks" class="context-sub">
@@ -84,6 +164,7 @@ function buildReference(task: ChatInspectionTaskContext) {
       </div>
       <div class="context-actions">
         <el-button size="small" text :icon="Refresh" @click="emit('refresh')" />
+        <el-button size="small" text :icon="Search" @click="openTaskDialog">选择任务</el-button>
         <el-button size="small" text :disabled="!visibleTasks.length" @click="expanded = !expanded">
           {{ expanded ? "收起" : "展开" }}
           <el-icon class="arrow" :class="{ up: expanded }"><ArrowDown /></el-icon>
@@ -110,6 +191,84 @@ function buildReference(task: ChatInspectionTaskContext) {
         <el-button size="small" link type="primary" @click="emit('reference', buildReference(task))">引用</el-button>
       </div>
     </div>
+
+    <el-dialog v-model="taskDialogVisible" title="选择质检任务作为 AI 上下文" width="820px" destroy-on-close>
+      <div class="task-picker">
+        <div class="task-picker-toolbar">
+          <el-input
+            v-model="productFilter"
+            clearable
+            placeholder="按产品编号筛选"
+            class="task-filter-input"
+            @keyup.enter="searchTasks"
+          />
+          <el-select v-model="taskStatusFilter" clearable placeholder="任务状态" class="task-filter-status">
+            <el-option label="pending" value="pending" />
+            <el-option label="queued" value="queued" />
+            <el-option label="running" value="running" />
+            <el-option label="done" value="done" />
+            <el-option label="failed" value="failed" />
+            <el-option label="reviewing" value="reviewing" />
+          </el-select>
+          <el-button type="primary" :icon="Search" :loading="taskLoading" @click="searchTasks">搜索</el-button>
+        </div>
+
+        <el-alert
+          v-if="taskLoadError"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="taskLoadError"
+        />
+
+        <div v-loading="taskLoading" class="task-picker-list">
+          <div v-if="!taskRows.length && !taskLoading" class="task-picker-empty">
+            当前条件下没有可选质检任务。
+          </div>
+          <div
+            v-for="task in taskRows"
+            :key="task.id"
+            class="picker-task"
+            :class="{ selected: selectedIdSet.has(task.id) }"
+          >
+            <div class="picker-task-main">
+              <div class="picker-task-title">{{ plainTaskTitle(task) }}</div>
+              <div class="picker-task-meta">
+                <span>{{ task.status }}</span>
+                <span>P{{ task.priority }}</span>
+                <span v-if="task.has_result">有结果</span>
+                <span v-if="task.has_stability">有稳定性报告</span>
+                <span v-if="task.created_at">{{ formatDate(task.created_at) }}</span>
+              </div>
+            </div>
+            <div class="picker-task-actions">
+              <el-button
+                size="small"
+                :type="selectedIdSet.has(task.id) ? 'success' : 'default'"
+                @click="toggleTask(task)"
+              >
+                {{ selectedIdSet.has(task.id) ? "已纳入" : "纳入上下文" }}
+              </el-button>
+              <el-button size="small" link type="primary" @click="emit('reference', buildTaskReference(task))">
+                引用
+              </el-button>
+            </div>
+          </div>
+        </div>
+
+        <div class="task-picker-footer">
+          <span>共 {{ taskTotal }} 条</span>
+          <el-pagination
+            v-model:current-page="taskPage"
+            small
+            layout="prev, pager, next"
+            :page-size="10"
+            :total="taskTotal"
+            @current-change="loadTaskOptions"
+          />
+        </div>
+      </div>
+    </el-dialog>
   </section>
 </template>
 
@@ -230,6 +389,99 @@ function buildReference(task: ChatInspectionTaskContext) {
   font-size: 12px;
 }
 
+.task-picker {
+  display: grid;
+  gap: 12px;
+}
+
+.task-picker-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.task-filter-input {
+  width: 220px;
+}
+
+.task-filter-status {
+  width: 160px;
+}
+
+.task-picker-list {
+  display: grid;
+  min-height: 220px;
+  gap: 8px;
+}
+
+.task-picker-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: #8a958f;
+  font-size: 13px;
+}
+
+.picker-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #e4eadf;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: #fbfcf8;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.picker-task:hover {
+  transform: translateY(-1px);
+  border-color: rgba(31, 93, 60, 0.28);
+}
+
+.picker-task.selected {
+  border-color: rgba(31, 93, 60, 0.42);
+  background: linear-gradient(135deg, #f1f9ef, #fffaf0);
+}
+
+.picker-task-main {
+  min-width: 0;
+}
+
+.picker-task-title {
+  overflow: hidden;
+  color: #1f3327;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 3px;
+  color: #66796d;
+  font-size: 12px;
+}
+
+.picker-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.task-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #718074;
+  font-size: 12px;
+}
+
 @media (max-width: 640px) {
   .context-main {
     align-items: flex-start;
@@ -238,6 +490,16 @@ function buildReference(task: ChatInspectionTaskContext) {
   .context-actions {
     flex-direction: column;
     align-items: flex-end;
+  }
+
+  .picker-task {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .picker-task-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 </style>

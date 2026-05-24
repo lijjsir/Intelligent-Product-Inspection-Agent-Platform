@@ -15,6 +15,19 @@ const analyticsStore = useAnalyticsStore();
 const loading = ref(false);
 
 const modelMetrics = computed(() => analyticsStore.overview?.model_metrics ?? []);
+const totalCost = computed(() => analyticsStore.overview?.total_cost ?? 0);
+const totalCalls = computed(() => {
+  const modelCallTotal = modelMetrics.value.reduce((sum, item) => sum + (item.call_count ?? item.result_count ?? 0), 0);
+  return modelCallTotal || analyticsStore.overview?.total_results || 0;
+});
+const avgCostPerCall = computed(() => (totalCalls.value ? totalCost.value / totalCalls.value : 0));
+const sortedCostMetrics = computed(() =>
+  [...modelMetrics.value].sort((a, b) => (b.total_cost || 0) - (a.total_cost || 0)),
+);
+const maxCost = computed(() => sortedCostMetrics.value[0]?.total_cost || 1);
+const hasUnpricedUsage = computed(() =>
+  modelMetrics.value.some((item) => (item.total_tokens ?? 0) > 0 && Number(item.total_cost || 0) === 0),
+);
 
 const models = ref<ModelConfig[]>([]);
 const modelsLoading = ref(false);
@@ -79,6 +92,46 @@ function formatTokens(value: number | null | undefined) {
   if (value == null || value <= 0) return "-";
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
   return `${value.toFixed(0)}`;
+}
+
+function formatCost(value: number | null | undefined) {
+  const safe = Number(value || 0);
+  if (safe >= 1) return `¥${safe.toFixed(2)}`;
+  if (safe >= 0.01) return `¥${safe.toFixed(4)}`;
+  return `¥${safe.toFixed(6)}`;
+}
+
+function formatModelCost(metric: { total_cost?: number; total_tokens?: number }) {
+  if ((metric.total_tokens ?? 0) > 0 && Number(metric.total_cost || 0) === 0) return "未配置价格";
+  return formatCost(metric.total_cost);
+}
+
+function formatSummaryCost(value: number) {
+  if (hasUnpricedUsage.value && Number(value || 0) === 0) return "未配置价格";
+  return formatCost(value);
+}
+
+function formatModelAvgCost(metric: { call_count?: number; result_count?: number; total_cost?: number; total_tokens?: number }) {
+  if ((metric.total_tokens ?? 0) > 0 && Number(metric.total_cost || 0) === 0) return "未配置价格";
+  return formatCost(avgCost(metric));
+}
+
+function formatPct(part: number, whole: number) {
+  if (!whole) return "0%";
+  return `${((part / whole) * 100).toFixed(1)}%`;
+}
+
+function metricCallCount(metric: { call_count?: number; result_count?: number }) {
+  return metric.call_count ?? metric.result_count ?? 0;
+}
+
+function avgCost(metric: { call_count?: number; result_count?: number; total_cost?: number }) {
+  const calls = metricCallCount(metric);
+  return calls ? Number(metric.total_cost || 0) / calls : 0;
+}
+
+function costBarWidth(cost: number) {
+  return `${Math.max((cost / maxCost.value) * 100, 2)}%`;
 }
 
 function statusColor(passRate: number) {
@@ -181,7 +234,7 @@ onUnmounted(() => {
     <section class="hero">
       <p class="eyebrow">Model Monitor</p>
       <h2>调用监控</h2>
-      <p class="sub">只看模型健康、调用效果和 Token 消耗，成本统一放到“成本分析”页面，避免重复解读。</p>
+      <p class="sub">统一查看模型健康、调用效果、Token 消耗和成本，不再拆成重复的成本分析页。</p>
     </section>
 
     <el-alert
@@ -192,10 +245,37 @@ onUnmounted(() => {
     />
 
     <el-alert
-      title="成本指标已收口到“成本分析”页面，这里只保留调用健康、通过率、幻觉率和 Token 使用。"
+      title="模型相关指标已收口在这里：通过率、幻觉率、Token、总成本和均价使用同一套本地账本口径。"
       type="info"
       :closable="false"
     />
+
+    <el-alert
+      v-if="hasUnpricedUsage"
+      title="检测到有模型已产生 Token 但成本为 0，通常是模型配置未填写输入/输出单价；这里不会用假价格补算。"
+      type="warning"
+      :closable="false"
+      show-icon
+    />
+
+    <section class="summary-row">
+      <div class="summary-card">
+        <span class="summary-label">总成本</span>
+        <strong>{{ formatSummaryCost(totalCost) }}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">总调用次数</span>
+        <strong>{{ totalCalls.toLocaleString() }}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">平均单次成本</span>
+        <strong>{{ formatSummaryCost(avgCostPerCall) }}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">有调用模型数</span>
+        <strong>{{ modelMetrics.length }}</strong>
+      </div>
+    </section>
 
     <section class="metric-grid">
       <el-card v-for="m in modelMetrics" :key="m.model_key" shadow="never" class="model-card">
@@ -223,11 +303,19 @@ onUnmounted(() => {
           </div>
           <div class="stat">
             <span class="stat-label">调用次数</span>
-            <span class="stat-value">{{ m.result_count }}</span>
+            <span class="stat-value">{{ metricCallCount(m) }}</span>
           </div>
           <div class="stat">
             <span class="stat-label">平均 Token</span>
             <span class="stat-value">{{ formatTokens(m.avg_tokens) }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">总成本</span>
+            <span class="stat-value">{{ formatModelCost(m) }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">均价</span>
+            <span class="stat-value">{{ formatModelAvgCost(m) }}</span>
           </div>
         </div>
         <div class="progress-bar">
@@ -249,6 +337,33 @@ onUnmounted(() => {
         </div>
       </template>
       <div ref="tokenChartRef" class="chart-host" />
+    </el-card>
+
+    <el-card v-if="sortedCostMetrics.length" shadow="never" class="chart-card">
+      <template #header>
+        <div class="card-head">
+          <strong>模型成本分布</strong>
+          <span>按总成本降序排列，和 Token/调用质量共用同一模型维度</span>
+        </div>
+      </template>
+      <div class="cost-list">
+        <div v-for="m in sortedCostMetrics" :key="m.model_key" class="cost-row">
+          <div class="cost-bar-bg">
+            <div class="cost-bar" :style="{ width: costBarWidth(m.total_cost) }" />
+          </div>
+          <div class="cost-info">
+            <div class="cost-model">
+              <span class="model-key">{{ m.model_key }}</span>
+              <strong>{{ formatPct(m.total_cost, totalCost) }}</strong>
+            </div>
+            <div class="cost-detail">
+              <span>{{ formatModelCost(m) }}</span>
+              <span>{{ metricCallCount(m) }} 次调用</span>
+              <span>均价 {{ formatModelAvgCost(m) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </el-card>
 
     <section class="section-header">
@@ -327,6 +442,34 @@ onUnmounted(() => {
 .eyebrow { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.76; }
 .hero h2 { margin: 0; font-size: 40px; }
 .sub { margin: 12px 0 0; color: rgba(248, 250, 252, 0.82); }
+
+.summary-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.summary-card {
+  padding: 18px;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+.summary-label {
+  display: block;
+  color: #71717a;
+  font-size: 13px;
+}
+
+.summary-card strong {
+  display: block;
+  margin-top: 8px;
+  color: #18181b;
+  font-size: 28px;
+  font-weight: 800;
+}
 
 .metric-grid {
   display: grid;
@@ -417,9 +560,51 @@ onUnmounted(() => {
 .card-head span { display: block; margin-top: 4px; color: #64748b; font-size: 13px; }
 .chart-host { width: 100%; height: 320px; }
 
+.cost-list { display: flex; flex-direction: column; gap: 12px; }
+.cost-row { position: relative; min-height: 76px; }
+.cost-bar-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fafafa;
+}
+.cost-bar {
+  height: 100%;
+  background: rgba(15, 118, 110, 0.12);
+  border-radius: 10px;
+  transition: width 0.35s ease;
+}
+.cost-info {
+  position: relative;
+  z-index: 1;
+  padding: 14px 16px;
+}
+.cost-model {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.model-key { font-weight: 700; color: #18181b; word-break: break-all; }
+.cost-model strong { color: #0f766e; font-size: 18px; }
+.cost-detail {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: #71717a;
+  font-size: 13px;
+}
+
 .refresh-row {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+@media (max-width: 960px) {
+  .summary-row { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

@@ -49,10 +49,10 @@ export const useAuthStore = defineStore("auth", () => {
     if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
       workspacesForRoles.push(WORKSPACE_APP);
     }
-    if (rs.length > 0) {
+    if (rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
       workspacesForRoles.push(WORKSPACE_OPS);
     }
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+    if (rs.includes(ROLE_ADMIN)) {
       workspacesForRoles.push(WORKSPACE_GOVERNANCE);
     }
     return Array.from(new Set(workspacesForRoles));

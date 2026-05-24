@@ -20,15 +20,15 @@ export const opsRoutes = [
   // Data quality
   { path: "data-quality", name: "ops-data-quality", component: () => import("@/views/ops/DataQualityView.vue"), meta: { title: "数据质量", roles: [ROLE_PLATFORM_OPERATOR] } },
 
-  // Cost analysis
-  { path: "cost", name: "ops-cost", component: () => import("@/views/ops/CostAnalysisView.vue"), meta: { title: "成本分析", roles: [ROLE_PLATFORM_OPERATOR] } },
+  // Cost is part of the model call monitor now; keep the old URL as a safe redirect.
+  { path: "cost", name: "ops-cost", redirect: { name: "ops-calls" }, meta: { title: "调用监控", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Reports
   { path: "reports", name: "ops-reports", component: () => import("@/views/ops/BizReportView.vue"), meta: { title: "业务报表", roles: [ROLE_PLATFORM_OPERATOR] } },
 
-  // Cross-domain readonly
+  // Cross-domain readonly views exposed as top-level ops entries.
   { path: "agents", name: "ops-agents", component: () => import("@/views/ops/AgentManageView.vue"), meta: { title: "Agent 查看", roles: [ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR] } },
-  { path: "stability", name: "ops-stability", component: () => import("@/views/StabilityOverviewView.vue"), meta: { title: "稳定性查看", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "stability", name: "ops-stability", redirect: { name: "ops-analytics" }, meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
   { path: "inspection-specs", name: "ops-inspection-specs", component: () => import("@/views/admin/InspectionSpecView.vue"), meta: { title: "质检门槛查看", roles: [ROLE_PLATFORM_OPERATOR] } },
   { path: "tasks", name: "ops-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务查看", roles: [ROLE_PLATFORM_OPERATOR] } },
   { path: "tasks/:id", name: "ops-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_PLATFORM_OPERATOR] } },

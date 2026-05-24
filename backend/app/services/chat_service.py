@@ -123,14 +123,18 @@ class ChatService:
             return [ChatMessageResponse.model_validate(item) for item in rows]
 
     async def get_inspection_context(self) -> dict[str, Any]:
-        async with get_session() as session:
-            context_service = ChatContextService(
-                session,
-                org_id=self._org_id,
-                user_id=self._user_id,
-                role=self._current.role,
-            )
-            return await context_service.build_inspection_context(recent_limit=6, summary_window=12)
+        try:
+            async with get_session() as session:
+                context_service = ChatContextService(
+                    session,
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    role=self._current.role,
+                )
+                return await context_service.build_inspection_context(recent_limit=6, summary_window=12)
+        except Exception as exc:
+            logger.warning("chat inspection context endpoint failed: %s", exc, exc_info=True)
+            return self._empty_inspection_context(scope="unavailable", error="质检上下文暂不可用，可手动选择任务加入 AI 上下文。")
 
     async def delete_session(self, session_id: str) -> bool:
         async with get_session() as session:
@@ -450,29 +454,33 @@ class ChatService:
                 hist_rows = await hist_repo.list_for_session(
                     org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
                 )
-                context_service = ChatContextService(
-                    hist_session,
-                    org_id=self._org_id,
-                    user_id=self._user_id,
-                    role=self._current.role,
-                )
                 ext_payload["history_messages"] = [
                     {"role": m.role, "content": m.content}
                     for m in hist_rows
                     if int(m.seq_no or 0) < current_user_seq_no
                 ][-10:]
-                try:
-                    ext_payload["inspection_context"] = await context_service.build_inspection_context()
-                except Exception:
-                    logger.debug("chat inspection context build skipped", exc_info=True)
-                    ext_payload["inspection_context"] = {
-                        "scope": "unavailable",
-                        "summary_window": 0,
-                        "stats": {},
-                        "recent_tasks": [],
-                        "recent_failures": [],
-                        "latest_task": None,
-                    }
+                if ext_payload.get("inspection_context_enabled") is True:
+                    context_service = ChatContextService(
+                        hist_session,
+                        org_id=self._org_id,
+                        user_id=self._user_id,
+                        role=self._current.role,
+                    )
+                    try:
+                        selected_task_ids = [
+                            str(item)
+                            for item in list(ext_payload.get("selected_inspection_task_ids") or [])
+                            if str(item).strip()
+                        ]
+                        ext_payload["inspection_context"] = await context_service.build_inspection_context(
+                            selected_task_ids=selected_task_ids
+                        )
+                    except Exception:
+                        logger.debug("chat inspection context build skipped", exc_info=True)
+                        ext_payload["inspection_context"] = self._empty_inspection_context(scope="unavailable")
+                else:
+                    ext_payload.pop("inspection_context", None)
+                    ext_payload.pop("selected_inspection_task_ids", None)
             await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),
@@ -530,6 +538,21 @@ class ChatService:
                     "payload": failure_payload,
                 }
             )
+
+    @staticmethod
+    def _empty_inspection_context(*, scope: str, error: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "scope": scope,
+            "summary_window": 0,
+            "stats": {},
+            "recent_tasks": [],
+            "recent_failures": [],
+            "latest_task": None,
+            "selected_tasks": [],
+        }
+        if error:
+            payload["error"] = error
+        return payload
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         async for event in chat_stream_broker.subscribe(session_id):

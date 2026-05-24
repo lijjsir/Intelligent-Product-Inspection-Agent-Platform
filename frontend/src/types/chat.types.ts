@@ -120,6 +120,8 @@ export interface ChatInspectionContext {
   recent_tasks: ChatInspectionTaskContext[];
   recent_failures: ChatInspectionTaskContext[];
   latest_task?: ChatInspectionTaskContext | null;
+  selected_tasks?: ChatInspectionTaskContext[];
+  error?: string | null;
 }
 
 export interface ChatArtifact {

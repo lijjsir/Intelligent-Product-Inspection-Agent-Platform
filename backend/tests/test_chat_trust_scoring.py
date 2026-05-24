@@ -148,10 +148,11 @@ async def test_trust_scoring_service_falls_back_to_rule_only_when_reviewer_fails
     )
 
     assert result["status"] == "rule_only"
-    assert result["trust_score"] is None
-    assert result["hallucination_risk"] is None
-    assert result["overconfidence"] is None
-    assert result["has_citation"] is None
+    assert result["combined_scores"] is not None
+    assert result["trust_score"] is not None
+    assert result["hallucination_risk"] is not None
+    assert result["overconfidence"] is not None
+    assert result["has_citation"] is False
     assert result["trace_url"] == "http://127.0.0.1:3000/project/x/traces/trace-1"
     assert synced_scores == []
 
@@ -587,7 +588,13 @@ async def test_quality_trace_list_uses_langfuse_api_for_chat_source(monkeypatch)
                             {"name": "overconfidence", "value": 0.21},
                         ],
                         "observations": [
-                            {"id": "obs-1", "type": "GENERATION", "model": "doubao-seed-2-0-pro-260215", "usage": {"total": 327}}
+                            {
+                                "id": "obs-1",
+                                "type": "GENERATION",
+                                "model": "doubao-seed-2-0-pro-260215",
+                                "usageDetails": {"input": 100, "output": 227, "total": 327},
+                                "costDetails": {"total": 0.0042},
+                            }
                         ],
                     }
                 ],
@@ -628,6 +635,7 @@ async def test_quality_trace_list_uses_langfuse_api_for_chat_source(monkeypatch)
     assert len(traces) == 1
     assert traces[0]["source_type"] == "chat"
     assert traces[0]["total_tokens"] == 327
+    assert traces[0]["total_cost"] == 0.0042
     assert traces[0]["trust_score"] == 0.355
 
 
@@ -947,7 +955,7 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
     service._chat_score_repo = ChatScoreRepo()
     service._chat_message_repo = ChatMessageRepo()
 
-    report = await service.build_report(source="chat")
+    report = await service.build_report(source="chat", include_remote=True)
 
     assert report["total_results"] == 1
     assert report["hallucination_rate"] == 1.0
@@ -971,6 +979,55 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
     assert report["chat_unscored_count"] == 0
     assert report["chat_scored_rate"] == 1.0
     assert report["chat_avg_trust_score"] == 0.4
+
+
+@pytest.mark.asyncio
+async def test_quality_report_estimates_unscored_chat_messages_locally():
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatScoreRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+    class ChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-1",
+                    session_id="session-1",
+                    content="该答案可能需要结合来源：标准文档进一步确认。",
+                    payload={
+                        "citations": [{"id": "doc-1", "title": "标准文档"}],
+                        "llm_meta": {"model": "chat-model", "usage": {"total_tokens": 42}},
+                    },
+                    created_at=datetime(2026, 5, 14, 9, 0, 0),
+                )
+            ]
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._stability_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = EmptyChatScoreRepo()
+    service._chat_message_repo = ChatMessageRepo()
+
+    report = await service.build_report(source="chat")
+
+    assert report["chat_message_count"] == 1
+    assert report["chat_score_count"] == 1
+    assert report["chat_scored_rate"] == 1.0
+    assert report["chat_avg_trust_score"] > 0
+    assert report["chat_trust_trend"]
 
 
 @pytest.mark.asyncio
@@ -1028,7 +1085,7 @@ async def test_quality_report_uses_langfuse_trace_items_when_enabled(monkeypatch
     service._token_ledger_repo = EmptyLedgerRepo()
     service._chat_score_repo = EmptyRepo()
     service._chat_message_repo = EmptyChatMessageRepo()
-    report = await service.build_report(source="chat")
+    report = await service.build_report(source="chat", include_remote=True)
 
     assert report["total_results"] == 1
     assert report["chat_message_count"] == 1
@@ -1093,7 +1150,7 @@ async def test_analytics_overview_overlays_quality_metrics_from_langfuse(monkeyp
 
     service = AnalyticsService(session=object(), org_id="org-1")
     service._repo = FakeRepo()
-    overview = await service.overview()
+    overview = await service.overview(include_remote=True)
 
     assert overview["total_tasks"] == 5
     assert overview["total_results"] == 1

@@ -8,7 +8,7 @@ import { useQualityStore } from "@/stores/quality.store";
 
 const store = useQualityStore();
 const report = computed(() => store.report);
-const loading = computed(() => store.loading);
+const loading = computed(() => store.reportLoading);
 const traceMeta = computed(() => store.traceMeta);
 
 function formatRate(value: number | null | undefined) {
@@ -25,15 +25,15 @@ const summaryCards = computed(() => {
   if (!r) return [];
   return [
     {
-      label: "已评分消息",
+      label: "可评估消息",
       value: r.chat_message_count ? `${r.chat_score_count} / ${r.chat_message_count}` : `${r.chat_score_count}`,
-      sub: `可信度链路覆盖率 ${formatRate(r.chat_scored_rate)}`,
+      sub: `可信度覆盖率 ${formatRate(r.chat_scored_rate)}`,
       tone: r.chat_scored_rate >= 0.6 ? "success" : r.chat_score_count > 0 ? "warning" : "default",
     },
     {
       label: "平均可信度",
       value: formatRate(r.chat_avg_trust_score),
-      sub: "来自可信度评分链路的综合得分",
+      sub: "来自 LLM 评审或规则兜底的综合得分",
       tone: r.chat_avg_trust_score >= 0.8 ? "success" : r.chat_avg_trust_score >= 0.6 ? "warning" : "danger",
     },
     {
@@ -69,19 +69,14 @@ const summaryCards = computed(() => {
   ];
 });
 
-const modelComparison = computed(() => {
-  const models = report.value?.model_metrics ?? [];
-  return [...models].sort((a, b) => (b.pass_rate || 0) - (a.pass_rate || 0));
-});
-
 const trustTrendEmptyDescription = computed(() => {
   const r = report.value;
   if (!r) return "暂无趋势数据";
   if (r.chat_message_count > 0 && r.chat_score_count === 0) {
-    return `暂无趋势数据，当前 ${r.chat_message_count} 条聊天消息尚未写入可信度评分`;
+    return `暂无趋势数据，当前 ${r.chat_message_count} 条聊天消息缺少可评估回复内容`;
   }
   if (r.chat_message_count > r.chat_score_count) {
-    return `仅有 ${r.chat_score_count} / ${r.chat_message_count} 条聊天消息进入了可信度评分链路`;
+    return `仅有 ${r.chat_score_count} / ${r.chat_message_count} 条聊天消息可计算可信度`;
   }
   return "暂无趋势数据";
 });
@@ -91,7 +86,7 @@ const metaTitle = computed(() => {
   const r = report.value;
   if (!meta) return "";
   if (meta.langfuse_status === "ok") {
-    return `Langfuse 已连接 · 远端 ${meta.item_count || 0} 条 Trace · 已评分消息 ${r?.chat_score_count ?? 0}/${r?.chat_message_count ?? 0}`;
+    return `Langfuse 已连接 · 远端 ${meta.item_count || 0} 条 Trace · 可评估消息 ${r?.chat_score_count ?? 0}/${r?.chat_message_count ?? 0}`;
   }
   if (meta.langfuse_status === "error") {
     return `Langfuse 连接异常：${meta.langfuse_error || "无法读取远端 Trace"}`;
@@ -136,37 +131,11 @@ const metaType = computed(() => {
         <template #header>
           <div class="card-head">
             <strong>聊天可信度趋势</strong>
-            <span>仅统计已经写入可信度评分链路的聊天回复</span>
+            <span>统计 LLM 评审结果；评审不可用时使用本地规则兜底</span>
           </div>
         </template>
         <ChatTrustTrendChart v-if="(report?.chat_trust_trend || []).length" :points="report?.chat_trust_trend || []" />
         <el-empty v-else :description="trustTrendEmptyDescription" :image-size="48" />
-      </el-card>
-
-      <el-card shadow="never" class="chart-card">
-        <template #header>
-          <div class="card-head">
-            <strong>模型质量对比</strong>
-            <span>按模型观察通过率和幻觉率，不再重复展示成本</span>
-          </div>
-        </template>
-        <div v-if="modelComparison.length" class="model-list">
-          <div v-for="m in modelComparison" :key="m.model_key" class="model-row">
-            <div class="model-main">
-              <span class="m-key">{{ m.model_key }}</span>
-              <span class="m-stat">{{ m.result_count }} 条记录</span>
-            </div>
-            <div class="model-metrics">
-              <span class="m-pass" :class="(m.pass_rate || 0) >= 0.8 ? 'text-green-600' : 'text-red-600'">
-                通过 {{ ((m.pass_rate || 0) * 100).toFixed(0) }}%
-              </span>
-              <span class="m-hall" :class="(m.hallucination_rate || 0) <= 0.1 ? 'text-green-600' : 'text-red-600'">
-                幻觉 {{ ((m.hallucination_rate || 0) * 100).toFixed(0) }}%
-              </span>
-            </div>
-          </div>
-        </div>
-        <el-empty v-else description="暂无模型数据" :image-size="48" />
       </el-card>
 
       <el-card shadow="never" class="chart-card">
@@ -233,15 +202,6 @@ const metaType = computed(() => {
 .chart-card { border-radius: 20px; border: 1px solid rgba(16, 36, 61, 0.08); box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05); }
 .card-head strong { display: block; color: #172033; font-size: 18px; }
 .card-head span { display: block; margin-top: 4px; color: #64748b; font-size: 13px; }
-
-.model-list { display: flex; flex-direction: column; gap: 8px; }
-.model-row { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 8px; background: #fafafa; }
-.model-main { display: flex; justify-content: space-between; align-items: center; }
-.m-key { font-weight: 600; font-size: 13px; color: #18181b; }
-.m-stat { font-size: 12px; color: #a1a1aa; }
-.model-metrics { display: flex; gap: 16px; font-size: 13px; font-weight: 600; }
-.text-green-600 { color: #16a34a; }
-.text-red-600 { color: #dc2626; }
 
 @media (max-width: 1180px) {
   .card-grid { grid-template-columns: repeat(2, 1fr); }

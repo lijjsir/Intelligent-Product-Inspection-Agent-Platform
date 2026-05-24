@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import { useAlertStore } from "@/stores/alert.store";
 import { useAlertRuleStore } from "@/stores/alert-rule.store";
 import type { AlertEvent, AlertAction } from "@/types/alert.types";
-import type { AlertRule, AlertRuleCreate, AlertRuleUpdate } from "@/types/alert-rule.types";
+import type { AlertRule } from "@/types/alert-rule.types";
 
 const alertStore = useAlertStore();
 const alertRuleStore = useAlertRuleStore();
@@ -110,9 +110,6 @@ function severBarClass(key: string) {
 const rulePage = ref(1);
 const ruleSize = ref(20);
 const searchEnabled = ref<string>("");
-const dialogVisible = ref(false);
-const editingRule = ref<AlertRule | null>(null);
-const formLoading = ref(false);
 
 const ruleItems = computed(() => alertRuleStore.items);
 const ruleTotal = computed(() => alertRuleStore.total);
@@ -125,88 +122,10 @@ const alertTypeLabel: Record<string, string> = {
   custom: "自定义",
 };
 
-const alertTypeOptions = [
-  { label: "稳定性风险", value: "stability_risk" },
-  { label: "质检审核", value: "quality_review" },
-  { label: "模型错误", value: "model_error" },
-  { label: "延迟过高", value: "high_latency" },
-  { label: "成本激增", value: "cost_spike" },
-  { label: "通过率下降", value: "pass_rate_drop" },
-  { label: "幻觉率上升", value: "hallucination_rise" },
-  { label: "数据质量", value: "data_quality" },
-  { label: "系统异常", value: "system_error" },
-  { label: "自定义", value: "custom" },
-];
-
-const defaultForm = (): AlertRuleCreate => ({
-  name: "", description: "", alert_type: "model_error", severity: "warning", enabled: true,
-  condition_config: {}, notification_channels: {}, cooldown_seconds: 300,
-});
-
-const ruleForm = ref<AlertRuleCreate>(defaultForm());
-const formMode = computed(() => (editingRule.value ? "edit" : "create"));
-
 async function fetchRules() {
   const params: any = { page: rulePage.value, size: ruleSize.value };
   if (searchEnabled.value !== "") params.enabled = searchEnabled.value === "true";
   await alertRuleStore.fetchRules(params);
-}
-
-function openCreate() {
-  editingRule.value = null;
-  ruleForm.value = defaultForm();
-  dialogVisible.value = true;
-}
-
-function openEdit(rule: AlertRule) {
-  editingRule.value = rule;
-  ruleForm.value = {
-    name: rule.name, description: rule.description || "", alert_type: rule.alert_type,
-    severity: rule.severity, enabled: rule.enabled,
-    condition_config: rule.condition_config ? { ...rule.condition_config } : {},
-    notification_channels: rule.notification_channels ? { ...rule.notification_channels } : {},
-    cooldown_seconds: rule.cooldown_seconds,
-  };
-  dialogVisible.value = true;
-}
-
-async function handleRuleSubmit() {
-  if (!ruleForm.value.name.trim()) { ElMessage.warning("请输入规则名称"); return; }
-  formLoading.value = true;
-  try {
-    if (formMode.value === "edit" && editingRule.value) {
-      const payload: AlertRuleUpdate = { ...ruleForm.value };
-      await alertRuleStore.updateRule(editingRule.value.id, payload);
-      ElMessage.success("规则已更新");
-    } else {
-      await alertRuleStore.createRule(ruleForm.value);
-      ElMessage.success("规则已创建");
-    }
-    dialogVisible.value = false;
-    ruleForm.value = defaultForm();
-    editingRule.value = null;
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message || "操作失败");
-  } finally {
-    formLoading.value = false;
-  }
-}
-
-async function handleDelete(rule: AlertRule) {
-  try {
-    await ElMessageBox.confirm(`确定删除规则 "${rule.name}"？`, "确认删除", { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" });
-    await alertRuleStore.deleteRule(rule.id);
-    ElMessage.success("规则已删除");
-  } catch { /* cancelled */ }
-}
-
-async function handleToggle(rule: AlertRule) {
-  try {
-    await alertRuleStore.updateRule(rule.id, { enabled: !rule.enabled });
-    ElMessage.success(rule.enabled ? "规则已停用" : "规则已启用");
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.message || "操作失败");
-  }
 }
 
 function onRulePageChange(p: number) { rulePage.value = p; fetchRules(); }
@@ -223,7 +142,7 @@ onMounted(() => {
     <section class="hero">
       <p class="eyebrow">Alert Intelligence</p>
       <h2>告警管理</h2>
-      <p class="sub">统一查看和处理系统告警，管理告警触发规则。</p>
+      <p class="sub">统一查看和处理系统告警；告警规则配置归管理员治理，运维侧只做核对。</p>
     </section>
 
     <!-- Tabs -->
@@ -365,9 +284,15 @@ onMounted(() => {
             <el-option label="已停用" value="false" />
           </el-select>
         </div>
-        <el-button type="primary" @click="openCreate">新建规则</el-button>
         <el-button @click="fetchRules">刷新</el-button>
       </div>
+
+      <el-alert
+        title="平台运维可查看告警规则用于排障核对；新增、编辑、启停和删除请到管理员的系统治理中处理。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
 
       <el-card shadow="never" class="table-card">
         <el-table :data="ruleItems" :loading="rulesLoading" size="default" empty-text="暂无告警规则" class="rule-table">
@@ -380,8 +305,12 @@ onMounted(() => {
           <el-table-column label="严重度" width="84">
             <template #default="{ row }"><el-tag :type="severityTag[row.severity] || 'info'" size="small" effect="dark">{{ severityLabel[row.severity] || row.severity }}</el-tag></template>
           </el-table-column>
-          <el-table-column label="状态" width="80">
-            <template #default="{ row }"><el-switch :model-value="row.enabled" size="small" @change="handleToggle(row)" /></template>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.enabled ? 'success' : 'info'">
+                {{ row.enabled ? "已启用" : "已停用" }}
+              </el-tag>
+            </template>
           </el-table-column>
           <el-table-column label="冷却时间" width="100">
             <template #default="{ row }"><span class="cool-cell">{{ row.cooldown_seconds }}s</span></template>
@@ -389,68 +318,12 @@ onMounted(() => {
           <el-table-column label="更新时间" width="176">
             <template #default="{ row }"><span class="time-cell">{{ formatTime(row.updated_at) }}</span></template>
           </el-table-column>
-          <el-table-column label="操作" width="150" fixed="right">
-            <template #default="{ row }">
-              <el-button size="small" type="primary" link @click="openEdit(row)">编辑</el-button>
-              <el-button size="small" type="danger" link @click="handleDelete(row)">删除</el-button>
-            </template>
-          </el-table-column>
         </el-table>
         <div class="pager">
           <el-pagination v-model:current-page="rulePage" v-model:page-size="ruleSize" :total="ruleTotal" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @current-change="onRulePageChange" @size-change="onRuleSizeChange" />
         </div>
       </el-card>
 
-      <!-- Rule Create/Edit Dialog -->
-      <el-dialog v-model="dialogVisible" :title="formMode === 'edit' ? '编辑规则' : '新建规则'" width="560px" destroy-on-close @close="editingRule = null; ruleForm = defaultForm()">
-        <el-form :model="ruleForm" label-position="top">
-          <el-form-item label="规则名称" required>
-            <el-input v-model="ruleForm.name" placeholder="例如：模型延迟告警" maxlength="128" />
-          </el-form-item>
-          <el-form-item label="描述">
-            <el-input v-model="ruleForm.description" type="textarea" :rows="2" placeholder="规则的详细描述" />
-          </el-form-item>
-          <el-row :gutter="16">
-            <el-col :span="12">
-              <el-form-item label="告警类型" required>
-                <el-select v-model="ruleForm.alert_type" placeholder="选择告警类型">
-                  <el-option v-for="opt in alertTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="严重度">
-                <el-select v-model="ruleForm.severity">
-                  <el-option label="严重" value="critical" />
-                  <el-option label="错误" value="error" />
-                  <el-option label="警告" value="warning" />
-                  <el-option label="提示" value="info" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="12">
-              <el-form-item label="冷却时间（秒）">
-                <el-input-number v-model="ruleForm.cooldown_seconds" :min="0" :max="86400" :step="60" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="启用"><el-switch v-model="ruleForm.enabled" /></el-form-item>
-            </el-col>
-          </el-row>
-          <el-form-item label="触发条件 (JSON)">
-            <el-input v-model="ruleForm.condition_config" type="textarea" :rows="3" placeholder='{"metric": "latency_ms", "operator": "gt", "threshold": 3000}' />
-          </el-form-item>
-          <el-form-item label="通知渠道 (JSON)">
-            <el-input v-model="ruleForm.notification_channels" type="textarea" :rows="3" placeholder='{"email": ["ops@example.com"]}' />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="formLoading" @click="handleRuleSubmit">{{ formMode === "edit" ? "保存" : "创建" }}</el-button>
-        </template>
-      </el-dialog>
     </template>
   </div>
 </template>

@@ -12,8 +12,16 @@ class AnalyticsService:
         self._org_id = org_id
         self._repo = AnalyticsRepository(session)
 
-    async def overview(self, start_date=None, end_date=None, product_lines: list[str] | None = None) -> dict:
+    async def overview(
+        self,
+        start_date=None,
+        end_date=None,
+        product_lines: list[str] | None = None,
+        include_remote: bool = False,
+    ) -> dict:
         overview = await self._repo.get_overview(self._org_id, start_date=start_date, end_date=end_date, product_lines=product_lines)
+        if not include_remote:
+            return overview
         api_client = LangfuseApiClient()
         if not api_client.enabled:
             return overview

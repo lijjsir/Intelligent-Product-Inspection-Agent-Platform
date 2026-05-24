@@ -630,7 +630,8 @@ class ChatExecutor:
         latest_task = context.get("latest_task") if isinstance(context.get("latest_task"), dict) else None
         recent_tasks = [item for item in list(context.get("recent_tasks") or []) if isinstance(item, dict)]
         recent_failures = [item for item in list(context.get("recent_failures") or []) if isinstance(item, dict)]
-        if not stats and latest_task is None and not recent_tasks and not recent_failures:
+        selected_tasks = [item for item in list(context.get("selected_tasks") or []) if isinstance(item, dict)]
+        if not stats and latest_task is None and not recent_tasks and not recent_failures and not selected_tasks:
             return ""
 
         parts = [
@@ -645,6 +646,10 @@ class ChatExecutor:
                 parts.append(f"recent_stats={stat_text}")
         if latest_task:
             parts.append(f"latest_task: {ChatExecutor._inspection_task_line(latest_task)}")
+        if selected_tasks:
+            parts.append("user_selected_tasks:")
+            for item in selected_tasks[:6]:
+                parts.append(f"- {ChatExecutor._inspection_task_line(item)}")
         items = recent_failures[:2] if recent_failures else recent_tasks[:4]
         if items:
             parts.append("recent_tasks:")

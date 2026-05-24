@@ -35,6 +35,16 @@ const healthLabel = computed(() => {
   if (healthTone.value === "warning") return "运行中";
   return "正常";
 });
+const quickLinks = [
+  { label: "任务查看", path: "/ops/tasks" },
+  { label: "分析中心", path: "/ops/analytics" },
+  { label: "告警管理", path: "/ops/alerts" },
+  { label: "调用监控", path: "/ops/calls" },
+  { label: "数据质量", path: "/ops/data-quality" },
+  { label: "业务报表", path: "/ops/reports" },
+  { label: "Agent 查看", path: "/ops/agents" },
+  { label: "质检门槛查看", path: "/ops/inspection-specs" },
+];
 
 function statusType(status: string) {
   const map: Record<string, "info" | "primary" | "success" | "danger" | "warning"> = {
@@ -65,14 +75,16 @@ function goTask(row: InspectionTask) {
 
 async function fetchData() {
   loading.value = true;
+  analyticsStore.fetchOverview().catch(() => undefined);
   try {
-    await Promise.all([
-      analyticsStore.fetchOverview(),
+    const [, , result] = await Promise.allSettled([
       alertStore.fetchAlerts({ page: 1, size: 20, status: "open" }),
       taskStore.fetchTasks({ page: 1, size: 8 }),
       resultStore.fetchResults({ page: 1, size: 1, verdict: "manual_required" }),
     ]);
-    pendingReviewCount.value = resultStore.total;
+    if (result.status === "fulfilled") {
+      pendingReviewCount.value = resultStore.total;
+    }
   } finally {
     loading.value = false;
   }
@@ -181,10 +193,9 @@ onMounted(fetchData);
 
     <section class="quick-row">
       <el-button @click="fetchData">刷新</el-button>
-      <el-button @click="go('/ops/analytics')">分析中心</el-button>
-      <el-button @click="go('/ops/data-quality')">数据质量</el-button>
-      <el-button @click="go('/ops/calls')">调用监控</el-button>
-      <el-button @click="go('/ops/inspection-specs')">质检门槛</el-button>
+      <el-button v-for="item in quickLinks" :key="item.path" @click="go(item.path)">
+        {{ item.label }}
+      </el-button>
     </section>
   </div>
 </template>

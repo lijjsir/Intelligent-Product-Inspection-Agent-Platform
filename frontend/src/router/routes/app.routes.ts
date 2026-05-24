@@ -3,7 +3,7 @@ import { ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR } from "@/co
 const APP_ROLES = [ROLE_USER, ROLE_EXPERT];
 
 export const appRoutes = [
-  { path: "dashboard", name: "app-dashboard", component: () => import("@/views/DashboardView.vue"), meta: { title: "工作台概览", roles: APP_ROLES } },
+  { path: "dashboard", name: "app-dashboard", redirect: { name: "app-chat" }, meta: { title: "工作台概览", roles: APP_ROLES } },
   { path: "chat", name: "app-chat", component: () => import("@/views/ChatView.vue"), meta: { title: "AI 对话", roles: APP_ROLES } },
   { path: "meetings", name: "app-meetings", component: () => import("@/views/MeetingRoomView.vue"), meta: { title: "聊天会议室", roles: APP_ROLES } },
   { path: "rag-spaces", name: "app-rag-spaces", component: () => import("@/views/RagSpaceView.vue"), meta: { title: "RAG 空间", roles: [ROLE_ADMIN, ROLE_EXPERT] } },

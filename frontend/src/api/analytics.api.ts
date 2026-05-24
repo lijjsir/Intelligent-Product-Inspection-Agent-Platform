@@ -2,7 +2,7 @@ import { http } from "./http";
 import type { ModelDrilldown, OverviewStats, ProductLineDrilldown, TaskDrilldown } from "@/types/analytics.types";
 
 export const analyticsApi = {
-  getOverview(params?: { start_date?: string; end_date?: string; product_lines?: string }) {
+  getOverview(params?: { start_date?: string; end_date?: string; product_lines?: string; include_remote?: boolean }) {
     return http.get<OverviewStats>("/v1/analytics/overview", { params });
   },
   getProductLineDrilldown(productLine: string, params?: { start_date?: string; end_date?: string; page?: number; size?: number }) {

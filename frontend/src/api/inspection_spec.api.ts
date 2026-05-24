@@ -1,9 +1,9 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import type { InspectionSpec, InspectionSpecPayload } from "@/types/governance.types";
 
 export const inspectionSpecApi = {
-  list() {
-    return http.get<InspectionSpec[]>("/v1/inspection-specs");
+  list(config?: ApiRequestConfig) {
+    return http.get<InspectionSpec[]>("/v1/inspection-specs", config);
   },
   get(id: string) {
     return http.get<InspectionSpec>(`/v1/inspection-specs/${id}`);

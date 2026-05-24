@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import type {
   RagNode,
   RagNodeCreateRequest,
@@ -10,8 +10,8 @@ import type {
 } from "@/types/rag-space.types";
 
 export const ragSpaceApi = {
-  list(limit = 200) {
-    return http.get<RagSpace[]>("/v1/rag-spaces", { params: { limit } });
+  list(limit = 200, config?: ApiRequestConfig) {
+    return http.get<RagSpace[]>("/v1/rag-spaces", { ...config, params: { ...config?.params, limit } });
   },
 
   getTree(ragSpaceId: string) {

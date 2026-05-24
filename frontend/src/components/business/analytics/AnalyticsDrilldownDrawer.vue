@@ -113,9 +113,7 @@ defineEmits<Emits>();
           <el-descriptions-item label="结果数">{{ modelDrilldown.result_count }}</el-descriptions-item>
           <el-descriptions-item label="通过率">{{ (modelDrilldown.pass_rate * 100).toFixed(1) }}%</el-descriptions-item>
           <el-descriptions-item label="幻觉率">{{ (modelDrilldown.hallucination_rate * 100).toFixed(1) }}%</el-descriptions-item>
-          <el-descriptions-item label="平均 Tokens">{{ modelDrilldown.avg_tokens.toFixed(1) }}</el-descriptions-item>
           <el-descriptions-item label="平均耗时">{{ modelDrilldown.avg_latency_ms.toFixed(0) }} ms</el-descriptions-item>
-          <el-descriptions-item label="累计成本">￥{{ modelDrilldown.total_cost.toFixed(4) }}</el-descriptions-item>
         </el-descriptions>
         <div class="drawer-actions">
           <el-button type="primary" @click="$emit('model-results')">查看结果列表</el-button>
