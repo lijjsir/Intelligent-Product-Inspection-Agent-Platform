@@ -4,6 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 
 import RiskDistributionTrendChart from "@/components/business/analytics/RiskDistributionTrendChart.vue";
 import StabilityAlertTab from "@/components/business/stability/StabilityAlertTab.vue";
+import { ROLE_ADMIN, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
+import { usePermission } from "@/composables/usePermission";
 import { useAnalyticsStore } from "@/stores/analytics.store";
 
 type TabKey = "overview" | "alerts";
@@ -13,13 +15,19 @@ type RiskLevel = "low" | "medium" | "high" | "critical";
 const route = useRoute();
 const router = useRouter();
 const analyticsStore = useAnalyticsStore();
+const { hasRole } = usePermission();
 
 const activeTab = ref<TabKey>((route.query.tab as TabKey) || "overview");
 const selectedRange = ref<RangeOption>(30);
 const loaded = ref<Record<TabKey, boolean>>({ overview: true, alerts: false });
 
 const overview = computed(() => analyticsStore.overview);
-const scopeLabel = computed(() => (overview.value?.scope_kind === "global" ? "全部组织" : "当前组织"));
+const canLoadOverview = computed(() => hasRole([ROLE_ADMIN, ROLE_PLATFORM_OPERATOR]));
+const canLoadAlerts = computed(() => hasRole(ROLE_PLATFORM_OPERATOR));
+const scopeLabel = computed(() => {
+  if (!canLoadOverview.value) return "单任务报告";
+  return overview.value?.scope_kind === "global" ? "全部组织" : "当前组织";
+});
 const totalReports = computed(() =>
   (overview.value?.risk_distribution ?? []).reduce((sum, item) => sum + item.value, 0),
 );
@@ -45,11 +53,18 @@ const riskItems = computed(() => {
 });
 
 onMounted(async () => {
-  await fetchOverview();
-  if (activeTab.value === "alerts") loaded.value.alerts = true;
+  if (activeTab.value === "alerts" && !canLoadAlerts.value) {
+    activeTab.value = "overview";
+    await router.replace({ query: { ...route.query, tab: "overview" } });
+  }
+  if (canLoadOverview.value) {
+    await fetchOverview();
+  }
+  if (activeTab.value === "alerts" && canLoadAlerts.value) loaded.value.alerts = true;
 });
 
 function handleTabChange(tab: TabKey) {
+  if (tab === "alerts" && !canLoadAlerts.value) return;
   activeTab.value = tab;
   if (!loaded.value[tab]) loaded.value[tab] = true;
   router.replace({ query: { ...route.query, tab } });
@@ -59,6 +74,10 @@ watch(
   () => route.query.tab,
   (val) => {
     const tab = (val as TabKey) || "overview";
+    if (tab === "alerts" && !canLoadAlerts.value) {
+      activeTab.value = "overview";
+      return;
+    }
     if (tab !== activeTab.value) {
       activeTab.value = tab;
       if (!loaded.value[tab]) loaded.value[tab] = true;
@@ -67,12 +86,14 @@ watch(
 );
 
 async function setRange(days: RangeOption) {
+  if (!canLoadOverview.value) return;
   if (selectedRange.value === days && overview.value) return;
   selectedRange.value = days;
   await fetchOverview();
 }
 
 async function fetchOverview() {
+  if (!canLoadOverview.value) return;
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - (selectedRange.value - 1));
@@ -96,17 +117,17 @@ function formatDate(value: Date) {
         <p class="subtitle">风险总览和预警处置现在与任务主表共享同一统计范围，并自动排除已删除任务。</p>
         <div class="scope-row">
           <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
-          <el-tag type="info" effect="plain">最近 {{ selectedRange }} 日</el-tag>
+          <el-tag v-if="canLoadOverview" type="info" effect="plain">最近 {{ selectedRange }} 日</el-tag>
         </div>
       </div>
       <div class="hero-actions">
-        <div class="range-switch" :style="{ visibility: activeTab === 'overview' ? 'visible' : 'hidden' }">
+        <div class="range-switch" :style="{ visibility: activeTab === 'overview' && canLoadOverview ? 'visible' : 'hidden' }">
           <el-button :type="selectedRange === 7 ? 'primary' : 'default'" @click="setRange(7)">7 日</el-button>
           <el-button :type="selectedRange === 30 ? 'primary' : 'default'" @click="setRange(30)">30 日</el-button>
           <el-button :type="selectedRange === 90 ? 'primary' : 'default'" @click="setRange(90)">90 日</el-button>
         </div>
         <div class="action-group">
-          <el-button type="primary" @click="router.push('/ops/analytics')">进入分析中心</el-button>
+          <el-button v-if="canLoadOverview" type="primary" @click="router.push('/ops/analytics')">进入分析中心</el-button>
           <el-button plain @click="router.push('/app/tasks')">从任务查看详情</el-button>
         </div>
       </div>
@@ -114,7 +135,7 @@ function formatDate(value: Date) {
 
     <div class="tab-bar">
       <button :class="['tab-btn', { active: activeTab === 'overview' }]" @click="handleTabChange('overview')">稳定性总览</button>
-      <button :class="['tab-btn', { active: activeTab === 'alerts' }]" @click="handleTabChange('alerts')">预警处置</button>
+      <button v-if="canLoadAlerts" :class="['tab-btn', { active: activeTab === 'alerts' }]" @click="handleTabChange('alerts')">预警处置</button>
     </div>
 
     <div v-show="activeTab === 'overview'" class="overview-panel">
@@ -124,8 +145,14 @@ function formatDate(value: Date) {
         type="warning"
         :closable="false"
       />
+      <el-alert
+        v-if="!canLoadOverview"
+        title="当前角色请从任务详情查看单任务稳定性报告；稳定性总览与预警处置由平台运维统一查看。"
+        type="info"
+        :closable="false"
+      />
 
-      <section v-if="overview" class="metric-grid">
+      <section v-if="canLoadOverview && overview" class="metric-grid">
         <el-card shadow="never" class="metric-card">
           <div class="metric-label">稳定性报告数</div>
           <div class="metric-value">{{ totalReports }}</div>
@@ -148,7 +175,7 @@ function formatDate(value: Date) {
         </el-card>
       </section>
 
-      <section class="content-grid">
+      <section v-if="canLoadOverview" class="content-grid">
         <el-card shadow="never" class="panel">
           <template #header>
             <div class="panel-head">

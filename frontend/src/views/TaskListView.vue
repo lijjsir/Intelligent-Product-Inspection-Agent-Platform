@@ -134,6 +134,7 @@ function handleReset() {
 }
 
 function handleOpenCreate() {
+  if (!canCreateTask.value) return;
   createForm.value = { product_id: "", spec_code: "", rag_space_id: "", image_urls_input: "", priority: 5 };
   uploadFiles.value = [];
   showCreateDialog.value = true;
@@ -147,6 +148,7 @@ function onSpecChange(specCode: string) {
 }
 
 function handleOpenCreateFromDraft() {
+  if (!canCreateTask.value) return;
   const raw = sessionStorage.getItem("piap_quality_task_draft");
   sessionStorage.removeItem("piap_quality_task_draft");
   if (!raw) {
@@ -322,8 +324,12 @@ function handleCurrentChange(current: number) {
 
 onMounted(async () => {
   syncFromRoute();
-  await Promise.all([fetchData(), fetchSpecOptions(), chatStore.fetchRagSpaces()]);
-  if (route.query.create === "1") {
+  const jobs = [fetchData()];
+  if (canCreateTask.value) {
+    jobs.push(fetchSpecOptions(), chatStore.fetchRagSpaces());
+  }
+  await Promise.all(jobs);
+  if (canCreateTask.value && route.query.create === "1") {
     handleOpenCreateFromDraft();
   }
 });
@@ -333,7 +339,7 @@ watch(
   async () => {
     syncFromRoute();
     await fetchData();
-    if (route.query.create === "1" && !showCreateDialog.value) {
+    if (canCreateTask.value && route.query.create === "1" && !showCreateDialog.value) {
       handleOpenCreateFromDraft();
     }
   },
@@ -395,6 +401,7 @@ watch(
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="router.push(`${listBasePath}/${row.id}`)">查看详情</el-button>
             <el-button
+              v-if="canCreateTask"
               link
               type="danger"
               size="small"
