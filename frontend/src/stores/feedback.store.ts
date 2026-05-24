@@ -1,13 +1,27 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
-import type { FeedbackQuery, FeedbackSubmitPayload, ResultFeedback } from "@/types/governance.types";
+import type {
+  FeedbackQuery,
+  FeedbackSeverity,
+  FeedbackStatus,
+  FeedbackSubmitPayload,
+  FeedbackSummary,
+  ResultFeedback,
+} from "@/types/governance.types";
 
 export const useFeedbackStore = defineStore("feedback", () => {
   const items = ref<ResultFeedback[]>([]);
   const total = ref(0);
   const loading = ref(false);
+  const summary = ref<FeedbackSummary | null>(null);
   const submittedResultIds = ref<string[]>([]);
+  const currentDetail = ref<ResultFeedback | null>(null);
+
+  async function fetchSummary() {
+    const { data } = await feedbackApi.summary();
+    summary.value = data.data;
+  }
 
   async function fetchList(query: FeedbackQuery) {
     loading.value = true;
@@ -18,6 +32,12 @@ export const useFeedbackStore = defineStore("feedback", () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  async function fetchDetail(id: string) {
+    const { data } = await feedbackApi.detail(id);
+    currentDetail.value = data.data;
+    return data.data;
   }
 
   async function submit(resultId: string, payload: FeedbackSubmitPayload) {
@@ -37,6 +57,24 @@ export const useFeedbackStore = defineStore("feedback", () => {
     }
   }
 
-  return { items, total, loading, submittedResultIds, fetchList, submit };
-});
+  async function updateStatus(id: string, status: FeedbackStatus, resolution?: string) {
+    const { data } = await feedbackApi.updateStatus(id, { status, resolution });
+    const idx = items.value.findIndex((i) => i.id === id);
+    if (idx !== -1) items.value[idx] = data.data;
+    if (currentDetail.value?.id === id) currentDetail.value = data.data;
+    return data.data;
+  }
 
+  async function assign(id: string, assignedTo: string) {
+    const { data } = await feedbackApi.assign(id, { assigned_to: assignedTo });
+    const idx = items.value.findIndex((i) => i.id === id);
+    if (idx !== -1) items.value[idx] = data.data;
+    if (currentDetail.value?.id === id) currentDetail.value = data.data;
+    return data.data;
+  }
+
+  return {
+    items, total, loading, summary, submittedResultIds, currentDetail,
+    fetchSummary, fetchList, fetchDetail, submit, updateStatus, assign,
+  };
+});

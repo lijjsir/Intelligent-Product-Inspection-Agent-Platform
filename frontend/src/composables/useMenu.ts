@@ -153,9 +153,8 @@ function getUserMenu(): MenuStructure {
     { title: "会议室", path: "/app/meetings" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
-    { title: "证据溯源", path: "/app/results/:id", placeholder: true },
     { title: "异常反馈", path: "/app/feedbacks" },
-    { title: "报告导出", path: "/app/export", placeholder: true },
+    { title: "报告导出", path: "/app/export" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
@@ -167,9 +166,8 @@ function getExpertMenu(): MenuStructure {
     { title: "RAG 空间", path: "/app/rag-spaces" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
-    { title: "证据溯源", path: "/app/results/:id", placeholder: true },
     { title: "异常反馈", path: "/app/feedbacks" },
-    { title: "报告导出", path: "/app/export", placeholder: true },
+    { title: "报告导出", path: "/app/export" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

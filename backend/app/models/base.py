@@ -19,8 +19,13 @@ class UUIDBinary(TypeDecorator):
         if isinstance(value, uuid.UUID):
             return value.bytes
         if isinstance(value, bytes):
-            return value
-        return uuid.UUID(str(value)).bytes
+            if len(value) == 16:
+                return value
+            raise ValueError(f"UUIDBinary expects 16 bytes, got {len(value)}")
+        try:
+            return uuid.UUID(str(value)).bytes
+        except (ValueError, AttributeError):
+            raise ValueError(f"cannot convert {value!r} to UUID binary") from None
 
     def process_result_value(self, value: Any, dialect) -> Any:
         if value is None:
