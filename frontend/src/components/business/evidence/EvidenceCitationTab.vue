@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from "vue"
+import { computed, ref, watch } from "vue"
 import EvidenceJsonDialog from "./EvidenceJsonDialog.vue"
 
 const props = defineProps<{
-  citations: Record<string, any> | null
+  citations: Record<string, any> | any[] | null
 }>()
 
 const selectedIdx = ref(0)
@@ -12,45 +12,98 @@ const jsonDialogRef = ref<InstanceType<typeof EvidenceJsonDialog>>()
 interface CitationItem {
   name: string
   source: string
-  type: string
+  sourceLabel: string
+  rawType: string
   relevance: number
   excerpt: string
   page?: string
   chapter?: string
 }
 
-const citationList = computed<CitationItem[]>(() => {
-  if (!props.citations) return []
-  if (Array.isArray(props.citations)) {
-    return props.citations.map((c: any, i: number) => ({
-      name: c.name || c.title || c.document || `引用 ${i + 1}`,
-      source: c.source || c.file || c.url || "-",
-      type: c.type || c.category || c.evidence_type || "标准",
-      relevance: c.relevance || c.score || c.similarity || 0,
-      excerpt: c.excerpt || c.text || c.content || c.snippet || "",
-      page: c.page || c.section || c.chapter,
-      chapter: c.chapter || c.section || c.clause,
-    }))
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function toNumber(value: unknown) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function normalizeSourceLabel(raw: Record<string, any>) {
+  const kind = String(raw.kind || raw.type || raw.category || raw.evidence_type || "").toLowerCase()
+  const source = String(raw.source || "").toLowerCase()
+  const id = String(raw.id || "").toLowerCase()
+  const attachmentType = String(raw.attachment_type || "").toLowerCase()
+
+  if (kind.includes("rag")) return "RAG 引用"
+
+  if (
+    source === "chat_query"
+    || id === "structured-query"
+    || attachmentType === "structured_input"
+    || kind === "structured_input"
+  ) {
+    return "结构化输入"
   }
-  return Object.entries(props.citations).map(([key, val]: [string, any]) => ({
-    name: val.name || val.title || key,
-    source: val.source || val.file || "-",
-    type: val.type || "标准",
-    relevance: val.relevance || val.score || 0,
-    excerpt: val.excerpt || val.text || JSON.stringify(val).slice(0, 200),
-  }))
+
+  if (kind.includes("attachment") || attachmentType) {
+    return "附件证据"
+  }
+
+  return "引用证据"
+}
+
+function normalizeCitationList(citations: Record<string, any> | any[] | null) {
+  if (!citations) return []
+  if (Array.isArray(citations)) return citations
+  if (Array.isArray(citations.items)) return citations.items
+  return Object.entries(citations).map(([key, value]) => (
+    isRecord(value) ? { __key: key, ...value } : { __key: key, value }
+  ))
+}
+
+const citationList = computed<CitationItem[]>(() => {
+  return normalizeCitationList(props.citations)
+    .filter((item) => isRecord(item))
+    .map((item, index) => {
+      const rawType = String(item.kind || item.type || item.category || item.evidence_type || "unknown")
+      return {
+        name: String(item.name || item.title || item.document || item.filename || item.__key || `引用 ${index + 1}`),
+        source: String(item.source || item.file || item.url || item.path || "-"),
+        sourceLabel: normalizeSourceLabel(item),
+        rawType,
+        relevance: toNumber(item.relevance ?? item.score ?? item.similarity),
+        excerpt: String(item.excerpt || item.text || item.content || item.snippet || ""),
+        page: item.page || item.section || undefined,
+        chapter: item.chapter || item.clause || undefined,
+      }
+    })
 })
+
+watch(
+  citationList,
+  (items) => {
+    if (!items.length) {
+      selectedIdx.value = 0
+      return
+    }
+    if (selectedIdx.value >= items.length) {
+      selectedIdx.value = 0
+    }
+  },
+  { immediate: true },
+)
 
 const selected = computed(() => citationList.value[selectedIdx.value] || null)
 
-function relevanceColor(r: number) {
-  if (r >= 0.8) return "danger"
-  if (r >= 0.5) return "warning"
+function relevanceColor(value: number) {
+  if (value >= 0.8) return "success"
+  if (value >= 0.5) return "warning"
   return "info"
 }
 
-function relevancePct(r: number) {
-  return (r * 100).toFixed(0) + "%"
+function relevancePct(value: number) {
+  return `${(value * 100).toFixed(0)}%`
 }
 
 function openRawJson() {
@@ -61,19 +114,18 @@ function openRawJson() {
 <template>
   <div class="citation-tab">
     <div v-if="!citationList.length" class="empty-full">
-      <el-empty description="未使用知识库引证" :image-size="80" />
+      <el-empty description="暂无引用证据" :image-size="80" />
     </div>
 
     <div v-else class="citation-layout">
-      <!-- Left: source list -->
       <div class="source-list">
         <div class="list-header">
-          <span>引用来源 ({{ citationList.length }})</span>
+          <span>引用证据 ({{ citationList.length }})</span>
           <el-button size="small" text @click="openRawJson">原始 JSON</el-button>
         </div>
         <button
           v-for="(item, idx) in citationList"
-          :key="idx"
+          :key="`${item.name}-${idx}`"
           class="source-row"
           :class="{ active: idx === selectedIdx }"
           @click="selectedIdx = idx"
@@ -85,33 +137,35 @@ function openRawJson() {
             </el-tag>
           </div>
           <div class="source-meta">
-            <span class="source-type">{{ item.type }}</span>
+            <span class="source-type">{{ item.sourceLabel }}</span>
             <span v-if="item.source !== '-'" class="source-file">{{ item.source }}</span>
           </div>
         </button>
       </div>
 
-      <!-- Right: detail -->
       <div class="citation-detail">
         <template v-if="selected">
           <div class="detail-header">
             <h3 class="detail-title">{{ selected.name }}</h3>
             <div class="detail-tags">
-              <el-tag size="small">{{ selected.type }}</el-tag>
+              <el-tag size="small">{{ selected.sourceLabel }}</el-tag>
+              <el-tag v-if="selected.rawType && selected.rawType !== 'unknown'" size="small" type="info">
+                {{ selected.rawType }}
+              </el-tag>
               <el-tag v-if="selected.page" size="small" type="info">{{ selected.page }}</el-tag>
               <el-tag v-if="selected.chapter" size="small" type="info">{{ selected.chapter }}</el-tag>
             </div>
           </div>
 
           <div class="detail-section">
-            <span class="section-label">来源</span>
+            <span class="section-label">来源位置</span>
             <code class="section-value">{{ selected.source }}</code>
           </div>
 
           <div class="detail-section">
             <span class="section-label">引用片段</span>
             <blockquote class="excerpt">
-              {{ selected.excerpt || "无文本片段" }}
+              {{ selected.excerpt || "暂无文本片段" }}
             </blockquote>
           </div>
 
@@ -120,7 +174,7 @@ function openRawJson() {
           </div>
         </template>
         <div v-else class="detail-empty">
-          <span class="text-zinc-400 text-sm">选择左侧引用来源查看详情</span>
+          <span class="text-zinc-400 text-sm">选择左侧引用证据查看详情</span>
         </div>
       </div>
     </div>
@@ -217,6 +271,7 @@ function openRawJson() {
   gap: 8px;
   font-size: 11px;
   color: oklch(0.5 0.01 260);
+  flex-wrap: wrap;
 }
 
 .source-type {
@@ -225,8 +280,11 @@ function openRawJson() {
   border-radius: 3px;
 }
 
+.source-file {
+  word-break: break-all;
+}
+
 .citation-detail {
-  flex: 1;
   padding: 24px;
   overflow-y: auto;
   display: flex;
@@ -245,6 +303,7 @@ function openRawJson() {
   display: flex;
   gap: 6px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .detail-section {
@@ -263,11 +322,12 @@ function openRawJson() {
 
 .section-value {
   font-size: 13px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   color: oklch(0.45 0.01 260);
   background: oklch(0.97 0.005 260);
   padding: 6px 10px;
   border-radius: 4px;
+  word-break: break-all;
 }
 
 .excerpt {
@@ -279,6 +339,7 @@ function openRawJson() {
   line-height: 1.7;
   color: oklch(0.35 0.01 260);
   border-left: none;
+  white-space: pre-wrap;
 }
 
 .detail-actions {
@@ -292,5 +353,17 @@ function openRawJson() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+@media (max-width: 960px) {
+  .citation-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .source-list {
+    border-right: none;
+    border-bottom: 1px solid oklch(0.92 0.005 260);
+    max-height: 280px;
+  }
 }
 </style>

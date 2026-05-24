@@ -173,9 +173,15 @@ function goToProductLineTaskList(productLine: string) {
 <template>
   <div class="overview-panel">
     <el-alert v-if="analyticsStore.error" :title="analyticsStore.error" type="warning" :closable="false" />
+    <el-alert
+      title="口径说明：幻觉率优先按 reasoning_chain.trust_scoring.hallucination_risk >= 0.6 统计；只有缺少可信度评分时，才把引用为空视为高风险。风险分布变化展示的是质检业务风险等级，不是文本语气风险。"
+      type="info"
+      :closable="false"
+      show-icon
+    />
 
     <div class="filter-stack">
-      <div class="filter-title">产品线叠加</div>
+      <div class="filter-title">产品线筛选</div>
       <el-checkbox-group v-model="selectedProductLines">
         <el-checkbox v-for="item in productLineOptions" :key="item.name" :label="item.name" :value="item.name">
           {{ item.name }}
@@ -191,7 +197,7 @@ function goToProductLineTaskList(productLine: string) {
           <div class="card-head">
             <div>
               <strong>通过率趋势</strong>
-              <span>统一时间窗口下的主稳定性指标</span>
+              <span>统一时间窗口下的核心质检稳定性指标</span>
             </div>
           </div>
         </template>
@@ -203,7 +209,7 @@ function goToProductLineTaskList(productLine: string) {
           <div class="card-head">
             <div>
               <strong>产品线任务趋势</strong>
-              <span>点击折线查看产品线详情</span>
+              <span>点击折线查看该产品线的任务详情</span>
             </div>
           </div>
         </template>
@@ -215,7 +221,7 @@ function goToProductLineTaskList(productLine: string) {
           <div class="card-head">
             <div>
               <strong>幻觉率趋势</strong>
-              <span>引用为空的结果会被计入幻觉率</span>
+              <span>优先按可信度评分统计；缺少评分时，引用为空按高风险处理</span>
             </div>
           </div>
         </template>
@@ -227,7 +233,7 @@ function goToProductLineTaskList(productLine: string) {
           <div class="card-head">
             <div>
               <strong>风险分布变化</strong>
-              <span>按日期堆叠展示风险等级演化</span>
+              <span>按日期堆叠展示质检业务风险等级演化</span>
             </div>
           </div>
         </template>
@@ -240,7 +246,7 @@ function goToProductLineTaskList(productLine: string) {
         <div class="card-head">
           <div>
             <strong>模型质量简表</strong>
-            <span>这里只看通过率和幻觉率；Token 与成本已统一到模型用量</span>
+            <span>这里只看通过率和幻觉率；Token 与成本来自模型用量统计</span>
           </div>
         </div>
       </template>
