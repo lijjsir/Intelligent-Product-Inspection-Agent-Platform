@@ -9,6 +9,7 @@ from agent.contracts import (
     ClarificationRequest,
     NormalizedRequest,
     PersistableOutput,
+    QualityTraceEvent,
     RagQueryLog,
     ResultAggregate,
     RouteDecision,
@@ -19,6 +20,11 @@ from agent.contracts import (
 )
 from app.services import quality_agent_orchestrator_service as orchestrator_mod
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
+
+
+@pytest.fixture(autouse=True)
+def disable_background_trust_scoring(monkeypatch):
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", lambda *_args, **_kwargs: None)
 
 
 def test_orchestrator_json_sanitizer_drops_callables_from_legacy_state():
@@ -419,6 +425,208 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
 
     assert success is True
     assert updates[0]["content"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_adds_pending_trust_scoring_and_enqueues(monkeypatch):
+    updates: list[dict] = []
+    events: list[dict] = []
+    queued: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    def fake_enqueue(_self, payload):
+        queued.append(payload)
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", fake_enqueue)
+
+    request = NormalizedRequest(
+        request_id="req-trust",
+        workflow_run_id="trace-chat",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        query="who am i",
+        ext={"emit": fake_emit},
+    )
+    output = AgentOutput(
+        message_type="assistant_text",
+        answer="你来自 M78 星云。[RAG-1]",
+        citations=[{"id": "RAG-1", "source": "profile.md"}],
+        route_decision=RouteDecision(
+            mode="router_enabled",
+            selected_agent="chat",
+            sub_route="rag_qa",
+            intent="rag_qa",
+            reason="test",
+        ),
+        raw_state={
+            "response_payload": {
+                "trace_id": "trace-chat",
+                "llm_meta": {
+                    "model": "doubao-seed-2-0-lite-260215",
+                    "langfuse": {"trace_id": "trace-chat", "observation_id": "obs-1"},
+                },
+            }
+        },
+    )
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is True
+    assert updates[0]["payload"]["trust_scoring"]["status"] == "reviewing"
+    assert updates[0]["payload"]["trust_scoring"]["trust_score"] is None
+    assert queued == [
+        {
+            "org_id": "org-1",
+            "session_id": "session-1",
+            "user_id": "user-1",
+            "assistant_message_id": "assistant-1",
+            "input_text": "who am i",
+            "output_text": "你来自 M78 星云。[RAG-1]",
+            "citations": [{"id": "RAG-1", "source": "profile.md"}],
+            "trace_id": "trace-chat",
+            "observation_id": "obs-1",
+            "model_key": "doubao-seed-2-0-lite-260215",
+        }
+    ]
+    final_event = next(event for event in events if event["event"] == "message_final")
+    assert final_event["payload"]["trust_scoring"]["status"] == "reviewing"
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_records_chat_token_usage(monkeypatch):
+    ledgers: list[dict] = []
+    increments: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            return object()
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    class FakeRagAnalysisRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+    class FakeTokenLedgerRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_idempotency_key(self, _key: str):
+            return None
+
+        async def create_once(self, data: dict):
+            ledgers.append(data)
+            return SimpleNamespace(created_at="created-at", **data)
+
+        async def create(self, data: dict):
+            return await self.create_once(data)
+
+    class FakeUserTokenUsageSummaryRepository:
+        def __init__(self, _session):
+            pass
+
+        async def increment(self, **kwargs):
+            increments.append(kwargs)
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
+    monkeypatch.setattr(orchestrator_mod, "TokenLedgerRepository", FakeTokenLedgerRepository)
+    monkeypatch.setattr(orchestrator_mod, "UserTokenUsageSummaryRepository", FakeUserTokenUsageSummaryRepository)
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", lambda *_args, **_kwargs: None)
+
+    request = NormalizedRequest(
+        request_id="req-token",
+        workflow_run_id="trace-token",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        workspace="chat",
+        query="hello",
+    )
+    output = AgentOutput(
+        message_type="assistant_text",
+        answer="hello",
+        persistable_output=PersistableOutput(
+            token_usage=[
+                TokenUsageEvent(
+                    model_key="doubao-seed-2-0-lite-260215",
+                    prompt_tokens=100,
+                    completion_tokens=50,
+                    total_tokens=150,
+                    cost_amount=0.00015,
+                    trace_id="trace-token",
+                )
+            ],
+            quality_trace=QualityTraceEvent(trace_id="trace-token"),
+        ),
+    )
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is True
+    assert len(ledgers) == 1
+    assert ledgers[0]["task_id"] is None
+    assert ledgers[0]["result_id"] is None
+    assert ledgers[0]["model_key"] == "doubao-seed-2-0-lite-260215"
+    assert ledgers[0]["total_tokens"] == 150
+    assert ledgers[0]["cost_amount"] == 0.00015
+    assert ledgers[0]["trace_id"] == "trace-token"
+    assert ledgers[0]["idempotency_key"].endswith(":chat-token:0:doubao-seed-2-0-lite-260215:trace-token")
+    assert increments[0]["total_tokens"] == 150
 
 
 @pytest.mark.asyncio
@@ -861,6 +1069,10 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     monkeypatch.setattr(orchestrator_mod, "TokenLedgerRepository", FakeTokenLedgerRepository)
     monkeypatch.setattr(orchestrator_mod, "UserTokenUsageSummaryRepository", FakeUserTokenUsageSummaryRepository)
     monkeypatch.setattr("app.services.rule_engine_service.RuleEngineService", FakeRuleEngineService)
+    monkeypatch.setattr(
+        "worker.tasks.alert_dispatch_task.dispatch_alert.delay",
+        lambda *_args, **_kwargs: None,
+    )
 
     request = NormalizedRequest(
         request_id="req-idempotent-materialize",

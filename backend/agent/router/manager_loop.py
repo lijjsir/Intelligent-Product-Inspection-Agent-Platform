@@ -15,6 +15,7 @@ from agent.router.manager_evaluator import EvaluationResult, ManagerEvaluator
 from agent.router.manager_policy import ManagerPolicy
 from agent.router.manager_state import ManagerState
 from agent.llm.gateway import LLMGateway
+from agent.llm.langfuse_tracer import LangfuseTracer
 from app.services.model_config_service import ModelConfigService
 
 
@@ -43,6 +44,7 @@ class ManagerLoop:
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
         state = self._policy.initialize_state(request)
         state.manager_model = await self._resolve_manager_model(state, db_session=db_session)
+        self._start_chat_trace(state)
         blocked_by_missing_inputs = False
         started_at = perf_counter()
 
@@ -94,6 +96,29 @@ class ManagerLoop:
             state = self._refine_for_next_round(state, evaluation)
 
         return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+
+    @staticmethod
+    def _start_chat_trace(state: ManagerState) -> None:
+        trace_id = str(state.workflow_run_id or state.request_id or "").strip()
+        if not trace_id:
+            return
+        model_key = str((state.manager_model or {}).get("model_id") or "").strip() or None
+        trace = LangfuseTracer().start_trace(
+            trace_id=trace_id,
+            task_id=state.session_id,
+            org_id=state.org_id,
+            model_key=model_key,
+            name="agent_manager.chat",
+            source_type="chat",
+            agent="chat",
+            sub_route="manager",
+            intent="manager",
+            workflow_version="agent_manager_v1",
+            session_id=state.session_id,
+            input={"query": state.original_query, "session_id": state.session_id},
+        )
+        state.trace_id = str(trace.get("trace_id") or trace_id)
+        state.trace_url = trace.get("trace_url")
 
     def _validate_plan(self, state: ManagerState, plan: AgentRoutePlan) -> ValidationResult:
         if state.missing_inputs:
@@ -251,6 +276,8 @@ class ManagerLoop:
             "answer": answer,
             "summary": self._summary(state, self._status(state, blocked_by_missing_inputs=bool(state.missing_inputs))),
             "message_type": message_type,
+            "trace_id": state.trace_id,
+            "trace_url": state.trace_url,
             "artifacts": artifacts,
             "citations": self._citations(state),
             "route_trace": route_trace,
@@ -260,6 +287,8 @@ class ManagerLoop:
             "selected_rag_space": state.selected_rag_space,
             "rag_summary": self._rag_summary(state),
             "created_task": None,
+            "llm_meta": state.llm_metas[-1] if state.llm_metas else None,
+            "llm_usage": list(state.llm_usage_events),
         }
 
     @staticmethod
@@ -452,7 +481,17 @@ class ManagerLoop:
                     },
                 }
             )
-        return {"rag_queries": rag_queries}
+        return {
+            "quality_trace": {
+                "trace_id": state.trace_id or state.workflow_run_id or state.request_id,
+                "trace_url": state.trace_url,
+                "workflow_version": "agent_manager_v1",
+                "prompt_version": None,
+                "route_subgraph": "agent_manager",
+            },
+            "token_usage": list(state.llm_usage_events),
+            "rag_queries": rag_queries,
+        }
 
     @staticmethod
     def _top_sources(hits: list[dict[str, Any]], citations: list[dict[str, Any]]) -> list[str]:

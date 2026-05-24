@@ -100,5 +100,6 @@ class MeetingAdminService:
         member = await self._repo.get_member(self._org_id, room_id, user_id)
         if not member:
             raise NotFoundError("member not found in meeting room")
-        member.deleted_at = __import__("datetime").datetime.utcnow()
+        from app.core.datetime import utcnow
+        member.deleted_at = utcnow()
         await self._session.flush()

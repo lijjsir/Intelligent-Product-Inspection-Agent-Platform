@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class StreamSessionCreateRequest(BaseModel):
-    resource: str = Field(..., pattern="^(chat|task)$")
+    resource: str = Field(..., pattern="^(chat|task|meeting)$")
     resource_id: str
 
 

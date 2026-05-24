@@ -392,7 +392,7 @@ function graphStats() {
                 type="info"
                 show-icon
                 title="当前账号仅可只读查看策略"
-                description="策略配置仅 admin 可编辑，platform_operator 保持只读。"
+                description="策略配置仅 admin 可编辑，请通过管理员流程调整策略。"
                 class="mb-4"
               />
               <el-form label-position="top">

@@ -164,6 +164,25 @@ class MeetingRepository:
         )
         return list(result.scalars().all())
 
+    async def list_recent_messages(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        limit: int = 50,
+    ) -> list[MeetingMessage]:
+        result = await self._session.execute(
+            select(MeetingMessage)
+            .where(
+                MeetingMessage.org_id == org_id,
+                MeetingMessage.room_id == room_id,
+                MeetingMessage.deleted_at.is_(None),
+            )
+            .order_by(MeetingMessage.seq_no.desc())
+            .limit(limit)
+        )
+        return list(reversed(list(result.scalars().all())))
+
     async def touch_room(self, org_id: str, room_id: str) -> None:
         await self._session.execute(
             update(MeetingRoom)
@@ -280,6 +299,26 @@ class MeetingRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_visible_agent_definition(self, org_id: str, agent_def_id: str) -> MeetingAgentDefinition | None:
+        system_org_id = "00000000-0000-0000-0000-000000000000"
+        result = await self._session.execute(
+            select(MeetingAgentDefinition).where(
+                MeetingAgentDefinition.id == agent_def_id,
+                or_(
+                    MeetingAgentDefinition.org_id == org_id,
+                    MeetingAgentDefinition.org_id == system_org_id,
+                ),
+                MeetingAgentDefinition.deleted_at.is_(None),
+            )
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            return None
+        for row in rows:
+            if str(row.org_id) == org_id:
+                return row
+        return rows[0]
+
     async def list_active_agent_definitions(self, org_id: str) -> list[MeetingAgentDefinition]:
         system_org_id = "00000000-0000-0000-0000-000000000000"
         result = await self._session.execute(
@@ -344,7 +383,7 @@ class MeetingRepository:
         room = result.scalar_one_or_none()
         if room is None:
             return False
-        room.deleted_at = datetime.utcnow()
+        room.deleted_at = utcnow()
         await self._session.flush()
         return True
 

@@ -154,7 +154,7 @@ class ChatMessageRepository:
         *,
         start_date=None,
         end_date=None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[ChatMessage]:
         stmt = (
             select(ChatMessage)
@@ -163,7 +163,6 @@ class ChatMessageRepository:
                 ChatMessage.deleted_at.is_(None),
             )
             .order_by(ChatMessage.created_at.desc())
-            .limit(limit)
         )
         if org_id:
             stmt = stmt.where(ChatMessage.org_id == org_id)
@@ -171,6 +170,8 @@ class ChatMessageRepository:
             stmt = stmt.where(ChatMessage.created_at >= start_date)
         if end_date:
             stmt = stmt.where(ChatMessage.created_at <= end_date)
+        if limit:
+            stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

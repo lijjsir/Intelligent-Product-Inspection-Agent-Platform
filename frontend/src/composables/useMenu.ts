@@ -120,16 +120,7 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "成本分析", path: "/ops/cost" },
     { title: "业务报表", path: "/ops/reports" },
     {
-      title: "治理工具",
-      icon: "Management",
-      items: [
-        { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
-        { title: "日志中心", path: "/governance/admin/logs" },
-        { title: "记忆治理", path: "/governance/memory" },
-      ],
-    },
-    {
-      title: "跨域查看",
+      title: "只读巡检",
       icon: "View",
       items: [
         { title: "Agent 查看", path: "/ops/agents" },

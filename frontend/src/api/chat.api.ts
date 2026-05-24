@@ -2,6 +2,7 @@ import { http } from "./http";
 import { streamApi } from "./stream.api";
 import type {
   ChatAttachment,
+  ChatInspectionContext,
   ChatMessage,
   ChatMessageSendRequest,
   ChatSendResponse,
@@ -24,6 +25,10 @@ export const chatApi = {
     return http.get<ChatMessage[]>(`/v1/chat/sessions/${sessionId}/messages`, {
       params: { after_seq: afterSeq, limit },
     });
+  },
+
+  getInspectionContext() {
+    return http.get<ChatInspectionContext>("/v1/chat/inspection-context");
   },
 
   sendMessage(sessionId: string, payload: ChatMessageSendRequest) {

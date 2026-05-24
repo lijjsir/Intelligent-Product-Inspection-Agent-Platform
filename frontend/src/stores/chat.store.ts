@@ -5,6 +5,7 @@ import { ragSpaceApi } from "@/api/rag-space.api";
 import type {
   ChatAttachment,
   ChatCreatedTask,
+  ChatInspectionContext,
   ChatMessage,
   ChatMessagePayload,
   ChatMessageSendRequest,
@@ -18,6 +19,15 @@ const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 35000;
+
+const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
+  scope: "unavailable",
+  summary_window: 0,
+  stats: {},
+  recent_tasks: [],
+  recent_failures: [],
+  latest_task: null,
+};
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -103,6 +113,8 @@ export const useChatStore = defineStore("chat", () => {
   const trustPollInFlight = ref(false);
   const ragSpaces = ref<RagSpace[]>([]);
   const ragSpacesError = ref("");
+  const inspectionContext = ref<ChatInspectionContext>({ ...EMPTY_INSPECTION_CONTEXT });
+  const inspectionContextError = ref("");
   const pendingAttachments = ref<ChatAttachment[]>([]);
   const nextClientSeq = ref(1);
   const STORAGE_CURRENT_SESSION = "chat_current_session_id";
@@ -358,6 +370,26 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  async function fetchInspectionContext() {
+    try {
+      const { data } = await chatApi.getInspectionContext();
+      inspectionContext.value = {
+        ...EMPTY_INSPECTION_CONTEXT,
+        ...(data.data || {}),
+        stats: data.data?.stats || {},
+        recent_tasks: data.data?.recent_tasks || [],
+        recent_failures: data.data?.recent_failures || [],
+        latest_task: data.data?.latest_task || null,
+      };
+      inspectionContextError.value = "";
+      return inspectionContext.value;
+    } catch (error) {
+      inspectionContext.value = { ...EMPTY_INSPECTION_CONTEXT };
+      inspectionContextError.value = resolveErrorMessage(error, "质检上下文暂不可用，请稍后重试。");
+      return inspectionContext.value;
+    }
+  }
+
   async function createRagSpace(payload: { name: string; description?: string }, files: File[]) {
     const { data } = await ragSpaceApi.create(payload);
     const created = data.data;
@@ -452,6 +484,7 @@ export const useChatStore = defineStore("chat", () => {
       } catch {
         // RAG metadata initialization should not block ordinary chat usage.
       }
+      await fetchInspectionContext();
       const savedSessionId = getSavedSession();
       const saved = savedSessionId ? sessions.value.find((x) => x.id === savedSessionId) : null;
       if (saved && saved.last_message_at != null) {
@@ -799,12 +832,15 @@ export const useChatStore = defineStore("chat", () => {
     streamConnected,
     ragSpaces,
     ragSpacesError,
+    inspectionContext,
+    inspectionContextError,
     selectedRagSpaceId,
     selectedRagSpace,
     canCancelResponse,
     pendingAttachments,
     fetchSessions,
     fetchRagSpaces,
+    fetchInspectionContext,
     createRagSpace,
     uploadPendingAttachments,
     removePendingAttachment,

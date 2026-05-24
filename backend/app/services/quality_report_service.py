@@ -112,15 +112,24 @@ class QualityReportService(TenantAwareService):
         if api_client.enabled:
             meta["canonical_source"] = "langfuse"
             traces, error = await self._fetch_traces_from_langfuse(source=source, limit=limit, api_client=api_client)
+            local_traces = await self._list_traces_from_mysql(
+                limit=limit,
+                source=source,
+                api_client=api_client,
+                langfuse_available=False,
+            )
             if error:
                 meta["langfuse_status"] = "error"
                 meta["langfuse_error"] = str(error)
-                meta["item_count"] = 0
-                return {"items": [], "meta": meta}
-            else:
-                meta["langfuse_status"] = "ok"
-            meta["item_count"] = len(traces)
-            return {"items": traces, "meta": meta}
+                meta["canonical_source"] = "local_fallback"
+                meta["item_count"] = len(local_traces)
+                return {"items": local_traces, "meta": meta}
+
+            meta["langfuse_status"] = "ok"
+            merged_traces = self._merge_trace_items(traces, local_traces)
+            meta["canonical_source"] = "hybrid" if local_traces else "langfuse"
+            meta["item_count"] = len(merged_traces)
+            return {"items": merged_traces, "meta": meta}
 
         traces = await self._list_traces_from_mysql(
             limit=limit,
@@ -134,18 +143,31 @@ class QualityReportService(TenantAwareService):
     async def _list_traces_from_mysql(
         self,
         *,
-        limit: int,
+        limit: int | None,
         source: str,
         api_client: LangfuseApiClient,
         langfuse_available: bool,
+        start_date=None,
+        end_date=None,
     ) -> list[dict]:
-        results = await self._result_repo.list_by_range(self._org_id)
-        feedbacks = await self._feedback_repo.list_by_range(self._org_id)
+        results = await self._result_repo.list_by_range(self._org_id, start_date, end_date)
+        feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)
+        message_feedbacks = await self._feedback_repo.list_message_by_range(
+            self._org_id,
+            start_date,
+            end_date,
+            target_type="chat",
+        )
         ledger_items = await self._token_ledger_repo.list_filtered(self._org_id)
-        chat_scores = await self._chat_score_repo.list_by_range(self._org_id, limit=limit)
-        chat_messages = await self._chat_message_repo.list_assistant_for_org(self._org_id, limit=limit)
+        chat_scores = await self._chat_score_repo.list_by_range(self._org_id, start_date, end_date, limit=limit)
+        chat_messages = await self._chat_message_repo.list_assistant_for_org(
+            self._org_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
         if source == "inspection":
-            chat_scores, chat_messages = [], []
+            chat_scores, chat_messages, message_feedbacks = [], [], []
         if source == "chat":
             results, feedbacks = [], []
         trace_exists_cache: dict[str, bool | None] = {}
@@ -168,7 +190,7 @@ class QualityReportService(TenantAwareService):
 
         return self._build_quality_traces(
             results, feedbacks, ledger_items, limit=limit,
-            chat_scores=chat_scores, chat_messages=chat_messages,
+            chat_scores=chat_scores, chat_messages=chat_messages, message_feedbacks=message_feedbacks,
             langfuse_trace_exists=langfuse_trace_exists,
             build_trace_url=build_trace_url,
         )
@@ -341,6 +363,7 @@ class QualityReportService(TenantAwareService):
         thumbs_up_count = 0
         last_score_value = None
         last_score_at = None
+        latest_feedback_by_actor: dict[str, dict] = {}
 
         for s in score_dicts:
             name = s.get("name", "")
@@ -362,13 +385,30 @@ class QualityReportService(TenantAwareService):
             elif name == "has_citation":
                 has_citation = bool(value)
             elif name == "user_feedback":
-                feedback_count += 1
-                if value < 0.5:
-                    thumbs_down_count += 1
-                else:
-                    thumbs_up_count += 1
+                score_meta = s.get("metadata") or {}
+                actor_key = str(
+                    score_meta.get("actor_id")
+                    or s.get("userId")
+                    or s.get("id")
+                    or f"feedback:{len(latest_feedback_by_actor)}"
+                )
+                current_ts = str(s.get("timestamp") or s.get("createdAt") or "")
+                previous = latest_feedback_by_actor.get(actor_key)
+                previous_ts = str((previous or {}).get("timestamp") or (previous or {}).get("createdAt") or "")
+                if previous is None or current_ts >= previous_ts:
+                    latest_feedback_by_actor[actor_key] = s
+
+        for s in latest_feedback_by_actor.values():
+            value = float(s.get("value", 0))
+            feedback_count += 1
+            if value < 0.5:
+                thumbs_down_count += 1
+            else:
+                thumbs_up_count += 1
+            scored_at = s.get("timestamp") or s.get("createdAt")
+            if last_score_at is None or str(scored_at or "") >= str(last_score_at or ""):
                 last_score_value = value
-                last_score_at = s.get("timestamp") or s.get("createdAt")
+                last_score_at = scored_at
 
         total_tokens = sum(
             int((o.get("usage") or {}).get("total", 0))
@@ -395,7 +435,7 @@ class QualityReportService(TenantAwareService):
             "source_type": metadata.get("source_type", "inspection"),
             "trace_id": tid,
             "trace_url": trace_url,
-            "result_id": metadata.get("task_id"),
+            "result_id": metadata.get("result_id") or metadata.get("task_id"),
             "task_id": metadata.get("task_id"),
             "assistant_message_id": None,
             "session_id": trace.get("sessionId"),
@@ -422,6 +462,35 @@ class QualityReportService(TenantAwareService):
 
     async def build_report(self, start_date=None, end_date=None, source: str = "all"):
         api_client = LangfuseApiClient()
+        stabilities = await self._stability_repo.list_by_range(self._org_id, start_date, end_date)
+        result_feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)
+        message_feedbacks = await self._feedback_repo.list_message_by_range(
+            self._org_id,
+            start_date,
+            end_date,
+            target_type="chat",
+        )
+        if source == "inspection":
+            message_feedbacks = []
+        elif source == "chat":
+            stabilities = []
+            result_feedbacks = []
+
+        local_traces = await self._list_traces_from_mysql(
+            limit=None,
+            source=source,
+            api_client=api_client,
+            langfuse_available=False,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        local_chat_message_count = len(
+            {
+                str(item.get("assistant_message_id") or "")
+                for item in local_traces
+                if item.get("source_type") == "chat" and item.get("assistant_message_id")
+            }
+        )
         if api_client.enabled:
             traces, error = await self._fetch_traces_from_langfuse(
                 source=source,
@@ -431,80 +500,67 @@ class QualityReportService(TenantAwareService):
                 end_date=end_date,
             )
             if not error:
-                return self._build_report_from_trace_items(traces)
+                merged_traces = self._merge_trace_items(traces, local_traces)
+                report = self._build_report_from_trace_items(merged_traces)
+                report["avg_risk_score"] = round(
+                    sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
+                    4,
+                ) if stabilities else 0.0
+                report.update(
+                    self._build_feedback_summary(
+                        result_feedbacks,
+                        message_feedbacks,
+                        fallback_up_count=int(report.get("thumbs_up_count") or 0),
+                        fallback_down_count=int(report.get("thumbs_down_count") or 0),
+                    )
+                )
+                report.update(self._build_feedback_rate_summary(
+                    total_results=int(report.get("total_results") or 0),
+                    thumbs_up_count=int(report.get("thumbs_up_count") or 0),
+                    thumbs_down_count=int(report.get("thumbs_down_count") or 0),
+                ))
+                report.update(
+                    self._build_chat_coverage_summary(
+                        chat_score_count=int(report.get("chat_score_count") or 0),
+                        chat_message_count=max(local_chat_message_count, int(report.get("chat_message_count") or 0)),
+                    )
+                )
+                report["feedback_distribution"] = self._build_feedback_distribution(
+                    result_feedbacks,
+                    message_feedbacks,
+                )
+                return report
             logger.warning("Langfuse report source unavailable, falling back to local report: %s", error)
 
-        results = await self._result_repo.list_by_range(self._org_id, start_date, end_date)
-        feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)
-        stabilities = await self._stability_repo.list_by_range(self._org_id, start_date, end_date)
-        chat_scores = await self._chat_score_repo.list_by_range(self._org_id, start_date, end_date)
-        chat_messages = await self._chat_message_repo.list_assistant_for_org(self._org_id, start_date=start_date, end_date=end_date)
-        if source == "inspection":
-            chat_scores, chat_messages = [], []
-        elif source == "chat":
-            results, feedbacks, stabilities = [], [], []
-
-        total_results = len(results) + len(chat_messages)
-        hallucination_count = sum(1 for item in results if not self._has_citations(item.citations, item.reasoning_chain))
-        thumbs_down_count = sum(1 for item in feedbacks if item.feedback_type == "down")
-        thumbs_up_count = sum(1 for item in feedbacks if item.feedback_type == "up")
-        avg_risk_score = round(
+        report = self._build_report_from_trace_items(local_traces)
+        report["avg_risk_score"] = round(
             sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
             4,
         ) if stabilities else 0.0
-
-        model_counter: dict[str, list] = defaultdict(list)
-        result_by_id = {item.id: item for item in results}
-        feedbacks_by_result: dict[str, list] = defaultdict(list)
-        for feedback in feedbacks:
-            feedbacks_by_result[feedback.result_id].append(feedback)
-        for item in results:
-            model_counter[item.llm_model].append(item)
-        for msg in chat_messages:
-            payload = msg.payload or {}
-            model_key = str(payload.get("llm_meta", {}).get("model") or "chat_model")
-            model_counter[model_key].append(msg)
-
-        model_metrics = []
-        for model_key, model_results in sorted(model_counter.items()):
-            result_count = len(model_results)
-            if any(hasattr(item, "verdict") for item in model_results):
-                model_metrics.append({
-                    "model_key": model_key,
-                    "result_count": result_count,
-                    "pass_rate": round(sum(1 for item in model_results if hasattr(item, "verdict") and item.verdict == "pass") / result_count, 4) if result_count else 0.0,
-                    "hallucination_rate": round(sum(1 for item in model_results if hasattr(item, "citations") and not self._has_citations(item.citations, getattr(item, "reasoning_chain", None))) / result_count, 4) if result_count else 0.0,
-                    "thumbs_down_rate": 0.0,
-                    "thumbs_up_rate": 0.0,
-                })
-            else:
-                model_metrics.append({
-                    "model_key": model_key,
-                    "result_count": result_count,
-                    "pass_rate": 0.0,
-                    "hallucination_rate": 0.0,
-                    "thumbs_down_rate": 0.0,
-                    "thumbs_up_rate": 0.0,
-                })
-
-        return {
-            "total_results": total_results,
-            "hallucination_rate": round(hallucination_count / total_results, 4) if total_results else 0.0,
-            "thumbs_down_rate": round(thumbs_down_count / total_results, 4) if total_results else 0.0,
-            "thumbs_up_rate": round(thumbs_up_count / total_results, 4) if total_results else 0.0,
-            "avg_risk_score": avg_risk_score,
-            "feedback_distribution": dict(Counter((item.category or "uncategorized") for item in feedbacks)),
-            "hallucination_trend": self._build_result_trend(results, lambda item: 0 if self._has_citations(item.citations, item.reasoning_chain) else 1),
-            "thumbs_down_trend": self._build_feedback_trend(feedbacks, "down"),
-            "thumbs_up_trend": self._build_feedback_trend(feedbacks, "up"),
-            "model_metrics": model_metrics,
-            "chat_score_count": len(chat_scores),
-            "chat_avg_trust_score": self._avg_chat_value(chat_scores, "trust_score"),
-            "chat_hallucination_rate": self._chat_rate(chat_scores, "hallucination_risk", threshold=0.6),
-            "chat_overconfidence_rate": self._chat_rate(chat_scores, "overconfidence", threshold=0.6),
-            "chat_citation_rate": self._chat_citation_rate(chat_scores),
-            "chat_trust_trend": self._build_chat_score_trend(chat_scores, "trust_score"),
-        }
+        report.update(
+            self._build_feedback_summary(
+                result_feedbacks,
+                message_feedbacks,
+                fallback_up_count=int(report.get("thumbs_up_count") or 0),
+                fallback_down_count=int(report.get("thumbs_down_count") or 0),
+            )
+        )
+        report.update(self._build_feedback_rate_summary(
+            total_results=int(report.get("total_results") or 0),
+            thumbs_up_count=int(report.get("thumbs_up_count") or 0),
+            thumbs_down_count=int(report.get("thumbs_down_count") or 0),
+        ))
+        report.update(
+            self._build_chat_coverage_summary(
+                chat_score_count=int(report.get("chat_score_count") or 0),
+                chat_message_count=max(local_chat_message_count, int(report.get("chat_message_count") or 0)),
+            )
+        )
+        report["feedback_distribution"] = self._build_feedback_distribution(
+            result_feedbacks,
+            message_feedbacks,
+        )
+        return report
 
     @staticmethod
     def _empty_report() -> dict:
@@ -513,13 +569,21 @@ class QualityReportService(TenantAwareService):
             "hallucination_rate": 0.0,
             "thumbs_down_rate": 0.0,
             "thumbs_up_rate": 0.0,
+            "thumbs_down_count": 0,
+            "thumbs_up_count": 0,
+            "feedback_total_count": 0,
+            "thumbs_down_share": 0.0,
+            "thumbs_up_share": 0.0,
             "avg_risk_score": 0.0,
             "feedback_distribution": {},
             "hallucination_trend": [],
             "thumbs_down_trend": [],
             "thumbs_up_trend": [],
             "model_metrics": [],
+            "chat_message_count": 0,
             "chat_score_count": 0,
+            "chat_unscored_count": 0,
+            "chat_scored_rate": 0.0,
             "chat_avg_trust_score": 0.0,
             "chat_hallucination_rate": 0.0,
             "chat_overconfidence_rate": 0.0,
@@ -538,6 +602,21 @@ class QualityReportService(TenantAwareService):
         thumbs_down_count = sum(int(item.get("thumbs_down_count") or 0) for item in traces)
         thumbs_up_count = sum(int(item.get("thumbs_up_count") or 0) for item in traces)
         chat_traces = [item for item in traces if item.get("source_type") == "chat"]
+        chat_message_count = max(
+            len(
+                {
+                    str(item.get("assistant_message_id") or "")
+                    for item in chat_traces
+                    if item.get("assistant_message_id")
+                }
+            ),
+            len(chat_traces),
+        )
+        chat_hallucination_values = [
+            float(item["hallucination_risk"])
+            for item in chat_traces
+            if item.get("hallucination_risk") is not None
+        ]
         trust_values = [
             float(item["trust_score"])
             for item in chat_traces
@@ -593,18 +672,32 @@ class QualityReportService(TenantAwareService):
             ) if hallucination_values else 0.0,
             "thumbs_down_rate": round(thumbs_down_count / total_results, 4) if total_results else 0.0,
             "thumbs_up_rate": round(thumbs_up_count / total_results, 4) if total_results else 0.0,
+            "thumbs_down_count": thumbs_down_count,
+            "thumbs_up_count": thumbs_up_count,
+            "feedback_total_count": thumbs_down_count + thumbs_up_count,
+            "thumbs_down_share": round(
+                thumbs_down_count / (thumbs_down_count + thumbs_up_count),
+                4,
+            ) if (thumbs_down_count + thumbs_up_count) else 0.0,
+            "thumbs_up_share": round(
+                thumbs_up_count / (thumbs_down_count + thumbs_up_count),
+                4,
+            ) if (thumbs_down_count + thumbs_up_count) else 0.0,
             "avg_risk_score": 0.0,
             "feedback_distribution": {},
             "hallucination_trend": cls._build_trace_value_trend(traces, "hallucination_risk", threshold=0.6),
-            "thumbs_down_trend": cls._build_trace_count_trend(traces, "thumbs_down_count"),
-            "thumbs_up_trend": cls._build_trace_count_trend(traces, "thumbs_up_count"),
+            "thumbs_down_trend": cls._build_trace_feedback_rate_trend(traces, "thumbs_down_count"),
+            "thumbs_up_trend": cls._build_trace_feedback_rate_trend(traces, "thumbs_up_count"),
             "model_metrics": model_metrics,
+            "chat_message_count": chat_message_count,
             "chat_score_count": len(trust_values),
+            "chat_unscored_count": max(chat_message_count - len(trust_values), 0),
+            "chat_scored_rate": round(len(trust_values) / chat_message_count, 4) if chat_message_count else 0.0,
             "chat_avg_trust_score": round(sum(trust_values) / len(trust_values), 4) if trust_values else 0.0,
             "chat_hallucination_rate": round(
-                sum(1 for value in hallucination_values if value >= 0.6) / len(hallucination_values),
+                sum(1 for value in chat_hallucination_values if value >= 0.6) / len(chat_hallucination_values),
                 4,
-            ) if hallucination_values else 0.0,
+            ) if chat_hallucination_values else 0.0,
             "chat_overconfidence_rate": round(
                 sum(1 for value in overconfidence_values if value >= 0.6) / len(overconfidence_values),
                 4,
@@ -653,6 +746,13 @@ class QualityReportService(TenantAwareService):
         return None
 
     @classmethod
+    def _trace_sort_key(cls, item: dict) -> str:
+        raw = item.get("created_at")
+        if isinstance(raw, datetime):
+            return raw.isoformat()
+        return str(raw or "")
+
+    @classmethod
     def _build_trace_average_trend(cls, traces: list[dict], attr: str):
         buckets: dict[str, list[float]] = defaultdict(list)
         for item in traces:
@@ -694,6 +794,23 @@ class QualityReportService(TenantAwareService):
         ]
 
     @classmethod
+    def _build_trace_feedback_rate_trend(cls, traces: list[dict], attr: str):
+        buckets: dict[str, dict[str, int]] = defaultdict(lambda: {"all": 0, "feedback": 0})
+        for item in traces:
+            bucket = cls._trace_bucket(item)
+            if not bucket:
+                continue
+            buckets[bucket]["all"] += 1
+            buckets[bucket]["feedback"] += int(item.get(attr) or 0)
+        return [
+            {
+                "bucket": bucket,
+                "value": round(values["feedback"] / values["all"], 4) if values["all"] else 0.0,
+            }
+            for bucket, values in sorted(buckets.items())
+        ]
+
+    @classmethod
     def _build_trace_verdict_trend(cls, traces: list[dict]):
         buckets: dict[str, list[bool]] = defaultdict(list)
         for item in traces:
@@ -711,9 +828,10 @@ class QualityReportService(TenantAwareService):
         results,
         feedbacks,
         ledger_items,
-        limit: int = 100,
+        limit: int | None = 100,
         chat_scores=None,
         chat_messages=None,
+        message_feedbacks=None,
         langfuse_trace_exists=None,
         build_trace_url=None,
     ) -> list[dict]:
@@ -729,15 +847,28 @@ class QualityReportService(TenantAwareService):
         for item in feedbacks:
             feedbacks_by_result[item.result_id].append(item)
 
+        feedbacks_by_message: dict[str, list] = defaultdict(list)
+        for item in list(message_feedbacks or []):
+            feedbacks_by_message[str(item.target_id)].append(item)
+
+        chat_messages_by_id = {
+            str(getattr(item, "id", "") or ""): item
+            for item in list(chat_messages or [])
+            if getattr(item, "id", None)
+        }
+
         traces: list[dict] = []
         for result in sorted(results, key=lambda item: item.created_at, reverse=True):
             reasoning_chain = result.reasoning_chain or {}
             trace_meta = reasoning_chain.get("trace") if isinstance(reasoning_chain, dict) else {}
             score_events = reasoning_chain.get("langfuse_scores") if isinstance(reasoning_chain, dict) else []
+            trust_scoring = reasoning_chain.get("trust_scoring") if isinstance(reasoning_chain, dict) else {}
             if not isinstance(trace_meta, dict):
                 trace_meta = {}
             if not isinstance(score_events, list):
                 score_events = []
+            if not isinstance(trust_scoring, dict):
+                trust_scoring = {}
 
             ledger_group = ledger_by_result.get(result.id, [])
             feedback_group = feedbacks_by_result.get(result.id, [])
@@ -746,6 +877,17 @@ class QualityReportService(TenantAwareService):
             score_candidates = [item for item in score_events if isinstance(item, dict)]
             if score_candidates:
                 latest_score = max(score_candidates, key=lambda item: item.get("scored_at") or "")
+
+            hallucination_risk = QualityReportService._extract_trust_risk(reasoning_chain)
+            if hallucination_risk is None:
+                hallucination_risk = 0.0 if QualityReportService._has_citations(getattr(result, "citations", None), reasoning_chain) else 1.0
+            overconfidence = trust_scoring.get("overconfidence")
+            if overconfidence is not None:
+                try:
+                    overconfidence = float(overconfidence)
+                except (TypeError, ValueError):
+                    overconfidence = None
+            has_citation = QualityReportService._has_citations(getattr(result, "citations", None), reasoning_chain)
 
             trace_id = str(
                 trace_meta.get("trace_id")
@@ -786,9 +928,9 @@ class QualityReportService(TenantAwareService):
                     "last_score_value": None if not latest_score else float(latest_score.get("value") or 0.0),
                     "last_score_at": None if not latest_score else latest_score.get("scored_at"),
                     "trust_score": None if not latest_score else float(latest_score.get("value") or 0.0),
-                    "hallucination_risk": None,
-                    "overconfidence": None,
-                    "has_citation": None,
+                    "hallucination_risk": hallucination_risk,
+                    "overconfidence": overconfidence,
+                    "has_citation": has_citation,
                     "score_status": None,
                     "review_model": None,
                     "langfuse_status": "local_only",
@@ -798,14 +940,25 @@ class QualityReportService(TenantAwareService):
             )
 
         for score in list(chat_scores or []):
-            trace_id = str(score.trace_id or "")
+            assistant_message_id = str(getattr(score, "assistant_message_id", "") or "")
+            linked_message = chat_messages_by_id.get(assistant_message_id)
+            linked_payload = dict(getattr(linked_message, "payload", {}) or {})
+            linked_llm_meta = dict(linked_payload.get("llm_meta") or {})
+            trace_id = str(
+                getattr(score, "trace_id", "")
+                or linked_llm_meta.get("langfuse", {}).get("trace_id")
+                or assistant_message_id
+            )
             ledger_group = ledger_by_trace.get(trace_id, [])
+            feedback_group = feedbacks_by_message.get(assistant_message_id, [])
             total_tokens = sum(int(item.total_tokens or 0) for item in ledger_group)
+            if total_tokens <= 0:
+                total_tokens = int(linked_llm_meta.get("usage", {}).get("total_tokens") or 0)
             trace_url = None
             if callable(build_trace_url):
                 trace_url = build_trace_url(trace_id)
             if not trace_url:
-                trace_url = score.trace_url
+                trace_url = getattr(score, "trace_url", None)
             traces.append(
                 {
                     "source_type": "chat",
@@ -813,25 +966,26 @@ class QualityReportService(TenantAwareService):
                     "trace_url": trace_url,
                     "result_id": None,
                     "task_id": None,
-                    "assistant_message_id": str(score.assistant_message_id),
-                    "session_id": str(score.session_id),
-                    "observation_id": score.observation_id,
+                    "assistant_message_id": assistant_message_id,
+                    "session_id": str(getattr(score, "session_id", "") or ""),
+                    "observation_id": getattr(score, "observation_id", None),
                     "verdict": None,
-                    "model_key": score.model_key,
+                    "model_key": getattr(score, "model_key", None) or str(linked_llm_meta.get("model") or "chat_model"),
                     "total_tokens": total_tokens,
-                    "feedback_count": 0,
-                    "thumbs_down_count": 0,
-                    "last_score_value": None if score.trust_score is None else float(score.trust_score),
-                    "last_score_at": score.langfuse_synced_at,
-                    "trust_score": None if score.trust_score is None else float(score.trust_score),
-                    "hallucination_risk": None if score.hallucination_risk is None else float(score.hallucination_risk),
-                    "overconfidence": None if score.overconfidence is None else float(score.overconfidence),
-                    "has_citation": score.has_citation,
-                    "score_status": score.status,
-                    "review_model": score.review_model,
+                    "feedback_count": len(feedback_group),
+                    "thumbs_down_count": sum(1 for item in feedback_group if item.feedback_type == "down"),
+                    "thumbs_up_count": sum(1 for item in feedback_group if item.feedback_type == "up"),
+                    "last_score_value": None if getattr(score, "trust_score", None) is None else float(score.trust_score),
+                    "last_score_at": getattr(score, "langfuse_synced_at", None),
+                    "trust_score": None if getattr(score, "trust_score", None) is None else float(score.trust_score),
+                    "hallucination_risk": None if getattr(score, "hallucination_risk", None) is None else float(score.hallucination_risk),
+                    "overconfidence": None if getattr(score, "overconfidence", None) is None else float(score.overconfidence),
+                    "has_citation": getattr(score, "has_citation", None),
+                    "score_status": getattr(score, "status", None),
+                    "review_model": getattr(score, "review_model", None),
                     "langfuse_status": "local_only",
-                    "langfuse_synced": score.langfuse_synced_at is not None,
-                    "created_at": score.created_at,
+                    "langfuse_synced": getattr(score, "langfuse_synced_at", None) is not None,
+                    "created_at": getattr(score, "created_at", None),
                 }
             )
 
@@ -843,6 +997,7 @@ class QualityReportService(TenantAwareService):
             llm_meta = payload.get("llm_meta") or {}
             trace_id = str(llm_meta.get("langfuse", {}).get("trace_id") or msg.id)
             ledger_group = ledger_by_trace.get(trace_id, [])
+            feedback_group = feedbacks_by_message.get(str(msg.id), [])
             traces.append(
                 {
                     "source_type": "chat",
@@ -857,8 +1012,9 @@ class QualityReportService(TenantAwareService):
                     "model_key": str(llm_meta.get("model") or "chat_model"),
                     "total_tokens": sum(int(item.total_tokens or 0) for item in ledger_group)
                     or int(llm_meta.get("usage", {}).get("total_tokens") or 0),
-                    "feedback_count": 0,
-                    "thumbs_down_count": 0,
+                    "feedback_count": len(feedback_group),
+                    "thumbs_down_count": sum(1 for item in feedback_group if item.feedback_type == "down"),
+                    "thumbs_up_count": sum(1 for item in feedback_group if item.feedback_type == "up"),
                     "last_score_value": None,
                     "last_score_at": None,
                     "trust_score": None,
@@ -878,7 +1034,173 @@ class QualityReportService(TenantAwareService):
             langfuse_trace_exists=langfuse_trace_exists,
         )
         traces.sort(key=lambda item: item.get("created_at") or "", reverse=True)
-        return traces[:limit]
+        return traces if limit is None else traces[:limit]
+
+    @staticmethod
+    def _build_feedback_distribution(result_feedbacks, message_feedbacks) -> dict[str, int]:
+        counter = Counter()
+        for item in list(result_feedbacks or []):
+            counter[str(item.category or "uncategorized")] += 1
+        for item in list(message_feedbacks or []):
+            counter[str(item.category or "uncategorized")] += 1
+        return dict(counter)
+
+    @staticmethod
+    def _build_feedback_summary(result_feedbacks, message_feedbacks, *, fallback_up_count: int, fallback_down_count: int) -> dict:
+        local_feedbacks = list(result_feedbacks or []) + list(message_feedbacks or [])
+        if local_feedbacks:
+            thumbs_up_count = sum(1 for item in local_feedbacks if item.feedback_type == "up")
+            thumbs_down_count = sum(1 for item in local_feedbacks if item.feedback_type == "down")
+        else:
+            thumbs_up_count = int(fallback_up_count or 0)
+            thumbs_down_count = int(fallback_down_count or 0)
+        feedback_total_count = thumbs_up_count + thumbs_down_count
+        return {
+            "thumbs_up_count": thumbs_up_count,
+            "thumbs_down_count": thumbs_down_count,
+            "feedback_total_count": feedback_total_count,
+            "thumbs_up_share": round(thumbs_up_count / feedback_total_count, 4) if feedback_total_count else 0.0,
+            "thumbs_down_share": round(thumbs_down_count / feedback_total_count, 4) if feedback_total_count else 0.0,
+        }
+
+    @staticmethod
+    def _build_feedback_rate_summary(*, total_results: int, thumbs_up_count: int, thumbs_down_count: int) -> dict:
+        total = int(total_results or 0)
+        return {
+            "thumbs_up_rate": round(int(thumbs_up_count or 0) / total, 4) if total else 0.0,
+            "thumbs_down_rate": round(int(thumbs_down_count or 0) / total, 4) if total else 0.0,
+        }
+
+    @staticmethod
+    def _build_chat_coverage_summary(*, chat_score_count: int, chat_message_count: int) -> dict:
+        scored = int(chat_score_count or 0)
+        total = int(chat_message_count or 0)
+        return {
+            "chat_message_count": total,
+            "chat_score_count": scored,
+            "chat_unscored_count": max(total - scored, 0),
+            "chat_scored_rate": round(scored / total, 4) if total else 0.0,
+        }
+
+    @classmethod
+    def _trace_identity_keys(cls, item: dict) -> list[str]:
+        source_type = str(item.get("source_type") or "unknown")
+        keys: list[str] = []
+        if item.get("assistant_message_id"):
+            keys.append(f"{source_type}:assistant:{item['assistant_message_id']}")
+        if item.get("result_id"):
+            keys.append(f"{source_type}:result:{item['result_id']}")
+        if item.get("task_id"):
+            keys.append(f"{source_type}:task:{item['task_id']}")
+        if item.get("trace_id"):
+            keys.append(f"{source_type}:trace:{item['trace_id']}")
+        return keys
+
+    @classmethod
+    def _merge_trace_item(cls, remote: dict, local: dict) -> dict:
+        merged = dict(local)
+        merged["source_type"] = str(remote.get("source_type") or local.get("source_type") or "unknown")
+        merged["trace_id"] = remote.get("trace_id") or local.get("trace_id")
+        merged["trace_url"] = remote.get("trace_url") or local.get("trace_url")
+        merged["task_id"] = remote.get("task_id") or local.get("task_id")
+        merged["assistant_message_id"] = remote.get("assistant_message_id") or local.get("assistant_message_id")
+        merged["session_id"] = remote.get("session_id") or local.get("session_id")
+        merged["observation_id"] = remote.get("observation_id") or local.get("observation_id")
+        merged["verdict"] = remote.get("verdict") or local.get("verdict")
+        merged["model_key"] = remote.get("model_key") or local.get("model_key")
+        merged["total_tokens"] = int(remote.get("total_tokens") or 0) or int(local.get("total_tokens") or 0)
+        merged["total_cost"] = float(remote.get("total_cost") or 0.0) or float(local.get("total_cost") or 0.0)
+
+        local_feedback_count = int(local.get("feedback_count") or 0)
+        local_down_count = int(local.get("thumbs_down_count") or 0)
+        local_up_count = int(local.get("thumbs_up_count") or 0)
+        if local_feedback_count or local_down_count or local_up_count:
+            merged["feedback_count"] = local_feedback_count
+            merged["thumbs_down_count"] = local_down_count
+            merged["thumbs_up_count"] = local_up_count
+        else:
+            merged["feedback_count"] = int(remote.get("feedback_count") or 0)
+            merged["thumbs_down_count"] = int(remote.get("thumbs_down_count") or 0)
+            merged["thumbs_up_count"] = int(remote.get("thumbs_up_count") or 0)
+
+        merged["last_score_value"] = remote.get("last_score_value")
+        if merged["last_score_value"] is None:
+            merged["last_score_value"] = local.get("last_score_value")
+        merged["last_score_at"] = remote.get("last_score_at") or local.get("last_score_at")
+        merged["trust_score"] = remote.get("trust_score")
+        if merged["trust_score"] is None:
+            merged["trust_score"] = local.get("trust_score")
+        merged["hallucination_risk"] = remote.get("hallucination_risk")
+        if merged["hallucination_risk"] is None:
+            merged["hallucination_risk"] = local.get("hallucination_risk")
+        merged["overconfidence"] = remote.get("overconfidence")
+        if merged["overconfidence"] is None:
+            merged["overconfidence"] = local.get("overconfidence")
+        merged["has_citation"] = remote.get("has_citation")
+        if merged["has_citation"] is None:
+            merged["has_citation"] = local.get("has_citation")
+        merged["score_status"] = remote.get("score_status") or local.get("score_status")
+        merged["review_model"] = remote.get("review_model") or local.get("review_model")
+        merged["langfuse_status"] = remote.get("langfuse_status") or local.get("langfuse_status")
+        merged["langfuse_synced"] = remote.get("langfuse_synced")
+        if merged["langfuse_synced"] is None:
+            merged["langfuse_synced"] = local.get("langfuse_synced")
+        merged["created_at"] = remote.get("created_at") or local.get("created_at")
+
+        remote_result_id = remote.get("result_id")
+        local_result_id = local.get("result_id")
+        if local_result_id and (not remote_result_id or remote_result_id == remote.get("task_id")):
+            merged["result_id"] = local_result_id
+        else:
+            merged["result_id"] = remote_result_id or local_result_id
+        return merged
+
+    @classmethod
+    def _keep_local_trace_for_hybrid(cls, item: dict) -> bool:
+        if str(item.get("source_type") or "") != "chat":
+            return True
+        if int(item.get("feedback_count") or 0) > 0:
+            return True
+        if item.get("trust_score") is not None or item.get("hallucination_risk") is not None:
+            return True
+        if int(item.get("total_tokens") or 0) > 0:
+            return True
+        assistant_message_id = str(item.get("assistant_message_id") or "")
+        trace_id = str(item.get("trace_id") or "")
+        if trace_id and assistant_message_id and trace_id != assistant_message_id:
+            return True
+        if str(item.get("model_key") or "") not in {"", "chat_model"}:
+            return True
+        return False
+
+    @classmethod
+    def _merge_trace_items(cls, remote_traces: list[dict], local_traces: list[dict]) -> list[dict]:
+        merged: list[dict] = []
+        key_to_index: dict[str, int] = {}
+
+        local_items = list(local_traces or [])
+        if list(remote_traces or []):
+            local_items = [item for item in local_items if cls._keep_local_trace_for_hybrid(item)]
+
+        for item in local_items:
+            idx = len(merged)
+            merged.append(dict(item))
+            for key in cls._trace_identity_keys(item):
+                key_to_index[key] = idx
+
+        for item in list(remote_traces or []):
+            keys = cls._trace_identity_keys(item)
+            match_idx = next((key_to_index[key] for key in keys if key in key_to_index), None)
+            if match_idx is None:
+                match_idx = len(merged)
+                merged.append(dict(item))
+            else:
+                merged[match_idx] = cls._merge_trace_item(item, merged[match_idx])
+            for key in cls._trace_identity_keys(merged[match_idx]):
+                key_to_index[key] = match_idx
+
+        merged.sort(key=cls._trace_sort_key, reverse=True)
+        return merged
 
     @staticmethod
     def _normalize_langfuse_trace_statuses(traces: list[dict], langfuse_trace_exists=None) -> list[dict]:

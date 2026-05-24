@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from io import BytesIO
 
@@ -64,6 +64,14 @@ async def list_messages(
 ):
     service = _build_service(current)
     return ResponseEnvelope(data=await service.list_messages(session_id, after_seq=after_seq, limit=limit))
+
+
+@router.get("/inspection-context", response_model=ResponseEnvelope[dict[str, Any]])
+async def get_inspection_context(
+    current: CurrentUser = Depends(get_current_user),
+):
+    service = _build_service(current)
+    return ResponseEnvelope(data=await service.get_inspection_context())
 
 
 @router.post("/sessions/{session_id}/messages", response_model=ResponseEnvelope[ChatSendResponse])

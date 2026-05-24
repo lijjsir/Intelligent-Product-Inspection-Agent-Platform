@@ -24,6 +24,8 @@ export const useMeetingStore = defineStore("meeting", () => {
   const loadingRooms = ref(false);
   const loadingMessages = ref(false);
   const sending = ref(false);
+  const aiThinking = ref(false);
+  const summarizing = ref(false);
   const availableAgentDefs = ref<Array<{
     id: string;
     name: string;
@@ -34,6 +36,20 @@ export const useMeetingStore = defineStore("meeting", () => {
     is_active: boolean;
   }>>([]);
   const messageReactions = ref<Record<string, "up" | "down">>({});
+  let streamRequestId = 0;
+
+  function unwrap<T>(payload: unknown): T {
+    return ((payload as { data?: T }).data || payload) as T;
+  }
+
+  function upsertMessage(message: MeetingMessage) {
+    const index = messages.value.findIndex((m) => m.id === message.id);
+    if (index >= 0) {
+      messages.value = messages.value.map((m, i) => (i === index ? { ...m, ...message } : m));
+      return;
+    }
+    messages.value = [...messages.value, message];
+  }
 
   // ── Computed ───────────────────────────────────────────────────
 
@@ -46,7 +62,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     loadingRooms.value = true;
     try {
       const { data } = await meetingApi.listRooms();
-      const list = (data as { data?: MeetingRoom[] }).data || (data as unknown as MeetingRoom[]);
+      const list = unwrap<MeetingRoom[]>(data);
       rooms.value = list;
       if (selectLatest && list.length > 0) {
         activeRoomId.value = list[0].id;
@@ -62,7 +78,7 @@ export const useMeetingStore = defineStore("meeting", () => {
 
   async function createRoom(title: string, password?: string | null) {
     const { data } = await meetingApi.createRoom({ title, password: password || null });
-    const room = (data as { data?: MeetingRoom }).data || (data as unknown as MeetingRoom);
+    const room = unwrap<MeetingRoom>(data);
     rooms.value = [room, ...rooms.value.filter((r) => r.id !== room.id)];
     activeRoomId.value = room.id;
     return room;
@@ -70,7 +86,7 @@ export const useMeetingStore = defineStore("meeting", () => {
 
   async function joinRoom(accessCode: string, password?: string | null) {
     const { data } = await meetingApi.joinRoom({ access_code: accessCode, password: password || null });
-    const room = (data as { data?: MeetingRoom }).data || (data as unknown as MeetingRoom);
+    const room = unwrap<MeetingRoom>(data);
     rooms.value = [room, ...rooms.value.filter((r) => r.id !== room.id)];
     activeRoomId.value = room.id;
     return room;
@@ -86,7 +102,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     loadingMessages.value = afterSeq === 0;
     try {
       const { data } = await meetingApi.listMessages(activeRoom.value.id, afterSeq);
-      const list = (data as { data?: MeetingMessage[] }).data || (data as unknown as MeetingMessage[]);
+      const list = unwrap<MeetingMessage[]>(data);
       if (afterSeq > 0) {
         const seen = new Set(messages.value.map((m) => m.id));
         messages.value = [...messages.value, ...list.filter((m) => !seen.has(m.id))];
@@ -103,11 +119,37 @@ export const useMeetingStore = defineStore("meeting", () => {
     sending.value = true;
     try {
       const { data } = await meetingApi.sendMessage(activeRoom.value.id, content);
-      const msg = (data as { data?: MeetingMessage }).data || (data as unknown as MeetingMessage);
-      messages.value = [...messages.value, msg];
+      const msg = unwrap<MeetingMessage>(data);
+      upsertMessage(msg);
       return msg;
     } finally {
       sending.value = false;
+    }
+  }
+
+  async function requestAiReply() {
+    if (!activeRoom.value || aiThinking.value) return null;
+    aiThinking.value = true;
+    try {
+      const { data } = await meetingApi.aiChat(activeRoom.value.id);
+      const msg = unwrap<MeetingMessage>(data);
+      upsertMessage(msg);
+      return msg;
+    } finally {
+      aiThinking.value = false;
+    }
+  }
+
+  async function summarizeMeeting() {
+    if (!activeRoom.value || summarizing.value) return null;
+    summarizing.value = true;
+    try {
+      const { data } = await meetingApi.summarize(activeRoom.value.id);
+      const msg = unwrap<MeetingMessage>(data);
+      upsertMessage(msg);
+      return msg;
+    } finally {
+      summarizing.value = false;
     }
   }
 
@@ -120,7 +162,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
     try {
       const { data } = await meetingApi.listAgents(activeRoom.value.id);
-      agents.value = (data as { data?: MeetingRoomAgent[] }).data || (data as unknown as MeetingRoomAgent[]);
+      agents.value = unwrap<MeetingRoomAgent[]>(data);
     } catch {
       agents.value = [];
     }
@@ -138,8 +180,7 @@ export const useMeetingStore = defineStore("meeting", () => {
   async function loadAvailableAgentDefs() {
     try {
       const { data } = await meetingApi.listAgentDefs();
-      availableAgentDefs.value = (data as { data?: typeof availableAgentDefs.value }).data
-        || (data as unknown as typeof availableAgentDefs.value);
+      availableAgentDefs.value = unwrap<typeof availableAgentDefs.value>(data);
     } catch {
       availableAgentDefs.value = [];
     }
@@ -148,7 +189,7 @@ export const useMeetingStore = defineStore("meeting", () => {
   async function addAgentToRoom(agentDefId: string, role = "participant") {
     if (!activeRoom.value) return null;
     const { data } = await meetingApi.addAgent(activeRoom.value.id, { agent_id: agentDefId, role });
-    const agent = (data as { data?: MeetingRoomAgent }).data || (data as unknown as MeetingRoomAgent);
+    const agent = unwrap<MeetingRoomAgent>(data);
     agents.value = [...agents.value, agent];
     return agent;
   }
@@ -164,16 +205,23 @@ export const useMeetingStore = defineStore("meeting", () => {
   function connectStream() {
     disconnectStream();
     if (!activeRoom.value) return;
+    const requestId = ++streamRequestId;
 
     meetingApi.stream(activeRoom.value.id, handleStreamEvent).then((source) => {
+      if (requestId !== streamRequestId) {
+        source.close();
+        return;
+      }
       eventSource.value = source;
       streamConnected.value = true;
     }).catch(() => {
+      if (requestId !== streamRequestId) return;
       streamConnected.value = false;
     });
   }
 
   function disconnectStream() {
+    streamRequestId += 1;
     if (eventSource.value) {
       eventSource.value.close();
       eventSource.value = null;
@@ -185,11 +233,8 @@ export const useMeetingStore = defineStore("meeting", () => {
   function handleStreamEvent(evt: MeetingStreamEvent) {
     switch (evt.event) {
       case "message_created": {
-        const exists = messages.value.some((m) => m.id === evt.message.id);
-        if (!exists) {
-          messages.value = [...messages.value, evt.message];
-          loadRooms();
-        }
+        upsertMessage(evt.message);
+        loadRooms();
         break;
       }
       case "agent_run_started": {
@@ -208,7 +253,7 @@ export const useMeetingStore = defineStore("meeting", () => {
           existing.content = content;
           existing.message_type = "agent" as never;
         } else {
-          messages.value = [...messages.value, {
+          upsertMessage({
             id: evt.message_id,
             room_id: activeRoomId.value,
             user_id: evt.agent_id,
@@ -218,7 +263,7 @@ export const useMeetingStore = defineStore("meeting", () => {
             message_type: "agent",
             agent_id: evt.agent_id,
             created_at: new Date().toISOString(),
-          } as MeetingMessage];
+          } as MeetingMessage);
         }
         const next = { ...streamingContent.value };
         delete next[evt.message_id];
@@ -230,7 +275,7 @@ export const useMeetingStore = defineStore("meeting", () => {
         delete next[evt.message_id];
         streamingContent.value = next;
         const errMsg = `[${evt.agent_name}] 响应失败: ${evt.error}`;
-        messages.value = [...messages.value, {
+        upsertMessage({
           id: evt.message_id,
           room_id: activeRoomId.value,
           user_id: evt.agent_id,
@@ -240,7 +285,7 @@ export const useMeetingStore = defineStore("meeting", () => {
           message_type: "agent",
           agent_id: evt.agent_id,
           created_at: new Date().toISOString(),
-        } as MeetingMessage];
+        } as MeetingMessage);
         break;
       }
     }
@@ -266,12 +311,13 @@ export const useMeetingStore = defineStore("meeting", () => {
   return {
     // state
     rooms, messages, agents, activeRoomId, eventSource, streamConnected,
-    streamingContent, loadingRooms, loadingMessages, sending, messageReactions,
+    streamingContent, loadingRooms, loadingMessages, sending, messageReactions, aiThinking, summarizing,
     // computed
     activeRoom, canSend, lastMessageSeq,
     // actions
     loadRooms, createRoom, joinRoom,
     loadMessages, sendMessage,
+    requestAiReply, summarizeMeeting,
     loadAgents, deleteRoom,
     availableAgentDefs, loadAvailableAgentDefs, addAgentToRoom, removeAgentFromRoom,
     connectStream, disconnectStream, handleStreamEvent,

@@ -490,6 +490,7 @@ def test_quality_trace_builder_merges_chat_scores():
             "total_tokens": 0,
             "feedback_count": 0,
             "thumbs_down_count": 0,
+            "thumbs_up_count": 0,
             "last_score_value": 0.82,
             "last_score_at": datetime(2026, 5, 13, 12, 0, 0),
             "trust_score": 0.82,
@@ -601,7 +602,27 @@ async def test_quality_trace_list_uses_langfuse_api_for_chat_source(monkeypatch)
         lambda: FakeApiClient(),
     )
 
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
     service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = EmptyRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
     traces = await service.list_traces(source="chat")
 
     assert len(traces) == 1
@@ -662,7 +683,27 @@ async def test_quality_trace_list_hydrates_score_ids_from_langfuse_api(monkeypat
 
     monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
 
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
     service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = EmptyRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
     traces = await service.list_traces(source="chat")
 
     assert traces[0]["trust_score"] == 0.72
@@ -671,7 +712,7 @@ async def test_quality_trace_list_hydrates_score_ids_from_langfuse_api(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_quality_trace_list_does_not_fallback_to_local_rows_when_langfuse_is_ok_but_empty(monkeypatch):
+async def test_quality_trace_list_merges_local_rows_when_langfuse_is_ok_but_empty(monkeypatch):
     class FakeApiClient:
         enabled = True
 
@@ -704,19 +745,39 @@ async def test_quality_trace_list_does_not_fallback_to_local_rows_when_langfuse_
                 )
             ]
 
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
     monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
 
     service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
     service._chat_score_repo = ChatScoreRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
     result = await service.list_traces_with_meta(source="chat")
 
     assert result["meta"]["langfuse_status"] == "ok"
-    assert result["meta"]["canonical_source"] == "langfuse"
-    assert result["items"] == []
+    assert result["meta"]["canonical_source"] == "hybrid"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["trace_id"] == "deleted-langfuse-trace"
 
 
 @pytest.mark.asyncio
-async def test_quality_trace_list_returns_error_meta_without_local_rows_when_langfuse_api_fails(monkeypatch):
+async def test_quality_trace_list_returns_error_meta_with_local_fallback_when_langfuse_api_fails(monkeypatch):
     class FakeApiClient:
         enabled = True
 
@@ -728,6 +789,9 @@ async def test_quality_trace_list_returns_error_meta_without_local_rows_when_lan
 
     class EmptyRepo:
         async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
             return []
 
     class EmptyLedgerRepo:
@@ -782,8 +846,9 @@ async def test_quality_trace_list_returns_error_meta_without_local_rows_when_lan
 
     assert result["meta"]["langfuse_status"] == "error"
     assert "401" in result["meta"]["langfuse_error"]
-    assert result["meta"]["canonical_source"] == "langfuse"
-    assert result["items"] == []
+    assert result["meta"]["canonical_source"] == "local_fallback"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["trace_id"] == "trace-chat"
 
 
 @pytest.mark.asyncio
@@ -840,6 +905,9 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
         async def list_by_range(self, *_args, **_kwargs):
             return [SimpleNamespace(result_id="result-1", feedback_type="down", category="bad", created_at=datetime(2026, 5, 14, 8, 0, 0))]
 
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
     class StabilityRepo:
         async def list_by_range(self, *_args, **_kwargs):
             return [SimpleNamespace(risk_score=0.9)]
@@ -867,30 +935,41 @@ async def test_quality_report_filters_chat_source_without_inspection_counts():
                 )
             ]
 
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
     service = QualityReportService(session=object(), org_id="org-1")
     service._result_repo = ResultRepo()
     service._feedback_repo = FeedbackRepo()
     service._stability_repo = StabilityRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
     service._chat_score_repo = ChatScoreRepo()
     service._chat_message_repo = ChatMessageRepo()
 
     report = await service.build_report(source="chat")
 
     assert report["total_results"] == 1
-    assert report["hallucination_rate"] == 0.0
+    assert report["hallucination_rate"] == 1.0
     assert report["thumbs_down_rate"] == 0.0
     assert report["thumbs_up_rate"] == 0.0
+    assert report["thumbs_down_count"] == 0
+    assert report["thumbs_up_count"] == 0
+    assert report["feedback_total_count"] == 0
     assert report["model_metrics"] == [
         {
             "model_key": "chat-model",
             "result_count": 1,
             "pass_rate": 0.0,
-            "hallucination_rate": 0.0,
+            "hallucination_rate": 1.0,
             "thumbs_down_rate": 0.0,
             "thumbs_up_rate": 0.0,
         }
     ]
+    assert report["chat_message_count"] == 1
     assert report["chat_score_count"] == 1
+    assert report["chat_unscored_count"] == 0
+    assert report["chat_scored_rate"] == 1.0
     assert report["chat_avg_trust_score"] == 0.4
 
 
@@ -921,18 +1000,41 @@ async def test_quality_report_uses_langfuse_trace_items_when_enabled(monkeypatch
         def build_trace_url(self, trace_id):
             return f"http://127.0.0.1:3000/project/p/traces/{trace_id}"
 
-    class ResultRepo:
+    class EmptyResultRepo:
         async def list_by_range(self, *_args, **_kwargs):
-            raise AssertionError("local results should not drive Langfuse-first report")
+            return []
+
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
 
     monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
 
     service = QualityReportService(session=object(), org_id="org-1")
-    service._result_repo = ResultRepo()
+    service._result_repo = EmptyResultRepo()
+    service._feedback_repo = EmptyRepo()
+    service._stability_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = EmptyRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
     report = await service.build_report(source="chat")
 
     assert report["total_results"] == 1
+    assert report["chat_message_count"] == 1
     assert report["chat_score_count"] == 1
+    assert report["chat_unscored_count"] == 0
+    assert report["chat_scored_rate"] == 1.0
     assert report["chat_avg_trust_score"] == 0.6
     assert report["chat_hallucination_rate"] == 1.0
 

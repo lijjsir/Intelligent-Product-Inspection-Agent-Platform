@@ -4,6 +4,8 @@ import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
+import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
+import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
@@ -276,6 +278,13 @@ async function sendMessage() {
     ElMessage.error("消息发送失败，请稍后重试。");
     console.error(error);
   }
+}
+
+function appendInspectionContextReference(value: string) {
+  const text = value.trim();
+  if (!text) return;
+  input.value = input.value.trim() ? `${input.value.trim()}\n\n${text}` : text;
+  ElMessage.success("已把任务引用加入输入框");
 }
 
 const onInputKeydown = async (event: KeyboardEvent) => {
@@ -646,6 +655,14 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       title="知识库暂不可用" :description="chatStore.ragSpacesError"
     />
 
+    <ChatInspectionContextPanel
+      class="inspection-context-strip"
+      :context="chatStore.inspectionContext"
+      :error="chatStore.inspectionContextError"
+      @refresh="chatStore.fetchInspectionContext"
+      @reference="appendInspectionContextReference"
+    />
+
     <!-- Chat area -->
     <div class="chat-shell">
       <div ref="messageListRef" class="message-list">
@@ -820,6 +837,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             中断回答
           </el-button>
         </div>
+        <PromptTemplateTray v-model="input" class="prompt-template-entry" />
         <div class="composer-row" @paste="handleComposerPaste">
           <el-input v-model="input" type="textarea" :rows="2" resize="none" :placeholder="composerPlaceholder" @keydown="onInputKeydown" class="composer-input" />
           <div class="composer-actions">
@@ -886,10 +904,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 </template>
 
 <style scoped>
-/* ── Page shell — Grid layout guarantees composer stays at bottom ── */
 .chat-page {
-  display: grid;
-  grid-template-rows: auto auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   gap: 0;
 }
@@ -917,10 +934,14 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 /* ── Alert ── */
 .alert-bar { margin: 0 12px; border-radius: 10px; }
 
-/* ── Chat shell — Grid: message list fills, composer at bottom ── */
+.inspection-context-strip {
+  margin: 10px 16px 8px;
+}
+
 .chat-shell {
   display: grid;
   grid-template-rows: 1fr auto;
+  flex: 1;
   min-height: 0;
   overflow: hidden;
   background: #fff;
@@ -1162,6 +1183,9 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-size: 12px;
   font-weight: 600;
   margin-bottom: 6px;
+}
+.prompt-template-entry {
+  margin-bottom: 8px;
 }
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .composer-input { flex: 1; }

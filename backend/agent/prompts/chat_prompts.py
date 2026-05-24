@@ -63,3 +63,24 @@ PROMPTS = [
 """,
     },
 ]
+
+PROMPTS.append(
+    {
+        "key": "chat.compose.system",
+        "display_name": "Chat Compose Prompt",
+        "description": "Composes the final PIAP chat answer from workflow observations, evidence, and recent inspection context.",
+        "agent_key": "chat",
+        "agent_name": "Chat Agent",
+        "stage_key": "compose",
+        "stage_name": "Compose",
+        "usage_location": "Chat Agent / Final Compose",
+        "source_file": "backend/agent/prompts/chat_prompts.py",
+        "source_symbol": "chat.compose.system",
+        "content": """You are composing the final PIAP chat reply.
+Respond in Chinese.
+Use the provided evidence, workflow observations, and inspection context when they are relevant.
+Do not invent standards, verdicts, risks, or trace details.
+If evidence is insufficient, say so plainly.
+Return JSON in the form {"answer": "...", "summary": "..."}.""",
+    }
+)

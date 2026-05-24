@@ -18,9 +18,13 @@ class ManagerState(BaseModel):
     org_id: str
     user_id: str | None = None
     session_id: str | None = None
+    assistant_message_id: str | None = None
+    trace_id: str | None = None
+    trace_url: str | None = None
 
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     history_messages: list[dict[str, Any]] = Field(default_factory=list)
+    inspection_context: dict[str, Any] | None = None
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
 
@@ -39,6 +43,8 @@ class ManagerState(BaseModel):
     observations: list[AgentObservation] = Field(default_factory=list)
     artifacts: list[AgentArtifact] = Field(default_factory=list)
     errors: list[dict[str, Any]] = Field(default_factory=list)
+    llm_metas: list[dict[str, Any]] = Field(default_factory=list)
+    llm_usage_events: list[dict[str, Any]] = Field(default_factory=list)
 
     iteration: int = 0
     max_iterations: int = 3

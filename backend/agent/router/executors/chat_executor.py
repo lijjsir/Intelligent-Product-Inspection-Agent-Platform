@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from agent.llm.client import LLMClient
+from agent.llm.pricing import ModelPricing
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
 from agent.router.executors.base import artifact, observation
@@ -13,6 +14,49 @@ from agent.router.manager_state import ManagerState
 
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
+    "chat.general.system": (
+        'You are the PIAP workspace assistant. Respond in Chinese. '
+        'Answer naturally, accurately, and concisely. '
+        'If the prompt includes inspection history or platform context, use it only when it is relevant '
+        'to the current user question. '
+        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+    ),
+    "chat.compose.system": (
+        'You are composing the final PIAP chat reply. Respond in Chinese. '
+        'Use the provided evidence, workflow observations, and inspection context when they are relevant. '
+        'Do not invent standards, verdicts, risks, or trace details. '
+        'If evidence is insufficient, say so plainly. '
+        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+    ),
+    "chat.rag_answer.system": (
+        'You are the PIAP retrieval-answer assistant. Respond in Chinese. '
+        'Answer from the retrieved evidence first, cite evidence markers when available, '
+        'and do not fill gaps with unsupported assumptions. '
+        'If the selected knowledge base does not contain the needed evidence, say so clearly. '
+        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+    ),
+    "chat.file_summary.system": (
+        'You are the PIAP file-analysis assistant. Respond in Chinese. '
+        'Answer from the parsed file content and extracted evidence only. '
+        'Call out uncertainty when the uploaded material is incomplete. '
+        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+    ),
+}
+
+TOOL_LOOP_INSTRUCTIONS = (
+    "If you need tools, call them through tool_calls only. "
+    "Do not print tool arguments as normal text. "
+    'If tools are not needed, return JSON in the form {"answer": "...", "summary": "..."}.'
+)
+
+FORCE_WEB_TOOL_LOOP_INSTRUCTIONS = (
+    "The user enabled web search. Prefer calling web.search first when fresh external information matters, "
+    "then combine it with the available platform context or other tools. "
+    "Pass only the essential search keywords to web.search. "
+    'If tools are not needed, return JSON in the form {"answer": "...", "summary": "..."}.'
+)
 
 
 class ChatExecutor:
@@ -49,50 +93,6 @@ class ChatExecutor:
 
     # ── model helpers ──
 
-    async def _call_model(
-        self,
-        state: ManagerState,
-        request: NormalizedRequest,
-        user_prompt: str,
-        *,
-        use_tools: bool = False,
-    ) -> str | None:
-        runtime = state.manager_model_runtime or {}
-        if not runtime.get("model_id"):
-            return None
-        try:
-            client = LLMClient(
-                api_key=runtime.get("api_key"),
-                base_url=runtime.get("base_url"),
-                model_id=runtime.get("model_id"),
-                provider=runtime.get("provider"),
-                org_id=request.org_id,
-                input_price_per_million=runtime.get("input_price_per_million"),
-                output_price_per_million=runtime.get("output_price_per_million"),
-            )
-            state.used_llm_calls += 1
-
-            tools, tool_name_map = self._build_tools_for_llm(state)
-            if use_tools and tools:
-                return await self._run_tool_loop(state, client, user_prompt, tools, tool_name_map)
-
-            response = await client.chat(
-                [
-                    {
-                        "role": "system",
-                        "content": "你是智能助手。用中文简洁准确回答。返回 JSON：{\"answer\":\"...\"}。",
-                    },
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.2,
-                observation_name="chat",
-                observation_metadata={"surface": state.surface},
-            )
-            return self._extract_answer(response)
-        except Exception as exc:
-            logger.warning("Chat model call failed: %s", exc, exc_info=True)
-            return None
-
     def _build_tools_for_llm(self, state: ManagerState) -> tuple[list[dict[str, Any]], dict[str, str]]:
         available = getattr(state, "available_tools", None)
         if not available:
@@ -128,100 +128,6 @@ class ChatExecutor:
             index += 1
         used_names.add(candidate)
         return candidate
-
-    async def _run_tool_loop(
-        self, state: ManagerState, client: LLMClient,
-        user_prompt: str, tools: list[dict[str, Any]], tool_name_map: dict[str, str] | None = None,
-    ) -> str | None:
-        invoker = getattr(state, "tool_invoker", None)
-        tool_name_map = tool_name_map or {}
-
-        # Check if web search is forced
-        first_tool_name = tools[0].get("function", {}).get("name") if tools else ""
-        force_web = bool(first_tool_name and tool_name_map.get(first_tool_name, first_tool_name) == "web.search")
-
-        system_prompt = (
-            "你是智能助手。可以使用工具获取信息。"
-            "如果需要工具，必须通过 tool_calls 调用工具，不要把工具参数作为普通内容输出。"
-            "如果不需要工具，必须返回 JSON：{\"answer\":\"...\"}。"
-            "用中文回答。"
-        )
-        if force_web:
-            system_prompt = (
-                "你是智能助手。用户开启了联网搜索，你必须优先调用 web.search 工具检索互联网实时信息，"
-                "然后再结合其他工具（知识库、文件解析等）一起解决问题。"
-                "如果需要工具，必须通过 tool_calls 调用工具，不要把工具参数作为普通内容输出。"
-                "如果不需要工具，必须返回 JSON：{\"answer\":\"...\"}。"
-                "重要：调用 web.search 时，query 参数只传核心关键词（名词/实体名，空格分隔），"
-                "去掉'怎么样''如何''是什么'等无用词。例如用户问'张雪峰现在怎么了'，只传 '张雪峰 近况'。"
-                "用中文回答。"
-            )
-
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        max_rounds = min(state.max_tool_calls, 3)
-        used_tool = False
-
-        for _round in range(max_rounds):
-            response = await client.chat_with_tools(
-                messages, tools=tools, temperature=0.2,
-                observation_name="chat.tool_loop",
-                observation_metadata={"surface": state.surface, "round": _round},
-            )
-
-            tool_calls = response.get("tool_calls") or self._tool_calls_from_content(response.get("content"), tools)
-            if tool_calls:
-                pass
-            elif response.get("content"):
-                if used_tool:
-                    messages.append({"role": "assistant", "content": response["content"]})
-                    return await self._finalize_tool_answer(state, client, messages)
-                answer = self._extract_answer(response)
-                if answer:
-                    return answer
-                messages.append({"role": "assistant", "content": response["content"]})
-                return await self._finalize_tool_answer(state, client, messages)
-            else:
-                if used_tool:
-                    return await self._finalize_tool_answer(state, client, messages)
-                return "无法确定答案"
-
-            for tc in tool_calls:
-                llm_tool_name = str(tc.get("name") or "")
-                internal_tool_name = tool_name_map.get(llm_tool_name, llm_tool_name)
-                messages.append({"role": "assistant", "content": None, "tool_calls": [{
-                    "id": tc.get("id", ""), "type": "function",
-                    "function": {"name": llm_tool_name, "arguments": json.dumps(tc.get("arguments", {}), ensure_ascii=False)},
-                }]})
-
-                if invoker:
-                    from agent.tools.contracts import ToolContext
-                    context = ToolContext(
-                        org_id=state.org_id, request_id=state.request_id,
-                        agent=getattr(state, "selected_agent", "") or "",
-                        surface=state.surface,
-                        user_id=state.user_id, session_id=state.session_id,
-                        workflow_run_id=state.workflow_run_id,
-                        allowed_modes=state.allowed_modes,
-                    )
-                    result = await invoker.invoke(tool_name=internal_tool_name, arguments=tc.get("arguments", {}), context=context)
-                    result_text = json.dumps({"status": result.status, "data": result.data, "error": result.error}, ensure_ascii=False)
-                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": result_text})
-                else:
-                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
-                                     "content": json.dumps({"status": "skipped", "error": "ToolInvoker not available"})})
-
-                used_tool = True
-                state.used_tool_calls += 1
-
-            # After executing tools, finalize immediately — don't loop
-            return await self._finalize_tool_answer(state, client, messages)
-
-        if used_tool:
-            return await self._finalize_tool_answer(state, client, messages)
-        return "无法确定答案"
 
     def _tool_calls_from_content(self, content: Any, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(content, str) or not content.strip():
@@ -355,26 +261,31 @@ class ChatExecutor:
                     "请根据上面的工具返回结果，直接回答用户问题。"
                     "如果工具返回了搜索结果，请引用搜索结果中的具体信息来回答。"
                     "如果工具没有返回有效信息，请如实说明。"
+                    "必须返回 JSON：{\"answer\":\"...\",\"summary\":\"...\"}。"
                 ),
             },
         ]
-        # Don't use json_object mode — let model answer naturally with tool results
-        final = await client._post_json(
-            "/chat/completions",
-            {
-                "model": client.model_id,
-                "messages": final_messages,
-                "temperature": 0.3,
-            },
-            observation_name="chat.final",
-            observation_type="generation",
-            observation_metadata={"surface": state.surface},
-        )
-        choices = final.get("choices") or []
-        if choices:
-            content = (choices[0].get("message") or {}).get("content")
-            if isinstance(content, str) and content.strip():
-                return content.strip()
+        post_json = getattr(client, "_post_json", None)
+        if callable(post_json):
+            final = await post_json(
+                "/chat/completions",
+                {
+                    "model": getattr(client, "model_id", ""),
+                    "messages": final_messages,
+                    "temperature": 0.3,
+                },
+                observation_name="chat.final",
+                observation_type="generation",
+                observation_metadata=self._observation_metadata(state),
+            )
+        else:
+            final = await client.chat(
+                final_messages,
+                temperature=0.3,
+                observation_name="chat.final",
+                observation_metadata=self._observation_metadata(state),
+            )
+        self._record_llm_meta(state, final)
         return self._extract_answer(final)
 
     @staticmethod
@@ -398,73 +309,6 @@ class ChatExecutor:
             except Exception:
                 return content.strip()[:1000] or None
         return None
-
-    # ── prompts ──
-
-    @staticmethod
-    def _history_text(state: ManagerState) -> str:
-        if not state.history_messages:
-            return ""
-        lines = []
-        for m in state.history_messages[-10:]:
-            role = "用户" if m.get("role") == "user" else "助手"
-            content = str(m.get("content") or "")[:300]
-            if content:
-                lines.append(f"{role}：{content}")
-        return "\n".join(lines) if lines else ""
-
-    @staticmethod
-    def _general_prompt(state: ManagerState) -> str:
-        """General chat prompt — keep it simple: just history + query, no old artifacts."""
-        parts = []
-        hist = ChatExecutor._history_text(state)
-        if hist:
-            parts.append(f"对话历史：\n{hist}")
-        parts.append(f"用户问题：{state.original_query}")
-        return "\n\n".join(parts)
-
-    @staticmethod
-    def _compose_prompt(state: ManagerState) -> str:
-        """Compose final answer — only include current-iteration artifacts, not stale ones."""
-        parts = []
-        hist = ChatExecutor._history_text(state)
-        if hist:
-            parts.append(f"对话历史：\n{hist}")
-        parts.append(f"用户问题：{state.original_query}")
-        parts.append(f"场景：{state.surface}")
-        rag_context = ChatExecutor._rag_prompt_context(state)
-        if rag_context:
-            parts.append(rag_context)
-
-        # Only include artifacts from the current iteration (not all session history)
-        prev_count = state.last_artifact_counts[-2] if len(state.last_artifact_counts) >= 2 else 0
-        current_artifacts = state.artifacts[prev_count:]
-        current_observations = state.observations[prev_count:]
-
-        if current_observations:
-            obs_text = "\n".join(
-                f"- [{o.capability_key}] {o.status}: {o.summary}"
-                for o in current_observations
-                if o.capability_key != "chat.response.compose"
-            )
-            if obs_text:
-                parts.append(f"当前步骤：\n{obs_text}")
-        if current_artifacts:
-            for art in current_artifacts:
-                if art.type in {"composed_response", "rag_hits"}:
-                    continue
-                content = json.dumps(art.content or {}, ensure_ascii=False, default=str)[:2000]
-                parts.append(f"{art.type} 结果：{content}")
-        if state.errors:
-            parts.append(f"错误：{'; '.join(e.get('message', '') for e in state.errors)}")
-        if state.selected_rag_space:
-            parts.append(
-                "回答要求：必须优先依据上面的 RAG 证据回答，并在使用证据的句子后标注引用编号，例如 [RAG-1]。"
-                "如果 RAG 证据不足以回答用户问题，请明确说明当前选中的知识库没有提供该信息，不要凭常识补全。"
-            )
-        else:
-            parts.append("请根据以上所有信息，生成最终的自然语言回复。")
-        return "\n\n".join(parts)
 
     @staticmethod
     def _rag_prompt_context(state: ManagerState) -> str:
@@ -507,6 +351,333 @@ class ChatExecutor:
                     return str(value).strip()
         return ""
 
+    async def _call_model(
+        self,
+        state: ManagerState,
+        request: NormalizedRequest,
+        user_prompt: str,
+        *,
+        use_tools: bool = False,
+    ) -> str | None:
+        runtime = state.manager_model_runtime or {}
+        if not runtime.get("model_id"):
+            return None
+        try:
+            client = LLMClient(
+                api_key=runtime.get("api_key"),
+                base_url=runtime.get("base_url"),
+                model_id=runtime.get("model_id"),
+                provider=runtime.get("provider"),
+                trace_id=state.trace_id or state.workflow_run_id or state.request_id,
+                org_id=request.org_id,
+                input_price_per_million=runtime.get("input_price_per_million"),
+                output_price_per_million=runtime.get("output_price_per_million"),
+            )
+            state.used_llm_calls += 1
+            system_prompt = await self._resolve_system_prompt(
+                state,
+                request,
+                compose=bool(state.route_plan and state.route_plan.reason != "general_chat"),
+            )
+            tools, tool_name_map = self._build_tools_for_llm(state)
+            if use_tools and tools:
+                return await self._run_tool_loop(
+                    state,
+                    client,
+                    user_prompt,
+                    tools,
+                    tool_name_map,
+                    system_prompt=system_prompt,
+                )
+
+            response = await client.chat(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                observation_name="chat",
+                observation_metadata=self._observation_metadata(state),
+            )
+            self._record_llm_meta(state, response)
+            return self._extract_answer(response)
+        except Exception as exc:
+            logger.warning("Chat model call failed: %s", exc, exc_info=True)
+            return None
+
+    async def _run_tool_loop(
+        self,
+        state: ManagerState,
+        client: LLMClient,
+        user_prompt: str,
+        tools: list[dict[str, Any]],
+        tool_name_map: dict[str, str] | None = None,
+        system_prompt: str | None = None,
+    ) -> str | None:
+        invoker = getattr(state, "tool_invoker", None)
+        tool_name_map = tool_name_map or {}
+
+        first_tool_name = tools[0].get("function", {}).get("name") if tools else ""
+        force_web = bool(first_tool_name and tool_name_map.get(first_tool_name, first_tool_name) == "web.search")
+        base_system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPTS["chat.general.system"]
+        tool_instructions = FORCE_WEB_TOOL_LOOP_INSTRUCTIONS if force_web else TOOL_LOOP_INSTRUCTIONS
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": f"{base_system_prompt}\n\n{tool_instructions}"},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        max_rounds = min(state.max_tool_calls, 3)
+        used_tool = False
+        for round_index in range(max_rounds):
+            response = await client.chat_with_tools(
+                messages,
+                tools=tools,
+                temperature=0.2,
+                observation_name="chat.tool_loop",
+                observation_metadata={**self._observation_metadata(state), "round": round_index},
+            )
+            self._record_llm_meta(state, response)
+
+            tool_calls = response.get("tool_calls") or self._tool_calls_from_content(response.get("content"), tools)
+            if not tool_calls:
+                if response.get("content"):
+                    if used_tool:
+                        messages.append({"role": "assistant", "content": response["content"]})
+                        return await self._finalize_tool_answer(state, client, messages)
+                    answer = self._extract_answer(response)
+                    if answer:
+                        return answer
+                    messages.append({"role": "assistant", "content": response["content"]})
+                    return await self._finalize_tool_answer(state, client, messages)
+                if used_tool:
+                    return await self._finalize_tool_answer(state, client, messages)
+                return "无法确定答案"
+
+            for tool_call in tool_calls:
+                llm_tool_name = str(tool_call.get("name") or "")
+                internal_tool_name = tool_name_map.get(llm_tool_name, llm_tool_name)
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": llm_tool_name,
+                                    "arguments": json.dumps(tool_call.get("arguments", {}), ensure_ascii=False),
+                                },
+                            }
+                        ],
+                    }
+                )
+
+                if invoker:
+                    from agent.tools.contracts import ToolContext
+
+                    context = ToolContext(
+                        org_id=state.org_id,
+                        request_id=state.request_id,
+                        agent=getattr(state, "selected_agent", "") or "",
+                        surface=state.surface,
+                        user_id=state.user_id,
+                        session_id=state.session_id,
+                        workflow_run_id=state.workflow_run_id,
+                        allowed_modes=state.allowed_modes,
+                    )
+                    result = await invoker.invoke(
+                        tool_name=internal_tool_name,
+                        arguments=tool_call.get("arguments", {}),
+                        context=context,
+                    )
+                    result_text = json.dumps(
+                        {"status": result.status, "data": result.data, "error": result.error},
+                        ensure_ascii=False,
+                    )
+                else:
+                    result_text = json.dumps(
+                        {"status": "skipped", "error": "ToolInvoker not available"},
+                        ensure_ascii=False,
+                    )
+
+                messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": result_text})
+                used_tool = True
+                state.used_tool_calls += 1
+
+            return await self._finalize_tool_answer(state, client, messages)
+
+        if used_tool:
+            return await self._finalize_tool_answer(state, client, messages)
+        return "无法确定答案"
+
+    async def _resolve_system_prompt(
+        self,
+        state: ManagerState,
+        request: NormalizedRequest,
+        *,
+        compose: bool,
+    ) -> str:
+        prompt_key = self._prompt_key_for_state(state, compose=compose)
+        default_content = DEFAULT_SYSTEM_PROMPTS.get(prompt_key, DEFAULT_SYSTEM_PROMPTS["chat.compose.system"])
+        try:
+            from app.services.prompt_admin_service import PromptResolver
+            from infra.database.session import get_session
+
+            resolved = await PromptResolver(get_session).get(prompt_key, org_id=request.org_id)
+            return str(resolved or default_content)
+        except Exception as exc:
+            logger.debug(
+                "prompt resolve skipped prompt_key=%s org_id=%s: %s",
+                prompt_key,
+                request.org_id,
+                exc,
+            )
+            return default_content
+
+    @staticmethod
+    def _prompt_key_for_state(state: ManagerState, *, compose: bool) -> str:
+        if not compose:
+            return "chat.general.system"
+        reason = str(state.route_plan.reason if state.route_plan else "").strip().lower()
+        if reason == "rag_qa":
+            return "chat.rag_answer.system"
+        if reason in {"file_summary", "file_qa"}:
+            return "chat.file_summary.system"
+        return "chat.compose.system"
+
+    @staticmethod
+    def _history_text(state: ManagerState) -> str:
+        if not state.history_messages:
+            return ""
+        lines = []
+        for message in state.history_messages[-10:]:
+            role = "user" if message.get("role") == "user" else "assistant"
+            content = str(message.get("content") or "").strip()
+            if content:
+                lines.append(f"{role}: {content[:300]}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _general_prompt(state: ManagerState) -> str:
+        parts: list[str] = []
+        history_text = ChatExecutor._history_text(state)
+        if history_text:
+            parts.append(f"Conversation history:\n{history_text}")
+        inspection_context = ChatExecutor._inspection_context_text(state)
+        if inspection_context:
+            parts.append(inspection_context)
+        parts.append(f"Current user question:\n{state.original_query}")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _compose_prompt(state: ManagerState) -> str:
+        parts: list[str] = []
+        history_text = ChatExecutor._history_text(state)
+        if history_text:
+            parts.append(f"Conversation history:\n{history_text}")
+        inspection_context = ChatExecutor._inspection_context_text(state)
+        if inspection_context:
+            parts.append(inspection_context)
+        parts.append(f"Current user question:\n{state.original_query}")
+        parts.append(f"Surface:\n{state.surface}")
+
+        rag_context = ChatExecutor._rag_prompt_context(state)
+        if rag_context:
+            parts.append(rag_context)
+
+        prev_count = state.last_artifact_counts[-2] if len(state.last_artifact_counts) >= 2 else 0
+        current_artifacts = state.artifacts[prev_count:]
+        current_observations = state.observations[prev_count:]
+
+        if current_observations:
+            observation_lines = "\n".join(
+                f"- [{item.capability_key}] {item.status}: {item.summary}"
+                for item in current_observations
+                if item.capability_key != "chat.response.compose"
+            )
+            if observation_lines:
+                parts.append(f"Current workflow observations:\n{observation_lines}")
+        if current_artifacts:
+            for artifact_item in current_artifacts:
+                if artifact_item.type in {"composed_response", "rag_hits"}:
+                    continue
+                content = json.dumps(artifact_item.content or {}, ensure_ascii=False, default=str)[:2000]
+                parts.append(f"{artifact_item.type} result:\n{content}")
+        if state.errors:
+            parts.append(
+                "Errors:\n"
+                + "; ".join(str(item.get("message") or "") for item in state.errors if item.get("message"))
+            )
+        if state.selected_rag_space:
+            parts.append(
+                "Answer requirements:\n"
+                "Prefer the RAG evidence above when it is relevant, and cite evidence markers such as [RAG-1].\n"
+                "If the selected knowledge base does not provide enough evidence, say so clearly and do not fill gaps with guesses.\n"
+                "如果 RAG 证据不足以回答用户问题，请明确说明当前选中的知识库没有提供该信息，不要凭常识补全。"
+            )
+        else:
+            parts.append("Answer requirements:\nWrite the final natural-language reply from the information above.")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _inspection_context_text(state: ManagerState) -> str:
+        context = state.inspection_context or {}
+        if not isinstance(context, dict):
+            return ""
+
+        stats = context.get("stats") if isinstance(context.get("stats"), dict) else {}
+        latest_task = context.get("latest_task") if isinstance(context.get("latest_task"), dict) else None
+        recent_tasks = [item for item in list(context.get("recent_tasks") or []) if isinstance(item, dict)]
+        recent_failures = [item for item in list(context.get("recent_failures") or []) if isinstance(item, dict)]
+        if not stats and latest_task is None and not recent_tasks and not recent_failures:
+            return ""
+
+        parts = [
+            "Inspection context from recent platform tasks. Use it only when it helps answer the current question.",
+        ]
+        scope = str(context.get("scope") or "").strip()
+        if scope:
+            parts.append(f"scope={scope}")
+        if stats:
+            stat_text = ", ".join(f"{key}={value}" for key, value in stats.items() if value not in (None, "", 0))
+            if stat_text:
+                parts.append(f"recent_stats={stat_text}")
+        if latest_task:
+            parts.append(f"latest_task: {ChatExecutor._inspection_task_line(latest_task)}")
+        items = recent_failures[:2] if recent_failures else recent_tasks[:4]
+        if items:
+            parts.append("recent_tasks:")
+            for item in items:
+                parts.append(f"- {ChatExecutor._inspection_task_line(item)}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _inspection_task_line(item: dict[str, Any]) -> str:
+        fields: list[str] = []
+        for key in (
+            "task_id",
+            "product_id",
+            "spec_code",
+            "status",
+            "verdict",
+            "risk_level",
+            "overall_score",
+            "prompt_version",
+            "trace_id",
+            "created_at",
+        ):
+            value = item.get(key)
+            if value not in (None, "", []):
+                fields.append(f"{key}={value}")
+        failed_rules = [str(rule) for rule in list(item.get("failed_rules") or []) if str(rule).strip()]
+        if failed_rules:
+            fields.append(f"failed_rules={'; '.join(failed_rules[:3])}")
+        root_cause = str(item.get("root_cause") or "").strip()
+        if root_cause:
+            fields.append(f"root_cause={root_cause[:180]}")
+        return ", ".join(fields)
+
     # ── compose helpers ──
 
     @staticmethod
@@ -544,6 +715,77 @@ class ChatExecutor:
         if state.final_action == "fail":
             return "failed", False
         return "completed", False
+
+    @staticmethod
+    def _observation_metadata(state: ManagerState) -> dict[str, Any]:
+        return {
+            "surface": state.surface,
+            "source_type": "chat",
+            "org_id": state.org_id,
+            "session_id": state.session_id,
+            "assistant_message_id": state.assistant_message_id,
+            "workflow_run_id": state.workflow_run_id,
+        }
+
+    @staticmethod
+    def _record_llm_meta(state: ManagerState, response: dict[str, Any] | None) -> None:
+        if not isinstance(response, dict):
+            return
+        meta = dict(response.get("__meta__") or {})
+        if not meta:
+            return
+        state.llm_metas.append(meta)
+
+        usage = LLMClient._normalize_usage(meta.get("usage"))
+        if not usage:
+            return
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+        if total_tokens <= 0:
+            return
+
+        runtime = state.manager_model_runtime or {}
+        pricing = dict(meta.get("pricing") or {})
+        input_price = pricing.get("input_price_per_million")
+        output_price = pricing.get("output_price_per_million")
+        if input_price is None:
+            input_price = runtime.get("input_price_per_million")
+        if output_price is None:
+            output_price = runtime.get("output_price_per_million")
+
+        langfuse_meta = dict(meta.get("langfuse") or {})
+        model_key = str(meta.get("model") or runtime.get("model_id") or "unknown")
+        trace_id = str(
+            langfuse_meta.get("trace_id")
+            or state.trace_id
+            or state.workflow_run_id
+            or state.request_id
+            or ""
+        ).strip() or None
+        observation_id = str(langfuse_meta.get("observation_id") or "").strip() or None
+        event_key = str(meta.get("id") or observation_id or f"{model_key}:{len(state.llm_usage_events)}")
+        if any(item.get("event_key") == event_key for item in state.llm_usage_events):
+            return
+
+        state.llm_usage_events.append(
+            {
+                "event_key": event_key,
+                "model_key": model_key,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cost_amount": ModelPricing.estimate_cost(
+                    model_key,
+                    prompt_tokens,
+                    completion_tokens,
+                    input_price_per_million=float(input_price) if input_price is not None else None,
+                    output_price_per_million=float(output_price) if output_price is not None else None,
+                ),
+                "trace_id": trace_id,
+                "observation_id": observation_id,
+            }
+        )
 
     @staticmethod
     def _build_fallback(state: ManagerState) -> str:

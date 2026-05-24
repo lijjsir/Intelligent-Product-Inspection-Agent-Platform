@@ -146,6 +146,19 @@ async def ai_chat(
     return ResponseEnvelope(data=await service.ai_respond(room_id))
 
 
+@router.post("/rooms/{room_id}/summary", response_model=ResponseEnvelope[MeetingMessageResponse])
+async def summarize_room(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("meeting", current.role)
+    from app.services.meeting_ai_service import MeetingAiService
+
+    service = MeetingAiService(db, current.org_id, current.user_id)
+    return ResponseEnvelope(data=await service.summarize(room_id))
+
+
 # ── Available Agents ──────────────────────────────────────────────
 
 @router.get("/available-agents", response_model=ResponseEnvelope[list[dict]])
