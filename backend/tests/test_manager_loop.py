@@ -5,9 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
+from agent.router.contracts import AgentPlanStep
 from agent.router.executors.chat_executor import ChatExecutor
 from agent.router.manager_state import ManagerState
 from agent.router.manager_loop import ManagerLoop
+from agent.tools.contracts import ToolResult, ToolSpec
 
 
 @pytest.fixture
@@ -168,7 +170,8 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     assert output.route_decision.sub_route == "rag_qa"
     assert "用户姓名是张三" in prompt
     assert "[RAG-1]" in prompt
-    assert "不要凭常识补全" in prompt
+    assert "仍然要继续回答用户问题" in prompt
+    assert "不要伪造知识库引用" in prompt
     assert output.agent_output["answer"] == "根据知识库，您的名字是张三。[RAG-1]"
     assert output.agent_output["citations"][0]["quote"] == "用户姓名是张三。"
     rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
@@ -176,6 +179,279 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     assert rag_log["hit_count"] == 1
     assert rag_log["source_graph"] == "manager"
     assert rag_log["metadata"]["used_citations"][0]["quote"] == "用户姓名是张三。"
+
+
+@pytest.mark.asyncio
+async def test_selected_rag_empty_recall_still_lets_model_answer(monkeypatch):
+    captured = {}
+
+    class FakeRagRetrievalService:
+        def __init__(self, session, *, org_id: str, user_id: str | None = None):
+            pass
+
+        async def search(self, *, rag_space_id, query, top_k=4, scope_node_ids=None):
+            return {
+                "rag_space_id": rag_space_id,
+                "rag_space_name": "Empty Space",
+                "hits": [],
+                "hit_count": 0,
+                "latency_ms": 7,
+            }
+
+    async def fake_call_model(self, state, request, prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "当前知识库没有提供可引用依据。基于通用知识，我可以继续回答这个问题。"
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagRetrievalService", FakeRagRetrievalService)
+    monkeypatch.setattr("agent.router.executors.chat_executor.ChatExecutor._call_model", fake_call_model)
+
+    output = await ManagerLoop().run(
+        _request(
+            query="张雪峰老师现状",
+            ext={
+                "surface": "chat",
+                "selected_rag_space": {"id": "rag-empty", "name": "Empty Space"},
+                "rag_scope": {"enabled": True, "rag_space_id": "rag-empty"},
+            },
+        ),
+        db_session=object(),
+    )
+
+    prompt = captured["prompt"]
+    assert output.route_decision.sub_route == "rag_qa"
+    assert "未检索到可用片段" in prompt
+    assert "仍然要继续回答用户问题" in prompt
+    assert "不要伪造知识库引用" in prompt
+    assert output.agent_output["answer"] == "当前知识库没有提供可引用依据。基于通用知识，我可以继续回答这个问题。"
+    assert output.agent_output["citations"] == []
+    rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
+    assert rag_log["hit_count"] == 0
+    assert rag_log["metadata"]["empty_recall"] is True
+
+
+@pytest.mark.asyncio
+async def test_selected_rag_hit_without_answer_marker_is_not_counted_as_used(monkeypatch):
+    class FakeRagRetrievalService:
+        def __init__(self, session, *, org_id: str, user_id: str | None = None):
+            pass
+
+        async def search(self, *, rag_space_id, query, top_k=4, scope_node_ids=None):
+            return {
+                "rag_space_id": rag_space_id,
+                "rag_space_name": "Test Standards",
+                "hits": [
+                    {
+                        "id": "chunk-1",
+                        "title": "Profile",
+                        "source": "profile.md",
+                        "quote": "The stored name is Zhang San.",
+                        "score": 0.91,
+                    }
+                ],
+                "hit_count": 1,
+            }
+
+    async def fake_call_model(self, state, request, prompt, **kwargs):
+        return "The answer was generated without a RAG citation marker."
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagRetrievalService", FakeRagRetrievalService)
+    monkeypatch.setattr("agent.router.executors.chat_executor.ChatExecutor._call_model", fake_call_model)
+
+    output = await ManagerLoop().run(
+        _request(
+            query="what is my name",
+            ext={
+                "surface": "chat",
+                "selected_rag_space": {"id": "rag-1", "name": "Test Standards"},
+                "rag_scope": {"enabled": True, "rag_space_id": "rag-1"},
+            },
+        ),
+        db_session=object(),
+    )
+
+    assert output.agent_output["citations"] == []
+    assert output.agent_output["rag_summary"]["hit_count"] == 1
+    assert output.agent_output["rag_summary"]["citation_coverage"] == 0.0
+    rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
+    assert rag_log["hit_count"] == 1
+    assert rag_log["citation_coverage"] == 0.0
+    assert rag_log["metadata"]["evidence_found"] is True
+    assert rag_log["metadata"]["evidence_used"] is False
+    assert rag_log["metadata"]["used_citations"] == []
+
+
+@pytest.mark.asyncio
+async def test_rag_compose_lets_model_skip_web_tool_when_not_forced(monkeypatch):
+    invoked: list[tuple[str, dict]] = []
+    captured_tools: list[str] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.model_id = kwargs.get("model_id")
+
+        async def chat_with_tools(self, messages, **kwargs):
+            captured_tools.extend(tool["function"]["name"] for tool in kwargs["tools"])
+            return {
+                "content": '{"answer":"Model decided no tool is needed."}',
+                "tool_calls": None,
+            }
+
+        async def _post_json(self, path, payload, **kwargs):
+            raise AssertionError("No final tool answer should be generated when no tool is used")
+
+    class FakeInvoker:
+        async def invoke(self, *, tool_name, arguments, context):
+            invoked.append((tool_name, arguments))
+            raise AssertionError("Tool should not be invoked unless the model calls it")
+
+    monkeypatch.setattr("agent.router.executors.chat_executor.LLMClient", FakeLLMClient)
+
+    state = ManagerState(
+        request_id="req-1",
+        workflow_run_id="wf-1",
+        original_query="basic product explanation",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        selected_agent="chat",
+        manager_model_runtime={"model_id": "fake-model", "provider": "fake"},
+        selected_rag_space={"id": "rag-1", "name": "Test Standards"},
+    )
+    state.available_tools = [
+        ToolSpec(
+            name="web.search",
+            title="Web search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        )
+    ]
+    state.tool_invoker = FakeInvoker()
+
+    observation, artifacts = await ChatExecutor().execute(
+        AgentPlanStep(
+            step_id="compose-1",
+            capability_key="chat.response.compose",
+            agent="chat",
+            operation="compose",
+            mode="answer",
+        ),
+        state,
+        _request(query="basic product explanation", ext={"surface": "chat"}),
+    )
+
+    assert observation.status == "success"
+    assert captured_tools == ["web_search"]
+    assert invoked == []
+    assert state.used_tool_calls == 0
+    assert artifacts[0].content["answer"] == "Model decided no tool is needed."
+
+
+@pytest.mark.asyncio
+async def test_rag_compose_forced_web_search_invokes_web_tool(monkeypatch):
+    invoked: list[tuple[str, dict]] = []
+    captured_tools: list[str] = []
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.model_id = kwargs.get("model_id")
+
+        async def chat_with_tools(self, messages, **kwargs):
+            captured_tools.extend(tool["function"]["name"] for tool in kwargs["tools"])
+            return {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-web-1",
+                        "name": "web_search",
+                        "arguments": {"query": "zhang xuefeng status", "max_results": 5},
+                    }
+                ],
+            }
+
+        async def _post_json(self, path, payload, **kwargs):
+            assert any(message.get("role") == "tool" for message in payload["messages"])
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Web search result based answer.",
+                        }
+                    }
+                ]
+            }
+
+    class FakeInvoker:
+        async def invoke(self, *, tool_name, arguments, context):
+            invoked.append((tool_name, arguments))
+            return ToolResult(
+                tool_name=tool_name,
+                status="success",
+                data={
+                    "results": [
+                        {
+                            "title": "Latest status",
+                            "snippet": "Fresh web result.",
+                            "url": "https://example.test/latest",
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("agent.router.executors.chat_executor.LLMClient", FakeLLMClient)
+
+    state = ManagerState(
+        request_id="req-1",
+        workflow_run_id="wf-1",
+        original_query="zhang xuefeng status",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        selected_agent="chat",
+        manager_model_runtime={"model_id": "fake-model", "provider": "fake"},
+        selected_rag_space={"id": "rag-1", "name": "Test Standards"},
+    )
+    state.forced_tool_names = ["web.search"]
+    state.available_tools = [
+        ToolSpec(
+            name="web.search",
+            title="Web search",
+            description="Search the web",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        )
+    ]
+    state.tool_invoker = FakeInvoker()
+
+    observation, artifacts = await ChatExecutor().execute(
+        AgentPlanStep(
+            step_id="compose-1",
+            capability_key="chat.response.compose",
+            agent="chat",
+            operation="compose",
+            mode="answer",
+        ),
+        state,
+        _request(query="zhang xuefeng status", ext={"surface": "chat", "force_web_search": True}),
+    )
+
+    assert observation.status == "success"
+    assert captured_tools == ["web_search"]
+    assert invoked == [("web.search", {"query": "zhang xuefeng status", "max_results": 5})]
+    assert state.used_tool_calls == 1
+    assert artifacts[0].content["answer"] == "Web search result based answer."
 
 
 @pytest.mark.asyncio
@@ -335,7 +611,7 @@ async def test_tool_loop_final_answer_receives_tool_context():
         message.get("role") == "tool" and "张雪峰近期有教育咨询相关公开内容" in message.get("content", "")
         for message in final_messages
     )
-    assert "必须返回 JSON" in final_messages[-1]["content"]
+    assert "直接回答用户问题" in final_messages[-1]["content"]
 
 
 @pytest.mark.asyncio

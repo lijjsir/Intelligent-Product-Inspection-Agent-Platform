@@ -10,6 +10,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from agent.llm.client import LLMClient
 from agent.prompts.chat_prompts import PROMPTS as CHAT_CODE_PROMPTS
+from agent.prompts.prompt_builder import PromptBuilder
 from app.services.rag_space_service import _is_rag_metadata_missing
 from agent.subgraphs.quality_chat.graph import (
     _chat_usage_from_state,
@@ -70,6 +71,32 @@ def test_chat_specialized_prompts_keep_json_contract():
         content = prompts[prompt_key]
         assert "JSON" in content
         assert '{"answer": string, "summary": string}' in content
+
+
+def test_chat_rag_prompt_does_not_refuse_on_empty_recall():
+    prompts = {str(item["key"]): str(item["content"]) for item in CHAT_CODE_PROMPTS}
+    content = prompts["chat.rag_answer.system"]
+
+    assert "不是回答开关" in content
+    assert "仍然继续回答用户问题" in content
+    assert "不来自当前知识库" in content
+
+
+def test_prompt_builder_appends_rag_empty_recall_policy_to_runtime_override():
+    system_prompt, user_message, _temperature, _metadata = PromptBuilder.build(
+        agent="chat",
+        sub_route="rag_qa",
+        query="张雪峰老师现状",
+        retrieved_docs=[],
+        prompt_override="旧版提示：如果证据不足，请说明知识库没有提供该信息。",
+        prompt_version_override="db_prompt_v1",
+    )
+
+    assert "旧版提示" in system_prompt
+    assert "仍然要继续回答用户问题" in system_prompt
+    assert "不来自当前知识库" in system_prompt
+    assert "未检索到可用知识库片段" in user_message
+    assert "请继续回答用户问题" in user_message
 
 
 @pytest.mark.asyncio
@@ -751,16 +778,17 @@ async def test_knowledge_skips_retrieval_for_non_quality_qa():
 async def test_knowledge_retrieves_for_plain_rag_qa(monkeypatch):
     captured: dict[str, object] = {}
 
-    class FakeRetriever:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
+    async def fake_resolve_and_search_system_rag(**kwargs):
+        captured.update(kwargs)
+        return {
+            "rag_space_id": kwargs["user_rag_space_id"],
+            "rag_space_ids": [kwargs["user_rag_space_id"]],
+            "rag_space_names": ["My Space"],
+            "latency_ms": 3,
+            "hits": [{"id": "doc-1", "title": "1.txt", "text": "我的名字叫tgg", "score": 0.9}],
+        }
 
-        async def retrieve(self, query, top_k=5, payload_filter=None):
-            captured["query"] = query
-            captured["payload_filter"] = payload_filter
-            return [{"id": "doc-1", "title": "1.txt", "text": "我的名字叫tgg", "score": 0.9}]
-
-    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.resolve_and_search_system_rag", fake_resolve_and_search_system_rag)
 
     state = {
         "intent": "rag_qa",
@@ -775,11 +803,9 @@ async def test_knowledge_retrieves_for_plain_rag_qa(monkeypatch):
     updated = await knowledge(state)
 
     assert captured["query"] == "我叫什么名字"
-    assert captured["payload_filter"] == {
-        "org_id": "org-1",
-        "user_id": "user-1",
-        "rag_space_id": "space-1",
-    }
+    assert captured["org_id"] == "org-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["user_rag_space_id"] == "space-1"
     assert updated["retrieval_metrics"]["skipped"] is False
     assert updated["citations"][0]["quote"] == "我的名字叫tgg"
 
@@ -788,17 +814,17 @@ async def test_knowledge_retrieves_for_plain_rag_qa(monkeypatch):
 async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
     captured: dict[str, object] = {}
 
-    class FakeRetriever:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
+    async def fake_resolve_and_search_system_rag(**kwargs):
+        captured.update(kwargs)
+        return {
+            "rag_space_id": kwargs["user_rag_space_id"],
+            "rag_space_ids": [kwargs["user_rag_space_id"]],
+            "rag_space_names": ["My Space"],
+            "latency_ms": 3,
+            "hits": [],
+        }
 
-        async def retrieve(self, query, top_k=5, payload_filter=None):
-            captured["query"] = query
-            captured["top_k"] = top_k
-            captured["payload_filter"] = payload_filter
-            return []
-
-    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.resolve_and_search_system_rag", fake_resolve_and_search_system_rag)
 
     state = {
         "intent": "quality_qa",
@@ -815,11 +841,9 @@ async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
 
     updated = await knowledge(state)
 
-    assert captured["payload_filter"] == {
-        "org_id": "org-1",
-        "user_id": "user-1",
-        "rag_space_id": "space-1",
-    }
+    assert captured["org_id"] == "org-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["user_rag_space_id"] == "space-1"
     assert updated["retrieval_metrics"]["rag_space_id"] == "space-1"
 
 
@@ -827,15 +851,17 @@ async def test_knowledge_filters_retrieval_by_current_user(monkeypatch):
 async def test_knowledge_includes_scope_node_filters_when_present(monkeypatch):
     captured: dict[str, object] = {}
 
-    class FakeRetriever:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
+    async def fake_resolve_and_search_system_rag(**kwargs):
+        captured.update(kwargs)
+        return {
+            "rag_space_id": kwargs["user_rag_space_id"],
+            "rag_space_ids": [kwargs["user_rag_space_id"]],
+            "rag_space_names": ["My Space"],
+            "latency_ms": 3,
+            "hits": [],
+        }
 
-        async def retrieve(self, query, top_k=5, payload_filter=None):
-            captured["payload_filter"] = payload_filter
-            return []
-
-    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.resolve_and_search_system_rag", fake_resolve_and_search_system_rag)
 
     state = {
         "intent": "quality_qa",
@@ -852,27 +878,27 @@ async def test_knowledge_includes_scope_node_filters_when_present(monkeypatch):
 
     await knowledge(state)
 
-    assert captured["payload_filter"] == {
-        "org_id": "org-1",
-        "user_id": "user-1",
-        "rag_space_id": "space-1",
-        "ancestor_node_ids": ["folder-1", "folder-2"],
-    }
+    assert captured["org_id"] == "org-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["user_rag_space_id"] == "space-1"
+    assert captured["scope_node_ids"] == ["folder-1", "folder-2"]
 
 
 @pytest.mark.asyncio
 async def test_knowledge_accepts_rag_scope_payload(monkeypatch):
     captured: dict[str, object] = {}
 
-    class FakeRetriever:
-        def __init__(self, **kwargs):
-            captured["init"] = kwargs
+    async def fake_resolve_and_search_system_rag(**kwargs):
+        captured.update(kwargs)
+        return {
+            "rag_space_id": kwargs["user_rag_space_id"],
+            "rag_space_ids": [kwargs["user_rag_space_id"]],
+            "rag_space_names": ["My Space"],
+            "latency_ms": 3,
+            "hits": [],
+        }
 
-        async def retrieve(self, query, top_k=5, payload_filter=None):
-            captured["payload_filter"] = payload_filter
-            return []
-
-    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.Retriever", FakeRetriever)
+    monkeypatch.setattr("agent.subgraphs.quality_chat.graph.resolve_and_search_system_rag", fake_resolve_and_search_system_rag)
 
     state = {
         "intent": "quality_qa",
@@ -893,12 +919,10 @@ async def test_knowledge_accepts_rag_scope_payload(monkeypatch):
 
     await knowledge(state)
 
-    assert captured["payload_filter"] == {
-        "org_id": "org-1",
-        "user_id": "user-1",
-        "rag_space_id": "space-1",
-        "ancestor_node_ids": ["folder-1"],
-    }
+    assert captured["org_id"] == "org-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["user_rag_space_id"] == "space-1"
+    assert captured["scope_node_ids"] == ["folder-1"]
 
 
 @pytest.mark.asyncio

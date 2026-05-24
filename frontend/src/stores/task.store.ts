@@ -55,13 +55,14 @@ export const useTaskStore = defineStore("task", () => {
 
   async function fetchTaskEvents(id: string) {
     const { data } = await taskApi.events(id);
-    return data.data.map((item: TaskStreamEvent & { event_type?: string; payload_json?: TaskStreamEvent }) => ({
+    return data.data.map((item: TaskStreamEvent & { event_type?: string; payload_json?: TaskStreamEvent; created_at?: string }) => ({
       ...(item.payload_json || item),
+      id: item.id || item.payload_json?.id,
       type: String(item.type || item.event_type || item.payload_json?.type || "event"),
       status: item.status || item.payload_json?.status,
       stage: item.stage || item.payload_json?.stage,
       message: item.message || item.payload_json?.message,
-      ts: item.ts || item.payload_json?.ts,
+      ts: item.ts || item.payload_json?.ts || item.created_at,
     }));
   }
 

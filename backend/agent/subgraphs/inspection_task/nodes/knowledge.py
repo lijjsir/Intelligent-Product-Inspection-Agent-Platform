@@ -26,6 +26,9 @@ async def run_knowledge(state: InspectionState) -> InspectionState:
     """基于用户 RAG 和系统标准 RAG 做合并检索，并将统一引用挂到运行态。"""
     now = utcnow_iso()
     query = _query_from_state(state)
+    top_k = 5
+    state["rag_retrieval_query"] = query
+    state["rag_top_k"] = top_k
     try:
         async with get_session() as session:
             rag_result = await resolve_and_search_system_rag(
@@ -37,7 +40,7 @@ async def run_knowledge(state: InspectionState) -> InspectionState:
                 product_id=str(state.get("product_id") or "") or None,
                 spec_code=str(state.get("spec_code") or "") or None,
                 user_rag_space_id=str(state.get("selected_rag_space_id") or "") or None,
-                top_k=5,
+                top_k=top_k,
                 scope_node_ids=list(state.get("selected_rag_scope_node_ids") or []),
             )
     except Exception as exc:
@@ -63,6 +66,11 @@ async def run_knowledge(state: InspectionState) -> InspectionState:
             "standard_binding_name": None,
             "merged_rag_source_count": 0,
             "hit_count": 0,
+            "latency_ms": 0,
+            "candidate_count": 0,
+            "rejected_count": 0,
+            "score_threshold": None,
+            "top_k": top_k,
             "top_sources": [],
             "source_graph": "inspection_task",
         }
@@ -99,6 +107,11 @@ async def run_knowledge(state: InspectionState) -> InspectionState:
         "standard_binding_name": rag_result.get("standard_binding_name"),
         "merged_rag_source_count": int(rag_result.get("merged_rag_source_count") or 0),
         "hit_count": int(rag_result.get("hit_count") or 0),
+        "latency_ms": int(float(rag_result.get("latency_ms") or 0)),
+        "candidate_count": int(rag_result.get("candidate_count") or len(docs)),
+        "rejected_count": int(rag_result.get("rejected_count") or 0),
+        "score_threshold": rag_result.get("score_threshold"),
+        "top_k": top_k,
         "top_sources": list(dict.fromkeys(str(item.get("source") or "") for item in docs if str(item.get("source") or "").strip()))[:5],
         "source_graph": "inspection_task",
     }

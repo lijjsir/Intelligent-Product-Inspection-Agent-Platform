@@ -5,7 +5,6 @@ from app.api.v1.deps import get_current_user, get_db
 from app.core.permissions import require_role
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.governance import (
-    FeedbackAssignPayload,
     FeedbackQuery,
     FeedbackResponse,
     FeedbackStatusUpdate,
@@ -125,17 +124,16 @@ async def update_feedback_status(
     return ResponseEnvelope(data=FeedbackResponse.model_validate(item))
 
 
-@router.patch("/{feedback_id}/assign", response_model=ResponseEnvelope[FeedbackResponse])
-async def assign_feedback(
+@router.delete("/{feedback_id}", response_model=ResponseEnvelope[dict])
+async def delete_feedback(
     feedback_id: str,
-    payload: FeedbackAssignPayload,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     require_role("feedback", current.role)
     service = FeedbackService(db, current.org_id)
-    item = await service.assign(feedback_id, payload.assigned_to)
-    return ResponseEnvelope(data=FeedbackResponse.model_validate(item))
+    await service.delete(feedback_id)
+    return ResponseEnvelope(data={"deleted": True, "feedback_id": feedback_id})
 
 
 @router.post("/messages/{target_type}/{target_id}", response_model=ResponseEnvelope[MessageFeedbackResponse])

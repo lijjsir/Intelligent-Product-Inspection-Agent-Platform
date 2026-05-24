@@ -36,7 +36,12 @@ class ChatExecutor:
             return observation(step, status="success", summary=answer), []
 
         if step.capability_key == "chat.response.compose":
-            answer = await self._call_model(state, request, self._compose_prompt(state))
+            answer = await self._call_model(
+                state,
+                request,
+                self._compose_prompt(state),
+                use_tools=True,
+            )
             if answer is None:
                 fallback = self._build_fallback(state)
                 art = artifact("composed_response", "chat", {"answer": fallback, "summary": fallback, "message_type": "assistant_text", "status": "degraded", "surface": state.surface, "blocked": False})
@@ -136,9 +141,8 @@ class ChatExecutor:
         invoker = getattr(state, "tool_invoker", None)
         tool_name_map = tool_name_map or {}
 
-        # Check if web search is forced
-        first_tool_name = tools[0].get("function", {}).get("name") if tools else ""
-        force_web = bool(first_tool_name and tool_name_map.get(first_tool_name, first_tool_name) == "web.search")
+        forced_tool_names = set(getattr(state, "forced_tool_names", []) or [])
+        force_web = "web.search" in forced_tool_names
 
         system_prompt = (
             "你是智能助手。可以使用工具获取信息。"
@@ -358,18 +362,21 @@ class ChatExecutor:
                 ),
             },
         ]
-        # Don't use json_object mode — let model answer naturally with tool results
-        final = await client._post_json(
-            "/chat/completions",
-            {
-                "model": client.model_id,
-                "messages": final_messages,
-                "temperature": 0.3,
-            },
-            observation_name="chat.final",
-            observation_type="generation",
-            observation_metadata={"surface": state.surface},
-        )
+        # Don't use json_object mode — let model answer naturally with tool results.
+        if hasattr(client, "_post_json"):
+            final = await client._post_json(
+                "/chat/completions",
+                {
+                    "model": client.model_id,
+                    "messages": final_messages,
+                    "temperature": 0.3,
+                },
+                observation_name="chat.final",
+                observation_type="generation",
+                observation_metadata={"surface": state.surface},
+            )
+        else:
+            final = await client.chat(final_messages, temperature=0.3, observation_name="chat.final")
         choices = final.get("choices") or []
         if choices:
             content = (choices[0].get("message") or {}).get("content")
@@ -459,8 +466,8 @@ class ChatExecutor:
             parts.append(f"错误：{'; '.join(e.get('message', '') for e in state.errors)}")
         if state.selected_rag_space:
             parts.append(
-                "回答要求：必须优先依据上面的 RAG 证据回答，并在使用证据的句子后标注引用编号，例如 [RAG-1]。"
-                "如果 RAG 证据不足以回答用户问题，请明确说明当前选中的知识库没有提供该信息，不要凭常识补全。"
+                "回答要求：如果上面有 RAG 证据，请优先结合证据回答，并在使用证据的句子后标注引用编号，例如 [RAG-1]。"
+                "如果 RAG 未检索到可用片段或证据不足，仍然要继续回答用户问题；但必须明确说明当前选中的知识库没有提供可引用依据，后续内容基于模型通用能力生成，不要伪造知识库引用。"
             )
         else:
             parts.append("请根据以上所有信息，生成最终的自然语言回复。")
@@ -552,7 +559,7 @@ class ChatExecutor:
         rag_context = ChatExecutor._rag_prompt_context(state)
         if rag_context and state.selected_rag_space:
             if "未检索到可用片段" in rag_context:
-                return "当前选中的知识库没有检索到可用于回答该问题的依据。"
+                return "当前选中的知识库没有检索到可用依据；同时模型回复生成失败，因此暂时无法给出可靠回答。请稍后重试或补充知识库资料。"
             return rag_context[:500]
         if state.observations:
             for obs in reversed(state.observations):

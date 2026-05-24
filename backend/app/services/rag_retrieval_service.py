@@ -4,6 +4,7 @@ from time import perf_counter
 from typing import Any
 
 from agent.rag.retriever import Retriever
+from app.core.config import settings
 from app.repositories.rag_space_repo import RagSpaceRepository
 from infra.cache.memory_cache import _rag_result_cache, _rag_space_cache, stable_cache_key
 
@@ -15,6 +16,18 @@ class RagRetrievalService:
         self._user_id = user_id
         self._spaces = RagSpaceRepository(session)
         self._retriever = Retriever(org_id=org_id)
+
+    @staticmethod
+    def _score_threshold() -> float:
+        try:
+            return max(0.0, min(1.0, float(settings.rag_score_threshold)))
+        except (TypeError, ValueError):
+            return 0.55
+
+    @classmethod
+    def _is_relevant(cls, item: dict[str, Any], *, threshold: float | None = None) -> bool:
+        threshold = cls._score_threshold() if threshold is None else threshold
+        return float(item.get("score") or 0.0) >= threshold
 
     async def search(
         self,
@@ -31,6 +44,9 @@ class RagRetrievalService:
                 "rag_space_name": None,
                 "hits": [],
                 "hit_count": 0,
+                "candidate_count": 0,
+                "rejected_count": 0,
+                "score_threshold": self._score_threshold(),
                 "latency_ms": 0.0,
             }
 
@@ -50,6 +66,9 @@ class RagRetrievalService:
                 "rag_space_name": None,
                 "hits": [],
                 "hit_count": 0,
+                "candidate_count": 0,
+                "rejected_count": 0,
+                "score_threshold": self._score_threshold(),
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             }
 
@@ -70,6 +89,7 @@ class RagRetrievalService:
             sorted(scope_node_ids or []),
             normalized_query,
             max(int(top_k or 0), 1),
+            self._score_threshold(),
             getattr(space, "updated_at", None),
         )
         docs = _rag_result_cache.get(result_cache_key)
@@ -80,6 +100,9 @@ class RagRetrievalService:
                 payload_filter=payload_filter,
             )
             _rag_result_cache.set(result_cache_key, docs, ttl_seconds=120)
+        score_threshold = self._score_threshold()
+        candidates = docs[: max(1, top_k)]
+        filtered = [item for item in candidates if self._is_relevant(item, threshold=score_threshold)]
         selected = [
             {
                 "id": str(item.get("id") or ""),
@@ -93,13 +116,16 @@ class RagRetrievalService:
                 "document_id": item.get("document_id"),
                 "node_id": item.get("node_id"),
             }
-            for item in docs[: max(1, top_k)]
+            for item in filtered
         ]
         return {
             "rag_space_id": str(space.id),
             "rag_space_name": str(space.name),
             "hits": selected,
             "hit_count": len(selected),
+            "candidate_count": len(candidates),
+            "rejected_count": max(0, len(candidates) - len(selected)),
+            "score_threshold": score_threshold,
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
         }
 
@@ -122,6 +148,9 @@ class RagRetrievalService:
                 "rag_space_names": [],
                 "hits": [],
                 "hit_count": 0,
+                "candidate_count": 0,
+                "rejected_count": 0,
+                "score_threshold": self._score_threshold(),
                 "latency_ms": 0.0,
                 "source_count": 0,
             }
@@ -179,6 +208,9 @@ class RagRetrievalService:
             "rag_space_names": rag_space_names,
             "hits": selected,
             "hit_count": len(selected),
+            "candidate_count": sum(int(result.get("candidate_count") or 0) for result in results),
+            "rejected_count": sum(int(result.get("rejected_count") or 0) for result in results),
+            "score_threshold": self._score_threshold(),
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             "source_count": len(hit_space_ids),
         }

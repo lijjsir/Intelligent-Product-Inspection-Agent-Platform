@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
@@ -14,8 +14,11 @@ const loading = ref(true);
 const running = ref(false);
 const deleting = ref(false);
 const deleteDialogVisible = ref(false);
-const taskId = route.params.id as string;
+const taskId = computed(() => String(route.params.id || ""));
+const currentTask = computed(() => taskStore.current?.id === taskId.value ? taskStore.current : null);
 const timeline = ref<TaskStreamEvent[]>([]);
+const seenEventIds = new Set<string>();
+const seenEventFingerprints = new Set<string>();
 let unsubscribe: (() => void) | null = null;
 
 function getStatusType(status: string) {
@@ -30,20 +33,69 @@ function getStatusType(status: string) {
   return map[status] || "info";
 }
 
+function eventKey(event: TaskStreamEvent) {
+  return String(
+    event.id
+      || `${event.type}|${event.stage || ""}|${event.status || ""}|${event.message || ""}|${event.ts || ""}`,
+  );
+}
+
+function eventFingerprint(event: TaskStreamEvent) {
+  return `${event.type}|${event.stage || ""}|${event.status || ""}|${event.message || ""}`;
+}
+
+function eventTime(event: TaskStreamEvent) {
+  const raw = String(event.ts || "");
+  const normalized = raw && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? `${raw}Z` : raw;
+  const value = Date.parse(normalized);
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function rememberEvent(event: TaskStreamEvent) {
+  const id = event.id ? String(event.id) : "";
+  if (id) {
+    if (seenEventIds.has(id)) {
+      return false;
+    }
+    seenEventIds.add(id);
+    return true;
+  }
+  const fingerprint = eventFingerprint(event);
+  if (seenEventFingerprints.has(fingerprint)) {
+    return false;
+  }
+  seenEventFingerprints.add(fingerprint);
+  return true;
+}
+
+function sortTimeline() {
+  timeline.value = [...timeline.value].sort((a, b) => eventTime(a) - eventTime(b));
+}
+
 function pushEvent(event: TaskStreamEvent) {
   if (event.type === "ready" || event.message === "stream_connected") {
     return;
   }
-  timeline.value.unshift(event);
-  if (timeline.value.length > 100) {
-    timeline.value = timeline.value.slice(0, 100);
+  if (!rememberEvent(event)) {
+    return;
   }
-  if (event.status === "done" || event.status === "failed") {
+  timeline.value = [...timeline.value, event];
+  sortTimeline();
+  if (timeline.value.length > 100) {
+    timeline.value = timeline.value.slice(-100);
+  }
+  if (event.status && taskStore.current?.id === taskId.value) {
+    taskStore.current = { ...taskStore.current, status: event.status };
+  }
+  if (event.status === "queued" || event.status === "running") {
+    running.value = true;
+  }
+  if (event.status === "done" || event.status === "failed" || event.status === "reviewing") {
     running.value = false;
-    taskStore.fetchTask(taskId).catch((err) => {
+    taskStore.fetchTask(taskId.value).catch((err) => {
       console.error("Failed to refresh task after completion:", err);
       // Retry once after 2s in case of transient failure
-      setTimeout(() => taskStore.fetchTask(taskId).catch(() => {}), 2000);
+      setTimeout(() => taskStore.fetchTask(taskId.value).catch(() => {}), 2000);
     });
   }
 }
@@ -51,7 +103,7 @@ function pushEvent(event: TaskStreamEvent) {
 async function startPipeline() {
   try {
     running.value = true;
-    const result = await taskStore.runTask(taskId);
+    const result = await taskStore.runTask(taskId.value);
     if (taskStore.current) {
       taskStore.current.status = result.status || "queued";
     }
@@ -61,7 +113,7 @@ async function startPipeline() {
       status: result.status || "queued",
       ts: new Date().toISOString(),
     });
-    await taskStore.fetchTask(taskId);
+    await taskStore.fetchTask(taskId.value);
   } catch (error: any) {
     running.value = false;
     ElMessage.error(error?.response?.data?.message || "启动任务失败");
@@ -79,7 +131,7 @@ async function deleteTask() {
 async function confirmDeleteTask() {
   deleting.value = true;
   try {
-    await taskStore.deleteTask(taskId);
+    await taskStore.deleteTask(taskId.value);
     ElMessage.success("任务已删除");
     deleteDialogVisible.value = false;
     router.push("/app/tasks");
@@ -90,18 +142,37 @@ async function confirmDeleteTask() {
   }
 }
 
-onMounted(async () => {
+async function loadTaskDetail(id: string) {
+  unsubscribe?.();
+  unsubscribe = null;
+  if (taskStore.current?.id !== id) taskStore.current = null;
+  timeline.value = [];
+  seenEventIds.clear();
+  seenEventFingerprints.clear();
+  loading.value = true;
   try {
-    await taskStore.fetchTask(taskId);
-    timeline.value = await taskStore.fetchTaskEvents(taskId);
-    unsubscribe = taskStore.subscribeTaskStream(taskId, pushEvent);
+    await taskStore.fetchTask(id);
+    const events = await taskStore.fetchTaskEvents(id);
+    timeline.value = [];
+    for (const event of events) {
+      if (rememberEvent(event)) {
+        timeline.value.push(event);
+      }
+    }
+    sortTimeline();
+    running.value = taskStore.current?.status === "queued" || taskStore.current?.status === "running";
+    unsubscribe = taskStore.subscribeTaskStream(id, pushEvent);
   } catch (error) {
     console.error(error);
     ElMessage.error("获取任务详情失败");
   } finally {
     loading.value = false;
   }
-});
+}
+
+watch(taskId, (id) => {
+  if (id) void loadTaskDetail(id);
+}, { immediate: true });
 
 onUnmounted(() => {
   unsubscribe?.();
@@ -113,7 +184,7 @@ onUnmounted(() => {
   <div class="flex flex-col gap-5" v-loading="loading">
     <div>
       <el-button @click="goBack" class="back-button">&larr; 返回列表</el-button>
-      <div v-if="taskStore.current" class="title-area">
+      <div v-if="currentTask" class="title-area">
         <h2 class="text-2xl font-bold text-zinc-900">任务：{{ taskStore.current.id }}</h2>
         <el-tag :type="getStatusType(taskStore.current.status)" size="large">
           {{ taskStore.current.status.toUpperCase() }}
@@ -154,7 +225,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="taskStore.current" class="content">
+    <div v-if="currentTask" class="content">
       <el-card shadow="never">
         <template #header>基本信息</template>
         <el-descriptions :column="2">
@@ -183,7 +254,7 @@ onUnmounted(() => {
         <template #header>AI 检测 Agent 实时流</template>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
-          <el-timeline-item v-for="(item, index) in timeline" :key="index" :timestamp="item.ts || ''" placement="top">
+          <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="item.ts || ''" placement="top">
             <div class="event-line">
               <strong>{{ item.type }}</strong>
               <span v-if="item.stage"> / {{ item.stage }}</span>

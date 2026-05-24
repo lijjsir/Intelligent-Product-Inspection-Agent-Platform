@@ -129,10 +129,16 @@ class TokenUsageEvent(BaseModel):
 
 class QualityTraceEvent(BaseModel):
     trace_id: str | None = None
+    observation_id: str | None = None
     trace_url: str | None = None
     workflow_version: str | None = None
     prompt_version: str | None = None
     route_subgraph: str | None = None
+    trust_score: float | None = None
+    hallucination_risk: float | None = None
+    overconfidence: float | None = None
+    has_citation: bool | None = None
+    synced: bool | None = None
 
 
 class RagQueryLog(BaseModel):

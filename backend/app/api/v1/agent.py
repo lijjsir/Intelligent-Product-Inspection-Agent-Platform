@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -8,16 +9,31 @@ from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.permissions import ROLE_EXPERT, ROLE_USER, require_role
+from app.core.permissions import ROLE_USER, require_role
 from app.core.security import safe_decode_token
+from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.repositories.task_repo import TaskRepository
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
 from app.services.task_execution_service import launch_task_execution
-from app.services.stream_service import stream_broker
+from infra.database.session import get_session
 
 
 router = APIRouter()
+
+
+def _task_event_payload(event) -> dict:
+    payload = dict(event.payload_json or {})
+    payload.setdefault("type", event.event_type)
+    if event.stage is not None:
+        payload.setdefault("stage", event.stage)
+    if event.status is not None:
+        payload.setdefault("status", event.status)
+    if event.message is not None:
+        payload.setdefault("message", event.message)
+    payload.setdefault("ts", event.created_at.isoformat() if event.created_at else None)
+    payload["id"] = event.id
+    return payload
 
 
 def get_current_user_for_sse(
@@ -84,8 +100,26 @@ async def stream_task_events(
     async def event_iter() -> AsyncIterator[str]:
         """按 SSE 协议格式输出历史事件和后续实时事件。"""
         yield "event: ready\ndata: {\"message\":\"stream_connected\"}\n\n"
-        async for event in stream_broker.subscribe(task_id):
-            payload = json.dumps(event, ensure_ascii=False)
-            yield f"event: message\ndata: {payload}\n\n"
+        last_event_id: str | None = None
+        idle_ticks = 0
+        while True:
+            async with get_session() as poll_db:
+                repo = TaskExecutionEventRepository(poll_db)
+                events = await repo.list_after(
+                    str(task.org_id),
+                    task_id,
+                    after_id=last_event_id,
+                )
+            if events:
+                idle_ticks = 0
+                for event in events:
+                    last_event_id = event.id
+                    payload = json.dumps(_task_event_payload(event), ensure_ascii=False)
+                    yield f"id: {event.id}\nevent: message\ndata: {payload}\n\n"
+            else:
+                idle_ticks += 1
+                if idle_ticks % 20 == 0:
+                    yield ": heartbeat\n\n"
+            await asyncio.sleep(0.75)
 
     return StreamingResponse(event_iter(), media_type="text/event-stream")

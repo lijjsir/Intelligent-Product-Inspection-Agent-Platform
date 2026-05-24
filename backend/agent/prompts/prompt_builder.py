@@ -19,7 +19,7 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "prompt_key": "chat.rag_answer.system",
         "prompt_version": "chat_rag_qa_v1",
         "temperature": 0.2,
-        "default_content": """你是知识库问答助手。请基于检索到的知识库内容回答用户的问题。不要套用质量检测、任务检测、标准编号、产品型号、缺陷位置、风险等级等质检话术。如果证据不足，请说明知识库中没有足够相关内容，并给出可以继续补充的方向。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
+        "default_content": """你是知识库问答助手。检索到的知识库内容是可引用上下文，不是回答开关。若有知识库证据，请优先结合证据回答，并在使用证据的位置标注引用；不要套用质量检测、任务检测、标准编号、产品型号、缺陷位置、风险等级等质检话术。若知识库未检索到可用内容或证据不足，仍然要继续回答用户问题，但需要说明该部分不来自当前知识库、不要伪造引用。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },
     "file_summary": {
         "prompt_key": "chat.file_summary.system",
@@ -46,6 +46,12 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "default_content": """你是正式质量检测执行智能体。请基于图片、结构化文件、产品信息、检测标准和 RAG 证据完成检测。输出必须包含检测结论、依据、引用、风险等级、结果摘要。证据不足时，应进入人工复核或补充信息状态，不要强行 PASS/FAIL。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },
 }
+
+RAG_QA_EMPTY_RECALL_POLICY = (
+    "强制规则：RAG 检索结果只是可引用上下文，不是回答开关。"
+    "当知识库未检索到可用片段或证据不足时，仍然要继续回答用户问题；"
+    "但必须说明该回答不来自当前知识库，不要伪造知识库引用。"
+)
 
 
 def _format_task_draft(draft: dict[str, Any]) -> str:
@@ -141,6 +147,9 @@ class PromptBuilder:
         temperature = float(prompt_config["temperature"])
         prompt_version = str(prompt_version_override or prompt_config["prompt_version"])
 
+        if sub_route == "rag_qa" and RAG_QA_EMPTY_RECALL_POLICY not in system_prompt:
+            system_prompt = f"{system_prompt}\n\n{RAG_QA_EMPTY_RECALL_POLICY}"
+
         if runtime_prompt_section:
             system_prompt = f"{system_prompt}\n\n{runtime_prompt_section}"
 
@@ -166,6 +175,11 @@ class PromptBuilder:
             ]
             doc_text = "\n\n".join(doc_lines) if doc_lines else "无"
             user_message = f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n检索证据:\n{doc_text}"
+        elif sub_route == "rag_qa" and retrieved_docs is not None:
+            user_message = (
+                f"问题:\n{query}\n\n历史对话:\n{history_text}\n\n"
+                "检索证据:\n未检索到可用知识库片段。请继续回答用户问题；说明该回答不来自当前知识库，不要伪造引用。"
+            )
 
         if task_draft:
             draft_text = _format_task_draft(task_draft)

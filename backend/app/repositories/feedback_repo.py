@@ -39,6 +39,10 @@ class FeedbackRepository:
         await self._session.flush()
         return obj
 
+    async def delete(self, feedback: ResultFeedback) -> None:
+        await self._session.delete(feedback)
+        await self._session.flush()
+
     async def get_actor_message_feedback(
         self,
         *,

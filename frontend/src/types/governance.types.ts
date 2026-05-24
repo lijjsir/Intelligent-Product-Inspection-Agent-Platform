@@ -122,8 +122,8 @@ export interface BillingQuery {
   product_line?: string;
 }
 
-export type FeedbackSeverity = "low" | "medium" | "high" | "critical";
-export type FeedbackStatus = "pending" | "processing" | "resolved" | "closed" | "reopened";
+export type FeedbackSeverity = "info" | "low" | "medium" | "high" | "critical";
+export type FeedbackStatus = "pending" | "processing" | "resolved" | "closed";
 export type FeedbackSourceType = "result" | "chat" | "meeting";
 export type FeedbackCategory = "reliable" | "wrong_verdict" | "weak_evidence" | "bad_bbox" | "unclear_reasoning";
 

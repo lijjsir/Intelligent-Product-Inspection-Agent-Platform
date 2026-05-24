@@ -34,8 +34,11 @@ export function useECharts() {
 
   function ensureChart() {
     if (!chartRef.value) return;
+    const el = chartRef.value;
+    const hasSize = el.clientWidth > 0 && el.clientHeight > 0;
+    if (!hasSize && !chart) return; // no container size yet, defer to ResizeObserver
     if (!chart) {
-      chart = init(chartRef.value);
+      chart = init(el);
     }
     if (pendingOption) {
       chart.setOption(pendingOption, true);

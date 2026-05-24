@@ -7,15 +7,32 @@ const props = defineProps<{
   result: InspectionResult
 }>()
 
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function toBool(value: unknown): boolean | null {
+  if (value === null || value === undefined || value === "") return null
+  if (typeof value === "boolean") return value
+  if (typeof value === "number") return value > 0
+  const raw = String(value).trim().toLowerCase()
+  if (["1", "true", "yes", "y"].includes(raw)) return true
+  if (["0", "false", "no", "n"].includes(raw)) return false
+  return null
+}
+
 const traceInfo = computed(() => {
   const rc = props.result.reasoning_chain as any
+  const trustScoring = rc?.trust_scoring || rc?.trace?.trust_scoring || {}
   return {
     traceId: rc?.trace?.trace_id || rc?.trace_id || "-",
     observationId: rc?.trace?.observation_id || rc?.observation_id || "-",
-    trustScore: rc?.trust_score ?? rc?.trace?.trust_score ?? null,
-    hallucinationRisk: rc?.hallucination_risk ?? rc?.trace?.hallucination_risk ?? null,
-    overconfidence: rc?.overconfidence ?? rc?.trace?.overconfidence ?? null,
-    hasCitation: rc?.has_citation ?? rc?.trace?.has_citation ?? null,
+    trustScore: toNumber(rc?.trace?.trust_score ?? rc?.trust_score ?? trustScoring?.trust_score ?? rc?.quality?.confidence),
+    hallucinationRisk: toNumber(rc?.trace?.hallucination_risk ?? rc?.hallucination_risk ?? trustScoring?.hallucination_risk),
+    overconfidence: toNumber(rc?.trace?.overconfidence ?? rc?.overconfidence ?? trustScoring?.overconfidence),
+    hasCitation: toBool(rc?.trace?.has_citation ?? rc?.has_citation ?? trustScoring?.has_citation),
     traceUrl: rc?.trace?.trace_url || rc?.trace_url || null,
     synced: rc?.trace?.synced ?? rc?.trace?.langfuse_synced ?? null,
   }
@@ -33,16 +50,22 @@ function trustLabel(score: number | null) {
   return (score * 100).toFixed(0) + "%"
 }
 
-function riskLevel(risk: string | null) {
+function riskLevel(risk: string | number | null) {
   if (risk === null) return "na"
+  if (typeof risk === "number") {
+    if (risk >= 0.6) return "danger"
+    if (risk >= 0.3) return "warning"
+    return "success"
+  }
   const r = String(risk).toLowerCase()
   if (r === "high" || r === "critical") return "danger"
   if (r === "medium") return "warning"
   return "success"
 }
 
-function riskLabel(risk: string | null) {
+function riskLabel(risk: string | number | null) {
   if (risk === null) return "-"
+  if (typeof risk === "number") return (risk * 100).toFixed(0) + "%"
   return String(risk)
 }
 

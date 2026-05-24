@@ -60,4 +60,5 @@ class ManagerState(BaseModel):
 
     # Tool system — injected by ManagerDispatcher at execution time
     available_tools: list[Any] = Field(default_factory=list, exclude=True)
+    forced_tool_names: list[str] = Field(default_factory=list, exclude=True)
     tool_invoker: Any = Field(default=None, exclude=True)

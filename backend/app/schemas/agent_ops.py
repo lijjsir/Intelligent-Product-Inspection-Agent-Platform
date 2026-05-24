@@ -200,6 +200,9 @@ class RagAnalysisItem(BaseModel):
     evidence_found: bool = False
     evidence_used: bool = False
     verdict_impacted: bool = False
+    candidate_count: int = 0
+    rejected_count: int = 0
+    score_threshold: Optional[float] = None
     top_sources: list[str] = Field(default_factory=list)
     rule_hits: list[str] = Field(default_factory=list)
     created_at: datetime
@@ -224,6 +227,9 @@ class RagTraceDetailResponse(BaseModel):
     evidence_found: bool = False
     evidence_used: bool = False
     verdict_impacted: bool = False
+    candidate_count: int = 0
+    rejected_count: int = 0
+    score_threshold: Optional[float] = None
     retrieval_config: dict[str, Any] = Field(default_factory=dict)
     retrieved_chunks: list[dict[str, Any]] = Field(default_factory=list)
     used_citations: list[dict[str, Any]] = Field(default_factory=list)

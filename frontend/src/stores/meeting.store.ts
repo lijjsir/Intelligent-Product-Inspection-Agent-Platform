@@ -1,7 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
 import { meetingApi } from "@/api/meeting.api";
-import { useAuthStore } from "@/stores/auth.store";
 import type {
   MeetingMessage,
   MeetingRoom,
@@ -10,7 +9,6 @@ import type {
 } from "@/types/meeting.types";
 
 export const useMeetingStore = defineStore("meeting", () => {
-  const auth = useAuthStore();
 
   // ── State ──────────────────────────────────────────────────────
 

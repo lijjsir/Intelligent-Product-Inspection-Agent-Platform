@@ -167,7 +167,7 @@
           <article class="panel">
             <div class="panel-header-row">
               <span class="panel-title">版本历史</span>
-              <el-button size="small" @click="showCreateVersionDialog = true">创建新版本</el-button>
+              <el-button size="small" @click="openCreateVersion">创建新版本</el-button>
             </div>
             <el-table :data="store.toolVersions" stripe size="small" v-loading="versionsLoading">
               <el-table-column prop="version" label="版本" width="100" />
@@ -295,14 +295,57 @@
         </template>
       </el-dialog>
 
-      <el-dialog v-model="showCreateVersionDialog" title="创建新版本" width="480px" destroy-on-close>
+      <el-dialog v-model="showCreateVersionDialog" title="创建新版本" width="640px" destroy-on-close>
         <el-form :model="versionForm" label-position="top">
-          <el-form-item label="版本号">
+          <el-form-item label="版本号" required>
             <el-input v-model="versionForm.version" placeholder="例如 1.1.0" />
           </el-form-item>
-          <el-form-item label="显示名称">
-            <el-input v-model="versionForm.display_name" />
+          <el-form-item label="显示名称" required>
+            <el-input v-model="versionForm.display_name" placeholder="版本的描述性名称" />
           </el-form-item>
+          <el-divider content-position="left">调用配置</el-divider>
+          <div class="grid-two">
+            <el-form-item label="Endpoint">
+              <el-input v-model="versionForm.endpoint" placeholder="https://api.example.com/endpoint" />
+            </el-form-item>
+            <el-form-item label="HTTP Method">
+              <el-select v-model="versionForm.method">
+                <el-option label="GET" value="GET" />
+                <el-option label="POST" value="POST" />
+                <el-option label="PUT" value="PUT" />
+                <el-option label="DELETE" value="DELETE" />
+                <el-option label="PATCH" value="PATCH" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <el-form-item label="Handler Path (native/RAG 工具)">
+            <el-input v-model="versionForm.handler_path" placeholder="agent.tools.custom.my_func" />
+          </el-form-item>
+          <div class="grid-three">
+            <el-form-item label="认证方式">
+              <el-select v-model="versionForm.auth_type">
+                <el-option label="无" value="none" />
+                <el-option label="Bearer Token" value="bearer" />
+                <el-option label="API Key" value="api_key" />
+                <el-option label="Basic Auth" value="basic" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="超时 (ms)">
+              <el-input-number v-model="versionForm.timeout_ms" :min="1000" :max="120000" :step="1000" />
+            </el-form-item>
+            <el-form-item label="限流 (rpm)">
+              <el-input-number v-model="versionForm.rate_limit_rpm" :min="1" :max="10000" />
+            </el-form-item>
+          </div>
+          <el-divider content-position="left">Schema 定义</el-divider>
+          <div class="grid-two">
+            <el-form-item label="Parameters Schema (JSON)">
+              <el-input v-model="versionForm.parameters_schema" type="textarea" :rows="8" class="mono-input" />
+            </el-form-item>
+            <el-form-item label="Returns Schema (JSON)">
+              <el-input v-model="versionForm.returns_schema" type="textarea" :rows="8" class="mono-input" />
+            </el-form-item>
+          </div>
         </el-form>
         <template #footer>
           <el-button @click="showCreateVersionDialog = false">取消</el-button>
@@ -372,6 +415,14 @@ const showAddBindingDialog = ref(false);
 const versionForm = reactive({
   version: "",
   display_name: "",
+  endpoint: "",
+  method: "POST" as string,
+  handler_path: "",
+  parameters_schema: "{\n  \"type\": \"object\",\n  \"properties\": {}\n}" as string,
+  returns_schema: "{\n  \"type\": \"object\",\n  \"properties\": {}\n}" as string,
+  auth_type: "none" as string,
+  timeout_ms: 30000,
+  rate_limit_rpm: 60,
 });
 
 const bindingForm = reactive<BindingCreateRequest>({
@@ -523,12 +574,40 @@ async function loadBindings() {
   }
 }
 
+function openCreateVersion() {
+  const t = tool.value;
+  versionForm.version = "";
+  versionForm.display_name = "";
+  versionForm.endpoint = (t as any)?.endpoint || "";
+  versionForm.method = (t as any)?.method || "POST";
+  versionForm.handler_path = (t as any)?.handler_path || "";
+  versionForm.parameters_schema = JSON.stringify((t as any)?.parameters_schema || { type: "object", properties: {} }, null, 2);
+  versionForm.returns_schema = JSON.stringify((t as any)?.returns_schema || { type: "object", properties: {} }, null, 2);
+  versionForm.auth_type = (t as any)?.auth_type || "none";
+  versionForm.timeout_ms = (t as any)?.timeout_ms || 30000;
+  versionForm.rate_limit_rpm = (t as any)?.rate_limit_rpm || 60;
+  showCreateVersionDialog.value = true;
+}
+
 async function doCreateVersion() {
   if (!tool.value || !versionForm.version.trim()) return;
+  let paramsSchema: Record<string, unknown> | undefined;
+  let returnsSchema: Record<string, unknown> | undefined;
+  try { paramsSchema = JSON.parse(versionForm.parameters_schema); } catch { /* keep raw */ }
+  try { returnsSchema = JSON.parse(versionForm.returns_schema); } catch { /* keep raw */ }
+
   await store.createVersion(tool.value.id, {
     version: versionForm.version.trim(),
     display_name: versionForm.display_name || versionForm.version.trim(),
     description: tool.value.description,
+    endpoint: versionForm.endpoint || undefined,
+    method: versionForm.method || undefined,
+    handler_path: versionForm.handler_path || undefined,
+    parameters_schema: paramsSchema,
+    returns_schema: returnsSchema,
+    auth_type: versionForm.auth_type,
+    timeout_ms: versionForm.timeout_ms,
+    rate_limit_rpm: versionForm.rate_limit_rpm,
   });
   showCreateVersionDialog.value = false;
   ElMessage.success("版本已创建");
@@ -682,6 +761,17 @@ onMounted(loadTool);
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.grid-three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.mono-input :deep(textarea) {
+  font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+  font-size: 12px;
 }
 
 .panel {

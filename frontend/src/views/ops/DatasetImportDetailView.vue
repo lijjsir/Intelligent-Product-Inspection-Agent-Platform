@@ -273,7 +273,7 @@ async function downloadExportArtifact() {
     const link = document.createElement("a");
     link.href = url;
     const header = response.headers.get("content-disposition") || "";
-    const matched = header.match(/filename=\"?([^\";]+)\"?/i);
+    const matched = header.match(/filename="?([^";]+)"?/i);
     link.download = matched?.[1] || resolveDownloadFilename();
     document.body.appendChild(link);
     link.click();
