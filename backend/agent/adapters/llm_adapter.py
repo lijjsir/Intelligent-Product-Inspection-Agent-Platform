@@ -6,14 +6,14 @@ from typing import Any, Callable
 
 import httpx
 
-from app.core.config import settings
 from agent.adapters.base import BaseAgentAdapter
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class LLMAgentAdapter(BaseAgentAdapter):
-    """Calls LLM API directly with agent system_prompt + room context."""
+    """Calls an LLM API directly with the agent prompt and room context."""
 
     async def invoke(
         self,
@@ -23,9 +23,10 @@ class LLMAgentAdapter(BaseAgentAdapter):
         query: str,
         context_messages: list[dict[str, str]],
         emit: Callable,
+        runtime_model: dict[str, Any] | None = None,
     ) -> str:
         llm_messages = self._build_messages(agent_def, context_messages, query)
-        return await self._stream_llm(llm_messages, emit)
+        return await self._stream_llm(llm_messages, emit, runtime_model=runtime_model)
 
     async def should_participate(
         self,
@@ -66,26 +67,30 @@ class LLMAgentAdapter(BaseAgentAdapter):
         agent_def: Any,
         recent_messages: list[dict[str, str]],
         emit: Callable,
+        runtime_model: dict[str, Any] | None = None,
     ) -> str:
         system_prompt = getattr(agent_def, "system_prompt", "")
         name = getattr(agent_def, "name", "AI 助手")
         llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "system", "content": (
-                f"你叫{name}，你正在自主参与一个会议讨论。"
-                f"请根据最近的对话，给出有价值的发言。"
-            )},
+            {
+                "role": "system",
+                "content": (
+                    f"你叫{name}，你正在自主参与一个多人会议室讨论。"
+                    "请基于最近对话，给出简洁、有价值的补充。"
+                ),
+            },
         ]
         for msg in recent_messages:
             role = "assistant" if msg.get("role") in ("agent", "agent_streaming") else "user"
-            llm_messages.append({
-                "role": role,
-                "content": f"{msg.get('username', '')}: {msg.get('content', '')}",
-            })
+            llm_messages.append(
+                {
+                    "role": role,
+                    "content": f"{msg.get('username', '')}: {msg.get('content', '')}",
+                }
+            )
 
-        return await self._stream_llm(llm_messages, emit)
-
-    # ── private ────────────────────────────────────────────────────
+        return await self._stream_llm(llm_messages, emit, runtime_model=runtime_model)
 
     def _build_messages(
         self,
@@ -97,17 +102,22 @@ class LLMAgentAdapter(BaseAgentAdapter):
         name = getattr(agent_def, "name", "AI 助手")
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
-            {"role": "system", "content": (
-                f"你叫{name}，你正在参与一个多人会议室。"
-                f"有人在消息中 @了你，请直接回答这个人的问题。"
-            )},
+            {
+                "role": "system",
+                "content": (
+                    f"你叫{name}，你正在参与一个多人会议室。"
+                    "有人在消息里 @了你，请直接回答对方的问题。"
+                ),
+            },
         ]
         for msg in context_messages:
             role = "assistant" if msg.get("role") in ("agent", "agent_streaming") else "user"
-            messages.append({
-                "role": role,
-                "content": f"{msg.get('username', '')}: {msg.get('content', '')}",
-            })
+            messages.append(
+                {
+                    "role": role,
+                    "content": f"{msg.get('username', '')}: {msg.get('content', '')}",
+                }
+            )
         messages.append({"role": "user", "content": query})
         return messages
 
@@ -115,13 +125,20 @@ class LLMAgentAdapter(BaseAgentAdapter):
         self,
         messages: list[dict[str, str]],
         emit: Callable,
+        *,
+        runtime_model: dict[str, Any] | None = None,
     ) -> str:
-        api_key = settings.deepseek_api_key
-        base_url = settings.deepseek_base_url.rstrip("/")
-        model = settings.deepseek_model_id
+        if runtime_model:
+            api_key = str(runtime_model.get("api_key") or settings.deepseek_api_key)
+            base_url = str(runtime_model.get("base_url") or settings.deepseek_base_url).rstrip("/")
+            model = str(runtime_model.get("model_id") or settings.deepseek_model_id)
+        else:
+            api_key = settings.deepseek_api_key
+            base_url = settings.deepseek_base_url.rstrip("/")
+            model = settings.deepseek_model_id
 
         if not api_key:
-            raise RuntimeError("DEEPSEEK_API_KEY not configured")
+            raise RuntimeError("No meeting runtime model API key is configured")
 
         full_content = ""
         async with httpx.AsyncClient(timeout=120) as client:
@@ -150,16 +167,11 @@ class LLMAgentAdapter(BaseAgentAdapter):
                     try:
                         data = json.loads(data_str)
                         delta = data["choices"][0].get("delta", {}).get("content", "")
-                        if delta:
-                            full_content += delta
-                            await emit({
-                                "event": "message_delta",
-                                "delta": delta,
-                            })
-                    except (json.JSONDecodeError, KeyError, IndexError):
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                         continue
+                    if not delta:
+                        continue
+                    full_content += delta
+                    await emit({"event": "message_delta", "delta": delta})
 
-        if not full_content:
-            full_content = "抱歉，我暂时无法回答这个问题。"
-
-        return full_content
+        return full_content or "抱歉，我暂时无法回答这个问题。"

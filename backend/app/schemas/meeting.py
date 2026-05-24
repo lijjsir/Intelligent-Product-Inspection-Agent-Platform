@@ -51,6 +51,12 @@ class MeetingMessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MeetingDiscussionStartResponse(BaseModel):
+    started: bool
+    participant_count: int = 0
+    topic_message: MeetingMessageResponse | None = None
+
+
 # ── Agent schemas ────────────────────────────────────────────────
 
 class MeetingAddAgentRequest(BaseModel):

@@ -39,11 +39,20 @@ def test_role_specific_resources_do_not_bleed_between_workspaces():
     require_role("tool", ROLE_APP_DEVELOPER)
     require_role("analytics", ROLE_ADMIN)
     require_role("analytics", ROLE_PLATFORM_OPERATOR)
+    require_role("auth_log", ROLE_ADMIN)
+    require_role("infrastructure", ROLE_ADMIN)
+    require_role("memory_governance", ROLE_ADMIN)
     require_role("meeting", ROLE_USER)
     require_role("meeting", ROLE_EXPERT)
 
     with pytest.raises(ForbiddenError):
         require_role("tool", ROLE_PLATFORM_OPERATOR)
+    with pytest.raises(ForbiddenError):
+        require_role("memory_governance", ROLE_PLATFORM_OPERATOR)
+    with pytest.raises(ForbiddenError):
+        require_role("auth_log", ROLE_PLATFORM_OPERATOR)
+    with pytest.raises(ForbiddenError):
+        require_role("infrastructure", ROLE_PLATFORM_OPERATOR)
     with pytest.raises(ForbiddenError):
         require_role("analytics", ROLE_APP_DEVELOPER)
     with pytest.raises(ForbiddenError):

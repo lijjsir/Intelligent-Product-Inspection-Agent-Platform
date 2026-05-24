@@ -94,6 +94,34 @@ export interface ChatResultCard {
   rag_summary?: ChatRagSummary | null;
 }
 
+export interface ChatInspectionTaskContext {
+  task_id?: string | null;
+  product_id?: string | null;
+  spec_code?: string | null;
+  status?: string | null;
+  priority?: number | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+  verdict?: string | null;
+  overall_score?: number | null;
+  risk_level?: string | null;
+  risk_score?: number | null;
+  prompt_version?: string | null;
+  model_key?: string | null;
+  trace_id?: string | null;
+  failed_rules?: string[];
+  root_cause?: string | null;
+}
+
+export interface ChatInspectionContext {
+  scope: "user_recent_tasks" | "org_recent_tasks" | "unavailable" | string;
+  summary_window: number;
+  stats: Record<string, number>;
+  recent_tasks: ChatInspectionTaskContext[];
+  recent_failures: ChatInspectionTaskContext[];
+  latest_task?: ChatInspectionTaskContext | null;
+}
+
 export interface ChatArtifact {
   artifact_id: string;
   type: string;

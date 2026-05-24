@@ -7,7 +7,6 @@ import {
   type FormRules,
   type UploadFile,
   type UploadFiles,
-  type UploadUserFile,
 } from "element-plus";
 
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
@@ -30,7 +29,7 @@ const deletingTaskId = ref("");
 const deleteDialogVisible = ref(false);
 const pendingDeleteTaskId = ref("");
 const formRef = ref<FormInstance>();
-const uploadFiles = ref<UploadUserFile[]>([]);
+const uploadFiles = ref<UploadFile[]>([]);
 const createForm = ref({
   product_id: "",
   spec_code: "",
@@ -164,13 +163,6 @@ function handleOpenCreateFromDraft() {
   }
 }
 
-function onSpecChange(specCode: string) {
-  const spec = activeSpecOptions.value.find((s) => s.spec_code === specCode);
-  if (spec) {
-    createForm.value.product_id = spec.product_family || spec.product_id || "";
-  }
-}
-
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -221,9 +213,9 @@ async function handleSubmitCreate() {
       }
     }
     const urlsFromText = parsedUrls.map((p) => p.url);
-    const uploadFilesRaw = uploadFiles.value
+    const uploadFilesRaw: File[] = uploadFiles.value
       .map((item) => item.raw)
-      .filter((item): item is File => Boolean(item));
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
     const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
     const allUrls = [...urlsFromText, ...dataUrls];
 

@@ -1,86 +1,111 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useQualityStore } from "@/stores/quality.store";
+
 import ChatTrustTrendChart from "@/components/business/analytics/ChatTrustTrendChart.vue";
 import ThumbsDownTrendChart from "@/components/business/analytics/ThumbsDownTrendChart.vue";
 import ThumbsUpTrendChart from "@/components/business/analytics/ThumbsUpTrendChart.vue";
+import { useQualityStore } from "@/stores/quality.store";
 
 const store = useQualityStore();
 const report = computed(() => store.report);
 const loading = computed(() => store.loading);
 const traceMeta = computed(() => store.traceMeta);
 
+function formatRate(value: number | null | undefined) {
+  return `${(((value ?? 0) as number) * 100).toFixed(1)}%`;
+}
+
+function feedbackSubtext(share: number, coverage: number, total: number) {
+  if (!total) return "暂无有效反馈";
+  return `占反馈 ${formatRate(share)} · 覆盖率 ${formatRate(coverage)}`;
+}
+
 const summaryCards = computed(() => {
   const r = report.value;
   if (!r) return [];
   return [
     {
-      label: "聊天评分数",
-      value: r.chat_score_count,
-      sub: "已有信任评估的记录数",
-      tone: r.chat_score_count > 0 ? "success" : "default",
+      label: "已评分消息",
+      value: r.chat_message_count ? `${r.chat_score_count} / ${r.chat_message_count}` : `${r.chat_score_count}`,
+      sub: `可信度链路覆盖率 ${formatRate(r.chat_scored_rate)}`,
+      tone: r.chat_scored_rate >= 0.6 ? "success" : r.chat_score_count > 0 ? "warning" : "default",
     },
     {
       label: "平均可信度",
-      value: `${(r.chat_avg_trust_score * 100).toFixed(1)}%`,
-      sub: "LLM 评审对回复的综合信任评分",
+      value: formatRate(r.chat_avg_trust_score),
+      sub: "来自可信度评分链路的综合得分",
       tone: r.chat_avg_trust_score >= 0.8 ? "success" : r.chat_avg_trust_score >= 0.6 ? "warning" : "danger",
     },
     {
-      label: "幻觉率",
-      value: `${(r.chat_hallucination_rate * 100).toFixed(1)}%`,
-      sub: "幻觉风险 ≥ 0.6 的聊天占比",
+      label: "聊天幻觉率",
+      value: formatRate(r.chat_hallucination_rate),
+      sub: "可信度评分中判为高幻觉风险的占比",
       tone: r.chat_hallucination_rate <= 0.05 ? "success" : "danger",
     },
     {
       label: "过度自信率",
-      value: `${(r.chat_overconfidence_rate * 100).toFixed(1)}%`,
-      sub: "过度自信 ≥ 0.6 的聊天占比",
+      value: formatRate(r.chat_overconfidence_rate),
+      sub: "可信度评分中判为高自信风险的占比",
       tone: r.chat_overconfidence_rate <= 0.1 ? "success" : "warning",
     },
     {
       label: "引用率",
-      value: `${(r.chat_citation_rate * 100).toFixed(1)}%`,
-      sub: "回复中包含引用依据的比例",
+      value: formatRate(r.chat_citation_rate),
+      sub: "已评分回复中包含引用依据的占比",
       tone: r.chat_citation_rate >= 0.8 ? "success" : r.chat_citation_rate >= 0.5 ? "warning" : "danger",
     },
     {
-      label: "点赞率",
-      value: `${(r.thumbs_up_rate * 100).toFixed(1)}%`,
-      sub: "用户明确标记满意的比例",
-      tone: r.thumbs_up_rate >= 0.8 ? "success" : r.thumbs_up_rate >= 0.5 ? "warning" : "danger",
+      label: "点赞数",
+      value: `${r.thumbs_up_count}`,
+      sub: feedbackSubtext(r.thumbs_up_share, r.thumbs_up_rate, r.feedback_total_count),
+      tone: r.feedback_total_count > 0 && r.thumbs_up_share >= 0.5 ? "success" : "default",
     },
     {
-      label: "点踩率",
-      value: `${(r.thumbs_down_rate * 100).toFixed(1)}%`,
-      sub: "用户明确标记不满意的比例",
-      tone: r.thumbs_down_rate <= 0.05 ? "success" : "danger",
+      label: "点踩数",
+      value: `${r.thumbs_down_count}`,
+      sub: feedbackSubtext(r.thumbs_down_share, r.thumbs_down_rate, r.feedback_total_count),
+      tone: r.feedback_total_count > 0 && r.thumbs_down_share >= 0.3 ? "danger" : "default",
     },
   ];
 });
 
-function metaAlertTitle() {
-  const meta = traceMeta.value;
-  if (!meta) return "";
-  if (meta.langfuse_status === "ok")
-    return `Langfuse 已连接 · 远端 ${meta.item_count || 0} 条 Trace · 本地 ${report.value?.chat_score_count || 0} 条评分`;
-  if (meta.langfuse_status === "error")
-    return `Langfuse 连接异常：${meta.langfuse_error || "无法读取远端"}`;
-  if (meta.langfuse_status === "disabled")
-    return "Langfuse 未启用，仅展示本地聊天评分数据";
-  return "正在确认 Langfuse 状态";
-}
-
-function metaType() {
-  if (traceMeta.value?.langfuse_status === "ok") return "success";
-  if (traceMeta.value?.langfuse_status === "error") return "warning";
-  return "info";
-}
-
-// Model trust comparison sorted by trust score
 const modelComparison = computed(() => {
   const models = report.value?.model_metrics ?? [];
   return [...models].sort((a, b) => (b.pass_rate || 0) - (a.pass_rate || 0));
+});
+
+const trustTrendEmptyDescription = computed(() => {
+  const r = report.value;
+  if (!r) return "暂无趋势数据";
+  if (r.chat_message_count > 0 && r.chat_score_count === 0) {
+    return `暂无趋势数据，当前 ${r.chat_message_count} 条聊天消息尚未写入可信度评分`;
+  }
+  if (r.chat_message_count > r.chat_score_count) {
+    return `仅有 ${r.chat_score_count} / ${r.chat_message_count} 条聊天消息进入了可信度评分链路`;
+  }
+  return "暂无趋势数据";
+});
+
+const metaTitle = computed(() => {
+  const meta = traceMeta.value;
+  const r = report.value;
+  if (!meta) return "";
+  if (meta.langfuse_status === "ok") {
+    return `Langfuse 已连接 · 远端 ${meta.item_count || 0} 条 Trace · 已评分消息 ${r?.chat_score_count ?? 0}/${r?.chat_message_count ?? 0}`;
+  }
+  if (meta.langfuse_status === "error") {
+    return `Langfuse 连接异常：${meta.langfuse_error || "无法读取远端 Trace"}`;
+  }
+  if (meta.langfuse_status === "disabled") {
+    return "Langfuse 未启用，当前仅展示本地质量数据";
+  }
+  return "正在确认 Langfuse 连接状态";
+});
+
+const metaType = computed(() => {
+  if (traceMeta.value?.langfuse_status === "ok") return "success";
+  if (traceMeta.value?.langfuse_status === "error") return "warning";
+  return "info";
 });
 </script>
 
@@ -88,16 +113,15 @@ const modelComparison = computed(() => {
   <div class="qr-panel" v-loading="loading">
     <el-alert
       v-if="traceMeta"
-      :title="metaAlertTitle()"
-      :type="metaType()"
+      :title="metaTitle"
+      :type="metaType"
       :closable="false"
       show-icon
     />
 
-    <!-- 聊天质量评估卡片 -->
     <section>
       <h3 class="section-title">聊天质量评估</h3>
-      <p class="section-desc">以下指标来自 AI 对话的信任评审，独立于检测任务的业务指标。</p>
+      <p class="section-desc">把可信度评分、反馈覆盖率和模型表现分开看，避免把“反馈占比”误读成“全量结果占比”。</p>
       <div class="card-grid">
         <div v-for="card in summaryCards" :key="card.label" class="qr-card" :class="card.tone">
           <span class="qr-card-label">{{ card.label }}</span>
@@ -107,24 +131,23 @@ const modelComparison = computed(() => {
       </div>
     </section>
 
-    <!-- 趋势图表区 -->
     <section class="trends-section">
       <el-card shadow="never" class="chart-card">
         <template #header>
           <div class="card-head">
             <strong>聊天可信度趋势</strong>
-            <span>LLM 评审对回复的综合信任评分变化</span>
+            <span>仅统计已经写入可信度评分链路的聊天回复</span>
           </div>
         </template>
         <ChatTrustTrendChart v-if="(report?.chat_trust_trend || []).length" :points="report?.chat_trust_trend || []" />
-        <el-empty v-else description="暂无趋势数据" :image-size="48" />
+        <el-empty v-else :description="trustTrendEmptyDescription" :image-size="48" />
       </el-card>
 
       <el-card shadow="never" class="chart-card">
         <template #header>
           <div class="card-head">
-            <strong>模型可信度对比</strong>
-            <span>按模型维度统计通过率和幻觉表现</span>
+            <strong>模型质量对比</strong>
+            <span>按模型观察通过率和幻觉率，不再重复展示成本</span>
           </div>
         </template>
         <div v-if="modelComparison.length" class="model-list">
@@ -149,30 +172,29 @@ const modelComparison = computed(() => {
       <el-card shadow="never" class="chart-card">
         <template #header>
           <div class="card-head">
-            <strong>点赞率趋势</strong>
-            <span>用户标记满意的比例变化</span>
+            <strong>点赞覆盖率趋势</strong>
+            <span>按天统计被用户明确点赞的结果覆盖率</span>
           </div>
         </template>
         <ThumbsUpTrendChart v-if="(report?.thumbs_up_trend || []).length" :points="report?.thumbs_up_trend || []" />
-        <el-empty v-else description="暂无点赞数据" :image-size="48" />
+        <el-empty v-else description="暂无点赞趋势数据" :image-size="48" />
       </el-card>
 
       <el-card shadow="never" class="chart-card">
         <template #header>
           <div class="card-head">
-            <strong>点踩率趋势</strong>
-            <span>用户标记不满意的比例变化</span>
+            <strong>点踩覆盖率趋势</strong>
+            <span>按天统计被用户明确点踩的结果覆盖率</span>
           </div>
         </template>
         <ThumbsDownTrendChart v-if="(report?.thumbs_down_trend || []).length" :points="report?.thumbs_down_trend || []" />
-        <el-empty v-else description="暂无点踩数据" :image-size="48" />
+        <el-empty v-else description="暂无点踩趋势数据" :image-size="48" />
       </el-card>
     </section>
 
-    <!-- 空状态 -->
     <el-empty
       v-if="!report?.chat_score_count && !report?.total_results"
-      description="暂无质量评估数据。开启信任评分或执行质检后，质量报告将展示 AI 回复质量分析。"
+      description="暂无质量评估数据。执行质检或产生聊天可信度评分后，这里会展示结果。"
     />
   </div>
 </template>
@@ -188,16 +210,18 @@ const modelComparison = computed(() => {
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
+
 .qr-card {
   padding: 18px;
   border-radius: 14px;
   background: #fff;
-  border: 1px solid rgba(16,36,61,.08);
-  box-shadow: 0 4px 12px rgba(15,23,42,.03);
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+
 .qr-card-label { font-size: 13px; color: #71717a; }
 .qr-card-value { font-size: 30px; font-weight: 800; color: #18181b; }
 .qr-card-sub { font-size: 12px; color: #a1a1aa; margin-top: 2px; }
@@ -206,7 +230,7 @@ const modelComparison = computed(() => {
 .qr-card.danger .qr-card-value { color: #dc2626; }
 
 .trends-section { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.chart-card { border-radius: 20px; border: 1px solid rgba(16,36,61,.08); box-shadow: 0 18px 40px rgba(15,23,42,.05); }
+.chart-card { border-radius: 20px; border: 1px solid rgba(16, 36, 61, 0.08); box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05); }
 .card-head strong { display: block; color: #172033; font-size: 18px; }
 .card-head span { display: block; margin-top: 4px; color: #64748b; font-size: 13px; }
 

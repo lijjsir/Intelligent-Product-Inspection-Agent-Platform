@@ -29,6 +29,7 @@ from app.repositories.task_repo import TaskRepository
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.tool_repo import ToolRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
+from app.services.chat_trust_scoring_service import build_pending_trust_score, trust_payload_from_score
 from app.services.task_service import TaskService
 from app.services.chat_message_lifecycle_service import ChatMessageLifecycleService
 from infra.database.session import get_session
@@ -203,6 +204,13 @@ class QualityAgentOrchestratorService:
             materialized_task=materialized_task,
             materialization_error=materialization_error,
         )
+        trust_scoring_request = self._build_trust_scoring_request(request, output, response_payload)
+        if trust_scoring_request:
+            pending_score = build_pending_trust_score(**trust_scoring_request)
+            response_payload = {
+                **response_payload,
+                "trust_scoring": trust_payload_from_score(pending_score),
+            }
 
         is_legacy_stream = True  # Graph handler (response_writer) already streams deltas
         if callable(emit) and not is_legacy_stream:
@@ -294,7 +302,12 @@ class QualityAgentOrchestratorService:
                     materialized_task_id=None if not materialized else str(materialized["task_id"]),
                 )
 
+            if not materialized:
+                await self._persist_chat_token_usage(session, request=request, output=output)
+
             await session.commit()
+
+        self._enqueue_trust_scoring(trust_scoring_request)
 
         if output.route_decision:
             await self._record_route_decision_log(request, output)
@@ -441,6 +454,149 @@ class QualityAgentOrchestratorService:
             return []
         return [item for item in list(payload.get("artifacts") or []) if isinstance(item, dict)]
 
+    @staticmethod
+    def _build_trust_scoring_request(
+        request: NormalizedRequest,
+        output: AgentOutput,
+        response_payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not settings.trust_scoring_enabled:
+            return None
+        message_type = str(response_payload.get("message_type") or output.message_type or "")
+        if message_type in {"task_action", "task_result", "action_blocked"}:
+            return None
+        answer = str(response_payload.get("answer") or output.answer or "").strip()
+        if not answer:
+            return None
+
+        llm_meta = dict(response_payload.get("llm_meta") or {})
+        langfuse_meta = dict(llm_meta.get("langfuse") or {})
+        trace_id = (
+            str(langfuse_meta.get("trace_id") or "").strip()
+            or str(response_payload.get("trace_id") or "").strip()
+            or (
+                str(output.persistable_output.quality_trace.trace_id or "").strip()
+                if output.persistable_output and output.persistable_output.quality_trace
+                else ""
+            )
+            or str(request.workflow_run_id or request.request_id or "").strip()
+        )
+        observation_id = str(langfuse_meta.get("observation_id") or "").strip() or None
+        model_key = (
+            str(llm_meta.get("model") or "").strip()
+            or QualityAgentOrchestratorService._model_key_from_route_trace(response_payload)
+            or QualityAgentOrchestratorService._model_key_from_usage(output)
+        )
+        return {
+            "org_id": str(request.org_id),
+            "session_id": str(request.session_id or ""),
+            "user_id": str(request.user_id or "") or None,
+            "assistant_message_id": str(request.assistant_message_id or ""),
+            "input_text": str(request.query or ""),
+            "output_text": answer,
+            "citations": list(response_payload.get("citations") or output.citations or []),
+            "trace_id": trace_id or None,
+            "observation_id": observation_id,
+            "model_key": model_key or None,
+        }
+
+    @staticmethod
+    def _model_key_from_route_trace(response_payload: dict[str, Any]) -> str | None:
+        route_trace = response_payload.get("route_trace")
+        if not isinstance(route_trace, dict):
+            return None
+        manager_model = route_trace.get("manager_model")
+        if not isinstance(manager_model, dict):
+            return None
+        return str(manager_model.get("model_id") or "").strip() or None
+
+    @staticmethod
+    def _model_key_from_usage(output: AgentOutput) -> str | None:
+        if not output.persistable_output:
+            return None
+        for item in reversed(list(output.persistable_output.token_usage or [])):
+            model_key = str(item.model_key or "").strip()
+            if model_key:
+                return model_key
+        return None
+
+    @staticmethod
+    def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
+        if not payload:
+            return
+        try:
+            from worker.tasks.chat_trust_scoring_task import score_chat_message
+
+            score_chat_message.delay(payload)
+        except Exception as exc:
+            logger.warning(
+                "trust scoring enqueue failed assistant_message_id=%s trace_id=%s: %s",
+                payload.get("assistant_message_id"),
+                payload.get("trace_id"),
+                exc,
+                exc_info=True,
+            )
+
+    async def _persist_chat_token_usage(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+    ) -> None:
+        usage_items = list(output.persistable_output.token_usage or [])
+        if not usage_items:
+            return
+
+        token_repo = TokenLedgerRepository(session)
+        user_summary_repo = UserTokenUsageSummaryRepository(session)
+        for index, item in enumerate(usage_items):
+            prompt_tokens = int(item.prompt_tokens or 0)
+            completion_tokens = int(item.completion_tokens or 0)
+            total_tokens = int(item.total_tokens or (prompt_tokens + completion_tokens))
+            if total_tokens <= 0:
+                continue
+            ledger_key = self._idempotency_key(
+                request,
+                "chat-token",
+                index,
+                item.model_key,
+                item.trace_id or "",
+            )
+            existing_ledger = None
+            get_ledger = getattr(token_repo, "get_by_idempotency_key", None)
+            if callable(get_ledger):
+                existing_ledger = await get_ledger(ledger_key)
+            create_ledger = getattr(token_repo, "create_once", token_repo.create)
+            ledger = existing_ledger or await create_ledger(
+                {
+                    "idempotency_key": ledger_key,
+                    "id": str(uuid7()),
+                    "org_id": request.org_id,
+                    "user_id": str(request.user_id or "") or None,
+                    "task_id": None,
+                    "result_id": None,
+                    "model_config_id": None,
+                    "model_key": item.model_key,
+                    "product_line": str(request.workspace or "chat"),
+                    "trace_id": item.trace_id,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "cost_amount": float(item.cost_amount or 0.0),
+                }
+            )
+            if request.user_id and existing_ledger is None:
+                await user_summary_repo.increment(
+                    org_id=request.org_id,
+                    user_id=str(request.user_id),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost_amount=float(item.cost_amount or 0.0),
+                    ledger_created_at=ledger.created_at,
+                )
+
     async def _record_route_decision_log(
         self,
         request: NormalizedRequest,
@@ -523,7 +679,7 @@ class QualityAgentOrchestratorService:
 
         from agent.response.response_builder import ResponseBuilder
 
-        return ResponseBuilder.build(
+        payload = ResponseBuilder.build(
             agent=agent,
             sub_route=sub_route,
             answer=output.answer,
@@ -549,6 +705,11 @@ class QualityAgentOrchestratorService:
             capabilities_used=list(base_payload.get("capabilities_used") or []),
             satisfied=base_payload.get("satisfied"),
         )
+        if base_payload.get("llm_meta"):
+            payload["llm_meta"] = base_payload.get("llm_meta")
+        if base_payload.get("llm_usage"):
+            payload["llm_usage"] = base_payload.get("llm_usage")
+        return payload
 
     async def _materialize_chat_output(
         self,

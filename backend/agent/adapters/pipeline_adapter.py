@@ -19,6 +19,7 @@ class PipelineAgentAdapter(BaseAgentAdapter):
         query: str,
         context_messages: list[dict[str, str]],
         emit: Callable,
+        runtime_model: dict[str, Any] | None = None,
     ) -> str:
         raise NotImplementedError("PipelineAgentAdapter is not yet implemented")
 
@@ -39,5 +40,6 @@ class PipelineAgentAdapter(BaseAgentAdapter):
         agent_def: Any,
         recent_messages: list[dict[str, str]],
         emit: Callable,
+        runtime_model: dict[str, Any] | None = None,
     ) -> str:
         raise NotImplementedError("PipelineAgentAdapter is not yet implemented")

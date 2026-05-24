@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ChatDotRound, Delete, Key, Plus, Promotion, RefreshRight } from "@element-plus/icons-vue";
+import { ChatDotRound, Delete, Key, Plus, Promotion, RefreshRight, MagicStick } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
@@ -17,6 +17,8 @@ const joinCode = ref("");
 const joinPassword = ref("");
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
+const inputRef = ref<HTMLTextAreaElement | null>(null);
+const mentionableAgents = computed(() => store.agents.filter((agent) => agent.role === "participant"));
 
 function formatTime(value?: string | null) {
   if (!value) return "";
@@ -106,9 +108,48 @@ async function joinRoom() {
 async function sendMessage() {
   if (!store.canSend) return;
   const content = input.value.trim();
+  if (!content) return;
   await store.sendMessage(content);
   input.value = "";
   await scrollToBottom();
+}
+
+async function requestAiReply() {
+  if (!store.activeRoom) return;
+  try {
+    await store.requestAiReply();
+    await scrollToBottom();
+  } catch (error) {
+    ElMessage.error("AI 助手回应失败，请稍后重试。");
+    console.error(error);
+  }
+}
+
+async function summarizeMeeting() {
+  if (!store.activeRoom) return;
+  try {
+    await store.summarizeMeeting();
+    await scrollToBottom();
+    ElMessage.success("会议总结已生成。");
+  } catch (error) {
+    ElMessage.error("会议总结失败，请稍后重试。");
+    console.error(error);
+  }
+}
+
+async function insertAgentMention(agentName: string) {
+  const mention = `@${agentName} `;
+  const el = inputRef.value;
+  if (!el) {
+    input.value = `${input.value}${mention}`;
+    return;
+  }
+  const start = el.selectionStart ?? input.value.length;
+  const end = el.selectionEnd ?? input.value.length;
+  input.value = `${input.value.slice(0, start)}${mention}${input.value.slice(end)}`;
+  await nextTick();
+  el.focus();
+  el.setSelectionRange(start + mention.length, start + mention.length);
 }
 
 async function handleDeleteRoom() {
@@ -142,9 +183,6 @@ watch(() => store.activeRoomId, async (newId) => {
 
 onMounted(async () => {
   await store.loadRooms(true);
-  if (store.activeRoomId) {
-    store.connectStream();
-  }
 });
 
 onBeforeUnmount(() => {
@@ -158,7 +196,7 @@ onBeforeUnmount(() => {
       <section class="sidebar-section">
         <p class="section-kicker">MEETING HUB</p>
         <h1>进入会议</h1>
-        <p class="section-copy">创建会议邀请成员，开启 AI 助手协作。</p>
+        <p class="section-copy">创建会议邀请成员，按需点名 Agent 或请 AI 协作。</p>
 
         <div class="form-stack">
           <label>
@@ -263,6 +301,26 @@ onBeforeUnmount(() => {
             </div>
           </el-popover>
 
+          <!-- AI actions are explicit: normal chat should not make the assistant interrupt every message. -->
+          <el-button
+            v-if="store.activeRoom"
+            type="primary"
+            plain
+            :icon="MagicStick"
+            :loading="store.aiThinking"
+            size="small"
+            @click="requestAiReply"
+          >
+            请 AI 回应
+          </el-button>
+          <el-button
+            v-if="store.activeRoom"
+            :loading="store.summarizing"
+            size="small"
+            @click="summarizeMeeting"
+          >
+            总结会议
+          </el-button>
           <div v-if="store.activeRoom" class="room-code">
             <span>会议码</span>
             <strong>{{ store.activeRoom.access_code }}</strong>
@@ -271,7 +329,7 @@ onBeforeUnmount(() => {
             删除
           </el-button>
         </div>
-        <p v-if="!store.activeRoom" class="room-hint">创建或加入会议后开始聊天 · 开启 AI 助手获取智能回复</p>
+        <p v-if="!store.activeRoom" class="room-hint">创建或加入会议后开始聊天 · @Agent 点名或手动请 AI 回应</p>
       </header>
 
       <div ref="messageListRef" v-loading="store.loadingMessages" class="message-list">
@@ -284,7 +342,15 @@ onBeforeUnmount(() => {
         <div v-else-if="store.messages.length === 0 && !store.loadingMessages" class="empty-state">
           <ChatDotRound />
           <h3>会议内容将在这里实时同步</h3>
-          <p>输入会议消息后回车发送，开启 AI 助手后自动获得智能回复。</p>
+          <p>输入会议消息后回车发送；需要 AI 时可以点名 Agent、请 AI 回应或总结会议。</p>
+        </div>
+
+        <!-- AI thinking indicator -->
+        <div v-if="store.aiThinking" class="ai-thinking-bar">
+          <span class="ai-thinking-dots">
+            <span class="dot" /><span class="dot" /><span class="dot" />
+          </span>
+          AI 助手思考中...
         </div>
 
         <article
@@ -317,12 +383,24 @@ onBeforeUnmount(() => {
       </div>
 
       <footer class="composer">
+        <div v-if="mentionableAgents.length" class="mention-bar">
+          <button
+            v-for="agent in mentionableAgents"
+            :key="agent.id"
+            type="button"
+            class="mention-chip"
+            @click="insertAgentMention(agent.agent_name)"
+          >
+            @{{ agent.agent_name }}
+          </button>
+        </div>
         <textarea
+          ref="inputRef"
           v-model="input"
           class="composer-textarea"
           :disabled="!store.activeRoom"
           rows="1"
-          placeholder="输入消息后回车发送"
+          placeholder="输入消息后回车发送，@Agent 点名；点击多个 Agent 可多选"
           @keydown="onInputKeydown"
         />
         <el-button type="primary" :icon="Promotion" :loading="store.sending" :disabled="!store.canSend" @click="sendMessage">
@@ -674,6 +752,41 @@ label span {
   background: #eff6ff;
 }
 
+.ai-thinking-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 13px;
+}
+
+.ai-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #2563eb;
+  animation: blink 1.4s infinite both;
+}
+
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40% { opacity: 1; }
+}
+
 /* Composer */
 .composer {
   display: grid;
@@ -683,6 +796,30 @@ label span {
   padding: 12px;
   border-top: 1px solid #e4e4e7;
   background: #fff;
+}
+
+.mention-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mention-chip {
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #374151;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.mention-chip:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: #eff6ff;
 }
 
 .composer-textarea {

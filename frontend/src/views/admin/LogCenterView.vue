@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
 import { logCenterApi } from "@/api/log-center.api";
-import { ROLE_ADMIN, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
+import { ROLE_ADMIN } from "@/constants/roles";
 import { useAuthStore } from "@/stores/auth.store";
 import type { AuditLog, AuthLog } from "@/types/governance.types";
 
@@ -37,7 +37,7 @@ const auditFilters = reactive({
 
 const roles = computed(() => [...auth.roles, auth.role].filter(Boolean));
 const canViewAuditLogs = computed(() => roles.value.includes(ROLE_ADMIN));
-const canViewAuthLogs = computed(() => roles.value.includes(ROLE_ADMIN) || roles.value.includes(ROLE_PLATFORM_OPERATOR));
+const canViewAuthLogs = computed(() => roles.value.includes(ROLE_ADMIN));
 
 onMounted(async () => {
   if (canViewAuthLogs.value) {

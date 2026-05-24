@@ -114,6 +114,26 @@ class FeedbackRepository:
         result = await self._session.execute(stmt.order_by(ResultFeedback.created_at.asc()))
         return list(result.scalars().all())
 
+    async def list_message_by_range(
+        self,
+        org_id: str | None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        *,
+        target_type: str | None = None,
+    ) -> list[MessageFeedback]:
+        stmt = select(MessageFeedback)
+        if org_id:
+            stmt = stmt.where(MessageFeedback.org_id == org_id)
+        if target_type:
+            stmt = stmt.where(MessageFeedback.target_type == target_type)
+        if start_date:
+            stmt = stmt.where(MessageFeedback.created_at >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            stmt = stmt.where(MessageFeedback.created_at <= datetime.combine(end_date, datetime.max.time()))
+        result = await self._session.execute(stmt.order_by(MessageFeedback.created_at.asc()))
+        return list(result.scalars().all())
+
     async def category_distribution(self, org_id: str, start_date: date | None = None, end_date: date | None = None) -> dict[str, int]:
         items = await self.list_by_range(org_id, start_date, end_date)
         counter = Counter((item.category or "uncategorized") for item in items)

@@ -50,6 +50,10 @@ export const meetingApi = {
     return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/ai-chat`);
   },
 
+  summarize(roomId: string) {
+    return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/summary`);
+  },
+
   // ── Agent management ───────────────────────────────────────────
 
   listAgents(roomId: string) {

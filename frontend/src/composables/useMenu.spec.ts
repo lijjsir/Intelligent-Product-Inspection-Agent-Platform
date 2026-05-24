@@ -48,6 +48,23 @@ describe("useMenu", () => {
     expect(flattenTitles()).not.toContain("Prompt 管理");
   });
 
+  it("keeps governance and infrastructure tools out of platform operator navigation", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_PLATFORM_OPERATOR;
+    auth.roles = [ROLE_PLATFORM_OPERATOR];
+
+    const { menu } = useMenu();
+    const groupTitles = menu.value.flatMap((item) => ("items" in item ? [item.title] : []));
+    const titles = flattenTitles();
+
+    expect(groupTitles).not.toContain("治理工具");
+    expect(groupTitles).not.toContain("运维诊断");
+    expect(groupTitles).toContain("只读巡检");
+    expect(titles).not.toContain("记忆治理");
+    expect(titles).not.toContain("存储/基础设施");
+    expect(titles).not.toContain("日志中心");
+  });
+
   it("groups tool management entries under app developer navigation", () => {
     const auth = useAuthStore();
     auth.role = ROLE_APP_DEVELOPER;

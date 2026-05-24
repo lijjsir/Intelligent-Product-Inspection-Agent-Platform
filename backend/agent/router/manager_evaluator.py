@@ -83,6 +83,7 @@ class ManagerEvaluator:
                 base_url=runtime.get("base_url"),
                 model_id=runtime.get("model_id"),
                 provider=runtime.get("provider"),
+                trace_id=state.trace_id or state.workflow_run_id or state.request_id,
                 org_id=state.org_id,
                 input_price_per_million=runtime.get("input_price_per_million"),
                 output_price_per_million=runtime.get("output_price_per_million"),
@@ -118,7 +119,15 @@ class ManagerEvaluator:
                 ],
                 temperature=0.0,
                 observation_name="manager.evaluate",
-                observation_metadata={"surface": state.surface, "manager_model": runtime.get("model_id")},
+                observation_metadata={
+                    "surface": state.surface,
+                    "source_type": "chat",
+                    "manager_model": runtime.get("model_id"),
+                    "org_id": state.org_id,
+                    "session_id": state.session_id,
+                    "assistant_message_id": state.assistant_message_id,
+                    "workflow_run_id": state.workflow_run_id,
+                },
             )
             data = self._extract_json(response)
             if not data:

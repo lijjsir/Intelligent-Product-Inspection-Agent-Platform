@@ -26,6 +26,7 @@ from app.schemas.chat import (
 from agent.contracts import NormalizedAttachment
 from app.schemas.stream import StreamSessionResponse
 from app.schemas.user import CurrentUser
+from app.services.chat_context_service import ChatContextService
 from app.services.quality_agent_orchestrator_service import QualityAgentOrchestratorService
 from app.services.rag_space_service import RagSpaceService
 from app.services.stream_service import chat_stream_broker
@@ -120,6 +121,16 @@ class ChatService:
                 limit=limit,
             )
             return [ChatMessageResponse.model_validate(item) for item in rows]
+
+    async def get_inspection_context(self) -> dict[str, Any]:
+        async with get_session() as session:
+            context_service = ChatContextService(
+                session,
+                org_id=self._org_id,
+                user_id=self._user_id,
+                role=self._current.role,
+            )
+            return await context_service.build_inspection_context(recent_limit=6, summary_window=12)
 
     async def delete_session(self, session_id: str) -> bool:
         async with get_session() as session:
@@ -439,11 +450,29 @@ class ChatService:
                 hist_rows = await hist_repo.list_for_session(
                     org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
                 )
+                context_service = ChatContextService(
+                    hist_session,
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    role=self._current.role,
+                )
                 ext_payload["history_messages"] = [
                     {"role": m.role, "content": m.content}
                     for m in hist_rows
                     if int(m.seq_no or 0) < current_user_seq_no
                 ][-10:]
+                try:
+                    ext_payload["inspection_context"] = await context_service.build_inspection_context()
+                except Exception:
+                    logger.debug("chat inspection context build skipped", exc_info=True)
+                    ext_payload["inspection_context"] = {
+                        "scope": "unavailable",
+                        "summary_window": 0,
+                        "stats": {},
+                        "recent_tasks": [],
+                        "recent_failures": [],
+                        "latest_task": None,
+                    }
             await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),
