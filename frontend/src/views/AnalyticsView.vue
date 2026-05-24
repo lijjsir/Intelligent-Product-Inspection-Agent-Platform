@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import AnalyticsOverviewPanel from "@/components/business/analytics/AnalyticsOverviewPanel.vue";
@@ -99,7 +99,7 @@ function markOverviewLoaded() {
       <div>
         <p class="eyebrow">PIAP Intelligence Desk</p>
         <h2>分析中心</h2>
-        <p class="subtitle">这里统一查看通过率、幻觉率、风险演化和质量追踪；模型 Token 与成本统一在模型用量查看。</p>
+        <p class="subtitle">这里统一查看通过率、幻觉率、业务风险演化与质量追踪，并明确区分业务判定、引用证据和文本可信度口径。</p>
         <div class="scope-row">
           <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
           <el-tag v-if="dateRange" type="info" effect="plain">
@@ -108,9 +108,9 @@ function markOverviewLoaded() {
         </div>
       </div>
       <div class="hero-actions">
-        <el-button @click="quickRange(7)">7 日</el-button>
-        <el-button @click="quickRange(30)">30 日</el-button>
-        <el-button @click="quickRange(90)">90 日</el-button>
+        <el-button @click="quickRange(7)">7 天</el-button>
+        <el-button @click="quickRange(30)">30 天</el-button>
+        <el-button @click="quickRange(90)">90 天</el-button>
       </div>
     </section>
 
@@ -120,7 +120,7 @@ function markOverviewLoaded() {
       <div class="filter-row">
         <div>
           <div class="filter-title">时间范围</div>
-          <div class="filter-meta">所有图表跟随同一时间窗口，不再和任务页使用不同口径。</div>
+          <div class="filter-meta">所有图表共用同一时间窗口，避免不同页面口径不一致。</div>
         </div>
         <el-date-picker
           v-model="dateRange"

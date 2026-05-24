@@ -76,6 +76,25 @@ class QualityReportService(TenantAwareService):
         return True
 
     @staticmethod
+    def _is_chat_origin_result_feedback(item) -> bool:
+        category = str(getattr(item, "category", "") or "").strip().lower()
+        comment = str(getattr(item, "comment", "") or "").strip().lower()
+        source_type = str(getattr(item, "source_type", "") or "").strip().lower()
+        if category in {"chat_helpful", "chat_not_helpful"}:
+            return True
+        if comment.startswith("from_chat_message:"):
+            return True
+        return source_type == "chat"
+
+    @classmethod
+    def _normalize_result_feedbacks_for_quality(cls, feedbacks) -> list:
+        return [
+            item
+            for item in list(feedbacks or [])
+            if not cls._is_chat_origin_result_feedback(item)
+        ]
+
+    @staticmethod
     def _safe_float(value) -> float | None:
         if value is None:
             return None
@@ -681,6 +700,7 @@ class QualityReportService(TenantAwareService):
         elif source == "chat":
             stabilities = []
             result_feedbacks = []
+        result_feedbacks = self._normalize_result_feedbacks_for_quality(result_feedbacks)
 
         local_traces = await self._list_traces_from_mysql(
             limit=None,
@@ -1058,7 +1078,7 @@ class QualityReportService(TenantAwareService):
                 ledger_by_trace[str(item.trace_id)].append(item)
 
         feedbacks_by_result: dict[str, list] = defaultdict(list)
-        for item in feedbacks:
+        for item in QualityReportService._normalize_result_feedbacks_for_quality(feedbacks):
             feedbacks_by_result[item.result_id].append(item)
 
         feedbacks_by_message: dict[str, list] = defaultdict(list)
