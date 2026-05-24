@@ -91,7 +91,7 @@
           <li>创建后可继续做版本和绑定配置</li>
         </ul>
         <div class="entry-actions">
-          <el-button type="primary" plain @click="$router.push('/ops/tools/catalog')">前往工具库</el-button>
+          <el-button type="primary" @click="createDialog.visible = true">新增工具</el-button>
         </div>
       </article>
     </section>
@@ -209,19 +209,101 @@
         </div>
       </template>
     </section>
+
+    <el-dialog v-model="createDialog.visible" title="新增工具" width="620px" destroy-on-close>
+      <el-form :model="createDialog.form" label-position="top">
+        <el-form-item label="Tool Key">
+          <el-input v-model="createDialog.form.tool_key" placeholder="例如：rag.custom_search" />
+        </el-form-item>
+        <el-form-item label="显示名称">
+          <el-input v-model="createDialog.form.display_name" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="createDialog.form.description" type="textarea" :rows="3" />
+        </el-form-item>
+        <div class="grid-two">
+          <el-form-item label="分类">
+            <el-select v-model="createDialog.form.category">
+              <el-option label="RAG" value="RAG" />
+              <el-option label="文件解析" value="file_parse" />
+              <el-option label="检测计算" value="inspection_calc" />
+              <el-option label="报告生成" value="report_gen" />
+              <el-option label="HTTP API" value="http_api" />
+              <el-option label="MCP" value="MCP" />
+              <el-option label="数据库" value="database" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="工具类型">
+            <el-select v-model="createDialog.form.tool_type">
+              <el-option label="原生" value="native" />
+              <el-option label="HTTP" value="http" />
+              <el-option label="RAG" value="rag" />
+              <el-option label="MCP" value="mcp" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="createDialog.visible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="doCreateTool">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { http } from "@/api/http";
 import { useToolsStore } from "@/stores/tools.store";
+import type { ToolCategory, ToolDefinition } from "@/types/tools.types";
 
 type ActivePanel = "builtin" | "openapi" | "mcp";
 type ToolCandidate = Record<string, unknown>;
 
 const store = useToolsStore();
+const creating = ref(false);
+
+const createDialog = reactive({
+  visible: false,
+  form: {
+    tool_key: "",
+    display_name: "",
+    description: "",
+    category: "RAG" as ToolCategory,
+    tool_type: "native" as ToolDefinition["tool_type"],
+  },
+});
+
+async function doCreateTool() {
+  if (!createDialog.form.tool_key.trim() || !createDialog.form.display_name.trim()) {
+    ElMessage.warning("请填写 Tool Key 和显示名称");
+    return;
+  }
+  creating.value = true;
+  try {
+    await store.createTool({
+      tool_key: createDialog.form.tool_key.trim(),
+      display_name: createDialog.form.display_name.trim(),
+      description: createDialog.form.description,
+      category: createDialog.form.category,
+      tool_type: createDialog.form.tool_type,
+    });
+    ElMessage.success("工具已创建");
+    createDialog.visible = false;
+    createDialog.form = {
+      tool_key: "",
+      display_name: "",
+      description: "",
+      category: "RAG",
+      tool_type: "native",
+    };
+  } catch {
+    ElMessage.error("创建失败");
+  } finally {
+    creating.value = false;
+  }
+}
 
 const activePanel = ref<ActivePanel>("builtin");
 
@@ -556,6 +638,12 @@ function resetMcp() {
     border-left: none;
     border-top: 1px solid oklch(0.91 0.005 260);
   }
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
 @media (max-width: 768px) {

@@ -86,15 +86,11 @@ class FeedbackService(TenantAwareService):
         await self._session.flush()
         return fb
 
-    async def assign(self, feedback_id: str, assigned_to: str):
+    async def delete(self, feedback_id: str) -> None:
         fb = await self._repo.get_by_id(feedback_id)
         if not fb or fb.org_id != self._org_id:
             raise NotFoundError("feedback not found")
-        fb.assigned_to = assigned_to
-        if fb.status == "pending":
-            fb.status = "processing"
-        await self._session.flush()
-        return fb
+        await self._repo.delete(fb)
 
     async def summary(self):
         return await self._repo.summary(self._org_id)

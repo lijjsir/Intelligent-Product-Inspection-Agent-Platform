@@ -16,6 +16,8 @@ class InspectionState(TypedDict, total=False):
     selected_rag_space_name: str | None
     selected_rag_space: dict[str, Any] | None
     selected_rag_scope_node_ids: list[str]
+    rag_retrieval_query: str
+    rag_top_k: int
     structured_record: dict[str, Any]
     model_id: str
     model_config_id: str | None

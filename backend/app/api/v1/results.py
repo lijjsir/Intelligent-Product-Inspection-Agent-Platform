@@ -46,7 +46,7 @@ async def get_by_task(
 ):
     require_role("result", current.role)
     service = ResultService(db, current.org_id)
-    result = await service.get_by_task(task_id)
+    result = await service.get_response_by_task(task_id)
     if not result:
         raise NotFoundError("Result not found for task")
 

@@ -18,6 +18,7 @@ class FeedbackCategory(str, Enum):
 
 
 class FeedbackSeverity(str, Enum):
+    info = "info"
     low = "low"
     medium = "medium"
     high = "high"
@@ -29,7 +30,6 @@ class FeedbackStatus(str, Enum):
     processing = "processing"
     resolved = "resolved"
     closed = "closed"
-    reopened = "reopened"
 
 
 class FeedbackSourceType(str, Enum):
@@ -300,10 +300,6 @@ class FeedbackSummaryResponse(BaseModel):
 class FeedbackStatusUpdate(BaseModel):
     status: FeedbackStatus
     resolution: Optional[str] = None
-
-
-class FeedbackAssignPayload(BaseModel):
-    assigned_to: str
 
 
 class MessageFeedbackQuery(BaseModel):

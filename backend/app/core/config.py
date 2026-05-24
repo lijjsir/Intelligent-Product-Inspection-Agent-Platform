@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     dataset_storage_bucket: str = "dataset-assets"
     dataset_export_bucket: str = "dataset-exports"
     model_artifact_bucket: str = "algo-model-artifacts"
+    report_export_bucket: str = "report-exports"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
     neo4j_enabled: bool = False
@@ -76,6 +77,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
+    rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
     enable_legacy_agent_fallback: bool = False

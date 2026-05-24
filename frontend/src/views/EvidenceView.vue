@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { ElMessage } from "element-plus"
 import { useResultStore } from "@/stores/result.store"
@@ -18,8 +18,10 @@ const resultStore = useResultStore()
 const taskStore = useTaskStore()
 
 const loading = ref(true)
-const taskId = route.params.task_id as string
 const activeTab = ref("summary")
+const currentTaskId = computed(() => String(route.params.task_id || ""))
+const currentResult = computed(() => resultStore.current?.task_id === currentTaskId.value ? resultStore.current : null)
+const currentTask = computed(() => taskStore.current?.id === currentTaskId.value ? taskStore.current : null)
 
 function resolveTaskImageUrl(value?: string | null) {
   const url = String(value || "").trim()
@@ -32,11 +34,11 @@ function resolveTaskImageUrl(value?: string | null) {
 }
 
 const taskImages = computed(() => {
-  return (taskStore.current?.image_urls || []).map((item) => resolveTaskImageUrl(item)).filter(Boolean)
+  return (currentTask.value?.image_urls || []).map((item) => resolveTaskImageUrl(item)).filter(Boolean)
 })
 
 const sampleLabels = computed(() => {
-  const items = taskStore.current?.image_items
+  const items = currentTask.value?.image_items
   if (!items || !items.length) return {} as Record<number, string>
   const map: Record<number, string> = {}
   for (const item of items) {
@@ -52,7 +54,10 @@ function sampleLabel(imageIndex?: number | null): string {
   return sampleLabels.value[imageIndex] || ""
 }
 
-onMounted(async () => {
+async function loadEvidence(taskId: string) {
+  loading.value = true
+  if (resultStore.current?.task_id !== taskId) resultStore.current = null
+  if (taskStore.current?.id !== taskId) taskStore.current = null
   try {
     await Promise.all([
       resultStore.fetchByTask(taskId),
@@ -71,7 +76,11 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+watch(currentTaskId, (taskId) => {
+  if (taskId) void loadEvidence(taskId)
+}, { immediate: true })
 
 function goBack() {
   router.back()
@@ -80,10 +89,10 @@ function goBack() {
 
 <template>
   <div class="evidence-page" v-loading="loading">
-    <div v-if="resultStore.current" class="evidence-container">
+    <div v-if="currentResult" class="evidence-container">
       <EvidenceHeader
-        :result="resultStore.current"
-        :task="taskStore.current"
+        :result="currentResult"
+        :task="currentTask"
         @back="goBack"
       />
 
@@ -93,32 +102,32 @@ function goBack() {
         @tab-change="(tab: string) => router.replace({ query: { tab } })"
       >
         <el-tab-pane label="结论摘要" name="summary">
-          <EvidenceSummaryTab :result="resultStore.current" />
+          <EvidenceSummaryTab :result="currentResult" />
         </el-tab-pane>
 
         <el-tab-pane label="图像证据" name="image">
           <EvidenceImageTab
             :images="taskImages"
-            :defects="resultStore.current.defects"
+            :defects="currentResult.defects"
             :loading="loading"
             :sample-label="sampleLabel"
           />
         </el-tab-pane>
 
         <el-tab-pane label="引用证据" name="citation">
-          <EvidenceCitationTab :citations="resultStore.current.citations" />
+          <EvidenceCitationTab :citations="currentResult.citations" />
         </el-tab-pane>
 
         <el-tab-pane label="推理链路" name="reasoning">
-          <EvidenceReasoningTab :reasoning-chain="resultStore.current.reasoning_chain" />
+          <EvidenceReasoningTab :reasoning-chain="currentResult.reasoning_chain" />
         </el-tab-pane>
 
         <el-tab-pane label="Trace" name="trace">
-          <EvidenceTraceTab :result="resultStore.current" />
+          <EvidenceTraceTab :result="currentResult" />
         </el-tab-pane>
 
         <el-tab-pane label="复核反馈" name="feedback">
-          <EvidenceFeedbackTab :result="resultStore.current" />
+          <EvidenceFeedbackTab :result="currentResult" />
         </el-tab-pane>
       </el-tabs>
     </div>

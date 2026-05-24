@@ -1345,6 +1345,49 @@ async def test_inspection_graph_stops_after_runtime_error(monkeypatch):
     assert calls == ["planner", "vision"]
 
 
+@pytest.mark.asyncio
+async def test_inspection_graph_event_stream_follows_stage_execution_order(monkeypatch):
+    async def fake_node(stage: str):
+        async def _run(state):
+            state.setdefault("timeline", []).append({"stage": stage, "message": f"{stage} done"})
+            return state
+
+        return _run
+
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", await fake_node("planner"))
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", await fake_node("vision"))
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", await fake_node("knowledge"))
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", await fake_node("reasoning"))
+    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", await fake_node("finalizer"))
+
+    events: list[dict] = []
+
+    async def on_event(event):
+        events.append(event)
+
+    state = await InspectionGraph().run({"timeline": [], "runtime_errors": []}, on_event=on_event)
+
+    assert [item["stage"] for item in state["timeline"]] == [
+        "planner",
+        "vision",
+        "knowledge",
+        "reasoning",
+        "finalizer",
+    ]
+    assert [(item["type"], item["stage"]) for item in events] == [
+        ("stage_start", "planner"),
+        ("stage_end", "planner"),
+        ("stage_start", "vision"),
+        ("stage_end", "vision"),
+        ("stage_start", "knowledge"),
+        ("stage_end", "knowledge"),
+        ("stage_start", "reasoning"),
+        ("stage_end", "reasoning"),
+        ("stage_start", "finalizer"),
+        ("stage_end", "finalizer"),
+    ]
+
+
 def test_langfuse_trace_to_item_parses_inspection_trace():
     trace = {
         "id": "trace-1",

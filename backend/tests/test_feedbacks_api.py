@@ -35,6 +35,9 @@ class FakeFeedbackService:
         ]
         return []
 
+    async def delete(self, feedback_id: str):
+        assert feedback_id == "019e53f1-1927-762b-a0ff-53350cd9bb3a"
+
 
 def _build_client(monkeypatch) -> TestClient:
     app = FastAPI()
@@ -65,6 +68,18 @@ def test_list_message_feedbacks_route_is_not_shadowed_by_feedback_detail(monkeyp
 
     assert response.status_code == 200
     assert response.json()["data"] == []
+
+
+def test_delete_feedback_route_returns_deleted_payload(monkeypatch):
+    client = _build_client(monkeypatch)
+
+    response = client.delete("/api/v1/feedbacks/019e53f1-1927-762b-a0ff-53350cd9bb3a")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "deleted": True,
+        "feedback_id": "019e53f1-1927-762b-a0ff-53350cd9bb3a",
+    }
 
 
 class FakeScalarResult:
