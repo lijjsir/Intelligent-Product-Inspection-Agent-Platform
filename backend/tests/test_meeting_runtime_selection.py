@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.services import meeting_agent_service as meeting_agent_mod
@@ -88,16 +89,19 @@ def make_gateway():
             reserve: bool = True,
         ):
             candidate_models = list(models or [])
+            excluded = set(excluded_runtime_ids or set())
             self.calls.append(
                 {
                     "models": candidate_models,
+                    "excluded_runtime_ids": excluded,
                     "model_types": model_types,
                     "reserve": reserve,
                 }
             )
-            if not candidate_models:
+            available = [item for item in candidate_models if str(item.get("id") or "") not in excluded]
+            if not available:
                 return None
-            selected = candidate_models[0]
+            selected = available[0]
             return {
                 "runtime_key": str(selected.get("id") or ""),
                 "model_config_id": str(selected.get("id") or ""),
@@ -105,6 +109,7 @@ def make_gateway():
                 "base_url": str(selected.get("endpoint") or ""),
                 "api_key": selected.get("api_key"),
                 "provider": str(selected.get("provider") or "custom"),
+                "display_name": str(selected.get("display_name") or selected.get("model_key") or ""),
             }
 
     return FakeGateway()
@@ -295,3 +300,152 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
     assert requests[1]["json"]["temperature"] == 0.2
     assert summary_message.agent_id == "meeting_summary"
     assert any(event["event"] == "message_created" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_meeting_ai_fails_over_to_next_runtime_model_on_auth_error(monkeypatch):
+    runtime_models = make_runtime_models()
+    gateway = make_gateway()
+    requests: list[dict] = []
+    events: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, content: str = "doubao ai reply"):
+            self.status_code = status_code
+            self._content = content
+            self.request = httpx.Request("POST", "https://example.test/chat/completions")
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    "upstream auth failed",
+                    request=self.request,
+                    response=httpx.Response(self.status_code, request=self.request),
+                )
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._content}}]}
+
+    class FakeClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            requests.append({"url": url, "headers": headers, "json": json})
+            if json and json.get("model") == "doubao-pro":
+                return FakeResponse(401)
+            return FakeResponse(200, content="qwen fallback reply")
+
+    class FakeRepo:
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id="member-1")
+
+        async def list_messages(self, org_id: str, room_id: str, after_seq: int = 0, limit: int = 20):
+            return [SimpleNamespace(message_type="user", username="alice", content="请帮我总结一下")]
+
+        async def create_message(self, **kwargs):
+            return SimpleNamespace(
+                id=kwargs.get("message_id", "msg-1"),
+                room_id=kwargs["room_id"],
+                user_id=kwargs["user_id"],
+                username=kwargs["username"],
+                seq_no=1,
+                content=kwargs["content"],
+                message_type=kwargs.get("message_type", "agent"),
+                agent_id=kwargs.get("agent_id"),
+                mentions=kwargs.get("mentions"),
+                created_at=None,
+                updated_at=None,
+            )
+
+    async def fake_publish(room_id: str, event: dict):
+        events.append(event)
+
+    monkeypatch.setattr(meeting_ai_mod, "ModelConfigService", make_model_config_service(runtime_models))
+    monkeypatch.setattr(meeting_ai_mod, "LLMGateway", lambda: gateway)
+    monkeypatch.setattr(meeting_ai_mod.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr("app.services.stream_service.meeting_stream_broker.publish", fake_publish)
+
+    service = meeting_ai_mod.MeetingAiService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeRepo()
+
+    message = await service.ai_respond("room-1")
+
+    assert len(requests) == 2
+    assert requests[0]["json"]["model"] == "doubao-pro"
+    assert requests[1]["json"]["model"] == "qwen-plus"
+    assert gateway.calls[1]["excluded_runtime_ids"] == {"cfg-doubao"}
+    assert message.content == "qwen fallback reply"
+    assert any(event["event"] == "message_created" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_meeting_ai_returns_actionable_default_runtime_auth_error(monkeypatch):
+    class EmptyModelConfigService:
+        def __init__(self, session, org_id: str):
+            self.session = session
+            self.org_id = org_id
+
+        async def list_runtime_models(self, model_type: str | None = None):
+            return []
+
+    class FakeResponse:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+            self.request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError(
+                "default auth failed",
+                request=self.request,
+                response=httpx.Response(self.status_code, request=self.request),
+            )
+
+        def json(self):
+            return {}
+
+    class FakeClient:
+        def __init__(self, timeout=None):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            return FakeResponse(401)
+
+    class FakeRepo:
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id="member-1")
+
+        async def list_messages(self, org_id: str, room_id: str, after_seq: int = 0, limit: int = 20):
+            return [SimpleNamespace(message_type="user", username="alice", content="请帮我总结一下")]
+
+    monkeypatch.setattr(meeting_ai_mod, "ModelConfigService", EmptyModelConfigService)
+    monkeypatch.setattr(meeting_ai_mod.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(meeting_ai_mod.settings, "deepseek_api_key", "placeholder-key")
+    monkeypatch.setattr(meeting_ai_mod.settings, "deepseek_base_url", "https://api.deepseek.com")
+    monkeypatch.setattr(meeting_ai_mod.settings, "deepseek_model_id", "deepseek-v4-flash")
+
+    service = meeting_ai_mod.MeetingAiService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeRepo()
+
+    with pytest.raises(meeting_ai_mod.ServiceUnavailableError) as exc_info:
+        await service.ai_respond("room-1")
+
+    assert "PIAP_DEEPSEEK_API_KEY" in str(exc_info.value)

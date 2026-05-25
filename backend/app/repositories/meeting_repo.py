@@ -108,6 +108,18 @@ class MeetingRepository:
         )
         return {str(room_id): int(count) for room_id, count in result.all()}
 
+    async def list_members(self, org_id: str, room_id: str) -> list[MeetingRoomMember]:
+        result = await self._session.execute(
+            select(MeetingRoomMember)
+            .where(
+                MeetingRoomMember.org_id == org_id,
+                MeetingRoomMember.room_id == room_id,
+                MeetingRoomMember.deleted_at.is_(None),
+            )
+            .order_by(MeetingRoomMember.created_at.asc())
+        )
+        return list(result.scalars().all())
+
     async def next_message_seq(self, room_id: str) -> int:
         max_seq = await self._session.scalar(
             select(func.max(MeetingMessage.seq_no)).where(MeetingMessage.room_id == room_id)

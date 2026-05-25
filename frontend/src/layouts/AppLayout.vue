@@ -128,6 +128,8 @@ import {
   ROLE_USER,
 } from "@/constants/roles";
 import { isMenuGroup, resolveMenuGroupLandingPath, useMenu, type MenuGroup, type MenuItem } from "@/composables/useMenu";
+import type { ChatSession } from "@/types/chat.types";
+import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 
 const router = useRouter();
 const route = useRoute();
@@ -197,28 +199,28 @@ const roleLabel = computed(() => {
 const sessionOptions = computed(() => {
   const rows = [...chatStore.sessions];
   rows.sort((a, b) => {
-    const ta = new Date(a.updated_at || a.last_message_at || a.created_at || 0).getTime();
-    const tb = new Date(b.updated_at || b.last_message_at || b.created_at || 0).getTime();
+    const ta = parseServerDateTime(a.updated_at || a.last_message_at || a.created_at)?.getTime() ?? 0;
+    const tb = parseServerDateTime(b.updated_at || b.last_message_at || b.created_at)?.getTime() ?? 0;
     return tb - ta;
   });
   return rows;
 });
 
-function formatTime(ts?: string | null) {
-  if (!ts) return "-";
-  const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(ts) ? ts : `${ts}Z`;
-  const dt = new Date(normalized);
-  if (Number.isNaN(dt.getTime())) return ts;
-  return dt.toLocaleString("zh-CN", { hour12: false });
+const AUTO_SESSION_TITLE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+
+function sessionDisplayLabel(item: ChatSession) {
+  const rawTitle = String(item.title || "").trim();
+  if (rawTitle && !AUTO_SESSION_TITLE_RE.test(rawTitle)) return rawTitle;
+  return formatServerDateTime(item.created_at || item.last_message_at || item.updated_at) || rawTitle || "无";
 }
 
 function sessionLabel(sessionId: string) {
   const found = chatStore.sessions.find((item) => item.id === sessionId);
   if (!found) {
-    if (chatStore.session?.id === sessionId) return chatStore.session.title || "无";
+    if (chatStore.session?.id === sessionId) return sessionDisplayLabel(chatStore.session);
     return sessionId;
   }
-  return found.title || "无";
+  return sessionDisplayLabel(found);
 }
 
 function normalizeActiveNames(value: string | string[]) {

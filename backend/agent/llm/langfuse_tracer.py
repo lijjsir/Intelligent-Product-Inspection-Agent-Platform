@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from functools import lru_cache
 import logging
+import re
 from typing import Any
 
 from app.core.config import settings
@@ -12,6 +13,8 @@ from app.core.ids import uuid7
 
 
 logger = logging.getLogger(__name__)
+
+_OTEL_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class _NoopObservation:
@@ -78,6 +81,20 @@ class LangfuseTracer:
                 except Exception as exc:  # pragma: no cover - defensive runtime guard
                     logger.warning("Langfuse create_trace_id failed: %s", exc)
         return str(uuid7())
+
+    def normalize_trace_id(self, trace_id: str | None = None, *, seed: str | None = None) -> str | None:
+        raw = str(trace_id or "").strip()
+        if raw and _OTEL_TRACE_ID_RE.match(raw):
+            return raw
+        if raw:
+            if self._client is None:
+                return raw
+            return self.create_trace_id(seed=raw)
+        if seed:
+            if self._client is None:
+                return str(seed)
+            return self.create_trace_id(seed=str(seed))
+        return self.create_trace_id() if self.enabled else None
 
     def get_trace_url(self, trace_id: str | None) -> str | None:
         if not trace_id:
@@ -155,7 +172,14 @@ class LangfuseTracer:
         return "not found" in detail or "not_found" in detail or "404" in detail
 
     def start_trace(self, **kwargs):
-        trace_id = str(kwargs.get("trace_id") or self.create_trace_id())
+        trace_seed = str(
+            kwargs.get("trace_id")
+            or kwargs.get("workflow_run_id")
+            or kwargs.get("request_id")
+            or kwargs.get("task_id")
+            or ""
+        ).strip() or None
+        trace_id = str(self.normalize_trace_id(kwargs.get("trace_id"), seed=trace_seed) or self.create_trace_id())
         source_type = kwargs.get("source_type") or "inspection"
         agent = kwargs.get("agent", "")
         sub_route = kwargs.get("sub_route", "")
@@ -191,6 +215,9 @@ class LangfuseTracer:
                     "intent": kwargs.get("intent", ""),
                     "prompt_version": kwargs.get("prompt_version", ""),
                     "workflow_version": kwargs.get("workflow_version", ""),
+                    "workflow_run_id": kwargs.get("workflow_run_id", ""),
+                    "request_id": kwargs.get("request_id", ""),
+                    "assistant_message_id": kwargs.get("assistant_message_id", ""),
                     "session_id": kwargs.get("session_id", ""),
                     "route_source": kwargs.get("route_source", ""),
                     "route_confidence": kwargs.get("route_confidence", 0.0),

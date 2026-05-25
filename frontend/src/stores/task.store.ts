@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { taskApi } from "@/api/task.api";
+import type { ApiRequestConfig } from "@/api/http";
 import type {
   InspectionTask,
   TaskCreate,
@@ -34,8 +35,8 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
-  async function createTask(payload: TaskCreate) {
-    const { data } = await taskApi.create(payload);
+  async function createTask(payload: TaskCreate, config?: ApiRequestConfig) {
+    const { data } = await taskApi.create(payload, config);
     items.value.unshift(data.data);
     total.value++;
     return data.data;

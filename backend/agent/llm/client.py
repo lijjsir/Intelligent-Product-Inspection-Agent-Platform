@@ -54,7 +54,11 @@ class LLMClient:
         self._input_price_per_million = input_price_per_million
         self._output_price_per_million = output_price_per_million
         self._tracer = LangfuseTracer()
-        self._trace_id = trace_id or (self._tracer.create_trace_id() if self._tracer.enabled else None)
+        normalize_trace_id = getattr(self._tracer, "normalize_trace_id", None)
+        if trace_id:
+            self._trace_id = normalize_trace_id(trace_id) if callable(normalize_trace_id) else trace_id
+        else:
+            self._trace_id = self._tracer.create_trace_id() if self._tracer.enabled else None
         self._ark_client = None
         self._last_embedding_usage_event: dict[str, Any] | None = None
 

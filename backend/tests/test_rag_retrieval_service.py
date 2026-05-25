@@ -129,6 +129,40 @@ async def test_rag_retrieval_service_returns_empty_when_all_candidates_are_below
 
 
 @pytest.mark.asyncio
+async def test_rag_retrieval_service_can_return_low_confidence_fallback(monkeypatch):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+
+    class FakeRetriever:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            return [
+                {"id": "weak-1", "title": "profile", "text": "我叫迪迦，来自M78星云。", "score": 0.34},
+                {"id": "weak-2", "title": "other", "text": "other candidate", "score": 0.22},
+            ]
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda session: FakeSpaceRepo())
+    monkeypatch.setattr("app.services.rag_retrieval_service.Retriever", FakeRetriever)
+    monkeypatch.setattr("app.services.rag_retrieval_service.settings.rag_score_threshold", 0.55)
+
+    service = RagRetrievalService(FakeSession(), org_id="org-1", user_id="user-1")
+    result = await service.search(
+        rag_space_id="space-1",
+        query="我是谁",
+        top_k=2,
+        include_low_confidence_fallback=True,
+    )
+
+    assert result["hit_count"] == 1
+    assert result["candidate_count"] == 2
+    assert result["rejected_count"] == 1
+    assert result["low_confidence_fallback"] is True
+    assert [hit["id"] for hit in result["hits"]] == ["weak-1"]
+
+
+@pytest.mark.asyncio
 async def test_rag_retrieval_service_caches_space_and_result(monkeypatch):
     _rag_space_cache.clear()
     _rag_result_cache.clear()

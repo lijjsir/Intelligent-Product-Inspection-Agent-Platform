@@ -32,6 +32,7 @@ const deleteDialogVisible = ref(false);
 const pendingDeleteTaskId = ref("");
 const formRef = ref<FormInstance>();
 const uploadFiles = ref<UploadFile[]>([]);
+const MAX_IMAGE_COUNT = 5;
 const createForm = ref({
   product_id: "",
   spec_code: "",
@@ -41,6 +42,11 @@ const createForm = ref({
 });
 
 const activeSpecOptions = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
+const selectedTaskSpec = computed(
+  () => activeSpecOptions.value.find((item) => item.spec_code === createForm.value.spec_code) || null,
+);
+const parsedUrlEntries = computed(() => parseImageUrlLines(createForm.value.image_urls_input));
+const totalSelectedImageCount = computed(() => parsedUrlEntries.value.length + uploadFiles.value.length);
 const isAdmin = computed(() => hasRole("admin"));
 const canCreateTask = computed(() => hasRole(["user", "expert"]));
 const isOpsView = computed(() => route.path.startsWith("/ops/"));
@@ -51,6 +57,18 @@ const pageDescription = computed(() =>
     ? "这里查看平台侧已经物化的任务和执行状态，筛选、排查和跳转都保持在运维入口。"
     : "这里展示用户侧创建和执行的检测任务，也可以继续新建任务。"
 );
+
+function parseImageUrlLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^#(\d+)\s+(.+)$/);
+      if (!match) return { url: line };
+      return { url: match[2].trim(), sample_number: Number.parseInt(match[1], 10) };
+    });
+}
 
 const rules: FormRules = {
   product_id: [
@@ -194,6 +212,92 @@ async function fileToHash(file: File): Promise<string> {
     .join("");
 }
 
+async function textToHash(value: string): Promise<string> {
+  const buffer = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function extractTaskCreateErrorMessage(error: any) {
+  const message = error?.response?.data?.message;
+  if (typeof message === "string" && message.trim()) return message;
+  const detail = error?.response?.data?.detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail.find((item) => typeof item?.msg === "string" && item.msg.trim());
+    if (first?.msg) return String(first.msg);
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "任务创建失败，请稍后重试。";
+}
+
+async function buildImageSubmissionPayload() {
+  const uploadFilesRaw: File[] = uploadFiles.value
+    .map((item) => item.raw)
+    .filter((item): item is NonNullable<typeof item> => item != null) as File[];
+
+  const urlEntries = parsedUrlEntries.value;
+  const totalCount = urlEntries.length + uploadFilesRaw.length;
+  if (totalCount === 0) {
+    throw new Error("请至少提供一张图片 URL 或上传一张图片");
+  }
+  if (totalCount > MAX_IMAGE_COUNT) {
+    throw new Error(`当前共选择 ${totalCount} 张图片，最多只能提交 ${MAX_IMAGE_COUNT} 张`);
+  }
+
+  const [dataUrls, uploadHashes, urlHashes] = await Promise.all([
+    Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item))),
+    Promise.all(uploadFilesRaw.map((item) => fileToHash(item))),
+    Promise.all(urlEntries.map((item) => textToHash(item.url))),
+  ]);
+
+  const duplicateGroups = new Map<string, string[]>();
+  urlEntries.forEach((item, index) => {
+    const label = item.sample_number != null ? `样品${item.sample_number}` : `URL图片${index + 1}`;
+    const hash = urlHashes[index];
+    duplicateGroups.set(hash, [...(duplicateGroups.get(hash) || []), label]);
+  });
+  uploadFilesRaw.forEach((file, index) => {
+    const label = file.name?.trim() || `图片${urlEntries.length + index + 1}`;
+    const hash = uploadHashes[index];
+    duplicateGroups.set(hash, [...(duplicateGroups.get(hash) || []), label]);
+  });
+
+  const duplicateDescriptions = Array.from(duplicateGroups.values())
+    .filter((items) => items.length > 1)
+    .map((items) => Array.from(new Set(items)).join("、"));
+  if (duplicateDescriptions.length > 0) {
+    throw new Error(`检测到重复图片：${duplicateDescriptions.join("；")}，请删除重复图片后重试`);
+  }
+
+  const imageItems = [
+    ...urlEntries.map((item, index) => ({
+      index,
+      url: item.url,
+      hash: urlHashes[index],
+      sample_number: item.sample_number,
+    })),
+    ...dataUrls.map((url, index) => ({
+      index: urlEntries.length + index,
+      url,
+      hash: uploadHashes[index],
+    })),
+  ];
+
+  const requiredImageCount = selectedTaskSpec.value?.required_image_count || 1;
+  if (imageItems.length < requiredImageCount) {
+    throw new Error(
+      `标准 ${createForm.value.spec_code.trim()} 至少需要 ${requiredImageCount} 张图片，当前仅提供 ${imageItems.length} 张`,
+    );
+  }
+
+  return {
+    imageUrls: [...urlEntries.map((item) => item.url), ...dataUrls],
+    imageItems,
+  };
+}
+
 function handleUploadChange(_file: UploadFile, files: UploadFiles) {
   uploadFiles.value = files;
 }
@@ -212,45 +316,7 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    // Parse URL lines with optional #N prefix for sample number
-    const urlLines = createForm.value.image_urls_input
-      .split(/[\n]+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const parsedUrls: { url: string; sample_number?: number }[] = [];
-    for (const line of urlLines) {
-      const match = line.match(/^#(\d+)\s+(.+)$/);
-      if (match) {
-        parsedUrls.push({ url: match[2].trim(), sample_number: parseInt(match[1]) });
-      } else {
-        parsedUrls.push({ url: line });
-      }
-    }
-    const urlsFromText = parsedUrls.map((p) => p.url);
-    const uploadFilesRaw: File[] = uploadFiles.value
-      .map((item) => item.raw)
-      .filter((item): item is NonNullable<typeof item> => item != null) as File[];
-    const dataUrls = await Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item)));
-    const allUrls = [...urlsFromText, ...dataUrls];
-
-    // Build image_items with content hashes for uploaded files.
-    const imageItems = await Promise.all(
-      allUrls.map(async (url, i) => {
-        const uploadFile = uploadFilesRaw[i - urlsFromText.length];
-        if (uploadFile && i >= urlsFromText.length) {
-          const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
-          return { index: i, url, hash: await fileToHash(uploadFile), sample_number: sn };
-        }
-        // For URL-only entries, hash the URL string.
-        const msgUint8 = new TextEncoder().encode(url);
-        const urlHash = await crypto.subtle.digest("SHA-256", msgUint8);
-        const urlHashHex = Array.from(new Uint8Array(urlHash))
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-        const sn = i < parsedUrls.length ? parsedUrls[i].sample_number : undefined;
-        return { index: i, url, hash: urlHashHex, sample_number: sn };
-      }),
-    );
+    const { imageUrls, imageItems } = await buildImageSubmissionPayload();
 
     const metadata: Record<string, unknown> = { source: "task_list" };
     const selectedSpace = createForm.value.rag_space_id
@@ -270,17 +336,17 @@ async function handleSubmitCreate() {
     await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
-      image_urls: allUrls,
+      image_urls: imageUrls,
       image_items: imageItems,
       priority: createForm.value.priority,
       metadata,
-    });
+    }, { suppressErrorToast: true });
     ElMessage.success("任务创建成功");
     showCreateDialog.value = false;
     await fetchData();
   } catch (error) {
     console.error(error);
-    ElMessage.error("任务创建失败，请稍后重试。");
+    ElMessage.error(extractTaskCreateErrorMessage(error));
   } finally {
     creating.value = false;
   }
@@ -429,7 +495,7 @@ watch(
       </div>
     </div>
 
-    <el-dialog v-model="showCreateDialog" title="新建检测任务" width="560px">
+    <el-dialog v-model="showCreateDialog" title="新建检测任务" width="620px">
       <el-form ref="formRef" :model="createForm" :rules="rules" label-width="96px">
         <el-form-item label="检测标准" prop="spec_code">
           <el-select v-model="createForm.spec_code" filterable clearable placeholder="选择检测标准" class="!w-full" @change="onSpecChange">
@@ -440,6 +506,15 @@ watch(
               :value="spec.spec_code"
             />
           </el-select>
+          <div v-if="selectedTaskSpec" class="task-spec-preview">
+            <div class="task-spec-preview-title">{{ selectedTaskSpec.spec_code }} · {{ selectedTaskSpec.name }}</div>
+            <div class="task-spec-preview-grid">
+              <span>产品线</span><strong>{{ selectedTaskSpec.product_family || selectedTaskSpec.product_id || "未设置" }}</strong>
+              <span>至少图片</span><strong>{{ selectedTaskSpec.required_image_count }}</strong>
+              <span>要求视角</span><strong>{{ selectedTaskSpec.required_views?.join("、") || "未设置" }}</strong>
+              <span>自动放行</span><strong>{{ selectedTaskSpec.auto_pass_enabled ? "开启" : "关闭" }}</strong>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="产品线" prop="product_id">
           <div class="product-line-display">{{ createForm.product_id || '选择标准后自动填入' }}</div>
@@ -462,6 +537,9 @@ watch(
             resize="none"
             placeholder="每行一个URL；批量标号加 #N 前缀，如：#1 https://a.jpg"
           />
+          <div class="task-form-hint">
+            图片 URL 会直接参与检测，并和本地上传图片合并计算。当前 URL 数量：{{ parsedUrlEntries.length }}。
+          </div>
         </el-form-item>
         <el-form-item label="上传图片">
           <el-upload
@@ -469,15 +547,23 @@ watch(
             :auto-upload="false"
             accept="image/*"
             :limit="5"
+            multiple
             list-type="text"
             @change="handleUploadChange"
             @remove="handleUploadRemove"
           >
             <el-button type="primary" plain size="small">选择本地图片</el-button>
             <template #tip>
-              <div class="el-upload__tip">支持 JPG/PNG/WebP，最多 5 张。</div>
+              <div class="el-upload__tip">支持 JPG/PNG/WebP，可一次多选；URL 与上传合计最多 5 张。</div>
             </template>
           </el-upload>
+          <div class="task-selection-summary">
+            <span>当前已选</span>
+            <strong>{{ totalSelectedImageCount }}</strong>
+            <span>/ 需要至少</span>
+            <strong>{{ selectedTaskSpec?.required_image_count || 1 }}</strong>
+            <span>张</span>
+          </div>
         </el-form-item>
         <el-form-item label="优先级">
           <el-input-number v-model="createForm.priority" :min="1" :max="10" size="small" />
@@ -589,6 +675,57 @@ watch(
   color: #374151;
   font-size: 13px;
   font-weight: 600;
+}
+
+.task-spec-preview {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(180, 83, 9, 0.12);
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.task-spec-preview-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #9a3412;
+}
+
+.task-spec-preview-grid {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.task-spec-preview-grid strong {
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.task-form-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+}
+
+.task-selection-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
+}
+
+.task-selection-summary strong {
+  font-size: 14px;
 }
 
 @media (max-width: 780px) {

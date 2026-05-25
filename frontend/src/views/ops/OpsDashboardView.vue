@@ -15,6 +15,11 @@ const resultStore = useResultStore();
 const loading = ref(false);
 const pendingReviewCount = ref(0);
 
+type DashboardAction = {
+  label: string;
+  path: string;
+};
+
 const overview = computed(() => analyticsStore.overview);
 const alerts = computed(() => alertStore.items);
 const recentTasks = computed(() => taskStore.items);
@@ -25,8 +30,13 @@ const failedTasks = computed(() => recentTasks.value.filter((item) => item.statu
 const completedWithoutResult = computed(() => recentTasks.value.filter((item) => item.status === "done" && !item.has_result));
 const passRate = computed(() => overview.value ? `${(overview.value.pass_rate * 100).toFixed(1)}%` : "-");
 const riskSummary = computed(() => {
-  if (criticalAlerts.value.length || failedTasks.value.length) return "优先处理告警和失败任务";
-  if (completedWithoutResult.value.length || runningTasks.value.length) return "重点盯执行队列和结果落库";
+  const items: string[] = [];
+  if (criticalAlerts.value.length) items.push(`${criticalAlerts.value.length} 条高优先告警`);
+  if (failedTasks.value.length) items.push(`${failedTasks.value.length} 个失败任务`);
+  if (pendingReviewCount.value) items.push(`${pendingReviewCount.value} 条待专家审核`);
+  if (completedWithoutResult.value.length) items.push(`${completedWithoutResult.value.length} 个结果未落库任务`);
+  if (items.length) return `待响应：${items.join(" / ")}`;
+  if (runningTasks.value.length) return `${runningTasks.value.length} 个任务正在执行，重点盯队列状态`;
   return "今天的队列状态稳定，可以转去分析中心看趋势";
 });
 const healthTone = computed(() => {
@@ -35,15 +45,21 @@ const healthTone = computed(() => {
   return "success";
 });
 const healthLabel = computed(() => {
-  if (healthTone.value === "danger") return "需要处理";
-  if (healthTone.value === "warning") return "运行中";
+  if (healthTone.value === "danger") return "有待响应";
+  if (healthTone.value === "warning") return "运行跟进";
   return "稳定";
 });
 
-type DashboardAction = {
-  label: string;
-  path: string;
-};
+const primaryAction = computed<DashboardAction>(() => {
+  if (criticalAlerts.value.length) {
+    const severity = criticalAlerts.value.some((item) => item.severity === "critical") ? "critical" : "error";
+    return { label: "查看高优先告警", path: `/ops/alerts?status=open&severity=${severity}` };
+  }
+  if (failedTasks.value.length) return { label: "查看失败任务", path: "/ops/tasks?status=failed" };
+  if (pendingReviewCount.value) return { label: "查看人工审核", path: "/app/results?verdict=manual_required" };
+  if (completedWithoutResult.value.length) return { label: "查看结果未落库", path: "/ops/tasks?status=done" };
+  return { label: "查看分析中心", path: "/ops/analytics" };
+});
 
 const dashboardActions: DashboardAction[] = [
   { label: "任务查看", path: "/ops/tasks" },
@@ -84,6 +100,12 @@ function go(path: string) {
   router.push(path);
 }
 
+function alertTarget(alert: { severity?: string }) {
+  const query = new URLSearchParams({ status: "open" });
+  if (alert.severity) query.set("severity", String(alert.severity));
+  return `/ops/alerts?${query.toString()}`;
+}
+
 function goTask(row: InspectionTask) {
   router.push(`/ops/tasks/${row.id}`);
 }
@@ -115,12 +137,12 @@ onMounted(fetchData);
         <p class="eyebrow">Platform Ops Desk</p>
         <h2>平台运营工作台</h2>
         <p class="sub">
-          先在这里处理今天要动作的任务、告警和人工审核，再去分析中心看趋势、去模型观测看 Token、成本和质检模型表现。
+          先在这里响应告警、排查失败任务，并把待人工审核结果转到专家复核入口；趋势、Token、成本和模型表现放到分析中心继续看。
         </p>
 
         <div class="hero-pill-row">
           <span class="hero-pill">总任务 {{ taskStore.total.toLocaleString() }}</span>
-          <span class="hero-pill">待处理告警 {{ openAlerts.length }}</span>
+          <span class="hero-pill">待响应告警 {{ openAlerts.length }}</span>
           <span class="hero-pill">分析中心通过率 {{ passRate }}</span>
         </div>
       </div>
@@ -128,7 +150,10 @@ onMounted(fetchData);
       <div class="hero-side">
         <el-tag :type="healthTone" effect="dark" size="large" class="health-tag">{{ healthLabel }}</el-tag>
         <p class="hero-note">{{ riskSummary }}</p>
-        <el-button class="hero-refresh" plain :loading="loading" @click="fetchData">刷新数据</el-button>
+        <div class="hero-actions">
+          <el-button class="hero-primary" plain @click="go(primaryAction.path)">{{ primaryAction.label }}</el-button>
+          <el-button class="hero-refresh" plain :loading="loading" @click="fetchData">刷新数据</el-button>
+        </div>
       </div>
     </section>
 
@@ -148,8 +173,8 @@ onMounted(fetchData);
         <strong>{{ failedTasks.length }}</strong>
         <span class="mc-sub">优先检查执行链路和日志</span>
       </button>
-      <button class="metric-card warning" @click="go('/ops/alerts')">
-        <span class="mc-label">待处理告警</span>
+      <button class="metric-card warning" @click="go('/ops/alerts?status=open')">
+        <span class="mc-label">待响应告警</span>
         <strong>{{ openAlerts.length }}</strong>
         <span class="mc-sub">{{ criticalAlerts.length }} 条高优先级</span>
       </button>
@@ -194,8 +219,8 @@ onMounted(fetchData);
       <div class="panel side-panel">
         <div class="panel-head compact">
           <div>
-            <h3>待处理队列</h3>
-            <p>这里只放需要动作的项目，不再堆趋势型信息。</p>
+            <h3>待响应队列</h3>
+            <p>直接跳到需要响应、排查或专家复核的地方。</p>
           </div>
         </div>
 
@@ -206,7 +231,7 @@ onMounted(fetchData);
             @click="go('/app/results?verdict=manual_required')"
           >
             <strong>{{ pendingReviewCount }} 条结果待人工审核</strong>
-            <span>进入结果列表做最终复核和裁定</span>
+            <span>跳到结果列表，由专家做最终复核和裁定</span>
           </button>
 
           <button
@@ -227,14 +252,14 @@ onMounted(fetchData);
             <span>重点核对结果入库和后续链路</span>
           </button>
 
-          <button v-for="alert in openAlerts.slice(0, 5)" :key="alert.id" class="queue-item" @click="go('/ops/alerts')">
+          <button v-for="alert in openAlerts.slice(0, 5)" :key="alert.id" class="queue-item" @click="go(alertTarget(alert))">
             <strong>{{ alert.title }}</strong>
-            <span>{{ alert.severity }} · {{ formatTime(alert.created_at) }}</span>
+            <span>跳到告警管理筛选结果 · {{ alert.severity }} · {{ formatTime(alert.created_at) }}</span>
           </button>
 
           <el-empty
             v-if="!pendingReviewCount && !failedTasks.length && !completedWithoutResult.length && !openAlerts.length"
-            description="当前没有待处理事项"
+            description="当前没有待响应事项"
             :image-size="56"
           />
         </div>
@@ -339,13 +364,24 @@ onMounted(fetchData);
   line-height: 1.6;
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.hero-primary,
 .hero-refresh {
+  margin-left: 0;
   border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.1);
   color: #f8fafc;
   font-weight: 700;
 }
 
+.hero-primary:hover,
+.hero-primary:focus,
 .hero-refresh:hover,
 .hero-refresh:focus {
   border-color: rgba(255, 255, 255, 0.44);
@@ -549,6 +585,10 @@ onMounted(fetchData);
 
   .hero-note {
     text-align: left;
+  }
+
+  .hero-actions {
+    justify-content: flex-start;
   }
 
   .metric-row {

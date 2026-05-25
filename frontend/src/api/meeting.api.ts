@@ -8,6 +8,7 @@ import type {
   MeetingRoomCreate,
   MeetingRoomDetail,
   MeetingRoomJoin,
+  MeetingRoomMember,
   MeetingStreamEvent,
 } from "@/types/meeting.types";
 
@@ -66,6 +67,10 @@ export const meetingApi = {
 
   removeAgent(roomId: string, agentId: string) {
     return http.delete(`/v1/meetings/rooms/${roomId}/agents/${agentId}`);
+  },
+
+  listMembers(roomId: string) {
+    return http.get<MeetingRoomMember[]>(`/v1/meetings/rooms/${roomId}/members`);
   },
 
   // ── Agent Definitions ─────────────────────────────────────────
