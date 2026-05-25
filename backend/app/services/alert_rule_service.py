@@ -280,6 +280,8 @@ class AlertRuleService:
         return await self._repo.list_rules(self._org_id, skip, limit, severity, enabled)
 
     async def create_rule(self, payload: dict) -> dict:
+        payload = dict(payload)
+        payload.setdefault("id", str(uuid.uuid4()))
         rule = await self._repo.create(payload)
         await self._session.commit()
         return rule

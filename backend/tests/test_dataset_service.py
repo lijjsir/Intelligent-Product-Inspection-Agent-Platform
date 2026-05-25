@@ -25,6 +25,7 @@ class FakeDataset:
     status: str = "active"
     sample_count: int = 0
     image_sample_count: int = 0
+    video_sample_count: int = 0
     text_sample_count: int = 0
     uploaded_bytes: int = 0
     knowledge_graph_status: str = "idle"
@@ -91,6 +92,16 @@ class FakeDatasetRepo:
 
     async def list_for_owner(self, **kwargs):
         rows = [row for row in self.datasets.values() if row.created_by == kwargs["owner_user_id"] and row.deleted_at is None]
+        keyword = str(kwargs.get("keyword") or "").strip()
+        modality = kwargs.get("modality")
+        status = kwargs.get("status")
+        if keyword:
+            rows = [row for row in rows if keyword in row.name or keyword in str(row.description or "")]
+        if modality:
+            rows = [row for row in rows if row.modality == modality]
+        if status:
+            rows = [row for row in rows if row.status == status]
+        rows = rows[: int(kwargs.get("size") or len(rows))]
         return rows, len(rows)
 
     async def get(self, *, org_id: str, dataset_id: str, owner_user_id: str):
@@ -342,6 +353,15 @@ async def test_get_dataset_raises_for_foreign_owner(service):
 
     with pytest.raises(NotFoundError):
         await svc.get_dataset("missing")
+
+
+@pytest.mark.asyncio
+async def test_list_dataset_name_options_returns_name_only(service):
+    svc, _dataset_repo, _sample_repo, _job_repo, _upload_repo, _storage = service
+
+    result = await svc.list_dataset_name_options(modality="image", status="active", limit=20)
+
+    assert [item.name for item in result] == ["缺陷样本集"]
 
 
 @pytest.mark.asyncio

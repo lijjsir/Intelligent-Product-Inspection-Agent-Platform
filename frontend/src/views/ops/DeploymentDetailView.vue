@@ -33,9 +33,9 @@ watch(() => route.params.id, load);
     :auto-refresh-when-running="true"
     :relation-sections="[
       { label: '来源类型', value: (item) => item?.source_type },
-      { label: '来源资源', value: (item) => item?.source_id },
+      { label: '来源资源', value: (item) => item?.source_name || item?.source_id },
       { label: '合并模式', value: (item) => item?.merge_mode },
-      { label: '实验', value: (item) => item?.experiment_id },
+      { label: '实验', value: (item) => item?.experiment_name || item?.experiment_id },
     ]"
     intro="查看部署运行时注册信息、推理配置和产出清单。"
     :highlights="summaryView.highlights"
@@ -52,7 +52,7 @@ watch(() => route.params.id, load);
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">来源</div>
-          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.source_type || "-" }} / {{ runtimeRegistration.source_id || "-" }}</div>
+          <div class="mt-2 break-all text-sm font-semibold text-slate-900">{{ runtimeRegistration.source_type || "-" }} / {{ current?.source_name || runtimeRegistration.source_id || "-" }}</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div class="text-sm text-slate-500">模型</div>

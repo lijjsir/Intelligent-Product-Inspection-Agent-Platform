@@ -1,4 +1,4 @@
-import { ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
 
 const APP_ROLES = [ROLE_USER, ROLE_EXPERT];
 
@@ -7,8 +7,8 @@ export const appRoutes = [
   { path: "chat", name: "app-chat", component: () => import("@/views/ChatView.vue"), meta: { title: "AI 对话", roles: APP_ROLES } },
   { path: "meetings", name: "app-meetings", component: () => import("@/views/MeetingRoomView.vue"), meta: { title: "聊天会议室", roles: APP_ROLES } },
   { path: "rag-spaces", name: "app-rag-spaces", component: () => import("@/views/RagSpaceView.vue"), meta: { title: "RAG 空间", roles: [ROLE_ADMIN, ROLE_EXPERT] } },
-  { path: "tasks", name: "app-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务管理", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] } },
-  { path: "tasks/:id", name: "app-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] } },
+  { path: "tasks", name: "app-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务管理", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER] } },
+  { path: "tasks/:id", name: "app-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER] } },
   { path: "results", name: "app-results", component: () => import("@/views/ResultListView.vue"), meta: { title: "检测结果", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] } },
   { path: "results/:id", name: "app-result-detail", component: () => import("@/views/ResultDetailView.vue"), meta: { title: "检测结果详情", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] } },
   { path: "results/:task_id/evidence", name: "app-evidence", component: () => import("@/views/EvidenceView.vue"), meta: { title: "证据溯源", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] } },

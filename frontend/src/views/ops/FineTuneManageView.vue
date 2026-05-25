@@ -96,7 +96,7 @@ function populateForm(item: {
     :store="store"
     :build-payload="buildPayload"
     :populate-form="populateForm"
-    :detail-description="(item) => `数据集：${item?.source_dataset_id || '-'}；基础模型：${item?.model_config_ref?.display_name || item?.model_config_ref?.model_key || item?.model_config_id || '-'}`"
+    :detail-description="(item) => `数据集：${item?.source_dataset_name || item?.source_dataset_id || '-'}；基础模型：${item?.model_config_ref?.display_name || item?.model_config_ref?.model_key || item?.model_config_id || '-'}`"
     show-launch
   >
     <template #form-extra>

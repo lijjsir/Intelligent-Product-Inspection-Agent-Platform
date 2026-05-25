@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
+import AlertRuleManagerPanel from "@/components/ops/AlertRuleManagerPanel.vue";
 import { useAlertStore } from "@/stores/alert.store";
-import { useAlertRuleStore } from "@/stores/alert-rule.store";
 import type { AlertEvent, AlertAction } from "@/types/alert.types";
-import type { AlertRule } from "@/types/alert-rule.types";
 
 const alertStore = useAlertStore();
-const alertRuleStore = useAlertRuleStore();
 
 type TabName = "alerts" | "rules";
 const activeTab = ref<TabName>("alerts");
@@ -107,14 +105,6 @@ function severBarClass(key: string) {
 }
 
 // ===== Alert Rules State =====
-const rulePage = ref(1);
-const ruleSize = ref(20);
-const searchEnabled = ref<string>("");
-
-const ruleItems = computed(() => alertRuleStore.items);
-const ruleTotal = computed(() => alertRuleStore.total);
-const rulesLoading = computed(() => alertRuleStore.loading);
-
 const alertTypeLabel: Record<string, string> = {
   stability_risk: "稳定性风险", quality_review: "质检审核", model_error: "模型错误",
   high_latency: "延迟过高", cost_spike: "成本激增", pass_rate_drop: "通过率下降",
@@ -122,18 +112,8 @@ const alertTypeLabel: Record<string, string> = {
   custom: "自定义",
 };
 
-async function fetchRules() {
-  const params: any = { page: rulePage.value, size: ruleSize.value };
-  if (searchEnabled.value !== "") params.enabled = searchEnabled.value === "true";
-  await alertRuleStore.fetchRules(params);
-}
-
-function onRulePageChange(p: number) { rulePage.value = p; fetchRules(); }
-function onRuleSizeChange(s: number) { ruleSize.value = s; rulePage.value = 1; fetchRules(); }
-
 onMounted(() => {
   fetchAlerts();
-  fetchRules();
 });
 </script>
 
@@ -142,7 +122,7 @@ onMounted(() => {
     <section class="hero">
       <p class="eyebrow">Alert Intelligence</p>
       <h2>告警管理</h2>
-      <p class="sub">统一查看和处理系统告警；告警规则配置归管理员治理，运维侧只做核对。</p>
+      <p class="sub">统一查看和处理系统告警，并在同一页面维护告警规则。</p>
     </section>
 
     <!-- Tabs -->
@@ -269,61 +249,7 @@ onMounted(() => {
 
     <!-- === Rules Tab === -->
     <template v-if="activeTab === 'rules'">
-      <section class="stat-row">
-        <div class="stat-card"><span class="stat-label">规则总数</span><span class="stat-value">{{ ruleTotal }}</span></div>
-        <div class="stat-card stat-open"><span class="stat-label">严重级别</span><span class="stat-value">{{ ruleItems.filter((r: AlertRule) => r.severity === 'critical').length }}</span></div>
-        <div class="stat-card stat-ack"><span class="stat-label">警告级别</span><span class="stat-value">{{ ruleItems.filter((r: AlertRule) => r.severity === 'warning').length }}</span></div>
-        <div class="stat-card stat-resolved"><span class="stat-label">已启用</span><span class="stat-value">{{ ruleItems.filter((r: AlertRule) => r.enabled).length }}</span></div>
-      </section>
-
-      <div class="filter-bar">
-        <div class="filter-group">
-          <label>启用状态</label>
-          <el-select v-model="searchEnabled" size="default" clearable placeholder="全部" @change="() => { rulePage = 1; fetchRules(); }">
-            <el-option label="已启用" value="true" />
-            <el-option label="已停用" value="false" />
-          </el-select>
-        </div>
-        <el-button @click="fetchRules">刷新</el-button>
-      </div>
-
-      <el-alert
-        title="平台运营可查看告警规则用于排障核对；新增、编辑、启停和删除请到管理员的系统治理中处理。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
-
-      <el-card shadow="never" class="table-card">
-        <el-table :data="ruleItems" :loading="rulesLoading" size="default" empty-text="暂无告警规则" class="rule-table">
-          <el-table-column prop="name" label="规则名称" min-width="200">
-            <template #default="{ row }"><span class="rule-name">{{ row.name }}</span></template>
-          </el-table-column>
-          <el-table-column label="告警类型" width="140">
-            <template #default="{ row }"><span class="type-cell">{{ alertTypeLabel[row.alert_type] || row.alert_type }}</span></template>
-          </el-table-column>
-          <el-table-column label="严重度" width="84">
-            <template #default="{ row }"><el-tag :type="severityTag[row.severity] || 'info'" size="small" effect="dark">{{ severityLabel[row.severity] || row.severity }}</el-tag></template>
-          </el-table-column>
-          <el-table-column label="状态" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.enabled ? 'success' : 'info'">
-                {{ row.enabled ? "已启用" : "已停用" }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="冷却时间" width="100">
-            <template #default="{ row }"><span class="cool-cell">{{ row.cooldown_seconds }}s</span></template>
-          </el-table-column>
-          <el-table-column label="更新时间" width="176">
-            <template #default="{ row }"><span class="time-cell">{{ formatTime(row.updated_at) }}</span></template>
-          </el-table-column>
-        </el-table>
-        <div class="pager">
-          <el-pagination v-model:current-page="rulePage" v-model:page-size="ruleSize" :total="ruleTotal" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @current-change="onRulePageChange" @size-change="onRuleSizeChange" />
-        </div>
-      </el-card>
-
+      <AlertRuleManagerPanel embedded />
     </template>
   </div>
 </template>

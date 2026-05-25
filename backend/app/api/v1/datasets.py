@@ -10,6 +10,7 @@ from app.schemas.dataset import (
     DatasetCreateRequest,
     DatasetDetailResponse,
     DatasetJobResponse,
+    DatasetNameOption,
     DatasetUploadCompleteRequest,
     DatasetUploadCompleteResponse,
     DatasetUploadInitRequest,
@@ -45,6 +46,27 @@ async def list_datasets(
             keyword=keyword,
             modality=modality,
             status=status_text,
+        )
+    )
+
+
+@router.get("/names", response_model=ResponseEnvelope[list[DatasetNameOption]])
+async def list_dataset_names(
+    keyword: str | None = Query(default=None),
+    modality: str | None = Query(default=None),
+    status_text: str | None = Query(default="active", alias="status"),
+    limit: int = Query(default=100, ge=1, le=200),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("dataset", current.role)
+    service = DatasetService(db, current.org_id, current.user_id)
+    return ResponseEnvelope(
+        data=await service.list_dataset_name_options(
+            keyword=keyword,
+            modality=modality,
+            status=status_text,
+            limit=limit,
         )
     )
 

@@ -31,10 +31,10 @@ watch(() => route.params.id, load);
       back-path="/ops/eval/offline"
       :auto-refresh-when-running="true"
       :relation-sections="[
-        { label: '评测集', value: (item) => item?.eval_set_id },
+        { label: '评测集', value: (item) => item?.eval_set_name || item?.eval_set_id },
         { label: '目标类型', value: (item) => item?.target_type },
-        { label: '目标资源', value: (item) => item?.target_id },
-        { label: '实验', value: (item) => item?.experiment_id },
+        { label: '目标资源', value: (item) => item?.target_name || item?.target_id },
+        { label: '实验', value: (item) => item?.experiment_name || item?.experiment_id },
       ]"
       intro="查看离线评测指标、错误案例和执行日志。"
       :highlights="summaryView.highlights"

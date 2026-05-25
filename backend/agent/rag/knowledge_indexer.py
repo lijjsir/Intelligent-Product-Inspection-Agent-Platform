@@ -21,7 +21,7 @@ class KnowledgeIndexer:
         if self._qdrant_api_key:
             headers["api-key"] = self._qdrant_api_key
         payload = {"vectors": {"size": vector_size, "distance": "Cosine"}}
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             resp = await client.put(
                 f"{self._qdrant_url}/collections/{self._collection}",
                 json=payload,
@@ -64,7 +64,7 @@ class KnowledgeIndexer:
         if self._qdrant_api_key:
             headers["api-key"] = self._qdrant_api_key
         payload = {"points": points}
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             resp = await client.put(
                 f"{self._qdrant_url}/collections/{self._collection}/points",
                 json=payload,
@@ -92,7 +92,7 @@ class KnowledgeIndexer:
                 "must": must,
             }
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.post(
                 f"{self._qdrant_url}/collections/{self._collection}/points/delete",
                 json=payload,

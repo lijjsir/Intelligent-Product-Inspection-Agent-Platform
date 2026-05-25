@@ -51,6 +51,11 @@ const detailDrawerOpen = computed({
   },
 });
 
+const detailNodeLive = computed(() => {
+  if (!detailNode.value) return null;
+  return store.items.find((item) => item.id === detailNode.value?.id) || detailNode.value;
+});
+
 function readAutoRefreshPreference() {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY) === "true";
@@ -183,7 +188,7 @@ function syncAutoRefresh() {
   stopAutoRefresh();
   if (!autoRefresh.value) return;
   refreshTimer = setInterval(() => {
-    store.fetchAll({ silent: true }).catch(() => {});
+    store.refreshAllMetrics({ silent: true }).catch(() => {});
   }, 15000);
 }
 
@@ -231,7 +236,7 @@ onBeforeUnmount(stopAutoRefresh);
           <el-option label="禁用" value="disabled" />
         </el-select>
       </div>
-      <el-table :data="filteredItems" v-loading="store.loading">
+      <el-table :data="filteredItems" v-loading="store.loading" row-key="id">
         <el-table-column prop="name" label="节点名" min-width="140" />
         <el-table-column prop="host" label="主机" min-width="160" />
         <el-table-column label="状态" width="100">
@@ -287,23 +292,25 @@ onBeforeUnmount(stopAutoRefresh);
     </el-drawer>
 
     <el-drawer v-model="detailDrawerOpen" title="节点详情" size="560px" @close="detailNode = null">
-      <template v-if="detailNode">
+      <template v-if="detailNodeLive">
         <div class="flex flex-col gap-4">
           <el-descriptions :column="1" border>
-            <el-descriptions-item label="节点">{{ detailNode.name }}</el-descriptions-item>
-            <el-descriptions-item label="主机">{{ detailNode.host }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ statusText(detailNode) }}</el-descriptions-item>
-            <el-descriptions-item label="最近探针">{{ detailNode.last_probe_at || "-" }}</el-descriptions-item>
-            <el-descriptions-item label="最近错误">{{ detailNode.last_probe_error || "-" }}</el-descriptions-item>
+            <el-descriptions-item label="节点">{{ detailNodeLive.name }}</el-descriptions-item>
+            <el-descriptions-item label="主机">{{ detailNodeLive.host }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ statusText(detailNodeLive) }}</el-descriptions-item>
+            <el-descriptions-item label="CPU 使用率">{{ detailNodeLive.cpu_usage ?? "-" }}</el-descriptions-item>
+            <el-descriptions-item label="GPU 使用率">{{ detailNodeLive.gpu_usage ?? "-" }}</el-descriptions-item>
+            <el-descriptions-item label="最近探针">{{ detailNodeLive.last_probe_at || "-" }}</el-descriptions-item>
+            <el-descriptions-item label="最近错误">{{ detailNodeLive.last_probe_error || "-" }}</el-descriptions-item>
           </el-descriptions>
           <el-card shadow="never">
             <template #header>主机摘要</template>
-            <pre class="overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(detailNode.hardware_summary || {}, null, 2) }}</pre>
+            <pre class="overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(detailNodeLive.hardware_summary || {}, null, 2) }}</pre>
           </el-card>
           <el-card shadow="never">
             <template #header>GPU 明细</template>
-            <el-empty v-if="!(detailNode.gpu_devices || []).length" description="暂无 GPU 明细" />
-            <el-table v-else :data="detailNode.gpu_devices || []">
+            <el-empty v-if="!(detailNodeLive.gpu_devices || []).length" description="暂无 GPU 明细" />
+            <el-table v-else :data="detailNodeLive.gpu_devices || []" row-key="index">
               <el-table-column prop="index" label="卡号" width="80" />
               <el-table-column prop="name" label="型号" min-width="180" />
               <el-table-column prop="memory_total_mb" label="总显存(MB)" width="120" />

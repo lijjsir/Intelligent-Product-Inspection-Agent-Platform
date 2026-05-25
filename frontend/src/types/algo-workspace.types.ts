@@ -355,6 +355,7 @@ export interface DatasetProcessingResults {
 
 export interface EvaluationDataset extends AlgoResourceBase {
   source_dataset_id: string;
+  source_dataset_name?: string | null;
   sample_count: number;
   samples_preview: EvaluationDatasetItem[];
 }
@@ -388,24 +389,32 @@ export interface ResourceModelRef {
 
 export interface FineTuneRun extends AlgoExecutionResource {
   source_dataset_id: string;
+  source_dataset_name?: string | null;
   model_config_id: string;
   model_config_ref?: ResourceModelRef | null;
   eval_set_id?: string | null;
+  eval_set_name?: string | null;
   experiment_id?: string | null;
+  experiment_name?: string | null;
   result_summary?: TrainingResultSummaryRecord | null;
 }
 
 export interface OfflineEvaluation extends AlgoExecutionResource {
   eval_set_id: string;
+  eval_set_name?: string | null;
   target_type: string;
   target_id: string;
+  target_name?: string | null;
   experiment_id?: string | null;
+  experiment_name?: string | null;
   result_summary?: OfflineEvaluationResultSummaryRecord | null;
 }
 
 export interface OnlineValidation extends AlgoExecutionResource {
   deployment_id: string;
+  deployment_name?: string | null;
   experiment_id?: string | null;
+  experiment_name?: string | null;
   result_summary?: OnlineValidationResultSummaryRecord | null;
 }
 
@@ -426,10 +435,12 @@ export interface Experiment extends AlgoResourceBase {
 }
 
 export interface Deployment extends AlgoExecutionResource {
-  source_type: "fine_tune";
+  source_type: "training_job" | "fine_tune";
   source_id: string;
+  source_name?: string | null;
   merge_mode: "dynamic" | "static";
   experiment_id?: string | null;
+  experiment_name?: string | null;
   result_summary?: DeploymentResultSummaryRecord | null;
 }
 
@@ -493,7 +504,7 @@ export interface OfflineEvaluationCreateRequest {
   description?: string;
   config_json?: Record<string, unknown>;
   eval_set_id: string;
-  target_type: "fine_tune" | "deployment";
+  target_type: "training_job" | "fine_tune" | "deployment";
   target_id: string;
   experiment_id?: string | null;
 }
@@ -523,7 +534,7 @@ export interface ModelDeploymentCreateRequest {
   name: string;
   description?: string;
   config_json?: Record<string, unknown>;
-  source_type: "fine_tune";
+  source_type: "training_job" | "fine_tune";
   source_id: string;
   merge_mode?: "dynamic" | "static";
   experiment_id?: string | null;

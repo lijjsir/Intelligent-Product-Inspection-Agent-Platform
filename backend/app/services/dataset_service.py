@@ -28,6 +28,7 @@ from app.schemas.dataset import (
     DatasetCreateRequest,
     DatasetDetailResponse,
     DatasetListItem,
+    DatasetNameOption,
     DatasetSampleCreateRequest,
     DatasetSampleResponse,
     DatasetUpdateRequest,
@@ -99,6 +100,27 @@ class DatasetService(TenantAwareService):
             page=page,
             size=size,
         )
+
+    async def list_dataset_name_options(
+        self,
+        *,
+        keyword: str | None = None,
+        modality: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[DatasetNameOption]:
+        rows, _ = await self._datasets.list_for_owner(
+            org_id=self._org_id,
+            owner_user_id=self._user_id,
+            page=1,
+            size=limit,
+            keyword=keyword,
+            modality=None if modality in {"image", "text", "video"} else modality,
+            status=status,
+        )
+        if modality in {"image", "text", "video"}:
+            rows = [row for row in rows if dataset_supports_sample_type(getattr(row, "modality", None), modality)]
+        return [DatasetNameOption(name=str(row.name)) for row in rows]
 
     async def create_dataset(self, payload: DatasetCreateRequest) -> DatasetDetailResponse:
         body = payload.model_dump()

@@ -46,9 +46,11 @@ def test_role_specific_resources_do_not_bleed_between_workspaces():
     require_role("meeting", ROLE_EXPERT)
     require_role("agent_ops_read", ROLE_PLATFORM_OPERATOR)
     require_role("agent_ops", ROLE_APP_DEVELOPER)
+    require_role("alert", ROLE_ADMIN)
     require_role("alert", ROLE_PLATFORM_OPERATOR)
     require_role("alert_rule_read", ROLE_PLATFORM_OPERATOR)
     require_role("alert_rule", ROLE_ADMIN)
+    require_role("alert_rule", ROLE_PLATFORM_OPERATOR)
     require_role("quality_delete", ROLE_ADMIN)
 
     with pytest.raises(ForbiddenError):
@@ -65,7 +67,5 @@ def test_role_specific_resources_do_not_bleed_between_workspaces():
         require_role("chat", ROLE_ADMIN)
     with pytest.raises(ForbiddenError):
         require_role("agent_ops", ROLE_PLATFORM_OPERATOR)
-    with pytest.raises(ForbiddenError):
-        require_role("alert_rule", ROLE_PLATFORM_OPERATOR)
     with pytest.raises(ForbiddenError):
         require_role("quality_delete", ROLE_PLATFORM_OPERATOR)

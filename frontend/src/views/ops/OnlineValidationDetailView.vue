@@ -18,8 +18,8 @@ const summaryView = computed(() => buildOnlineValidationSummaryViewModel(current
     :store="store"
     back-path="/ops/eval/online"
     :relation-sections="[
-      { label: '部署记录', value: (item) => item?.deployment_id },
-      { label: '实验', value: (item) => item?.experiment_id },
+      { label: '部署记录', value: (item) => item?.deployment_name || item?.deployment_id },
+      { label: '实验', value: (item) => item?.experiment_name || item?.experiment_id },
     ]"
     intro="查看在线验证任务的部署关联、执行状态和结果摘要。"
     :highlights="summaryView.highlights"
