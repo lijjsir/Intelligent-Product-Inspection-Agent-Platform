@@ -1071,7 +1071,9 @@ async def test_llm_client_chat_records_langfuse_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_client_chat_retries_without_response_format(monkeypatch):
+async def test_llm_client_chat_no_response_format(monkeypatch):
+    """chat() payloads must NOT include response_format – it breaks tool use and non-OpenAI models."""
+
     class FakeObservation:
         def update(self, **kwargs):
             return None
@@ -1099,19 +1101,23 @@ async def test_llm_client_chat_retries_without_response_format(monkeypatch):
             return f"https://langfuse.local/trace/{trace_id}"
 
     class FakeResponse:
-        def __init__(self, status_code: int, body: dict, text: str | None = None):
-            self.status_code = status_code
-            self._body = body
-            self._text = text or json.dumps(body)
-            self.is_error = status_code >= 400
-            self.request = object()
+        status_code = 200
+        is_error = False
+        request = object()
 
         def json(self):
-            return self._body
-
-        @property
-        def text(self):
-            return self._text
+            return {
+                "id": "resp-1",
+                "model": "chat-1",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"verdict":"pass","overall_score":0.9}'
+                        }
+                    }
+                ],
+            }
 
     class FakeHttpClient:
         calls: list[dict] = []
@@ -1127,32 +1133,7 @@ async def test_llm_client_chat_retries_without_response_format(monkeypatch):
 
         async def post(self, path, json=None, headers=None):
             self.calls.append({"path": path, "json": json, "headers": headers})
-            if len(self.calls) == 1:
-                return FakeResponse(
-                    400,
-                    {
-                        "error": {
-                            "code": "InvalidParameter",
-                            "message": "The parameter `response_format.type` specified in the request are not valid: `json_object` is not supported by this model.",
-                        }
-                    },
-                    text='{"error":{"code":"InvalidParameter","message":"The parameter `response_format.type` specified in the request are not valid: `json_object` is not supported by this model."}}',
-                )
-            return FakeResponse(
-                200,
-                {
-                    "id": "resp-2",
-                    "model": "chat-1",
-                    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
-                    "choices": [
-                        {
-                            "message": {
-                                "content": '{"verdict":"pass","overall_score":0.9,"reasoning_chain":{"summary":"ok"}}'
-                            }
-                        }
-                    ],
-                },
-            )
+            return FakeResponse()
 
     monkeypatch.setattr("agent.llm.client.LangfuseTracer", lambda: FakeTracer())
     monkeypatch.setattr("agent.llm.client.httpx.AsyncClient", FakeHttpClient)
@@ -1166,12 +1147,14 @@ async def test_llm_client_chat_retries_without_response_format(monkeypatch):
     data = await client.chat([{"role": "user", "content": "hi"}])
 
     assert data["verdict"] == "pass"
-    assert FakeHttpClient.calls[0]["json"]["response_format"] == {"type": "json_object"}
-    assert "response_format" not in FakeHttpClient.calls[1]["json"]
+    assert "response_format" not in FakeHttpClient.calls[0]["json"]
+    assert FakeHttpClient.calls[0]["json"]["model"] == "chat-1"
 
 
 @pytest.mark.asyncio
-async def test_llm_client_chat_with_tools_adds_json_prompt_hint(monkeypatch):
+async def test_llm_client_chat_with_tools_no_response_format(monkeypatch):
+    """chat_with_tools payload must include tools but NOT response_format."""
+
     class FakeObservation:
         def update(self, **kwargs):
             return None
@@ -1231,7 +1214,7 @@ async def test_llm_client_chat_with_tools_adds_json_prompt_hint(monkeypatch):
 
     client = LLMClient(api_key="secret", base_url="https://example.com/api/v3", model_id="chat-1")
     await client.chat_with_tools(
-        [{"role": "system", "content": "你是智能助手。可以使用工具。"}],
+        [{"role": "system", "content": "你是智能助手。"}],
         tools=[
             {
                 "type": "function",
@@ -1245,9 +1228,9 @@ async def test_llm_client_chat_with_tools_adds_json_prompt_hint(monkeypatch):
     )
 
     payload = FakeHttpClient.calls[0]["json"]
-    assert payload["response_format"] == {"type": "json_object"}
-    assert payload["messages"][0]["role"] == "system"
-    assert "json" in payload["messages"][0]["content"]
+    assert "response_format" not in payload
+    assert payload["tools"][0]["type"] == "function"
+    assert payload["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio

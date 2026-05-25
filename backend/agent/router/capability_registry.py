@@ -127,6 +127,15 @@ CAPABILITIES: dict[str, Capability] = {
         cost_level="medium",
         description="预留数据分析 Agent 的只读分析能力",
     ),
+    "web.search": Capability(
+        key="web.search",
+        agent="chat",
+        operation="search",
+        mode="answer",
+        surfaces=["chat", "quality_task"],
+        cost_level="medium",
+        description="通过 DuckDuckGo 检索互联网公开信息",
+    ),
 }
 
 

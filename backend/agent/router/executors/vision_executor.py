@@ -83,7 +83,7 @@ class VisionExecutor:
             from app.services.model_config_service import ModelConfigService
 
             models = await ModelConfigService(db_session, request.org_id).list_runtime_models()
-            runtime = await LLMGateway().select_runtime(models=models, model_types={"multimodal", "vision", "chat"}, reserve=False)
+            runtime = await LLMGateway().select_runtime(models=models, model_types={"multimodal", "vision", "vlm"}, reserve=False)
             if not runtime:
                 return {"error": "no multimodal/vision model configured in this org"}
             image_urls = []

@@ -68,6 +68,9 @@ class ChatExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
+        if step.capability_key == "web.search":
+            return await self._execute_web_search(step, state)
+
         if step.capability_key == "chat.general":
             answer = await self._call_model(
                 state,
@@ -84,7 +87,7 @@ class ChatExecutor:
                 state,
                 request,
                 self._compose_prompt(state),
-                use_tools=True,
+                use_tools=not state.force_web_search,
             )
             if answer is None:
                 fallback = self._build_fallback(state)
@@ -97,6 +100,51 @@ class ChatExecutor:
         return observation(step, status="failed", summary=f"未知 capability: {step.capability_key}"), []
 
     # ── model helpers ──
+
+    async def _execute_web_search(
+        self,
+        step: AgentPlanStep,
+        state: ManagerState,
+    ) -> tuple[AgentObservation, list[AgentArtifact]]:
+        invoker = getattr(state, "tool_invoker", None)
+        if invoker is None:
+            return observation(step, status="failed", summary="ToolInvoker not available"), []
+
+        args = dict(step.input or {})
+        args["query"] = str(args.get("query") or state.original_query).strip()
+        args["max_results"] = int(args.get("max_results") or 5)
+        args["region"] = str(args.get("region") or "cn-zh")
+
+        from agent.tools.contracts import ToolContext
+
+        context = ToolContext(
+            org_id=state.org_id,
+            request_id=state.request_id,
+            agent=getattr(state, "selected_agent", "") or "chat",
+            surface=state.surface,
+            user_id=state.user_id,
+            session_id=state.session_id,
+            workflow_run_id=state.workflow_run_id,
+            allowed_modes=state.allowed_modes,
+        )
+        result = await invoker.invoke(tool_name="web.search", arguments=args, context=context)
+        data = dict(result.data or {})
+        results = [item for item in list(data.get("results") or []) if isinstance(item, dict)]
+        content = {
+            "query": data.get("query") or args["query"],
+            "keywords": data.get("keywords"),
+            "results": results,
+            "total": int(data.get("total") or len(results)),
+            "status": result.status,
+            "error": result.error or data.get("error"),
+        }
+        art = artifact("web_search_results", "chat", content)
+        status = "success" if result.status == "success" else result.status
+        summary = f"联网搜索完成，命中 {len(results)} 条结果"
+        if status != "success":
+            summary = f"联网搜索失败：{content.get('error') or status}"
+        state.used_tool_calls += 1
+        return observation(step, status=status, summary=summary, artifact_ids=[art.artifact_id]), [art]
 
     def _build_tools_for_llm(self, state: ManagerState) -> tuple[list[dict[str, Any]], dict[str, str]]:
         available = getattr(state, "available_tools", None)
@@ -307,6 +355,9 @@ class ChatExecutor:
         if isinstance(choices, list) and choices:
             content = (choices[0].get("message") or {}).get("content")
         if isinstance(content, str):
+            cleaned = ChatExecutor._strip_json_code_blocks(content)
+            if cleaned and cleaned != content.strip():
+                return cleaned[:1000] or None
             try:
                 data = json.loads(content)
                 answer = data.get("answer") or data.get("text") or ""
@@ -314,6 +365,14 @@ class ChatExecutor:
             except Exception:
                 return content.strip()[:1000] or None
         return None
+
+    @staticmethod
+    def _strip_json_code_blocks(content: str) -> str:
+        return re.sub(
+            r"```(?:json|JSON)?\s*\{[\s\S]*?\}\s*```",
+            "",
+            content,
+        ).strip()
 
     @staticmethod
     def _rag_prompt_context(state: ManagerState) -> str:
@@ -431,7 +490,73 @@ class ChatExecutor:
             {"role": "user", "content": user_prompt},
         ]
 
+        async def invoke_tool_call(tool_call: dict[str, Any]) -> None:
+            llm_tool_name = str(tool_call.get("name") or "")
+            internal_tool_name = tool_name_map.get(llm_tool_name, llm_tool_name)
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tool_call.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": llm_tool_name,
+                                "arguments": json.dumps(tool_call.get("arguments", {}), ensure_ascii=False),
+                            },
+                        }
+                    ],
+                }
+            )
+
+            if invoker:
+                from agent.tools.contracts import ToolContext
+
+                context = ToolContext(
+                    org_id=state.org_id,
+                    request_id=state.request_id,
+                    agent=getattr(state, "selected_agent", "") or "",
+                    surface=state.surface,
+                    user_id=state.user_id,
+                    session_id=state.session_id,
+                    workflow_run_id=state.workflow_run_id,
+                    allowed_modes=state.allowed_modes,
+                )
+                result = await invoker.invoke(
+                    tool_name=internal_tool_name,
+                    arguments=tool_call.get("arguments", {}),
+                    context=context,
+                )
+                result_text = json.dumps(
+                    {"status": result.status, "data": result.data, "error": result.error},
+                    ensure_ascii=False,
+                )
+            else:
+                result_text = json.dumps(
+                    {"status": "skipped", "error": "ToolInvoker not available"},
+                    ensure_ascii=False,
+                )
+
+            messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": result_text})
+            state.used_tool_calls += 1
+
         max_rounds = min(state.max_tool_calls, 3)
+        forced_tool_names = set(getattr(state, "forced_tool_names", []) or [])
+        if "web.search" in forced_tool_names and force_web:
+            await invoke_tool_call(
+                {
+                    "id": "call_forced_web_search",
+                    "name": first_tool_name,
+                    "arguments": {
+                        "query": state.original_query,
+                        "max_results": 5,
+                        "region": "cn-zh",
+                    },
+                }
+            )
+            return await self._finalize_tool_answer(state, client, messages)
+
         used_tool = False
         for round_index in range(max_rounds):
             response = await client.chat_with_tools(
@@ -459,56 +584,8 @@ class ChatExecutor:
                 return "无法确定答案"
 
             for tool_call in tool_calls:
-                llm_tool_name = str(tool_call.get("name") or "")
-                internal_tool_name = tool_name_map.get(llm_tool_name, llm_tool_name)
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": tool_call.get("id", ""),
-                                "type": "function",
-                                "function": {
-                                    "name": llm_tool_name,
-                                    "arguments": json.dumps(tool_call.get("arguments", {}), ensure_ascii=False),
-                                },
-                            }
-                        ],
-                    }
-                )
-
-                if invoker:
-                    from agent.tools.contracts import ToolContext
-
-                    context = ToolContext(
-                        org_id=state.org_id,
-                        request_id=state.request_id,
-                        agent=getattr(state, "selected_agent", "") or "",
-                        surface=state.surface,
-                        user_id=state.user_id,
-                        session_id=state.session_id,
-                        workflow_run_id=state.workflow_run_id,
-                        allowed_modes=state.allowed_modes,
-                    )
-                    result = await invoker.invoke(
-                        tool_name=internal_tool_name,
-                        arguments=tool_call.get("arguments", {}),
-                        context=context,
-                    )
-                    result_text = json.dumps(
-                        {"status": result.status, "data": result.data, "error": result.error},
-                        ensure_ascii=False,
-                    )
-                else:
-                    result_text = json.dumps(
-                        {"status": "skipped", "error": "ToolInvoker not available"},
-                        ensure_ascii=False,
-                    )
-
-                messages.append({"role": "tool", "tool_call_id": tool_call.get("id", ""), "content": result_text})
+                await invoke_tool_call(tool_call)
                 used_tool = True
-                state.used_tool_calls += 1
 
             return await self._finalize_tool_answer(state, client, messages)
 
@@ -619,7 +696,8 @@ class ChatExecutor:
                 "Answer requirements:\n"
                 "Prefer the RAG evidence above when it is relevant, and cite evidence markers such as [RAG-1].\n"
                 "If the selected knowledge base does not provide enough evidence, say so clearly and do not fill gaps with guesses.\n"
-                "如果 RAG 证据不足以回答用户问题，请明确说明当前选中的知识库没有提供该信息，不要凭常识补全。"
+                "如果 RAG 证据不足，仍然要继续回答用户问题，但必须明确区分知识库证据和通用回答。\n"
+                "如果 RAG 证据不足以回答用户问题，请明确说明当前选中的知识库没有提供该信息，不要凭常识补全，不要伪造知识库引用。"
             )
         else:
             parts.append("Answer requirements:\nWrite the final natural-language reply from the information above.")

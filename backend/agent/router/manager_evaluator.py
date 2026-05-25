@@ -46,6 +46,11 @@ class ManagerEvaluator:
         artifact_types = {item.type for item in [*state.artifacts, *artifacts]}
         if any(step.capability_key == "chat.general" for step in plan.steps):
             return EvaluationResult(True, 1.0, "finish", "普通聊天已生成回复")
+        composed_artifacts = [
+            item for item in [*state.artifacts, *artifacts] if item.type == "composed_response"
+        ]
+        if any(str((item.content or {}).get("status") or "completed") != "blocked" for item in composed_artifacts):
+            return EvaluationResult(True, 1.0, "finish", "聊天回复已生成")
         if "quality_report" in artifact_types:
             return EvaluationResult(True, 0.86, "finish", "已经找到报告信息")
         if "task_status" in artifact_types:

@@ -170,17 +170,27 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
-        payload["response_format"] = {"type": "json_object"}
-        return self._ensure_json_prompt_hint(payload)
+        else:
+            payload["response_format"] = {"type": "json_object"}
+            self._ensure_json_prompt_hint(payload)
+        return payload
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
             content.append({"type": "image_url", "image_url": {"url": url}})
-        return await self.chat(
-            [{"role": "user", "content": content}],
-            temperature=0.1,
+        # Bypass _build_chat_payload to avoid response_format — many vision
+        # models (doubao, etc.) do not support JSON mode.
+        payload = {
+            "model": self._model_id,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0.1,
+        }
+        return await self._post_json(
+            "/chat/completions",
+            payload,
             observation_name="llm.vision_chat",
+            observation_type="generation",
             observation_metadata={"image_count": len(image_urls), "modality": "vision"},
         )
 
@@ -594,14 +604,29 @@ class LLMClient:
         return min(0.5 * (2 ** max(attempt - 1, 0)), 2.0)
 
     @staticmethod
+    def _safe_update_observation(observation: Any, **kwargs) -> None:
+        updater = getattr(observation, "update", None)
+        if not callable(updater):
+            return
+        payload = {key: value for key, value in kwargs.items() if value is not None}
+        if not payload:
+            return
+        try:
+            updater(**payload)
+        except Exception:
+            return
+
+    @staticmethod
     def _should_retry_without_response_format(path: str, payload: dict[str, Any], response: httpx.Response) -> bool:
         if path != "/chat/completions":
             return False
         response_format = payload.get("response_format")
         if not isinstance(response_format, dict) or response_format.get("type") != "json_object":
             return False
+        if response.status_code not in {400, 422}:
+            return False
         detail = response.text.lower()
-        return "response_format.type" in detail and "json_object" in detail and "not supported by this model" in detail
+        return "response_format" in detail
 
     @staticmethod
     def _ensure_json_prompt_hint(payload: dict[str, Any]) -> dict[str, Any]:
@@ -631,25 +656,28 @@ class LLMClient:
         return next_payload
 
     @staticmethod
-    def _safe_update_observation(observation: Any, **kwargs) -> None:
-        updater = getattr(observation, "update", None)
-        if not callable(updater):
-            return
-        payload = {key: value for key, value in kwargs.items() if value is not None}
-        if not payload:
-            return
-        try:
-            updater(**payload)
-        except Exception:
-            return
-
-    @staticmethod
     def _extract_json_object(text: str) -> dict[str, Any] | None:
-        candidates = [text.strip()]
+        if not isinstance(text, str) or not text.strip():
+            return None
+        # Collect every {…} span as a candidate, preferring those that look like answers.
+        spans: list[str] = []
+        for m in re.finditer(r"\{", text):
+            depth = 0
+            for j in range(m.start(), len(text)):
+                ch = text[j]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        spans.append(text[m.start():j + 1])
+                        break
+        spans.sort(key=lambda s: ("\"answer\"" in s), reverse=True)
+        # Also try markdown code blocks and the full text.
+        candidates = spans + [text.strip()]
         if "```" in text:
             for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.S):
                 candidates.append(block.strip())
-
         for candidate in candidates:
             if not candidate:
                 continue
@@ -658,13 +686,12 @@ class LLMClient:
             try:
                 parsed = json.loads(candidate)
             except json.JSONDecodeError:
-                start = candidate.find("{")
-                end = candidate.rfind("}")
-                if start == -1 or end == -1 or end <= start:
-                    continue
-                try:
-                    parsed = json.loads(candidate[start : end + 1])
-                except json.JSONDecodeError:
+                if candidate.startswith("{"):
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        continue
+                else:
                     continue
             if isinstance(parsed, dict):
                 return parsed
