@@ -42,6 +42,48 @@ def test_orchestrator_json_sanitizer_drops_callables_from_legacy_state():
     assert payload == {"answer": "ok", "nested": {"count": 1}}
 
 
+def test_orchestrator_idempotency_key_hashes_long_keys_within_mysql_limit():
+    request = NormalizedRequest(
+        request_kind="chat",
+        request_id="req-token",
+        workflow_run_id="workflow-" + ("w" * 80),
+        session_id="session-" + ("s" * 80),
+        assistant_message_id="assistant-" + ("a" * 80),
+        org_id="org-1",
+        user_id="user-1",
+        workspace="chat",
+        query="hello",
+    )
+
+    key = QualityAgentOrchestratorService._idempotency_key(
+        request,
+        "chat-token",
+        0,
+        "doubao-seed-2-0-lite-260215",
+        "trace-" + ("t" * 80),
+    )
+    same_key = QualityAgentOrchestratorService._idempotency_key(
+        request,
+        "chat-token",
+        0,
+        "doubao-seed-2-0-lite-260215",
+        "trace-" + ("t" * 80),
+    )
+    different_key = QualityAgentOrchestratorService._idempotency_key(
+        request,
+        "chat-token",
+        1,
+        "doubao-seed-2-0-lite-260215",
+        "trace-" + ("t" * 80),
+    )
+
+    assert len(key) <= 191
+    assert len(different_key) <= 191
+    assert ":sha256:" in key
+    assert same_key == key
+    assert different_key != key
+
+
 def test_chat_answer_is_not_materialized_as_task():
     output = AgentOutput(
         message_type="quality_answer",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, status
@@ -13,9 +12,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-LANGFUSE_INTERNAL_URL = "http://langfuse-web:3000"
 DEFAULT_EMAIL = "admin@piap.local"
 DEFAULT_PASSWORD = "piap_admin_123456"
+
+
+def _langfuse_auth_base_url() -> str:
+    return str(getattr(settings, "langfuse_host", "") or "http://127.0.0.1:3000").rstrip("/")
 
 
 def _build_proxy_trace_url(trace_id: str) -> str:
@@ -28,11 +30,12 @@ async def langfuse_redirect(
     trace_id: str = Query(..., description="Langfuse trace ID"),
 ):
     email = str(getattr(settings, "langfuse_init_user_email", "") or "").strip() or DEFAULT_EMAIL
-    password = DEFAULT_PASSWORD
+    password = str(getattr(settings, "langfuse_init_user_password", "") or "").strip() or DEFAULT_PASSWORD
+    langfuse_base_url = _langfuse_auth_base_url()
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         try:
-            csrf_resp = await client.get(f"{LANGFUSE_INTERNAL_URL}/api/auth/csrf")
+            csrf_resp = await client.get(f"{langfuse_base_url}/api/auth/csrf")
             csrf_resp.raise_for_status()
         except Exception as exc:
             logger.error("Langfuse CSRF fetch failed: %s", exc)
@@ -48,7 +51,7 @@ async def langfuse_redirect(
 
         try:
             login_resp = await client.post(
-                f"{LANGFUSE_INTERNAL_URL}/api/auth/callback/credentials",
+                f"{langfuse_base_url}/api/auth/callback/credentials",
                 data={
                     "csrfToken": csrf_token,
                     "email": email,

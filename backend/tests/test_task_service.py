@@ -3,8 +3,13 @@ from datetime import datetime
 import pytest
 
 from app.core.exceptions import ValidationError
-from app.schemas.task import TaskResponse
+from app.schemas.task import ImageItem, TaskResponse
 from app.services.task_service import TaskService
+
+
+class FakeSpec:
+    def __init__(self, required_image_count: int = 1):
+        self.required_image_count = required_image_count
 
 
 class FakeTask:
@@ -17,6 +22,7 @@ class FakeTask:
         self.status = "pending"
         self.priority = 5
         self.image_urls = ["https://example.com/a.png"]
+        self.image_items = None
         self.created_at = datetime(2026, 3, 25, 12, 0, 0)
         self.updated_at = datetime(2026, 3, 25, 12, 0, 1)
         self.has_result = False
@@ -46,6 +52,8 @@ class FakeTaskRepo:
         fake.created_by = task.created_by
         fake.meta_data = task.meta_data
         fake.spec_code = task.spec_code
+        fake.image_urls = task.image_urls
+        fake.image_items = task.image_items
         return fake
 
     async def get_for_user(self, org_id, task_id, owner_user_id=None):
@@ -76,7 +84,7 @@ class FakeTaskRepo:
 class FakeSpecRepo:
     def __init__(self, session):
         self._session = session
-        self.active_specs = {"STD-1": object()}
+        self.active_specs = {"STD-1": FakeSpec()}
 
     async def get_active_spec(self, org_id: str, spec_code: str):
         return self.active_specs.get(spec_code)
@@ -148,6 +156,79 @@ async def test_create_task_returns_serializable_task(monkeypatch):
     assert response.created_at == datetime(2026, 3, 25, 12, 0, 0)
     assert response.updated_at == datetime(2026, 3, 25, 12, 0, 1)
     assert session.refreshed == ["task-1"]
+
+
+@pytest.mark.asyncio
+async def test_create_task_preserves_image_items_and_sample_numbers(monkeypatch):
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+
+    session = FakeSession()
+    service = TaskService(session=session, org_id="org-1")
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png", "https://example.com/b.png"],
+        image_items=[
+            ImageItem(index=0, url="https://example.com/a.png", hash="hash-a", sample_number=3),
+            ImageItem(index=1, url="https://example.com/b.png", hash="hash-b", sample_number=4),
+        ],
+        priority=5,
+        metadata={"batch": "B-2"},
+    )
+
+    assert task.image_urls == ["https://example.com/a.png", "https://example.com/b.png"]
+    assert task.image_items == [
+        {"index": 0, "url": "https://example.com/a.png", "hash": "hash-a", "sample_number": 3},
+        {"index": 1, "url": "https://example.com/b.png", "hash": "hash-b", "sample_number": 4},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_duplicate_images_in_same_submission(monkeypatch):
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1")
+
+    with pytest.raises(ValidationError, match="检测到重复图片"):
+        await service.create_task(
+            created_by="user-1",
+            product_id="product-1",
+            spec_code="STD-1",
+            image_urls=["https://example.com/a.png", "https://example.com/a-dup.png"],
+            image_items=[
+                ImageItem(index=0, url="https://example.com/a.png", hash="same-hash"),
+                ImageItem(index=1, url="https://example.com/a-dup.png", hash="same-hash"),
+            ],
+            priority=5,
+            metadata=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_when_images_below_spec_requirement(monkeypatch):
+    repo = FakeTaskRepo(None)
+    spec_repo = FakeSpecRepo(None)
+    spec_repo.active_specs["STD-1"] = FakeSpec(required_image_count=2)
+    monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", lambda session: spec_repo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1")
+
+    with pytest.raises(ValidationError, match="至少需要 2 张图片"):
+        await service.create_task(
+            created_by="user-1",
+            product_id="product-1",
+            spec_code="STD-1",
+            image_urls=["https://example.com/a.png"],
+            priority=5,
+            metadata=None,
+        )
 
 
 @pytest.mark.asyncio

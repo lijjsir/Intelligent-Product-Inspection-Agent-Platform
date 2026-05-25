@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChatDotRound, Delete, Key, Plus, Promotion, RefreshRight, MagicStick } from "@element-plus/icons-vue";
+import { ChatDotRound, CopyDocument, Delete, Key, MagicStick, Plus, Promotion, RefreshRight, Share, User } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
@@ -15,10 +15,34 @@ const roomTitle = ref("会议室");
 const roomPassword = ref("");
 const joinCode = ref("");
 const joinPassword = ref("");
+const hubMode = ref<"create" | "join">("create");
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
 const mentionableAgents = computed(() => store.agents.filter((agent) => agent.role === "participant"));
+const activeMeetingLink = computed(() => {
+  const code = store.activeRoom?.access_code;
+  if (!code) return "";
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", code);
+  url.hash = "";
+  return url.toString();
+});
+const hostMember = computed(() => {
+  const creatorId = store.activeRoom?.created_by;
+  return store.members.find((member) => member.role === "host")
+    || store.members.find((member) => member.user_id === creatorId)
+    || null;
+});
+const visibleMemberCount = computed(() => store.members.length || store.activeRoom?.member_count || 0);
+
+function memberRoleLabel(role: string) {
+  return role === "host" ? "主持人" : "成员";
+}
+
+function memberInitial(name: string) {
+  return (name || "?").trim().slice(0, 1).toUpperCase();
+}
 
 function formatTime(value?: string | null) {
   if (!value) return "";
@@ -40,6 +64,22 @@ function shareMeetingMessage(message: MeetingMessage) {
   const roomPart = store.activeRoom?.access_code ? `?room=${store.activeRoom.access_code}` : "";
   const url = `${window.location.origin}${window.location.pathname}${roomPart}#meeting-message-${message.id}`;
   copyToClipboard(url, "分享链接已复制");
+}
+
+function buildInviteText() {
+  if (!store.activeRoom) return "";
+  return [
+    `邀请你加入会议「${store.activeRoom.title}」`,
+    `会议码：${store.activeRoom.access_code}`,
+    `入会链接：${activeMeetingLink.value}`,
+    "如果会议设置过密码，请向邀请人索取。",
+  ].join("\n");
+}
+
+function copyInvite() {
+  const text = buildInviteText();
+  if (!text) return;
+  copyToClipboard(text, "邀请信息已复制");
 }
 
 async function scrollToBottom() {
@@ -172,17 +212,28 @@ async function handleDeleteRoom() {
 watch(() => store.activeRoomId, async (newId) => {
   if (newId) {
     await store.loadMessages(0);
+    await store.loadMembers();
     await store.loadAgents();
     await store.loadAvailableAgentDefs();
     store.connectStream();
     await scrollToBottom();
   } else {
+    await store.loadMembers();
     store.disconnectStream();
   }
 });
 
 onMounted(async () => {
+  const invitedCode = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() || "";
+  if (invitedCode) {
+    joinCode.value = invitedCode;
+    hubMode.value = "join";
+  }
   await store.loadRooms(true);
+  if (invitedCode) {
+    const matchedRoom = store.rooms.find((room) => room.access_code.toUpperCase() === invitedCode);
+    store.activeRoomId = matchedRoom?.id || "";
+  }
 });
 
 onBeforeUnmount(() => {
@@ -195,28 +246,49 @@ onBeforeUnmount(() => {
     <aside class="meeting-sidebar">
       <section class="sidebar-section">
         <p class="section-kicker">MEETING HUB</p>
-        <h1>进入会议</h1>
-        <p class="section-copy">创建会议邀请成员，按需点名 Agent 或请 AI 协作。</p>
+        <h1>会议室</h1>
+        <p class="section-copy">创建新会议，或用别人发来的会议码加入。</p>
 
-        <div class="form-stack">
+        <div class="hub-mode" role="tablist" aria-label="会议室操作">
+          <button
+            type="button"
+            :class="{ 'hub-mode-active': hubMode === 'create' }"
+            role="tab"
+            :aria-selected="hubMode === 'create'"
+            @click="hubMode = 'create'"
+          >
+            创建会议
+          </button>
+          <button
+            type="button"
+            :class="{ 'hub-mode-active': hubMode === 'join' }"
+            role="tab"
+            :aria-selected="hubMode === 'join'"
+            @click="hubMode = 'join'"
+          >
+            加入会议
+          </button>
+        </div>
+
+        <div v-if="hubMode === 'create'" class="form-stack">
           <label>
             <span>会议标题</span>
             <el-input v-model="roomTitle" placeholder="会议室" />
           </label>
           <label>
-            <span>会议密码</span>
+            <span>入会密码（可选）</span>
             <el-input v-model="roomPassword" type="password" show-password placeholder="可留空" />
           </label>
           <el-button :icon="Plus" @click="createRoom">创建会议室</el-button>
         </div>
 
-        <div class="form-stack join-stack">
+        <div v-else class="form-stack">
           <label>
             <span>会议码</span>
             <el-input v-model="joinCode" placeholder="输入会议码" />
           </label>
           <label>
-            <span>会议密码</span>
+            <span>入会密码</span>
             <el-input v-model="joinPassword" type="password" show-password placeholder="无密码可留空" @keydown.enter="joinRoom" />
           </label>
           <el-button :icon="Key" @click="joinRoom">加入会议</el-button>
@@ -245,11 +317,76 @@ onBeforeUnmount(() => {
 
     <section class="meeting-room">
       <header class="room-header">
-        <div>
+        <div class="room-title-block">
           <p class="section-kicker">LIVE ROOM</p>
           <h2>{{ store.activeRoom?.title || "实时会议协作" }}</h2>
+          <div v-if="store.activeRoom && hostMember" class="room-submeta">
+            <span class="host-pill">主持人 {{ hostMember.username }}</span>
+          </div>
         </div>
         <div class="room-header-right">
+          <el-popover
+            v-if="store.activeRoom"
+            placement="bottom-end"
+            :width="340"
+            trigger="click"
+            @show="store.loadMembers()"
+          >
+            <template #reference>
+              <el-button size="small" :icon="User">
+                成员 ({{ visibleMemberCount }})
+              </el-button>
+            </template>
+            <div class="member-panel">
+              <div class="member-panel-head">
+                <span>会议成员</span>
+                <strong>{{ visibleMemberCount }} 人</strong>
+              </div>
+              <div v-if="store.members.length === 0" class="member-panel-empty">
+                暂无成员信息
+              </div>
+              <div v-for="member in store.members" :key="member.id" class="member-item">
+                <span class="member-avatar">{{ memberInitial(member.username) }}</span>
+                <span class="member-main">
+                  <strong>{{ member.username }}</strong>
+                  <small>{{ member.user_id === auth.userId ? "当前账号" : member.user_id.slice(-8) }}</small>
+                </span>
+                <span class="member-role" :class="{ 'member-role-host': member.role === 'host' }">
+                  {{ memberRoleLabel(member.role) }}
+                </span>
+              </div>
+            </div>
+          </el-popover>
+
+          <el-popover
+            v-if="store.activeRoom"
+            placement="bottom-end"
+            :width="360"
+            trigger="click"
+          >
+            <template #reference>
+              <el-button size="small" type="primary" plain :icon="Share">
+                邀请成员
+              </el-button>
+            </template>
+            <div class="invite-panel">
+              <div class="invite-panel-head">
+                <span>会议码</span>
+                <strong>{{ store.activeRoom.access_code }}</strong>
+              </div>
+              <p class="invite-note">复制给成员后，对方打开链接会自动填入会议码。</p>
+              <div class="invite-link">{{ activeMeetingLink }}</div>
+              <div class="invite-actions">
+                <el-button size="small" :icon="CopyDocument" @click="copyToClipboard(store.activeRoom.access_code, '会议码已复制')">
+                  复制会议码
+                </el-button>
+                <el-button size="small" type="primary" :icon="Share" @click="copyInvite">
+                  复制邀请
+                </el-button>
+              </div>
+            </div>
+          </el-popover>
+
           <!-- Agent Management -->
           <el-popover
             v-if="store.activeRoom"
@@ -468,16 +605,41 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+.hub-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 4px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.hub-mode button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #52525b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.hub-mode button:hover,
+.hub-mode-active {
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
 .form-stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
   margin-top: 16px;
-}
-
-.join-stack {
-  padding-top: 16px;
-  border-top: 1px solid #f4f4f5;
 }
 
 label {
@@ -572,9 +734,36 @@ label span {
   font-size: 18px;
 }
 
+.room-title-block {
+  min-width: 180px;
+}
+
+.room-submeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.host-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid #d6d3d1;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .room-header-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -598,6 +787,149 @@ label span {
   color: #18181b;
   font-size: 14px;
   font-weight: 700;
+}
+
+/* Invitation */
+.invite-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.invite-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+.invite-panel-head span {
+  color: #71717a;
+  font-size: 12px;
+}
+
+.invite-panel-head strong {
+  color: #111827;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+}
+
+.invite-note {
+  color: #71717a;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.invite-link {
+  padding: 8px 10px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #fafafa;
+  color: #3f3f46;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.invite-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Members */
+.member-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.member-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+.member-panel-head span {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.member-panel-head strong {
+  color: #71717a;
+  font-size: 12px;
+}
+
+.member-panel-empty {
+  padding: 18px 0;
+  color: #a1a1aa;
+  font-size: 13px;
+  text-align: center;
+}
+
+.member-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #fafafa;
+}
+
+.member-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #18181b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.member-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.member-main strong {
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-main small {
+  color: #a1a1aa;
+  font-size: 11px;
+}
+
+.member-role {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f4f4f5;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.member-role-host {
+  background: #fff7ed;
+  color: #9a3412;
 }
 
 /* Agent Panel */

@@ -58,6 +58,7 @@ async def create_task(
         product_id=payload.product_id,
         spec_code=payload.spec_code,
         image_urls=payload.image_urls,
+        image_items=payload.image_items,
         priority=payload.priority,
         metadata=payload.metadata,
     )

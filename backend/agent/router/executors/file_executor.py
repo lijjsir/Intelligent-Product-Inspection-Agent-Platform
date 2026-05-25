@@ -117,6 +117,8 @@ class FileExecutor:
                 base_url=runtime.get("base_url"),
                 model_id=runtime.get("model_id"),
                 provider=runtime.get("provider"),
+                trace_id=state.trace_id or state.workflow_run_id or state.request_id,
+                task_id=state.session_id,
                 org_id=request.org_id,
             )
             state.used_llm_calls += 1

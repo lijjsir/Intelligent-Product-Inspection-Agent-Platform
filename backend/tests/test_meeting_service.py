@@ -128,6 +128,33 @@ async def test_parse_mentions_requires_room_participant_and_supports_spaced_name
 
 
 @pytest.mark.asyncio
+async def test_list_room_members_resolves_host_and_usernames():
+    class FakeRepo:
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id="member-current", org_id=org_id, room_id=room_id, user_id=user_id)
+
+        async def list_members(self, org_id: str, room_id: str):
+            return [
+                SimpleNamespace(id="member-1", room_id=room_id, user_id="user-1", role="host", created_at=None),
+                SimpleNamespace(id="member-2", room_id=room_id, user_id="user-2", role="member", created_at=None),
+            ]
+
+    fake_users = FakeUsersRepo()
+    fake_users.users[("org-1", "user-2")] = FakeUser("bob")
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeRepo()
+    service._users = fake_users
+
+    members = await service.list_room_members("room-1")
+
+    assert [(member.username, member.role) for member in members] == [("alice", "host"), ("bob", "member")]
+
+
+@pytest.mark.asyncio
 async def test_parse_mentions_supports_single_agent_short_aliases():
     class FakeRoomAgent:
         agent_id = "11111111-1111-1111-1111-111111111111"

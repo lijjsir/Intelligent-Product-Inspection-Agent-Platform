@@ -4,7 +4,14 @@ from app.core.exceptions import NotFoundError
 from app.repositories.agent_ops_repo import AgentDefinitionRepository
 from app.repositories.meeting_repo import MeetingRepository
 from app.repositories.user_repo import UserRepository
-from app.schemas.meeting import AdminMeetingRoomResponse, MeetingRoomAgentResponse, MeetingRoomDetailResponse, MeetingRoomResponse, MeetingMessageResponse
+from app.schemas.meeting import (
+    AdminMeetingRoomResponse,
+    MeetingMessageResponse,
+    MeetingRoomAgentResponse,
+    MeetingRoomDetailResponse,
+    MeetingRoomMemberResponse,
+    MeetingRoomResponse,
+)
 
 
 class MeetingAdminService:
@@ -57,6 +64,7 @@ class MeetingAdminService:
         counts = await self._repo.count_members(self._org_id, [room_id])
         agent_counts = await self._repo.count_agents(self._org_id, [room_id])
         agents = await self._repo.get_agents(self._org_id, room_id)
+        members = await self._repo.list_members(self._org_id, room_id)
 
         agent_responses = []
         for a in agents:
@@ -76,6 +84,19 @@ class MeetingAdminService:
                 added_by=str(a.added_by),
             ))
 
+        member_responses = []
+        for member in members:
+            user_id = str(member.user_id)
+            user = await self._users.get_by_id(self._org_id, user_id)
+            member_responses.append(MeetingRoomMemberResponse(
+                id=str(member.id),
+                room_id=str(member.room_id),
+                user_id=user_id,
+                username=user.username if user else user_id[-8:],
+                role=str(member.role),
+                joined_at=member.created_at,
+            ))
+
         return MeetingRoomDetailResponse(
             id=str(room.id),
             org_id=str(room.org_id),
@@ -86,6 +107,7 @@ class MeetingAdminService:
             member_count=counts.get(room_id, 0),
             agent_count=agent_counts.get(room_id, 0),
             agents=agent_responses,
+            members=member_responses,
             last_message_at=room.last_message_at,
             created_at=room.created_at,
             updated_at=room.updated_at,

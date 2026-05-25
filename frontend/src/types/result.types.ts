@@ -5,7 +5,9 @@ export interface Defect {
   type: string;
   confidence: number;
   bbox: [number, number, number, number];
-  description?: string;
+  description?: string | null;
+  image_index?: number | null;
+  image_hash?: string | null;
 }
 
 export interface InspectionResult {

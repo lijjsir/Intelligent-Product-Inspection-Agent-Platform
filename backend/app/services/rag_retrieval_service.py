@@ -3,8 +3,11 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
+from sqlalchemy import select
+
 from agent.rag.retriever import Retriever
 from app.core.config import settings
+from app.models.rag_space import RagDocument, RagDocumentChunk, RagNode
 from app.repositories.rag_space_repo import RagSpaceRepository
 from infra.cache.memory_cache import _rag_result_cache, _rag_space_cache, stable_cache_key
 
@@ -29,6 +32,121 @@ class RagRetrievalService:
         threshold = cls._score_threshold() if threshold is None else threshold
         return float(item.get("score") or 0.0) >= threshold
 
+    async def _get_space(self, rag_space_id: str | None):
+        if not rag_space_id:
+            return None
+        space_cache_key = f"rag_space:{self._org_id}:{self._user_id or ''}:{rag_space_id}"
+        space = _rag_space_cache.get(space_cache_key)
+        if space is None:
+            space = await self._spaces.get(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            if space is not None:
+                _rag_space_cache.set(space_cache_key, space, ttl_seconds=120)
+        return space
+
+    async def list_space_documents(
+        self,
+        *,
+        rag_space_id: str | None,
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        started_at = perf_counter()
+        if not rag_space_id:
+            return {
+                "rag_space_id": None,
+                "rag_space_name": None,
+                "hits": [],
+                "hit_count": 0,
+                "candidate_count": 0,
+                "rejected_count": 0,
+                "top_k": max(int(limit or 0), 1),
+                "overview_mode": True,
+                "latency_ms": 0.0,
+            }
+
+        space = await self._get_space(rag_space_id)
+        if not space:
+            return {
+                "rag_space_id": rag_space_id,
+                "rag_space_name": None,
+                "hits": [],
+                "hit_count": 0,
+                "candidate_count": 0,
+                "rejected_count": 0,
+                "top_k": max(int(limit or 0), 1),
+                "overview_mode": True,
+                "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+            }
+
+        row_limit = max(int(limit or 0), 1)
+        result = await self._session.execute(
+            select(RagDocument, RagNode.full_path)
+            .join(RagNode, RagNode.id == RagDocument.node_id, isouter=True)
+            .where(
+                RagDocument.org_id == self._org_id,
+                RagDocument.rag_space_id == str(space.id),
+                RagDocument.deleted_at.is_(None),
+                RagNode.deleted_at.is_(None),
+            )
+            .order_by(RagNode.full_path.asc(), RagDocument.file_name.asc())
+            .limit(row_limit)
+        )
+        rows = list(result.all())
+        doc_ids = [str(row[0].id) for row in rows]
+        previews: dict[str, str] = {}
+        if doc_ids:
+            chunk_rows = await self._session.execute(
+                select(
+                    RagDocumentChunk.document_id,
+                    RagDocumentChunk.content_preview,
+                    RagDocumentChunk.chunk_index,
+                )
+                .where(
+                    RagDocumentChunk.document_id.in_(doc_ids),
+                    RagDocumentChunk.deleted_at.is_(None),
+                )
+                .order_by(RagDocumentChunk.document_id.asc(), RagDocumentChunk.chunk_index.asc())
+            )
+            for document_id, content_preview, _chunk_index in chunk_rows.all():
+                previews.setdefault(str(document_id), str(content_preview or ""))
+
+        hits = []
+        for index, (document, full_path) in enumerate(rows, start=1):
+            doc_id = str(document.id)
+            source = str(full_path or document.file_name or "")
+            hits.append(
+                {
+                    "id": doc_id,
+                    "title": str(document.file_name or f"document-{index}"),
+                    "source": source,
+                    "full_path": source,
+                    "quote": previews.get(doc_id, ""),
+                    "score": 1.0,
+                    "document_id": doc_id,
+                    "chunk_index": None,
+                    "page_number": None,
+                    "kind": "document_overview",
+                    "parse_status": str(document.parse_status or ""),
+                    "index_status": str(document.index_status or ""),
+                    "chunk_count": int(document.chunk_count or 0),
+                }
+            )
+
+        return {
+            "rag_space_id": str(space.id),
+            "rag_space_name": str(space.name),
+            "hits": hits,
+            "hit_count": len(hits),
+            "candidate_count": len(hits),
+            "rejected_count": 0,
+            "top_k": row_limit,
+            "overview_mode": True,
+            "latency_ms": round((perf_counter() - started_at) * 1000, 2),
+        }
+
     async def search(
         self,
         *,
@@ -36,6 +154,7 @@ class RagRetrievalService:
         query: str,
         top_k: int = 4,
         scope_node_ids: list[str] | None = None,
+        include_low_confidence_fallback: bool = False,
     ) -> dict[str, Any]:
         started_at = perf_counter()
         if not rag_space_id:
@@ -47,19 +166,11 @@ class RagRetrievalService:
                 "candidate_count": 0,
                 "rejected_count": 0,
                 "score_threshold": self._score_threshold(),
+                "low_confidence_fallback": False,
                 "latency_ms": 0.0,
             }
 
-        space_cache_key = f"rag_space:{self._org_id}:{self._user_id or ''}:{rag_space_id}"
-        space = _rag_space_cache.get(space_cache_key)
-        if space is None:
-            space = await self._spaces.get(
-                org_id=self._org_id,
-                rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
-            )
-            if space is not None:
-                _rag_space_cache.set(space_cache_key, space, ttl_seconds=120)
+        space = await self._get_space(rag_space_id)
         if not space:
             return {
                 "rag_space_id": rag_space_id,
@@ -69,6 +180,7 @@ class RagRetrievalService:
                 "candidate_count": 0,
                 "rejected_count": 0,
                 "score_threshold": self._score_threshold(),
+                "low_confidence_fallback": False,
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             }
 
@@ -103,6 +215,10 @@ class RagRetrievalService:
         score_threshold = self._score_threshold()
         candidates = docs[: max(1, top_k)]
         filtered = [item for item in candidates if self._is_relevant(item, threshold=score_threshold)]
+        low_confidence_fallback = False
+        if include_low_confidence_fallback and not filtered and candidates:
+            filtered = candidates[:1]
+            low_confidence_fallback = True
         selected = [
             {
                 "id": str(item.get("id") or ""),
@@ -126,6 +242,7 @@ class RagRetrievalService:
             "candidate_count": len(candidates),
             "rejected_count": max(0, len(candidates) - len(selected)),
             "score_threshold": score_threshold,
+            "low_confidence_fallback": low_confidence_fallback,
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
         }
 

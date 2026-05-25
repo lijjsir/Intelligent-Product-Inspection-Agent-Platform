@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from functools import lru_cache
 from typing import Any, AsyncIterator
 
@@ -92,7 +92,7 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            default_title = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            default_title = (utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
             obj = await repo.create(self._org_id, self._user_id, title=title or default_title)
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
