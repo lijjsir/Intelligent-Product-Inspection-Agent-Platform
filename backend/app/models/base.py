@@ -22,6 +22,8 @@ class UUIDBinary(TypeDecorator):
             if len(value) == 16:
                 return value
             raise ValueError(f"UUIDBinary expects 16 bytes, got {len(value)}")
+        if not value:
+            return None
         try:
             return uuid.UUID(str(value)).bytes
         except (ValueError, AttributeError):

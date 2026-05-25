@@ -60,6 +60,9 @@ logs/
 # Codex
 .codex/
 
+# Celery Beat runtime
+backend/celerybeat-schedule
+
 # Playwright MCP
 .playwright-mcp/
 tool-catalog-real-data.png
