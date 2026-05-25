@@ -178,6 +178,7 @@ class ManagerPolicy:
             inspection_context=dict(ext.get("inspection_context") or {}) or None,
             selected_rag_space=self._selected_rag_space(ext),
             rag_scope=dict(ext.get("rag_scope") or {}) or None,
+            force_web_search=bool(ext.get("force_web_search")),
             allowed_modes=allowed_modes,
             forbidden_modes=forbidden_modes,
             action_intent=str(ext.get("action_intent") or "") or None,
@@ -187,6 +188,7 @@ class ManagerPolicy:
     async def understand(self, state: ManagerState) -> Understanding:
         query = state.normalized_query
         attachment_kinds = [attachment_kind(item) for item in state.attachments]
+
         if self._matches(query, RAG_INGEST_PATTERNS):
             return Understanding(
                 goal="请求把文件写入 RAG 空间，需要显式确认且不能在聊天页直接执行",
@@ -221,7 +223,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="对图片进行非正式理解和初步判断",
                 intent="image_understanding",
-                needs=["image.understanding", "chat.response.compose"],
+                needs=self._with_forced_web_search(["image.understanding", "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -230,7 +232,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="处理聊天上传文件并返回辅助分析",
                 intent=capability.replace(".", "_"),
-                needs=[capability, "chat.response.compose"],
+                needs=self._with_forced_web_search([capability, "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -239,7 +241,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="只读查询质量检测报告或任务状态",
                 intent=capability.replace(".", "_"),
-                needs=[capability, "chat.response.compose"],
+                needs=self._with_forced_web_search([capability, "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -247,7 +249,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="基于可用知识源检索证据并回答",
                 intent="rag_qa",
-                needs=["rag.retrieve", "chat.response.compose"],
+                needs=self._with_forced_web_search(["rag.retrieve", "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -255,17 +257,30 @@ class ManagerPolicy:
             return Understanding(
                 goal="预留数据分析 Agent 只读分析能力",
                 intent="data_analysis",
-                needs=["data.analysis", "chat.response.compose"],
+                needs=self._with_forced_web_search(["data.analysis", "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
         return Understanding(
             goal="回答普通聊天问题",
             intent="general_chat",
-            needs=["chat.general"],
+            needs=self._with_forced_web_search(["chat.general"], state),
             missing_inputs=[],
             entities={},
         )
+
+    @staticmethod
+    def _with_forced_web_search(needs: list[str], state: ManagerState) -> list[str]:
+        if not state.force_web_search:
+            return needs
+        if "web.search" in needs:
+            return needs
+        if "chat.response.compose" in needs:
+            compose_index = needs.index("chat.response.compose")
+            return [*needs[:compose_index], "web.search", *needs[compose_index:]]
+        if needs == ["chat.general"]:
+            return ["web.search", "chat.response.compose"]
+        return [*needs, "web.search", "chat.response.compose"]
 
     _SUCCESS_CRITERIA: dict[str, list[str]] = {
         "rag.retrieve": ["hit_count > 0", "top_score meets threshold"],

@@ -406,7 +406,7 @@ class ManagerLoop:
         if state.route_plan and state.route_plan.reason == "data_analysis":
             return "已完成当前可用的只读数据分析。"
         for observation in reversed(state.observations):
-            if observation.capability_key == "chat.general" and observation.summary:
+            if observation.capability_key in {"chat.general", "web.search"} and observation.summary:
                 return observation.summary
         return "我已收到你的请求。"
 

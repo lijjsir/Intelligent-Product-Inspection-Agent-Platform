@@ -7,6 +7,7 @@ import pytest
 from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
 from agent.router.contracts import AgentPlanStep
 from agent.router.executors.chat_executor import ChatExecutor
+from agent.router.executors.vision_executor import VisionExecutor
 from agent.router.manager_state import ManagerState
 from agent.router.manager_loop import ManagerLoop
 from agent.tools.contracts import ToolResult, ToolSpec
@@ -72,6 +73,47 @@ async def test_chat_image_understanding_is_informal_and_does_not_create_task(moc
     assert output.route_decision.sub_route == "image_understanding"
     assert payload["message_type"] == "image_analysis"
     assert "created_task" not in payload or payload["created_task"] is None
+
+
+@pytest.mark.asyncio
+async def test_vision_understanding_does_not_select_text_only_chat_runtime(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            pass
+
+        async def list_runtime_models(self):
+            return [{"id": "chat-1", "model_key": "text-only", "model_type": "chat"}]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types, reserve=False, excluded_runtime_ids=None):
+            seen["model_types"] = set(model_types)
+            return None
+
+    monkeypatch.setattr("app.services.model_config_service.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.router.executors.vision_executor.LLMGateway", lambda: FakeGateway())
+
+    state = ManagerState(
+        request_id="req-1",
+        workflow_run_id="wf-1",
+        original_query="这个图片的内容是什么",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        selected_agent="chat",
+    )
+    routed = [{"attachment": {"url": "https://example.test/apple.jpg"}, "node": {}}]
+
+    result = await VisionExecutor()._try_multimodal_understanding(
+        routed,
+        state,
+        _request(query="这个图片的内容是什么"),
+        db_session=object(),
+    )
+
+    assert seen["model_types"] == {"multimodal", "vision", "vlm"}
+    assert result == {"error": "no multimodal/vision model configured in this org"}
 
 
 @pytest.mark.asyncio
@@ -356,24 +398,13 @@ async def test_rag_compose_lets_model_skip_web_tool_when_not_forced(monkeypatch)
 @pytest.mark.asyncio
 async def test_rag_compose_forced_web_search_invokes_web_tool(monkeypatch):
     invoked: list[tuple[str, dict]] = []
-    captured_tools: list[str] = []
 
     class FakeLLMClient:
         def __init__(self, **kwargs):
             self.model_id = kwargs.get("model_id")
 
         async def chat_with_tools(self, messages, **kwargs):
-            captured_tools.extend(tool["function"]["name"] for tool in kwargs["tools"])
-            return {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call-web-1",
-                        "name": "web_search",
-                        "arguments": {"query": "zhang xuefeng status", "max_results": 5},
-                    }
-                ],
-            }
+            raise AssertionError("force_web_search should invoke web.search before model tool_calls")
 
         async def _post_json(self, path, payload, **kwargs):
             assert any(message.get("role") == "tool" for message in payload["messages"])
@@ -448,8 +479,9 @@ async def test_rag_compose_forced_web_search_invokes_web_tool(monkeypatch):
     )
 
     assert observation.status == "success"
-    assert captured_tools == ["web_search"]
-    assert invoked == [("web.search", {"query": "zhang xuefeng status", "max_results": 5})]
+    assert invoked == [
+        ("web.search", {"query": "zhang xuefeng status", "max_results": 5, "region": "cn-zh"})
+    ]
     assert state.used_tool_calls == 1
     assert artifacts[0].content["answer"] == "Web search result based answer."
 
@@ -544,6 +576,70 @@ async def test_general_chat_lets_model_decide_no_tool_with_json_mode(monkeypatch
     assert output.status == "completed"
     assert output.route_decision.sub_route == "general_chat"
     assert output.agent_output["answer"] == "张雪峰最近仍以教育咨询和公开表达为主。"
+
+
+@pytest.mark.asyncio
+async def test_general_chat_force_web_search_runs_tool_once_through_manager(monkeypatch):
+    invoked: list[tuple[str, dict]] = []
+
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            pass
+
+        async def list_runtime_models(self):
+            return [{"id": "model-config-1", "model_key": "chat-fast", "model_type": "chat"}]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types, reserve=False, excluded_runtime_ids=None):
+            return {
+                "runtime_key": "chat-runtime",
+                "model_config_id": "model-config-1",
+                "model_id": "chat-fast",
+                "provider": "fake",
+                "failover_depth": 0,
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.model_id = kwargs.get("model_id")
+
+        async def chat_with_tools(self, messages, **kwargs):
+            raise AssertionError("force_web_search must call web.search before asking the model")
+
+        async def chat(self, messages, **kwargs):
+            joined = "\n".join(str(message.get("content") or "") for message in messages)
+            assert "web_search_results result" in joined
+            assert "results" in joined
+            return {"answer": "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"}
+
+    async def fake_invoke(self, *, tool_name, arguments, context):
+        invoked.append((tool_name, arguments))
+        return ToolResult(
+            tool_name=tool_name,
+            status="success",
+            data={"results": [{"title": "张雪峰动态", "snippet": "教育咨询相关公开动态"}]},
+        )
+
+    monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.router.manager_loop.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.router.executors.chat_executor.LLMClient", FakeLLMClient)
+    monkeypatch.setattr("agent.tools.invoker.ToolInvoker.invoke", fake_invoke)
+
+    output = await ManagerLoop().run(
+        _request(query="张雪峰现在怎么样了", ext={"surface": "chat", "force_web_search": True}),
+        db_session="db-session",
+    )
+
+    assert output.status == "completed"
+    assert output.agent_output["answer"] == "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"
+    assert invoked == [
+        ("web.search", {"query": "张雪峰现在怎么样了", "max_results": 5, "region": "cn-zh"})
+    ]
+    assert output.agent_output["route_trace"]["capabilities_used"] == ["web.search", "chat.response.compose"]
+    assert [item["type"] for item in output.agent_output["artifacts"]] == [
+        "web_search_results",
+        "composed_response",
+    ]
 
 
 @pytest.mark.asyncio
@@ -686,6 +782,76 @@ async def test_tool_loop_coerces_argument_json_content_into_tool_call():
     )
 
 
+@pytest.mark.asyncio
+async def test_tool_loop_forces_web_search_when_model_skips_tool_call():
+    final_call: dict[str, object] = {}
+    invoked: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        async def chat_with_tools(self, messages, **kwargs):
+            raise AssertionError("force_web_search must not wait for model tool_calls")
+
+        async def chat(self, messages, **kwargs):
+            final_call["messages"] = messages
+            return {"answer": "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"}
+
+    class FakeInvoker:
+        async def invoke(self, *, tool_name, arguments, context):
+            invoked.append((tool_name, arguments))
+            return SimpleNamespace(
+                status="success",
+                data={"results": [{"title": "张雪峰动态", "snippet": "教育咨询相关公开动态"}]},
+                error=None,
+            )
+
+    state = ManagerState(
+        request_id="req-1",
+        workflow_run_id="wf-1",
+        original_query="张雪峰现在怎么样了",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        selected_agent="chat",
+        max_tool_calls=1,
+    )
+    state.forced_tool_names = ["web.search"]
+    state.tool_invoker = FakeInvoker()
+
+    answer = await ChatExecutor()._run_tool_loop(
+        state,
+        FakeClient(),
+        "用户问题：张雪峰现在怎么样了",
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "max_results": {"type": "integer"},
+                            "region": {"type": "string"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        ],
+        {"web_search": "web.search"},
+    )
+
+    assert answer == "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"
+    assert invoked == [
+        ("web.search", {"query": "张雪峰现在怎么样了", "max_results": 5, "region": "cn-zh"})
+    ]
+    assert any(
+        message.get("role") == "tool" and "教育咨询相关公开动态" in message.get("content", "")
+        for message in final_call["messages"]
+    )
+
+
 def test_llm_tool_names_are_sanitized_and_mapped():
     used_names: set[str] = set()
     web_name = ChatExecutor._llm_tool_name("web.search", used_names)
@@ -694,6 +860,21 @@ def test_llm_tool_names_are_sanitized_and_mapped():
     assert web_name == "web_search"
     assert rag_name == "rag_standard_search"
     assert all("." not in name for name in {web_name, rag_name})
+
+
+def test_extract_answer_removes_trailing_json_block_from_mixed_model_content():
+    content = """根据图片分析结果，这张图展示了三块不同腐烂程度的苹果。
+
+```json
+{
+  "answer": "三块腐烂苹果，不适宜食用。",
+  "summary": "腐烂苹果"
+}
+```"""
+
+    answer = ChatExecutor._extract_answer({"content": content})
+
+    assert answer == "根据图片分析结果，这张图展示了三块不同腐烂程度的苹果。"
 
 
 @pytest.mark.asyncio

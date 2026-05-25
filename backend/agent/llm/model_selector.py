@@ -22,7 +22,11 @@ class ModelSelector:
             and self._is_configured_runtime(item)
             and self.runtime_id(item) not in excluded_runtime_ids
         ]
-        return sorted(active, key=self._sort_key)
+        # Order model_types as a list so earlier entries carry higher preference.
+        # Python 3.7+ preserves insertion order for sets, so {"multimodal", "vision", "chat"}
+        # iterates in that order and maps to preference 0, 1, 2.
+        type_order = {t: i for i, t in enumerate(model_types) if t} if model_types else {}
+        return sorted(active, key=lambda item: self._sort_key(item, type_order=type_order))
 
     def select(
         self,
@@ -49,9 +53,11 @@ class ModelSelector:
         return "unknown"
 
     @classmethod
-    def _sort_key(cls, item: dict) -> tuple[int, int, str]:
+    def _sort_key(cls, item: dict, *, type_order: dict[str, int] | None = None) -> tuple[int, int, int, str]:
+        order = type_order or {}
         return (
             cls._health_rank(item.get("health_status")),
+            order.get(str(item.get("model_type") or "chat").lower(), 99),
             int(item.get("priority") or 9999),
             str(item.get("display_name") or item.get("model_key") or ""),
         )
