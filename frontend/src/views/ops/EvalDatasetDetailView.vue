@@ -29,6 +29,7 @@ const sourceSampleQuery = reactive({
 });
 const selectedSamples = ref<DatasetSample[]>([]);
 const selectedSampleIds = computed(() => selectedSamples.value.map((item) => item.id));
+const sourceDatasetDisplayName = computed(() => evalStore.current?.source_dataset_name || evalStore.current?.source_dataset_id || "-");
 
 async function loadDetail() {
   if (!resourceId.value) return;
@@ -126,7 +127,7 @@ watch(
     >
       <template #aside>
         <div class="hero-meta">
-          <el-tag>来源数据集：{{ evalStore.current?.source_dataset_id || "-" }}</el-tag>
+          <el-tag>来源数据集：{{ sourceDatasetDisplayName }}</el-tag>
           <div class="hero-stat">
             <span>样本数</span>
             <strong>{{ evalStore.current?.sample_count || 0 }}</strong>
@@ -148,7 +149,7 @@ watch(
           </div>
           <div>
             <span>来源数据集</span>
-            <strong class="break-all">{{ evalStore.current?.source_dataset_id || "-" }}</strong>
+            <strong class="break-all">{{ sourceDatasetDisplayName }}</strong>
           </div>
           <div>
             <span>状态</span>

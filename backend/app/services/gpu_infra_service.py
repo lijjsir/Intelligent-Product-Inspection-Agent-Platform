@@ -22,6 +22,7 @@ from app.schemas.gpu_infra import (
     GpuComputeNodeCreateRequest,
     GpuComputeNodeResponse,
     GpuComputeNodeUpdateRequest,
+    GpuNodeBulkRefreshResponse,
     GpuNodeHeartbeatRequest,
 )
 from app.services.base import TenantAwareService
@@ -347,15 +348,24 @@ class GpuNodeService(TenantAwareService):
         return "0" * count
 
     @staticmethod
-    def _status_from_timestamp(last_heartbeat: datetime | None, current_status: str) -> str:
-        if current_status == "disabled":
+    def _status_from_timestamp(last_heartbeat: datetime | None, current_status: str, probe_status: str | None = None) -> str:
+        normalized = str(current_status or "").strip().lower()
+        if normalized == "disabled":
             return "disabled"
+        if normalized in {"online", "error", "offline"}:
+            return normalized
+        if probe_status == "ok":
+            return "online"
+        if probe_status == "probe_failed":
+            return "error"
+        if probe_status == "ssh_failed":
+            return "offline"
         if last_heartbeat is None:
-            return current_status or "offline"
+            return normalized or "offline"
         elapsed = (_utcnow() - last_heartbeat).total_seconds()
         if elapsed > settings.gpu_heartbeat_timeout_sec:
             return "offline"
-        return current_status or "online"
+        return normalized or "online"
 
     @staticmethod
     def _probe_metadata(metadata_json: dict[str, Any] | None) -> dict[str, Any]:
@@ -372,10 +382,10 @@ class GpuNodeService(TenantAwareService):
 
     def _serialize_node(self, node: GpuComputeNode) -> GpuComputeNodeResponse:
         data = GpuComputeNodeResponse.model_validate(node).model_dump()
-        data["status"] = self._status_from_timestamp(node.last_heartbeat, str(node.status or "offline"))
+        probe = self._probe_metadata(getattr(node, "metadata_json", None))
+        data["status"] = self._status_from_timestamp(node.last_heartbeat, str(node.status or "offline"), str(probe.get("probe_status") or ""))
         data["has_ssh_password"] = bool(getattr(node, "ssh_password_enc", None))
         data["has_ssh_private_key"] = bool(getattr(node, "ssh_private_key_enc", None))
-        probe = self._probe_metadata(getattr(node, "metadata_json", None))
         data["last_probe_at"] = probe.get("last_probe_at")
         data["last_probe_error"] = probe.get("last_probe_error")
         data["probe_status"] = probe.get("probe_status")
@@ -679,6 +689,20 @@ PY"""
             key = str(serialized.status or "offline")
             counts[key] = counts.get(key, 0) + 1
         return counts
+
+    async def refresh_all_nodes(self) -> GpuNodeBulkRefreshResponse:
+        rows = await self._nodes.list(org_id=self._org_id)
+        counts = {"online": 0, "offline": 0, "error": 0, "disabled": 0}
+        items: list[GpuComputeNodeResponse] = []
+        for row in rows:
+            if str(row.status or "").lower() == "disabled":
+                serialized = self._serialize_node(row)
+            else:
+                serialized, _ = await self.probe_node(row.id)
+            key = str(serialized.status or "offline")
+            counts[key] = counts.get(key, 0) + 1
+            items.append(serialized)
+        return GpuNodeBulkRefreshResponse(items=items, counts=counts)
 
     async def poll_all_nodes(self) -> dict[str, int]:
         rows = await self._nodes.list_all()

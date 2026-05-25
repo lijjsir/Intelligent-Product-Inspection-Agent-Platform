@@ -439,9 +439,7 @@ class AlgoWorkspaceService(TenantAwareService):
         return await self._build_experiment_response(row)
 
     async def create_deployment(self, payload: ModelDeploymentCreateRequest) -> ModelDeploymentResponse:
-        if payload.source_type != "fine_tune":
-            raise ValidationError("deployment source_type must be fine_tune")
-        source = await self._require_completed_target_resource(payload.source_type, payload.source_id)
+        source = await self._require_completed_deployment_source_resource(payload.source_type, payload.source_id)
         self._require_deployable_artifacts(source.result_summary, payload.source_type)
         if payload.experiment_id:
             await self._require_generic_resource(resource_type="experiment", resource_id=payload.experiment_id)
@@ -513,7 +511,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 requested_gpu_count=model_ref.default_gpu_request if model_ref else None,
             )
         elif resource_type == "deployment":
-            source = await self._require_completed_target_resource(row.source_type, row.source_id)
+            source = await self._require_completed_deployment_source_resource(row.source_type, row.source_id)
             model_ref = await self._resolve_model_ref_for_resource(source)
             mode = await self._resolve_algo_execution_mode(
                 template=model_ref.deployment_command_template if model_ref else None,
@@ -1462,7 +1460,7 @@ class AlgoWorkspaceService(TenantAwareService):
             row = await service._require_generic_resource(resource_type="deployment", resource_id=resource_id)
             if row.status == "cancelled":
                 return
-            source = await service._require_completed_target_resource(row.source_type, row.source_id)
+            source = await service._require_completed_deployment_source_resource(row.source_type, row.source_id)
             model_ref = await service._resolve_model_ref_for_resource(source)
             try:
                 gpu_result = await service._maybe_run_gpu_deployment(
@@ -1880,12 +1878,24 @@ class AlgoWorkspaceService(TenantAwareService):
             raise ValidationError("dataset must be active")
         return row
 
+    async def _maybe_require_dataset(self, dataset_id: str):
+        try:
+            return await self._require_dataset(dataset_id)
+        except NotFoundError:
+            return None
+
     async def _require_generic_resource(self, *, resource_type: str, resource_id: str):
         model = RESOURCE_MODEL_MAP[resource_type]
         row = await self._resources.get(model=model, org_id=self._org_id, resource_id=resource_id, owner_user_id=self._user_id)
         if row is None:
             raise NotFoundError(f"{resource_type} not found")
         return row
+
+    async def _maybe_require_generic_resource(self, *, resource_type: str, resource_id: str):
+        try:
+            return await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
+        except NotFoundError:
+            return None
 
     async def _commit(self) -> None:
         commit = getattr(self._session, "commit", None)
@@ -1991,6 +2001,7 @@ class AlgoWorkspaceService(TenantAwareService):
 
     async def _require_target_resource(self, target_type: str, target_id: str):
         mapping = {
+            "training_job": "fine_tune",
             "fine_tune": "fine_tune",
             "deployment": "deployment",
         }
@@ -2003,6 +2014,33 @@ class AlgoWorkspaceService(TenantAwareService):
         if str(getattr(row, "status", "") or "") != "completed":
             raise ValidationError("target resource must be completed")
         return row
+
+    async def _maybe_require_target_resource(self, target_type: str, target_id: str):
+        try:
+            return await self._require_target_resource(target_type, target_id)
+        except (NotFoundError, ValidationError):
+            return None
+
+    async def _require_deployment_source_resource(self, source_type: str, source_id: str):
+        mapping = {
+            "training_job": "fine_tune",
+            "fine_tune": "fine_tune",
+        }
+        if source_type not in mapping:
+            raise ValidationError("unsupported source_type")
+        return await self._require_generic_resource(resource_type=mapping[source_type], resource_id=source_id)
+
+    async def _require_completed_deployment_source_resource(self, source_type: str, source_id: str):
+        row = await self._require_deployment_source_resource(source_type, source_id)
+        if str(getattr(row, "status", "") or "") != "completed":
+            raise ValidationError("deployment source must be completed")
+        return row
+
+    async def _maybe_require_deployment_source_resource(self, source_type: str, source_id: str):
+        try:
+            return await self._require_deployment_source_resource(source_type, source_id)
+        except (NotFoundError, ValidationError):
+            return None
 
     async def _require_completed_resource(self, *, resource_type: str, resource_id: str):
         row = await self._require_generic_resource(resource_type=resource_type, resource_id=resource_id)
@@ -2373,8 +2411,16 @@ class AlgoWorkspaceService(TenantAwareService):
     async def _build_fine_tune_response(self, row) -> FineTuneRunResponse:
         payload = FineTuneRunResponse.model_validate(row).model_dump()
         payload["result_summary"] = dict(payload.get("result_summary") or self._default_fine_tune_summary())
+        dataset = await self._maybe_require_dataset(row.source_dataset_id)
+        payload["source_dataset_name"] = getattr(dataset, "name", None)
         model_ref = await self._build_model_ref(getattr(row, "model_config_id", None))
         payload["model_config_ref"] = model_ref.model_dump() if model_ref else None
+        if getattr(row, "eval_set_id", None):
+            eval_set = await self._maybe_require_generic_resource(resource_type="evaluation_dataset", resource_id=row.eval_set_id)
+            payload["eval_set_name"] = getattr(eval_set, "name", None)
+        if getattr(row, "experiment_id", None):
+            experiment = await self._maybe_require_generic_resource(resource_type="experiment", resource_id=row.experiment_id)
+            payload["experiment_name"] = getattr(experiment, "name", None)
         return FineTuneRunResponse(**payload)
 
     async def _build_experiment_response(self, row) -> ExperimentResponse:
@@ -2477,6 +2523,7 @@ class AlgoWorkspaceService(TenantAwareService):
         ), artifacts
 
     async def _build_evaluation_dataset_response(self, row) -> EvaluationDatasetResponse:
+        dataset = await self._maybe_require_dataset(row.source_dataset_id)
         sample_count = await self._eval_items.count_items(
             org_id=self._org_id,
             evaluation_dataset_id=row.id,
@@ -2490,6 +2537,7 @@ class AlgoWorkspaceService(TenantAwareService):
             size=6,
         )
         payload = EvaluationDatasetResponse.model_validate(row).model_dump()
+        payload["source_dataset_name"] = getattr(dataset, "name", None)
         payload["sample_count"] = sample_count
         payload["samples_preview"] = [item.model_dump() for item in await self._serialize_evaluation_dataset_items(row.source_dataset_id, preview_rows)]
         return EvaluationDatasetResponse(**payload)
@@ -2617,11 +2665,31 @@ class AlgoWorkspaceService(TenantAwareService):
         if resource_type == "offline_evaluation":
             payload = OfflineEvaluationResponse.model_validate(row).model_dump()
             payload["result_summary"] = dict(payload.get("result_summary") or self._default_offline_evaluation_summary())
+            eval_set = await self._maybe_require_generic_resource(resource_type="evaluation_dataset", resource_id=row.eval_set_id)
+            payload["eval_set_name"] = getattr(eval_set, "name", None)
+            target = await self._maybe_require_target_resource(row.target_type, row.target_id)
+            payload["target_name"] = getattr(target, "name", None)
+            if getattr(row, "experiment_id", None):
+                experiment = await self._maybe_require_generic_resource(resource_type="experiment", resource_id=row.experiment_id)
+                payload["experiment_name"] = getattr(experiment, "name", None)
             return OfflineEvaluationResponse(**payload)
         if resource_type == "deployment":
             payload = ModelDeploymentResponse.model_validate(row).model_dump()
             payload["result_summary"] = dict(payload.get("result_summary") or self._default_deployment_summary())
+            source = await self._maybe_require_deployment_source_resource(row.source_type, row.source_id)
+            payload["source_name"] = getattr(source, "name", None)
+            if getattr(row, "experiment_id", None):
+                experiment = await self._maybe_require_generic_resource(resource_type="experiment", resource_id=row.experiment_id)
+                payload["experiment_name"] = getattr(experiment, "name", None)
             return ModelDeploymentResponse(**payload)
+        if resource_type == "online_validation":
+            payload = OnlineValidationResponse.model_validate(row).model_dump()
+            deployment = await self._maybe_require_generic_resource(resource_type="deployment", resource_id=row.deployment_id)
+            payload["deployment_name"] = getattr(deployment, "name", None)
+            if getattr(row, "experiment_id", None):
+                experiment = await self._maybe_require_generic_resource(resource_type="experiment", resource_id=row.experiment_id)
+                payload["experiment_name"] = getattr(experiment, "name", None)
+            return OnlineValidationResponse(**payload)
         serializer = serializer_map[resource_type]
         return serializer.model_validate(row)
 

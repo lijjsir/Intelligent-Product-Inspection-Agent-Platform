@@ -237,6 +237,7 @@ class EvaluationDatasetItemResponse(BaseModel):
 
 class EvaluationDatasetResponse(AlgoResourceResponse):
     source_dataset_id: str
+    source_dataset_name: str | None = None
     sample_count: int = 0
     samples_preview: list[EvaluationDatasetItemResponse] = Field(default_factory=list)
 
@@ -277,15 +278,18 @@ class FineTuneRunUpdateRequest(AlgoResourceUpdateRequest):
 
 class FineTuneRunResponse(AlgoExecutionResourceResponse):
     source_dataset_id: str
+    source_dataset_name: str | None = None
     model_config_id: str
     model_config_ref: ResourceModelRef | None = None
     eval_set_id: str | None = None
+    eval_set_name: str | None = None
     experiment_id: str | None = None
+    experiment_name: str | None = None
 
 
 class OfflineEvaluationCreateRequest(AlgoResourceBase):
     eval_set_id: str
-    target_type: str = Field(..., pattern="^(fine_tune|deployment)$")
+    target_type: str = Field(..., pattern="^(training_job|fine_tune|deployment)$")
     target_id: str
     experiment_id: str | None = None
 
@@ -296,9 +300,12 @@ class OfflineEvaluationUpdateRequest(AlgoResourceUpdateRequest):
 
 class OfflineEvaluationResponse(AlgoExecutionResourceResponse):
     eval_set_id: str
+    eval_set_name: str | None = None
     target_type: str
     target_id: str
+    target_name: str | None = None
     experiment_id: str | None = None
+    experiment_name: str | None = None
 
 
 class OnlineValidationCreateRequest(AlgoResourceBase):
@@ -312,7 +319,9 @@ class OnlineValidationUpdateRequest(AlgoResourceUpdateRequest):
 
 class OnlineValidationResponse(AlgoExecutionResourceResponse):
     deployment_id: str
+    deployment_name: str | None = None
     experiment_id: str | None = None
+    experiment_name: str | None = None
 
 
 class ExperimentCreateRequest(AlgoResourceBase):
@@ -328,7 +337,7 @@ class ExperimentResponse(AlgoResourceResponse):
 
 
 class ModelDeploymentCreateRequest(AlgoResourceBase):
-    source_type: str = Field(..., pattern="^fine_tune$")
+    source_type: str = Field(..., pattern="^(training_job|fine_tune)$")
     source_id: str
     merge_mode: str = Field(default="dynamic", pattern="^(dynamic|static)$")
     experiment_id: str | None = None
@@ -341,8 +350,10 @@ class ModelDeploymentUpdateRequest(AlgoResourceUpdateRequest):
 class ModelDeploymentResponse(AlgoExecutionResourceResponse):
     source_type: str
     source_id: str
+    source_name: str | None = None
     merge_mode: str = "dynamic"
     experiment_id: str | None = None
+    experiment_name: str | None = None
 
 
 class ResourceActionResponse(BaseModel):

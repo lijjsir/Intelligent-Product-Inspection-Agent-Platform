@@ -122,11 +122,24 @@ async function submit() {
     ElMessage.error("运行时环境 JSON 解析失败");
     return;
   }
+  const provider = form.provider.trim();
+  const modelKey = form.model_key.trim();
+  const displayName = form.display_name.trim();
+  const sourceUri = form.source_uri.trim();
+  const endpoint = form.endpoint.trim();
+  if (!displayName || !sourceUri || !endpoint) {
+    ElMessage.error("请填写完整的展示名称、来源地址和接口地址");
+    return;
+  }
+  if (!editingId.value && (!provider || !modelKey)) {
+    ElMessage.error("新增模型时必须填写提供方和模型标识");
+    return;
+  }
   const payload: Record<string, unknown> = {
-    display_name: form.display_name,
+    display_name: displayName,
     source_type: form.source_type,
-    source_uri: form.source_uri,
-    endpoint: form.endpoint,
+    source_uri: sourceUri,
+    endpoint,
     model_type: form.model_type,
     fine_tune_command_template: form.fine_tune_command_template || null,
     offline_eval_command_template: form.offline_eval_command_template || null,
@@ -148,6 +161,8 @@ async function submit() {
     await store.updateOne(editingId.value, payload);
     ElMessage.success("模型配置已更新");
   } else {
+    payload.provider = provider;
+    payload.model_key = modelKey;
     payload.api_key = form.api_key || undefined;
     const created = await store.createOne(payload as unknown as ModelConfigPayload);
     ElMessage.success("模型配置已创建");

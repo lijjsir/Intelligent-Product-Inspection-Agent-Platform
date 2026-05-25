@@ -25,6 +25,21 @@ export const useGpuInfraStore = defineStore("gpu-infra", () => {
     }
   }
 
+  async function refreshAllMetrics(options?: { silent?: boolean }) {
+    const silent = Boolean(options?.silent);
+    if (!silent) loading.value = true;
+    try {
+      const { data } = await gpuInfraApi.refreshAll();
+      items.value = data.data.items;
+      if (current.value) {
+        current.value = data.data.items.find((item) => item.id === current.value?.id) || current.value;
+      }
+      return data.data;
+    } finally {
+      if (!silent) loading.value = false;
+    }
+  }
+
   async function fetchOne(id: string) {
     const { data } = await gpuInfraApi.get(id);
     current.value = data.data;
@@ -81,6 +96,7 @@ export const useGpuInfraStore = defineStore("gpu-infra", () => {
     availableGpuCount,
     allocatedGpuCount,
     fetchAll,
+    refreshAllMetrics,
     fetchOne,
     createOne,
     updateOne,

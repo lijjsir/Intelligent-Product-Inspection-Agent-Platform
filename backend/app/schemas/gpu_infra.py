@@ -82,6 +82,11 @@ class GpuNodeMetricRefreshResponse(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
+class GpuNodeBulkRefreshResponse(BaseModel):
+    items: list[GpuComputeNodeResponse] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
 class GpuNodeConnectionTestResponse(BaseModel):
     success: bool
     message: str

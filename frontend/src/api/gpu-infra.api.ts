@@ -1,6 +1,7 @@
 import { http } from "./http";
 import type {
   GpuComputeNode,
+  GpuNodeBulkRefreshResult,
   GpuNodeConnectionTestResult,
   GpuNodeCreatePayload,
   GpuNodeHeartbeatPayload,
@@ -33,6 +34,9 @@ export const gpuInfraApi = {
   refreshMetrics(id: string) {
     return http.post<GpuNodeMetricRefreshResult>(`/v1/gpu-nodes/${id}/refresh-metrics`);
   },
+  refreshAll() {
+    return http.post<GpuNodeBulkRefreshResult>("/v1/gpu-nodes/refresh-all");
+  },
   enable(id: string) {
     return http.post<GpuComputeNode>(`/v1/gpu-nodes/${id}/enable`);
   },
@@ -40,4 +44,3 @@ export const gpuInfraApi = {
     return http.post<GpuComputeNode>(`/v1/gpu-nodes/${id}/disable`);
   },
 };
-

@@ -10,6 +10,7 @@ import {
   ROLE_PLATFORM_OPERATOR,
 } from "@/constants/roles";
 import { opsRoutes } from "@/router/routes/ops.routes";
+import { ROLE_KEY, ROLES_KEY } from "@/utils/auth-session";
 
 function flattenTitles() {
   const { menu } = useMenu();
@@ -65,7 +66,7 @@ describe("useMenu", () => {
     expect(groupTitles).not.toContain("治理工具");
     expect(groupTitles).not.toContain("运维诊断");
     expect(groupTitles).not.toContain("只读巡检");
-    expect(titles).not.toContain("告警规则");
+    expect(titles).toContain("告警管理");
     expect(titles).toContain("Agent 查看");
     expect(titles).toContain("质检门槛查看");
     expect(titles).toContain("模型观测");
@@ -96,14 +97,26 @@ describe("useMenu", () => {
     ]);
   });
 
-  it("keeps alert rule configuration in admin governance", () => {
+  it("surfaces alert management for admins through the shared ops page", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ADMIN;
     auth.roles = [ROLE_ADMIN];
 
     const titles = flattenTitles();
+    const paths = flattenPaths();
 
-    expect(titles).toContain("告警规则");
+    expect(titles).toContain("告警管理");
+    expect(titles).not.toContain("告警规则");
+    expect(paths).toContain("/ops/alerts");
+  });
+
+  it("grants admins access to the ops workspace for shared management pages", () => {
+    sessionStorage.setItem(ROLE_KEY, ROLE_ADMIN);
+    sessionStorage.setItem(ROLES_KEY, JSON.stringify([ROLE_ADMIN]));
+    setActivePinia(createPinia());
+    const auth = useAuthStore();
+
+    expect(auth.workspaces).toContain("ops");
   });
 
   it("exposes the governance analytics center in admin navigation", () => {
@@ -133,5 +146,12 @@ describe("useMenu", () => {
       expect(route.meta?.roles).toContain(ROLE_ADMIN);
       expect(route.meta?.roles).toContain(ROLE_APP_DEVELOPER);
     }
+  });
+
+  it("allows admins into the shared alert management route", () => {
+    const alertRoute = opsRoutes.find((route) => route.name === "ops-alerts");
+
+    expect(alertRoute?.meta?.roles).toContain(ROLE_ADMIN);
+    expect(alertRoute?.meta?.roles).toContain(ROLE_PLATFORM_OPERATOR);
   });
 });

@@ -55,7 +55,7 @@ onMounted(async () => {
     subtitle="围绕已完成部署创建在线验证任务，展示影子回放汇总与执行日志。"
     :store="store"
     :build-payload="buildPayload"
-    :detail-description="(item) => `部署：${item?.deployment_id || '-'}`"
+    :detail-description="(item) => `部署：${item?.deployment_name || item?.deployment_id || '-'}`"
     show-launch
   >
     <template #form-extra>

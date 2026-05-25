@@ -49,7 +49,12 @@ export const useAuthStore = defineStore("auth", () => {
     if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
       workspacesForRoles.push(WORKSPACE_APP);
     }
-    if (rs.includes(ROLE_APP_DEVELOPER) || rs.includes(ROLE_PLATFORM_OPERATOR) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
+    if (
+      rs.includes(ROLE_ADMIN)
+      || rs.includes(ROLE_APP_DEVELOPER)
+      || rs.includes(ROLE_PLATFORM_OPERATOR)
+      || rs.includes(ROLE_ALGORITHM_ENGINEER)
+    ) {
       workspacesForRoles.push(WORKSPACE_OPS);
     }
     if (rs.includes(ROLE_ADMIN)) {
@@ -61,9 +66,12 @@ export const useAuthStore = defineStore("auth", () => {
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
   }
-  if (!workspaces.value.length) {
+  {
     const derived = deriveWorkspacesFromRoles(roles.value);
-    workspaces.value = derived.length ? derived : [WORKSPACE_APP];
+    workspaces.value = Array.from(new Set([...(workspaces.value || []), ...derived]));
+    if (!workspaces.value.length) {
+      workspaces.value = [WORKSPACE_APP];
+    }
   }
 
   const isAuthed = computed(() => Boolean(token.value));
