@@ -95,6 +95,50 @@ async def test_send_message_triggers_mentions_only_not_autonomous(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_message_triggers_meeting_ai_special_mention_without_room_agent(monkeypatch):
+    fake_repo = FakeMeetingRepo()
+    fake_users = FakeUsersRepo()
+    fake_session = FakeSession()
+    scheduled_tasks: list[asyncio.Task] = []
+    invoked_room_ids: list[str] = []
+    real_create_task = asyncio.create_task
+
+    class FakeAgentService:
+        async def invoke_agent(self, **kwargs):
+            raise AssertionError("room agent invocation should not run for built-in meeting ai mention")
+
+    async def fake_invoke_meeting_ai_reply(*, room_id: str):
+        invoked_room_ids.append(room_id)
+
+    def tracking_create_task(coro):
+        task = real_create_task(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(meeting_service_mod, "MeetingRepository", lambda session: fake_repo)
+    monkeypatch.setattr(meeting_service_mod, "MeetingAgentService", FakeAgentService)
+    monkeypatch.setattr(meeting_service_mod.asyncio, "create_task", tracking_create_task)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = fake_users
+    service._invoke_meeting_ai_reply = fake_invoke_meeting_ai_reply
+
+    async def fake_parse_mentions(content: str, room_id: str):
+        return []
+
+    service._parse_mentions = fake_parse_mentions
+
+    result = await service.send_message("room-1", "@AI 助手 你能做什么")
+
+    assert result.content == "@AI 助手 你能做什么"
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "ai_assistant", "agent_name": "AI 助手"}]
+    assert len(scheduled_tasks) == 1
+    await asyncio.wait_for(scheduled_tasks[0], timeout=1)
+    assert invoked_room_ids == ["room-1"]
+
+
+@pytest.mark.asyncio
 async def test_parse_mentions_requires_room_participant_and_supports_spaced_name():
     class FakeRoomAgent:
         def __init__(self, agent_id: str, role: str):
@@ -174,6 +218,15 @@ async def test_parse_mentions_supports_single_agent_short_aliases():
     assert await service._parse_mentions("@agent please check this", "room-1") == expected
     assert await service._parse_mentions("@aent please check this", "room-1") == expected
     assert await service._parse_mentions("@ai please check this", "room-1") == expected
+
+
+def test_contains_meeting_ai_mention_supports_spaced_and_compact_aliases():
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+
+    assert service._contains_meeting_ai_mention("@AI 助手 你能做什么") is True
+    assert service._contains_meeting_ai_mention("@AI助手 你能做什么") is True
+    assert service._contains_meeting_ai_mention("请 @AI助手 帮忙") is True
+    assert service._contains_meeting_ai_mention("@ai please help") is False
 
 
 @pytest.mark.asyncio

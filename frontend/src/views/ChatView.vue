@@ -13,6 +13,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
+import { writeTextToClipboard } from "@/utils/clipboard";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -355,7 +356,8 @@ function removePendingAttachment(id: string) { chatStore.removePendingAttachment
 
 async function copyToClipboard(text: string, successText = "已复制") {
   try {
-    await navigator.clipboard.writeText(text);
+    const copied = await writeTextToClipboard(text);
+    if (!copied) throw new Error("clipboard unavailable");
     ElMessage.success(successText);
   } catch {
     ElMessage.error("复制失败，请手动复制。");

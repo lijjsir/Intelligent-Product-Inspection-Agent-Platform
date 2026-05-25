@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import secrets
 import uuid
@@ -21,8 +22,12 @@ from app.schemas.meeting import (
 )
 from app.services.meeting_agent_service import MeetingAgentService
 from app.services.stream_service import meeting_stream_broker
+from infra.database.session import get_session
 
 _MENTION_DELIMITER_RE = re.compile(r"(?=$|[\s,.;:!?，。；：！？])")
+_MEETING_AI_AGENT_ID = "ai_assistant"
+_MEETING_AI_AGENT_NAME = "AI 助手"
+logger = logging.getLogger(__name__)
 
 
 def _is_valid_uuid(value: str) -> bool:
@@ -85,6 +90,10 @@ class MeetingService:
         username = user.username if user else self._user_id[-8:]
         clean_content = content.strip()
         mentions = await self._parse_mentions(clean_content, room_id)
+        ai_mentioned = not mentions and self._contains_meeting_ai_mention(clean_content)
+        stored_mentions = list(mentions)
+        if ai_mentioned:
+            stored_mentions.append({"agent_id": _MEETING_AI_AGENT_ID, "agent_name": _MEETING_AI_AGENT_NAME})
 
         message = await self._repo.create_message(
             org_id=self._org_id,
@@ -93,7 +102,7 @@ class MeetingService:
             username=username,
             content=clean_content,
             message_type="user",
-            mentions=mentions if mentions else None,
+            mentions=stored_mentions if stored_mentions else None,
         )
         response = MeetingMessageResponse.model_validate(message)
 
@@ -117,6 +126,8 @@ class MeetingService:
                         username=username,
                     )
                 )
+        if ai_mentioned:
+            asyncio.create_task(self._invoke_meeting_ai_reply(room_id=room_id))
         return response
 
     async def start_agent_discussion(
@@ -324,3 +335,26 @@ class MeetingService:
                 mentions.append({"agent_id": agent_id, "agent_name": agent_name})
 
         return mentions
+
+    def _contains_meeting_ai_mention(self, content: str) -> bool:
+        aliases = {_MEETING_AI_AGENT_NAME}
+        compact_name = _normalize_name(_MEETING_AI_AGENT_NAME)
+        if compact_name:
+            aliases.add(compact_name)
+
+        for alias in aliases:
+            pattern = re.compile(rf"@{re.escape(alias)}{_MENTION_DELIMITER_RE.pattern}", re.IGNORECASE)
+            if pattern.search(content):
+                return True
+        return False
+
+    async def _invoke_meeting_ai_reply(self, *, room_id: str) -> None:
+        from app.services.meeting_ai_service import MeetingAiService
+
+        try:
+            async with get_session() as session:
+                service = MeetingAiService(session, self._org_id, self._user_id)
+                await service.ai_respond(room_id)
+                await session.commit()
+        except Exception:
+            logger.exception("meeting ai mention invocation failed room_id=%s", room_id)

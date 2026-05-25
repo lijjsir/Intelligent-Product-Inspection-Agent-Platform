@@ -7,6 +7,7 @@ import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useMeetingStore } from "@/stores/meeting.store";
 import type { MeetingMessage } from "@/types/meeting.types";
+import { writeTextToClipboard } from "@/utils/clipboard";
 
 const auth = useAuthStore();
 const store = useMeetingStore();
@@ -20,6 +21,16 @@ const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
 const mentionableAgents = computed(() => store.agents.filter((agent) => agent.role === "participant"));
+const mentionTargets = computed(() => {
+  const entries = [{ id: "ai_assistant", agent_name: "AI 助手" }, ...mentionableAgents.value];
+  const seen = new Set<string>();
+  return entries.filter((item) => {
+    const key = item.agent_name.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+});
 const activeMeetingLink = computed(() => {
   const code = store.activeRoom?.access_code;
   if (!code) return "";
@@ -53,7 +64,8 @@ function formatTime(value?: string | null) {
 
 async function copyToClipboard(text: string, successText = "已复制") {
   try {
-    await navigator.clipboard.writeText(text);
+    const copied = await writeTextToClipboard(text);
+    if (!copied) throw new Error("clipboard unavailable");
     ElMessage.success(successText);
   } catch {
     ElMessage.error("复制失败，请手动复制。");
@@ -520,9 +532,9 @@ onBeforeUnmount(() => {
       </div>
 
       <footer class="composer">
-        <div v-if="mentionableAgents.length" class="mention-bar">
+        <div v-if="mentionTargets.length" class="mention-bar">
           <button
-            v-for="agent in mentionableAgents"
+            v-for="agent in mentionTargets"
             :key="agent.id"
             type="button"
             class="mention-chip"

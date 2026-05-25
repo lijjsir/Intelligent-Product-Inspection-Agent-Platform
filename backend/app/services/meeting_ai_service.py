@@ -211,7 +211,7 @@ class MeetingAiService:
         if not base_url or not model:
             raise ServiceUnavailableError("会议 AI 模型配置不完整，请检查 endpoint 和模型标识。")
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={
