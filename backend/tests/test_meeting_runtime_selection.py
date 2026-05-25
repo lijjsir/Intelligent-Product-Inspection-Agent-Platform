@@ -235,8 +235,9 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
             return {"choices": [{"message": {"content": "doubao ai reply"}}]}
 
     class FakeClient:
-        def __init__(self, timeout=None):
+        def __init__(self, timeout=None, trust_env=None):
             self.timeout = timeout
+            assert trust_env is False
 
         async def __aenter__(self):
             return self
@@ -327,8 +328,9 @@ async def test_meeting_ai_fails_over_to_next_runtime_model_on_auth_error(monkeyp
             return {"choices": [{"message": {"content": self._content}}]}
 
     class FakeClient:
-        def __init__(self, timeout=None):
+        def __init__(self, timeout=None, trust_env=None):
             self.timeout = timeout
+            assert trust_env is False
 
         async def __aenter__(self):
             return self
@@ -414,8 +416,9 @@ async def test_meeting_ai_returns_actionable_default_runtime_auth_error(monkeypa
             return {}
 
     class FakeClient:
-        def __init__(self, timeout=None):
+        def __init__(self, timeout=None, trust_env=None):
             self.timeout = timeout
+            assert trust_env is False
 
         async def __aenter__(self):
             return self
