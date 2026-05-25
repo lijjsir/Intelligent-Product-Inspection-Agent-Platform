@@ -11,7 +11,7 @@ export const opsRoutes = [
   { path: "analytics/behavior", name: "ops-analytics-behavior", component: Placeholder, meta: { title: "用户行为分析", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Alerts
-  { path: "alerts", name: "ops-alerts", component: () => import("@/views/ops/AlertManageView.vue"), meta: { title: "告警管理", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "alerts", name: "ops-alerts", component: () => import("@/views/ops/AlertManageView.vue"), meta: { title: "告警管理", roles: [ROLE_ADMIN, ROLE_PLATFORM_OPERATOR] } },
 
 
   // Call monitor

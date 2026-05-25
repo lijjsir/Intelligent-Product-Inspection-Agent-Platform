@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.common import PageParams
 
@@ -138,3 +139,49 @@ class TaskExecutionEventResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+TaskResultIngestTarget = Literal["rag", "dataset", "both"]
+TaskResultIngestMode = Literal["candidate"]
+
+
+class TaskResultIngestRequest(BaseModel):
+    target: TaskResultIngestTarget
+    rag_space_id: str | None = None
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    mode: TaskResultIngestMode = "candidate"
+
+    @staticmethod
+    def _normalize_uuid(value: str | None, field_name: str) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        if not cleaned:
+            return None
+        try:
+            return str(uuid.UUID(cleaned))
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be a valid UUID") from exc
+
+    @model_validator(mode="after")
+    def validate_target_ids(self) -> "TaskResultIngestRequest":
+        self.rag_space_id = self._normalize_uuid(self.rag_space_id, "rag_space_id")
+        if self.dataset_id is not None:
+            self.dataset_id = self._normalize_uuid(self.dataset_id, "dataset_id")
+        if self.dataset_name is not None:
+            self.dataset_name = str(self.dataset_name).strip() or None
+        return self
+
+
+class TaskResultIngestResponse(BaseModel):
+    task_id: str
+    target: TaskResultIngestTarget
+    mode: TaskResultIngestMode = "candidate"
+    rag_space_id: str | None = None
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    created_document_count: int = 0
+    created_sample_count: int = 0
+    skipped_count: int = 0
+    warnings: list[str] = Field(default_factory=list)

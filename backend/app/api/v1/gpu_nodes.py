@@ -9,6 +9,7 @@ from app.schemas.gpu_infra import (
     GpuComputeNodeCreateRequest,
     GpuComputeNodeResponse,
     GpuComputeNodeUpdateRequest,
+    GpuNodeBulkRefreshResponse,
     GpuNodeConnectionTestResponse,
     GpuNodeHeartbeatRequest,
     GpuNodeMetricRefreshResponse,
@@ -80,6 +81,11 @@ async def heartbeat_gpu_node(
 async def refresh_gpu_node_metrics(node_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
     node, metrics = await _svc(current, db).refresh_metrics(node_id)
     return ResponseEnvelope(data=GpuNodeMetricRefreshResponse(node=node, metrics=metrics))
+
+
+@router.post("/refresh-all", response_model=ResponseEnvelope[GpuNodeBulkRefreshResponse])
+async def refresh_all_gpu_node_metrics(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    return ResponseEnvelope(data=await _svc(current, db).refresh_all_nodes())
 
 
 @router.post("/{node_id}/enable", response_model=ResponseEnvelope[GpuComputeNodeResponse])

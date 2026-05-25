@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -275,3 +275,56 @@ async def test_poll_all_nodes_scans_across_orgs(monkeypatch):
     counts = await gpu_mod.GpuNodeService(session, "", "system").poll_all_nodes()
 
     assert counts["online"] == 2
+
+
+@pytest.mark.asyncio
+async def test_serialize_node_keeps_online_status_after_successful_probe_even_if_heartbeat_is_stale(service):
+    svc, _node_repo, _ssh, _session = service
+    created = await svc.create_node(
+        gpu_mod.GpuComputeNodeCreateRequest(
+            name="gpu-stale",
+            host="10.0.0.30",
+            ssh_username="root",
+            ssh_password="secret",
+            total_gpu_count=1,
+        )
+    )
+
+    refreshed, _metrics = await svc.refresh_metrics(created.id)
+    row = await svc._nodes.get(org_id="org-1", node_id=created.id)
+    assert row is not None
+    row.last_heartbeat = datetime.now() - timedelta(seconds=gpu_mod.settings.gpu_heartbeat_timeout_sec + 30)
+
+    serialized = svc._serialize_node(row)
+
+    assert refreshed.status == "online"
+    assert serialized.status == "online"
+
+
+@pytest.mark.asyncio
+async def test_refresh_all_nodes_returns_updated_metrics_for_each_active_node(service):
+    svc, _node_repo, _ssh, _session = service
+    await svc.create_node(
+        gpu_mod.GpuComputeNodeCreateRequest(
+            name="gpu-1",
+            host="10.0.0.10",
+            ssh_username="root",
+            ssh_password="secret",
+            total_gpu_count=1,
+        )
+    )
+    await svc.create_node(
+        gpu_mod.GpuComputeNodeCreateRequest(
+            name="gpu-2",
+            host="10.0.0.11",
+            ssh_username="root",
+            ssh_password="secret",
+            total_gpu_count=1,
+        )
+    )
+
+    payload = await svc.refresh_all_nodes()
+
+    assert len(payload.items) == 2
+    assert payload.counts["online"] == 2
+    assert all(item.cpu_usage is not None for item in payload.items)

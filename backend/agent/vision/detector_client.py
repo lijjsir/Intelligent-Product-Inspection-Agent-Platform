@@ -40,7 +40,7 @@ class VisionDetectorClient:
             "spec_code": spec_code,
         }
 
-        async with httpx.AsyncClient(timeout=float(self._timeout)) as client:
+        async with httpx.AsyncClient(timeout=float(self._timeout), trust_env=False) as client:
             response = await client.post(self._url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()

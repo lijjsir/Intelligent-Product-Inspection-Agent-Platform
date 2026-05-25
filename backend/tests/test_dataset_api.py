@@ -50,6 +50,7 @@ def build_dataset_detail() -> DatasetDetailResponse:
         status="active",
         sample_count=0,
         image_sample_count=0,
+        video_sample_count=0,
         text_sample_count=0,
         uploaded_bytes=0,
         knowledge_graph_status="idle",
@@ -97,6 +98,12 @@ class FakeDatasetService:
         assert payload.name == "demo dataset"
         return self.detail
 
+    async def list_dataset_name_options(self, *, keyword: str | None = None, modality: str | None = None, status: str | None = None, limit: int = 100):
+        assert modality == "image"
+        assert status == "active"
+        assert limit == 50
+        return [{"name": "demo dataset"}, {"name": "candidate set"}]
+
     async def update_dataset(self, dataset_id: str, payload: DatasetUpdateRequest) -> DatasetDetailResponse:
         assert dataset_id == "ds-1"
         assert payload.name == "renamed"
@@ -139,6 +146,23 @@ async def test_create_dataset_commits_before_return(fake_service):
     assert response.data is not None
     assert response.data.id == "ds-1"
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_list_dataset_names_returns_name_only_options(fake_service):
+    session = FakeAsyncSession()
+
+    response = await dataset_api.list_dataset_names(
+        keyword="demo",
+        modality="image",
+        status_text="active",
+        limit=50,
+        current=build_current_user(),
+        db=session,
+    )
+
+    assert response.data == [{"name": "demo dataset"}, {"name": "candidate set"}]
+    assert session.commit_calls == 0
 
 
 @pytest.mark.asyncio
