@@ -456,6 +456,133 @@ class RagSpaceService:
             self._raise_if_rag_metadata_missing(exc)
             raise
 
+    async def create_generated_document(
+        self,
+        *,
+        rag_space_id: str,
+        file_name: str,
+        content: bytes,
+        content_type: str | None = None,
+        parent_node_id: str | None = None,
+    ) -> RagNodeResponse:
+        try:
+            await self._get_owned_space(rag_space_id)
+            parent = await self._get_valid_parent(rag_space_id=rag_space_id, parent_id=parent_node_id)
+            space_nodes = await self._nodes.list_for_space(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            ancestor_node_ids = self._resolve_ancestor_node_ids(nodes=space_nodes, parent_id=parent_node_id)
+            normalized_name = self._normalize_node_name(file_name)
+            suffix = Path(normalized_name).suffix.lower()
+            if suffix not in ALLOWED_DOCUMENT_EXTENSIONS:
+                raise ValidationError(f"unsupported document type: {suffix or 'unknown'}")
+            await self._ensure_unique_name(rag_space_id=rag_space_id, parent_id=parent_node_id, name=normalized_name)
+            if not content:
+                raise ValidationError(f"empty document: {normalized_name}")
+
+            checksum = hashlib.sha256(content).hexdigest()
+            rag_storage = build_object_storage()
+            object_key = f"rag/{self._org_id}/{rag_space_id}/{checksum[:12]}-{normalized_name}"
+            stored = rag_storage.put_bytes(
+                bucket=self._rag_storage_bucket,
+                object_key=object_key,
+                data=content,
+                content_type=content_type,
+            )
+            full_path = self._build_full_path(parent=parent, name=normalized_name)
+            node = await self._nodes.create(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                created_by=self._user_id,
+                parent_id=parent_node_id,
+                node_type="file",
+                name=normalized_name,
+                full_path=full_path,
+                depth=(parent.depth + 1) if parent else 0,
+                sort_order=0,
+                status="ready",
+            )
+            document = await self._documents.create(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                node_id=str(node.id),
+                uploaded_by=self._user_id,
+                file_name=normalized_name,
+                content_type=content_type,
+                file_url=stored["url"],
+                size_bytes=int(stored["size_bytes"] or 0),
+                checksum_sha256=checksum,
+                storage_backend=str(stored.get("backend") or getattr(rag_storage, "backend_name", "local")),
+                bucket=str(stored.get("bucket") or self._rag_storage_bucket),
+                object_key=str(stored.get("object_key") or object_key),
+                parse_status="pending",
+                index_status="indexing",
+                chunk_count=0,
+            )
+            job = await self._jobs.create(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                document_id=str(document.id),
+                status="indexing",
+            )
+            docs = self._build_docs_from_file(
+                document_id=str(document.id),
+                node_id=str(node.id),
+                file_name=normalized_name,
+                file_url=stored["url"],
+                full_path=full_path,
+                suffix=suffix,
+                content=content,
+                rag_space_id=rag_space_id,
+                ancestor_node_ids=ancestor_node_ids,
+            )
+            try:
+                result = await self._indexer.index(docs)
+            except EmbeddingModelNotConfigured as exc:
+                document.parse_status = "failed"
+                document.index_status = "failed"
+                document.error_message = str(exc)
+                job.status = "failed"
+                job.error_message = str(exc)
+                raise ValidationError("未配置 embedding 模型，请先在模型配置页启用 embedding 模型后再上传文件。") from exc
+            if int(result.get("accepted") or 0) <= 0:
+                document.parse_status = "failed"
+                document.index_status = "failed"
+                document.error_message = f"failed to index document: {normalized_name}"
+                job.status = "failed"
+                job.error_message = document.error_message
+                raise ValidationError(f"failed to index document: {normalized_name}")
+
+            await self._persist_chunk_rows(
+                rag_space_id=rag_space_id,
+                node_id=str(node.id),
+                document_id=str(document.id),
+                docs=docs,
+            )
+            document.parse_status = "parsed"
+            document.index_status = "ready"
+            document.chunk_count = int(result.get("accepted") or 0)
+            document.error_message = None
+            job.status = "ready"
+            job.error_message = None
+            await self._nodes.recalculate_children_counts(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._spaces.recalculate_counters(
+                org_id=self._org_id,
+                rag_space_id=rag_space_id,
+                owner_user_id=self._user_id,
+            )
+            await self._session.flush()
+            return self._serialize_node(node, document)
+        except Exception as exc:
+            self._raise_if_rag_metadata_missing(exc)
+            raise
+
     async def delete_node(self, *, rag_space_id: str, node_id: str) -> None:
         try:
             await self._get_owned_space(rag_space_id)

@@ -70,6 +70,10 @@ class DatasetListItem(BaseModel):
     updated_at: datetime | None = None
 
 
+class DatasetNameOption(BaseModel):
+    name: str
+
+
 class DatasetSampleResponse(BaseModel):
     id: str
     org_id: str

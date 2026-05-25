@@ -3,6 +3,7 @@ import type {
   DatasetCreateRequest,
   DatasetDetail,
   DatasetListQuery,
+  DatasetNameOption,
   DatasetListResponse,
   DatasetUploadCompleteRequest,
   DatasetUploadCompleteResponse,
@@ -20,6 +21,10 @@ import type {
 export const datasetApi = {
   list(query: DatasetListQuery) {
     return http.get<DatasetListResponse>("/v1/datasets", { params: query });
+  },
+
+  listNames(params: { keyword?: string; modality?: string; status?: string; limit?: number }) {
+    return http.get<DatasetNameOption[]>("/v1/datasets/names", { params });
   },
 
   get(id: string) {

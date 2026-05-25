@@ -126,6 +126,7 @@ function getPlatformOperatorMenu(): MenuStructure {
 
 function getAlgorithmEngineerMenu(): MenuStructure {
   return [
+    { title: "任务管理", path: "/app/tasks" },
     { title: "数据接入", path: "/ops/data/import" },
     { title: "测试集管理", path: "/ops/data/eval-sets" },
     { title: "微调管理", path: "/ops/training/fine-tune" },

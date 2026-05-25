@@ -5,6 +5,7 @@ import { useMenu } from "@/composables/useMenu";
 import { useAuthStore } from "@/stores/auth.store";
 import {
   ROLE_ADMIN,
+  ROLE_ALGORITHM_ENGINEER,
   ROLE_APP_DEVELOPER,
   ROLE_EXPERT,
   ROLE_PLATFORM_OPERATOR,
@@ -52,6 +53,18 @@ describe("useMenu", () => {
     auth.roles = [ROLE_EXPERT];
 
     expect(flattenTitles()).not.toContain("Prompt 管理");
+  });
+
+  it("shows task management entry for algorithm engineers", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_ALGORITHM_ENGINEER;
+    auth.roles = [ROLE_ALGORITHM_ENGINEER];
+
+    const titles = flattenTitles();
+    const paths = flattenPaths();
+
+    expect(titles).toContain("任务管理");
+    expect(paths).toContain("/app/tasks");
   });
 
   it("keeps governance and infrastructure tools out of platform operator navigation", () => {

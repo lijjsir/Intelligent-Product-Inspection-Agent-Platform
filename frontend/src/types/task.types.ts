@@ -60,6 +60,30 @@ export interface TaskRunResponse {
   status?: TaskStatus;
 }
 
+export type TaskResultIngestTarget = "rag" | "dataset" | "both";
+export type TaskResultIngestMode = "candidate";
+
+export interface TaskResultIngestRequest {
+  target: TaskResultIngestTarget;
+  rag_space_id?: string | null;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  mode?: TaskResultIngestMode;
+}
+
+export interface TaskResultIngestResponse {
+  task_id: string;
+  target: TaskResultIngestTarget;
+  mode: TaskResultIngestMode;
+  rag_space_id?: string | null;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  created_document_count: number;
+  created_sample_count: number;
+  skipped_count: number;
+  warnings: string[];
+}
+
 export interface TaskStatusResponse {
   id: string;
   status: TaskStatus;
