@@ -1,6 +1,14 @@
 import { http, type ApiRequestConfig } from "./http";
 import { streamApi } from "./stream.api";
-import type { InspectionTask, TaskCreate, TaskListQuery, TaskRunResponse, TaskStreamEvent } from "@/types/task.types";
+import type {
+  InspectionTask,
+  TaskCreate,
+  TaskListQuery,
+  TaskResultIngestRequest,
+  TaskResultIngestResponse,
+  TaskRunResponse,
+  TaskStreamEvent,
+} from "@/types/task.types";
 import type { PagedResponse } from "@/types/common.types";
 
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
@@ -28,6 +36,10 @@ export const taskApi = {
 
   run(taskId: string) {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
+  },
+
+  ingest(taskId: string, payload: TaskResultIngestRequest) {
+    return http.post<TaskResultIngestResponse>(`/v1/tasks/${taskId}/ingest`, payload);
   },
 
   async stream(taskId: string, onMessage: (event: TaskStreamEvent) => void): Promise<EventSource> {

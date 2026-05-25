@@ -7,6 +7,7 @@ import type {
   DatasetCreateRequest,
   DatasetDetail,
   DatasetListQuery,
+  DatasetNameOption,
   DatasetSample,
   DatasetSampleCreateRequest,
   DatasetSampleListQuery,
@@ -17,6 +18,7 @@ export const useDatasetStore = defineStore("dataset", () => {
   const items = ref<Dataset[]>([]);
   const current = ref<DatasetDetail | null>(null);
   const samples = ref<DatasetSample[]>([]);
+  const nameOptions = ref<DatasetNameOption[]>([]);
   const total = ref(0);
   const sampleTotal = ref(0);
   const loading = ref(false);
@@ -45,6 +47,12 @@ export const useDatasetStore = defineStore("dataset", () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  async function fetchDatasetNames(params: { keyword?: string; modality?: string; status?: string; limit?: number }) {
+    const { data } = await datasetApi.listNames(params);
+    nameOptions.value = data.data;
+    return data.data;
   }
 
   async function createDataset(payload: DatasetCreateRequest) {
@@ -112,6 +120,7 @@ export const useDatasetStore = defineStore("dataset", () => {
     items.value = [];
     current.value = null;
     samples.value = [];
+    nameOptions.value = [];
     total.value = 0;
     sampleTotal.value = 0;
   }
@@ -120,6 +129,7 @@ export const useDatasetStore = defineStore("dataset", () => {
     items,
     current,
     samples,
+    nameOptions,
     total,
     sampleTotal,
     loading,
@@ -127,6 +137,7 @@ export const useDatasetStore = defineStore("dataset", () => {
     count,
     fetchDatasets,
     fetchDataset,
+    fetchDatasetNames,
     createDataset,
     updateDataset,
     removeDataset,

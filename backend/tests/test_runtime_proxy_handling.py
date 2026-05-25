@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import pytest
 
 from agent.llm.client import LLMClient
+from agent.rag.knowledge_indexer import KnowledgeIndexer
 from agent.rag.retriever import Retriever
 from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.vision.detector_client import VisionDetectorClient
@@ -137,6 +138,45 @@ async def test_retriever_disables_env_proxy(monkeypatch):
     docs = await Retriever().retrieve("scratch defect")
 
     assert docs == []
+
+
+@pytest.mark.asyncio
+async def test_knowledge_indexer_disables_env_proxy(monkeypatch):
+    client_calls: list[dict] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            client_calls.append(kwargs)
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def put(self, url, json=None, headers=None):
+            return FakeResponse()
+
+    async def fake_embed(self, text: str):
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("agent.rag.knowledge_indexer.Embedder.embed", fake_embed)
+    monkeypatch.setattr("agent.rag.knowledge_indexer.httpx.AsyncClient", FakeClient)
+
+    result = await KnowledgeIndexer(org_id="org-1").index(
+        [{"id": "doc-1", "title": "Doc", "text": "defect summary", "source": "task"}]
+    )
+
+    assert result == {"accepted": 1, "failed_embeddings": 0}
+    assert len(client_calls) == 2
 
 
 @pytest.mark.asyncio

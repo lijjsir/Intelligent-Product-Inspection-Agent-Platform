@@ -39,6 +39,10 @@ export interface Dataset {
   updated_at?: string | null;
 }
 
+export interface DatasetNameOption {
+  name: string;
+}
+
 export interface DatasetDetail extends Dataset {
   recent_jobs: AsyncJob[];
   supported_export_formats: string[];
