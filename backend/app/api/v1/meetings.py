@@ -19,6 +19,7 @@ from app.schemas.meeting import (
     MeetingRoomCreateRequest,
     MeetingRoomDetailResponse,
     MeetingRoomJoinRequest,
+    MeetingRoomMemberResponse,
     MeetingRoomResponse,
 )
 from app.schemas.user import CurrentUser
@@ -222,6 +223,16 @@ async def list_room_agents(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.list_room_agents(room_id))
+
+
+@router.get("/rooms/{room_id}/members", response_model=ResponseEnvelope[list[MeetingRoomMemberResponse]])
+async def list_room_members(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_room_members(room_id))
 
 
 @router.post("/rooms/{room_id}/agents", response_model=ResponseEnvelope[MeetingRoomAgentResponse])

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
@@ -9,6 +10,11 @@ from agent.router.manager_state import ManagerState
 
 
 class RagExecutor:
+    _SPACE_OVERVIEW_RE = re.compile(
+        r"(有哪些|有什么|列出|清单|目录|包含|所有|多少).{0,12}(规则|规范|标准|检测标准|文件|文档)"
+        r"|(规则|规范|标准|检测标准|文件|文档).{0,12}(有哪些|有什么|列出|清单|目录|包含|所有|多少)"
+    )
+
     async def execute(
         self,
         step: AgentPlanStep,
@@ -38,12 +44,26 @@ class RagExecutor:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
 
-                result = await RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id).search(
-                    rag_space_id=rag_space_id,
-                    query=state.original_query,
-                    top_k=5,
-                    scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
-                )
+                service = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id)
+                scope_node_ids = list((state.rag_scope or {}).get("scope_node_ids") or [])
+                if self._is_space_overview_query(state.original_query):
+                    list_documents = getattr(service, "list_space_documents", None)
+                    if callable(list_documents):
+                        result = await list_documents(rag_space_id=rag_space_id, limit=12)
+                    else:
+                        result = await self._search(
+                            service,
+                            rag_space_id=rag_space_id,
+                            query=state.original_query,
+                            scope_node_ids=scope_node_ids,
+                        )
+                else:
+                    result = await self._search(
+                        service,
+                        rag_space_id=rag_space_id,
+                        query=state.original_query,
+                        scope_node_ids=scope_node_ids,
+                    )
                 retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
@@ -72,11 +92,13 @@ class RagExecutor:
             {
                 "hit_count": len(hits),
                 "top_score": top_score,
-                "top_k": 5,
+                "top_k": int(retrieval_meta.get("top_k") or 5),
                 "latency_ms": latency_ms,
                 "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
                 "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
                 "score_threshold": retrieval_meta.get("score_threshold"),
+                "low_confidence_fallback": bool(retrieval_meta.get("low_confidence_fallback")),
+                "overview_mode": bool(retrieval_meta.get("overview_mode")),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
                 "hits": hits,
@@ -94,3 +116,36 @@ class RagExecutor:
             ),
             [art],
         )
+
+    @classmethod
+    def _is_space_overview_query(cls, query: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(query or ""))
+        if not normalized:
+            return False
+        if len(normalized) <= 16 and "检测标准" in normalized:
+            return True
+        return bool(cls._SPACE_OVERVIEW_RE.search(normalized))
+
+    @staticmethod
+    async def _search(
+        service,
+        *,
+        rag_space_id: str,
+        query: str,
+        scope_node_ids: list[str],
+    ) -> dict[str, Any]:
+        search_kwargs = {
+            "rag_space_id": rag_space_id,
+            "query": query,
+            "top_k": 5,
+            "scope_node_ids": scope_node_ids,
+        }
+        try:
+            return await service.search(
+                **search_kwargs,
+                include_low_confidence_fallback=True,
+            )
+        except TypeError as exc:
+            if "include_low_confidence_fallback" not in str(exc):
+                raise
+            return await service.search(**search_kwargs)

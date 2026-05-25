@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.api.v1 import langfuse_proxy
 from app.core.config import Settings
 
 
@@ -18,6 +19,12 @@ def test_langfuse_blank_values_normalize_to_none():
     assert settings.langfuse_public_key is None
     assert settings.langfuse_secret_key is None
     assert settings.langfuse_project_id is None
+
+
+def test_langfuse_redirect_uses_configured_host(monkeypatch):
+    monkeypatch.setattr(langfuse_proxy.settings, "langfuse_host", "http://127.0.0.1:3000/")
+
+    assert langfuse_proxy._langfuse_auth_base_url() == "http://127.0.0.1:3000"
 
 
 def test_jwt_pem_escape_sequences_normalize_to_real_newlines():

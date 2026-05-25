@@ -98,6 +98,45 @@ function sampleLabel(imageIndex?: number | null): string {
   return sampleLabels.value[imageIndex] || "";
 }
 
+const selectedImageIndex = ref(0);
+const defects = computed(() => currentResult.value?.defects || []);
+const hasDefectImageIndex = computed(() => defects.value.some((item) => item.image_index != null));
+const imageDefectGroups = computed(() => {
+  return taskImages.value.map((url, index) => {
+    const defectsForImage = defects.value.filter((item) => item.image_index === index);
+    return {
+      index,
+      url,
+      sample: sampleLabel(index),
+      defects: defectsForImage,
+      defectCount: defectsForImage.length,
+      isError: defectsForImage.length > 0,
+    };
+  });
+});
+const erroredImageGroups = computed(() => imageDefectGroups.value.filter((item) => item.isError));
+const selectedImageGroup = computed(
+  () => imageDefectGroups.value.find((item) => item.index === selectedImageIndex.value) || imageDefectGroups.value[0] || null,
+);
+const viewerDefects = computed(() => {
+  if (!hasDefectImageIndex.value) return defects.value;
+  return selectedImageGroup.value?.defects || [];
+});
+
+watch(
+  imageDefectGroups,
+  (groups) => {
+    if (!groups.length) {
+      selectedImageIndex.value = 0;
+      return;
+    }
+    const activeGroup = groups.find((item) => item.index === selectedImageIndex.value);
+    if (activeGroup) return;
+    selectedImageIndex.value = (groups.find((item) => item.isError) || groups[0]).index;
+  },
+  { immediate: true },
+);
+
 async function submitReview() {
   if (!currentResult.value || !reviewForm.value.verdict) return;
   reviewing.value = true;
@@ -155,11 +194,36 @@ async function submitReview() {
         <!-- 主体数据面板 -->
         <div>
           <!-- 缺陷图像可视化 -->
-          <el-card v-if="taskImages.length > 0 && store.current.defects && store.current.defects.length > 0" shadow="never" class="mb-4">
-            <template #header>缺陷可视化标注</template>
+          <el-card v-if="taskImages.length > 0 && defects.length > 0" shadow="never" class="mb-4">
+            <template #header>
+              <div class="viewer-header">
+                <span>缺陷可视化标注</span>
+                <span class="viewer-header-meta">共 {{ taskImages.length }} 张图，问题图 {{ erroredImageGroups.length }} 张</span>
+              </div>
+            </template>
+            <div v-if="imageDefectGroups.length > 1" class="image-group-list">
+              <button
+                v-for="group in imageDefectGroups"
+                :key="group.index"
+                type="button"
+                class="image-group-chip"
+                :class="{ active: selectedImageGroup?.index === group.index, error: group.isError }"
+                @click="selectedImageIndex = group.index"
+              >
+                <span>{{ group.sample || `图${group.index + 1}` }}</span>
+                <strong>{{ group.isError ? `${group.defectCount} 处问题` : "未见异常" }}</strong>
+              </button>
+            </div>
+            <el-alert
+              v-if="taskImages.length > 1 && !hasDefectImageIndex"
+              type="warning"
+              :closable="false"
+              class="mb-3"
+              title="当前结果未返回按图片定位信息，暂时只能展示总体缺陷。"
+            />
             <DefectImageViewer
-              :image-url="taskImages[0]"
-              :defects="store.current.defects"
+              :image-url="selectedImageGroup?.url || taskImages[0]"
+              :defects="viewerDefects"
               :loading="loading"
               :normalized="true"
             />
@@ -171,6 +235,18 @@ async function submitReview() {
               <el-tab-pane label="缺陷坐标清单 (Defects)">
                 <el-empty v-if="!store.current.defects || store.current.defects.length === 0" description="未检出明确缺陷包裹" />
                 <div v-else>
+                  <div v-if="erroredImageGroups.length > 0" class="error-image-summary">
+                    <span class="error-image-summary-label">问题图片</span>
+                    <el-tag
+                      v-for="group in erroredImageGroups"
+                      :key="group.index"
+                      type="danger"
+                      effect="plain"
+                      round
+                    >
+                      {{ group.sample || `图${group.index + 1}` }} · {{ group.defectCount }} 处
+                    </el-tag>
+                  </div>
                   <el-table :data="store.current.defects" stripe style="width: 100%">
                     <el-table-column type="index" label="#" width="50" />
                     <el-table-column label="样品" width="80">
@@ -275,6 +351,69 @@ async function submitReview() {
 
 .font-bold {
   font-weight: 700;
+}
+
+.viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.viewer-header-meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.image-group-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.image-group-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  text-align: left;
+  transition: all 0.2s ease;
+}
+
+.image-group-chip strong {
+  font-size: 12px;
+}
+
+.image-group-chip.error {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(254, 242, 242, 0.88);
+  color: #991b1b;
+}
+
+.image-group-chip.active {
+  border-color: #ea580c;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.12);
+  transform: translateY(-1px);
+}
+
+.error-image-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.error-image-summary-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
 }
 
 .json-viewer {

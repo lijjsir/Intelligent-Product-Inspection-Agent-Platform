@@ -13,6 +13,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
+import { formatServerDateTime } from "@/utils/date-time";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -91,10 +92,7 @@ const editingMessageId = ref("");
 const editingContent = ref("");
 
 function formatTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return formatServerDateTime(value, { includeSeconds: true });
 }
 
 function roleLabel(role: ChatMessage["role"]) {

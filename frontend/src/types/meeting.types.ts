@@ -28,6 +28,15 @@ export interface MeetingRoomAgent {
   added_by: string;
 }
 
+export interface MeetingRoomMember {
+  id: string;
+  room_id: string;
+  user_id: string;
+  username: string;
+  role: "host" | "member" | string;
+  joined_at?: string | null;
+}
+
 export interface MeetingRoom {
   id: string;
   org_id: string;
@@ -44,6 +53,7 @@ export interface MeetingRoom {
 
 export interface MeetingRoomDetail extends MeetingRoom {
   agents: MeetingRoomAgent[];
+  members: MeetingRoomMember[];
 }
 
 export interface MeetingRoomCreate {

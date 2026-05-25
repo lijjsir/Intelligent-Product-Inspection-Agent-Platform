@@ -930,6 +930,24 @@ def test_langfuse_tracer_starts_trace_and_syncs_score(monkeypatch):
     assert fake.flushed is True
 
 
+def test_langfuse_tracer_normalizes_non_otel_trace_ids(monkeypatch):
+    class FakeLangfuseClient:
+        def __init__(self):
+            self.seeds = []
+
+        def create_trace_id(self, seed=None):
+            self.seeds.append(seed)
+            return "abc123abc123abc123abc123abc123ab"
+
+    fake = FakeLangfuseClient()
+    monkeypatch.setattr("agent.llm.langfuse_tracer._get_langfuse_client", lambda: fake)
+
+    normalized = LangfuseTracer().normalize_trace_id("019e5df2-ff19-7e5e-b25b-f9ac7e2db800")
+
+    assert normalized == "abc123abc123abc123abc123abc123ab"
+    assert fake.seeds == ["019e5df2-ff19-7e5e-b25b-f9ac7e2db800"]
+
+
 def test_langfuse_tracer_trace_exists_uses_trace_api(monkeypatch):
     class FakeTraceApi:
         def __init__(self):
@@ -1583,6 +1601,9 @@ def test_start_trace_creates_v4_observation_when_trace_factory_missing(monkeypat
                 "intent": "",
                 "prompt_version": "",
                 "workflow_version": "",
+                "workflow_run_id": "",
+                "request_id": "",
+                "assistant_message_id": "",
                 "session_id": "",
                 "route_source": "",
                 "route_confidence": 0.0,

@@ -239,7 +239,7 @@ class QualityReportService(TenantAwareService):
                 limit=limit,
                 source=source,
                 api_client=api_client,
-                langfuse_available=False,
+                langfuse_available=True,
             )
             meta["langfuse_status"] = "ok"
             meta["canonical_source"] = "local_fast"
@@ -1205,7 +1205,10 @@ class QualityReportService(TenantAwareService):
                     "session_id": str(getattr(score, "session_id", "") or ""),
                     "observation_id": getattr(score, "observation_id", None),
                     "verdict": None,
-                    "model_key": getattr(score, "model_key", None) or str(linked_llm_meta.get("model") or "chat_model"),
+                    "model_key": QualityReportService._model_key_or_unknown(
+                        getattr(score, "model_key", None),
+                        linked_llm_meta.get("model"),
+                    ),
                     "total_tokens": total_tokens,
                     "feedback_count": len(feedback_group),
                     "thumbs_down_count": sum(1 for item in feedback_group if item.feedback_type == "down"),
@@ -1264,7 +1267,7 @@ class QualityReportService(TenantAwareService):
                     "session_id": str(msg.session_id),
                     "observation_id": None,
                     "verdict": None,
-                    "model_key": str(llm_meta.get("model") or "chat_model"),
+                    "model_key": QualityReportService._model_key_or_unknown(llm_meta.get("model")),
                     "total_tokens": sum(int(item.total_tokens or 0) for item in ledger_group)
                     or int(llm_meta.get("usage", {}).get("total_tokens") or 0),
                     "feedback_count": len(feedback_group),
@@ -1424,9 +1427,17 @@ class QualityReportService(TenantAwareService):
         trace_id = str(item.get("trace_id") or "")
         if trace_id and assistant_message_id and trace_id != assistant_message_id:
             return True
-        if str(item.get("model_key") or "") not in {"", "chat_model"}:
+        if str(item.get("model_key") or "") not in {"", "chat_model", "unknown"}:
             return True
         return False
+
+    @staticmethod
+    def _model_key_or_unknown(*values) -> str:
+        for value in values:
+            text = str(value or "").strip()
+            if text and text != "chat_model":
+                return text
+        return "unknown"
 
     @classmethod
     def _merge_trace_items(cls, remote_traces: list[dict], local_traces: list[dict]) -> list[dict]:
@@ -1463,17 +1474,23 @@ class QualityReportService(TenantAwareService):
         for item in traces:
             trace = dict(item)
             trace_id = trace.get("trace_id")
-            has_remote_link = bool(trace.get("trace_url"))
-            has_remote_history = bool(trace.get("langfuse_synced")) or bool(trace.get("last_score_at") and has_remote_link)
+            has_remote_candidate = bool(trace_id) and (
+                bool(trace.get("trace_url"))
+                or bool(trace.get("langfuse_synced"))
+                or bool(trace.get("last_score_at"))
+            )
 
-            if not has_remote_history:
+            if not has_remote_candidate:
                 trace["langfuse_status"] = "local_only"
                 if trace.get("langfuse_synced") is not None:
                     trace["langfuse_synced"] = False
+                trace["trace_url"] = None
                 normalized.append(trace)
                 continue
 
-            exists = langfuse_trace_exists(trace_id) if callable(langfuse_trace_exists) else True
+            exists = langfuse_trace_exists(trace_id) if callable(langfuse_trace_exists) else (
+                True if trace.get("langfuse_synced") or trace.get("last_score_at") else None
+            )
             if exists is True:
                 trace["langfuse_status"] = "synced"
                 trace["langfuse_synced"] = True
@@ -1482,9 +1499,9 @@ class QualityReportService(TenantAwareService):
                 trace["langfuse_synced"] = False
                 trace["trace_url"] = None
             else:
-                trace["langfuse_status"] = "synced" if trace.get("langfuse_synced") else "unknown"
-                if trace.get("langfuse_synced") is None:
-                    trace["langfuse_synced"] = trace["langfuse_status"] == "synced"
+                trace["langfuse_status"] = "unknown"
+                trace["langfuse_synced"] = False
+                trace["trace_url"] = None
 
             normalized.append(trace)
         return normalized

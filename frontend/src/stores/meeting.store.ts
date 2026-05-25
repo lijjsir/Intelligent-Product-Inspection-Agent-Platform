@@ -5,6 +5,7 @@ import type {
   MeetingMessage,
   MeetingRoom,
   MeetingRoomAgent,
+  MeetingRoomMember,
   MeetingStreamEvent,
 } from "@/types/meeting.types";
 
@@ -15,6 +16,7 @@ export const useMeetingStore = defineStore("meeting", () => {
   const rooms = ref<MeetingRoom[]>([]);
   const messages = ref<MeetingMessage[]>([]);
   const agents = ref<MeetingRoomAgent[]>([]);
+  const members = ref<MeetingRoomMember[]>([]);
   const activeRoomId = ref("");
   const eventSource = shallowRef<EventSource | null>(null);
   const streamConnected = ref(false);
@@ -166,6 +168,19 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
+  async function loadMembers() {
+    if (!activeRoom.value) {
+      members.value = [];
+      return;
+    }
+    try {
+      const { data } = await meetingApi.listMembers(activeRoom.value.id);
+      members.value = unwrap<MeetingRoomMember[]>(data);
+    } catch {
+      members.value = [];
+    }
+  }
+
   async function deleteRoom() {
     if (!activeRoom.value) return;
     await meetingApi.deleteRoom(activeRoom.value.id);
@@ -173,6 +188,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     activeRoomId.value = rooms.value[0]?.id || "";
     messages.value = [];
     agents.value = [];
+    members.value = [];
   }
 
   async function loadAvailableAgentDefs() {
@@ -308,7 +324,7 @@ export const useMeetingStore = defineStore("meeting", () => {
 
   return {
     // state
-    rooms, messages, agents, activeRoomId, eventSource, streamConnected,
+    rooms, messages, agents, members, activeRoomId, eventSource, streamConnected,
     streamingContent, loadingRooms, loadingMessages, sending, messageReactions, aiThinking, summarizing,
     // computed
     activeRoom, canSend, lastMessageSeq,
@@ -316,7 +332,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     loadRooms, createRoom, joinRoom,
     loadMessages, sendMessage,
     requestAiReply, summarizeMeeting,
-    loadAgents, deleteRoom,
+    loadAgents, loadMembers, deleteRoom,
     availableAgentDefs, loadAvailableAgentDefs, addAgentToRoom, removeAgentFromRoom,
     connectStream, disconnectStream, handleStreamEvent,
     setReaction,

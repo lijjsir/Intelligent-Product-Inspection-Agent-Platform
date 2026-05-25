@@ -325,11 +325,14 @@ class ChatExecutor:
         hits = [item for item in list(content.get("hits") or []) if isinstance(item, dict)]
         selected = state.selected_rag_space or {}
         space_name = str(content.get("rag_space_name") or selected.get("name") or selected.get("id") or "selected RAG space")
+        overview_mode = bool(content.get("overview_mode"))
         if not hits:
             return f"RAG 证据（{space_name}）：未检索到可用片段。"
 
-        lines = [f"RAG 证据（{space_name}）："]
-        for index, hit in enumerate(hits[:5], start=1):
+        label = "RAG 知识库目录" if overview_mode else "RAG 证据"
+        max_hits = 12 if overview_mode else 5
+        lines = [f"{label}（{space_name}）："]
+        for index, hit in enumerate(hits[:max_hits], start=1):
             title = str(hit.get("title") or hit.get("document_name") or f"片段 {index}")
             source = str(hit.get("source") or hit.get("full_path") or "")
             score = hit.get("score")
