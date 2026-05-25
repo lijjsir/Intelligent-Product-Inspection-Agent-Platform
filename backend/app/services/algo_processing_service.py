@@ -258,7 +258,7 @@ class AlgoProcessingService:
 
         if embedding_model is not None:
             try:
-                embedder = Embedder(org_id=self._deps.org_id)
+                embedder = Embedder(org_id=self._deps.org_id, user_id=self._deps.user_id)
                 for sample_id, text in {**image_desc, **text_desc}.items():
                     vectors[sample_id] = await embedder.embed((text or sample_id)[:4000])
             except EmbeddingModelNotConfigured as exc:

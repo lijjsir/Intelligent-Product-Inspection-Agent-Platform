@@ -214,12 +214,17 @@ function buildFlowElements() {
 async function loadAll() {
   loading.value = true;
   try {
-    await Promise.all([
-      store.fetchRoutingCurrent(),
+    await store.fetchRoutingCurrent();
+    buildFlowElements();
+
+    const optionalResults = await Promise.allSettled([
       store.fetchRoutingMetrics(),
       store.fetchRoutingEvents(20),
     ]);
-    buildFlowElements();
+    const rejected = optionalResults.filter((item) => item.status === "rejected");
+    if (rejected.length) {
+      console.warn("Optional routing stats failed to load", rejected);
+    }
   } finally {
     loading.value = false;
   }

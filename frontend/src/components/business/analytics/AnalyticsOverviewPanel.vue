@@ -245,8 +245,8 @@ function goToProductLineTaskList(productLine: string) {
       <template #header>
         <div class="card-head">
           <div>
-            <strong>模型质量简表</strong>
-            <span>这里只看通过率和幻觉率；Token 与成本来自模型用量统计</span>
+            <strong>质检模型质量简表</strong>
+            <span>只展示产生质检结果的生成模型；embedding 仅进入模型观测的用量、Token 和成本统计</span>
           </div>
         </div>
       </template>

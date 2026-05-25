@@ -113,11 +113,11 @@ function getAppDeveloperMenu(): MenuStructure {
 
 function getPlatformOperatorMenu(): MenuStructure {
   return [
-    { title: "平台运维工作台", path: "/ops/dashboard" },
+    { title: "平台运营工作台", path: "/ops/dashboard" },
     { title: "任务查看", path: "/ops/tasks" },
     { title: "分析中心", path: "/ops/analytics" },
     { title: "告警管理", path: "/ops/alerts" },
-    { title: "模型用量", path: "/ops/calls" },
+    { title: "模型观测", path: "/ops/calls" },
     { title: "Agent 查看", path: "/ops/agents" },
     { title: "质检门槛查看", path: "/ops/inspection-specs" },
     { title: "个人设置", path: "/app/profile" },

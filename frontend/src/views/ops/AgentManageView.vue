@@ -28,6 +28,12 @@ import {
 const store = useAgentOpsStore();
 const auth = useAuthStore();
 const isReadonly = computed(() => auth.primaryRole === ROLE_PLATFORM_OPERATOR);
+const pageTitle = computed(() => (isReadonly.value ? "Agent 查看" : "Agent 管理"));
+const pageDescription = computed(() =>
+  isReadonly.value
+    ? "查看 Agent 定义、运行态和拓扑状态，平台运营账号仅保留观察与排查入口。"
+    : "围绕 Agent 定义、运行态和拓扑的统一运营视图。拓扑页展示的是 Agent 总体结构与当前真实状态，不再默认展开子 Agent 内部节点。",
+);
 const { page, pageSize, total, onPageChange, onSizeChange } = usePagination();
 const loading = computed(() => store.loading);
 
@@ -254,8 +260,8 @@ onUnmounted(() => {
   <div class="agent-manage-page">
     <section class="page-head">
       <div>
-        <h1>Agent 管理</h1>
-        <p>围绕 Agent 定义、运行态和拓扑的统一运营视图。拓扑页展示的是 Agent 总体结构与当前真实状态，不再默认展开子 Agent 内部节点。</p>
+        <h1>{{ pageTitle }}</h1>
+        <p>{{ pageDescription }}</p>
       </div>
       <el-button :icon="RefreshRight" @click="refreshAll">刷新数据</el-button>
     </section>
@@ -537,6 +543,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(22, 163, 74, 0.16), transparent 24%),
+    radial-gradient(circle at right top, rgba(132, 204, 22, 0.14), transparent 25%),
+    linear-gradient(180deg, #f0fdf4 0%, #f8fafc 100%);
 }
 
 .page-head {
@@ -544,19 +556,41 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  padding: 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 86% 18%, rgba(190, 242, 100, 0.22), transparent 30%),
+    linear-gradient(135deg, #10231c 0%, #14532d 50%, #365314 100%);
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(20, 83, 45, 0.18);
 }
 
 .page-head h1 {
   margin: 0;
-  font-size: 28px;
-  color: #0f172a;
+  font-size: 40px;
+  line-height: 1.1;
+  color: #f8fafc;
 }
 
 .page-head p {
   max-width: 840px;
-  margin: 8px 0 0;
-  color: #64748b;
+  margin: 12px 0 0;
+  color: rgba(248, 250, 252, 0.82);
   line-height: 1.7;
+}
+
+.page-head :deep(.el-button) {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.page-head :deep(.el-button:hover),
+.page-head :deep(.el-button:focus) {
+  border-color: rgba(255, 255, 255, 0.44);
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 .agent-tabs :deep(.el-tabs__header) {
@@ -783,6 +817,10 @@ onUnmounted(() => {
 }
 
 @media (max-width: 900px) {
+  .agent-manage-page {
+    padding: 14px;
+  }
+
   .page-head,
   .panel-head,
   .topology-head {

@@ -288,7 +288,7 @@ onMounted(() => {
       </div>
 
       <el-alert
-        title="平台运维可查看告警规则用于排障核对；新增、编辑、启停和删除请到管理员的系统治理中处理。"
+        title="平台运营可查看告警规则用于排障核对；新增、编辑、启停和删除请到管理员的系统治理中处理。"
         type="info"
         :closable="false"
         show-icon
@@ -329,12 +329,24 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.alert-shell { display: grid; gap: 18px; padding: 24px; }
+.alert-shell {
+  min-height: 100vh;
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(220, 38, 38, 0.13), transparent 24%),
+    radial-gradient(circle at right top, rgba(251, 146, 60, 0.16), transparent 25%),
+    linear-gradient(180deg, #fff1f2 0%, #fff7ed 100%);
+}
 
 .hero {
   padding: 28px; border-radius: 24px;
-  background: linear-gradient(135deg, #1e293b 0%, #334155 52%, #0f766e 100%);
+  background:
+    radial-gradient(circle at 88% 16%, rgba(253, 186, 116, 0.24), transparent 30%),
+    linear-gradient(135deg, #450a0a 0%, #991b1b 52%, #ea580c 100%);
   color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(153, 27, 27, 0.16);
 }
 .eyebrow { margin: 0 0 8px; font-size: 12px; letter-spacing: .16em; text-transform: uppercase; opacity: .76; }
 .hero h2 { margin: 0; font-size: 40px; }
@@ -345,8 +357,8 @@ onMounted(() => {
   padding: 8px 20px; border-radius: 8px; border: none; background: transparent;
   color: #64748b; font-size: 14px; font-weight: 500; cursor: pointer; transition: all .2s;
 }
-.tab-btn:hover { color: #1b3a5c; background: rgba(255,255,255,.6); }
-.tab-btn.active { background: #fff; color: #0f766e; box-shadow: 0 2px 8px rgba(15,23,42,.08); font-weight: 600; }
+.tab-btn:hover { color: #991b1b; background: rgba(255,255,255,.6); }
+.tab-btn.active { background: #fff; color: #b91c1c; box-shadow: 0 2px 8px rgba(153,27,27,.1); font-weight: 600; }
 
 .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .stat-card { padding: 20px; border-radius: 16px; background: #fff; border: 1px solid rgba(16,36,61,.08); box-shadow: 0 4px 16px rgba(15,23,42,.03); }
@@ -383,7 +395,7 @@ onMounted(() => {
 .type-cell { font-size: 13px; color: #52525b; }
 .cool-cell { font-size: 13px; color: #71717a; }
 .alert-table :deep(.el-table__header th), .rule-table :deep(.el-table__header th) { color: #71717a; font-weight: 600; font-size: 13px; background: transparent; }
-.alert-table :deep(.el-table__body tr:hover > td), .rule-table :deep(.el-table__body tr:hover > td) { background: #f0fdfa; }
+.alert-table :deep(.el-table__body tr:hover > td), .rule-table :deep(.el-table__body tr:hover > td) { background: #fff1f2; }
 .pager { margin-top: 16px; display: flex; justify-content: flex-end; }
 
 .drawer-body { display: flex; flex-direction: column; gap: 8px; }

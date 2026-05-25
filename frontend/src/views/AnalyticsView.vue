@@ -148,9 +148,9 @@ function markOverviewLoaded() {
   display: grid;
   gap: 18px;
   background:
-    radial-gradient(circle at top left, rgba(15,118,110,0.14), transparent 24%),
-    radial-gradient(circle at right top, rgba(217,119,6,0.12), transparent 24%),
-    linear-gradient(180deg, #f6f2ea 0%, #edf2f7 100%);
+    radial-gradient(circle at top left, rgba(124, 58, 237, 0.14), transparent 24%),
+    radial-gradient(circle at right top, rgba(219, 39, 119, 0.12), transparent 25%),
+    linear-gradient(180deg, #faf5ff 0%, #f8fafc 100%);
 }
 
 .hero-panel {
@@ -159,8 +159,25 @@ function markOverviewLoaded() {
   gap: 24px;
   padding: 28px;
   border-radius: 24px;
-  background: linear-gradient(135deg, #10243d 0%, #173f5f 52%, #0f766e 100%);
+  background:
+    radial-gradient(circle at 86% 18%, rgba(244, 114, 182, 0.24), transparent 30%),
+    linear-gradient(135deg, #2e1065 0%, #5b21b6 50%, #be185d 100%);
   color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(91, 33, 182, 0.16);
+}
+
+.hero-actions :deep(.el-button) {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.hero-actions :deep(.el-button:hover),
+.hero-actions :deep(.el-button:focus) {
+  border-color: rgba(255, 255, 255, 0.44);
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 .eyebrow { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.76; }

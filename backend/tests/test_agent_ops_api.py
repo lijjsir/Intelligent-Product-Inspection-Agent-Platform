@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import ProgrammingError
 
 from app.api.v1.agent_ops import router
 from app.services import agent_ops_service as agent_ops_mod
@@ -53,6 +54,55 @@ def test_agent_ops_admin_scope_is_global_for_rag_analysis():
 
     assert agent_ops_api_mod._use_global_scope(admin) is True
     assert agent_ops_api_mod._use_global_scope(user) is False
+
+
+class FailingRouteLogSession:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+        self.rollback_count = 0
+
+    async def execute(self, *_args, **_kwargs):
+        raise self.exc
+
+    async def rollback(self):
+        self.rollback_count += 1
+
+
+def missing_route_log_error(message: str = "Table 'piap_main.agent_route_logs' doesn't exist"):
+    return ProgrammingError(
+        "SELECT * FROM agent_route_logs",
+        {},
+        Exception(message),
+    )
+
+
+@pytest.mark.asyncio
+async def test_routing_events_return_empty_when_route_log_table_is_missing():
+    session = FailingRouteLogSession(missing_route_log_error())
+    svc = agent_ops_mod.AgentOpsService(session=session, org_id="org-1", actor_id="user-1")
+
+    items = await svc.get_routing_events()
+
+    assert items == []
+    assert session.rollback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_routing_metrics_return_zero_when_route_log_schema_is_incomplete():
+    session = FailingRouteLogSession(
+        missing_route_log_error("Unknown column 'agent_route_logs.blocked' in 'field list'")
+    )
+    svc = agent_ops_mod.AgentOpsService(session=session, org_id="org-1", actor_id="user-1")
+
+    metrics = await svc.get_routing_metrics()
+
+    assert metrics.total_24h == 0
+    assert metrics.rule_hit_count == 0
+    assert metrics.model_fallback_count == 0
+    assert metrics.blocked_count == 0
+    assert metrics.by_agent == {}
+    assert metrics.by_rule == {}
+    assert session.rollback_count == 1
 
 
 def test_chat_rag_effectiveness_requires_answer_citation_marker():
