@@ -85,6 +85,50 @@ describe("chat store", () => {
     expect(store.messages[1].payload?.workflow_run_id).toBe("run-1");
   });
 
+  it("sends messages even when randomUUID is unavailable", async () => {
+    const { chatApi } = await import("@/api/chat.api");
+    vi.stubGlobal("crypto", {});
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          id: "session-1",
+          org_id: "org-1",
+          user_id: "user-1",
+          status: "active",
+        },
+      },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: {
+            id: "session-1",
+            org_id: "org-1",
+            user_id: "user-1",
+            status: "active",
+          },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "什么是毛刺？",
+            payload: {},
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-1",
+        },
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("新会话");
+    await expect(store.sendMessage({ message: "什么是毛刺？" })).resolves.toBeTruthy();
+    expect(chatApi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps chat initialization available when rag spaces fail to load", async () => {
     const { chatApi } = await import("@/api/chat.api");
     const { ragSpaceApi } = await import("@/api/rag-space.api");
