@@ -41,7 +41,7 @@ class ToolBindingService:
         if existing:
             raise ValidationError("binding already exists for this agent and tool")
 
-        tool_version_id = payload.get("tool_version_id", tool.active_version_id or tool.id)
+        tool_version_id = payload.get("tool_version_id") or tool.active_version_id or tool.id
         binding = AgentToolBinding(
             id=str(uuid7()),
             org_id=self._org_id,

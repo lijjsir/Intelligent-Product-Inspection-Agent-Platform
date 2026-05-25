@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
@@ -80,10 +82,16 @@ async def download_export_job(
             if result:
                 content, content_type = result
                 filename = f"{job.report_name or 'report'}.{job.format or 'pdf'}"
+                encoded = quote(filename)
                 return Response(
                     content=content,
                     media_type=content_type or "application/octet-stream",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": (
+                            f'attachment; filename="{encoded}";'
+                            f" filename*=UTF-8''{encoded}"
+                        ),
+                    },
                 )
     # Fallback: redirect to file_url
     from fastapi.responses import RedirectResponse

@@ -8,7 +8,10 @@ WORKDIR /app/backend
 
 COPY backend/requirements.txt ./requirements.txt
 
-RUN python -m pip install --upgrade pip && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends fonts-wqy-microhei && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip install --upgrade pip && \
     python -m pip install -r requirements.txt
 
 COPY backend/ ./
