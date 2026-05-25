@@ -141,7 +141,7 @@ class LLMAgentAdapter(BaseAgentAdapter):
             raise RuntimeError("No meeting runtime model API key is configured")
 
         full_content = ""
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
             async with client.stream(
                 "POST",
                 f"{base_url}/chat/completions",

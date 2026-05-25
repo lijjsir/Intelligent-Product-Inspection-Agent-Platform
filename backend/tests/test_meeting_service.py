@@ -7,6 +7,7 @@ import pytest
 
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_service as meeting_service_mod
+from app.repositories.meeting_repo import MeetingRepository
 
 
 class FakeSession:
@@ -227,6 +228,32 @@ def test_contains_meeting_ai_mention_supports_spaced_and_compact_aliases():
     assert service._contains_meeting_ai_mention("@AI助手 你能做什么") is True
     assert service._contains_meeting_ai_mention("请 @AI助手 帮忙") is True
     assert service._contains_meeting_ai_mention("@ai please help") is False
+
+
+@pytest.mark.asyncio
+async def test_next_message_seq_locks_room_before_allocating(monkeypatch):
+    executed = []
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeScalarSession:
+        async def execute(self, stmt):
+            executed.append(stmt)
+            return FakeResult()
+
+        async def scalar(self, stmt):
+            executed.append(stmt)
+            return 8
+
+    repo = MeetingRepository(FakeScalarSession())
+
+    seq_no = await repo.next_message_seq(org_id="org-1", room_id="room-1")
+
+    assert seq_no == 9
+    assert len(executed) == 2
+    assert getattr(executed[0], "_for_update_arg", None) is not None
 
 
 @pytest.mark.asyncio

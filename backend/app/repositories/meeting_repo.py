@@ -120,7 +120,19 @@ class MeetingRepository:
         )
         return list(result.scalars().all())
 
-    async def next_message_seq(self, room_id: str) -> int:
+    async def _lock_room_for_message_seq(self, *, org_id: str, room_id: str) -> None:
+        await self._session.execute(
+            select(MeetingRoom.id)
+            .where(
+                MeetingRoom.org_id == org_id,
+                MeetingRoom.id == room_id,
+                MeetingRoom.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+
+    async def next_message_seq(self, *, org_id: str, room_id: str) -> int:
+        await self._lock_room_for_message_seq(org_id=org_id, room_id=room_id)
         max_seq = await self._session.scalar(
             select(func.max(MeetingMessage.seq_no)).where(MeetingMessage.room_id == room_id)
         )
@@ -143,7 +155,7 @@ class MeetingRepository:
             room_id=room_id,
             user_id=user_id,
             username=username,
-            seq_no=await self.next_message_seq(room_id),
+            seq_no=await self.next_message_seq(org_id=org_id, room_id=room_id),
             content=content,
             message_type=message_type,
             agent_id=agent_id,
