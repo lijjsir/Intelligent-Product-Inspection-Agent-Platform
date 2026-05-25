@@ -33,7 +33,7 @@ class ModelHealthChecker:
             headers["Authorization"] = f"Bearer {item['api_key']}"
 
         timeout = float(settings.model_health_timeout_sec)
-        async with httpx.AsyncClient(base_url=endpoint, timeout=timeout) as client:
+        async with httpx.AsyncClient(base_url=endpoint, timeout=timeout, trust_env=False) as client:
             try:
                 response = await client.get("/models", headers=headers)
             except httpx.TimeoutException:

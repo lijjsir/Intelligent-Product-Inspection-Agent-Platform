@@ -66,7 +66,7 @@ const availableTargets = computed(() =>
     subtitle="维护离线评测任务，关联评测集与微调或部署目标。"
     :store="store"
     :build-payload="buildPayload"
-    :detail-description="(item) => `目标：${item?.target_type || '-'} / ${item?.target_id || '-'}`"
+    :detail-description="(item) => `目标：${item?.target_type || '-'} / ${item?.target_name || item?.target_id || '-'}`"
     show-launch
   >
     <template #form-extra>

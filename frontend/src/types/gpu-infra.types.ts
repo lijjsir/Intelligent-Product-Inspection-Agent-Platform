@@ -83,3 +83,8 @@ export interface GpuNodeMetricRefreshResult {
   node: GpuComputeNode;
   metrics: Record<string, unknown>;
 }
+
+export interface GpuNodeBulkRefreshResult {
+  items: GpuComputeNode[];
+  counts: Record<string, number>;
+}

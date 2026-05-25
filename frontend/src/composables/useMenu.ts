@@ -79,7 +79,7 @@ function getAdminMenu(): MenuStructure {
         { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
         { title: "质检门槛", path: "/governance/admin/inspection-specs" },
-        { title: "告警规则", path: "/governance/admin/alert-rules" },
+        { title: "告警管理", path: "/ops/alerts" },
         { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
         { title: "记忆治理", path: "/governance/memory" },

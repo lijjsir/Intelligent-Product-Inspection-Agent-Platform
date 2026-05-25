@@ -188,6 +188,10 @@ function openDetail(id: string) {
   router.push(`/ops/data/eval-sets/${id}`);
 }
 
+function resolveSourceDatasetName(row: any) {
+  return row?.source_dataset_name || row?.source_dataset_id || "-";
+}
+
 onMounted(async () => {
   await Promise.all([loadList(), loadSourceDatasets()]);
   await loadSourceSamples();
@@ -230,7 +234,11 @@ watch(sourceDatasetId, async (next, prev) => {
 
       <el-table :data="evalStore.items" v-loading="evalStore.loading" class="mt-4">
         <el-table-column prop="name" label="名称" min-width="220" />
-        <el-table-column prop="source_dataset_id" label="来源数据集" min-width="220" />
+        <el-table-column label="来源数据集" min-width="220">
+          <template #default="{ row }">
+            <span>{{ resolveSourceDatasetName(row) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="sample_count" label="样本数" width="100" />
         <el-table-column prop="status" label="状态" width="120" />
         <el-table-column prop="updated_at" label="更新时间" width="180" />

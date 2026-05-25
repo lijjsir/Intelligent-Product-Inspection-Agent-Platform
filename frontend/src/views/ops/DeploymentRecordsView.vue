@@ -54,7 +54,7 @@ onMounted(async () => {
     subtitle="管理模型部署任务，支持动态加载或静态合并。"
     :store="store"
     :build-payload="buildPayload"
-    :detail-description="(item) => `来源：${item?.source_type || '-'} / ${item?.source_id || '-'}；模式：${item?.merge_mode || '-'}`"
+    :detail-description="(item) => `来源：${item?.source_type || '-'} / ${item?.source_name || item?.source_id || '-'}；模式：${item?.merge_mode || '-'}`"
     show-launch
   >
     <template #form-extra>

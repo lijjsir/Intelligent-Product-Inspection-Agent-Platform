@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
+    AlertRuleManagerPanel: typeof import('./src/components/ops/AlertRuleManagerPanel.vue')['default']
     AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']
     AlgoResourcePage: typeof import('./src/components/business/algo/AlgoResourcePage.vue')['default']
     AlgoWorkspaceHero: typeof import('./src/components/business/algo/AlgoWorkspaceHero.vue')['default']
