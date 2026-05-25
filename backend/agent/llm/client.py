@@ -56,6 +56,7 @@ class LLMClient:
         self._tracer = LangfuseTracer()
         self._trace_id = trace_id or (self._tracer.create_trace_id() if self._tracer.enabled else None)
         self._ark_client = Ark(api_key=self._api_key) if Ark and self._api_key else None
+        self._last_embedding_usage_event: dict[str, Any] | None = None
 
     @property
     def model_id(self) -> str:
@@ -64,6 +65,10 @@ class LLMClient:
     @property
     def trace_id(self) -> str | None:
         return self._trace_id
+
+    @property
+    def last_embedding_usage_event(self) -> dict[str, Any] | None:
+        return dict(self._last_embedding_usage_event) if self._last_embedding_usage_event else None
 
     async def chat(
         self,
@@ -165,8 +170,7 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
-        else:
-            payload["response_format"] = {"type": "json_object"}
+        payload["response_format"] = {"type": "json_object"}
         return self._ensure_json_prompt_hint(payload)
 
     async def vision_chat(self, prompt: str, image_urls: list[str]) -> dict[str, Any]:
@@ -187,6 +191,7 @@ class LLMClient:
         observation_name: str = "llm.embedding",
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
+        self._last_embedding_usage_event = None
         metadata = dict(observation_metadata or {})
         metadata.setdefault("modality", "text")
         if self._should_use_multimodal_embedding():
@@ -219,6 +224,7 @@ class LLMClient:
         vector = self._extract_embedding_vector(data)
         if not vector:
             raise RuntimeError("embedding response did not include a vector")
+        self._last_embedding_usage_event = self._embedding_usage_event(data)
         return vector
 
     def _should_use_multimodal_embedding(self) -> bool:
@@ -275,6 +281,7 @@ class LLMClient:
 
             vector = self._extract_embedding_vector(data)
             usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+            self._last_embedding_usage_event = self._embedding_usage_event(data, usage_metadata=usage_metadata)
             self._safe_update_observation(
                 observation,
                 output={"vector_size": len(vector), "transport": "ark_sdk", "response": data},
@@ -285,6 +292,24 @@ class LLMClient:
                 },
             )
             return vector
+
+    def _embedding_usage_event(
+        self,
+        data: dict[str, Any],
+        *,
+        usage_metadata: dict[str, int] | None = None,
+    ) -> dict[str, Any] | None:
+        usage = usage_metadata or self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
+        if not usage:
+            return None
+        meta = data.get("__meta__") if isinstance(data.get("__meta__"), dict) else {}
+        return {
+            "model_key": str(data.get("model") or meta.get("model") or self._embed_model or "unknown"),
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
+            "response_id": data.get("id") or meta.get("id"),
+        }
 
     def _extract_embedding_vector(self, data: dict[str, Any]) -> list[float]:
         container = data.get("data")

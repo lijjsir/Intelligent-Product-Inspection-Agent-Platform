@@ -16,6 +16,11 @@ function flattenTitles() {
   return menu.value.flatMap((item) => ("items" in item ? item.items.map((child) => child.title) : [item.title]));
 }
 
+function flattenPaths() {
+  const { menu } = useMenu();
+  return menu.value.flatMap((item) => ("items" in item ? item.items.map((child) => child.path) : [item.path]));
+}
+
 describe("useMenu", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -63,7 +68,7 @@ describe("useMenu", () => {
     expect(titles).not.toContain("告警规则");
     expect(titles).toContain("Agent 查看");
     expect(titles).toContain("质检门槛查看");
-    expect(titles).toContain("模型用量");
+    expect(titles).toContain("模型观测");
     expect(titles).not.toContain("数据质量");
     expect(titles).not.toContain("业务报表");
     expect(titles).not.toContain("成本分析");
@@ -99,6 +104,14 @@ describe("useMenu", () => {
     const titles = flattenTitles();
 
     expect(titles).toContain("告警规则");
+  });
+
+  it("exposes the governance analytics center in admin navigation", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_ADMIN;
+    auth.roles = [ROLE_ADMIN];
+
+    expect(flattenPaths()).toContain("/governance/quality/analysis-center");
   });
 
   it("keeps tool management routes accessible to admins", () => {

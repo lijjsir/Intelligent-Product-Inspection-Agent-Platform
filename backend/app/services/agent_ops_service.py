@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import cast
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.topology_catalog import (
@@ -71,6 +72,25 @@ from app.schemas.agent_ops import (
 )
 from app.services.audit_service import AuditService
 from app.core.config import settings
+
+
+def _is_route_log_storage_unavailable(exc: Exception) -> bool:
+    if not isinstance(exc, (ProgrammingError, OperationalError)):
+        return False
+    message = str(exc).lower()
+    if "agent_route_logs" not in message:
+        return False
+    markers = (
+        "doesn't exist",
+        "does not exist",
+        "no such table",
+        "undefined table",
+        "unknown table",
+        "no such column",
+        "unknown column",
+        "undefined column",
+    )
+    return any(marker in message for marker in markers)
 
 
 class AgentOpsService:
@@ -1410,15 +1430,21 @@ class AgentOpsService:
         from app.models.agent_ops import AgentRouteLog
         from sqlalchemy import select
 
-        result = await self._session.execute(
-            select(AgentRouteLog)
-            .where(
-                AgentRouteLog.org_id == self._org_id,
-                AgentRouteLog.deleted_at.is_(None),
+        try:
+            result = await self._session.execute(
+                select(AgentRouteLog)
+                .where(
+                    AgentRouteLog.org_id == self._org_id,
+                    AgentRouteLog.deleted_at.is_(None),
+                )
+                .order_by(AgentRouteLog.created_at.desc())
+                .limit(limit)
             )
-            .order_by(AgentRouteLog.created_at.desc())
-            .limit(limit)
-        )
+        except Exception as exc:
+            if _is_route_log_storage_unavailable(exc):
+                await self._session.rollback()
+                return []
+            raise
         rows = result.scalars().all()
         items = []
         for row in rows:
@@ -1452,13 +1478,19 @@ class AgentOpsService:
 
         cutoff = utcnow() - timedelta(hours=24)
 
-        result = await self._session.execute(
-            select(AgentRouteLog).where(
-                AgentRouteLog.org_id == self._org_id,
-                AgentRouteLog.created_at >= cutoff,
-                AgentRouteLog.deleted_at.is_(None),
+        try:
+            result = await self._session.execute(
+                select(AgentRouteLog).where(
+                    AgentRouteLog.org_id == self._org_id,
+                    AgentRouteLog.created_at >= cutoff,
+                    AgentRouteLog.deleted_at.is_(None),
+                )
             )
-        )
+        except Exception as exc:
+            if _is_route_log_storage_unavailable(exc):
+                await self._session.rollback()
+                return RoutingMetricsResponse()
+            raise
         rows = list(result.scalars().all())
 
         total = len(rows)

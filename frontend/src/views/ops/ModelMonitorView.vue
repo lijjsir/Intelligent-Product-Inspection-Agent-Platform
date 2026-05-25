@@ -20,6 +20,7 @@ const rangeDays = ref<7 | 30 | 90>(7);
 const activeChart = ref<ChartTab>("cost");
 
 const modelMetrics = computed(() => analyticsStore.overview?.model_metrics ?? []);
+const qualityMetrics = computed(() => modelMetrics.value.filter((item) => (item.result_count ?? 0) > 0));
 const totalCost = computed(() => analyticsStore.overview?.total_cost ?? 0);
 const totalTokens = computed(() => modelMetrics.value.reduce((sum, item) => sum + (item.total_tokens ?? 0), 0));
 const totalCalls = computed(() => {
@@ -94,9 +95,9 @@ const summaryCards = computed(() => [
     tone: "tokens",
   },
   {
-    label: "整体通过率",
+    label: "质检通过率",
     value: formatRate(overallPassRate.value),
-    sub: hasUnpricedUsage.value ? "存在待补价格模型" : `平均单次成本 ${formatCost(avgCostPerCall.value)}`,
+    sub: hasUnpricedUsage.value ? "存在待补价格模型" : `生成模型质检样本 ${qualityMetrics.value.reduce((sum, item) => sum + item.result_count, 0)} 条`,
     tone: "quality",
   },
 ]);
@@ -187,6 +188,14 @@ function setRange(days: number) {
 function metricCallCount(metric?: Pick<ModelAnalyticsMetric, "call_count" | "result_count"> | null) {
   if (!metric) return 0;
   return metric.call_count ?? metric.result_count ?? 0;
+}
+
+function hasQualityMetric(metric?: Pick<ModelAnalyticsMetric, "result_count"> | null) {
+  return Boolean((metric?.result_count ?? 0) > 0);
+}
+
+function qualityRateText(metric: ModelAnalyticsMetric | null | undefined, key: "pass_rate" | "hallucination_rate") {
+  return hasQualityMetric(metric) ? formatRate(metric?.[key] ?? 0) : "不适用";
 }
 
 function formatRate(value: number) {
@@ -438,8 +447,8 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
     <section class="console-head">
       <div>
         <p class="eyebrow">Model Console</p>
-        <h2>模型用量</h2>
-        <p class="sub">统一查看请求量、Token、成本和模型健康，替代原来重复拆开的调用监控、成本分析和模型表现明细。</p>
+        <h2>模型观测</h2>
+        <p class="sub">统一查看请求量、Token、成本、模型健康与质检模型表现；embedding 参与用量和成本，质检通过率/幻觉率只统计产生质检结果的生成模型。</p>
       </div>
 
       <div class="range-switch">
@@ -468,6 +477,12 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
       :closable="false"
       show-icon
     />
+    <el-alert
+      title="口径说明：本页的质检通过率和质检幻觉率来自检测任务结果，不等同于分析中心质量报告里的聊天幻觉率；embedding 模型没有质检结果归属时不会展示质量率。"
+      type="info"
+      :closable="false"
+      show-icon
+    />
 
     <el-alert
       v-if="hasUnpricedUsage"
@@ -490,7 +505,7 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
         <template #header>
           <div class="analysis-head">
             <div>
-              <strong>模型数据分析</strong>
+              <strong>模型用量分析</strong>
               <span>{{ chartTabs.find((item) => item.key === activeChart)?.desc }}</span>
             </div>
 
@@ -537,27 +552,27 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
               <strong>{{ formatTokens(metric.avg_tokens) }}</strong>
             </div>
             <div>
-              <span>通过率</span>
-              <strong>{{ formatRate(metric.pass_rate) }}</strong>
+              <span>质检通过率</span>
+              <strong>{{ qualityRateText(metric, "pass_rate") }}</strong>
             </div>
             <div>
-              <span>幻觉率</span>
-              <strong>{{ formatRate(metric.hallucination_rate) }}</strong>
+              <span>质检幻觉率</span>
+              <strong>{{ qualityRateText(metric, "hallucination_rate") }}</strong>
             </div>
           </div>
         </el-card>
 
         <el-card shadow="never" class="spotlight-card note-card">
-          <strong>页面收口说明</strong>
-          <p>模型表现明细、Token 和成本已经统一收口到这里；分析中心只保留质量趋势，告警分布只留在告警管理。</p>
+          <strong>页面口径说明</strong>
+          <p>这里负责模型观测：调用、Token、成本、健康和质检模型表现统一看；分析中心保留质量趋势与质检/聊天质量口径，告警分布留在告警管理。</p>
         </el-card>
       </div>
     </section>
 
     <section class="table-section">
       <div class="section-title">
-        <h3>模型计费与配置</h3>
-        <span>同一张表里对齐配置状态和真实用量，方便直接定位待补价格模型。</span>
+        <h3>模型计费、用量与质检表现</h3>
+        <span>同一张表里对齐配置状态、真实用量和质检结果表现；embedding 有用量就会展示 Token/成本，但质量率显示为不适用。</span>
       </div>
 
       <el-alert v-if="modelsError" :title="modelsError" type="warning" :closable="false" show-icon />
@@ -611,6 +626,15 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
           <el-table-column label="单次均价" width="120">
             <template #default="{ row }">{{ formatAvgCost(row.usage) }}</template>
           </el-table-column>
+          <el-table-column label="质检结果" width="100">
+            <template #default="{ row }">{{ row.usage?.result_count || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="质检通过率" width="120">
+            <template #default="{ row }">{{ qualityRateText(row.usage, "pass_rate") }}</template>
+          </el-table-column>
+          <el-table-column label="质检幻觉率" width="120">
+            <template #default="{ row }">{{ qualityRateText(row.usage, "hallucination_rate") }}</template>
+          </el-table-column>
           <el-table-column label="RPM" width="80">
             <template #default="{ row }">{{ row.rpm_limit ?? "-" }}</template>
           </el-table-column>
@@ -629,21 +653,32 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
 
 <style scoped>
 .usage-shell {
+  min-height: 100vh;
   display: grid;
   gap: 18px;
   padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.16), transparent 25%),
+    radial-gradient(circle at right top, rgba(6, 182, 212, 0.14), transparent 26%),
+    linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
 }
 
 .console-head {
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  padding: 6px 0 2px;
+  padding: 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 86% 18%, rgba(125, 211, 252, 0.26), transparent 28%),
+    linear-gradient(135deg, #0f172a 0%, #1d4ed8 50%, #0e7490 100%);
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(29, 78, 216, 0.18);
 }
 
 .eyebrow {
   margin: 0 0 8px;
-  color: #64748b;
+  color: rgba(248, 250, 252, 0.76);
   font-size: 12px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -651,7 +686,7 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
 
 .console-head h2 {
   margin: 0;
-  color: #0f172a;
+  color: #f8fafc;
   font-size: 36px;
   line-height: 1.1;
 }
@@ -659,7 +694,7 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
 .sub {
   max-width: 760px;
   margin: 12px 0 0;
-  color: #64748b;
+  color: rgba(248, 250, 252, 0.82);
   line-height: 1.7;
 }
 
@@ -672,10 +707,10 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
 .range-btn {
   min-width: 84px;
   padding: 14px 18px;
-  border: 1px solid #d7dee8;
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 14px;
-  background: #fff;
-  color: #475569;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -683,14 +718,15 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
 }
 
 .range-btn:hover {
-  border-color: #94a3b8;
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .range-btn.active {
-  border-color: #0f172a;
-  background: #0f172a;
-  color: #fff;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+  border-color: rgba(255, 255, 255, 0.9);
+  background: #f8fafc;
+  color: #1e3a8a;
+  box-shadow: 0 10px 24px rgba(29, 78, 216, 0.24);
 }
 
 .summary-grid {

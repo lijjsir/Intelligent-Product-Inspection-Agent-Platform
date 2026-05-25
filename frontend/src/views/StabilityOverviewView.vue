@@ -147,7 +147,7 @@ function formatDate(value: Date) {
       />
       <el-alert
         v-if="!canLoadOverview"
-        title="当前角色请从任务详情查看单任务稳定性报告；稳定性总览与预警处置由平台运维统一查看。"
+        title="当前角色请从任务详情查看单任务稳定性报告；稳定性总览与预警处置由平台运营统一查看。"
         type="info"
         :closable="false"
       />

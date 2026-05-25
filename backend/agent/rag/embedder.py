@@ -6,7 +6,9 @@ from typing import Any
 
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
+from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.services.model_config_service import ModelConfigService
+from app.services.token_usage_service import record_embedding_usage
 from infra.cache.memory_cache import _embedding_cache, stable_cache_key
 from infra.database.session import get_session
 
@@ -25,11 +27,13 @@ class Embedder:
         trace_id: str | None = None,
         task_id: str | None = None,
         org_id: str | None = None,
+        user_id: str | None = None,
         runtime_models: list[dict[str, Any]] | None = None,
     ) -> None:
         self._trace_id = trace_id
         self._task_id = None if task_id is None else str(task_id)
         self._org_id = None if org_id is None else str(org_id)
+        self._user_id = None if user_id is None else str(user_id)
         self._runtime_models = runtime_models
         self._llm: LLMClient | None = None
 
@@ -47,12 +51,33 @@ class Embedder:
                 observation_name="rag.query_embedding",
                 observation_metadata={"component": "retriever"},
             )
+            await self._record_usage_event(runtime, getattr(llm, "last_embedding_usage_event", None))
         except EmbeddingModelNotConfigured:
             raise
         except Exception:
             embedding = self._pseudo_embed(normalized_text)
         _embedding_cache.set(cache_key, list(embedding), ttl_seconds=1800)
         return embedding
+
+    async def _record_usage_event(self, runtime: dict[str, Any], usage_event: dict[str, Any] | None) -> None:
+        if not usage_event or not self._org_id:
+            return
+        async with get_session() as session:
+            try:
+                await record_embedding_usage(
+                    token_ledger_repo=TokenLedgerRepository(session),
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    usage_events=[usage_event],
+                    trace_id=self._trace_id,
+                    task_id=self._task_id,
+                    model_config_id=runtime.get("model_config_id"),
+                    input_price_per_million=runtime.get("input_price_per_million"),
+                    output_price_per_million=runtime.get("output_price_per_million"),
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
 
     async def _client(self, runtime: dict[str, Any] | None = None) -> LLMClient:
         if self._llm is not None:

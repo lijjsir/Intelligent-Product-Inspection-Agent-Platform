@@ -57,7 +57,7 @@ const isReadonly = computed(() => {
 const pageTitle = computed(() => (isReadonly.value ? "质检门槛查看" : "质检门槛配置"));
 const pageSubtitle = computed(() =>
   isReadonly.value
-    ? "平台运维仅查看门槛、规则、AI 阈值和自动放行策略；新增、编辑、复制、删除仍归管理员治理。"
+    ? "平台运营仅查看门槛、规则、AI 阈值和自动放行策略；新增、编辑、复制、删除仍归管理员治理。"
     : "维护缺陷判定标准、AI 门槛阈值和自动放行策略，支撑 `inspection_specs` 主链路。",
 );
 const productOptions = computed(() =>
@@ -109,7 +109,7 @@ function resetForm() {
 
 function openCreate() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
     return;
   }
   resetForm();
@@ -123,7 +123,7 @@ function openPreview(row: InspectionSpec) {
 
 function openEdit(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
     return;
   }
   editingId.value = row.id;
@@ -162,7 +162,7 @@ function buildDuplicateCode(row: InspectionSpec) {
 
 async function duplicateSpec(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
     return;
   }
   const payload: InspectionSpecPayload = {
@@ -249,7 +249,7 @@ function validatePayload(payload: InspectionSpecPayload) {
 
 async function submit() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
     return;
   }
   const payload = buildPayload();
@@ -267,7 +267,7 @@ async function submit() {
 
 async function remove(id: string) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运维仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
     return;
   }
   await ElMessageBox.confirm("删除后将移除该门槛及其规则项，是否继续？", "删除质检门槛", {
@@ -295,7 +295,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5">
+  <div class="spec-page">
     <section class="hero">
       <div>
         <p class="eyebrow">Quality Gate</p>
@@ -336,7 +336,7 @@ onMounted(() => {
 
       <el-alert
         v-if="isReadonly"
-        title="平台运维在这里做配置核对和排障定位；门槛新增、编辑、复制、删除请由管理员在治理后台完成。"
+        title="平台运营在这里做配置核对和排障定位；门槛新增、编辑、复制、删除请由管理员在治理后台完成。"
         type="info"
         :closable="false"
         show-icon
@@ -589,6 +589,17 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.spec-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(13, 148, 136, 0.14), transparent 24%),
+    radial-gradient(circle at right top, rgba(45, 212, 191, 0.16), transparent 25%),
+    linear-gradient(180deg, #f0fdfa 0%, #f8fafc 100%);
+}
 
 .hero {
   display: flex;
@@ -598,9 +609,10 @@ onMounted(() => {
   padding: 20px 24px;
  border-radius: 24px;
   background:
-    radial-gradient(circle at top left, rgba(14, 116, 144, 0.18), transparent 34%),
-    linear-gradient(135deg, #10263d 0%, #1b3a5c 52%, #2563a8 100%);
+    radial-gradient(circle at 86% 18%, rgba(94, 234, 212, 0.24), transparent 30%),
+    linear-gradient(135deg, #042f2e 0%, #115e59 52%, #0f766e 100%);
   color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(17, 94, 89, 0.16);
 }
 
 .eyebrow {
@@ -608,7 +620,7 @@ onMounted(() => {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(224, 242, 254, 0.86);
+  color: rgba(204, 251, 241, 0.86);
 }
 
 .hero h2 {
@@ -633,7 +645,7 @@ onMounted(() => {
 }
 
 .metric-card.accent {
-  background: linear-gradient(135deg, #ecfeff 0%, #dbeafe 100%);
+  background: linear-gradient(135deg, #ccfbf1 0%, #e0f2fe 100%);
 }
 
 .metric-label {
@@ -645,7 +657,7 @@ onMounted(() => {
 .metric-value {
   display: block;
   margin-top: 10px;
-  color: #1b3a5c;
+  color: #115e59;
   font-size: 30px;
   font-weight: 700;
 }
@@ -669,7 +681,7 @@ onMounted(() => {
 .card-header h3,
 .rules-header h4 {
   margin: 0;
-  color: #1b3a5c;
+  color: #115e59;
 }
 
 .card-header p,
@@ -695,7 +707,7 @@ onMounted(() => {
   gap: 16px;
   padding: 20px;
  border-radius: 20px;
-  background: linear-gradient(135deg, #eff6ff 0%, #ecfeff 100%);
+  background: linear-gradient(135deg, #ccfbf1 0%, #ecfeff 100%);
 }
 
 .preview-code {
@@ -703,12 +715,12 @@ onMounted(() => {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #0e7490;
+  color: #0f766e;
 }
 
 .preview-hero h3 {
   margin: 0;
-  color: #1b3a5c;
+  color: #115e59;
 }
 
 .preview-meta {
@@ -748,7 +760,7 @@ onMounted(() => {
 .preview-stat strong {
   display: block;
   margin-top: 8px;
-  color: #1b3a5c;
+  color: #115e59;
   font-size: 20px;
 }
 
@@ -786,7 +798,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
-  color: #1b3a5c;
+  color: #115e59;
   font-weight: 600;
 }
 

@@ -347,14 +347,15 @@ watch(
 </script>
 
 <template>
-  <div class="flex flex-col gap-5">
-    <div class="flex items-start justify-between gap-4 flex-wrap">
+  <div class="task-page">
+    <section class="task-hero">
       <div>
-        <h2 class="text-2xl font-bold text-zinc-900">{{ pageTitle }}</h2>
-        <p class="mt-2 text-sm text-zinc-500">{{ pageDescription }}</p>
+        <p class="eyebrow">{{ isOpsView ? "Platform Task Desk" : "Inspection Task Desk" }}</p>
+        <h2>{{ pageTitle }}</h2>
+        <p>{{ pageDescription }}</p>
       </div>
-      <el-button v-if="canCreateTask" type="primary" @click="handleOpenCreate">新建任务</el-button>
-    </div>
+      <el-button v-if="canCreateTask" class="hero-action" plain @click="handleOpenCreate">新建任务</el-button>
+    </section>
 
     <div class="card-surface p-4">
       <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
@@ -510,6 +511,67 @@ watch(
 </template>
 
 <style scoped>
+.task-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(180, 83, 9, 0.18), transparent 24%),
+    radial-gradient(circle at right top, rgba(245, 158, 11, 0.18), transparent 25%),
+    linear-gradient(180deg, #fff7ed 0%, #f1f5f9 100%);
+}
+
+.task-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 88% 16%, rgba(251, 191, 36, 0.24), transparent 28%),
+    linear-gradient(135deg, #2a1708 0%, #7c2d12 48%, #b45309 100%);
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(124, 45, 18, 0.18);
+}
+
+.task-hero .eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.76;
+}
+
+.task-hero h2 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.1;
+}
+
+.task-hero p:not(.eyebrow) {
+  max-width: 840px;
+  margin: 12px 0 0;
+  color: rgba(248, 250, 252, 0.82);
+  line-height: 1.7;
+}
+
+.hero-action {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.hero-action:hover,
+.hero-action:focus {
+  border-color: rgba(255, 255, 255, 0.44);
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
 .list-table :deep(.el-table__header th) {
   @apply text-zinc-500 font-medium text-[13px] bg-zinc-50;
 }
@@ -527,5 +589,19 @@ watch(
   color: #374151;
   font-size: 13px;
   font-weight: 600;
+}
+
+@media (max-width: 780px) {
+  .task-page {
+    padding: 14px;
+  }
+
+  .task-hero {
+    flex-direction: column;
+  }
+
+  .task-hero h2 {
+    font-size: 34px;
+  }
 }
 </style>

@@ -97,11 +97,12 @@ function formatDateTime(value?: string) {
 </script>
 
 <template>
-  <div v-loading="loading" class="flex flex-col gap-5">
-    <div>
-      <h2 class="text-2xl font-bold text-zinc-900">个人资料</h2>
-      <p class="mt-2 text-sm text-zinc-500">维护当前登录账号的基础信息和密码。</p>
-    </div>
+  <div v-loading="loading" class="profile-page">
+    <section class="profile-hero">
+      <p class="eyebrow">Account Desk</p>
+      <h2>个人设置</h2>
+      <p>维护当前登录账号的基础信息、账号状态和密码，保持与平台工作台一致的操作入口。</p>
+    </section>
 
     <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
       <div class="card-surface col-span-2">
@@ -160,3 +161,58 @@ function formatDateTime(value?: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.profile-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(30, 64, 175, 0.12), transparent 24%),
+    radial-gradient(circle at right top, rgba(202, 138, 4, 0.14), transparent 25%),
+    linear-gradient(180deg, #eef2ff 0%, #fefce8 100%);
+}
+
+.profile-hero {
+  padding: 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 86% 18%, rgba(250, 204, 21, 0.24), transparent 30%),
+    linear-gradient(135deg, #111827 0%, #1e3a8a 52%, #854d0e 100%);
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(30, 58, 138, 0.18);
+}
+
+.profile-hero .eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.76;
+}
+
+.profile-hero h2 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.1;
+}
+
+.profile-hero p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 12px 0 0;
+  color: rgba(248, 250, 252, 0.82);
+  line-height: 1.7;
+}
+
+@media (max-width: 780px) {
+  .profile-page {
+    padding: 14px;
+  }
+
+  .profile-hero h2 {
+    font-size: 34px;
+  }
+}
+</style>

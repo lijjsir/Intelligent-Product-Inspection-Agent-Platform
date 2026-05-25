@@ -10,7 +10,7 @@ router = APIRouter()
 ROLE_LABELS = {
     "admin": "管理员",
     "app_developer": "应用开发者",
-    "platform_operator": "平台运维",
+    "platform_operator": "平台运营",
     "algorithm_engineer": "算法工程师",
     "user": "普通用户",
     "expert": "领域专家",

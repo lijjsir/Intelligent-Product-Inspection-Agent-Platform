@@ -40,14 +40,16 @@ const healthLabel = computed(() => {
   return "稳定";
 });
 
-const quickLinks = [
+type DashboardAction = {
+  label: string;
+  path: string;
+};
+
+const dashboardActions: DashboardAction[] = [
   { label: "任务查看", path: "/ops/tasks" },
   { label: "分析中心", path: "/ops/analytics" },
   { label: "告警管理", path: "/ops/alerts" },
-  { label: "模型用量", path: "/ops/calls" },
-];
-
-const supportLinks = [
+  { label: "模型观测", path: "/ops/calls" },
   { label: "Agent 查看", path: "/ops/agents" },
   { label: "质检门槛查看", path: "/ops/inspection-specs" },
   { label: "个人设置", path: "/app/profile" },
@@ -111,9 +113,9 @@ onMounted(fetchData);
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">Platform Ops Desk</p>
-        <h2>平台运维工作台</h2>
+        <h2>平台运营工作台</h2>
         <p class="sub">
-          先在这里处理今天要动作的任务、告警和人工审核，再去分析中心看趋势、去模型用量看 Token 和成本。
+          先在这里处理今天要动作的任务、告警和人工审核，再去分析中心看趋势、去模型观测看 Token、成本和质检模型表现。
         </p>
 
         <div class="hero-pill-row">
@@ -126,11 +128,7 @@ onMounted(fetchData);
       <div class="hero-side">
         <el-tag :type="healthTone" effect="dark" size="large" class="health-tag">{{ healthLabel }}</el-tag>
         <p class="hero-note">{{ riskSummary }}</p>
-        <div class="hero-actions">
-          <el-button v-for="item in quickLinks" :key="item.path" @click="go(item.path)">
-            {{ item.label }}
-          </el-button>
-        </div>
+        <el-button class="hero-refresh" plain :loading="loading" @click="fetchData">刷新数据</el-button>
       </div>
     </section>
 
@@ -243,9 +241,13 @@ onMounted(fetchData);
       </div>
     </section>
 
-    <section class="support-row">
-      <el-button @click="fetchData">刷新数据</el-button>
-      <el-button v-for="item in supportLinks" :key="item.path" plain @click="go(item.path)">
+    <section class="support-row" aria-label="平台运营工作台快捷入口">
+      <el-button
+        v-for="item in dashboardActions"
+        :key="item.label"
+        plain
+        @click="go(item.path)"
+      >
         {{ item.label }}
       </el-button>
     </section>
@@ -254,9 +256,14 @@ onMounted(fetchData);
 
 <style scoped>
 .ops-shell {
+  min-height: 100vh;
   display: grid;
   gap: 18px;
   padding: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(71, 85, 105, 0.16), transparent 24%),
+    radial-gradient(circle at right top, rgba(148, 163, 184, 0.18), transparent 26%),
+    linear-gradient(180deg, #f8fafc 0%, #e5e7eb 100%);
 }
 
 .hero {
@@ -267,8 +274,8 @@ onMounted(fetchData);
   border-radius: 24px;
   color: #f8fafc;
   background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 30%),
-    linear-gradient(135deg, #11263d 0%, #173f5f 48%, #0f766e 100%);
+    radial-gradient(circle at top right, rgba(203, 213, 225, 0.22), transparent 30%),
+    linear-gradient(135deg, #111827 0%, #334155 52%, #475569 100%);
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
 }
 
@@ -332,22 +339,18 @@ onMounted(fetchData);
   line-height: 1.6;
 }
 
-.hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.hero-actions :deep(.el-button) {
-  border-color: rgba(255, 255, 255, 0.24);
+.hero-refresh {
+  border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.1);
   color: #f8fafc;
+  font-weight: 700;
 }
 
-.hero-actions :deep(.el-button:hover) {
+.hero-refresh:hover,
+.hero-refresh:focus {
+  border-color: rgba(255, 255, 255, 0.44);
   background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.34);
+  color: #fff;
 }
 
 .metric-row {
@@ -501,8 +504,23 @@ onMounted(fetchData);
 
 .support-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.92)),
+    radial-gradient(circle at left center, rgba(71, 85, 105, 0.1), transparent 32%);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.05);
+}
+
+.support-row :deep(.el-button) {
+  min-width: 116px;
+  margin-left: 0;
+  border-radius: 10px;
+  font-weight: 600;
 }
 
 @media (max-width: 1200px) {
@@ -533,12 +551,12 @@ onMounted(fetchData);
     text-align: left;
   }
 
-  .hero-actions {
-    justify-content: flex-start;
-  }
-
   .metric-row {
     grid-template-columns: 1fr;
+  }
+
+  .support-row :deep(.el-button) {
+    flex: 1 1 132px;
   }
 }
 </style>

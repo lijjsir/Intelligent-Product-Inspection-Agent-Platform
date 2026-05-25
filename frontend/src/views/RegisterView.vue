@@ -76,16 +76,20 @@
         />
       </div>
 
-      <div class="flex flex-col gap-1.5">
+      <div v-if="!createOrg" class="flex flex-col gap-1.5">
         <label class="text-[13px] font-medium text-zinc-600">身份</label>
         <el-select v-model="role" size="large" class="!w-full">
           <el-option
-            v-for="item in roleOptions"
+            v-for="item in joinRoleOptions"
             :key="item.value"
             :label="item.label"
             :value="item.value"
           />
         </el-select>
+      </div>
+
+      <div v-else class="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-[13px] leading-6 text-zinc-500">
+        创建组织后，该账号会自动成为组织管理员；成员身份可在系统治理中统一维护。
       </div>
 
       <el-button
@@ -116,8 +120,7 @@ import { ElMessage } from "element-plus";
 const router = useRouter();
 const auth = useAuthStore();
 
-const roleOptions = [
-  { label: "管理员", value: "admin" },
+const joinRoleOptions = [
   { label: "普通用户", value: "user" },
   { label: "质检专家", value: "expert" },
   { label: "应用开发者", value: "app_developer" },
@@ -131,7 +134,7 @@ const orgSlug = ref("");
 const username = ref("");
 const email = ref("");
 const password = ref("");
-const role = ref("admin");
+const role = ref("user");
 const loading = ref(false);
 
 watch(createOrg, (val) => {
@@ -156,7 +159,7 @@ const submit = async () => {
       username: username.value,
       email: email.value,
       password: password.value,
-      role: role.value,
+      role: createOrg.value ? "admin" : role.value,
     });
     router.push(auth.resolveDefaultRoute());
   } catch (e: any) {

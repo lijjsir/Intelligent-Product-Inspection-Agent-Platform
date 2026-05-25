@@ -160,11 +160,11 @@ onUnmounted(() => {
     <section class="hero">
       <p class="eyebrow">Data Quality</p>
       <h2>数据质量</h2>
-      <p class="sub">聚焦结果质量、告警和质量趋势；模型维度的 Token、成本和质量对比统一进入调用监控。</p>
+      <p class="sub">聚焦结果质量、告警和质量趋势；模型维度的 Token、成本和质量对比统一进入模型观测。</p>
     </section>
 
     <el-alert
-      title="风险趋势统一放在分析中心；模型 Token、成本和模型质量对比统一放在调用监控。"
+      title="风险趋势统一放在分析中心；模型 Token、成本和模型质量对比统一放在模型观测。"
       type="info"
       :closable="false"
     />

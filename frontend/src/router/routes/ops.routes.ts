@@ -4,7 +4,7 @@ const Placeholder = () => import("@/views/placeholder/PlaceholderPage.vue");
 
 export const opsRoutes = [
   // Dashboard
-  { path: "dashboard", name: "ops-dashboard", component: () => import("@/views/ops/OpsDashboardView.vue"), meta: { title: "平台运维工作台", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "dashboard", name: "ops-dashboard", component: () => import("@/views/ops/OpsDashboardView.vue"), meta: { title: "平台运营工作台", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Analytics
   { path: "analytics", name: "ops-analytics", component: () => import("@/views/AnalyticsView.vue"), meta: { title: "分析中心", roles: [ROLE_ADMIN, ROLE_PLATFORM_OPERATOR] } },
@@ -15,13 +15,13 @@ export const opsRoutes = [
 
 
   // Call monitor
-  { path: "calls", name: "ops-calls", component: () => import("@/views/ops/ModelMonitorView.vue"), meta: { title: "模型用量", roles: [ROLE_PLATFORM_OPERATOR] } },
+  { path: "calls", name: "ops-calls", component: () => import("@/views/ops/ModelMonitorView.vue"), meta: { title: "模型观测", roles: [ROLE_PLATFORM_OPERATOR] } },
 
   // Data quality
   { path: "data-quality", name: "ops-data-quality", redirect: { name: "ops-analytics", query: { tab: "quality" } }, meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Cost is part of the model call monitor now; keep the old URL as a safe redirect.
-  { path: "cost", name: "ops-cost", redirect: { name: "ops-calls" }, meta: { title: "模型用量", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
+  { path: "cost", name: "ops-cost", redirect: { name: "ops-calls" }, meta: { title: "模型观测", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
 
   // Reports
   { path: "reports", name: "ops-reports", redirect: { name: "ops-analytics" }, meta: { title: "分析中心", roles: [ROLE_PLATFORM_OPERATOR], hiddenInMenu: true } },
