@@ -70,16 +70,16 @@ async def run_vision(state: InspectionState) -> InspectionState:
                 "如果没有明显缺陷，也要返回 defects: [] 和 image_summary。"
             ).format(idx=img_idx + 1)
 
-            client = LLMClient(
-                api_key=state.get("model_api_key"),
-                base_url=state.get("model_base_url"),
-                model_id=state.get("model_id"),
-                trace_id=state.get("trace_id"),
-                task_id=state.get("task_id"),
-                org_id=state.get("org_id"),
-                provider=state.get("model_provider"),
-            )
             try:
+                client = LLMClient(
+                    api_key=state.get("model_api_key"),
+                    base_url=state.get("model_base_url"),
+                    model_id=state.get("model_id"),
+                    trace_id=state.get("trace_id"),
+                    task_id=state.get("task_id"),
+                    org_id=state.get("org_id"),
+                    provider=state.get("model_provider"),
+                )
                 data = await client.chat(
                     [{"role": "user", "content": [
                         {"type": "text", "text": prompt},
