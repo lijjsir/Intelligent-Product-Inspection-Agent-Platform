@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from agent.adapters.llm_adapter import LLMAgentAdapter
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_ai_service as meeting_ai_mod
 
@@ -452,3 +453,73 @@ async def test_meeting_ai_returns_actionable_default_runtime_auth_error(monkeypa
         await service.ai_respond("room-1")
 
     assert "PIAP_DEEPSEEK_API_KEY" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_llm_agent_adapter_disables_env_proxy_for_streaming(monkeypatch):
+    emitted: list[dict] = []
+    requests: list[dict] = []
+
+    class FakeStreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for line in (
+                'data: {"choices":[{"delta":{"content":"hello"}}]}',
+                'data: {"choices":[{"delta":{"content":" world"}}]}',
+                "data: [DONE]",
+            ):
+                yield line
+
+    class FakeClient:
+        def __init__(self, timeout=None, trust_env=None):
+            assert timeout == 120
+            assert trust_env is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, headers=None, json=None):
+            requests.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "json": json,
+                }
+            )
+            return FakeStreamResponse()
+
+    async def fake_emit(event: dict):
+        emitted.append(event)
+
+    monkeypatch.setattr("agent.adapters.llm_adapter.httpx.AsyncClient", FakeClient)
+
+    adapter = LLMAgentAdapter()
+    result = await adapter.invoke(
+        room_id="room-1",
+        agent_def=SimpleNamespace(name="AI 助手", system_prompt="你是会议助手。"),
+        query="@AI 助手 看一下",
+        context_messages=[{"role": "user", "username": "alice", "content": "hello"}],
+        emit=fake_emit,
+        runtime_model={
+            "api_key": "test-key",
+            "base_url": "https://doubao.example",
+            "model_id": "doubao-pro",
+        },
+    )
+
+    assert result == "hello world"
+    assert requests[0]["url"] == "https://doubao.example/chat/completions"
+    assert requests[0]["json"]["model"] == "doubao-pro"
+    assert [event["delta"] for event in emitted] == ["hello", " world"]

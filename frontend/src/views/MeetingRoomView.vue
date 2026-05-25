@@ -235,6 +235,14 @@ watch(() => store.activeRoomId, async (newId) => {
   }
 });
 
+watch(() => store.messages.length, async () => {
+  await scrollToBottom();
+});
+
+watch(() => store.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => {
+  await scrollToBottom();
+});
+
 onMounted(async () => {
   const invitedCode = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() || "";
   if (invitedCode) {

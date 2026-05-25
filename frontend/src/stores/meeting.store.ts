@@ -46,9 +46,13 @@ export const useMeetingStore = defineStore("meeting", () => {
     const index = messages.value.findIndex((m) => m.id === message.id);
     if (index >= 0) {
       messages.value = messages.value.map((m, i) => (i === index ? { ...m, ...message } : m));
-      return;
+    } else {
+      messages.value = [...messages.value, message];
     }
-    messages.value = [...messages.value, message];
+    messages.value = [...messages.value].sort((a, b) => {
+      if (a.seq_no !== b.seq_no) return a.seq_no - b.seq_no;
+      return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+    });
   }
 
   // ── Computed ───────────────────────────────────────────────────
