@@ -138,7 +138,16 @@ function langfuseStatus(row: QualityTraceItem) {
 }
 
 function canOpenLangfuse(row: QualityTraceItem) {
-  return !!row.trace_url
+  const status = langfuseStatus(row)
+  return !!row.trace_url && status !== "local_only" && status !== "missing"
+}
+
+function langfuseActionLabel(row: QualityTraceItem) {
+  const status = langfuseStatus(row)
+  if (status === "local_only") return "本地记录"
+  if (status === "missing") return "远端缺失"
+  if (!row.trace_url) return "无链接"
+  return "Langfuse"
 }
 
 function langfuseStatusType(row: QualityTraceItem) {
@@ -272,7 +281,7 @@ function metaAlertTitle() {
       <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" :disabled="!canOpenLangfuse(row)" @click="openLangfuseTrace(row)">
-            Langfuse
+            {{ langfuseActionLabel(row) }}
           </el-button>
           <el-button v-if="canDeleteTrace" size="small" link type="danger" :loading="deleting === row.trace_id" @click="handleDeleteTrace(row)">
             删除

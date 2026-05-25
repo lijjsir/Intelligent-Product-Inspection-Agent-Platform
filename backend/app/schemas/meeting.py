@@ -75,8 +75,18 @@ class MeetingRoomAgentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MeetingRoomMemberResponse(BaseModel):
+    id: str
+    room_id: str
+    user_id: str
+    username: str = ""
+    role: str = "member"
+    joined_at: datetime | None = None
+
+
 class MeetingRoomDetailResponse(MeetingRoomResponse):
     agents: list[MeetingRoomAgentResponse] = []
+    members: list[MeetingRoomMemberResponse] = []
 
 
 # ── Admin schemas ────────────────────────────────────────────────

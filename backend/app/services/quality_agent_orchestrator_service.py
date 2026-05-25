@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import hashlib
 import logging
 from time import perf_counter
 from typing import Any
@@ -35,6 +36,8 @@ from app.services.chat_message_lifecycle_service import ChatMessageLifecycleServ
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
+
+_MAX_IDEMPOTENCY_KEY_LENGTH = 191
 
 
 class QualityAgentOrchestratorService:
@@ -89,7 +92,17 @@ class QualityAgentOrchestratorService:
                 ]
             )
         suffix = ":".join(str(part) for part in parts if str(part))
-        return f"{base}:{suffix}" if suffix else base
+        key = f"{base}:{suffix}" if suffix else base
+        if len(key) <= _MAX_IDEMPOTENCY_KEY_LENGTH:
+            return key
+
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        marker = ":sha256:"
+        prefix_limit = _MAX_IDEMPOTENCY_KEY_LENGTH - len(marker) - len(digest)
+        prefix = key[:max(0, prefix_limit)].rstrip(":")
+        if not prefix:
+            return f"sha256:{digest}"
+        return f"{prefix}{marker}{digest}"
 
     async def run_chat(self, payload: dict) -> dict:
         started_at = perf_counter()

@@ -56,10 +56,6 @@ class TaskCreate(BaseModel):
         indices = [item.index for item in v]
         if sorted(indices) != list(range(len(v))):
             raise ValueError("image_items 的 index 必须从 0 开始连续递增")
-        urls = [item.url for item in v]
-        hashes = [item.hash for item in v]
-        if len(set(hashes)) != len(hashes):
-            raise ValueError("检测到重复上传：存在相同的图片哈希")
         return v
 
     def deduplicated_items(self) -> list[ImageItem]:

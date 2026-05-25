@@ -16,6 +16,7 @@ from app.schemas.meeting import (
     MeetingMessageResponse,
     MeetingRoomAgentResponse,
     MeetingRoomDetailResponse,
+    MeetingRoomMemberResponse,
     MeetingRoomResponse,
 )
 from app.services.meeting_agent_service import MeetingAgentService
@@ -197,6 +198,25 @@ class MeetingService:
                     agent_name=agent_name,
                     role=str(row.role),
                     added_by=str(row.added_by),
+                )
+            )
+        return results
+
+    async def list_room_members(self, room_id: str) -> list[MeetingRoomMemberResponse]:
+        await self._ensure_member(room_id)
+        rows = await self._repo.list_members(self._org_id, room_id)
+        results: list[MeetingRoomMemberResponse] = []
+        for row in rows:
+            user_id = str(row.user_id)
+            user = await self._users.get_by_id(self._org_id, user_id)
+            results.append(
+                MeetingRoomMemberResponse(
+                    id=str(row.id),
+                    room_id=str(row.room_id),
+                    user_id=user_id,
+                    username=user.username if user else user_id[-8:],
+                    role=str(row.role),
+                    joined_at=row.created_at,
                 )
             )
         return results

@@ -507,6 +507,36 @@ def test_quality_trace_builder_merges_chat_scores():
     ]
 
 
+def test_trust_scoring_does_not_mark_missing_trace_as_synced(monkeypatch):
+    class FakeTracer:
+        def trace_exists(self, trace_id):
+            return False
+
+        def score(self, **_kwargs):
+            raise AssertionError("score should not be created for a missing trace")
+
+    monkeypatch.setattr("app.services.chat_trust_scoring_service.LangfuseTracer", lambda: FakeTracer())
+
+    trace_url, synced_at = ChatTrustScoringService._sync_langfuse_scores(
+        trace_id="missing-trace",
+        observation_id="obs-1",
+        model_key="doubao-seed-2-0-lite-260215",
+        review_model="doubao-seed-2-0-lite-260215",
+        rule_score={"debug": {}},
+        llm_score={"reasons": []},
+        combined={
+            "trust_score": 0.8,
+            "hallucination_risk": 0.1,
+            "overconfidence": 0.2,
+            "has_citation": True,
+        },
+        status="scored",
+    )
+
+    assert trace_url is None
+    assert synced_at is None
+
+
 def test_quality_trace_builder_marks_deleted_langfuse_trace_missing():
     class Score:
         org_id = "org-1"
@@ -857,6 +887,77 @@ async def test_quality_trace_list_returns_error_meta_with_local_fallback_when_la
     assert result["meta"]["canonical_source"] == "local_fallback"
     assert len(result["items"]) == 1
     assert result["items"][0]["trace_id"] == "trace-chat"
+
+
+@pytest.mark.asyncio
+async def test_quality_trace_list_hides_link_when_local_trace_is_missing_remotely(monkeypatch):
+    class FakeApiClient:
+        enabled = True
+
+        def build_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/project-test/traces/{trace_id}"
+
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyLedgerRepo:
+        async def list_filtered(self, *_args, **_kwargs):
+            return []
+
+    class ChatScoreRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return [
+                SimpleNamespace(
+                    org_id="org-1",
+                    assistant_message_id="msg-1",
+                    session_id="session-1",
+                    user_id="user-1",
+                    trace_id="missing-trace",
+                    observation_id="obs-chat",
+                    trace_url="http://127.0.0.1:3000/project/project-test/traces/missing-trace",
+                    model_key="doubao-seed-2-0-lite-260215",
+                    review_model="doubao-seed-2-0-lite-260215",
+                    trust_score=0.82,
+                    hallucination_risk=0.2,
+                    overconfidence=0.1,
+                    has_citation=True,
+                    status="scored",
+                    langfuse_synced_at=datetime(2026, 5, 13, 12, 0, 0),
+                    created_at=datetime(2026, 5, 13, 11, 0, 0),
+                )
+            ]
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
+    class FakeTracer:
+        def trace_exists(self, trace_id):
+            return False
+
+        def get_trace_url(self, trace_id):
+            return f"http://127.0.0.1:3000/project/project-test/traces/{trace_id}"
+
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseApiClient", lambda: FakeApiClient())
+    monkeypatch.setattr("app.services.quality_report_service.LangfuseTracer", lambda: FakeTracer())
+
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._token_ledger_repo = EmptyLedgerRepo()
+    service._chat_score_repo = ChatScoreRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
+
+    result = await service.list_traces_with_meta(source="chat", include_remote=False)
+
+    assert result["meta"]["canonical_source"] == "local_fast"
+    assert result["items"][0]["langfuse_status"] == "missing"
+    assert result["items"][0]["langfuse_synced"] is False
+    assert result["items"][0]["trace_url"] is None
 
 
 @pytest.mark.asyncio

@@ -26,8 +26,8 @@ export const taskApi = {
     return http.get<TaskStreamEvent[]>(`/v1/tasks/${id}/events`);
   },
 
-  create(payload: TaskCreate) {
-    return http.post<InspectionTask>("/v1/tasks", payload);
+  create(payload: TaskCreate, config?: ApiRequestConfig) {
+    return http.post<InspectionTask>("/v1/tasks", payload, config);
   },
 
   delete(taskId: string) {

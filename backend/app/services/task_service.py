@@ -13,15 +13,26 @@ from app.services.audit_service import AuditService
 from app.schemas.task import ImageItem
 
 
-def _dedup_image_items(items: list[ImageItem]) -> list[ImageItem]:
-    """Remove duplicate images by hash, keeping first occurrence."""
-    seen: set[str] = set()
-    result: list[ImageItem] = []
+def _duplicate_image_item_groups(items: list[ImageItem]) -> list[list[ImageItem]]:
+    groups: dict[str, list[ImageItem]] = {}
     for item in items:
-        if item.hash not in seen:
-            seen.add(item.hash)
-            result.append(item)
-    return result
+        groups.setdefault(item.hash, []).append(item)
+    return [group for group in groups.values() if len(group) > 1]
+
+
+def _format_image_item_label(item: ImageItem) -> str:
+    if item.sample_number is not None:
+        return f"样品{item.sample_number}"
+    return f"图片{item.index + 1}"
+
+
+def _format_image_item_labels(items: list[ImageItem]) -> str:
+    labels: list[str] = []
+    for item in items:
+        label = _format_image_item_label(item)
+        if label not in labels:
+            labels.append(label)
+    return "、".join(labels)
 
 
 class TaskService:
@@ -61,42 +72,55 @@ class TaskService:
         if not spec:
             raise ValidationError(f"检测标准 {normalized_spec_code} 不存在或未启用")
 
-        # Build or normalize image_items with hash-based dedup.
-        if image_items:
-            deduped = _dedup_image_items(image_items)
-            deduped_urls = [item.url for item in deduped]
-        else:
-            deduped = [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)]
-            deduped_urls = image_urls
+        normalized_items = list(image_items or [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)])
+        if not normalized_items:
+            raise ValidationError("请至少提供一张图片")
+
+        duplicate_groups = _duplicate_image_item_groups(normalized_items)
+        if duplicate_groups:
+            duplicate_desc = "；".join(
+                _format_image_item_labels(group) for group in duplicate_groups
+            )
+            raise ValidationError(f"检测到重复图片：{duplicate_desc}，请删除重复图片后重试")
+
+        required_image_count = max(1, int(getattr(spec, "required_image_count", 1) or 1))
+        if len(normalized_items) < required_image_count:
+            raise ValidationError(
+                f"标准 {normalized_spec_code} 至少需要 {required_image_count} 张图片，当前仅提供 {len(normalized_items)} 张"
+            )
 
         # Re-check hashes against recent tasks in this org to prevent cross-task duplicates.
         find_recent_image_hashes = getattr(self._repo, "find_recent_image_hashes", None)
         if callable(find_recent_image_hashes):
             existing_hashes = await find_recent_image_hashes(
-                self._org_id, [item.hash for item in deduped]
+                self._org_id, [item.hash for item in normalized_items]
             )
         else:
             existing_hashes = set()
         if existing_hashes:
-            deduped_items = [item for item in deduped if item.hash not in existing_hashes]
-            deduped_urls = [item.url for item in deduped_items]
-        else:
-            deduped_items = deduped
+            duplicate_items = [item for item in normalized_items if item.hash in existing_hashes]
+            raise ValidationError(
+                f"检测到重复图片：{_format_image_item_labels(duplicate_items)} 已在历史任务中上传，请更换后重试"
+            )
 
-        # Re-index remaining images sequentially.
-        deduped_items = [
-            ImageItem(index=i, url=item.url, hash=item.hash)
-            for i, item in enumerate(deduped_items)
+        normalized_items = [
+            ImageItem(
+                index=i,
+                url=item.url,
+                hash=item.hash,
+                sample_number=item.sample_number,
+            )
+            for i, item in enumerate(normalized_items)
         ]
-        deduped_urls = [item.url for item in deduped_items]
+        normalized_urls = [item.url for item in normalized_items]
 
         task = InspectionTask(
             org_id=self._org_id,
             created_by=created_by,
             product_id=product_id,
             spec_code=normalized_spec_code,
-            image_urls=deduped_urls,
-            image_items=[item.model_dump() for item in deduped_items],
+            image_urls=normalized_urls,
+            image_items=[item.model_dump() for item in normalized_items],
             priority=priority,
             meta_data=metadata,
             status="pending",

@@ -386,6 +386,9 @@ class ChatTrustScoringService:
         tracer = LangfuseTracer()
         if not trace_id:
             return None, None
+        trace_exists = getattr(tracer, "trace_exists", None)
+        if callable(trace_exists) and trace_exists(trace_id) is not True:
+            return None, None
         trace_url_getter = getattr(tracer, "get_trace_url", None)
         trace_url = trace_url_getter(trace_id) if callable(trace_url_getter) else None
         if status != "scored":

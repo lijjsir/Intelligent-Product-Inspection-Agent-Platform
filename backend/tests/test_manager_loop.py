@@ -212,8 +212,8 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     assert output.route_decision.sub_route == "rag_qa"
     assert "用户姓名是张三" in prompt
     assert "[RAG-1]" in prompt
-    assert "仍然要继续回答用户问题" in prompt
-    assert "不要伪造知识库引用" in prompt
+    assert "Prefer the RAG evidence above when it is relevant" in prompt
+    assert "不要凭常识补全" in prompt
     assert output.agent_output["answer"] == "根据知识库，您的名字是张三。[RAG-1]"
     assert output.agent_output["citations"][0]["quote"] == "用户姓名是张三。"
     rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
@@ -221,6 +221,75 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     assert rag_log["hit_count"] == 1
     assert rag_log["source_graph"] == "manager"
     assert rag_log["metadata"]["used_citations"][0]["quote"] == "用户姓名是张三。"
+
+
+@pytest.mark.asyncio
+async def test_selected_rag_overview_query_lists_space_documents(monkeypatch):
+    captured = {}
+
+    class FakeRagRetrievalService:
+        def __init__(self, session, *, org_id: str, user_id: str | None = None):
+            pass
+
+        async def list_space_documents(self, *, rag_space_id, limit=12):
+            return {
+                "rag_space_id": rag_space_id,
+                "rag_space_name": "测试",
+                "hits": [
+                    {
+                        "id": "doc-bottle",
+                        "title": "BOTTLE-RAG-BASE-V2_瓶罐容器检测标准.md",
+                        "source": "标准/BOTTLE-RAG-BASE-V2_瓶罐容器检测标准.md",
+                        "quote": "瓶罐容器检测标准，适用于玻璃瓶、塑料瓶等容器。",
+                        "score": 1.0,
+                        "kind": "document_overview",
+                    },
+                    {
+                        "id": "doc-electronic",
+                        "title": "ELECTRONIC-ENCLOSURE-V1_电子产品外壳检测标准.md",
+                        "source": "标准/ELECTRONIC-ENCLOSURE-V1_电子产品外壳检测标准.md",
+                        "quote": "电子产品外壳检测标准，适用于手机、平板等外壳组件。",
+                        "score": 1.0,
+                        "kind": "document_overview",
+                    },
+                ],
+                "hit_count": 2,
+                "candidate_count": 2,
+                "rejected_count": 0,
+                "top_k": 12,
+                "overview_mode": True,
+            }
+
+        async def search(self, **_kwargs):
+            raise AssertionError("overview queries should use document listing")
+
+    async def fake_call_model(self, state, request, prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "当前知识库包含瓶罐容器检测标准[RAG-1]和电子产品外壳检测标准[RAG-2]。"
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagRetrievalService", FakeRagRetrievalService)
+    monkeypatch.setattr("agent.router.executors.chat_executor.ChatExecutor._call_model", fake_call_model)
+
+    output = await ManagerLoop().run(
+        _request(
+            query="说错了是检测标准",
+            ext={
+                "surface": "chat",
+                "selected_rag_space": {"id": "rag-1", "name": "测试"},
+                "rag_scope": {"enabled": True, "rag_space_id": "rag-1"},
+            },
+        ),
+        db_session=object(),
+    )
+
+    prompt = captured["prompt"]
+    assert "RAG 知识库目录" in prompt
+    assert "BOTTLE-RAG-BASE-V2" in prompt
+    assert "ELECTRONIC-ENCLOSURE-V1" in prompt
+    assert output.agent_output["rag_summary"]["hit_count"] == 2
+    rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
+    assert rag_log["metadata"]["overview_mode"] is True
+    assert rag_log["metadata"]["retrieved_chunks"][0]["kind"] == "document_overview"
 
 
 @pytest.mark.asyncio
@@ -262,8 +331,8 @@ async def test_selected_rag_empty_recall_still_lets_model_answer(monkeypatch):
     prompt = captured["prompt"]
     assert output.route_decision.sub_route == "rag_qa"
     assert "未检索到可用片段" in prompt
-    assert "仍然要继续回答用户问题" in prompt
-    assert "不要伪造知识库引用" in prompt
+    assert "当前选中的知识库没有提供该信息" in prompt
+    assert "不要凭常识补全" in prompt
     assert output.agent_output["answer"] == "当前知识库没有提供可引用依据。基于通用知识，我可以继续回答这个问题。"
     assert output.agent_output["citations"] == []
     rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
