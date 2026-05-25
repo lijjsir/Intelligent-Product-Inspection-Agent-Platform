@@ -55,7 +55,7 @@ class LLMClient:
         self._output_price_per_million = output_price_per_million
         self._tracer = LangfuseTracer()
         self._trace_id = trace_id or (self._tracer.create_trace_id() if self._tracer.enabled else None)
-        self._ark_client = Ark(api_key=self._api_key) if Ark and self._api_key else None
+        self._ark_client = None
         self._last_embedding_usage_event: dict[str, Any] | None = None
 
     @property
@@ -238,11 +238,12 @@ class LLMClient:
         observation_name: str,
         observation_metadata: dict[str, Any] | None = None,
     ) -> list[float]:
-        if not self._ark_client:
+        ark_client = self._get_ark_client()
+        if not ark_client:
             return []
 
         def _request() -> Any:
-            return self._ark_client.multimodal_embeddings.create(
+            return ark_client.multimodal_embeddings.create(
                 model=self._embed_model,
                 input=[{"type": "text", "text": text}],
             )
@@ -292,6 +293,17 @@ class LLMClient:
                 },
             )
             return vector
+
+    def _get_ark_client(self) -> Any | None:
+        if self._ark_client is not None:
+            return self._ark_client
+        if not Ark or not self._api_key:
+            return None
+        self._ark_client = Ark(
+            api_key=self._api_key,
+            http_client=httpx.Client(trust_env=False),
+        )
+        return self._ark_client
 
     def _embedding_usage_event(
         self,
@@ -410,7 +422,7 @@ class LLMClient:
             model_parameters=model_parameters or None,
             metadata=self._build_observation_metadata(path=path, extra=observation_metadata),
         ) as observation:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=45.0) as client:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=45.0, trust_env=False) as client:
                 last_error: Exception | None = None
                 request_payload = dict(payload)
                 response_format_fallback = False

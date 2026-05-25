@@ -56,16 +56,16 @@ async def run_reasoning(state: InspectionState) -> InspectionState:
         )
     else:
         prompt["instruction"] = '输出 JSON: {"verdict":"pass|fail|uncertain","overall_score":0-1,"reasoning_chain":{...}}'
-    client = LLMClient(
-        api_key=state.get("model_api_key"),
-        base_url=state.get("model_base_url"),
-        model_id=state.get("model_id"),
-        trace_id=state.get("trace_id"),
-        task_id=state.get("task_id"),
-        org_id=state.get("org_id"),
-        provider=state.get("model_provider"),
-    )
     try:
+        client = LLMClient(
+            api_key=state.get("model_api_key"),
+            base_url=state.get("model_base_url"),
+            model_id=state.get("model_id"),
+            trace_id=state.get("trace_id"),
+            task_id=state.get("task_id"),
+            org_id=state.get("org_id"),
+            provider=state.get("model_provider"),
+        )
         data = await client.chat(
             [{"role": "user", "content": str(prompt)}],
             temperature=0.1,

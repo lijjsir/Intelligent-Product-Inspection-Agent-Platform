@@ -45,7 +45,7 @@ class Retriever:
             headers["api-key"] = self._qdrant_api_key
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
                 response = await client.post(
                     f"{self._qdrant_url}/collections/{self._collection}/points/search",
                     json=payload,
