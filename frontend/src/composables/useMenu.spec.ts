@@ -110,7 +110,7 @@ describe("useMenu", () => {
     ]);
   });
 
-  it("surfaces alert management for admins through the shared ops page", () => {
+  it("surfaces alert rule governance for admins instead of the ops alert page", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ADMIN;
     auth.roles = [ROLE_ADMIN];
@@ -118,9 +118,9 @@ describe("useMenu", () => {
     const titles = flattenTitles();
     const paths = flattenPaths();
 
-    expect(titles).toContain("告警管理");
-    expect(titles).not.toContain("告警规则");
-    expect(paths).toContain("/ops/alerts");
+    expect(titles).toContain("告警规则");
+    expect(titles).not.toContain("告警管理");
+    expect(paths).toContain("/governance/admin/alert-rules");
   });
 
   it("grants admins access to the ops workspace for shared management pages", () => {

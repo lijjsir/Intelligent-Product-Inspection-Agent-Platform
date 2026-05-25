@@ -31,6 +31,13 @@ const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
   selected_tasks: [],
 };
 
+function safeRandomId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `fallback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
     const candidate = error as {
@@ -70,7 +77,7 @@ function normalizeAttachments(value: unknown): ChatAttachment[] {
   return value
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
     .map((item) => ({
-      id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+      id: typeof item.id === "string" ? item.id : safeRandomId(),
       name: typeof item.name === "string" ? item.name : "附件",
       url: typeof item.url === "string" ? item.url : "",
       content_type: typeof item.content_type === "string" ? item.content_type : null,
@@ -544,8 +551,8 @@ export const useChatStore = defineStore("chat", () => {
           }
         : { enabled: false, scope_node_ids: [] },
     };
-    const tempUserId = `temp-user-${crypto.randomUUID()}`;
-    const tempAssistantId = `temp-assistant-${crypto.randomUUID()}`;
+    const tempUserId = `temp-user-${safeRandomId()}`;
+    const tempAssistantId = `temp-assistant-${safeRandomId()}`;
 
     appendMessages([
       {
