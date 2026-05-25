@@ -108,6 +108,15 @@
             >
               停用
             </el-button>
+            <el-button
+              v-if="tool.status === 'disabled'"
+              size="small"
+              text
+              type="success"
+              @click="enableTool(tool)"
+            >
+              启用
+            </el-button>
           </div>
         </div>
       </article>
@@ -149,10 +158,28 @@
         <el-table-column label="平均延迟" width="110" align="right">
           <template #default="{ row }">{{ row.avg_latency_ms }} ms</template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text @click.stop="$router.push(`/ops/tools/catalog/${row.id}`)">详情</el-button>
             <el-button size="small" text @click.stop="openTest(row)">测试</el-button>
+            <el-button
+              v-if="row.status === 'active'"
+              size="small"
+              text
+              type="warning"
+              @click.stop="disableTool(row)"
+            >
+              停用
+            </el-button>
+            <el-button
+              v-if="row.status === 'disabled'"
+              size="small"
+              text
+              type="success"
+              @click.stop="enableTool(row)"
+            >
+              启用
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -405,6 +432,12 @@ async function runTest() {
 async function disableTool(tool: ToolDefinition) {
   await store.updateToolStatus(tool.id, "disabled");
   ElMessage.success(`已停用 ${tool.display_name}`);
+  await loadTools();
+}
+
+async function enableTool(tool: ToolDefinition) {
+  await store.updateToolStatus(tool.id, "active");
+  ElMessage.success(`已启用 ${tool.display_name}`);
   await loadTools();
 }
 

@@ -123,7 +123,7 @@ class RagQueryLog(Base, TimestampMixin):
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     top_score: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(191), nullable=True, unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(512), nullable=True, unique=True)
 
 
 class AgentRouteLog(Base, TimestampMixin):
