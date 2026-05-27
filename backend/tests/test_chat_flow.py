@@ -67,7 +67,7 @@ def test_chat_general_prompt_supports_normal_model_chat():
 
 def test_chat_specialized_prompts_keep_json_contract():
     prompts = {str(item["key"]): str(item["content"]) for item in CHAT_CODE_PROMPTS}
-    for prompt_key in {"chat.rag_answer.system", "chat.file_summary.system"}:
+    for prompt_key in {"chat.rag_answer.system", "chat.file_summary.system", "chat.paper_format_check.system"}:
         content = prompts[prompt_key]
         assert "JSON" in content
         assert '{"answer": string, "summary": string}' in content

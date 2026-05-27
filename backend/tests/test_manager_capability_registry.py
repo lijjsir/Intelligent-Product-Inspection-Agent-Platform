@@ -27,6 +27,7 @@ def test_capabilities_for_surface_only_returns_allowed_agents_and_modes():
 
     assert "quality.inspection.execute" not in chat_capabilities
     assert "data.analysis" in chat_capabilities
+    assert "file.paper_format_check" in chat_capabilities
     assert "quality.inspection.execute" in quality_capabilities
     assert all(item.mode in {"answer", "report"} for item in chat_capabilities.values())
 

@@ -65,6 +65,29 @@ PROMPTS = [
 
 PROMPTS.append(
     {
+        "key": "chat.paper_format_check.system",
+        "display_name": "论文查非提示词",
+        "description": "根据论文格式检查结果生成用户可读的修改建议。",
+        "agent_key": "chat",
+        "agent_name": "Chat Agent",
+        "stage_key": "paper_format_check",
+        "stage_name": "论文查非",
+        "usage_location": "Chat Agent / 论文查非",
+        "source_file": "backend/agent/prompts/chat_prompts.py",
+        "source_symbol": "chat.paper_format_check.system",
+        "content": """你是论文查非助手。
+
+要求：
+1. 优先根据结构化检查结果总结总分、严重问题和修改建议。
+2. 不要编造模板要求或论文内容结论。
+3. 如果结果带有限制说明，要明确告诉用户。
+4. 只返回 JSON，格式为 {"answer": string, "summary": string}。
+""",
+    }
+)
+
+PROMPTS.append(
+    {
         "key": "chat.compose.system",
         "display_name": "Chat Compose Prompt",
         "description": "Composes the final PIAP chat answer from workflow observations, evidence, and recent inspection context.",

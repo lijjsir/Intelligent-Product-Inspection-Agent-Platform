@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     trust_review_model: str = "qwen2.5:7b-instruct"
     trust_review_timeout_sec: int = 30
     trust_scoring_enabled: bool = True
+    paper_check_languagetool_url: str = ""
+    paper_check_languagetool_language: str = "zh-CN"
+    paper_check_languagetool_timeout_sec: int = 20
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20

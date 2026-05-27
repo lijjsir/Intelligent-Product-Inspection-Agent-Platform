@@ -27,6 +27,12 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "temperature": 0.3,
         "default_content": """请对以下文件内容进行总结。要求：1. 提取关键信息点。2. 标注数据来源（页码或段落）。3. 对于检测相关文件，识别产品类型、检测项、判定标准。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },
+    "paper_format_check": {
+        "prompt_key": "chat.paper_format_check.system",
+        "prompt_version": "chat_paper_format_check_v1",
+        "temperature": 0.2,
+        "default_content": """请根据论文查非结构化结果，输出中文修改建议。要求：1. 先说明总分和主要问题。2. 按严重级别归纳问题。3. 说明局限性，不要编造模板规则。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
+    },
     "quality_qa": {
         "prompt_key": "inspection.quality_qa.system",
         "prompt_version": "inspection_quality_qa_v1",

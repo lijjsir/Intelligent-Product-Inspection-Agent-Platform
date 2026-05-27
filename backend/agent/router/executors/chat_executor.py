@@ -43,6 +43,13 @@ DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
         'Call out uncertainty when the uploaded material is incomplete. '
         'Return JSON in the form {"answer": "...", "summary": "..."}.'
     ),
+    "chat.paper_format_check.system": (
+        'You are the PIAP paper-format review assistant. Respond in Chinese. '
+        'Summarize the structured paper-format findings first, including score, critical issues, and revision suggestions. '
+        'Do not invent template requirements that are not present in the findings. '
+        'If the report includes limitations, explain them plainly. '
+        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+    ),
 }
 
 TOOL_LOOP_INSTRUCTIONS = (
@@ -624,6 +631,8 @@ class ChatExecutor:
         reason = str(state.route_plan.reason if state.route_plan else "").strip().lower()
         if reason == "rag_qa":
             return "chat.rag_answer.system"
+        if reason == "paper_format_check":
+            return "chat.paper_format_check.system"
         if reason in {"file_summary", "file_qa"}:
             return "chat.file_summary.system"
         return "chat.compose.system"
@@ -777,7 +786,7 @@ class ChatExecutor:
             mt = "action_blocked"
         elif reason == "image_understanding":
             mt = "image_analysis"
-        elif reason in {"file_summary", "file_qa"}:
+        elif reason in {"file_summary", "file_qa", "paper_format_check"}:
             mt = "file_answer"
         elif reason == "quality_report_query":
             mt = "report_answer"

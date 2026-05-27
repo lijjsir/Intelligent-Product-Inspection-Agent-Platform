@@ -18,11 +18,14 @@ class FileExecutor:
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
         from agent.tools.file_parsers import parse_file_content
+        from agent.tools.paper_format_checker import check_paper_format
         from app.services.object_storage.resolver import read_attachment_bytes
 
         parsed_files: list[dict] = []
         routed: list[dict] = []
         unsupported: list[dict] = []
+        paper_reports: list[dict] = []
+        template_id = str((step.input or {}).get("template_id") or "").strip() or None
         for attachment in state.attachments:
             node = route_attachment_to_node("chat", attachment)
             if not node:
@@ -40,19 +43,30 @@ class FileExecutor:
                 unsupported.append({**attachment, "reason": str(exc)})
                 continue
             text = str(parsed.get("text") or "")
-            parsed_files.append(
-                {
-                    "name": str(attachment.get("name") or "attachment"),
-                    "url": str(attachment.get("url") or ""),
-                    "content_type": content_type,
-                    "kind": parsed.get("kind"),
-                    "text": text[:12000],
-                    "summary": self._summarize_text(text),
-                    "metadata": {k: v for k, v in parsed.items() if k != "text"},
-                }
-            )
+            parsed_item = {
+                "name": str(attachment.get("name") or "attachment"),
+                "url": str(attachment.get("url") or ""),
+                "content_type": content_type,
+                "kind": parsed.get("kind"),
+                "text": text[:12000],
+                "summary": self._summarize_text(text),
+                "metadata": {k: v for k, v in parsed.items() if k != "text"},
+            }
+            parsed_files.append(parsed_item)
+            if step.capability_key == "file.paper_format_check":
+                paper_reports.append(
+                    check_paper_format(
+                        parsed=parsed,
+                        file_name=parsed_item["name"],
+                        query=state.original_query,
+                        template_id=template_id,
+                    )
+                )
 
-        artifact_type = "file_summary" if step.capability_key == "file.summary" else "file_answer"
+        if step.capability_key == "file.paper_format_check":
+            artifact_type = "paper_format_report"
+        else:
+            artifact_type = "file_summary" if step.capability_key == "file.summary" else "file_answer"
         model_summary = await self._try_chat_summary(parsed_files, state, request, db_session=db_session)
         if not parsed_files:
             art = artifact(artifact_type, "file", {"unsupported": unsupported, "parsed_files": []}, confidence=0.2)
@@ -60,14 +74,21 @@ class FileExecutor:
                 observation(step, status="skipped", summary="文件无法解析", artifact_ids=[art.artifact_id], error=str(unsupported)),
                 [art],
             )
-        content = {
-            "informal": True,
-            "parsed_files": parsed_files,
-            "model_summary": model_summary,
-            "unsupported": unsupported,
-        }
-        art = artifact(artifact_type, "file", content, confidence=0.75)
-        obs_summary = model_summary or self._compose_summary(parsed_files, state.original_query)
+        if step.capability_key == "file.paper_format_check":
+            merged = self._merge_paper_reports(paper_reports, unsupported=unsupported, parsed_files=parsed_files, model_summary=model_summary)
+            content = merged
+            obs_summary = str(merged.get("summary") or "") or "已完成论文查非分析"
+            confidence = 0.8
+        else:
+            content = {
+                "informal": True,
+                "parsed_files": parsed_files,
+                "model_summary": model_summary,
+                "unsupported": unsupported,
+            }
+            obs_summary = model_summary or self._compose_summary(parsed_files, state.original_query)
+            confidence = 0.75
+        art = artifact(artifact_type, "file", content, confidence=confidence)
         return (
             observation(
                 step,
@@ -93,6 +114,53 @@ class FileExecutor:
         for item in parsed_files:
             parts.append(f"{item['name']}（{item.get('kind') or 'file'}）：{item.get('summary') or '无文本内容'}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _merge_paper_reports(
+        reports: list[dict],
+        *,
+        unsupported: list[dict],
+        parsed_files: list[dict],
+        model_summary: str | None,
+    ) -> dict:
+        if not reports:
+            return {
+                "document_type": "unknown",
+                "template_id": None,
+                "summary": "当前没有可用于论文查非的 docx 或 tex 文件。",
+                "score": 0,
+                "issues": [],
+                "limitations": ["当前仅支持 docx 和 tex 的论文查非检查。"],
+                "parsed_files": parsed_files,
+                "unsupported": unsupported,
+                "model_summary": model_summary,
+            }
+        base = dict(reports[0])
+        if len(reports) == 1:
+            base["parsed_files"] = parsed_files
+            base["unsupported"] = unsupported
+            base["model_summary"] = model_summary
+            return base
+        all_issues = []
+        limitations = []
+        document_types = []
+        for item in reports:
+            all_issues.extend(list(item.get("issues") or []))
+            limitations.extend(list(item.get("limitations") or []))
+            document_types.append(str(item.get("document_type") or "unknown"))
+        total_score = sum(int(item.get("score") or 0) for item in reports) // len(reports)
+        summary = model_summary or f"已完成 {len(reports)} 个文件的论文查非分析，共发现 {len(all_issues)} 个问题。"
+        return {
+            "document_type": ",".join(document_types),
+            "template_id": base.get("template_id"),
+            "summary": summary,
+            "score": total_score,
+            "issues": all_issues,
+            "limitations": list(dict.fromkeys(limitations)),
+            "parsed_files": parsed_files,
+            "unsupported": unsupported,
+            "model_summary": model_summary,
+        }
 
     async def _try_chat_summary(self, parsed_files: list[dict], state: ManagerState, request: NormalizedRequest, *, db_session=None) -> str | None:
         if not parsed_files:

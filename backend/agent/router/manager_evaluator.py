@@ -57,6 +57,8 @@ class ManagerEvaluator:
             return EvaluationResult(True, 0.8, "finish", "已经找到任务状态")
         if "rag_hits" in artifact_types:
             return EvaluationResult(True, 0.76, "finish", "已经完成知识检索")
+        if "paper_format_report" in artifact_types:
+            return EvaluationResult(True, 0.82, "finish", "已经完成论文查非分析")
         if "file_summary" in artifact_types or "file_answer" in artifact_types:
             return EvaluationResult(True, 0.78, "finish", "已经完成文件辅助分析")
         if "image_understanding" in artifact_types:

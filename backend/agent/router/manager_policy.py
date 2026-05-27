@@ -21,6 +21,16 @@ TASK_PATTERNS = [
 ]
 REPORT_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"报告|上次检测|检测结果|失败原因|任务状态|status|report"]]
 SUMMARY_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"总结|概括|摘要|summary"]]
+PAPER_FORMAT_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"查非",
+        r"论文.{0,6}(格式|排版|模板|规范).{0,4}(检查|检测|审查|审阅)",
+        r"(格式|排版|模板).{0,4}(检查|检测|审查|审阅)",
+        r"错别字|病句|标点错误|格式错误|标点符号",
+        r"paper format|format check|proofread",
+    ]
+]
 RAG_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"知识库|RAG|根据.{0,8}(资料|文档|知识库|标准)|AQL|标准"]]
 DATA_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"数据分析|统计|趋势|分析数据|报表分析"]]
 RAG_INGEST_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"(加入|写入|导入|入库).{0,8}(知识库|RAG)|rag ingest|ingest"]]
@@ -101,6 +111,17 @@ class ManagerPolicy:
             },
             {
                 "priority": 5,
+                "name": "论文查非/格式检查",
+                "condition": "附件包含 document 且命中 PAPER_FORMAT_PATTERNS",
+                "intent": "paper_format_check",
+                "target_agent": "chat",
+                "needs": ["file.paper_format_check", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "对论文文档执行结构、格式、文字规范检查",
+            },
+            {
+                "priority": 6,
                 "name": "文档/文件处理",
                 "condition": "附件包含 document 或 structured_file 类型",
                 "intent": "file_summary / file_qa",
@@ -111,7 +132,7 @@ class ManagerPolicy:
                 "description": "处理聊天上传文件：命中 SUMMARY_PATTERNS 则总结，否则文件问答",
             },
             {
-                "priority": 6,
+                "priority": 7,
                 "name": "报告/任务状态查询",
                 "condition": "命中 REPORT_PATTERNS（报告/上次检测/检测结果/任务状态等）",
                 "intent": "quality_report_query",
@@ -122,7 +143,7 @@ class ManagerPolicy:
                 "description": "只读查询质量检测报告或任务状态",
             },
             {
-                "priority": 7,
+                "priority": 8,
                 "name": "RAG 知识库问答",
                 "condition": "已选择 RAG 空间，或命中 RAG_PATTERNS（知识库/RAG/根据资料/AQL/标准等）",
                 "intent": "rag_qa",
@@ -133,7 +154,7 @@ class ManagerPolicy:
                 "description": "基于可用知识源检索证据并回答",
             },
             {
-                "priority": 8,
+                "priority": 9,
                 "name": "数据分析",
                 "condition": "命中 DATA_PATTERNS（数据分析/统计/趋势等）",
                 "intent": "data_analysis",
@@ -144,7 +165,7 @@ class ManagerPolicy:
                 "description": "预留数据分析 Agent 只读分析能力",
             },
             {
-                "priority": 9,
+                "priority": 10,
                 "name": "默认普通聊天",
                 "condition": "未命中以上所有规则",
                 "intent": "general_chat",
@@ -179,6 +200,7 @@ class ManagerPolicy:
             selected_rag_space=self._selected_rag_space(ext),
             rag_scope=dict(ext.get("rag_scope") or {}) or None,
             force_web_search=bool(ext.get("force_web_search")),
+            template_id=str(ext.get("template_id") or "") or None,
             allowed_modes=allowed_modes,
             forbidden_modes=forbidden_modes,
             action_intent=str(ext.get("action_intent") or "") or None,
@@ -224,6 +246,14 @@ class ManagerPolicy:
                 goal="对图片进行非正式理解和初步判断",
                 intent="image_understanding",
                 needs=self._with_forced_web_search(["image.understanding", "chat.response.compose"], state),
+                missing_inputs=[],
+                entities=self._extract_entities(query, state.attachments),
+            )
+        if any(kind == "document" for kind in attachment_kinds) and self._matches(query, PAPER_FORMAT_PATTERNS):
+            return Understanding(
+                goal="检查论文文档的格式、结构和文字规范问题",
+                intent="paper_format_check",
+                needs=self._with_forced_web_search(["file.paper_format_check", "chat.response.compose"], state),
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -287,6 +317,7 @@ class ManagerPolicy:
         "rag.ingest": ["confirmed by user", "documents indexed"],
         "file.summary": ["parsed_text is not empty", "summary is not empty"],
         "file.qa": ["parsed_text is not empty", "answer references file content"],
+        "file.paper_format_check": ["paper issues are structured", "summary explains key findings"],
         "image.understanding": ["vision_result is not empty", "informal disclaimer present"],
         "quality.report.query": ["found related report", "verdict is not empty", "can explain conclusion"],
         "quality.task.status": ["task_id resolved", "status returned"],
@@ -408,7 +439,11 @@ class ManagerPolicy:
                 "rag_scope": state.rag_scope,
             }
         if key.startswith("file."):
-            return {"attachments": state.attachments, "query": state.original_query}
+            return {
+                "attachments": state.attachments,
+                "query": state.original_query,
+                "template_id": state.template_id or str((state.inspection_context or {}).get("template_id") or "") or None,
+            }
         if key == "image.understanding":
             return {"attachments": state.attachments, "query": state.original_query}
         if key == "quality.inspection.execute":

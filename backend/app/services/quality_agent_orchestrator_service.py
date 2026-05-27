@@ -404,7 +404,7 @@ class QualityAgentOrchestratorService:
     ) -> None:
         parsed_files: list[dict[str, Any]] = []
         for artifact in self._response_artifacts(output):
-            if str(artifact.get("type") or "") not in {"file_summary", "file_answer"}:
+            if str(artifact.get("type") or "") not in {"file_summary", "file_answer", "paper_format_report"}:
                 continue
             content = artifact.get("content")
             if not isinstance(content, dict):
