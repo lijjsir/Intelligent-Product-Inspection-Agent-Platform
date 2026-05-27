@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from agent.tools.paper_format_templates import get_paper_template
 
 
 DEFAULT_TEMPLATE_ID = "generic_cn_thesis"
@@ -55,7 +56,9 @@ def check_paper_format(
 ) -> dict[str, Any]:
     document_type = str(parsed.get("kind") or "text")
     effective_template_id = template_id or DEFAULT_TEMPLATE_ID
-    is_generic_template = not bool(template_id)
+    template = get_paper_template(effective_template_id)
+    effective_template_id = str(template.get("template_id") or effective_template_id)
+    is_generic_template = effective_template_id == DEFAULT_TEMPLATE_ID and not bool(template_id)
     issues: list[RuleIssue] = []
     limitations: list[str] = []
 
@@ -63,27 +66,36 @@ def check_paper_format(
         issues.extend(_check_docx_structure(parsed))
         issues.extend(_check_docx_style(parsed))
         issues.extend(_check_text_norms(parsed))
+        issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
+        issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
         limitations.append("LaTeX 仅基于源码检查，不代表最终 PDF 版面完全合规。")
+    elif document_type == "pdf":
+        issues.extend(_check_pdf_structure(parsed))
+        issues.extend(_check_text_norms(parsed))
+        issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        limitations.append("当前 PDF 检查主要基于文本抽取，不能完整判断字号、页边距、行距等版面格式。")
     else:
-        limitations.append("当前仅支持 docx 和 tex 的论文查非检查。")
+        limitations.append("当前仅支持 docx、pdf 和 tex 的论文查非检查。")
         issues.append(
             RuleIssue(
                 code="unsupported.document_type",
                 title="暂不支持的文档类型",
                 severity="high",
                 category="support",
-                message="当前论文查非仅支持 docx 和 tex 文件。",
+                message="当前论文查非仅支持 docx、pdf 和 tex 文件。",
                 evidence=file_name,
                 location={"file": file_name},
-                suggestion="请上传 docx 或 tex 文档。",
+                suggestion="请上传 docx、pdf 或 tex 文档。",
             )
         )
 
     if is_generic_template:
         limitations.append("未指定模板，当前使用内置通用论文规则，无法做严格模板校验。")
+    elif effective_template_id == "cqupt_graduate_thesis_2022":
+        limitations.append("已使用重庆邮电大学研究生学位论文模板（2022版）规则进行辅助校验，仍需以学校最新正式文件为准。")
 
     issues.extend(_dedupe_issues(_check_language_tool(parsed, file_name=file_name)))
     issues = _dedupe_issues(issues)
@@ -206,6 +218,51 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
+def _check_pdf_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    text = str(parsed.get("text") or "")
+    if not _contains_any(text, ["摘要"]):
+        issues.append(
+            RuleIssue(
+                code="structure.abstract_missing",
+                title="缺少摘要",
+                severity="high",
+                category="structure",
+                message="PDF 文本中未识别到“摘要”部分。",
+                evidence="未找到标题或段落“摘要”",
+                location={"section": "abstract"},
+                suggestion="核对 PDF 是否包含中文摘要，或改传 Word 文档以做更完整校验。",
+            )
+        )
+    if not _contains_any(text, ["关键词", "关键字"]):
+        issues.append(
+            RuleIssue(
+                code="structure.keywords_missing",
+                title="缺少关键词",
+                severity="medium",
+                category="structure",
+                message="PDF 文本中未识别到“关键词/关键字”部分。",
+                evidence="未找到关键词字段",
+                location={"section": "keywords"},
+                suggestion="补充关键词字段，或检查 PDF 文本是否可正确抽取。",
+            )
+        )
+    if not _contains_any(text, ["参考文献"]):
+        issues.append(
+            RuleIssue(
+                code="structure.references_missing",
+                title="缺少参考文献",
+                severity="high",
+                category="structure",
+                message="PDF 文本中未识别到“参考文献”部分。",
+                evidence="未找到参考文献标题",
+                location={"section": "references"},
+                suggestion="补充参考文献章节，或检查 PDF 文本抽取结果。",
+            )
+        )
+    return issues
+
+
 def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
     headings = list(parsed.get("headings") or [])
@@ -262,6 +319,132 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                 )
             )
             break
+    return issues
+
+
+def _check_template_rules(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    document_type: str,
+) -> list[RuleIssue]:
+    template_id = str(template.get("template_id") or DEFAULT_TEMPLATE_ID)
+    if template_id == DEFAULT_TEMPLATE_ID:
+        return []
+    if document_type == "docx":
+        rules = dict(template.get("docx_rules") or {})
+    elif document_type == "pdf":
+        rules = dict(template.get("pdf_rules") or template.get("docx_rules") or {})
+    elif document_type == "tex":
+        rules = dict(template.get("tex_rules") or {})
+    else:
+        return []
+
+    issues: list[RuleIssue] = []
+    text = str(parsed.get("text") or "")
+    for section in list(rules.get("required_sections") or []):
+        section_name = str(section)
+        if section_name and not _contains_any(text, [section_name]):
+            issues.append(
+                RuleIssue(
+                    code="template.required_section_missing",
+                    title=f"模板要求章节缺失：{section_name}",
+                    severity="high" if section_name in {"摘要", "参考文献"} else "medium",
+                    category="template",
+                    message=f"按 {template.get('name')} 规则未识别到“{section_name}”。",
+                    evidence=f"未找到模板章节：{section_name}",
+                    location={"section": section_name, "template_id": template_id},
+                    suggestion=f"按学校模板补充或核对“{section_name}”章节。",
+                )
+            )
+
+    if document_type != "docx":
+        return issues
+
+    page_rules = dict(rules.get("page_margin_cm") or {})
+    page = dict(parsed.get("page_layout") or {})
+    tolerance = float(page_rules.get("tolerance") or 0.2)
+    margin_map = {
+        "top": "top_margin_cm",
+        "bottom": "bottom_margin_cm",
+        "left": "left_margin_cm",
+        "right": "right_margin_cm",
+    }
+    for rule_key, parsed_key in margin_map.items():
+        expected = page_rules.get(rule_key)
+        actual = page.get(parsed_key)
+        if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+            if abs(float(actual) - float(expected)) > tolerance:
+                issues.append(
+                    RuleIssue(
+                        code="template.margin_mismatch",
+                        title="页边距与学校模板不一致",
+                        severity="medium",
+                        category="template",
+                        message=f"{parsed_key}={actual}cm，与模板建议 {expected}cm 不一致。",
+                        evidence=f"{parsed_key}: actual={actual}, expected={expected}",
+                        location={"page_layout": parsed_key, "template_id": template_id},
+                        suggestion="按学校模板重新设置页面边距。",
+                    )
+                )
+                break
+
+    body_font = dict(rules.get("body_font") or {})
+    body_candidates = [
+        item for item in list(parsed.get("paragraphs") or [])
+        if item.get("text") and not item.get("heading_level")
+    ]
+    expected_names = {
+        str(body_font.get("zh") or "").lower(),
+        str(body_font.get("en") or "").lower(),
+    } - {""}
+    expected_size = body_font.get("size_pt")
+    for paragraph in body_candidates[:20]:
+        actual_name = str(paragraph.get("font_name") or "").lower()
+        actual_size = paragraph.get("font_size_pt")
+        name_mismatch = bool(expected_names and actual_name and actual_name not in expected_names)
+        size_mismatch = (
+            isinstance(expected_size, (int, float))
+            and isinstance(actual_size, (int, float))
+            and abs(float(actual_size) - float(expected_size)) > 0.2
+        )
+        if name_mismatch or size_mismatch:
+            issues.append(
+                RuleIssue(
+                    code="template.body_font_mismatch",
+                    title="正文字体或字号与学校模板不一致",
+                    severity="medium",
+                    category="template",
+                    message="识别到正文段落字体或字号与模板建议不一致。",
+                    evidence=(
+                        f"段落 {paragraph.get('index')}: "
+                        f"font={paragraph.get('font_name')}, size={paragraph.get('font_size_pt')}"
+                    ),
+                    location={"paragraph_index": paragraph.get("index"), "template_id": template_id},
+                    suggestion="按学校模板统一正文字体和字号。",
+                )
+            )
+            break
+
+    expected_spacing = rules.get("line_spacing")
+    if isinstance(expected_spacing, (int, float)):
+        for paragraph in body_candidates[:20]:
+            actual_spacing = paragraph.get("line_spacing")
+            if isinstance(actual_spacing, (int, float)) and abs(float(actual_spacing) - float(expected_spacing)) > 0.1:
+                issues.append(
+                    RuleIssue(
+                        code="template.line_spacing_mismatch",
+                        title="正文行距与学校模板不一致",
+                        severity="low",
+                        category="template",
+                        message=f"正文行距 {actual_spacing} 与模板建议 {expected_spacing} 不一致。",
+                        evidence=f"段落 {paragraph.get('index')}: line_spacing={actual_spacing}",
+                        location={"paragraph_index": paragraph.get("index"), "template_id": template_id},
+                        suggestion="按学校模板统一正文行距。",
+                    )
+                )
+                break
+
     return issues
 
 

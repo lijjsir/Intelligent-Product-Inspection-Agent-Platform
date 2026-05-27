@@ -19,6 +19,9 @@ class ObjectStorage(Protocol):
     def get_bytes(self, *, bucket: str, object_key: str) -> tuple[bytes, str | None] | None:
         ...
 
+    def object_exists(self, *, bucket: str, object_key: str) -> bool:
+        ...
+
     def delete_object(self, *, bucket: str, object_key: str) -> None:
         ...
 

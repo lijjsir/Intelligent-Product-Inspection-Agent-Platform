@@ -122,6 +122,20 @@ function materializationTagType(status?: string | null) {
   return "info";
 }
 
+function paperScoreTagType(score: number) {
+  if (score >= 80) return "success";
+  if (score >= 60) return "warning";
+  return "danger";
+}
+
+function downloadReport(file: { url: string; file_name: string }) {
+  const a = document.createElement("a");
+  a.href = file.url;
+  a.download = file.file_name;
+  a.target = "_blank";
+  a.click();
+}
+
 function parseImageUrls(value: string) {
   return value.split(/\r?\n|,|;/).map((item) => item.trim()).filter(Boolean);
 }
@@ -843,6 +857,75 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
 
+              <!-- Paper review report card -->
+              <div v-if="message.payload?.paper_format_report" class="paper-review-card">
+                <div class="prc-header">
+                  <span class="prc-title">论文查非辅助报告</span>
+                  <div class="prc-header-right">
+                    <el-tag v-if="message.payload.paper_format_report.model_used === false" size="small" type="warning" effect="dark">
+                      模型未生效-仅规则检查
+                    </el-tag>
+                    <el-tag size="small" effect="dark" :type="paperScoreTagType(message.payload.paper_format_report.score)">
+                      {{ message.payload.paper_format_report.score }} / 100
+                    </el-tag>
+                  </div>
+                </div>
+                <div class="prc-meta" v-if="message.payload.paper_format_report.document_type">
+                  <span>文档：{{ message.payload.paper_format_report.document_type?.toUpperCase() }}</span>
+                  <span v-if="message.payload.paper_format_report.template_id">模板：{{ message.payload.paper_format_report.template_id }}</span>
+                </div>
+                <div class="prc-grid">
+                  <div class="prc-item">
+                    <span>发现问题</span>
+                    <strong>{{ message.payload.paper_format_report.issue_count }}</strong>
+                  </div>
+                  <div class="prc-item">
+                    <span>高优先级</span>
+                    <strong class="prc-high">{{ message.payload.paper_format_report.high_count }}</strong>
+                  </div>
+                  <div class="prc-item">
+                    <span>中优先级</span>
+                    <strong class="prc-medium">{{ message.payload.paper_format_report.medium_count }}</strong>
+                  </div>
+                  <div class="prc-item">
+                    <span>低优先级</span>
+                    <strong class="prc-low">{{ message.payload.paper_format_report.low_count }}</strong>
+                  </div>
+                </div>
+                <div class="prc-summary" v-if="message.payload.paper_format_report.summary">
+                  {{ message.payload.paper_format_report.summary }}
+                </div>
+                <div class="prc-template-errors" v-if="message.payload.paper_format_report.template_errors?.length">
+                  <el-alert
+                    v-for="(err, ei) in message.payload.paper_format_report.template_errors"
+                    :key="ei"
+                    :title="err"
+                    type="error"
+                    show-icon
+                    :closable="false"
+                    style="margin-bottom: 6px;"
+                  />
+                </div>
+                <div class="prc-limitations" v-if="message.payload.paper_format_report.limitations?.length">
+                  <span v-for="limit in message.payload.paper_format_report.limitations" :key="limit" class="prc-limit-tag">{{ limit }}</span>
+                </div>
+                <div class="prc-downloads">
+                  <el-button
+                    v-for="file in message.payload.paper_format_report.report_files"
+                    :key="file.format"
+                    size="small"
+                    type="primary"
+                    :plain="file.format !== 'md'"
+                    @click="downloadReport(file)"
+                  >
+                    下载 {{ file.format.toUpperCase() }}
+                  </el-button>
+                  <span v-if="!message.payload.paper_format_report.report_files?.length" class="prc-no-files">
+                    报告文件生成中，请稍后刷新页面下载。
+                  </span>
+                </div>
+              </div>
+
               <!-- Task card -->
               <div v-if="message.payload?.created_task" class="task-card">
                 <div class="task-title">{{ taskCardTitle(message) }}</div>
@@ -1174,6 +1257,30 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .rc-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
 .rc-sources { max-width: 50%; }
 .rc-sync { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ── Paper review report card ── */
+.paper-review-card {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+}
+.prc-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.prc-header-right { display: flex; gap: 6px; align-items: center; }
+.prc-title { font-weight: 700; color: #1e40af; font-size: 14px; }
+.prc-meta { display: flex; gap: 16px; font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.prc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-bottom: 10px; }
+.prc-item { display: flex; justify-content: space-between; font-size: 13px; color: #475569; }
+.prc-item strong { color: #1e293b; }
+.prc-high { color: #dc2626 !important; }
+.prc-medium { color: #d97706 !important; }
+.prc-low { color: #6b7280 !important; }
+.prc-summary { font-size: 13px; color: #475569; line-height: 1.5; margin-bottom: 10px; }
+.prc-downloads { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.prc-limitations { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.prc-limit-tag { font-size: 11px; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
+.prc-no-files { font-size: 12px; color: #94a3b8; }
 
 /* ── Task card ── */
 .task-card {

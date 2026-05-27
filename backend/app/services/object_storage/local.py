@@ -31,6 +31,14 @@ class LocalObjectStorage:
             f"{settings.local_upload_url_prefix.rstrip('/')}/{object_key.lstrip('/')}"
         )
 
+    def object_exists(self, *, bucket: str, object_key: str) -> bool:
+        cleaned = object_key.strip().lstrip("/").replace("\\", "/")
+        if not cleaned:
+            return False
+        target = (self._storage.root / cleaned).resolve()
+        root = self._storage.root.resolve()
+        return str(target).startswith(str(root)) and target.exists() and target.is_file()
+
     def get_bytes_from_legacy_prefix(self, *, object_key_prefix: str, suffix: str | None = None) -> tuple[bytes, str | None] | None:
         prefix = object_key_prefix.strip().strip("/")
         if not prefix:

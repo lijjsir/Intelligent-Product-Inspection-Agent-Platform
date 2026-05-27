@@ -436,7 +436,7 @@ class LLMClient:
             model_parameters=model_parameters or None,
             metadata=self._build_observation_metadata(path=path, extra=observation_metadata),
         ) as observation:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=45.0, trust_env=False) as client:
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=600.0, trust_env=False) as client:
                 last_error: Exception | None = None
                 request_payload = dict(payload)
                 response_format_fallback = False

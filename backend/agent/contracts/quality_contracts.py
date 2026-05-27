@@ -169,6 +169,7 @@ class PersistableOutput(BaseModel):
 
 
 class AgentOutput(BaseModel):
+    model_config = {"extra": "allow"}
     message_type: str = "assistant_text"
     answer: str = ""
     summary: str = ""
@@ -177,6 +178,8 @@ class AgentOutput(BaseModel):
     result_card: dict[str, Any] | None = None
     expectation_check: dict[str, Any] | None = None
     rag_summary: dict[str, Any] | None = None
+    paper_format_report: dict[str, Any] | None = None
+    ui_schema: str | None = None
     action_state: str | None = None
     task_draft: dict[str, Any] | None = None
     created_task: dict[str, Any] | None = None

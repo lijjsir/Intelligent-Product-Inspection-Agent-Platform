@@ -22,6 +22,7 @@ BUILTIN_MODULES = [
     "agent.tools.builtin.quality_tools",
     "agent.tools.builtin.data_tools",
     "agent.tools.builtin.search_tools",
+    "agent.tools.builtin.paper_format_tools",
 ]
 
 

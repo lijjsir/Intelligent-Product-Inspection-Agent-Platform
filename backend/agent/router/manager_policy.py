@@ -78,6 +78,28 @@ class ManagerPolicy:
             },
             {
                 "priority": 2,
+                "name": "论文查非/格式检查",
+                "condition": "附件包含 document 且命中 PAPER_FORMAT_PATTERNS",
+                "intent": "paper_format_check",
+                "target_agent": "chat",
+                "needs": ["file.paper_format_check", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "对论文文档执行结构、格式、文字规范检查（优先于纯文本任务拦截）",
+            },
+            {
+                "priority": 3,
+                "name": "图片理解",
+                "condition": "附件包含 image 类型",
+                "intent": "image_understanding",
+                "target_agent": "inspection_task",
+                "needs": ["image.understanding", "chat.response.compose"],
+                "risk": "low",
+                "stop_on_match": True,
+                "description": "对图片进行非正式理解和初步判断（优先于纯文本任务拦截）",
+            },
+            {
+                "priority": 4,
                 "name": "聊天页任务意图拦截",
                 "condition": "surface=chat 且命中 TASK_PATTERNS（创建/发起任务等）",
                 "intent": "action_blocked",
@@ -88,7 +110,7 @@ class ManagerPolicy:
                 "description": "阻止聊天页正式业务动作，提示用户前往质量检测任务页面",
             },
             {
-                "priority": 3,
+                "priority": 5,
                 "name": "检测页任务执行",
                 "condition": "surface=quality_task 且命中 TASK_PATTERNS",
                 "intent": "inspection_execute",
@@ -97,28 +119,6 @@ class ManagerPolicy:
                 "risk": "high",
                 "stop_on_match": True,
                 "description": "正式执行质量检测任务（需确认 action_intent）",
-            },
-            {
-                "priority": 4,
-                "name": "图片理解",
-                "condition": "附件包含 image 类型",
-                "intent": "image_understanding",
-                "target_agent": "inspection_task",
-                "needs": ["image.understanding", "chat.response.compose"],
-                "risk": "low",
-                "stop_on_match": True,
-                "description": "对图片进行非正式理解和初步判断（非正式检测）",
-            },
-            {
-                "priority": 5,
-                "name": "论文查非/格式检查",
-                "condition": "附件包含 document 且命中 PAPER_FORMAT_PATTERNS",
-                "intent": "paper_format_check",
-                "target_agent": "chat",
-                "needs": ["file.paper_format_check", "chat.response.compose"],
-                "risk": "low",
-                "stop_on_match": True,
-                "description": "对论文文档执行结构、格式、文字规范检查",
             },
             {
                 "priority": 6,
@@ -208,8 +208,14 @@ class ManagerPolicy:
         )
 
     async def understand(self, state: ManagerState) -> Understanding:
+        import logging
+        _log = logging.getLogger(__name__)
         query = state.normalized_query
         attachment_kinds = [attachment_kind(item) for item in state.attachments]
+        _log.info(
+            "ManagerPolicy.understand query=%r surface=%s kinds=%s attachments=%d",
+            query, state.surface, attachment_kinds, len(state.attachments),
+        )
 
         if self._matches(query, RAG_INGEST_PATTERNS):
             return Understanding(
@@ -220,7 +226,31 @@ class ManagerPolicy:
                 entities=self._extract_entities(query, state.attachments),
                 risk="high",
             )
-        if state.surface == "chat" and self._has_task_intent(query):
+        # Attachments with specific intent keywords take priority over
+        # pure-text task-intent blocking — documents for paper check
+        # and images for understanding never mean "create a task".
+        has_doc = any(kind == "document" for kind in attachment_kinds)
+        paper_match = self._matches(query, PAPER_FORMAT_PATTERNS)
+        _log.info("ManagerPolicy.understand paper_format_check has_doc=%s paper_match=%s", has_doc, paper_match)
+        if has_doc and paper_match:
+            return Understanding(
+                goal="检查论文文档的格式、结构和文字规范问题",
+                intent="paper_format_check",
+                needs=self._with_forced_web_search(["file.paper_format_check", "chat.response.compose"], state),
+                missing_inputs=[],
+                entities=self._extract_entities(query, state.attachments),
+            )
+        if "image" in attachment_kinds:
+            return Understanding(
+                goal="对图片进行非正式理解和初步判断",
+                intent="image_understanding",
+                needs=self._with_forced_web_search(["image.understanding", "chat.response.compose"], state),
+                missing_inputs=[],
+                entities=self._extract_entities(query, state.attachments),
+            )
+        has_task = self._has_task_intent(query)
+        _log.info("ManagerPolicy.understand action_blocked_check surface=%s has_task=%s", state.surface, has_task)
+        if state.surface == "chat" and has_task:
             return Understanding(
                 goal="阻止聊天页正式业务动作，并提示用户前往质量检测任务页面",
                 intent="action_blocked",
@@ -229,7 +259,7 @@ class ManagerPolicy:
                 entities=self._extract_entities(query, state.attachments),
                 risk="medium",
             )
-        if state.surface == "quality_task" and self._has_task_intent(query):
+        if state.surface == "quality_task" and has_task:
             missing = []
             if not state.action_intent:
                 missing.append("action_intent")
@@ -240,22 +270,6 @@ class ManagerPolicy:
                 missing_inputs=missing,
                 entities=self._extract_entities(query, state.attachments),
                 risk="high",
-            )
-        if "image" in attachment_kinds:
-            return Understanding(
-                goal="对图片进行非正式理解和初步判断",
-                intent="image_understanding",
-                needs=self._with_forced_web_search(["image.understanding", "chat.response.compose"], state),
-                missing_inputs=[],
-                entities=self._extract_entities(query, state.attachments),
-            )
-        if any(kind == "document" for kind in attachment_kinds) and self._matches(query, PAPER_FORMAT_PATTERNS):
-            return Understanding(
-                goal="检查论文文档的格式、结构和文字规范问题",
-                intent="paper_format_check",
-                needs=self._with_forced_web_search(["file.paper_format_check", "chat.response.compose"], state),
-                missing_inputs=[],
-                entities=self._extract_entities(query, state.attachments),
             )
         if any(kind in {"document", "structured_file"} for kind in attachment_kinds):
             capability = "file.summary" if self._matches(query, SUMMARY_PATTERNS) else "file.qa"
@@ -304,6 +318,9 @@ class ManagerPolicy:
         if not state.force_web_search:
             return needs
         if "web.search" in needs:
+            return needs
+        # Paper format check never needs web search
+        if "file.paper_format_check" in needs:
             return needs
         if "chat.response.compose" in needs:
             compose_index = needs.index("chat.response.compose")
@@ -384,7 +401,7 @@ class ManagerPolicy:
     def _budget_for_surface(surface: str) -> dict[str, int]:
         if surface == "quality_task":
             return {"max_iterations": 5, "max_tool_calls": 8, "max_llm_calls": 5, "timeout_ms": 60000}
-        return {"max_iterations": 2, "max_tool_calls": 3, "max_llm_calls": 2, "timeout_ms": 30000}
+        return {"max_iterations": 2, "max_tool_calls": 3, "max_llm_calls": 3, "timeout_ms": 600000}
 
     @staticmethod
     def _clean(value: str) -> str:

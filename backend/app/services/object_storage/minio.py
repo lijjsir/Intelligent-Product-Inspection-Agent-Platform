@@ -4,6 +4,7 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 from minio import Minio
+from minio.error import S3Error
 
 
 class MinioObjectStorage:
@@ -61,6 +62,15 @@ class MinioObjectStorage:
                 response.close()
             finally:
                 response.release_conn()
+
+    def object_exists(self, *, bucket: str, object_key: str) -> bool:
+        try:
+            self._client.stat_object(bucket, object_key)
+            return True
+        except S3Error as exc:
+            if exc.code in {"NoSuchKey", "NoSuchBucket", "NoSuchObject"}:
+                return False
+            raise
 
     def delete_object(self, *, bucket: str, object_key: str) -> None:
         self._client.remove_object(bucket, object_key)

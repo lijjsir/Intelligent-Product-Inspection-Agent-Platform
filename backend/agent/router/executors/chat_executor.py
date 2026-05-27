@@ -44,11 +44,17 @@ DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
         'Return JSON in the form {"answer": "...", "summary": "..."}.'
     ),
     "chat.paper_format_check.system": (
-        'You are the PIAP paper-format review assistant. Respond in Chinese. '
-        'Summarize the structured paper-format findings first, including score, critical issues, and revision suggestions. '
-        'Do not invent template requirements that are not present in the findings. '
-        'If the report includes limitations, explain them plainly. '
-        'Return JSON in the form {"answer": "...", "summary": "..."}.'
+        'You are a professional paper-format review assistant. Respond in Chinese.\n'
+        'You will receive a Review Evidence Pack with structured check results, issues, and evidence snippets.\n'
+        'Generate a professional review report based on the evidence provided.\n'
+        'Do NOT invent template requirements, paper content, or reference conclusions.\n'
+        'Mark issues without sufficient evidence as "需要人工复核" (needs human review).\n'
+        'Prioritize high-severity issues first, then medium, then low.\n'
+        'Include a complete markdown report in the "markdown_report" field.\n'
+        'If the document type has parsing limitations (e.g., LaTeX or PDF), explain them in limitations.\n'
+        'Return JSON in the form: {"answer": "...", "summary": "...", "markdown_report": "...", '
+        '"issues": [{"title": "", "severity": "", "category": "", "location": "", "evidence": "", '
+        '"impact": "", "suggestion": "", "need_human_review": false}], "download_title": "..."}.'
     ),
 }
 
@@ -794,7 +800,7 @@ class ChatExecutor:
             mt = "task_status"
         elif reason == "inspection_execute":
             mt = "task_result"
-        return {
+        result: dict[str, Any] = {
             "answer": answer,
             "summary": answer[:200] if answer else "",
             "message_type": mt,
@@ -802,9 +808,51 @@ class ChatExecutor:
             "status": status,
             "blocked": blocked,
         }
+        if reason == "paper_format_check":
+            paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report")
+            if paper_report:
+                ai_output = paper_report.get("ai_review_output") or {}
+                result["paper_format_report"] = {
+                    "score": paper_report.get("score", 0),
+                    "issue_count": paper_report.get("issue_count", len(paper_report.get("issues") or [])),
+                    "high_count": paper_report.get("high_count", 0),
+                    "medium_count": paper_report.get("medium_count", 0),
+                    "low_count": paper_report.get("low_count", 0),
+                    "summary": paper_report.get("summary", ""),
+                    "limitations": paper_report.get("limitations", []),
+                    "report_files": paper_report.get("report_files", []),
+                    "model_used": ai_output.get("model_used", True),
+                    "document_type": paper_report.get("document_type", ""),
+                    "template_id": paper_report.get("template_id", ""),
+                    "template_errors": paper_report.get("template_errors", []),
+                }
+                result["ui_schema"] = "paper_review_report_v1"
+                # Keep answer short when report card is present
+                short_answer = ai_output.get("answer") or paper_report.get("summary") or answer
+                result["answer"] = short_answer[:200]
+                result["summary"] = ai_output.get("summary") or paper_report.get("summary") or result["summary"]
+        return result
+
+    @staticmethod
+    def _find_artifact_content(state: ManagerState, artifact_type: str) -> dict[str, Any] | None:
+        for art in reversed(state.artifacts):
+            if art.type == artifact_type:
+                return art.content if isinstance(art.content, dict) else {}
+        return None
 
     @staticmethod
     def _resolve_status(state: ManagerState) -> tuple[str, bool]:
+        import logging
+        _log = logging.getLogger(__name__)
+        has_errors = bool(state.errors)
+        has_missing = bool(state.missing_inputs)
+        is_action_blocked = bool(state.route_plan and state.route_plan.reason == "action_blocked")
+        _log.info(
+            "_resolve_status errors=%s missing=%s plan_reason=%s action_blocked=%s final_action=%s",
+            has_errors, has_missing,
+            state.route_plan.reason if state.route_plan else "no-plan",
+            is_action_blocked, state.final_action,
+        )
         if state.errors or state.missing_inputs:
             return "blocked", True
         if state.route_plan and state.route_plan.reason == "action_blocked":
