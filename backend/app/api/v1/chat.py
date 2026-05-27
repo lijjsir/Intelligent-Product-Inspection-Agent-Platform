@@ -163,7 +163,7 @@ async def stream_session(
         stream = service.stream_events(session_id).__aiter__()
         while True:
             try:
-                event = await asyncio.wait_for(stream.__anext__(), timeout=15.0)
+                event = await asyncio.wait_for(stream.__anext__(), timeout=45.0)
             except asyncio.TimeoutError:
                 yield ": keepalive\n\n"
                 continue

@@ -16,11 +16,30 @@ def parse_pdf_bytes(content: bytes) -> dict:
         raise ValueError(f"pdf parsing dependency unavailable: {exc}") from exc
 
     reader = PdfReader(BytesIO(content))
-    pages = [(page.extract_text() or "").strip() for page in reader.pages]
-    text = "\n".join(page for page in pages if page)
+    page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
+    pages = [
+        {
+            "page_no": index,
+            "text": page_text,
+            "blocks": ([{"type": "text", "text": page_text}] if page_text else []),
+            "fonts": [],
+            "figures": [],
+            "tables": [],
+        }
+        for index, page_text in enumerate(page_texts, start=1)
+    ]
+    text = "\n".join(page for page in page_texts if page)
     return {
         "kind": "pdf",
         "page_count": len(reader.pages),
+        "pages": pages,
+        "headings": _extract_pdf_headings(text),
+        "references": _extract_reference_lines(text),
+        "layout": {
+            "analysis": "text_only",
+            "parser": "pypdf",
+            "page_count": len(reader.pages),
+        },
         "text": text,
     }
 
@@ -290,6 +309,52 @@ def _heading_level(style_name: str) -> int:
             return int(zh_match.group(1))
         return 1
     return 0
+
+
+def _extract_pdf_headings(text: str) -> list[dict]:
+    headings: list[dict] = []
+    for index, line in enumerate(str(text or "").splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^\d+(?:\.\d+)*\s+\S+", stripped) or stripped.lower() in {
+            "abstract",
+            "introduction",
+            "references",
+        } or stripped in {"摘要", "关键词", "目录", "参考文献", "致谢"}:
+            headings.append(
+                {
+                    "text": stripped,
+                    "level": _pdf_heading_level(stripped),
+                    "paragraph_index": index,
+                }
+            )
+    return headings
+
+
+def _pdf_heading_level(line: str) -> int:
+    match = re.match(r"^(\d+(?:\.\d+)*)\s+\S+", line)
+    if not match:
+        return 1
+    return min(match.group(1).count(".") + 1, 6)
+
+
+def _extract_reference_lines(text: str) -> list[str]:
+    references: list[str] = []
+    in_references = False
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower() in {"references", "bibliography"} or stripped == "参考文献":
+            in_references = True
+            continue
+        if in_references and (
+            re.match(r"^\[\d+\]\s*\S+", stripped)
+            or re.match(r"^\d+\.\s*\S+", stripped)
+        ):
+            references.append(stripped)
+    return references
 
 
 def _to_float(value) -> float | None:

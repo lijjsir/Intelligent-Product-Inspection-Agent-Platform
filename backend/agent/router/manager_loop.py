@@ -205,6 +205,8 @@ class ManagerLoop:
         }
 
     def _compose_final(self, state: ManagerState, *, blocked_by_missing_inputs: bool) -> AgentRouterOutput:
+        import logging
+        _log = logging.getLogger(__name__)
         composed = self._find_composed(state)
         plan = state.route_plan
         sub_route = self._sub_route(state)
@@ -213,6 +215,17 @@ class ManagerLoop:
         composed_status = "blocked" if status == "blocked" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
         message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
+        _log.info(
+            "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
+            "message_type=%s errors=%d obs_failures=%d",
+            plan.reason if plan else "no-plan",
+            sub_route,
+            composed is not None,
+            composed.get("status") if composed else "N/A",
+            message_type,
+            len(state.errors),
+            sum(1 for o in state.observations if o.status == "failed"),
+        )
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
         citations = self._citations(state, answer=answer)
         rag_summary = self._rag_summary(state, answer=answer)
@@ -242,6 +255,13 @@ class ManagerLoop:
             route_source="manager",
             fallback_agent=None,
         )
+        # Preserve paper_format_report and ui_schema from composed artifact
+        if composed:
+            for key in ("paper_format_report", "ui_schema"):
+                value = composed.get(key)
+                if value is not None:
+                    agent_output[key] = value
+
         return AgentRouterOutput(
             route_decision=decision,
             agent_output=agent_output,
@@ -373,9 +393,13 @@ class ManagerLoop:
     def _answer(state: ManagerState, *, status: str) -> str:
         if status == "blocked":
             error_message = state.errors[-1]["message"] if state.errors else ""
+            if "超时" in error_message:
+                return "处理超时，请稍后重试。论文查非涉及文档解析和AI审阅，可能需要较长时间。"
             if "action_intent" in error_message:
                 return "正式质量检测需要由质量检测任务页面显式提交，并携带 action_intent=quality_inspection_execute。"
-            return "这个操作需要在质量检测任务页面中执行。请前往质量检测任务页面创建或执行正式检测任务。"
+            if "能力执行失败" in error_message:
+                return f"论文查非处理出错：{error_message}。请稍后重试或联系管理员。"
+            return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "聊天页面不能创建或执行正式质量检测任务。请前往质量检测任务页面提交正式检测。"
         if state.route_plan and state.route_plan.reason == "image_understanding":

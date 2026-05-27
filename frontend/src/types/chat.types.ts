@@ -37,7 +37,32 @@ export type ChatUiSchema =
   | "quality_answer_v1"
   | "task_action_v1"
   | "task_result_v1"
+  | "paper_review_report_v1"
   | "error_v1";
+
+export interface PaperReviewReportFile {
+  format: "md" | "docx" | "pdf";
+  file_name: string;
+  bucket: string;
+  object_key: string;
+  url: string;
+  content_type: string;
+}
+
+export interface PaperReviewReport {
+  score: number;
+  issue_count: number;
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  summary: string;
+  limitations: string[];
+  report_files: PaperReviewReportFile[];
+  model_used: boolean;
+  document_type: string;
+  template_id: string;
+  template_errors: string[];
+}
 
 export type ChatMode = "auto" | "chat" | "inspection";
 
@@ -209,6 +234,7 @@ export interface ChatMessagePayload {
   satisfied?: boolean;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
+  paper_format_report?: PaperReviewReport | null;
   message_type?: string;
   status?: string;
   workflow_run_id?: string;

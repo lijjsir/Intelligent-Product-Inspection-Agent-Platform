@@ -722,6 +722,11 @@ class QualityAgentOrchestratorService:
             payload["llm_meta"] = base_payload.get("llm_meta")
         if base_payload.get("llm_usage"):
             payload["llm_usage"] = base_payload.get("llm_usage")
+        # Preserve paper_format_report and ui_schema from agent output
+        if output.paper_format_report:
+            payload["paper_format_report"] = output.paper_format_report
+        if output.ui_schema:
+            payload["ui_schema"] = output.ui_schema
         return payload
 
     async def _materialize_chat_output(
