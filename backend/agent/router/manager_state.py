@@ -28,6 +28,7 @@ class ManagerState(BaseModel):
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
     force_web_search: bool = False
+    template_id: str | None = None
 
     allowed_modes: list[str] = Field(default_factory=lambda: ["answer", "report"])
     forbidden_modes: list[str] = Field(default_factory=list)

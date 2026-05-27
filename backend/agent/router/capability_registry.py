@@ -82,6 +82,15 @@ CAPABILITIES: dict[str, Capability] = {
         cost_level="medium",
         description="基于聊天上传文件回答问题",
     ),
+    "file.paper_format_check": Capability(
+        key="file.paper_format_check",
+        agent="file",
+        operation="paper_format_check",
+        mode="report",
+        surfaces=["chat"],
+        cost_level="medium",
+        description="对上传论文文档执行查非和模板格式检查",
+    ),
     "image.understanding": Capability(
         key="image.understanding",
         agent="vision",

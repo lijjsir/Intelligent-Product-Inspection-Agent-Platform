@@ -325,6 +325,7 @@ class ManagerLoop:
                 "image_understanding": "image_understanding",
                 "file_summary": "file_summary",
                 "file_qa": "file_qa",
+                "paper_format_check": "paper_format_check",
                 "quality_report_query": "quality_report_query",
                 "quality_task_status": "quality_task_status",
                 "inspection_execute": "inspection_execute",
@@ -350,7 +351,7 @@ class ManagerLoop:
             return "action_blocked"
         if sub_route == "image_understanding":
             return "image_analysis"
-        if sub_route in {"file_summary", "file_qa"}:
+        if sub_route in {"file_summary", "file_qa", "paper_format_check"}:
             return "file_answer"
         if sub_route == "quality_task_status":
             return "task_status"
@@ -379,8 +380,8 @@ class ManagerLoop:
             return "聊天页面不能创建或执行正式质量检测任务。请前往质量检测任务页面提交正式检测。"
         if state.route_plan and state.route_plan.reason == "image_understanding":
             return "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
-        if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa"}:
-            artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
+        if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa", "paper_format_check"}:
+            artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer", "paper_format_report"})
             if artifact:
                 summary = str((artifact.content or {}).get("summary") or "").strip()
                 if summary:

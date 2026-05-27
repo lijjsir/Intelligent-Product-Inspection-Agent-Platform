@@ -90,7 +90,7 @@ INSPECTION_NODE_SPECS = {
 }
 
 
-TEXT_FILE_SUFFIXES = {"pdf", "docx", "txt", "md"}
+TEXT_FILE_SUFFIXES = {"pdf", "docx", "txt", "md", "tex"}
 STRUCTURED_FILE_SUFFIXES = {"xlsx", "csv", "json", "jsonl"}
 IMAGE_SUFFIXES = {"png", "jpg", "jpeg", "webp", "gif"}
 

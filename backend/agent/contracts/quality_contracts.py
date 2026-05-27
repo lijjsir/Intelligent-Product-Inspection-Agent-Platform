@@ -67,6 +67,7 @@ class RouteDecision(BaseModel):
         "image_understanding",
         "file_summary",
         "file_qa",
+        "paper_format_check",
         "quality_report_query",
         "quality_task_status",
         "action_blocked",
