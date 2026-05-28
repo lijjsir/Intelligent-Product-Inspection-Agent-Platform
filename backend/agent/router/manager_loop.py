@@ -208,6 +208,8 @@ class ManagerLoop:
         import logging
         _log = logging.getLogger(__name__)
         composed = self._find_composed(state)
+        if composed is None:
+            composed = self._recover_file_artifact_response(state)
         plan = state.route_plan
         sub_route = self._sub_route(state)
         selected_agent = self._selected_agent(state)
@@ -274,6 +276,46 @@ class ManagerLoop:
         for art in reversed(state.artifacts):
             if art.type == "composed_response":
                 return dict(art.content or {})
+        return None
+
+    @staticmethod
+    def _recover_file_artifact_response(state: ManagerState) -> dict[str, Any] | None:
+        paper_artifact = ManagerLoop._latest_artifact(state, {"paper_format_report"})
+        if paper_artifact and isinstance(paper_artifact.content, dict):
+            report = dict(paper_artifact.content or {})
+            answer = (
+                str(report.get("chat_advice") or "").strip()
+                or str(report.get("summary") or "").strip()
+                or "已完成论文查非分析。"
+            )
+            summary = str(report.get("summary") or "").strip() or answer[:200]
+            return {
+                "answer": answer,
+                "summary": summary,
+                "message_type": "file_answer",
+                "status": "completed",
+                "blocked": False,
+                "paper_format_report": report,
+                "ui_schema": "paper_review_report_v1",
+            }
+
+        file_artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
+        if file_artifact and isinstance(file_artifact.content, dict):
+            content = dict(file_artifact.content or {})
+            answer = (
+                str(content.get("answer") or "").strip()
+                or str(content.get("summary") or "").strip()
+                or "文件已完成辅助分析。"
+            )
+            summary = str(content.get("summary") or "").strip() or answer[:200]
+            return {
+                "answer": answer,
+                "summary": summary,
+                "message_type": "file_answer",
+                "status": "completed",
+                "blocked": False,
+                **content,
+            }
         return None
 
     def _payload(

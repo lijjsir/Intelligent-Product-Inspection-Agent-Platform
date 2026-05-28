@@ -90,6 +90,50 @@ async def test_manager_loop_returns_paper_format_report(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manager_loop_preserves_paper_report_when_composed_response_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.object_storage.resolver.read_attachment_bytes",
+        lambda attachment: (_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    )
+
+    original_find_composed = ManagerLoop._find_composed
+
+    def fake_find_composed(state):
+        return None
+
+    monkeypatch.setattr(ManagerLoop, "_find_composed", staticmethod(fake_find_composed))
+    try:
+        output = await ManagerLoop().run(
+            NormalizedRequest(
+                request_id="req-2b",
+                workflow_run_id="wf-2b",
+                org_id="org-1",
+                user_id="user-1",
+                session_id="session-1",
+                query="帮我做论文查非",
+                attachments=[
+                    NormalizedAttachment(
+                        name="paper.docx",
+                        kind="file",
+                        bucket="test",
+                        object_key="paper.docx",
+                    )
+                ],
+                ext={
+                    "surface": "chat",
+                    "template_id": "cqupt_graduate_thesis_2022",
+                },
+            )
+        )
+    finally:
+        monkeypatch.setattr(ManagerLoop, "_find_composed", staticmethod(original_find_composed))
+
+    assert output.agent_output["message_type"] == "file_answer"
+    assert output.agent_output["paper_format_report"]["issues"]
+    assert output.agent_output["answer"].startswith("已整理出以下修改意见")
+
+
+@pytest.mark.asyncio
 async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch):
     monkeypatch.setattr(
         "app.services.object_storage.resolver.read_attachment_bytes",
