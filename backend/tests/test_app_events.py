@@ -6,16 +6,16 @@ from app.core import events
 
 
 @pytest.mark.asyncio
-async def test_seed_paper_templates_on_startup_calls_builtin_seed(monkeypatch):
+async def test_seed_paper_templates_on_startup_calls_ensure_ready(monkeypatch):
     calls: list[bool] = []
 
-    def fake_seed_builtin_paper_templates():
+    async def fake_ensure_paper_templates_ready():
         calls.append(True)
-        return {"files": []}
+        return {"template_id": "test", "files": [], "index_status": "already_indexed"}
 
     monkeypatch.setattr(
-        "agent.tools.paper_template_storage.seed_builtin_paper_templates",
-        fake_seed_builtin_paper_templates,
+        "agent.tools.paper_template_storage.ensure_paper_templates_ready",
+        fake_ensure_paper_templates_ready,
     )
 
     await events.seed_paper_templates_on_startup()
@@ -25,12 +25,12 @@ async def test_seed_paper_templates_on_startup_calls_builtin_seed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_seed_paper_templates_on_startup_does_not_block_app(monkeypatch):
-    def fake_seed_builtin_paper_templates():
+    async def fake_ensure_paper_templates_ready():
         raise RuntimeError("minio unavailable")
 
     monkeypatch.setattr(
-        "agent.tools.paper_template_storage.seed_builtin_paper_templates",
-        fake_seed_builtin_paper_templates,
+        "agent.tools.paper_template_storage.ensure_paper_templates_ready",
+        fake_ensure_paper_templates_ready,
     )
 
     await events.seed_paper_templates_on_startup()

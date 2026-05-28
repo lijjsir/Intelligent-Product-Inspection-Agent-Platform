@@ -11,50 +11,61 @@ from agent.llm.gateway import LLMGateway
 from app.services.model_config_service import ModelConfigService
 
 
+class PaperReviewModelError(RuntimeError):
+    """论文查非 AI Review 模型调用失败。不上报兜底结果，直接向前端报错。"""
+    pass
+
+
 PROMPT_KEY = "chat.paper_format_check.system"
-DEFAULT_AI_REVIEW_PROMPT = """你是论文格式与规范审阅助手，严格按照专业审阅报告格式输出。
+DEFAULT_AI_REVIEW_PROMPT = """你是论文格式与规范审阅助手。
 
-你将收到用户问题和 Review Evidence Pack。Evidence Pack 包含：
-1. 结构化规则检查结果（客观问题清单，不是建议）
-2. 证据片段（违规段落的实际文本）
-3. 样式摘要（实际字体、行距、页边距等数据）
-4. 模板写作规范参考（目标格式要求）
+你只能基于 rule_report 中的 issues、evidence、retrieved_template_clauses 生成审阅报告。
+规则引擎已经完成客观判断，你不需要重新判断论文是否违规。
 
-你的核心任务：
-1. 基于规则检查发现的客观问题，逐条生成具体的修改建议。
-2. 对于每条问题，必须给出：问题描述 → 违规证据 → 影响 → 具体修改方案。
-3. 没有确凿证据的问题必须标注 need_human_review=true，并在 evidence 中写"需人工核对"。
-4. 如果提供了模板写作规范，将实际样式数据与模板要求逐项对比，明确指出差异。
-5. 严禁编造论文内容、学校名称、模板条款或参考文献信息。
-6. 优先输出高严重性问题，再输出中低严重性问题。
-7. 输出的 markdown_report 要完整、可读、可直接下载为正式审阅报告。
-8. 只返回 JSON，不要输出任何 JSON 之外的文本。
+严格规则：
+1. 每条 issue 必须给出：问题描述 -> 违规证据 -> 模板依据 -> 影响 -> 具体修改方案
+2. 模板依据必须来自 retrieved_template_clauses，不得编造模板条款
+3. 不得新增没有 evidence 支撑的问题
+4. 不得编造论文内容、学校名称、参考文献信息
+5. 没有证据支撑的问题必须拒绝输出
+6. 输出必须是合法 JSON，不要输出 JSON 之外的任何文本
 
 返回 JSON 格式（所有字段必填）：
 {
-  "answer": "不超过200字的简要总结，列出关键问题和评分",
+  "answer": "不超过200字的简要总结",
   "summary": "一句话结论",
-  "markdown_report": "格式完整的 Markdown 审阅报告，包含：总体评价、逐问题详述、模板对比结论、局限性说明、修改优先级建议。不得少于500字。",
+  "markdown_report": "完整 Markdown 审阅报告，包含总体评价、逐问题详述、模板对比结论、修改优先级建议。不得少于500字。不要自行生成局限性或人工复核段落。",
   "issues": [
     {
+      "code": "issue code",
       "title": "问题简述",
       "severity": "high|medium|low",
-      "category": "structure|style|text|template",
       "location": "具体段落/章节位置",
       "evidence": "实际违规证据文本",
+      "template_basis": "模板条款依据（引用自retrieved_template_clauses）",
       "impact": "不符合模板/规范的后果说明",
       "suggestion": "具体的、可执行的修改建议",
       "need_human_review": false
     }
   ],
-  "limitations": ["当前检查的局限性说明"],
-  "download_title": "论文查非辅助报告"
-}
+  "limitations": ["只能逐字复制 Review Evidence Pack.limitations 中已有的条目；如果为空则返回空数组"],
+  "download_title": "论文查非与格式审阅报告"
+}"""
 
-特别注意：
-- 如果用户未选择严格模板（template_id=generic_cn_thesis），你只能按通用学术规范提出建议，并说明"未指定学校模板，以下建议基于通用规范"。
-- 如果 PDF/LaTeX 解析无法获取完整版式信息，必须在 limitations 中写明。
-"""
+_MISLEADING_LIMITATION_PATTERNS = (
+    "仅基于规则引擎",
+    "规则引擎自动识别",
+    "图表格式",
+    "页眉页脚",
+    "参考文献著录格式",
+    "未覆盖",
+    "需人工复核",
+    "人工复核",
+    "第1段证据",
+    "仅依据第1段",
+    "其他段落可能",
+    "全面核查",
+)
 
 _TODAY = date.today().isoformat()
 
@@ -72,7 +83,7 @@ async def generate_ai_review_output(
     """Generate Ai-Review JSON from structured evidence using configured chat model."""
 
     if db_session is None:
-        return _fallback_output("未传入数据库会话，无法读取模型配置。")
+        raise PaperReviewModelError("未传入数据库会话，无法读取模型配置。")
 
     try:
         models = await ModelConfigService(db_session, org_id).list_runtime_models()
@@ -82,10 +93,10 @@ async def generate_ai_review_output(
             reserve=False,
         )
     except Exception as exc:
-        return _fallback_output(f"读取模型配置失败：{exc}")
+        raise PaperReviewModelError(f"读取模型配置失败：{exc}") from exc
 
     if not runtime:
-        return _fallback_output("未找到可用的聊天模型配置，已使用规则检查结果生成报告。")
+        raise PaperReviewModelError("未找到可用的聊天模型配置。")
 
     prompt = await _resolve_system_prompt(org_id=org_id)
     client = LLMClient(
@@ -118,9 +129,19 @@ async def generate_ai_review_output(
             },
         )
     except Exception as exc:
-        return _fallback_output(f"Ai-Review 模型调用失败：{exc}")
+        raise PaperReviewModelError(f"Ai-Review 模型调用失败：{exc}") from exc
 
     normalized = normalize_ai_review_output(response)
+    normalized["limitations"] = _sanitize_ai_limitations(
+        normalized.get("limitations") or [],
+        allowed=list(evidence_pack.get("limitations") or []),
+    )
+    normalized["markdown_report"] = _sanitize_ai_markdown_report(
+        str(normalized.get("markdown_report") or "")
+    )
+    if not normalized.get("markdown_report"):
+        raise PaperReviewModelError("Ai-Review 返回内容缺少 markdown_report。")
+
     if isinstance(response.get("__meta__"), dict):
         normalized["model_meta"] = response["__meta__"]
 
@@ -132,9 +153,6 @@ async def generate_ai_review_output(
             "rule_template": str((evidence_pack.get("document") or {}).get("template_id") or ""),
             "writing_guide": str(guide_evidence.get("file_name") or ""),
         }
-        normalized.setdefault("limitations", []).append(
-            f"已参考模板写作指南：{guide_evidence.get('file_name', '')}"
-        )
     return normalized
 
 
@@ -145,22 +163,43 @@ def build_ai_review_messages(
     guide_evidence: dict[str, Any] | None = None,
     system_prompt: str | None = None,
 ) -> list[dict[str, str]]:
-    evidence_json = json.dumps(evidence_pack, ensure_ascii=False, default=str)
-    guide_section = ""
-    if guide_evidence:
-        guide_section = (
-            f"\n\n模板写作规范参考（{guide_evidence.get('template_name', '')}）：\n"
-            f"{json.dumps(guide_evidence, ensure_ascii=False, default=str)}"
-        )
+    document = evidence_pack.get("document") or {}
+    issues = list(evidence_pack.get("issues") or [])
+    trimmed_issues = _trim_issues_for_model(issues, max_high=20, max_medium=10, max_low_abstract=5)
+
+    clauses_section = ""
+    if guide_evidence and not guide_evidence.get("error"):
+        clauses = guide_evidence.get("clauses") or []
+        if clauses:
+            clauses_section = (
+                "\n\n检索到的模板条款（你只能引用这些条款作为依据）：\n"
+                f"{json.dumps(clauses, ensure_ascii=False, default=str)}"
+            )
+
+    model_input = {
+        "task": {"type": "paper_format_ai_review", "language": "zh-CN", "output_format": "json"},
+        "document": document,
+        "rule_report": {
+            "score": evidence_pack.get("score", 0),
+            "issue_count": len(issues),
+            "high_count": sum(1 for i in issues if i.get("severity") == "high"),
+            "medium_count": sum(1 for i in issues if i.get("severity") == "medium"),
+            "low_count": sum(1 for i in issues if i.get("severity") == "low"),
+            "issues": trimmed_issues,
+        },
+        "style_summary": evidence_pack.get("style_summary") or {},
+        "limitations": list(evidence_pack.get("limitations") or []),
+    }
+
     user_content = (
         f"当前日期：{_TODAY}\n\n"
         f"用户问题：\n{query or '请进行论文查非与格式审阅'}\n\n"
-        "Review Evidence Pack（包含结构化检查结果、issue 清单、证据片段、样式摘要）：\n"
-        f"{evidence_json}"
-        f"{guide_section}\n\n"
+        f"Review Evidence Pack：\n{json.dumps(model_input, ensure_ascii=False, default=str)}"
+        f"{clauses_section}\n\n"
         "请基于以上证据生成完整审阅报告 JSON。"
         "markdown_report 必须详细充实，不少于500字。"
-        "如果提供了模板写作规范，将实际样式与模板要求逐项对比。"
+        "不得编造任何不在 issues 或 template_clauses 中的内容。"
+        "limitations 只能逐字复制 Review Evidence Pack.limitations，不能自行扩展为“规则引擎未覆盖/需人工复核/仅第1段证据”等结论。"
         "不要输出 JSON 以外的文本。"
     )
     return [
@@ -169,32 +208,24 @@ def build_ai_review_messages(
     ]
 
 
-def build_writing_guide_review_messages(
-    *,
-    query: str,
-    evidence_pack: dict[str, Any],
-    guide_evidence: dict[str, Any],
-    system_prompt: str | None = None,
-) -> list[dict[str, str]]:
-    payload = {
-        "document": evidence_pack.get("document") or {},
-        "rule_issues": list(evidence_pack.get("issues") or []),
-        "limitations": list(evidence_pack.get("limitations") or []),
-        "writing_guide": guide_evidence,
-    }
-    guide_json = json.dumps(payload, ensure_ascii=False, default=str)
-    user_content = (
-        f"用户问题：\n{query or '请进行论文查非与格式审阅'}\n\n"
-        "Writing Guide Evidence：\n"
-        f"{guide_json}\n\n"
-        "请只基于写作指南证据和规则检查结果，补充生成 JSON。"
-        "没有规则证据支撑的新问题必须标注 need_human_review=true。"
-        "不要输出 JSON 以外的文本。"
-    )
-    return [
-        {"role": "system", "content": system_prompt or DEFAULT_AI_REVIEW_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+def _trim_issues_for_model(
+    issues: list[dict[str, Any]],
+    max_high: int = 20,
+    max_medium: int = 10,
+    max_low_abstract: int = 5,
+) -> list[dict[str, Any]]:
+    high = [i for i in issues if i.get("severity") == "high"][:max_high]
+    medium = [i for i in issues if i.get("severity") == "medium"][:max_medium]
+    low = [i for i in issues if i.get("severity") == "low"]
+    low_abstract = low[:max_low_abstract]
+    if len(low) > max_low_abstract:
+        low_abstract.append({
+            "code": "summary.low_severity_omitted",
+            "title": f"另有 {len(low) - max_low_abstract} 个低严重性问题",
+            "severity": "low",
+            "message": f"完整列表共 {len(low)} 项低严重性问题，此处仅展示前 {max_low_abstract} 项，详见下载报告。",
+        })
+    return high + medium + low_abstract
 
 
 def normalize_ai_review_output(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -215,39 +246,53 @@ def normalize_ai_review_output(raw: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def merge_ai_review_outputs(
-    *,
-    rule_output: dict[str, Any],
-    guide_output: dict[str, Any],
-    evidence_pack: dict[str, Any],
-    guide_evidence: dict[str, Any],
-) -> dict[str, Any]:
-    merged = dict(rule_output)
-    rule_markdown = str(rule_output.get("markdown_report") or "").strip()
-    guide_markdown = str(guide_output.get("markdown_report") or "").strip()
-    if guide_markdown:
-        merged["markdown_report"] = "\n\n".join(
-            item
-            for item in [rule_markdown, "## 写作指南补充评判", guide_markdown]
-            if item
-        )
-    merged["answer"] = _join_sentences(rule_output.get("answer"), guide_output.get("answer"))
-    merged["summary"] = _join_sentences(rule_output.get("summary"), guide_output.get("summary"))
-    merged["guide_review_output"] = guide_output
-    merged["guide_issues"] = list(guide_output.get("issues") or [])
-    merged["limitations"] = list(
-        dict.fromkeys(
-            [
-                *list(rule_output.get("limitations") or []),
-                *list(guide_output.get("limitations") or []),
-            ]
-        )
-    )
-    merged["review_sources"] = {
-        "rule_template": str((evidence_pack.get("document") or {}).get("template_id") or ""),
-        "writing_guide": str(guide_evidence.get("file_name") or ""),
-    }
-    return merged
+def _sanitize_ai_limitations(limitations: list[Any], *, allowed: list[Any]) -> list[str]:
+    allowed_texts = [str(item).strip() for item in allowed if str(item).strip()]
+    allowed_set = set(allowed_texts)
+    sanitized: list[str] = []
+    for item in limitations:
+        text = str(item).strip()
+        if not text:
+            continue
+        if text in allowed_set and text not in sanitized:
+            sanitized.append(text)
+            continue
+        if any(pattern in text for pattern in _MISLEADING_LIMITATION_PATTERNS):
+            continue
+    return sanitized
+
+
+def _sanitize_ai_markdown_report(markdown: str) -> str:
+    lines = str(markdown or "").splitlines()
+    cleaned: list[str] = []
+    skip_section = False
+    skip_level = 0
+    for line in lines:
+        stripped = line.strip()
+        heading = _markdown_heading_level(stripped)
+        if heading:
+            title = stripped.lstrip("#").strip()
+            if "局限性" in title or "人工复核" in title:
+                skip_section = True
+                skip_level = heading
+                continue
+            if skip_section and heading <= skip_level:
+                skip_section = False
+        if skip_section:
+            continue
+        if any(pattern in stripped for pattern in _MISLEADING_LIMITATION_PATTERNS):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def _markdown_heading_level(line: str) -> int:
+    if not line.startswith("#"):
+        return 0
+    level = len(line) - len(line.lstrip("#"))
+    if level <= 6 and line[level:level + 1] == " ":
+        return level
+    return 0
 
 
 async def _resolve_system_prompt(*, org_id: str) -> str:
@@ -291,20 +336,3 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
-
-
-def _fallback_output(reason: str) -> dict[str, Any]:
-    return {
-        "answer": "",
-        "summary": "",
-        "markdown_report": "",
-        "issues": [],
-        "limitations": [reason],
-        "download_title": "论文查非辅助报告",
-        "model_used": False,
-    }
-
-
-def _join_sentences(*values: Any) -> str:
-    parts = [str(value).strip() for value in values if str(value or "").strip()]
-    return " ".join(parts)

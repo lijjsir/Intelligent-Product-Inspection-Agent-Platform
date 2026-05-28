@@ -20,6 +20,7 @@ from app.api.v1 import (
     exports,
     gpu_nodes,
     organizations,
+    paper_templates,
     inspection_specs,
     inspection_standards,
     infrastructure,
@@ -76,3 +77,4 @@ router.include_router(gpu_nodes.router, tags=["gpu-nodes"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])
 router.include_router(memory.router, prefix="/memory", tags=["memory"])
+router.include_router(paper_templates.router)

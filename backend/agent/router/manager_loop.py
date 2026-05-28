@@ -213,8 +213,13 @@ class ManagerLoop:
         plan = state.route_plan
         sub_route = self._sub_route(state)
         selected_agent = self._selected_agent(state)
-        status = composed.get("status", "completed") if composed else self._status(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
-        composed_status = "blocked" if status == "blocked" else "completed"
+        has_failed_observation = any(item.status == "failed" for item in state.observations)
+        status = (
+            self._status(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+            if has_failed_observation
+            else composed.get("status", "completed") if composed else self._status(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+        )
+        composed_status = "blocked" if status == "blocked" else "failed" if status == "failed" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
         message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
         _log.info(
@@ -263,6 +268,20 @@ class ManagerLoop:
                 value = composed.get(key)
                 if value is not None:
                     agent_output[key] = value
+        if status == "failed" and sub_route == "paper_format_check":
+            error_message = self._latest_failure_message(state) or "论文查非处理失败"
+            agent_output.update(
+                {
+                    "message_type": "error",
+                    "answer": error_message,
+                    "summary": error_message,
+                    "ui_schema": "paper_review_error_v1",
+                    "status": "failed",
+                    "error": error_message,
+                    "error_code": self._paper_review_error_code(error_message),
+                    "error_message": error_message,
+                }
+            )
 
         return AgentRouterOutput(
             route_decision=decision,
@@ -409,6 +428,8 @@ class ManagerLoop:
 
     @staticmethod
     def _message_type(state: ManagerState, sub_route: str, status: str) -> str:
+        if status == "failed":
+            return "error"
         if status == "blocked":
             return "action_blocked"
         if sub_route == "image_understanding":
@@ -433,6 +454,11 @@ class ManagerLoop:
 
     @staticmethod
     def _answer(state: ManagerState, *, status: str) -> str:
+        if status == "failed":
+            error_message = ManagerLoop._latest_failure_message(state)
+            if error_message:
+                return error_message
+            return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if status == "blocked":
             error_message = state.errors[-1]["message"] if state.errors else ""
             if "超时" in error_message:
@@ -479,6 +505,26 @@ class ManagerLoop:
             if observation.capability_key in {"chat.general", "web.search"} and observation.summary:
                 return observation.summary
         return "我已收到你的请求。"
+
+    @staticmethod
+    def _latest_failure_message(state: ManagerState) -> str:
+        for observation in reversed(state.observations):
+            if observation.status == "failed":
+                detail = str(observation.error or observation.summary or "").strip()
+                if detail:
+                    return detail
+        if state.errors:
+            return str(state.errors[-1].get("message") or "").strip()
+        return ""
+
+    @staticmethod
+    def _paper_review_error_code(message: str) -> str:
+        text = str(message or "")
+        if "报告生成" in text:
+            return "paper_review_report_failed"
+        if "模板" in text or "条款" in text or "RAG" in text or "Qdrant" in text:
+            return "paper_review_template_retrieval_failed"
+        return "paper_review_model_failed"
 
     @staticmethod
     def _latest_artifact(state: ManagerState, artifact_types: set[str]):

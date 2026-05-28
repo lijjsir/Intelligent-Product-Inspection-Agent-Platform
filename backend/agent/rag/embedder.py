@@ -29,12 +29,14 @@ class Embedder:
         org_id: str | None = None,
         user_id: str | None = None,
         runtime_models: list[dict[str, Any]] | None = None,
+        allow_pseudo_fallback: bool = True,
     ) -> None:
         self._trace_id = trace_id
         self._task_id = None if task_id is None else str(task_id)
         self._org_id = None if org_id is None else str(org_id)
         self._user_id = None if user_id is None else str(user_id)
         self._runtime_models = runtime_models
+        self._allow_pseudo_fallback = allow_pseudo_fallback
         self._llm: LLMClient | None = None
 
     async def embed(self, text: str) -> list[float]:
@@ -55,6 +57,8 @@ class Embedder:
         except EmbeddingModelNotConfigured:
             raise
         except Exception:
+            if not self._allow_pseudo_fallback:
+                raise
             embedding = self._pseudo_embed(normalized_text)
         _embedding_cache.set(cache_key, list(embedding), ttl_seconds=1800)
         return embedding

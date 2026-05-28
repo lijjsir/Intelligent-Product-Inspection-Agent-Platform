@@ -29,7 +29,13 @@ class PaperReviewEnrichmentService:
             from agent.tools.paper_template_evidence import load_writing_guide_evidence
             from agent.tools.paper_review_ai import generate_ai_review_output
 
-            guide_evidence = load_writing_guide_evidence(str(payload.get("template_id") or ""))
+            guide_evidence = await load_writing_guide_evidence(
+                str(payload.get("template_id") or ""),
+                issues=list(payload.get("issues") or paper_report.get("issues") or []),
+                trace_id=str(payload.get("trace_id") or request.workflow_run_id or request.request_id or ""),
+                task_id=str(payload.get("task_id") or request.session_id or ""),
+                org_id=str(payload.get("org_id") or request.org_id or ""),
+            )
             if guide_evidence:
                 merged["writing_guide_evidence"] = guide_evidence
                 if guide_evidence.get("error"):
@@ -75,16 +81,7 @@ class PaperReviewEnrichmentService:
                 request.session_id,
                 request.assistant_message_id,
             )
-            merged["model_used"] = False
-            merged["limitations"] = list(
-                dict.fromkeys(
-                    [
-                        *list(merged.get("limitations") or []),
-                        f"报告补充生成失败：{exc}",
-                    ]
-                )
-            )
-            merged.setdefault("report_files", list(merged.get("report_files") or []))
+            raise
 
         merged.pop("enrichment_payload", None)
         FileExecutor._finalize_paper_report_counts(merged)

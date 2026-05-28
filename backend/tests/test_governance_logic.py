@@ -543,6 +543,39 @@ async def test_embedder_falls_back_to_pseudo_vector_when_runtime_embedding_fails
     assert any(abs(value) > 0 for value in vector)
 
 
+@pytest.mark.asyncio
+async def test_embedder_can_disable_pseudo_vector_fallback(monkeypatch):
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def embed(self, text, **kwargs):
+            raise RuntimeError("embedding api failed")
+
+    monkeypatch.setattr("agent.rag.embedder.LLMClient", FakeLLMClient)
+
+    embedder = Embedder(
+        org_id="org-1",
+        allow_pseudo_fallback=False,
+        runtime_models=[
+            {
+                "id": "embed-cfg",
+                "provider": "volcengine",
+                "model_key": "doubao-embedding",
+                "endpoint": "https://ark.example.com/api/v3",
+                "api_key": "secret",
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            },
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="embedding api failed"):
+        await embedder.embed("strict embedding sample")
+
+
 def test_quality_report_result_trend_handles_empty_citations():
     items = [
         FakeResult(datetime(2026, 3, 23, 10, 0, 0), {"items": ["doc-1"]}),

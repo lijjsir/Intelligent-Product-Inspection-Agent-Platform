@@ -309,9 +309,17 @@ def parse_text_bytes(content: bytes) -> dict:
 def parse_file_content(file_name: str, content: bytes) -> dict:
     suffix = Path(file_name).suffix.lower()
     if suffix == ".pdf":
-        return parse_pdf_bytes(content)
+        try:
+            from agent.tools.paper_pdf_parser import parse_pdf_enhanced
+            return parse_pdf_enhanced(content)
+        except Exception:
+            return parse_pdf_bytes(content)
     if suffix == ".docx":
-        return parse_docx_bytes(content)
+        try:
+            from agent.tools.paper_docx_parser import parse_docx_enhanced
+            return parse_docx_enhanced(content)
+        except Exception:
+            return parse_docx_bytes(content)
     if suffix == ".tex":
         return parse_tex_bytes(content)
     if suffix == ".csv":

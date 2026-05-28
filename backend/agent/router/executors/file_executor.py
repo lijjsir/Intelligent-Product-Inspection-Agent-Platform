@@ -70,7 +70,9 @@ class FileExecutor:
             artifact_type = "paper_format_report"
         else:
             artifact_type = "file_summary" if step.capability_key == "file.summary" else "file_answer"
-        model_summary = await self._try_chat_summary(parsed_files, state, request, db_session=db_session)
+        model_summary = None
+        if step.capability_key != "file.paper_format_check":
+            model_summary = await self._try_chat_summary(parsed_files, state, request, db_session=db_session)
         if not parsed_files:
             art = artifact(artifact_type, "file", {"unsupported": unsupported, "parsed_files": []}, confidence=0.2)
             return (
@@ -80,17 +82,76 @@ class FileExecutor:
         if step.capability_key == "file.paper_format_check":
             merged = self._merge_paper_reports(paper_reports, unsupported=unsupported, parsed_files=parsed_files, model_summary=model_summary)
             self._finalize_paper_report_counts(merged)
-            enrichment_payload = self._build_paper_review_enrichment_payload(
-                merged=merged,
-                parsed_files=parsed_files,
-                template_id=str(merged.get("template_id") or template_id or ""),
-                query=state.original_query,
-                org_id=request.org_id,
-                trace_id=state.trace_id or state.workflow_run_id or state.request_id,
-                task_id=state.session_id,
-            )
-            if enrichment_payload:
-                merged["enrichment_payload"] = enrichment_payload
+
+            if db_session and parsed_files:
+                parsed_for_evidence = {
+                    **{k: v for k, v in parsed_files[0].get("metadata", {}).items()},
+                    "kind": parsed_files[0].get("kind"),
+                    "text": parsed_files[0].get("text", ""),
+                }
+                from agent.tools.paper_review_evidence import build_review_evidence_pack
+                review_evidence_pack = build_review_evidence_pack(
+                    parsed=parsed_for_evidence,
+                    check_result=merged,
+                    file_name=str(parsed_files[0].get("name") or ""),
+                )
+                merged["review_evidence_pack"] = review_evidence_pack
+
+                effective_template_id = str(merged.get("template_id") or template_id or "")
+                guide_evidence = None
+                if effective_template_id and merged.get("issues"):
+                    from agent.tools.paper_template_evidence import load_writing_guide_evidence
+                    guide_evidence = await load_writing_guide_evidence(
+                        effective_template_id,
+                        issues=merged.get("issues"),
+                        trace_id=state.trace_id,
+                        task_id=state.session_id,
+                        org_id=request.org_id,
+                    )
+                    if guide_evidence:
+                        merged["writing_guide_evidence"] = guide_evidence
+                        if guide_evidence.get("error"):
+                            from agent.tools.paper_review_ai import PaperReviewModelError
+                            raise PaperReviewModelError(
+                                str(guide_evidence.get("error_message") or "模板条款检索失败")
+                            )
+                        clauses = list(guide_evidence.get("clauses") or [])
+                        if clauses:
+                            review_evidence_pack["related_template_clauses"] = clauses
+
+                from agent.tools.paper_review_ai import generate_ai_review_output, PaperReviewModelError
+                try:
+                    ai_review_output = await generate_ai_review_output(
+                        evidence_pack=review_evidence_pack,
+                        guide_evidence=guide_evidence if guide_evidence and not guide_evidence.get("error") else None,
+                        query=state.original_query,
+                        db_session=db_session,
+                        org_id=request.org_id,
+                        trace_id=state.trace_id or state.workflow_run_id or state.request_id,
+                        task_id=state.session_id,
+                    )
+                    merged["ai_review_output"] = ai_review_output
+                    merged["model_used"] = True
+                    if ai_review_output.get("summary"):
+                        merged["summary"] = str(ai_review_output.get("summary"))
+                        merged["model_summary"] = str(ai_review_output.get("summary"))
+                    ai_limitations = [str(item) for item in list(ai_review_output.get("limitations") or []) if str(item).strip()]
+                    if ai_limitations:
+                        merged["limitations"] = list(dict.fromkeys([*list(merged.get("limitations") or []), *ai_limitations]))
+                except PaperReviewModelError:
+                    raise
+                except Exception as exc:
+                    raise PaperReviewModelError(f"论文查非 AI Review 失败：{exc}") from exc
+
+                try:
+                    report_files = await self._save_report_files(
+                        merged=merged,
+                        state=state,
+                        request=request,
+                    )
+                    merged["report_files"] = report_files
+                except Exception as exc:
+                    raise PaperReviewModelError(f"论文查非报告生成失败：{exc}") from exc
 
             content = merged
             obs_summary = str(merged.get("summary") or "") or "已完成论文查非分析"
@@ -323,55 +384,44 @@ class FileExecutor:
 
         md_report = build_markdown_report(review_output=review_output, evidence_pack=evidence_pack)
 
-        try:
-            from app.services.object_storage.factory import build_object_storage
-            storage = build_object_storage()
-            md_key = f"{object_prefix}/paper-review-report.md"
-            md_object = storage.put_bytes(bucket="chat-reports", object_key=md_key, data=md_report.encode("utf-8"), content_type="text/markdown")
-            report_files.append({
-                "format": "md",
-                "file_name": "论文查非辅助报告.md",
-                "bucket": "chat-reports",
-                "object_key": md_key,
-                "url": FileExecutor._report_file_url(md_object, md_key),
-                "content_type": "text/markdown",
-            })
+        from app.services.object_storage.factory import build_object_storage
+        storage = build_object_storage()
+        md_key = f"{object_prefix}/paper-review-report.md"
+        md_object = storage.put_bytes(bucket="chat-reports", object_key=md_key, data=md_report.encode("utf-8"), content_type="text/markdown")
+        report_files.append({
+            "format": "md",
+            "file_name": "论文查非辅助报告.md",
+            "bucket": "chat-reports",
+            "object_key": md_key,
+            "url": FileExecutor._report_file_url(md_object, md_key),
+            "content_type": "text/markdown",
+        })
 
-            # DOCX
-            try:
-                docx_data = build_docx_report(md_report)
-                docx_key = f"{object_prefix}/paper-review-report.docx"
-                docx_object = storage.put_bytes(bucket="chat-reports", object_key=docx_key, data=docx_data,
-                                                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                report_files.append({
-                    "format": "docx",
-                    "file_name": "论文查非辅助报告.docx",
-                    "bucket": "chat-reports",
-                    "object_key": docx_key,
-                    "url": FileExecutor._report_file_url(docx_object, docx_key),
-                    "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                })
-            except Exception:
-                pass
+        docx_data = build_docx_report(md_report)
+        docx_key = f"{object_prefix}/paper-review-report.docx"
+        docx_object = storage.put_bytes(bucket="chat-reports", object_key=docx_key, data=docx_data,
+                                        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        report_files.append({
+            "format": "docx",
+            "file_name": "论文查非辅助报告.docx",
+            "bucket": "chat-reports",
+            "object_key": docx_key,
+            "url": FileExecutor._report_file_url(docx_object, docx_key),
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        })
 
-            # PDF
-            try:
-                pdf_data = build_pdf_report(md_report)
-                pdf_key = f"{object_prefix}/paper-review-report.pdf"
-                pdf_object = storage.put_bytes(bucket="chat-reports", object_key=pdf_key, data=pdf_data,
-                                              content_type="application/pdf")
-                report_files.append({
-                    "format": "pdf",
-                    "file_name": "论文查非辅助报告.pdf",
-                    "bucket": "chat-reports",
-                    "object_key": pdf_key,
-                    "url": FileExecutor._report_file_url(pdf_object, pdf_key),
-                    "content_type": "application/pdf",
-                })
-            except Exception:
-                pass
-        except Exception:
-            pass
+        pdf_data = build_pdf_report(md_report)
+        pdf_key = f"{object_prefix}/paper-review-report.pdf"
+        pdf_object = storage.put_bytes(bucket="chat-reports", object_key=pdf_key, data=pdf_data,
+                                      content_type="application/pdf")
+        report_files.append({
+            "format": "pdf",
+            "file_name": "论文查非辅助报告.pdf",
+            "bucket": "chat-reports",
+            "object_key": pdf_key,
+            "url": FileExecutor._report_file_url(pdf_object, pdf_key),
+            "content_type": "application/pdf",
+        })
 
         merged["ai_review_output"] = review_output
         merged["score"] = score

@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
+    paper_template_qdrant_collection: str = "paper_template_clauses"
     rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
