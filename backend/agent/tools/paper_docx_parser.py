@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import zipfile
 from io import BytesIO
 from typing import Any
 
@@ -77,24 +78,33 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
                 "font_size_pt": font_size_resolved or font_size_raw,
             })
 
-        if text and re.match(r"^(图|Figure)\s*\d+", text, re.I):
+        if text and re.match(r"^(图|Figure)\s*\d+(?:[-.]\d+)*", text, re.I):
             figure_titles.append(text)
 
     tables = _parse_tables(doc)
     sections_data = _parse_sections_enhanced(doc)
     text_content = "\n".join(p["text"] for p in paragraphs if p["text"])
     citations = _extract_citations(text_content)
+    table_titles = _extract_titles(text_content, r"^(?:表|Table)\s*\d+(?:[-.]\d+)*[^\n]*")
+    formula_numbers = _extract_formula_numbers(paragraphs, text_content)
+    toc_entries = _extract_toc_entries(paragraphs)
+    word_metadata = _parse_docx_package_metadata(content)
 
     return {
         "kind": "docx",
         "paragraphs": paragraphs,
         "headings": headings,
         "figure_titles": figure_titles,
+        "table_titles": table_titles,
+        "formula_numbers": formula_numbers,
+        "toc_entries": toc_entries,
         "tables": tables,
         "sections": sections_data,
         "section_count": len(doc.sections),
         "page_layout": sections_data[0] if sections_data else {},
         "citations": citations,
+        "references": _extract_reference_lines(text_content),
+        "word_metadata": word_metadata,
         "text": text_content,
     }
 
@@ -165,13 +175,24 @@ def _parse_tables(doc) -> list[dict[str, Any]]:
 def _parse_sections_enhanced(doc) -> list[dict[str, Any]]:
     sections = []
     for section in doc.sections:
+        page_width = _to_cm(getattr(section, "page_width", None))
+        page_height = _to_cm(getattr(section, "page_height", None))
         sections.append({
-            "page_width_cm": _to_cm(getattr(section, "page_width", None)),
-            "page_height_cm": _to_cm(getattr(section, "page_height", None)),
+            "start_type": str(getattr(getattr(section, "start_type", None), "name", "") or getattr(section, "start_type", "") or ""),
+            "page_width_cm": page_width,
+            "page_height_cm": page_height,
+            "orientation": (
+                "landscape"
+                if isinstance(page_width, (int, float)) and isinstance(page_height, (int, float)) and page_width > page_height
+                else "portrait"
+            ),
             "top_margin_cm": _to_cm(getattr(section, "top_margin", None)),
             "bottom_margin_cm": _to_cm(getattr(section, "bottom_margin", None)),
             "left_margin_cm": _to_cm(getattr(section, "left_margin", None)),
             "right_margin_cm": _to_cm(getattr(section, "right_margin", None)),
+            "gutter_cm": _to_cm(getattr(section, "gutter", None)),
+            "header_distance_cm": _to_cm(getattr(section, "header_distance", None)),
+            "footer_distance_cm": _to_cm(getattr(section, "footer_distance", None)),
             "header_text": "\n".join(
                 (p.text or "").strip() for p in section.header.paragraphs if (p.text or "").strip()
             ),
@@ -180,6 +201,106 @@ def _parse_sections_enhanced(doc) -> list[dict[str, Any]]:
             ),
         })
     return sections
+
+
+def _extract_titles(text: str, pattern: str) -> list[str]:
+    return [
+        match.group(0).strip()
+        for match in re.finditer(pattern, text, flags=re.I | re.M)
+        if match.group(0).strip()
+    ]
+
+
+def _extract_formula_numbers(paragraphs: list[dict[str, Any]], text: str) -> list[str]:
+    numbers: list[str] = []
+    for paragraph in paragraphs:
+        paragraph_text = str(paragraph.get("text") or "")
+        style_name = str(paragraph.get("style_name") or "")
+        if "公式" not in style_name and not re.search(r"[=∑√≤≥±×÷]", paragraph_text):
+            continue
+        for match in re.finditer(r"[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", paragraph_text):
+            number = match.group(1)
+            if _plausible_formula_number(number) and number not in numbers:
+                numbers.append(number)
+    return numbers
+
+
+def _plausible_formula_number(number: str) -> bool:
+    parts = re.split(r"[-.]", str(number or ""))
+    if not 1 <= len(parts) <= 3:
+        return False
+    try:
+        values = [int(part) for part in parts]
+    except ValueError:
+        return False
+    return values[0] <= 20 and all(0 <= item <= 99 for item in values)
+
+
+def _extract_toc_entries(paragraphs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for paragraph in paragraphs:
+        style_name = str(paragraph.get("style_name") or "").lower()
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        if not (style_name.startswith("toc") or "table of figures" in style_name):
+            continue
+        title = text
+        page = ""
+        if "\t" in text:
+            title, page = text.rsplit("\t", 1)
+        entries.append({
+            "title": title.strip(),
+            "page": page.strip(),
+            "style_name": paragraph.get("style_name"),
+            "level": _toc_level(style_name),
+            "paragraph_index": paragraph.get("index"),
+        })
+    return entries
+
+
+def _toc_level(style_name: str) -> int:
+    match = re.search(r"toc\s*(\d+)", style_name)
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def _extract_reference_lines(text: str) -> list[str]:
+    lines = []
+    in_refs = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "参考文献" in line:
+            in_refs = True
+            continue
+        if in_refs and re.match(r"^\[\d+\]", line):
+            lines.append(line)
+    return lines
+
+
+def _parse_docx_package_metadata(content: bytes) -> dict[str, Any]:
+    metadata = {
+        "comment_count": 0,
+        "revision_count": 0,
+        "hidden_text_count": 0,
+        "field_count": 0,
+    }
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            names = set(archive.namelist())
+            if "word/comments.xml" in names:
+                comments_xml = archive.read("word/comments.xml").decode("utf-8", errors="ignore")
+                metadata["comment_count"] = comments_xml.count("<w:comment ")
+            document_xml = archive.read("word/document.xml").decode("utf-8", errors="ignore") if "word/document.xml" in names else ""
+            metadata["revision_count"] = len(re.findall(r"<w:(?:ins|del|moveFrom|moveTo)\b", document_xml))
+            metadata["hidden_text_count"] = document_xml.count("<w:vanish")
+            metadata["field_count"] = document_xml.count("<w:fldChar") + document_xml.count("<w:instrText")
+    except Exception:
+        return metadata
+    return metadata
 
 
 def _extract_citations(text: str) -> list[dict[str, Any]]:

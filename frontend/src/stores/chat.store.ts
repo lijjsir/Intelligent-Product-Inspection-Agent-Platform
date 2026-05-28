@@ -17,6 +17,7 @@ import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
+const PAPER_REVIEW_POLL_TIMEOUT_MS = 180000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 35000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
@@ -321,6 +322,11 @@ export const useChatStore = defineStore("chat", () => {
       if (!session.value || session.value.id !== sessionId || activeAssistantMessageId.value !== messageId) {
         stopPolling();
         return;
+      }
+      // Adaptive timeout: extend deadline when paper_format_report is detected (AI Review takes 60-120s)
+      const current = messages.value.find((item) => item.id === messageId);
+      if (current?.payload?.paper_format_report && pollDeadline.value < Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS) {
+        pollDeadline.value = Math.max(pollDeadline.value, Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS);
       }
       if (Date.now() > pollDeadline.value) {
         stopPolling();

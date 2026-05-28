@@ -79,23 +79,31 @@ def check_paper_format(
         issues.extend(_check_docx_style(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_toc_rules(parsed, template=template))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
+        issues.extend(_check_word_artifact_rules(parsed))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
         limitations.append("LaTeX 仅基于源码检查，不代表最终 PDF 版面完全合规。")
     elif document_type == "pdf":
         issues.extend(_check_pdf_structure(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
         limitations.append("当前 PDF 检查主要基于文本抽取，不能完整判断字号、页边距、行距等版面格式。")
     else:
@@ -573,7 +581,7 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                 )
             )
             break
-    body_candidates = [item for item in paragraphs if not item.get("heading_level") and item.get("text")]
+    body_candidates = _body_paragraph_candidates(parsed)
     for paragraph in body_candidates[:10]:
         line_spacing = paragraph.get("line_spacing")
         if isinstance(line_spacing, (int, float)) and float(line_spacing) < 1.15:
@@ -590,6 +598,138 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                 )
             )
             break
+    for paragraph in body_candidates:
+        if _is_front_matter_paragraph(paragraph):
+            continue
+        indent = paragraph.get("first_line_indent_pt")
+        if isinstance(indent, (int, float)) and float(indent) < 12:
+            issues.append(
+                RuleIssue(
+                    code="style.paragraph_indent_missing",
+                    title="正文首行缩进不足",
+                    severity="low",
+                    category="style",
+                    message="识别到正文段落首行缩进小于常见 2 字符要求。",
+                    evidence=f"段落 {paragraph.get('index')}: first_line_indent_pt={indent}",
+                    location=_issue_location_from_paragraph(paragraph),
+                    suggestion="将中文正文段落统一设置为首行缩进 2 字符。",
+                    parser_confidence="medium",
+                )
+            )
+            break
+    return issues
+
+
+def _check_docx_page_setup(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    rules: dict[str, Any],
+) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    page = dict(parsed.get("page_layout") or {})
+    template_id = str(template.get("template_id") or DEFAULT_TEMPLATE_ID)
+    size_rule = dict(rules.get("page_size_cm") or {})
+    tolerance = float(size_rule.get("tolerance") or 0.2)
+    expected_width = size_rule.get("width")
+    expected_height = size_rule.get("height")
+    actual_width = page.get("page_width_cm")
+    actual_height = page.get("page_height_cm")
+    if (
+        isinstance(expected_width, (int, float))
+        and isinstance(expected_height, (int, float))
+        and isinstance(actual_width, (int, float))
+        and isinstance(actual_height, (int, float))
+        and (
+            abs(float(actual_width) - float(expected_width)) > tolerance
+            or abs(float(actual_height) - float(expected_height)) > tolerance
+        )
+    ):
+        issues.append(
+            RuleIssue(
+                code="template.page_size_mismatch",
+                title="纸张大小与模板不一致",
+                severity="medium",
+                category="template",
+                message=f"页面大小 {actual_width}cm x {actual_height}cm 与模板 A4 尺寸不一致。",
+                evidence=f"page_size_cm: actual=({actual_width}, {actual_height}), expected=({expected_width}, {expected_height})",
+                location={"page_layout": "page_size", "template_id": template_id, "display_text": "页面设置"},
+                suggestion="将纸张大小设置为 A4（21.0cm x 29.7cm）。",
+                expected={"page_width_cm": expected_width, "page_height_cm": expected_height},
+                actual={"page_width_cm": actual_width, "page_height_cm": actual_height},
+                parser_confidence="high",
+            )
+        )
+
+    expected_orientation = str(rules.get("page_orientation") or "").strip()
+    actual_orientation = str(page.get("orientation") or "").strip()
+    if expected_orientation and actual_orientation and actual_orientation != expected_orientation:
+        issues.append(
+            RuleIssue(
+                code="template.page_orientation_mismatch",
+                title="页面方向与模板不一致",
+                severity="medium",
+                category="template",
+                message=f"页面方向为 {actual_orientation}，模板要求 {expected_orientation}。",
+                evidence=f"orientation: actual={actual_orientation}, expected={expected_orientation}",
+                location={"page_layout": "orientation", "template_id": template_id, "display_text": "页面方向"},
+                suggestion="将论文主体页面方向设置为纵向。",
+                expected={"orientation": expected_orientation},
+                actual={"orientation": actual_orientation},
+                parser_confidence="high",
+            )
+        )
+
+    gutter_rule = dict(rules.get("gutter_cm") or {})
+    expected_gutter = gutter_rule.get("value")
+    actual_gutter = page.get("gutter_cm")
+    gutter_tolerance = float(gutter_rule.get("tolerance") or 0.1)
+    if (
+        isinstance(expected_gutter, (int, float))
+        and isinstance(actual_gutter, (int, float))
+        and abs(float(actual_gutter) - float(expected_gutter)) > gutter_tolerance
+    ):
+        issues.append(
+            RuleIssue(
+                code="template.gutter_mismatch",
+                title="装订线设置与模板不一致",
+                severity="low",
+                category="template",
+                message=f"装订线为 {actual_gutter}cm，模板要求 {expected_gutter}cm。",
+                evidence=f"gutter_cm: actual={actual_gutter}, expected={expected_gutter}",
+                location={"page_layout": "gutter", "template_id": template_id, "display_text": "装订线设置"},
+                suggestion="按学校模板调整装订线设置。",
+                expected={"gutter_cm": expected_gutter},
+                actual={"gutter_cm": actual_gutter},
+                parser_confidence="high",
+            )
+        )
+
+    header_footer_rule = dict(rules.get("header_footer") or {})
+    hf_tolerance = float(header_footer_rule.get("tolerance") or 0.2)
+    mismatches: dict[str, dict[str, Any]] = {}
+    for key in ("header_distance_cm", "footer_distance_cm"):
+        expected = header_footer_rule.get(key)
+        actual = page.get(key)
+        if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+            if abs(float(actual) - float(expected)) > hf_tolerance:
+                mismatches[key] = {"expected": expected, "actual": actual}
+    if mismatches:
+        issues.append(
+            RuleIssue(
+                code="template.header_footer_mismatch",
+                title="页眉页脚距离与模板不一致",
+                severity="low",
+                category="template",
+                message="识别到页眉或页脚距离与学校模板设置不一致。",
+                evidence=", ".join(f"{k}: actual={v['actual']}, expected={v['expected']}" for k, v in mismatches.items()),
+                location={"page_layout": "header_footer", "template_id": template_id, "display_text": "页眉页脚设置"},
+                suggestion="按学校模板统一页眉距边界、页脚距边界设置。",
+                expected={key: value["expected"] for key, value in mismatches.items()},
+                actual={key: value["actual"] for key, value in mismatches.items()},
+                parser_confidence="high",
+            )
+        )
     return issues
 
 
@@ -636,6 +776,8 @@ def _check_template_rules(
     if document_type != "docx":
         return issues
 
+    issues.extend(_check_docx_page_setup(parsed, template=template, rules=rules))
+
     page_rules = dict(rules.get("page_margin_cm") or {})
     page = dict(parsed.get("page_layout") or {})
     tolerance = float(page_rules.get("tolerance") or 0.2)
@@ -668,10 +810,7 @@ def _check_template_rules(
                 break
 
     body_font = dict(rules.get("body_font") or {})
-    body_candidates = [
-        item for item in list(parsed.get("paragraphs") or [])
-        if item.get("text") and not item.get("heading_level")
-    ]
+    body_candidates = _body_paragraph_candidates(parsed)
     expected_names = {
         str(body_font.get("zh") or "").lower(),
         str(body_font.get("en") or "").lower(),
@@ -729,9 +868,13 @@ def _check_template_rules(
 
     expected_spacing = rules.get("line_spacing")
     if isinstance(expected_spacing, (int, float)):
-        for paragraph in body_candidates[:20]:
+        for paragraph in body_candidates:
             actual_spacing = paragraph.get("line_spacing")
-            if isinstance(actual_spacing, (int, float)) and abs(float(actual_spacing) - float(expected_spacing)) > 0.1:
+            if (
+                isinstance(actual_spacing, (int, float))
+                and float(actual_spacing) <= 5
+                and abs(float(actual_spacing) - float(expected_spacing)) > 0.1
+            ):
                 issues.append(
                     RuleIssue(
                         code="template.line_spacing_mismatch",
@@ -840,6 +983,109 @@ def _check_tex_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 evidence="figure without caption",
                 location={"environment": "figure", "display_text": "figure 环境附近"},
                 suggestion="为图表补充 \\caption{}。",
+            )
+        )
+    return issues
+
+
+def _check_front_matter_rules(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    document_type: str,
+) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    if document_type not in {"docx", "pdf", "tex"}:
+        return issues
+    rules = dict(template.get(f"{document_type}_rules") or template.get("docx_rules") or {})
+    keyword_rule = dict(rules.get("abstract_keywords") or {})
+    min_count = int(keyword_rule.get("min_count") or 3)
+    max_count = int(keyword_rule.get("max_count") or 5)
+    allowed_separators = [str(item) for item in list(keyword_rule.get("separators") or ["；", ";"]) if str(item)]
+    text = str(parsed.get("text") or "")
+
+    keyword_match = re.search(r"(?:关键词|关键字)\s*[:：]\s*([^\n]+)", text)
+    if keyword_match:
+        raw_keywords = keyword_match.group(1).strip()
+        keywords = [item.strip() for item in re.split(r"[；;，,、\s]+", raw_keywords) if item.strip()]
+        if not (min_count <= len(keywords) <= max_count):
+            issues.append(
+                RuleIssue(
+                    code="abstract.keyword_count_out_of_range",
+                    title="中文关键词数量不符合要求",
+                    severity="medium",
+                    category="structure",
+                    message=f"识别到 {len(keywords)} 个中文关键词，模板建议 {min_count}-{max_count} 个。",
+                    evidence=keyword_match.group(0),
+                    location={"section": "keywords", "display_text": "中文关键词"},
+                    suggestion=f"将关键词数量调整为 {min_count}-{max_count} 个。",
+                    expected={"min_count": min_count, "max_count": max_count},
+                    actual={"count": len(keywords), "keywords": keywords},
+                    parser_confidence="high",
+                )
+            )
+        if allowed_separators and not any(separator in raw_keywords for separator in allowed_separators) and len(keywords) > 1:
+            issues.append(
+                RuleIssue(
+                    code="abstract.keyword_separator_mismatch",
+                    title="中文关键词分隔符与模板不一致",
+                    severity="low",
+                    category="structure",
+                    message="关键词之间未使用模板建议的分隔符。",
+                    evidence=keyword_match.group(0),
+                    location={"section": "keywords", "display_text": "中文关键词"},
+                    suggestion=f"使用 {' 或 '.join(allowed_separators)} 分隔关键词。",
+                    expected={"separators": allowed_separators},
+                    actual={"text": raw_keywords},
+                    parser_confidence="high",
+                )
+            )
+
+    if re.search(r"(?:摘要|ABSTRACT)[\s\S]{0,600}(?:图\d+|表\d+|\[\d+\]|（\d+(?:[-.]\d+)*）)", text, flags=re.I):
+        issues.append(
+            RuleIssue(
+                code="abstract.contains_figure_formula_or_citation",
+                title="摘要中疑似包含图表、公式或参考文献编号",
+                severity="low",
+                category="structure",
+                message="摘要区域内识别到图表、公式或参考文献编号痕迹。",
+                evidence="摘要附近出现图表/公式/引用编号",
+                location={"section": "abstract", "display_text": "摘要"},
+                suggestion="摘要通常应避免出现图表、公式和参考文献编号。",
+                parser_confidence="medium",
+            )
+        )
+    return issues
+
+
+def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    rules = dict(template.get("docx_rules") or {})
+    required_entries = [str(item).strip() for item in list(rules.get("toc_required_entries") or []) if str(item).strip()]
+    if not required_entries:
+        return issues
+    toc_entries = list(parsed.get("toc_entries") or [])
+    text = str(parsed.get("text") or "")
+    has_toc = bool(toc_entries) or "目录" in text
+    if not has_toc:
+        return issues
+    toc_text = "\n".join(str(item.get("title") or "") for item in toc_entries) if toc_entries else _toc_text_window(text)
+    normalized_toc_text = _normalize_loose_text(toc_text)
+    missing = [entry for entry in required_entries if _normalize_loose_text(entry) not in normalized_toc_text]
+    if missing:
+        issues.append(
+            RuleIssue(
+                code="toc.required_entry_missing",
+                title="目录缺少模板要求条目",
+                severity="medium",
+                category="structure",
+                message=f"目录中未识别到条目：{', '.join(missing[:8])}。",
+                evidence=f"目录条目样例：{toc_text[:200]}",
+                location={"section": "toc", "display_text": "目录"},
+                suggestion="更新自动目录，确保摘要、图目录、表目录、参考文献、致谢等模板要求条目在目录中出现。",
+                expected={"required_entries": required_entries},
+                actual={"missing_entries": missing},
+                parser_confidence="medium" if not toc_entries else "high",
             )
         )
     return issues
@@ -977,9 +1223,54 @@ def _language_tool_suggestion(match: dict[str, Any]) -> str:
     return "请结合上下文人工复核该处表述。"
 
 
+def _toc_text_window(text: str) -> str:
+    content = str(text or "")
+    index = content.find("目录")
+    if index < 0:
+        return content[:1200]
+    return content[index:index + 2000]
+
+
+def _body_paragraph_candidates(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+    paragraphs = [
+        item for item in list(parsed.get("paragraphs") or [])
+        if str(item.get("text") or "").strip() and not item.get("heading_level")
+    ]
+    candidates = [
+        item for item in paragraphs
+        if _looks_like_body_paragraph(item)
+    ]
+    return candidates or paragraphs
+
+
+def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
+    if _is_front_matter_paragraph(paragraph):
+        return False
+    section_title = str(paragraph.get("section_title") or "").strip()
+    text = str(paragraph.get("text") or "").strip()
+    if not section_title:
+        return False
+    if len(text) < 6 and not re.search(r"[\u4e00-\u9fff].*[\u4e00-\u9fff]", text):
+        return False
+    return True
+
+
+def _is_front_matter_paragraph(paragraph: dict[str, Any]) -> bool:
+    section_title = str(paragraph.get("section_title") or "")
+    text = str(paragraph.get("text") or "")
+    front_keywords = ("摘要", "abstract", "关键词", "keywords", "目录", "图目录", "表目录", "参考文献", "致谢")
+    lowered = f"{section_title}\n{text}".lower()
+    return any(keyword.lower() in lowered for keyword in front_keywords)
+
+
+def _normalize_loose_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").lower())
+
+
 def _contains_any(text: str, keywords: list[str]) -> bool:
     lowered = text.lower()
-    return any(keyword.lower() in lowered for keyword in keywords)
+    loose = _normalize_loose_text(text)
+    return any(keyword.lower() in lowered or _normalize_loose_text(keyword) in loose for keyword in keywords)
 
 
 def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
@@ -1156,6 +1447,26 @@ def _check_heading_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
         m = re.match(r"^(\d+(?:\.\d+)*)\s", text)
         if m:
             current = m.group(1)
+            current_parts = current.split(".")
+            if len(current_parts) > 1:
+                try:
+                    if int(current_parts[-1]) > 1 and not _has_previous_sibling_heading(headings, current):
+                        issues.append(RuleIssue(
+                            code="heading.numbering_discontinuous",
+                            title="标题编号不连续",
+                            severity="medium",
+                            category="structure",
+                            message=f"标题编号 {current} 缺少前序同级标题。",
+                            evidence=text,
+                            location=_issue_location_from_paragraph(
+                                next((p for p in paragraphs if p.get("index") == heading.get("paragraph_index")), None)
+                            ),
+                            suggestion="检查标题编号是否从 1 开始并连续递增。",
+                            parser_confidence="high",
+                        ))
+                        break
+                except ValueError:
+                    pass
             if prev_number:
                 prev_parts = prev_number.split(".")
                 cur_parts = current.split(".")
@@ -1184,19 +1495,37 @@ def _check_heading_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
+def _has_previous_sibling_heading(headings: list[dict[str, Any]], current: str) -> bool:
+    parts = current.split(".")
+    try:
+        last = int(parts[-1])
+    except ValueError:
+        return True
+    if last <= 1:
+        return True
+    expected = ".".join([*parts[:-1], str(last - 1)])
+    for heading in headings:
+        text = str(heading.get("text") or "")
+        match = re.match(r"^(\d+(?:\.\d+)*)\s", text)
+        if match and match.group(1) == expected:
+            return True
+    return False
+
+
 def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues = []
     paragraphs = list(parsed.get("paragraphs") or [])
+    text = str(parsed.get("text") or "")
     figure_numbers = []
 
     for p in paragraphs:
-        text = str(p.get("text") or "").strip()
-        m = re.match(r"^(?:图|Fig(?:ure)?)\s*(\d+)", text, re.I)
+        paragraph_text = str(p.get("text") or "").strip()
+        m = re.match(r"^(?:图|Fig(?:ure)?)\s*(\d+(?:[-.]\d+)*)", paragraph_text, re.I)
         if m:
-            figure_numbers.append((int(m.group(1)), text, p))
+            figure_numbers.append((m.group(1), paragraph_text, p))
 
     for i in range(1, len(figure_numbers)):
-        if figure_numbers[i][0] != figure_numbers[i-1][0] + 1:
+        if not _number_is_next(figure_numbers[i - 1][0], figure_numbers[i][0]):
             issues.append(RuleIssue(
                 code="figure.numbering_discontinuous",
                 title="图号不连续",
@@ -1210,7 +1539,127 @@ def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             ))
             break
 
+    figure_caption_numbers = {_normalize_number(number) for number, _text, _p in figure_numbers}
+    figure_refs = {_normalize_number(item) for item in re.findall(r"图\s*(\d+(?:[-.]\d+)*)", text)}
+    missing_figure_captions = sorted(figure_refs - figure_caption_numbers)
+    if missing_figure_captions:
+        issues.append(RuleIssue(
+            code="figure.referenced_caption_missing",
+            title="正文引用的图号缺少对应图题",
+            severity="medium",
+            category="structure",
+            message=f"正文引用了图 {missing_figure_captions[:5]}，但未识别到对应图题。",
+            evidence=f"引用图号: {sorted(figure_refs)}, 图题图号: {sorted(figure_caption_numbers)}",
+            location={"display_text": "图题与正文引用"},
+            suggestion="补齐对应图题，或统一正文引用和图题编号。",
+            parser_confidence="medium",
+        ))
+
+    table_titles = list(parsed.get("table_titles") or [])
+    table_caption_numbers = {
+        _normalize_number(match.group(1))
+        for title in table_titles
+        for match in [re.match(r"^(?:表|Table)\s*(\d+(?:[-.]\d+)*)", str(title).strip(), re.I)]
+        if match
+    }
+    if not table_caption_numbers:
+        for p in paragraphs:
+            p_text = str(p.get("text") or "").strip()
+            match = re.match(r"^(?:表|Table)\s*(\d+(?:[-.]\d+)*)", p_text, re.I)
+            if match:
+                table_caption_numbers.add(_normalize_number(match.group(1)))
+    table_refs = {_normalize_number(item) for item in re.findall(r"表\s*(\d+(?:[-.]\d+)*)", text)}
+    missing_table_captions = sorted(table_refs - table_caption_numbers)
+    if missing_table_captions:
+        issues.append(RuleIssue(
+            code="table.referenced_caption_missing",
+            title="正文引用的表号缺少对应表题",
+            severity="medium",
+            category="structure",
+            message=f"正文引用了表 {missing_table_captions[:5]}，但未识别到对应表题。",
+            evidence=f"引用表号: {sorted(table_refs)}, 表题编号: {sorted(table_caption_numbers)}",
+            location={"display_text": "表题与正文引用"},
+            suggestion="补齐对应表题，或统一正文引用和表题编号。",
+            parser_confidence="medium",
+        ))
+
     return issues
+
+
+def _check_formula_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    text = str(parsed.get("text") or "")
+    defined = {_normalize_number(item) for item in list(parsed.get("formula_numbers") or []) if str(item).strip()}
+    if not defined:
+        defined = {_normalize_number(item) for item in re.findall(r"[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)}
+    referenced = {_normalize_number(item) for item in re.findall(r"(?:式|公式)\s*[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)}
+    combined = sorted(defined | referenced, key=_number_sort_key)
+    missing_between = _missing_numbers_in_sequence(combined)
+    if missing_between:
+        issues.append(RuleIssue(
+            code="formula.numbering_discontinuous",
+            title="公式编号不连续",
+            severity="medium",
+            category="structure",
+            message=f"公式编号可能缺少 {missing_between[:5]}。",
+            evidence=f"公式编号: {combined}",
+            location={"display_text": "公式编号"},
+            suggestion="检查公式编号是否按章节连续排列，正文引用是否与公式编号一致。",
+            parser_confidence="medium",
+        ))
+    missing_defined = sorted(referenced - defined)
+    if missing_defined:
+        issues.append(RuleIssue(
+            code="formula.referenced_number_missing",
+            title="正文引用的公式编号缺少对应公式",
+            severity="medium",
+            category="structure",
+            message=f"正文引用了公式 {missing_defined[:5]}，但未识别到对应公式编号。",
+            evidence=f"引用公式: {sorted(referenced)}, 公式编号: {sorted(defined)}",
+            location={"display_text": "公式引用"},
+            suggestion="补齐对应公式编号，或统一正文中的公式引用。",
+            parser_confidence="medium",
+        ))
+    return issues
+
+
+def _normalize_number(value: Any) -> str:
+    return str(value or "").strip().replace(".", "-").replace("－", "-").replace("–", "-")
+
+
+def _number_sort_key(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for part in _normalize_number(value).split("-"):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def _number_is_next(previous: str, current: str) -> bool:
+    prev_parts = list(_number_sort_key(previous))
+    cur_parts = list(_number_sort_key(current))
+    if len(prev_parts) != len(cur_parts) or not prev_parts or not cur_parts:
+        return True
+    if prev_parts[:-1] != cur_parts[:-1]:
+        return True
+    return cur_parts[-1] == prev_parts[-1] + 1
+
+
+def _missing_numbers_in_sequence(numbers: list[str]) -> list[str]:
+    normalized = sorted({_normalize_number(number) for number in numbers if number}, key=_number_sort_key)
+    missing: list[str] = []
+    for previous, current in zip(normalized, normalized[1:]):
+        prev_parts = list(_number_sort_key(previous))
+        cur_parts = list(_number_sort_key(current))
+        if len(prev_parts) != len(cur_parts) or prev_parts[:-1] != cur_parts[:-1]:
+            continue
+        if cur_parts[-1] > prev_parts[-1] + 1:
+            prefix = "-".join(str(item) for item in cur_parts[:-1])
+            for value in range(prev_parts[-1] + 1, cur_parts[-1]):
+                missing.append(f"{prefix}-{value}" if prefix else str(value))
+    return missing
 
 
 def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -1239,6 +1688,12 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
         m = re.match(r"^\[(\d+)\]", line.strip())
         if m:
             ref_numbers.add(int(m.group(1)))
+
+    if not ref_numbers:
+        for line in list(parsed.get("references") or []):
+            match = re.match(r"^\[(\d+)\]", str(line).strip())
+            if match:
+                ref_numbers.add(int(match.group(1)))
 
     missing_in_bib = cited_numbers - ref_numbers
     if missing_in_bib:
@@ -1270,7 +1725,87 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             parser_confidence="medium",
         ))
 
+    if ref_numbers:
+        sorted_refs = sorted(ref_numbers)
+        missing_ref_numbers = [
+            number for number in range(sorted_refs[0], sorted_refs[-1] + 1)
+            if number not in ref_numbers
+        ]
+        if missing_ref_numbers:
+            issues.append(RuleIssue(
+                code="references.numbering_discontinuous",
+                title="参考文献编号不连续",
+                severity="medium",
+                category="structure",
+                message=f"参考文献编号缺少 {missing_ref_numbers[:10]}。",
+                evidence=f"参考文献编号: {sorted_refs}",
+                location={"display_text": "参考文献章节"},
+                suggestion="检查参考文献列表编号是否从 1 开始连续排列。",
+                parser_confidence="high",
+                expected={"continuous_from": sorted_refs[0], "continuous_to": sorted_refs[-1]},
+                actual={"missing_numbers": missing_ref_numbers},
+            ))
+
+    reference_lines = list(parsed.get("references") or [])
+    if not reference_lines:
+        reference_lines = [line.strip() for line in text.splitlines() if re.match(r"^\[\d+\]", line.strip())]
+    for line in reference_lines[:30]:
+        stripped = str(line).strip()
+        if not stripped:
+            continue
+        if not _reference_entry_has_basic_gbt7714_shape(stripped):
+            issues.append(RuleIssue(
+                code="references.entry_format_incomplete",
+                title="参考文献著录信息疑似不完整",
+                severity="medium",
+                category="structure",
+                message="参考文献条目缺少题名、文献类型标识、出版源或年份等基础信息。",
+                evidence=stripped[:160],
+                location={"display_text": "参考文献章节"},
+                suggestion="按 GB/T 7714 或学校模板补全作者、题名、文献类型、出版源、年份等信息。",
+                parser_confidence="medium",
+            ))
+            break
+
     return issues
+
+
+def _reference_entry_has_basic_gbt7714_shape(line: str) -> bool:
+    content = str(line or "").strip()
+    if not re.match(r"^\[\d+\]\s*\S+", content):
+        return False
+    has_year = bool(re.search(r"(19|20)\d{2}", content))
+    has_type = bool(re.search(r"\[[A-Z]{1,3}(?:/[A-Z])?\]", content))
+    # A minimal Chinese GB/T-style entry usually has at least two separators after the number.
+    separator_count = sum(content.count(item) for item in [".", "．", ",", "，"])
+    return has_year and has_type and separator_count >= 2
+
+
+def _check_word_artifact_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
+    metadata = dict(parsed.get("word_metadata") or {})
+    comment_count = int(metadata.get("comment_count") or 0)
+    revision_count = int(metadata.get("revision_count") or 0)
+    hidden_text_count = int(metadata.get("hidden_text_count") or 0)
+    if comment_count <= 0 and revision_count <= 0 and hidden_text_count <= 0:
+        return []
+    return [
+        RuleIssue(
+            code="word.comments_or_revisions_present",
+            title="Word 文档存在批注、修订或隐藏文字痕迹",
+            severity="medium",
+            category="word",
+            message="提交前应删除批注、接受或拒绝修订，并检查隐藏文字。",
+            evidence=f"comments={comment_count}, revisions={revision_count}, hidden_text={hidden_text_count}",
+            location={"display_text": "Word 文档元数据"},
+            suggestion="在 Word 中关闭修订并清理批注、隐藏文字后重新提交最终版。",
+            parser_confidence="high",
+            actual={
+                "comment_count": comment_count,
+                "revision_count": revision_count,
+                "hidden_text_count": hidden_text_count,
+            },
+        )
+    ]
 
 
 def _dedupe_issues(issues: list[RuleIssue]) -> list[RuleIssue]:
