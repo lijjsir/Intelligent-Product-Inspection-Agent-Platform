@@ -79,65 +79,18 @@ class FileExecutor:
             )
         if step.capability_key == "file.paper_format_check":
             merged = self._merge_paper_reports(paper_reports, unsupported=unsupported, parsed_files=parsed_files, model_summary=model_summary)
-
-            # Build Review Evidence Pack
-            if paper_reports and parsed_files:
-                parsed_for_evidence = {
-                    **{k: v for k, v in parsed_files[0].get("metadata", {}).items()},
-                    "kind": parsed_files[0].get("kind"),
-                    "text": parsed_files[0].get("text", ""),
-                }
-                from agent.tools.paper_review_evidence import build_review_evidence_pack
-                evidence_pack = build_review_evidence_pack(
-                    parsed=parsed_for_evidence,
-                    check_result=merged,
-                    file_name=str(parsed_files[0].get("name") or ""),
-                )
-                merged["review_evidence_pack"] = evidence_pack
-            else:
-                evidence_pack = {}
-
-            from agent.tools.paper_template_evidence import load_writing_guide_evidence
-
-            guide_evidence = load_writing_guide_evidence(str(merged.get("template_id") or template_id or ""))
-            if guide_evidence:
-                merged["writing_guide_evidence"] = guide_evidence
-                if guide_evidence.get("error"):
-                    merged.setdefault("template_errors", []).append(
-                        guide_evidence.get("error_message", "模板文件加载失败")
-                    )
-
-            from agent.tools.paper_review_ai import generate_ai_review_output
-
-            ai_review_output = await generate_ai_review_output(
-                evidence_pack=evidence_pack,
-                guide_evidence=guide_evidence if guide_evidence and not guide_evidence.get("error") else None,
+            self._finalize_paper_report_counts(merged)
+            enrichment_payload = self._build_paper_review_enrichment_payload(
+                merged=merged,
+                parsed_files=parsed_files,
+                template_id=str(merged.get("template_id") or template_id or ""),
                 query=state.original_query,
-                db_session=db_session,
                 org_id=request.org_id,
                 trace_id=state.trace_id or state.workflow_run_id or state.request_id,
                 task_id=state.session_id,
             )
-            merged["ai_review_output"] = ai_review_output
-            ai_limitations = [
-                str(item)
-                for item in list(ai_review_output.get("limitations") or [])
-                if str(item).strip()
-            ]
-            if ai_limitations:
-                merged["limitations"] = list(
-                    dict.fromkeys([*list(merged.get("limitations") or []), *ai_limitations])
-                )
-            if ai_review_output.get("summary"):
-                merged["model_summary"] = str(ai_review_output.get("summary"))
-
-            # Save markdown report to object storage
-            report_files = await self._save_report_files(
-                merged=merged,
-                state=state,
-                request=request,
-            )
-            merged["report_files"] = report_files
+            if enrichment_payload:
+                merged["enrichment_payload"] = enrichment_payload
 
             content = merged
             obs_summary = str(merged.get("summary") or "") or "已完成论文查非分析"
@@ -193,6 +146,7 @@ class FileExecutor:
                 "summary": "当前没有可用于论文查非的 docx 或 tex 文件。",
                 "score": 0,
                 "issues": [],
+                "chat_advice": "当前没有可用于论文查非的文档，请上传 docx 或 tex 文件后重试。",
                 "limitations": ["当前仅支持 docx 和 tex 的论文查非检查。"],
                 "parsed_files": parsed_files,
                 "unsupported": unsupported,
@@ -203,6 +157,7 @@ class FileExecutor:
             base["parsed_files"] = parsed_files
             base["unsupported"] = unsupported
             base["model_summary"] = model_summary
+            base["chat_advice"] = FileExecutor._build_chat_advice(list(base.get("issues") or []))
             return base
         all_issues = []
         limitations = []
@@ -219,10 +174,107 @@ class FileExecutor:
             "summary": summary,
             "score": total_score,
             "issues": all_issues,
+            "chat_advice": FileExecutor._build_chat_advice(all_issues),
             "limitations": list(dict.fromkeys(limitations)),
             "parsed_files": parsed_files,
             "unsupported": unsupported,
             "model_summary": model_summary,
+        }
+
+    @staticmethod
+    def _build_chat_advice(issues: list[dict[str, object]]) -> str:
+        if not issues:
+            return "未发现明确格式问题，但仍建议人工复核模板细节。"
+        severity_order = {"high": 0, "medium": 1, "low": 2}
+        sorted_issues = sorted(
+            issues,
+            key=lambda item: (
+                severity_order.get(str(item.get("severity") or "").lower(), 9),
+                str(item.get("title") or ""),
+            ),
+        )
+        lines = ["已整理出以下修改意见："]
+        for idx, issue in enumerate(sorted_issues[:5], start=1):
+            location = FileExecutor._location_text(issue.get("location"))
+            evidence = str(issue.get("evidence") or "").strip() or "无直接证据片段"
+            suggestion = str(issue.get("suggestion") or "").strip() or "请结合模板要求人工复核。"
+            lines.append(f"{idx}. {str(issue.get('title') or '格式问题')}")
+            lines.append(f"位置：{location}")
+            lines.append(f"证据：{evidence}")
+            lines.append(f"建议：{suggestion}")
+        if len(sorted_issues) > 5:
+            lines.append(f"其余 {len(sorted_issues) - 5} 项问题请查看下载报告。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _location_text(location: object) -> str:
+        if isinstance(location, dict):
+            display = str(location.get("display_text") or "").strip()
+            if display:
+                return display
+            section = str(location.get("section_title") or location.get("section") or "").strip()
+            paragraph_no = location.get("paragraph_no")
+            line = location.get("line")
+            if section and paragraph_no:
+                return f"《{section}》下第{paragraph_no}段"
+            if section and line:
+                return f"《{section}》附近，第{line}行"
+            if section:
+                return f"《{section}》附近"
+            if paragraph_no:
+                return f"第{paragraph_no}段"
+            if line:
+                return f"第{line}行"
+        return "位置待人工确认"
+
+    @staticmethod
+    def _finalize_paper_report_counts(merged: dict) -> None:
+        issues = list(merged.get("issues") or [])
+        merged["score"] = int(merged.get("score") or 0)
+        merged["issue_count"] = len(issues)
+        merged["high_count"] = sum(1 for item in issues if str(item.get("severity") or "") == "high")
+        merged["medium_count"] = sum(1 for item in issues if str(item.get("severity") or "") == "medium")
+        merged["low_count"] = sum(1 for item in issues if str(item.get("severity") or "") == "low")
+        merged["report_files"] = list(merged.get("report_files") or [])
+        merged["chat_advice"] = str(merged.get("chat_advice") or FileExecutor._build_chat_advice(issues))
+
+    @staticmethod
+    def _build_paper_review_enrichment_payload(
+        *,
+        merged: dict,
+        parsed_files: list[dict],
+        template_id: str,
+        query: str,
+        org_id: str,
+        trace_id: str | None,
+        task_id: str | None,
+    ) -> dict | None:
+        if not parsed_files:
+            return None
+
+        review_evidence_pack = {}
+        if merged.get("issues"):
+            parsed_for_evidence = {
+                **{k: v for k, v in parsed_files[0].get("metadata", {}).items()},
+                "kind": parsed_files[0].get("kind"),
+                "text": parsed_files[0].get("text", ""),
+            }
+            from agent.tools.paper_review_evidence import build_review_evidence_pack
+
+            review_evidence_pack = build_review_evidence_pack(
+                parsed=parsed_for_evidence,
+                check_result=merged,
+                file_name=str(parsed_files[0].get("name") or ""),
+            )
+
+        return {
+            "query": query,
+            "org_id": org_id,
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "template_id": template_id,
+            "review_evidence_pack": review_evidence_pack,
+            "parsed_files": parsed_files,
         }
 
     @staticmethod
@@ -327,6 +379,7 @@ class FileExecutor:
         merged["high_count"] = sc
         merged["medium_count"] = mc
         merged["low_count"] = lc
+        merged["chat_advice"] = str(merged.get("chat_advice") or FileExecutor._build_chat_advice(issues))
 
         return report_files
 

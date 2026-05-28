@@ -381,24 +381,62 @@ def test_chat_state_keeps_trust_scoring_runtime_fields():
     assert "trust_scoring_task" not in annotations
 
 
-def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
+@pytest.mark.asyncio
+async def test_enqueue_trust_scoring_logs_queue_failures(monkeypatch, caplog):
     import sys
     from types import SimpleNamespace
 
-    def fail_delay(_payload):
+    async def fake_has_worker():
+        return True
+
+    def fail_apply_async(*_args, **_kwargs):
         raise RuntimeError("redis transport unavailable")
 
     monkeypatch.setitem(
         sys.modules,
         "worker.tasks.chat_trust_scoring_task",
-        SimpleNamespace(score_chat_message=SimpleNamespace(delay=fail_delay)),
+        SimpleNamespace(
+            score_chat_message=SimpleNamespace(apply_async=fail_apply_async),
+            _score_chat_message=lambda _payload: None,
+        ),
     )
+    monkeypatch.setattr("app.services.chat_trust_scoring_dispatcher.has_active_celery_worker", fake_has_worker)
 
     with caplog.at_level("WARNING", logger="agent.subgraphs.quality_chat.graph"):
-        _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
+        await _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
 
-    assert "trust scoring enqueue failed" in caplog.text
+    assert "trust scoring celery dispatch failed" in caplog.text
     assert "msg-1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_enqueue_trust_scoring_falls_back_to_local_background_without_worker(monkeypatch):
+    recorded: list[dict] = []
+    created: list[object] = []
+
+    async def fake_has_worker():
+        return False
+
+    async def fake_score(payload):
+        recorded.append(payload)
+        return {"status": "scored"}
+
+    real_create_task = asyncio.create_task
+
+    def tracking_create_task(coro):
+        task = real_create_task(coro)
+        created.append(task)
+        return task
+
+    monkeypatch.setattr("app.services.chat_trust_scoring_dispatcher.has_active_celery_worker", fake_has_worker)
+    monkeypatch.setattr("app.services.chat_trust_scoring_dispatcher.asyncio.create_task", tracking_create_task)
+    monkeypatch.setattr("worker.tasks.chat_trust_scoring_task._score_chat_message", fake_score)
+
+    mode = await _enqueue_trust_scoring({"assistant_message_id": "msg-1"})
+    await asyncio.gather(*created)
+
+    assert mode == "local_background"
+    assert recorded == [{"assistant_message_id": "msg-1"}]
 
 
 @pytest.mark.asyncio
@@ -444,7 +482,7 @@ async def test_finalizer_marks_trust_scoring_reviewing_and_enqueues_once(monkeyp
     async def fake_persist_rag(_session, _state):
         return None
 
-    def fake_enqueue(payload: dict | None):
+    async def fake_enqueue(payload: dict | None):
         if payload:
             queued_payloads.append(payload)
 

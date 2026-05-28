@@ -70,6 +70,7 @@ const streamStatusText = computed(() => {
   if (chatStore.streamPhase === "closing") return "正在整理回复...";
   return "智能体处理中...";
 });
+const FINAL_ASSISTANT_MESSAGE_TYPES = new Set(["assistant_text", "quality_answer", "file_answer", "report_answer", "task_status", "task_result", "image_analysis", "error", "interrupted"]);
 const specOptions = computed(() => inspectionSpecStore.items);
 const filteredSpecOptions = computed(() =>
   specOptions.value.filter((item) => item.is_active),
@@ -79,9 +80,7 @@ const totalTokenText = computed(() => (billingStore.myUsage?.total_tokens ?? 0).
 const latestTokenCountedMessageId = computed(() => {
   const candidates = [...chatStore.messages].reverse();
   for (const message of candidates) {
-    if (message.role !== "assistant") continue;
-    if (message.message_type === "streaming") continue;
-    if (!["assistant_text", "quality_answer"].includes(message.message_type)) continue;
+    if (!isFinalAssistantMessage(message)) continue;
     return message.id;
   }
   return "";
@@ -102,6 +101,14 @@ function roleLabel(role: ChatMessage["role"]) {
   if (role === "user") return "你";
   if (role === "assistant") return "智能体";
   return "系统";
+}
+
+function isFinalAssistantMessage(message: ChatMessage) {
+  return message.role === "assistant" && message.message_type !== "streaming" && FINAL_ASSISTANT_MESSAGE_TYPES.has(message.message_type);
+}
+
+function isVisibleAssistantAnswer(message: ChatMessage) {
+  return isFinalAssistantMessage(message);
 }
 
 function verdictTagType(verdict?: string | null) {
@@ -395,10 +402,21 @@ function getDisplayedContent(message: ChatMessage): string {
   if (message.role !== "assistant") return message.content;
   const pos = typewriterPos.value[message.id];
   if (pos === undefined) {
-    // streaming but timer not yet started → show empty, avoid flash
-    return message.message_type === "streaming" ? "" : message.content;
+    if (message.message_type === "streaming") {
+      if (message.content) return message.content;
+      return streamingPlaceholder(message);
+    }
+    return message.content;
   }
   return message.content.slice(0, pos);
+}
+
+function streamingPlaceholder(message: ChatMessage) {
+  const attachmentNames = (message.payload?.attachment_echo || []).map((item) => item.name.toLowerCase());
+  if (attachmentNames.some((name) => name.endsWith(".docx") || name.endsWith(".tex"))) {
+    return "正在解析文档并检查格式...";
+  }
+  return streamStatusText.value || "智能体处理中...";
 }
 
 function ensureTypewriter(msgId: string) {
@@ -438,7 +456,7 @@ function disposeAllTypewriters() {
 watch(
   () =>
     chatStore.messages
-      .filter((m) => m.role === "assistant" && m.message_type === "streaming")
+      .filter((m) => m.role === "assistant" && m.message_type === "streaming" && Boolean(m.content))
       .map((m) => m.id),
   (ids) => { for (const id of ids) ensureTypewriter(id); },
   { deep: false, immediate: true },
@@ -967,8 +985,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             <MessageActionBar
               :reaction="messageReactions[message.id] || ''"
               :show-edit="message.role === 'user'"
-              :show-feedback="message.role === 'assistant' && message.message_type !== 'streaming'"
-              :show-retry="message.role === 'assistant' && message.message_type !== 'streaming'"
+              :show-feedback="isVisibleAssistantAnswer(message)"
+              :show-retry="isVisibleAssistantAnswer(message)"
               :retry-disabled="chatStore.loading"
               @copy="copyToClipboard(message.content, '消息已复制')"
               @edit="editUserMessage(message)"

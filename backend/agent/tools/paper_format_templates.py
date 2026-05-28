@@ -43,7 +43,50 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
             ],
         },
         "docx_rules": {
-            "required_sections": ["摘要", "关键词", "目录", "正文", "参考文献", "致谢"],
+            "required_sections": [
+                {
+                    "key": "abstract",
+                    "label": "摘要",
+                    "aliases": ["摘要", "中文摘要"],
+                    "severity": "high",
+                    "match_mode": "heading_or_text",
+                },
+                {
+                    "key": "keywords",
+                    "label": "关键词",
+                    "aliases": ["关键词", "关键字"],
+                    "severity": "medium",
+                    "match_mode": "heading_or_text",
+                },
+                {
+                    "key": "toc",
+                    "label": "目录",
+                    "aliases": ["目录"],
+                    "severity": "medium",
+                    "match_mode": "heading_or_text",
+                },
+                {
+                    "key": "body",
+                    "label": "正文",
+                    "aliases": ["正文", "引言", "绪论", "研究内容", "实验结果", "结论"],
+                    "severity": "medium",
+                    "match_mode": "body_between_sections",
+                },
+                {
+                    "key": "references",
+                    "label": "参考文献",
+                    "aliases": ["参考文献"],
+                    "severity": "high",
+                    "match_mode": "heading_or_text",
+                },
+                {
+                    "key": "acknowledgements",
+                    "label": "致谢",
+                    "aliases": ["致谢", "致 謝"],
+                    "severity": "medium",
+                    "match_mode": "heading_or_text",
+                },
+            ],
             "page_margin_cm": {
                 "top": 2.5,
                 "bottom": 2.5,

@@ -31,8 +31,10 @@ from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.tool_repo import ToolRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.chat_trust_scoring_service import build_pending_trust_score, trust_payload_from_score
+from app.services.chat_trust_scoring_dispatcher import enqueue_chat_trust_scoring
 from app.services.task_service import TaskService
 from app.services.chat_message_lifecycle_service import ChatMessageLifecycleService
+from app.services.paper_review_enrichment_service import PaperReviewEnrichmentService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -320,7 +322,7 @@ class QualityAgentOrchestratorService:
 
             await session.commit()
 
-        self._enqueue_trust_scoring(trust_scoring_request)
+        await self._enqueue_trust_scoring(trust_scoring_request)
 
         if output.route_decision:
             await self._record_route_decision_log(request, output)
@@ -334,7 +336,77 @@ class QualityAgentOrchestratorService:
             payload=response_payload,
             quality=dict(output.quality or {}),
         )
+        await self._enqueue_paper_review_enrichment(
+            request=request,
+            output=output,
+            response_payload=response_payload,
+            emit=emit,
+        )
         return materialization_error is None
+
+    async def _enqueue_paper_review_enrichment(
+        self,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        response_payload: dict[str, Any],
+        emit,
+    ) -> None:
+        paper_report = response_payload.get("paper_format_report")
+        if not isinstance(paper_report, dict):
+            return
+        if not paper_report.get("enrichment_payload"):
+            return
+
+        async def run_enrichment() -> None:
+            try:
+                async with get_session() as session:
+                    lifecycle = ChatMessageLifecycleService(
+                        session,
+                        message_repository_cls=ChatMessageRepository,
+                        session_repository_cls=ChatSessionRepository,
+                    )
+
+                    async def emit_patch(*, content: str | None = None, message_type: str | None = None, payload: dict[str, Any] | None = None) -> None:
+                        updated = await lifecycle.patch_turn(
+                            org_id=request.org_id,
+                            user_id=str(request.user_id or ""),
+                            session_id=str(request.session_id or ""),
+                            assistant_message_id=str(request.assistant_message_id or ""),
+                            content=content,
+                            message_type=message_type,
+                            payload_patch=payload,
+                        )
+                        if updated is None:
+                            return
+                        await session.commit()
+                        await ChatMessageLifecycleService.emit_patch(
+                            emit,
+                            session_id=request.session_id,
+                            assistant_message_id=request.assistant_message_id,
+                            workflow_run_id=request.workflow_run_id,
+                            content=updated.get("content"),
+                            message_type=updated.get("message_type"),
+                            payload=updated.get("payload"),
+                        )
+
+                    enriched = await PaperReviewEnrichmentService().enrich(
+                        paper_report=paper_report,
+                        request=request,
+                        emit_patch=emit_patch,
+                        db_session=session,
+                    )
+                    output.paper_format_report = enriched
+            except Exception:
+                logger.exception(
+                    "paper review enrichment task failed session_id=%s assistant_message_id=%s",
+                    request.session_id,
+                    request.assistant_message_id,
+                )
+
+        import asyncio
+
+        asyncio.create_task(run_enrichment())
 
     async def _persist_rag_tool_executions(
         self,
@@ -534,21 +606,8 @@ class QualityAgentOrchestratorService:
         return None
 
     @staticmethod
-    def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
-        if not payload:
-            return
-        try:
-            from worker.tasks.chat_trust_scoring_task import score_chat_message
-
-            score_chat_message.delay(payload)
-        except Exception as exc:
-            logger.warning(
-                "trust scoring enqueue failed assistant_message_id=%s trace_id=%s: %s",
-                payload.get("assistant_message_id"),
-                payload.get("trace_id"),
-                exc,
-                exc_info=True,
-            )
+    async def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> str | None:
+        return await enqueue_chat_trust_scoring(payload, logger=logger)
 
     async def _persist_chat_token_usage(
         self,

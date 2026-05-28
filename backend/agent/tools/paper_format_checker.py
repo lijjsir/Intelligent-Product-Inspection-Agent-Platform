@@ -140,6 +140,209 @@ def _score_issues(issues: list[RuleIssue]) -> int:
     return max(0, score)
 
 
+def _issue_location_from_paragraph(
+    paragraph: dict[str, Any] | None,
+    *,
+    fallback_section: str | None = None,
+) -> dict[str, Any]:
+    paragraph = paragraph or {}
+    location: dict[str, Any] = {}
+    section_title = str(paragraph.get("section_title") or "").strip()
+    section_index = paragraph.get("section_index")
+    paragraph_index = paragraph.get("index")
+    paragraph_no = paragraph.get("paragraph_no")
+    if fallback_section:
+        location["section"] = fallback_section
+    if section_title:
+        location["section_title"] = section_title
+    if paragraph_index is not None:
+        location["paragraph_index"] = paragraph_index
+    if paragraph_no:
+        location["paragraph_no"] = paragraph_no
+    location["display_text"] = _format_docx_location(
+        section_title=section_title,
+        section_index=section_index,
+        paragraph_no=paragraph_no,
+        paragraph_index=paragraph_index,
+    )
+    return location
+
+
+def _issue_location_from_tex(
+    item: dict[str, Any] | None,
+    *,
+    fallback_section: str | None = None,
+) -> dict[str, Any]:
+    item = item or {}
+    location: dict[str, Any] = {}
+    section_title = str(item.get("section_title") or item.get("title") or "").strip()
+    section_index = item.get("section_index")
+    line = item.get("line")
+    if fallback_section:
+        location["section"] = fallback_section
+    if section_title:
+        location["section_title"] = section_title
+    if line is not None:
+        location["line"] = line
+    location["display_text"] = _format_tex_location(
+        section_title=section_title,
+        section_index=section_index,
+        line=line,
+    )
+    return location
+
+
+def _format_docx_location(
+    *,
+    section_title: str,
+    section_index: Any,
+    paragraph_no: Any,
+    paragraph_index: Any,
+) -> str:
+    if section_title and paragraph_no:
+        prefix = f"第{section_index}节《{section_title}》" if section_index else f"《{section_title}》"
+        return f"{prefix}下第{paragraph_no}段"
+    if section_title:
+        return f"《{section_title}》附近"
+    if paragraph_index is not None:
+        return f"第 {int(paragraph_index) + 1} 段"
+    return "文档位置待人工确认"
+
+
+def _format_tex_location(
+    *,
+    section_title: str,
+    section_index: Any,
+    line: Any,
+) -> str:
+    if section_title and line is not None:
+        prefix = f"第{section_index}节《{section_title}》" if section_index else f"《{section_title}》"
+        return f"{prefix}附近，第{line}行"
+    if line is not None:
+        return f"第 {line} 行"
+    return "源码位置待人工确认"
+
+
+def _find_paragraph_by_offset(parsed: dict[str, Any], offset: int) -> dict[str, Any] | None:
+    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    cursor = 0
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "")
+        start = cursor
+        end = cursor + len(text)
+        if start <= offset <= end:
+            return paragraph
+        cursor = end + 1
+    return paragraphs[0] if paragraphs else None
+
+
+def _normalize_required_section_rule(section: Any) -> dict[str, Any]:
+    if isinstance(section, dict):
+        label = str(section.get("label") or section.get("key") or "").strip()
+        aliases = [str(item).strip() for item in list(section.get("aliases") or []) if str(item).strip()]
+        if label and label not in aliases:
+            aliases.insert(0, label)
+        return {
+            "key": str(section.get("key") or label).strip(),
+            "label": label,
+            "aliases": aliases or ([label] if label else []),
+            "severity": str(section.get("severity") or "").strip() or ("high" if label in {"摘要", "参考文献"} else "medium"),
+            "match_mode": str(section.get("match_mode") or "heading_or_text").strip() or "heading_or_text",
+        }
+    label = str(section).strip()
+    return {
+        "key": label,
+        "label": label,
+        "aliases": [label] if label else [],
+        "severity": "high" if label in {"摘要", "参考文献"} else "medium",
+        "match_mode": "heading_or_text",
+    }
+
+
+def _required_section_present(parsed: dict[str, Any], rule: dict[str, Any], *, document_type: str) -> bool:
+    aliases = [item for item in list(rule.get("aliases") or []) if item]
+    match_mode = str(rule.get("match_mode") or "heading_or_text")
+    if document_type == "docx" and match_mode == "body_between_sections":
+        return _docx_body_between_sections_exists(parsed, rule)
+    headings = list(parsed.get("headings") or [])
+    text = str(parsed.get("text") or "")
+    if _headings_contain_aliases(headings, aliases):
+        return True
+    return _contains_any(text, aliases)
+
+
+def _headings_contain_aliases(headings: list[dict[str, Any]], aliases: list[str]) -> bool:
+    normalized_aliases = [alias.strip().lower() for alias in aliases if alias.strip()]
+    if not normalized_aliases:
+        return False
+    for heading in headings:
+        heading_text = str(heading.get("text") or "").strip().lower()
+        if not heading_text:
+            continue
+        if any(alias in heading_text for alias in normalized_aliases):
+            return True
+    return False
+
+
+def _docx_body_between_sections_exists(parsed: dict[str, Any], rule: dict[str, Any]) -> bool:
+    headings = list(parsed.get("headings") or [])
+    paragraphs = list(parsed.get("paragraphs") or [])
+    if not paragraphs:
+        return False
+    preface_aliases = ["摘要", "关键词", "关键字", "目录", "引言", "绪论"]
+    ending_aliases = ["参考文献", "致谢"]
+    start_index = None
+    end_index = None
+    for heading in headings:
+        text = str(heading.get("text") or "").strip()
+        paragraph_index = heading.get("paragraph_index")
+        if paragraph_index is None:
+            continue
+        if start_index is None and any(alias in text for alias in preface_aliases):
+            start_index = int(paragraph_index)
+        if any(alias in text for alias in ending_aliases):
+            end_index = int(paragraph_index)
+            break
+    if start_index is None:
+        for paragraph in paragraphs:
+            text = str(paragraph.get("text") or "").strip()
+            if any(alias in text for alias in preface_aliases):
+                start_index = int(paragraph.get("index") or 0)
+                break
+    candidate_headings = []
+    for heading in headings:
+        paragraph_index = heading.get("paragraph_index")
+        level = int(heading.get("level") or 0)
+        if paragraph_index is None or level != 1:
+            continue
+        paragraph_index = int(paragraph_index)
+        if start_index is not None and paragraph_index <= start_index:
+            continue
+        if end_index is not None and paragraph_index >= end_index:
+            continue
+        candidate_headings.append(heading)
+    if not candidate_headings:
+        aliases = [str(item).strip() for item in list(rule.get("aliases") or []) if str(item).strip()]
+        return _headings_contain_aliases(headings, aliases)
+    paragraph_map = {int(item.get("index") or 0): item for item in paragraphs}
+    for heading in candidate_headings:
+        heading_index = int(heading.get("paragraph_index") or 0)
+        next_heading_index = None
+        for sibling in candidate_headings:
+            sibling_index = int(sibling.get("paragraph_index") or 0)
+            if sibling_index > heading_index:
+                next_heading_index = sibling_index
+                break
+        for index in range(heading_index + 1, next_heading_index or len(paragraphs)):
+            paragraph = paragraph_map.get(index)
+            if not paragraph:
+                continue
+            text = str(paragraph.get("text") or "").strip()
+            if text and not paragraph.get("heading_level"):
+                return True
+    return False
+
+
 def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
     headings = list(parsed.get("headings") or [])
@@ -195,7 +398,18 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                     category="structure",
                     message=f"标题层级从 {prev_level} 级直接跳到 {level} 级。",
                     evidence=str(item.get("text") or ""),
-                    location={"paragraph_index": item.get("paragraph_index"), "heading_level": level},
+                    location={
+                        **_issue_location_from_paragraph(
+                            next(
+                                (
+                                    paragraph for paragraph in list(parsed.get("paragraphs") or [])
+                                    if paragraph.get("index") == item.get("paragraph_index")
+                                ),
+                                None,
+                            )
+                        ),
+                        "heading_level": level,
+                    },
                     suggestion="检查标题层级定义，避免跳级。",
                 )
             )
@@ -297,7 +511,15 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                     category="style",
                     message="识别到标题字号小于常见论文模板要求。",
                     evidence=f"{heading.get('text')}: {font_size}pt",
-                    location={"paragraph_index": heading.get("paragraph_index")},
+                    location=_issue_location_from_paragraph(
+                        next(
+                            (
+                                paragraph for paragraph in list(parsed.get("paragraphs") or [])
+                                if paragraph.get("index") == heading.get("paragraph_index")
+                            ),
+                            None,
+                        )
+                    ),
                     suggestion="检查标题字号和样式配置。",
                 )
             )
@@ -314,7 +536,7 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                     category="style",
                     message="识别到正文行距偏小，可能不符合模板要求。",
                     evidence=f"段落 {paragraph.get('index')}: line_spacing={line_spacing}",
-                    location={"paragraph_index": paragraph.get("index")},
+                    location=_issue_location_from_paragraph(paragraph),
                     suggestion="检查正文行距是否应为 1.5 倍或固定值。",
                 )
             )
@@ -341,19 +563,23 @@ def _check_template_rules(
         return []
 
     issues: list[RuleIssue] = []
-    text = str(parsed.get("text") or "")
     for section in list(rules.get("required_sections") or []):
-        section_name = str(section)
-        if section_name and not _contains_any(text, [section_name]):
+        section_rule = _normalize_required_section_rule(section)
+        section_name = str(section_rule.get("label") or "")
+        if section_name and not _required_section_present(parsed, section_rule, document_type=document_type):
             issues.append(
                 RuleIssue(
                     code="template.required_section_missing",
                     title=f"模板要求章节缺失：{section_name}",
-                    severity="high" if section_name in {"摘要", "参考文献"} else "medium",
+                    severity=str(section_rule.get("severity") or "medium"),
                     category="template",
                     message=f"按 {template.get('name')} 规则未识别到“{section_name}”。",
                     evidence=f"未找到模板章节：{section_name}",
-                    location={"section": section_name, "template_id": template_id},
+                    location={
+                        "section": section_name,
+                        "template_id": template_id,
+                        "display_text": f"模板要求存在《{section_name}》章节",
+                    },
                     suggestion=f"按学校模板补充或核对“{section_name}”章节。",
                 )
             )
@@ -383,7 +609,7 @@ def _check_template_rules(
                         category="template",
                         message=f"{parsed_key}={actual}cm，与模板建议 {expected}cm 不一致。",
                         evidence=f"{parsed_key}: actual={actual}, expected={expected}",
-                        location={"page_layout": parsed_key, "template_id": template_id},
+                        location={"page_layout": parsed_key, "template_id": template_id, "display_text": "页面版式设置"},
                         suggestion="按学校模板重新设置页面边距。",
                     )
                 )
@@ -420,7 +646,7 @@ def _check_template_rules(
                         f"段落 {paragraph.get('index')}: "
                         f"font={paragraph.get('font_name')}, size={paragraph.get('font_size_pt')}"
                     ),
-                    location={"paragraph_index": paragraph.get("index"), "template_id": template_id},
+                    location={**_issue_location_from_paragraph(paragraph), "template_id": template_id},
                     suggestion="按学校模板统一正文字体和字号。",
                 )
             )
@@ -439,7 +665,7 @@ def _check_template_rules(
                         category="template",
                         message=f"正文行距 {actual_spacing} 与模板建议 {expected_spacing} 不一致。",
                         evidence=f"段落 {paragraph.get('index')}: line_spacing={actual_spacing}",
-                        location={"paragraph_index": paragraph.get("index"), "template_id": template_id},
+                        location={**_issue_location_from_paragraph(paragraph), "template_id": template_id},
                         suggestion="按学校模板统一正文行距。",
                     )
                 )
@@ -516,12 +742,12 @@ def _check_tex_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                     title="章节层级跳变",
                     severity="medium",
                     category="structure",
-                    message="LaTeX 章节层级存在跳级。",
-                    evidence=str(item.get("title") or ""),
-                    location={"line": item.get("line")},
-                    suggestion="检查 section/subsection/subsubsection 层级。",
-                )
+                message="LaTeX 章节层级存在跳级。",
+                evidence=str(item.get("title") or ""),
+                location=_issue_location_from_tex(item),
+                suggestion="检查 section/subsection/subsubsection 层级。",
             )
+        )
             break
         prev_level = level or prev_level
     if parsed.get("figure_count", 0) > 0 and not parsed.get("figure_titles"):
@@ -533,7 +759,7 @@ def _check_tex_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 category="structure",
                 message="检测到 figure 环境，但未识别到 caption。",
                 evidence="figure without caption",
-                location={"environment": "figure"},
+                location={"environment": "figure", "display_text": "figure 环境附近"},
                 suggestion="为图表补充 \\caption{}。",
             )
         )
@@ -546,6 +772,8 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     paragraphs = list(parsed.get("paragraphs") or [])
     seen_fullwidth = re.search(r"[Ａ-Ｚａ-ｚ０-９]", text)
     if seen_fullwidth:
+        fullwidth_hit = _build_text_hit_location(parsed, seen_fullwidth.start())
+        fullwidth_evidence = _build_text_hit_evidence(parsed, seen_fullwidth.start(), seen_fullwidth.end(), default_text=text)
         issues.append(
             RuleIssue(
                 code="text.fullwidth_ascii",
@@ -553,13 +781,14 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                 severity="low",
                 category="text",
                 message="检测到全角英文或数字字符。",
-                evidence=seen_fullwidth.group(0),
-                location={"offset": seen_fullwidth.start()},
+                evidence=fullwidth_evidence,
+                location=fullwidth_hit,
                 suggestion="统一改为半角英文和数字。",
             )
         )
     double_space = re.search(r"[^\n]\s{2,}[^\n]", text)
     if double_space:
+        matched_paragraph = _find_paragraph_by_offset(parsed, double_space.start())
         issues.append(
             RuleIssue(
                 code="text.multiple_spaces",
@@ -568,11 +797,16 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                 category="text",
                 message="检测到连续空格。",
                 evidence=double_space.group(0),
-                location={"offset": double_space.start()},
+                location=(
+                    _issue_location_from_paragraph(matched_paragraph)
+                    if str(parsed.get("kind") or "") == "docx"
+                    else {"offset": double_space.start(), "display_text": "文档文本附近"}
+                ),
                 suggestion="清理多余空格，保持排版一致。",
             )
         )
-    if _mixed_punctuation(text):
+    mixed_punctuation_hit = _find_mixed_punctuation_hit(parsed)
+    if mixed_punctuation_hit:
         issues.append(
             RuleIssue(
                 code="text.mixed_punctuation",
@@ -580,8 +814,8 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                 severity="medium",
                 category="text",
                 message="检测到中文语境中可能存在中英文标点混用。",
-                evidence="文本中同时出现中文和英文标点组合",
-                location={"scope": "document"},
+                evidence=str(mixed_punctuation_hit.get("evidence") or ""),
+                location=dict(mixed_punctuation_hit.get("location") or {"scope": "document"}),
                 suggestion="统一中文正文中的标点风格。",
             )
         )
@@ -594,13 +828,13 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                     title="标题末尾含标点",
                     severity="low",
                     category="text",
-                    message="标题末尾通常不应保留句末标点。",
-                    evidence=content,
-                    location={"paragraph_index": paragraph.get("index")},
-                    suggestion="移除标题末尾句号、逗号、冒号等标点。",
-                )
+                message="标题末尾通常不应保留句末标点。",
+                evidence=content,
+                location=_issue_location_from_paragraph(paragraph),
+                suggestion="移除标题末尾句号、逗号、冒号等标点。",
             )
-            break
+        )
+        break
     return issues
 
 
@@ -632,6 +866,7 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
         length = int(match.get("length") or 0)
         evidence = text[offset: offset + length] if length > 0 else text[offset: offset + 20]
         category_name = str(((match.get("rule") or {}).get("category") or {}).get("id") or "text").lower()
+        matched_paragraph = _find_paragraph_by_offset(parsed, offset)
         issues.append(
             RuleIssue(
                 code=f"languagetool.{str((match.get('rule') or {}).get('id') or 'match').lower()}",
@@ -640,7 +875,16 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
                 category="text" if category_name else "text",
                 message=message or "检测到可能的语言或标点问题。",
                 evidence=evidence[:80],
-                location={"file": file_name, "offset": offset, "length": length},
+                location=(
+                    {
+                        **_issue_location_from_paragraph(matched_paragraph),
+                        "file": file_name,
+                        "offset": offset,
+                        "length": length,
+                    }
+                    if str(parsed.get("kind") or "") == "docx"
+                    else {"file": file_name, "offset": offset, "length": length, "display_text": "文档文本附近"}
+                ),
                 suggestion=_language_tool_suggestion(match),
             )
         )
@@ -659,10 +903,167 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(keyword.lower() in lowered for keyword in keywords)
 
 
-def _mixed_punctuation(text: str) -> bool:
-    zh_positions = [text.find(ch) for ch in _ZH_PUNCT if ch in text]
-    en_positions = [text.find(ch) for ch in _EN_PUNCT if ch in text]
-    return bool(zh_positions and en_positions)
+def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    kind = str(parsed.get("kind") or "")
+    if kind == "docx":
+        for paragraph in list(parsed.get("paragraphs") or []):
+            text = str(paragraph.get("text") or "").strip()
+            if not text:
+                continue
+            evidence = _extract_mixed_punctuation_evidence(text)
+            if evidence:
+                return {
+                    "evidence": evidence,
+                    "location": _issue_location_from_paragraph(paragraph),
+                }
+        return None
+
+    if kind == "tex":
+        for item in list(parsed.get("paragraphs") or []):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            evidence = _extract_mixed_punctuation_evidence(text)
+            if evidence:
+                return {
+                    "evidence": evidence,
+                    "location": _issue_location_from_tex(item),
+                }
+        return None
+
+    if kind == "pdf":
+        for page in list(parsed.get("pages") or []):
+            text = str(page.get("text") or "").strip()
+            if not text:
+                continue
+            evidence = _extract_mixed_punctuation_evidence(text)
+            if evidence:
+                page_no = page.get("page_no")
+                return {
+                    "evidence": evidence,
+                    "location": {
+                        "page": page_no,
+                        "display_text": f"第 {page_no} 页" if page_no is not None else "PDF 文本附近",
+                    },
+                }
+        return None
+
+    evidence = _extract_mixed_punctuation_evidence(str(parsed.get("text") or ""))
+    if not evidence:
+        return None
+    return {
+        "evidence": evidence,
+        "location": {"scope": "document", "display_text": "文档文本附近"},
+    }
+
+
+def _build_text_hit_location(parsed: dict[str, Any], offset: int) -> dict[str, Any]:
+    kind = str(parsed.get("kind") or "")
+    if kind == "docx":
+        matched_paragraph = _find_paragraph_by_offset(parsed, offset)
+        return _issue_location_from_paragraph(matched_paragraph)
+
+    if kind == "tex":
+        matched_item = _find_tex_paragraph_by_offset(parsed, offset)
+        return _issue_location_from_tex(matched_item) if matched_item else {"offset": offset, "display_text": "源码文本附近"}
+
+    if kind == "pdf":
+        page = _find_pdf_page_by_offset(parsed, offset)
+        page_no = page.get("page_no") if page else None
+        return {
+            "page": page_no,
+            "offset": offset,
+            "display_text": f"第 {page_no} 页" if page_no is not None else "PDF 文本附近",
+        }
+
+    return {"offset": offset, "display_text": "文档文本附近"}
+
+
+def _build_text_hit_evidence(parsed: dict[str, Any], start: int, end: int, *, default_text: str) -> str:
+    kind = str(parsed.get("kind") or "")
+    if kind == "docx":
+        matched_paragraph = _find_paragraph_by_offset(parsed, start)
+        if matched_paragraph:
+            return str(matched_paragraph.get("text") or "").strip() or _build_evidence_excerpt(default_text, start, end)
+
+    if kind == "tex":
+        matched_item = _find_tex_paragraph_by_offset(parsed, start)
+        if matched_item:
+            return str(matched_item.get("text") or "").strip() or _build_evidence_excerpt(default_text, start, end)
+
+    if kind == "pdf":
+        matched_page = _find_pdf_page_by_offset(parsed, start)
+        if matched_page:
+            return _build_evidence_excerpt(str(matched_page.get("text") or ""), 0, len(str(matched_page.get("text") or "")))
+
+    return _build_evidence_excerpt(default_text, start, end)
+
+
+def _find_tex_paragraph_by_offset(parsed: dict[str, Any], offset: int) -> dict[str, Any] | None:
+    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    cursor = 0
+    for item in paragraphs:
+        text = str(item.get("text") or "")
+        start = cursor
+        end = cursor + len(text)
+        if start <= offset <= end:
+            return item
+        cursor = end + 1
+    return paragraphs[0] if paragraphs else None
+
+
+def _find_pdf_page_by_offset(parsed: dict[str, Any], offset: int) -> dict[str, Any] | None:
+    pages = [item for item in list(parsed.get("pages") or []) if str(item.get("text") or "").strip()]
+    cursor = 0
+    for page in pages:
+        text = str(page.get("text") or "")
+        start = cursor
+        end = cursor + len(text)
+        if start <= offset <= end:
+            return page
+        cursor = end + 1
+    return pages[0] if pages else None
+
+
+def _extract_mixed_punctuation_evidence(text: str) -> str | None:
+    content = str(text or "")
+    if not content:
+        return None
+
+    escaped_zh = re.escape(_ZH_PUNCT)
+    escaped_en = re.escape(_EN_PUNCT)
+    suspicious_patterns = [
+        rf"[\u4e00-\u9fff][{escaped_en}]",
+        rf"[{escaped_en}][\u4e00-\u9fff]",
+        rf"[A-Za-z0-9][{escaped_zh}]",
+        rf"[{escaped_zh}][A-Za-z0-9]",
+    ]
+    for pattern in suspicious_patterns:
+        match = re.search(pattern, content)
+        if match:
+            return _build_evidence_excerpt(content, match.start(), match.end())
+
+    seen_zh = re.search(rf"[{escaped_zh}]", content)
+    seen_en = re.search(rf"[{escaped_en}]", content)
+    if not (seen_zh and seen_en):
+        return None
+
+    start = min(seen_zh.start(), seen_en.start())
+    end = max(seen_zh.end(), seen_en.end())
+    return _build_evidence_excerpt(content, start, end)
+
+
+def _build_evidence_excerpt(text: str, start: int, end: int, *, radius: int = 12) -> str:
+    if len(text) <= 80:
+        return text.strip()
+    left = max(0, start - radius)
+    right = min(len(text), end + radius)
+    excerpt = text[left:right].strip()
+    if left > 0:
+        excerpt = f"...{excerpt}"
+    if right < len(text):
+        excerpt = f"{excerpt}..."
+    return excerpt
 
 
 def _dedupe_issues(issues: list[RuleIssue]) -> list[RuleIssue]:
