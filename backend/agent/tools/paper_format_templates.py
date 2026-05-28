@@ -160,6 +160,9 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
                 "header_distance_cm": 2.0,
                 "footer_distance_cm": 2.0,
                 "tolerance": 0.2,
+                "expected_header_text": "重庆邮电大学硕士学位论文",
+                "expected_footer_pattern": "page_number_only",
+                "cover_no_header_footer": True,
             },
             "abstract_keywords": {
                 "min_count": 3,

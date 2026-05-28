@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ from agent.tools.paper_format_templates import get_paper_template
 
 DEFAULT_TEMPLATE_ID = "generic_cn_thesis"
 
-_ZH_PUNCT = "，。；：？！、“”‘’（）《》【】"
+_ZH_PUNCT = "，。；：？！、''‘’（）《》【】"
 _EN_PUNCT = ",.;:?!()[]\"'"
 _SECTION_CMD_LEVEL = {
     "part": 0,
@@ -383,8 +383,8 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少摘要",
                 severity="high",
                 category="structure",
-                message="文档中未识别到“摘要”部分。",
-                evidence="未找到标题或段落“摘要”",
+                message="文档中未识别到'摘要'部分。",
+                evidence="未找到标题或段落'摘要'",
                 location={"section": "abstract"},
                 suggestion="补充中文摘要并按模板放在前置部分。",
             )
@@ -410,7 +410,7 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少关键词",
                 severity="medium",
                 category="structure",
-                message="文档中未识别到“关键词/关键字”部分。",
+                message="文档中未识别到'关键词/关键字'部分。",
                 evidence="未找到关键词字段",
                 location={"section": "keywords"},
                 suggestion="按模板添加关键词字段。",
@@ -437,7 +437,7 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少参考文献",
                 severity="high",
                 category="structure",
-                message="文档中未识别到“参考文献”部分。",
+                message="文档中未识别到'参考文献'部分。",
                 evidence="未找到参考文献标题",
                 location={"section": "references"},
                 suggestion="补充参考文献章节并统一编号。",
@@ -483,7 +483,7 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 message="文中出现图示痕迹，但未识别到标准图题。",
                 evidence="检测到图相关文本但未提取到图题",
                 location={"section": "figure"},
-                suggestion="检查图题是否按模板书写，例如“图 1 标题”。",
+                suggestion="检查图题是否按模板书写，例如'图 1 标题'。",
             )
         )
     return issues
@@ -499,8 +499,8 @@ def _check_pdf_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少摘要",
                 severity="high",
                 category="structure",
-                message="PDF 文本中未识别到“摘要”部分。",
-                evidence="未找到标题或段落“摘要”",
+                message="PDF 文本中未识别到'摘要'部分。",
+                evidence="未找到标题或段落'摘要'",
                 location={"section": "abstract"},
                 suggestion="核对 PDF 是否包含中文摘要，或改传 Word 文档以做更完整校验。",
             )
@@ -512,7 +512,7 @@ def _check_pdf_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少关键词",
                 severity="medium",
                 category="structure",
-                message="PDF 文本中未识别到“关键词/关键字”部分。",
+                message="PDF 文本中未识别到'关键词/关键字'部分。",
                 evidence="未找到关键词字段",
                 location={"section": "keywords"},
                 suggestion="补充关键词字段，或检查 PDF 文本是否可正确抽取。",
@@ -525,7 +525,7 @@ def _check_pdf_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 title="缺少参考文献",
                 severity="high",
                 category="structure",
-                message="PDF 文本中未识别到“参考文献”部分。",
+                message="PDF 文本中未识别到'参考文献'部分。",
                 evidence="未找到参考文献标题",
                 location={"section": "references"},
                 suggestion="补充参考文献章节，或检查 PDF 文本抽取结果。",
@@ -617,6 +617,52 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
                 )
             )
             break
+    # Check for inconsistent fonts in body paragraphs
+    font_names: set[str] = set()
+    for paragraph in body_candidates[:30]:
+        fn = paragraph.get("font_name_resolved") or paragraph.get("font_name") or ""
+        if fn:
+            font_names.add(str(fn).strip())
+    if len(font_names) > 2:
+        issues.append(
+            RuleIssue(
+                code="style.body_font_inconsistent",
+                title="正文字体不一致",
+                severity="medium",
+                category="style",
+                message=f"正文中检测到 {len(font_names)} 种不同字体：{', '.join(sorted(font_names))}。",
+                evidence=f"字体列表: {', '.join(sorted(font_names))}",
+                location={"display_text": "正文区域", "scope": "body"},
+                suggestion="将正文统一为模板规定的字体（中文宋体，英文 Times New Roman）。",
+                actual={"fonts": sorted(font_names)},
+                parser_confidence="medium",
+            )
+        )
+    # Check for consecutive blank paragraphs or excessive empty lines
+    blank_count = 0
+    consecutive_blanks: list[int] = []
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "").strip()
+        if not text and not paragraph.get("heading_level"):
+            blank_count += 1
+        else:
+            if blank_count >= 2:
+                consecutive_blanks.append(blank_count)
+            blank_count = 0
+    if consecutive_blanks:
+        issues.append(
+            RuleIssue(
+                code="style.excessive_blank_paragraphs",
+                title="存在多余空行",
+                severity="low",
+                category="style",
+                message=f"正文中检测到 {len(consecutive_blanks)} 处连续空段落（最多连续 {max(consecutive_blanks)} 个），可能为排版异常。",
+                evidence=f"连续空段落数: {consecutive_blanks[:5]}",
+                location={"display_text": "正文区域", "scope": "body"},
+                suggestion="检查并删除多余空行，正文段落间不应有空白段落。",
+                parser_confidence="high",
+            )
+        )
     return issues
 
 
@@ -730,6 +776,49 @@ def _check_docx_page_setup(
                 parser_confidence="high",
             )
         )
+    # Check header/footer text content against template requirements
+    header_footer_content_rule = dict(rules.get("header_footer") or {})
+    expected_header = str(header_footer_content_rule.get("expected_header_text") or "").strip()
+    cover_no_hf = bool(header_footer_content_rule.get("cover_no_header_footer"))
+    sections = list(parsed.get("sections") or [])
+    header_texts = [str(sec.get("header_text") or "").strip() for sec in sections]
+    footer_texts = [str(sec.get("footer_text") or "").strip() for sec in sections]
+    if expected_header and header_texts:
+        any_header_match = any(expected_header in ht for ht in header_texts if ht)
+        if any(ht for ht in header_texts) and not any_header_match:
+            issues.append(
+                RuleIssue(
+                    code="template.header_content_mismatch",
+                    title="页眉内容与模板要求不一致",
+                    severity="medium",
+                    category="template",
+                    message=f"模板要求页眉包含 {expected_header}，但未在任何节的页眉中检测到。",
+                    evidence=f"检测到的页眉文本: {[ht[:60] for ht in header_texts if ht][:5]}",
+                    location={"display_text": "页眉区域", "scope": "headers"},
+                    suggestion=f"在页眉中添加 {expected_header}。",
+                    expected={"header_text": expected_header},
+                    actual={"header_texts": [ht[:80] for ht in header_texts if ht][:5]},
+                    parser_confidence="high",
+                )
+            )
+    if cover_no_hf and sections:
+        first_section = sections[0]
+        first_header = str(first_section.get("header_text") or "").strip()
+        first_footer = str(first_section.get("footer_text") or "").strip()
+        if first_header or first_footer:
+            issues.append(
+                RuleIssue(
+                    code="template.cover_has_header_footer",
+                    title="封面不应包含页眉页脚",
+                    severity="medium",
+                    category="template",
+                    message="封面通常不应有页眉和页脚。",
+                    evidence=f"封面页眉: {repr(first_header[:60])}, 页脚: {repr(first_footer[:60])}",
+                    location={"display_text": "封面区域", "section_index": 0},
+                    suggestion="在 Word 中为封面设置独立的节，取消首页页眉页脚。",
+                    parser_confidence="high",
+                )
+            )
     return issues
 
 
@@ -762,14 +851,14 @@ def _check_template_rules(
                     title=f"模板要求章节缺失：{section_name}",
                     severity=str(section_rule.get("severity") or "medium"),
                     category="template",
-                    message=f"按 {template.get('name')} 规则未识别到“{section_name}”。",
+                    message=f"按 {template.get('name')} 规则未识别到'{section_name}'。",
                     evidence=f"未找到模板章节：{section_name}",
                     location={
                         "section": section_name,
                         "template_id": template_id,
                         "display_text": f"模板要求存在《{section_name}》章节",
                     },
-                    suggestion=f"按学校模板补充或核对“{section_name}”章节。",
+                    suggestion=f"按学校模板补充或核对'{section_name}'章节。",
                 )
             )
 
@@ -818,10 +907,18 @@ def _check_template_rules(
     expected_size = body_font.get("size_pt")
     font_mismatch_samples: list[dict[str, Any]] = []
     font_mismatch_count = 0
+    unresolved_font_count = 0
     for paragraph in body_candidates:
-        actual_name = str(paragraph.get("font_name") or "").lower()
-        actual_size = paragraph.get("font_size_pt")
-        name_mismatch = bool(expected_names and actual_name and actual_name not in expected_names)
+        actual_name = str(
+            paragraph.get("font_name_resolved") or paragraph.get("font_name") or ""
+        ).lower()
+        actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt")
+        # Font inherited from styles — skip name check when unresolved
+        if actual_name:
+            name_mismatch = actual_name not in expected_names
+        else:
+            name_mismatch = False
+            unresolved_font_count += 1
         size_mismatch = (
             isinstance(expected_size, (int, float))
             and isinstance(actual_size, (int, float))
@@ -834,8 +931,8 @@ def _check_template_rules(
                     "paragraph_index": paragraph.get("index"),
                     "display_text": _issue_location_from_paragraph(paragraph).get("display_text"),
                     "section_title": paragraph.get("section_title"),
-                    "font_name": paragraph.get("font_name"),
-                    "font_size_pt": paragraph.get("font_size_pt"),
+                    "font_name": actual_name or "(样式继承-未识别)",
+                    "font_size_pt": actual_size,
                     "text": str(paragraph.get("text") or "")[:80],
                 })
     if font_mismatch_count:
@@ -850,8 +947,8 @@ def _check_template_rules(
                 title="正文字体或字号与学校模板不一致",
                 severity="medium",
                 category="template",
-                message=f"已扫描 {len(body_candidates)} 个正文段落，发现 {font_mismatch_count} 个段落字体或字号与模板建议不一致。",
-                evidence=f"不一致段落 {font_mismatch_count}/{len(body_candidates)}。示例：{sample_text}",
+                message=f"已扫描 {len(body_candidates)} 个正文段落，其中 {font_mismatch_count} 个字体/字号与模板不一致" + (f"，{unresolved_font_count} 个段落字体由样式继承无法识别（不计入差异）" if unresolved_font_count > 0 else ""),
+                evidence=f"不一致段落 {font_mismatch_count}/{len(body_candidates)}" + (f"，{unresolved_font_count} 个为样式继承" if unresolved_font_count > 0 else "") + f"。示例：{sample_text}",
                 location={
                     "section_title": first_sample.get("section_title"),
                     "paragraph_index": first_sample.get("paragraph_index"),
@@ -1132,16 +1229,19 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
         )
     mixed_punctuation_hit = _find_mixed_punctuation_hit(parsed)
     if mixed_punctuation_hit:
+        hit_count = _count_mixed_punctuation_hits(parsed)
         issues.append(
             RuleIssue(
                 code="text.mixed_punctuation",
                 title="中英文标点混用",
                 severity="medium",
                 category="text",
-                message="检测到中文语境中可能存在中英文标点混用。",
+                message=f"检测到全文约 {hit_count} 处中英文标点混用，如中文语境中使用英文括号/逗号，或英文语境中使用中文标点。",
                 evidence=str(mixed_punctuation_hit.get("evidence") or ""),
                 location=dict(mixed_punctuation_hit.get("location") or {"scope": "document"}),
-                suggestion="统一中文正文中的标点风格。",
+                suggestion="统一标点风格：中文正文使用全角标点，英文使用半角标点。",
+                actual={"estimated_total_hits": hit_count},
+                parser_confidence="medium",
             )
         )
     for paragraph in paragraphs[:30]:
@@ -1159,7 +1259,26 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                 suggestion="移除标题末尾句号、逗号、冒号等标点。",
             )
         )
-        break
+            break
+    # Check Chinese-English spacing: Chinese char followed by ASCII letter/digit without space
+    cn_en_no_space = re.findall(r"[一-鿿][A-Za-z0-9]|[一-鿿]\(", text)
+    if cn_en_no_space:
+        evidence_text = text[:4000]
+        first_hit = re.search(r"[一-鿿][A-Za-z0-9(]", text)
+        offset = first_hit.start() if first_hit else 0
+        issues.append(
+            RuleIssue(
+                code="text.cn_en_space_missing",
+                title="中英文之间缺少空格",
+                severity="low",
+                category="text",
+                message=f"检测到 {len(cn_en_no_space)} 处中文与英文/数字之间缺少空格，可能影响排版美观。",
+                evidence=_build_evidence_excerpt(text, offset, offset + 4),
+                location=_build_text_hit_location(parsed, offset),
+                suggestion="在中英文之间添加半角空格以改善排版美观度。",
+                parser_confidence="medium",
+            )
+        )
     return issues
 
 
@@ -1423,6 +1542,35 @@ def _extract_mixed_punctuation_evidence(text: str) -> str | None:
     return _build_evidence_excerpt(content, start, end)
 
 
+def _count_mixed_punctuation_hits(parsed: dict) -> int:
+    """Count total mixed punctuation occurrences across the document."""
+    count = 0
+    kind = str(parsed.get("kind") or "")
+    escaped_zh = re.escape(_ZH_PUNCT)
+    escaped_en = re.escape(_EN_PUNCT)
+    patterns = [
+        rf"[一-鿿][{escaped_en}]",
+        rf"[{escaped_en}][一-鿿]",
+        rf"[A-Za-z0-9][{escaped_zh}]",
+        rf"[{escaped_zh}][A-Za-z0-9]",
+    ]
+    if kind == "docx":
+        for paragraph in list(parsed.get("paragraphs") or []):
+            text = str(paragraph.get("text") or "")
+            for pat in patterns:
+                count += len(re.findall(pat, text))
+    elif kind == "pdf":
+        for page in list(parsed.get("pages") or []):
+            text = str(page.get("text") or "")
+            for pat in patterns:
+                count += len(re.findall(pat, text))
+    else:
+        text = str(parsed.get("text") or "")
+        for pat in patterns:
+            count += len(re.findall(pat, text))
+    return count
+
+
 def _build_evidence_excerpt(text: str, start: int, end: int, *, radius: int = 12) -> str:
     if len(text) <= 80:
         return text.strip()
@@ -1662,18 +1810,34 @@ def _missing_numbers_in_sequence(numbers: list[str]) -> list[str]:
     return missing
 
 
+
+def _find_reference_boundary(text: str) -> int:
+    """Find the character position where the reference list begins."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in {"参考文献", "References", "Bibliography", "REFERENCES"}:
+            # Verify it looks like a section header (short line, no brackets)
+            if len(stripped) < 20 and not re.match(r"^\[\d+\]", stripped):
+                return text.find(line)
+    return -1
+
 def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues = []
     text = str(parsed.get("text") or "")
 
+    # --- Extract in-text citation numbers ---
     cited_numbers: set[int] = set()
-    for m in re.finditer(r"\[(\d+(?:[,,、\-\u2013]\d+)*)\]", text):
+    # Only extract citations from text before the reference list to avoid
+    # counting reference entries themselves as in-text citations.
+    ref_boundary = _find_reference_boundary(text)
+    pre_ref_text = text[:ref_boundary] if ref_boundary > 0 else text
+    for m in re.finditer(r"\[(\d+(?:[,,、\-–]\d+)*)\]", pre_ref_text):
         inner = m.group(1)
         for part in re.split(r"[,,、]", inner):
             part = part.strip()
-            if "-" in part or "\u2013" in part:
+            if "-" in part or "–" in part:
                 try:
-                    a_str, b_str = re.split(r"[-\u2013]", part)
+                    a_str, b_str = re.split(r"[-–]", part)
                     cited_numbers.update(range(int(a_str), int(b_str) + 1))
                 except ValueError:
                     pass
@@ -1683,18 +1847,36 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 except ValueError:
                     pass
 
+    # --- Extract reference entry numbers with multi-line support ---
     ref_numbers: set[int] = set()
-    for line in text.splitlines():
-        m = re.match(r"^\[(\d+)\]", line.strip())
-        if m:
-            ref_numbers.add(int(m.group(1)))
-
+    ref_entries: dict[int, str] = {}
+    raw_refs = list(parsed.get("references") or [])
+    if raw_refs:
+        for line in raw_refs:
+            m = re.match(r"^\[(\d+)\]\s*(.+)", str(line).strip())
+            if m:
+                num = int(m.group(1))
+                ref_numbers.add(num)
+                ref_entries[num] = m.group(2).strip()
+    # Fallback: parse from full text with multi-line entry support
     if not ref_numbers:
-        for line in list(parsed.get("references") or []):
-            match = re.match(r"^\[(\d+)\]", str(line).strip())
-            if match:
-                ref_numbers.add(int(match.group(1)))
+        current_num = None
+        current_text = ""
+        for line in text.splitlines():
+            m = re.match(r"^\[(\d+)\]\s*(.+)", line.strip())
+            if m:
+                if current_num is not None:
+                    ref_entries[current_num] = current_text.strip()
+                current_num = int(m.group(1))
+                current_text = m.group(2)
+                ref_numbers.add(current_num)
+            elif current_num is not None and line.strip():
+                # Continuation of previous entry (wrapped line)
+                current_text += " " + line.strip()
+        if current_num is not None:
+            ref_entries[current_num] = current_text.strip()
 
+    # --- Cross-reference: citation vs bibliography ---
     missing_in_bib = cited_numbers - ref_numbers
     if missing_in_bib:
         issues.append(RuleIssue(
@@ -1702,7 +1884,7 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             title="正文引用在参考文献列表中缺失",
             severity="high",
             category="structure",
-            message=f"正文中引用了编号 {sorted(missing_in_bib)[:10]}，但文末参考文献列表中未找到对应条目。",
+            message=f"正文引用了编号 {sorted(missing_in_bib)[:10]} 共 {len(missing_in_bib)} 条，但文末参考文献列表中未找到对应条目。",
             evidence=f"正文引用: {sorted(cited_numbers)[:20]}, 文献列表: {sorted(ref_numbers)[:20]}",
             location={"display_text": "参考文献章节"},
             suggestion="确保正文中每条引用在参考文献列表中都有对应条目。",
@@ -1712,73 +1894,109 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
         ))
 
     unused = ref_numbers - cited_numbers
-    if unused and len(ref_numbers) > 5:
+    if unused and len(ref_numbers) > 3:
         issues.append(RuleIssue(
             code="references.unused_reference",
-            title="参考文献列表中部分文献未被引用",
+            title="参考文献列表中部分文献未被正文引用",
             severity="low",
             category="structure",
-            message=f"参考文献列表中编号 {sorted(unused)[:10]} 的条目未在正文中被引用。",
+            message=f"参考文献编号 {sorted(unused)[:10]} 共 {len(unused)} 条未在正文中被引用。",
             evidence=f"未引用编号: {sorted(unused)[:10]}",
             location={"display_text": "参考文献章节"},
             suggestion="确认这些文献是否确实需要列入，或补充正文引用。",
             parser_confidence="medium",
         ))
 
+    # --- Numbering continuity ---
     if ref_numbers:
         sorted_refs = sorted(ref_numbers)
-        missing_ref_numbers = [
-            number for number in range(sorted_refs[0], sorted_refs[-1] + 1)
-            if number not in ref_numbers
-        ]
-        if missing_ref_numbers:
+        gaps = [n for n in range(sorted_refs[0], sorted_refs[-1] + 1) if n not in ref_numbers]
+        if gaps:
             issues.append(RuleIssue(
                 code="references.numbering_discontinuous",
                 title="参考文献编号不连续",
                 severity="medium",
                 category="structure",
-                message=f"参考文献编号缺少 {missing_ref_numbers[:10]}。",
-                evidence=f"参考文献编号: {sorted_refs}",
+                message=f"参考文献编号缺少 {gaps[:10]}{'...' if len(gaps) > 10 else ''}，共 {len(gaps)} 个缺口。",
+                evidence=f"编号范围: {sorted_refs[0]}-{sorted_refs[-1]}，现有: {sorted_refs}",
                 location={"display_text": "参考文献章节"},
                 suggestion="检查参考文献列表编号是否从 1 开始连续排列。",
                 parser_confidence="high",
                 expected={"continuous_from": sorted_refs[0], "continuous_to": sorted_refs[-1]},
-                actual={"missing_numbers": missing_ref_numbers},
+                actual={"missing_numbers": gaps},
             ))
 
-    reference_lines = list(parsed.get("references") or [])
-    if not reference_lines:
-        reference_lines = [line.strip() for line in text.splitlines() if re.match(r"^\[\d+\]", line.strip())]
-    for line in reference_lines[:30]:
-        stripped = str(line).strip()
-        if not stripped:
-            continue
-        if not _reference_entry_has_basic_gbt7714_shape(stripped):
+    # --- Per-entry format analysis with statistics ---
+    if ref_entries:
+        format_issues = []
+        for num in sorted(ref_entries)[:50]:
+            entry_text = ref_entries[num]
+            check = _analyze_reference_entry(entry_text)
+            if check["problems"]:
+                format_issues.append({"number": num, "problems": check["problems"], "text": entry_text[:120]})
+        if format_issues:
+            bad_count = len(format_issues)
+            total = len(ref_entries)
+            all_problems = list(dict.fromkeys(p for fi in format_issues for p in fi["problems"]))
+            sample = format_issues[0]
             issues.append(RuleIssue(
                 code="references.entry_format_incomplete",
-                title="参考文献著录信息疑似不完整",
+                title="参考文献著录信息不完整",
                 severity="medium",
                 category="structure",
-                message="参考文献条目缺少题名、文献类型标识、出版源或年份等基础信息。",
-                evidence=stripped[:160],
+                message=f"{bad_count}/{total} 条参考文献存在格式问题: {'; '.join(all_problems[:5])}。",
+                evidence=f"[{sample['number']}] {sample['text']}",
                 location={"display_text": "参考文献章节"},
-                suggestion="按 GB/T 7714 或学校模板补全作者、题名、文献类型、出版源、年份等信息。",
+                suggestion="按 GB/T 7714 标准补全各条目缺失的字段。常见期刊格式: [序号] 作者. 题名[J]. 刊名, 年, 卷(期): 页码.",
+                expected={"required_fields": ["author", "title", "year", "source"]},
+                actual={"bad_count": bad_count, "total_count": total, "common_problems": all_problems},
                 parser_confidence="medium",
             ))
-            break
+    elif not ref_numbers and cited_numbers:
+        issues.append(RuleIssue(
+            code="references.bibliography_not_found",
+            title="未识别到参考文献列表",
+            severity="high",
+            category="structure",
+            message="正文中有引用编号但文末未找到参考文献列表。",
+            evidence=f"正文引用: {sorted(cited_numbers)[:20]}",
+            location={"display_text": "文末区域"},
+            suggestion="在文末添加参考文献列表，每条以 [序号] 开头。",
+            parser_confidence="high",
+        ))
 
     return issues
 
 
+def _analyze_reference_entry(text: str) -> dict:
+    """Analyze a single reference entry for GB/T 7714 compliance."""
+    problems = []
+    content = str(text or "").strip()
+    if not content:
+        return {"problems": ["empty"]}
+
+    has_type = bool(re.search(r"\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]", content))
+    has_year = bool(re.search(r"(?:19|20)\d{2}", content))
+    has_source = bool(re.search(r"\][^.[\]]+\.[^.[\]]*$", content)) or bool(re.search(r"\d{4}[,，]\s*\d+", content))
+    has_vol_pages = bool(re.search(r"\d{4}[,，]\s*\d+", content)) or bool(re.search(r"\d+\(\d+\)", content)) or bool(re.search(r":\s*\d+-\d+", content))
+    has_period_end = content.rstrip().endswith(".")
+
+    if not has_year:
+        problems.append("缺少年份")
+    if not has_type:
+        problems.append("缺少文献类型标识[J/M/D]")
+    if not has_source:
+        problems.append("缺少刊名/出版源")
+    if not has_vol_pages:
+        problems.append("缺少卷期页码")
+    if not has_period_end:
+        problems.append("末尾缺句号")
+
+    return {"problems": problems}
+
+
 def _reference_entry_has_basic_gbt7714_shape(line: str) -> bool:
-    content = str(line or "").strip()
-    if not re.match(r"^\[\d+\]\s*\S+", content):
-        return False
-    has_year = bool(re.search(r"(19|20)\d{2}", content))
-    has_type = bool(re.search(r"\[[A-Z]{1,3}(?:/[A-Z])?\]", content))
-    # A minimal Chinese GB/T-style entry usually has at least two separators after the number.
-    separator_count = sum(content.count(item) for item in [".", "．", ",", "，"])
-    return has_year and has_type and separator_count >= 2
+    return len(_analyze_reference_entry(line)["problems"]) <= 2
 
 
 def _check_word_artifact_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
