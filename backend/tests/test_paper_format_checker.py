@@ -31,6 +31,19 @@ def test_parse_docx_bytes_extracts_structure_and_layout():
     assert parsed["section_count"] >= 1
 
 
+def test_parse_docx_enhanced_extracts_template_check_metadata():
+    from agent.tools.paper_docx_parser import parse_docx_enhanced
+
+    parsed = parse_docx_enhanced(_build_docx_bytes())
+
+    assert "orientation" in parsed["page_layout"]
+    assert "gutter_cm" in parsed["page_layout"]
+    assert "toc_entries" in parsed
+    assert "table_titles" in parsed
+    assert "formula_numbers" in parsed
+    assert "word_metadata" in parsed
+
+
 def test_parse_tex_bytes_extracts_commands_and_sections():
     content = r"""
 \documentclass{article}
@@ -306,6 +319,104 @@ def test_check_paper_format_reports_missing_body_when_no_main_text():
 
     missing_titles = {item["title"] for item in report["issues"] if item["code"] == "template.required_section_missing"}
     assert "模板要求章节缺失：正文" in missing_titles
+
+
+def test_check_paper_format_covers_checklist_layout_front_matter_and_word_artifacts():
+    parsed = {
+        "kind": "docx",
+        "text": (
+            "封面\n摘要\n摘要正文引用了图1和[3]。\n关键词：一个，两个\nABSTRACT\nKeywords: one, two\n"
+            "目录\n1 绪论\n1.2 研究背景\n正文见图2-1、表2-1和式（2-1）。\n"
+            "图2-2 错位图题\n表2-2 错位表题\nE=mc^2 （2-3）\n"
+            "参考文献\n[1] 张三. 论文题名[J]. 期刊, 2020.\n[3] 缺少编号二的文献\n"
+        ),
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 1, "section_index": 1},
+            {"text": "ABSTRACT", "level": 1, "paragraph_index": 4, "section_index": 2},
+            {"text": "目录", "level": 1, "paragraph_index": 6, "section_index": 3},
+            {"text": "1 绪论", "level": 1, "paragraph_index": 7, "section_index": 4},
+            {"text": "1.2 研究背景", "level": 2, "paragraph_index": 8, "section_index": 4},
+            {"text": "参考文献", "level": 1, "paragraph_index": 13, "section_index": 5},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "封面", "heading_level": 0, "section_title": "", "section_index": 0, "paragraph_no": 1},
+            {"index": 1, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "paragraph_no": 0},
+            {"index": 2, "text": "摘要正文引用了图1和[3]。", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 1, "font_name": "宋体", "font_size_pt": 12, "line_spacing": 1.5, "first_line_indent_pt": 0},
+            {"index": 3, "text": "关键词：一个，两个", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 2, "font_name": "宋体", "font_size_pt": 12, "line_spacing": 1.5},
+            {"index": 4, "text": "ABSTRACT", "heading_level": 1, "section_title": "ABSTRACT", "section_index": 2, "paragraph_no": 0},
+            {"index": 5, "text": "Keywords: one, two", "heading_level": 0, "section_title": "ABSTRACT", "section_index": 2, "paragraph_no": 1, "font_name": "Times New Roman", "font_size_pt": 12, "line_spacing": 1.5},
+            {"index": 6, "text": "目录", "heading_level": 1, "section_title": "目录", "section_index": 3, "paragraph_no": 0},
+            {"index": 7, "text": "1 绪论", "heading_level": 1, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 0, "font_name": "黑体", "font_size_pt": 15},
+            {"index": 8, "text": "1.2 研究背景", "heading_level": 2, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 0, "font_name": "黑体", "font_size_pt": 14},
+            {"index": 9, "text": "正文见图2-1、表2-1和式（2-1）。", "heading_level": 0, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 1, "font_name": "宋体", "font_size_pt": 12, "line_spacing": 1.0, "first_line_indent_pt": 0},
+            {"index": 10, "text": "图2-2 错位图题", "heading_level": 0, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 2},
+            {"index": 11, "text": "表2-2 错位表题", "heading_level": 0, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 3},
+            {"index": 12, "text": "E=mc^2 （2-3）", "heading_level": 0, "section_title": "1 绪论", "section_index": 4, "paragraph_no": 4},
+            {"index": 13, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 5, "paragraph_no": 0},
+            {"index": 14, "text": "[1] 张三. 论文题名[J]. 期刊, 2020.", "heading_level": 0, "section_title": "参考文献", "section_index": 5, "paragraph_no": 1},
+            {"index": 15, "text": "[3] 缺少编号二的文献", "heading_level": 0, "section_title": "参考文献", "section_index": 5, "paragraph_no": 2},
+        ],
+        "toc_entries": [{"title": "1 绪论", "level": 1, "page": "1"}],
+        "figure_titles": ["图2-2 错位图题"],
+        "table_titles": ["表2-2 错位表题"],
+        "formula_numbers": ["2-3"],
+        "references": ["[1] 张三. 论文题名[J]. 期刊, 2020.", "[3] 缺少编号二的文献"],
+        "word_metadata": {"comment_count": 1, "revision_count": 2, "hidden_text_count": 1},
+        "sections": [
+            {
+                "page_width_cm": 20.0,
+                "page_height_cm": 29.7,
+                "orientation": "portrait",
+                "top_margin_cm": 2.0,
+                "bottom_margin_cm": 3.0,
+                "left_margin_cm": 2.0,
+                "right_margin_cm": 3.0,
+                "gutter_cm": 0.5,
+                "header_distance_cm": 1.0,
+                "footer_distance_cm": 1.0,
+                "header_text": "错误页眉",
+                "footer_text": "第 1 页",
+            }
+        ],
+        "page_layout": {
+            "page_width_cm": 20.0,
+            "page_height_cm": 29.7,
+            "orientation": "portrait",
+            "top_margin_cm": 2.0,
+            "bottom_margin_cm": 3.0,
+            "left_margin_cm": 2.0,
+            "right_margin_cm": 3.0,
+            "gutter_cm": 0.5,
+            "header_distance_cm": 1.0,
+            "footer_distance_cm": 1.0,
+            "header_text": "错误页眉",
+            "footer_text": "第 1 页",
+        },
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="按清单和重邮模板查非",
+        template_id="cqupt_graduate_thesis_2022",
+    )
+
+    issue_codes = {item["code"] for item in report["issues"]}
+    assert "template.page_size_mismatch" in issue_codes
+    assert "template.gutter_mismatch" in issue_codes
+    assert "template.header_footer_mismatch" in issue_codes
+    assert "abstract.keyword_count_out_of_range" in issue_codes
+    assert "abstract.keyword_separator_mismatch" in issue_codes
+    assert "toc.required_entry_missing" in issue_codes
+    assert "heading.numbering_discontinuous" in issue_codes
+    assert "style.paragraph_indent_missing" in issue_codes
+    assert "style.line_spacing_small" in issue_codes
+    assert "figure.referenced_caption_missing" in issue_codes
+    assert "table.referenced_caption_missing" in issue_codes
+    assert "formula.numbering_discontinuous" in issue_codes
+    assert "references.numbering_discontinuous" in issue_codes
+    assert "references.entry_format_incomplete" in issue_codes
+    assert "word.comments_or_revisions_present" in issue_codes
 
 
 def test_check_paper_format_supports_pdf_text_phase_with_limitations():

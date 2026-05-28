@@ -32,7 +32,7 @@ export const chatApi = {
   },
 
   sendMessage(sessionId: string, payload: ChatMessageSendRequest) {
-    return http.post<ChatSendResponse>(`/v1/chat/sessions/${sessionId}/messages`, payload);
+    return http.post<ChatSendResponse>(`/v1/chat/sessions/${sessionId}/messages`, payload, { timeout: 180000 });
   },
 
   cancelMessage(sessionId: string, messageId: string) {
