@@ -6,6 +6,7 @@ It reduces noise, controls cost, and gives the model concrete evidence to work w
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 
@@ -69,25 +70,34 @@ def _build_style_summary(parsed: dict[str, Any], document_type: str) -> dict[str
 
 def _docx_style_summary(parsed: dict[str, Any]) -> dict[str, Any]:
     paragraphs = list(parsed.get("paragraphs") or [])
-    font_names: list[str] = []
-    font_sizes: list[float] = []
-    line_spacings: list[float] = []
-    for p in paragraphs[:50]:
-        fn = p.get("font_name")
+    body_paragraphs = [
+        item for item in paragraphs
+        if str(item.get("text") or "").strip() and not item.get("heading_level")
+    ]
+    font_names: Counter[str] = Counter()
+    font_sizes: Counter[str] = Counter()
+    line_spacings: Counter[str] = Counter()
+    for p in body_paragraphs:
+        fn = p.get("font_name") or p.get("font_name_resolved") or p.get("font_name_raw")
         if fn:
-            font_names.append(str(fn))
-        fs = p.get("font_size_pt")
+            font_names[str(fn)] += 1
+        fs = p.get("font_size_pt") or p.get("font_size_resolved") or p.get("font_size_raw")
         if fs is not None:
-            font_sizes.append(float(fs))
+            font_sizes[str(float(fs))] += 1
         ls = p.get("line_spacing")
         if ls is not None:
-            line_spacings.append(float(ls))
+            line_spacings[str(float(ls))] += 1
 
     page = dict(parsed.get("page_layout") or {})
     return {
-        "font_names": sorted(set(font_names)) if font_names else [],
-        "font_sizes": sorted(set(font_sizes)) if font_sizes else [],
-        "line_spacing_values": sorted(set(line_spacings)) if line_spacings else [],
+        "body_paragraph_count": len(body_paragraphs),
+        "style_evidence_scope": "all_body_paragraphs",
+        "font_names": sorted(font_names) if font_names else [],
+        "font_name_counts": dict(font_names.most_common(20)),
+        "font_sizes": sorted(float(item) for item in font_sizes) if font_sizes else [],
+        "font_size_counts": dict(font_sizes.most_common(20)),
+        "line_spacing_values": sorted(float(item) for item in line_spacings) if line_spacings else [],
+        "line_spacing_counts": dict(line_spacings.most_common(20)),
         "margin_cm": {
             "top": page.get("top_margin_cm"),
             "bottom": page.get("bottom_margin_cm"),
@@ -111,7 +121,9 @@ def _tex_style_summary(parsed: dict[str, Any]) -> dict[str, Any]:
 def _pdf_style_summary(parsed: dict[str, Any]) -> dict[str, Any]:
     pages = list(parsed.get("pages") or [])
     return {
-        "layout": dict(parsed.get("layout") or {}),
+        "layout": dict(parsed.get("layout_summary") or parsed.get("layout") or {}),
+        "font_summary": dict(parsed.get("font_summary") or {}),
+        "font_size_summary": dict(parsed.get("font_size_summary") or {}),
         "page_count": int(parsed.get("page_count") or len(pages) or 0),
         "reference_count": len(list(parsed.get("references") or [])),
         "page_text_lengths": [

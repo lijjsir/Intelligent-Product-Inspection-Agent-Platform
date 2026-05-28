@@ -3,6 +3,49 @@ from __future__ import annotations
 from agent.tools.paper_review_evidence import build_review_evidence_pack
 
 
+def test_review_evidence_pack_summarizes_all_docx_body_paragraphs():
+    parsed = {
+        "kind": "docx",
+        "text": "引言\n" + "\n".join(f"正文段落{i}" for i in range(60)),
+        "headings": [{"text": "引言", "level": 1, "paragraph_index": 0}],
+        "paragraphs": [
+            {"index": 0, "text": "引言", "heading_level": 1},
+            *[
+                {
+                    "index": i + 1,
+                    "text": f"正文段落{i}",
+                    "heading_level": 0,
+                    "font_name": "宋体" if i < 55 else "Calibri",
+                    "font_size_pt": 12 if i < 55 else 10.5,
+                    "line_spacing": 1.5,
+                }
+                for i in range(60)
+            ],
+        ],
+        "page_layout": {},
+    }
+    check_result = {
+        "document_type": "docx",
+        "template_id": "cqupt_graduate_thesis_2022",
+        "score": 90,
+        "issues": [],
+        "limitations": [],
+    }
+
+    pack = build_review_evidence_pack(
+        parsed=parsed,
+        check_result=check_result,
+        file_name="paper.docx",
+    )
+
+    style_summary = pack["style_summary"]
+    assert style_summary["style_evidence_scope"] == "all_body_paragraphs"
+    assert style_summary["body_paragraph_count"] == 60
+    assert style_summary["font_name_counts"]["宋体"] == 55
+    assert style_summary["font_name_counts"]["Calibri"] == 5
+    assert style_summary["font_size_counts"]["10.5"] == 5
+
+
 def test_review_evidence_pack_includes_pdf_pages_and_layout():
     parsed = {
         "kind": "pdf",

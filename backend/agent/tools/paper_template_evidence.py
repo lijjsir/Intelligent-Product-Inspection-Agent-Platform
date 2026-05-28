@@ -1,77 +1,106 @@
 """Load template-side evidence used by the paper review model.
 
-Reads the writing guide file from object storage. If files are not found,
-returns an error dict that propagates to the frontend.
+The paper review path must use retrieved clauses, not full writing-guide text.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from agent.tools.file_parsers import parse_file_content
 from agent.tools.paper_format_templates import get_paper_template
 
 
-def load_writing_guide_evidence(
+async def load_writing_guide_evidence(
     template_id: str | None,
     *,
-    max_chars: int = 12000,
+    issues: list[dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+    task_id: str | None = None,
+    org_id: str | None = None,
 ) -> dict[str, Any] | None:
+    """Load template writing guide evidence via RAG retrieval.
+
+    Returns error dict when retrieval fails — no silent fallback to full-text.
+    Caller must raise or propagate the error to the frontend.
+    """
     template = get_paper_template(template_id)
     if template is None:
         return None
 
-    storage = dict(template.get("storage") or {})
-    bucket = str(storage.get("bucket") or "").strip()
-    guide = _template_file_by_role(template, "writing_guide")
-    # No storage configured at all → return None (not an error; template doesn't need guide files)
-    if not storage or not bucket:
-        return None
-    # Storage configured but writing_guide role not found in files list
-    if not guide:
-        return _error_result(template, template_id, "模板存储配置中缺少 writing_guide 文件定义")
+    effective_template_id = str(template.get("template_id") or template_id)
 
-    object_key = str(guide.get("object_key") or "").strip()
-    file_name = str(guide.get("file_name") or "writing-guide.docx")
-    if not object_key:
-        return _error_result(template, template_id, "模板缺少 object_key")
+    if issues:
+        retrieved = []
+        retrieval_error: Exception | None = None
+        try:
+            from agent.rag.paper_template_clause_retriever import PaperTemplateClauseRetriever
+            retriever = PaperTemplateClauseRetriever(
+                trace_id=trace_id, task_id=task_id, org_id=org_id
+            )
+            retrieved = await retriever.retrieve_for_issues(
+                template_id=effective_template_id,
+                issues=issues,
+                top_k=10,
+            )
+            if retrieved:
+                return {
+                    "template_id": effective_template_id,
+                    "template_name": str(template.get("name") or ""),
+                    "source": "qdrant_rag",
+                    "file_name": str(retrieved[0].get("source_file_name") or ""),
+                    "clauses": retrieved,
+                    "clause_count": len(retrieved),
+                }
+        except Exception as exc:
+            retrieval_error = exc
 
-    try:
-        from app.services.object_storage.factory import build_object_storage
+        if org_id:
+            try:
+                from agent.tools.paper_template_storage import ensure_paper_templates_ready
 
-        payload = build_object_storage().get_bytes(bucket=bucket, object_key=object_key)
-    except Exception as exc:
-        return _error_result(template, template_id, f"对象存储读取失败：{exc}")
+                ready_result = await ensure_paper_templates_ready(org_id=org_id, force_index=True)
+                if str(ready_result.get("index_status") or "") in {"failed", "skipped"}:
+                    raise RuntimeError(str(ready_result.get("error") or ready_result.get("reason") or ready_result))
+                from agent.rag.paper_template_clause_retriever import PaperTemplateClauseRetriever
+                retriever = PaperTemplateClauseRetriever(
+                    trace_id=trace_id, task_id=task_id, org_id=org_id
+                )
+                retrieved = await retriever.retrieve_for_issues(
+                    template_id=effective_template_id,
+                    issues=issues,
+                    top_k=10,
+                )
+                if retrieved:
+                    return {
+                        "template_id": effective_template_id,
+                        "template_name": str(template.get("name") or ""),
+                        "source": "qdrant_rag",
+                        "file_name": str(retrieved[0].get("source_file_name") or ""),
+                        "clauses": retrieved,
+                        "clause_count": len(retrieved),
+                    }
+            except Exception as exc:
+                retrieval_error = exc
 
-    if payload is None:
+        if retrieval_error is not None:
+            return _error_result(
+                template, template_id,
+                f"模板条款检索失败：{retrieval_error}"
+                " — 请检查 Qdrant 服务是否正常，以及嵌入模型是否已配置。"
+                " 错误码: PAPER_TEMPLATE_RETRIEVAL_ERROR"
+            )
         return _error_result(
-            template,
-            template_id,
-            f"MinIO 中未找到文件：{file_name}（bucket={bucket}, key={object_key}）。请先将模板文件导入对象存储。",
+            template, template_id,
+            "写作指南条款未索引 — 请联系管理员配置嵌入模型后重启服务，或通过 POST /paper-templates/import 导入写作指南。"
+            " 错误码: PAPER_TEMPLATE_CLAUSES_NOT_INDEXED"
         )
 
-    content, content_type = payload
-    try:
-        parsed = parse_file_content(file_name, content)
-    except Exception as exc:
-        return _error_result(template, template_id, f"模板文件解析失败：{exc}")
-
-    text = str(parsed.get("text") or "").strip()
-    if not text:
-        return _error_result(template, template_id, f"模板文件 {file_name} 解析后无文本内容")
-
     return {
-        "template_id": str(template.get("template_id") or template_id or ""),
+        "template_id": effective_template_id,
         "template_name": str(template.get("name") or ""),
-        "source": "object_storage",
-        "role": "writing_guide",
-        "file_name": file_name,
-        "bucket": bucket,
-        "object_key": object_key,
-        "content_type": content_type or guide.get("content_type"),
-        "document_type": str(parsed.get("kind") or ""),
-        "text": text[:max_chars],
-        "summary": _summarize(text),
+        "source": "none",
+        "clauses": [],
+        "clause_count": 0,
     }
 
 
@@ -84,17 +113,3 @@ def _error_result(template: dict[str, Any], template_id: str | None, message: st
         "error": True,
         "error_message": message,
     }
-
-
-def _template_file_by_role(template: dict[str, Any], role: str) -> dict[str, Any] | None:
-    for item in list((template.get("storage") or {}).get("files") or []):
-        if str(item.get("role") or "") == role:
-            return dict(item)
-    return None
-
-
-def _summarize(text: str) -> str:
-    cleaned = " ".join(str(text or "").split())
-    if not cleaned:
-        return ""
-    return cleaned[:500] + ("..." if len(cleaned) > 500 else "")

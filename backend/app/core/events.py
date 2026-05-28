@@ -17,14 +17,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 async def seed_paper_templates_on_startup() -> None:
-    try:
-        from agent.tools.paper_template_storage import seed_builtin_paper_templates
+    """Ensure paper template files and clause index are ready on startup.
 
-        result = seed_builtin_paper_templates()
+    Pipeline: local assets -> MinIO (idempotent) -> MySQL + Qdrant (idempotent).
+    Safe to call repeatedly — skips already-seeded data.
+    """
+    try:
+        from agent.tools.paper_template_storage import ensure_paper_templates_ready
+
+        result = await ensure_paper_templates_ready()
         logger.info(
-            "paper template seed completed template_id=%s file_count=%s",
+            "paper template bootstrap complete template_id=%s minio_files=%d index_status=%s",
             result.get("template_id"),
             len(result.get("files") or []),
+            result.get("index_status", "unknown"),
         )
     except Exception as exc:
-        logger.warning("paper template seed skipped: %s", exc)
+        logger.warning("paper template bootstrap skipped: %s", exc)

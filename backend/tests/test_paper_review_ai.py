@@ -5,6 +5,7 @@ import json
 import pytest
 
 from agent.tools import paper_review_ai
+from agent.tools.paper_review_ai import PaperReviewModelError
 
 
 @pytest.mark.asyncio
@@ -100,14 +101,14 @@ async def test_generate_ai_review_output_uses_configured_chat_model(monkeypatch)
     messages = calls["messages"]
     assert isinstance(messages, list)
     assert messages[0]["role"] == "system"
-    assert "Review Evidence Pack" in messages[0]["content"]
+    assert "论文格式与规范审阅助手" in messages[0]["content"]
     payload = messages[1]["content"]
     assert "请进行论文查非" in payload
     assert "structure.abstract_missing" in payload
 
 
 @pytest.mark.asyncio
-async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch):
+async def test_generate_ai_review_output_includes_guide_clauses(monkeypatch):
     calls: list[list[dict[str, str]]] = []
 
     class FakeModelConfigService:
@@ -135,9 +136,9 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
             return {
                 "answer": "规则结果已生成，并参考了写作指南。",
                 "summary": "规则发现 1 个问题，并补充了模板建议。",
-                "markdown_report": "# 规则审阅\n\n缺少摘要。\n\n## 写作指南补充评判\n\n应按指南完善摘要。",
+                "markdown_report": "# 审阅报告\n\n缺少摘要。应按指南完善摘要。",
                 "issues": [{"title": "缺少摘要", "severity": "high"}],
-                "download_title": "规则报告",
+                "download_title": "论文查非与格式审阅报告",
             }
 
     monkeypatch.setattr(paper_review_ai, "ModelConfigService", FakeModelConfigService)
@@ -151,9 +152,12 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
         },
         guide_evidence={
             "template_id": "cqupt_graduate_thesis_2022",
-            "role": "writing_guide",
+            "template_name": "重庆邮电大学模板",
+            "source": "qdrant_rag",
             "file_name": "附件4-写作指南.docx",
-            "text": "摘要应说明研究目的、方法、结果和结论。",
+            "clauses": [
+                {"clause_id": "c001", "text": "摘要应说明研究目的、方法、结果和结论。", "score": 0.9}
+            ],
         },
         query="请按重邮模板查非",
         db_session=object(),
@@ -162,18 +166,19 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
 
     assert len(calls) == 1
     assert result["model_used"] is True
-    assert "规则审阅" in result["markdown_report"]
-    assert "写作指南补充评判" in result["markdown_report"]
-    assert "应按指南完善摘要" in result["markdown_report"]
+    assert "审阅报告" in result["markdown_report"]
     assert result["review_sources"] == {
         "rule_template": "cqupt_graduate_thesis_2022",
         "writing_guide": "附件4-写作指南.docx",
     }
-    assert "模板写作规范参考" in calls[0][1]["content"]
+    # Verify clauses are included in model input
+    user_content = calls[0][1]["content"]
+    assert "检索到的模板条款" in user_content
+    assert "摘要应说明研究目的" in user_content
 
 
 @pytest.mark.asyncio
-async def test_generate_ai_review_output_returns_fallback_when_runtime_unavailable(monkeypatch):
+async def test_generate_ai_review_output_raises_when_runtime_unavailable(monkeypatch):
     class FakeModelConfigService:
         def __init__(self, session, org_id: str):
             pass
@@ -188,16 +193,15 @@ async def test_generate_ai_review_output_returns_fallback_when_runtime_unavailab
     monkeypatch.setattr(paper_review_ai, "ModelConfigService", FakeModelConfigService)
     monkeypatch.setattr(paper_review_ai, "LLMGateway", FakeGateway)
 
-    result = await paper_review_ai.generate_ai_review_output(
-        evidence_pack={"score": 70, "issues": []},
-        query="查非",
-        db_session=object(),
-        org_id="org-1",
-    )
+    with pytest.raises(PaperReviewModelError) as exc_info:
+        await paper_review_ai.generate_ai_review_output(
+            evidence_pack={"score": 70, "issues": []},
+            query="查非",
+            db_session=object(),
+            org_id="org-1",
+        )
 
-    assert result["model_used"] is False
-    assert result["markdown_report"] == ""
-    assert any("未找到可用" in item for item in result["limitations"])
+    assert "未找到可用" in str(exc_info.value)
 
 
 def test_normalize_ai_review_output_accepts_text_json_payload():
@@ -220,3 +224,103 @@ def test_normalize_ai_review_output_accepts_text_json_payload():
     assert result["summary"] == "done"
     assert result["markdown_report"] == "# report"
     assert result["download_title"] == "title"
+
+
+@pytest.mark.asyncio
+async def test_generate_ai_review_output_filters_model_invented_limitations(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            pass
+
+        async def list_runtime_models(self):
+            return [{"id": "model-1", "model_key": "paper-review-model", "model_type": "chat"}]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types, reserve):
+            return {
+                "api_key": "test-key",
+                "base_url": "https://llm.example/v1",
+                "model_id": "paper-review-model",
+                "provider": "local_openai",
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def chat(self, messages, **kwargs):
+            return {
+                "answer": "已完成。",
+                "summary": "发现 1 个问题。",
+                "markdown_report": (
+                    "# 报告\n\n"
+                    "已按证据生成。\n\n"
+                    "## 局限性说明\n\n"
+                    "- 当前检查仅基于规则引擎自动识别，图表格式、页眉页脚、参考文献著录格式等未覆盖，需人工复核。\n"
+                    "- 字体字号检查仅依据第1段证据，其他段落可能也存在类似问题，建议全面核查。\n\n"
+                    "## 修改建议\n\n"
+                    "请按模板修改。"
+                ),
+                "issues": [],
+                "limitations": [
+                    "当前检查仅基于规则引擎自动识别，图表格式、页眉页脚、参考文献著录格式等未覆盖，需人工复核。",
+                    "字体字号检查仅依据第1段证据，其他段落可能也存在类似问题，建议全面核查。",
+                    "已使用重庆邮电大学研究生学位论文模板（2022版）规则进行辅助校验，仍需以学校最新正式文件为准。",
+                ],
+                "download_title": "论文查非与格式审阅报告",
+            }
+
+    monkeypatch.setattr(paper_review_ai, "ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr(paper_review_ai, "LLMGateway", FakeGateway)
+    monkeypatch.setattr(paper_review_ai, "LLMClient", FakeLLMClient)
+
+    allowed_limit = "已使用重庆邮电大学研究生学位论文模板（2022版）规则进行辅助校验，仍需以学校最新正式文件为准。"
+    result = await paper_review_ai.generate_ai_review_output(
+        evidence_pack={
+            "document": {"file_name": "paper.docx", "document_type": "docx"},
+            "issues": [{"code": "template.body_font_mismatch"}],
+            "limitations": [allowed_limit],
+        },
+        query="查非",
+        db_session=object(),
+        org_id="org-1",
+    )
+
+    assert result["limitations"] == [allowed_limit]
+    assert "当前检查仅基于规则引擎" not in result["markdown_report"]
+    assert "字体字号检查仅依据第1段证据" not in result["markdown_report"]
+    assert "局限性说明" not in result["markdown_report"]
+    assert "请按模板修改" in result["markdown_report"]
+
+
+def test_trim_issues_for_model_trims_low_severity():
+    issues = [
+        {"severity": "high", "code": "h1"},
+        {"severity": "high", "code": "h2"},
+        {"severity": "medium", "code": "m1"},
+        {"severity": "medium", "code": "m2"},
+        {"severity": "low", "code": "l1"},
+        {"severity": "low", "code": "l2"},
+        {"severity": "low", "code": "l3"},
+        {"severity": "low", "code": "l4"},
+        {"severity": "low", "code": "l5"},
+        {"severity": "low", "code": "l6"},
+        {"severity": "low", "code": "l7"},
+    ]
+    result = paper_review_ai._trim_issues_for_model(issues, max_high=20, max_medium=10, max_low_abstract=5)
+    codes = [i["code"] for i in result]
+    assert "h1" in codes
+    assert "h2" in codes
+    assert "m1" in codes
+    assert "l1" in codes
+    assert "l5" in codes
+    assert "l6" not in codes
+
+
+def test_trim_issues_for_model_adds_omitted_summary():
+    issues = [
+        {"severity": "low", "code": f"l{i}"} for i in range(20)
+    ]
+    result = paper_review_ai._trim_issues_for_model(issues, max_low_abstract=3)
+    assert len(result) == 4
+    assert result[-1]["code"] == "summary.low_severity_omitted"

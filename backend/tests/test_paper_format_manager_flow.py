@@ -86,7 +86,7 @@ async def test_manager_loop_returns_paper_format_report(monkeypatch):
     assert paper_reports[0]["content"]["chat_advice"].startswith("已整理出以下修改意见")
     assert len(paper_reports[0]["content"]["issues"]) == paper_reports[0]["content"]["issue_count"]
     assert paper_reports[0]["content"]["report_files"] == []
-    assert "enrichment_payload" in paper_reports[0]["content"]
+    assert "issues" in paper_reports[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -179,7 +179,59 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
 
     content = artifacts[0].content
     assert content["template_id"] == "cqupt_graduate_thesis_2022"
-    assert content["enrichment_payload"]["template_id"] == "cqupt_graduate_thesis_2022"
+    assert "issues" in content
+
+
+@pytest.mark.asyncio
+async def test_manager_loop_returns_paper_review_error_schema_when_ai_review_fails(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.object_storage.resolver.read_attachment_bytes",
+        lambda attachment: (_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    )
+
+    async def fake_load_writing_guide_evidence(*args, **kwargs):
+        return {"template_id": "cqupt_graduate_thesis_2022", "source": "none", "clauses": []}
+
+    async def fake_generate_ai_review_output(*args, **kwargs):
+        from agent.tools.paper_review_ai import PaperReviewModelError
+
+        raise PaperReviewModelError("Ai-Review 模型调用失败：timeout")
+
+    monkeypatch.setattr(
+        "agent.tools.paper_template_evidence.load_writing_guide_evidence",
+        fake_load_writing_guide_evidence,
+    )
+    monkeypatch.setattr(
+        "agent.tools.paper_review_ai.generate_ai_review_output",
+        fake_generate_ai_review_output,
+    )
+
+    output = await ManagerLoop().run(
+        NormalizedRequest(
+            request_id="req-ai-fail",
+            workflow_run_id="wf-ai-fail",
+            org_id="org-1",
+            user_id="user-1",
+            session_id="session-1",
+            query="帮我做论文查非",
+            attachments=[
+                NormalizedAttachment(
+                    name="paper.docx",
+                    kind="file",
+                    bucket="test",
+                    object_key="paper.docx",
+                )
+            ],
+            ext={"surface": "chat", "template_id": "cqupt_graduate_thesis_2022"},
+        ),
+        db_session=object(),
+    )
+
+    assert output.status == "failed"
+    assert output.agent_output["message_type"] == "error"
+    assert output.agent_output["ui_schema"] == "paper_review_error_v1"
+    assert output.agent_output["error_code"] == "paper_review_model_failed"
+    assert "Ai-Review 模型调用失败" in output.agent_output["error_message"]
 
 
 @pytest.mark.asyncio

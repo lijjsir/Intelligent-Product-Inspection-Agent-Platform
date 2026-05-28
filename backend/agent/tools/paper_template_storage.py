@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from agent.tools.paper_format_templates import get_paper_template
 
+logger = logging.getLogger(__name__)
 
 DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _ASSET_DIR = (
@@ -27,6 +29,7 @@ def get_cqupt_graduate_template_asset_paths() -> dict[str, Path]:
 
 
 def seed_builtin_paper_templates(*, storage: Any | None = None) -> dict[str, Any]:
+    """Upload built-in template files to MinIO. Idempotent — skips existing files."""
     if storage is None:
         from app.services.object_storage.factory import build_object_storage
 
@@ -97,6 +100,82 @@ def seed_cqupt_graduate_templates(
         "bucket": bucket,
         "files": uploaded,
     }
+
+
+async def ensure_paper_templates_ready(
+    *,
+    org_id: str | None = None,
+    force_index: bool = False,
+) -> dict[str, Any]:
+    """Ensure template files are in MinIO and indexed in MySQL + Qdrant.
+
+    This is the single entry point for bootstrap. It is fully idempotent:
+    - MinIO: skips if file already exists
+    - MySQL: skips if template already has clauses
+    - Qdrant: upsert by point id
+
+    Called on app startup. Safe to call repeatedly.
+    """
+    from app.services.object_storage.factory import build_object_storage
+    from app.services.paper_template_index_service import PaperTemplateIndexService
+    from infra.database.session import get_session
+
+    # 1. Ensure MinIO has the files (idempotent)
+    storage = build_object_storage()
+    seed_result = seed_builtin_paper_templates(storage=storage)
+    logger.info(
+        "MinIO seed: template_id=%s files=%s",
+        seed_result["template_id"],
+        [(f["role"], f["status"]) for f in seed_result["files"]],
+    )
+
+    # 2. Ensure MySQL + Qdrant have the clause index (idempotent)
+    template = get_paper_template("cqupt_graduate_thesis_2022")
+    template_id = str(template["template_id"])
+
+    writing_guide_role = _template_file_by_role(template, "writing_guide")
+    if writing_guide_role is None:
+        logger.warning("No writing_guide file defined for template %s", template_id)
+        return {**seed_result, "index_status": "skipped", "reason": "no writing_guide role"}
+
+    guide_path = DEFAULT_WRITING_GUIDE_PATH
+    if not guide_path.exists():
+        logger.warning("Writing guide file not found: %s", guide_path)
+        return {**seed_result, "index_status": "skipped", "reason": "file not found"}
+
+    async with get_session() as session:
+        try:
+            index_service = PaperTemplateIndexService(session, org_id=org_id)
+
+            if not force_index and await index_service.is_indexed(template_id=template_id):
+                logger.info("Template %s already indexed in MySQL, skipping", template_id)
+                return {**seed_result, "index_status": "already_indexed"}
+
+            index_result = await index_service.index_template(
+                template_id=template_id,
+                template_name=str(template.get("name") or "CQUPT Graduate Thesis 2022"),
+                guide_file_bytes=guide_path.read_bytes(),
+                guide_file_name=guide_path.name,
+                school_name="重庆邮电大学",
+                degree_type="硕士",
+                version=str(template.get("version") or "V2.0"),
+                description=str(template.get("description") or ""),
+                force=force_index,
+            )
+            await session.commit()
+            logger.info("Template index result: %s", index_result)
+            return {**seed_result, "index_status": index_result["status"], "clause_count": index_result.get("clause_count", 0)}
+        except Exception as exc:
+            await session.rollback()
+            logger.exception("Failed to index template %s: %s", template_id, exc)
+            return {**seed_result, "index_status": "failed", "error": str(exc)}
+
+
+def _template_file_by_role(template: dict[str, Any], role: str) -> dict[str, Any] | None:
+    for item in list((template.get("storage") or {}).get("files") or []):
+        if str(item.get("role") or "") == role:
+            return dict(item)
+    return None
 
 
 def _object_exists(storage: Any, *, bucket: str, object_key: str) -> bool:

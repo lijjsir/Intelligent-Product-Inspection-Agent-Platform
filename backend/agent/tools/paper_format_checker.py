@@ -33,9 +33,13 @@ class RuleIssue:
     evidence: str
     location: dict[str, Any]
     suggestion: str
+    expected: dict[str, Any] | None = None
+    actual: dict[str, Any] | None = None
+    source_clause_ids: list[str] | None = None
+    parser_confidence: str = "medium"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "code": self.code,
             "title": self.title,
             "severity": self.severity,
@@ -44,7 +48,15 @@ class RuleIssue:
             "evidence": self.evidence,
             "location": dict(self.location),
             "suggestion": self.suggestion,
+            "parser_confidence": self.parser_confidence,
         }
+        if self.expected:
+            result["expected"] = dict(self.expected)
+        if self.actual:
+            result["actual"] = dict(self.actual)
+        if self.source_clause_ids:
+            result["source_clause_ids"] = list(self.source_clause_ids)
+        return result
 
 
 def check_paper_format(
@@ -67,15 +79,24 @@ def check_paper_format(
         issues.extend(_check_docx_style(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_heading_rules(parsed))
+        issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_reference_rules(parsed))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_heading_rules(parsed))
+        issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_reference_rules(parsed))
         limitations.append("LaTeX 仅基于源码检查，不代表最终 PDF 版面完全合规。")
     elif document_type == "pdf":
         issues.extend(_check_pdf_structure(parsed))
         issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_heading_rules(parsed))
+        issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_reference_rules(parsed))
         limitations.append("当前 PDF 检查主要基于文本抽取，不能完整判断字号、页边距、行距等版面格式。")
     else:
         limitations.append("当前仅支持 docx、pdf 和 tex 的论文查非检查。")
@@ -360,6 +381,20 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 suggestion="补充中文摘要并按模板放在前置部分。",
             )
         )
+    if not _contains_any(text, ["Abstract", "ABSTRACT"]):
+        issues.append(
+            RuleIssue(
+                code="structure.en_abstract_missing",
+                title="缺少英文摘要",
+                severity="high",
+                category="structure",
+                message="文档中未识别到英文摘要（Abstract）。",
+                evidence="未找到 Abstract 标题",
+                location={"section": "en_abstract"},
+                suggestion="补充英文摘要（Abstract）并按模板放在前置部分。",
+                parser_confidence="high",
+            )
+        )
     if not _contains_any(text, ["关键词", "关键字"]):
         issues.append(
             RuleIssue(
@@ -371,6 +406,20 @@ def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
                 evidence="未找到关键词字段",
                 location={"section": "keywords"},
                 suggestion="按模板添加关键词字段。",
+            )
+        )
+    if not _contains_any(text, ["Keywords", "Key words"]):
+        issues.append(
+            RuleIssue(
+                code="structure.en_keywords_missing",
+                title="缺少英文关键词",
+                severity="medium",
+                category="structure",
+                message="文档中未识别到英文关键词（Keywords/Key words）。",
+                evidence="未找到 Keywords 字段",
+                location={"section": "en_keywords"},
+                suggestion="按模板补充英文关键词（Keywords）。",
+                parser_confidence="high",
             )
         )
     if not _contains_any(text, ["参考文献"]):
@@ -611,6 +660,9 @@ def _check_template_rules(
                         evidence=f"{parsed_key}: actual={actual}, expected={expected}",
                         location={"page_layout": parsed_key, "template_id": template_id, "display_text": "页面版式设置"},
                         suggestion="按学校模板重新设置页面边距。",
+                        expected={parsed_key: expected},
+                        actual={parsed_key: actual},
+                        parser_confidence="high",
                     )
                 )
                 break
@@ -625,7 +677,9 @@ def _check_template_rules(
         str(body_font.get("en") or "").lower(),
     } - {""}
     expected_size = body_font.get("size_pt")
-    for paragraph in body_candidates[:20]:
+    font_mismatch_samples: list[dict[str, Any]] = []
+    font_mismatch_count = 0
+    for paragraph in body_candidates:
         actual_name = str(paragraph.get("font_name") or "").lower()
         actual_size = paragraph.get("font_size_pt")
         name_mismatch = bool(expected_names and actual_name and actual_name not in expected_names)
@@ -635,22 +689,43 @@ def _check_template_rules(
             and abs(float(actual_size) - float(expected_size)) > 0.2
         )
         if name_mismatch or size_mismatch:
-            issues.append(
-                RuleIssue(
-                    code="template.body_font_mismatch",
-                    title="正文字体或字号与学校模板不一致",
-                    severity="medium",
-                    category="template",
-                    message="识别到正文段落字体或字号与模板建议不一致。",
-                    evidence=(
-                        f"段落 {paragraph.get('index')}: "
-                        f"font={paragraph.get('font_name')}, size={paragraph.get('font_size_pt')}"
-                    ),
-                    location={**_issue_location_from_paragraph(paragraph), "template_id": template_id},
-                    suggestion="按学校模板统一正文字体和字号。",
-                )
+            font_mismatch_count += 1
+            if len(font_mismatch_samples) < 5:
+                font_mismatch_samples.append({
+                    "paragraph_index": paragraph.get("index"),
+                    "display_text": _issue_location_from_paragraph(paragraph).get("display_text"),
+                    "section_title": paragraph.get("section_title"),
+                    "font_name": paragraph.get("font_name"),
+                    "font_size_pt": paragraph.get("font_size_pt"),
+                    "text": str(paragraph.get("text") or "")[:80],
+                })
+    if font_mismatch_count:
+        first_sample = font_mismatch_samples[0] if font_mismatch_samples else {}
+        sample_text = "；".join(
+            f"{item.get('display_text')}: font={item.get('font_name')}, size={item.get('font_size_pt')}"
+            for item in font_mismatch_samples
+        )
+        issues.append(
+            RuleIssue(
+                code="template.body_font_mismatch",
+                title="正文字体或字号与学校模板不一致",
+                severity="medium",
+                category="template",
+                message=f"已扫描 {len(body_candidates)} 个正文段落，发现 {font_mismatch_count} 个段落字体或字号与模板建议不一致。",
+                evidence=f"不一致段落 {font_mismatch_count}/{len(body_candidates)}。示例：{sample_text}",
+                location={
+                    "section_title": first_sample.get("section_title"),
+                    "paragraph_index": first_sample.get("paragraph_index"),
+                    "template_id": template_id,
+                    "display_text": f"正文样式汇总（首个示例：{first_sample.get('display_text') or '正文段落'}）",
+                },
+                suggestion="按学校模板统一全文正文的中文字体、英文字体和字号；优先修改正文样式定义，再抽查样例段落。",
+                expected={"zh_font": body_font.get("zh"), "en_font": body_font.get("en"), "font_size_pt": body_font.get("size_pt")},
+                actual={"mismatch_count": font_mismatch_count, "checked_count": len(body_candidates), "samples": font_mismatch_samples},
+                source_clause_ids=["cqupt_2022_body_font"],
+                parser_confidence="medium",
             )
-            break
+        )
 
     expected_spacing = rules.get("line_spacing")
     if isinstance(expected_spacing, (int, float)):
@@ -667,6 +742,10 @@ def _check_template_rules(
                         evidence=f"段落 {paragraph.get('index')}: line_spacing={actual_spacing}",
                         location={**_issue_location_from_paragraph(paragraph), "template_id": template_id},
                         suggestion="按学校模板统一正文行距。",
+                        expected={"line_spacing": expected_spacing},
+                        actual={"line_spacing": actual_spacing},
+                        source_clause_ids=["cqupt_2022_body_line_spacing"],
+                        parser_confidence="medium",
                     )
                 )
                 break
@@ -1064,6 +1143,134 @@ def _build_evidence_excerpt(text: str, start: int, end: int, *, radius: int = 12
     if right < len(text):
         excerpt = f"{excerpt}..."
     return excerpt
+
+
+def _check_heading_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
+    issues = []
+    headings = list(parsed.get("headings") or [])
+    paragraphs = list(parsed.get("paragraphs") or [])
+
+    prev_number = None
+    for heading in headings:
+        text = str(heading.get("text") or "")
+        m = re.match(r"^(\d+(?:\.\d+)*)\s", text)
+        if m:
+            current = m.group(1)
+            if prev_number:
+                prev_parts = prev_number.split(".")
+                cur_parts = current.split(".")
+                if len(prev_parts) == len(cur_parts):
+                    try:
+                        prev_num = int(prev_parts[-1])
+                        cur_num = int(cur_parts[-1])
+                        if cur_num > prev_num + 1:
+                            issues.append(RuleIssue(
+                                code="heading.numbering_discontinuous",
+                                title="标题编号不连续",
+                                severity="medium",
+                                category="structure",
+                                message=f"标题编号从 {prev_number} 跳到 {current}，可能遗漏中间章节。",
+                                evidence=text,
+                                location=_issue_location_from_paragraph(
+                                    next((p for p in paragraphs if p.get("index") == heading.get("paragraph_index")), None)
+                                ),
+                                suggestion="检查标题编号是否连续。",
+                                parser_confidence="high",
+                            ))
+                    except ValueError:
+                        pass
+            prev_number = current
+
+    return issues
+
+
+def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
+    issues = []
+    paragraphs = list(parsed.get("paragraphs") or [])
+    figure_numbers = []
+
+    for p in paragraphs:
+        text = str(p.get("text") or "").strip()
+        m = re.match(r"^(?:图|Fig(?:ure)?)\s*(\d+)", text, re.I)
+        if m:
+            figure_numbers.append((int(m.group(1)), text, p))
+
+    for i in range(1, len(figure_numbers)):
+        if figure_numbers[i][0] != figure_numbers[i-1][0] + 1:
+            issues.append(RuleIssue(
+                code="figure.numbering_discontinuous",
+                title="图号不连续",
+                severity="medium",
+                category="structure",
+                message=f"图号从 {figure_numbers[i-1][0]} 跳到 {figure_numbers[i][0]}。",
+                evidence=f"{figure_numbers[i-1][1]} -> {figure_numbers[i][1]}",
+                location=_issue_location_from_paragraph(figure_numbers[i][2]),
+                suggestion="检查图号是否连续。",
+                parser_confidence="medium",
+            ))
+            break
+
+    return issues
+
+
+def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
+    issues = []
+    text = str(parsed.get("text") or "")
+
+    cited_numbers: set[int] = set()
+    for m in re.finditer(r"\[(\d+(?:[,,、\-\u2013]\d+)*)\]", text):
+        inner = m.group(1)
+        for part in re.split(r"[,,、]", inner):
+            part = part.strip()
+            if "-" in part or "\u2013" in part:
+                try:
+                    a_str, b_str = re.split(r"[-\u2013]", part)
+                    cited_numbers.update(range(int(a_str), int(b_str) + 1))
+                except ValueError:
+                    pass
+            else:
+                try:
+                    cited_numbers.add(int(part))
+                except ValueError:
+                    pass
+
+    ref_numbers: set[int] = set()
+    for line in text.splitlines():
+        m = re.match(r"^\[(\d+)\]", line.strip())
+        if m:
+            ref_numbers.add(int(m.group(1)))
+
+    missing_in_bib = cited_numbers - ref_numbers
+    if missing_in_bib:
+        issues.append(RuleIssue(
+            code="references.citation_missing_in_bibliography",
+            title="正文引用在参考文献列表中缺失",
+            severity="high",
+            category="structure",
+            message=f"正文中引用了编号 {sorted(missing_in_bib)[:10]}，但文末参考文献列表中未找到对应条目。",
+            evidence=f"正文引用: {sorted(cited_numbers)[:20]}, 文献列表: {sorted(ref_numbers)[:20]}",
+            location={"display_text": "参考文献章节"},
+            suggestion="确保正文中每条引用在参考文献列表中都有对应条目。",
+            parser_confidence="medium",
+            expected={"cited": sorted(cited_numbers), "listed": sorted(ref_numbers)},
+            actual={"missing_in_bib": sorted(missing_in_bib)},
+        ))
+
+    unused = ref_numbers - cited_numbers
+    if unused and len(ref_numbers) > 5:
+        issues.append(RuleIssue(
+            code="references.unused_reference",
+            title="参考文献列表中部分文献未被引用",
+            severity="low",
+            category="structure",
+            message=f"参考文献列表中编号 {sorted(unused)[:10]} 的条目未在正文中被引用。",
+            evidence=f"未引用编号: {sorted(unused)[:10]}",
+            location={"display_text": "参考文献章节"},
+            suggestion="确认这些文献是否确实需要列入，或补充正文引用。",
+            parser_confidence="medium",
+        ))
+
+    return issues
 
 
 def _dedupe_issues(issues: list[RuleIssue]) -> list[RuleIssue]:

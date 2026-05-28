@@ -273,7 +273,9 @@ def test_check_paper_format_reports_cqupt_template_differences():
     assert any("重庆邮电大学" in item for item in report["limitations"])
     font_issue = next(item for item in report["issues"] if item["code"] == "template.body_font_mismatch")
     assert font_issue["location"]["section_title"] == "引言"
-    assert "第1节《引言》下第1段" == font_issue["location"]["display_text"]
+    assert "正文样式汇总" in font_issue["location"]["display_text"]
+    assert font_issue["actual"]["checked_count"] >= font_issue["actual"]["mismatch_count"] >= 1
+    assert font_issue["actual"]["samples"][0]["display_text"] == "第1节《引言》下第1段"
 
 
 def test_check_paper_format_reports_missing_body_when_no_main_text():
