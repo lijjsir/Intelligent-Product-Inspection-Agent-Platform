@@ -104,7 +104,7 @@ async def generate_ai_review_output(
         messages = build_ai_review_messages(
             query=query,
             evidence_pack=evidence_pack,
-            guide_evidence=None,
+            guide_evidence=guide_evidence,
             system_prompt=prompt,
         )
         response = await client.chat(
@@ -124,40 +124,14 @@ async def generate_ai_review_output(
     if isinstance(response.get("__meta__"), dict):
         normalized["model_meta"] = response["__meta__"]
 
-    if guide_evidence:
-        try:
-            guide_messages = build_writing_guide_review_messages(
-                query=query,
-                evidence_pack=evidence_pack,
-                guide_evidence=guide_evidence,
-                system_prompt=prompt,
-            )
-            guide_response = await client.chat(
-                guide_messages,
-                temperature=0.2,
-                observation_name="paper.ai_review.writing_guide",
-                observation_metadata={
-                    "prompt_key": PROMPT_KEY,
-                    "template_id": guide_evidence.get("template_id"),
-                    "guide_role": guide_evidence.get("role"),
-                },
-            )
-            guide_output = normalize_ai_review_output(guide_response)
-            if isinstance(guide_response.get("__meta__"), dict):
-                guide_output["model_meta"] = guide_response["__meta__"]
-            normalized = merge_ai_review_outputs(
-                rule_output=normalized,
-                guide_output=guide_output,
-                evidence_pack=evidence_pack,
-                guide_evidence=guide_evidence,
-            )
-        except Exception as exc:
-            normalized.setdefault("limitations", []).append(
-                f"writing guide review failed: {exc}"
-            )
-
     normalized["model_used"] = True
     if guide_evidence:
+        normalized.setdefault("review_sources", {})
+        normalized["review_sources"] = {
+            **dict(normalized.get("review_sources") or {}),
+            "rule_template": str((evidence_pack.get("document") or {}).get("template_id") or ""),
+            "writing_guide": str(guide_evidence.get("file_name") or ""),
+        }
         normalized.setdefault("limitations", []).append(
             f"已参考模板写作指南：{guide_evidence.get('file_name', '')}"
         )

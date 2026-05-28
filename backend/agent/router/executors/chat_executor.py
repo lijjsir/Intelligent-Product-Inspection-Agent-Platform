@@ -96,6 +96,10 @@ class ChatExecutor:
             return observation(step, status="success", summary=answer), []
 
         if step.capability_key == "chat.response.compose":
+            if self._should_short_circuit_paper_reply(state):
+                composed = self._compose_paper_reply(state)
+                art = artifact("composed_response", "chat", composed)
+                return observation(step, status="success", summary=composed.get("summary", ""), artifact_ids=[art.artifact_id]), [art]
             answer = await self._call_model(
                 state,
                 request,
@@ -784,6 +788,60 @@ class ChatExecutor:
     # ── compose helpers ──
 
     @staticmethod
+    def _should_short_circuit_paper_reply(state: ManagerState) -> bool:
+        reason = str(state.route_plan.reason if state.route_plan else "").strip().lower()
+        if reason != "paper_format_check":
+            return False
+        paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report") or {}
+        if str(paper_report.get("chat_advice") or "").strip():
+            return True
+        if list(paper_report.get("issues") or []) or str(paper_report.get("summary") or "").strip():
+            return True
+        return False
+
+    @staticmethod
+    def _compose_paper_reply(state: ManagerState) -> dict[str, Any]:
+        status, blocked = ChatExecutor._resolve_status(state)
+        paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report") or {}
+        ai_output = paper_report.get("ai_review_output") or {}
+        answer = (
+            str(paper_report.get("chat_advice") or "").strip()
+            or str(paper_report.get("summary") or "").strip()
+            or str(ai_output.get("answer") or "").strip()
+            or ChatExecutor._build_fallback(state)
+        )
+        summary = (
+            str(paper_report.get("summary") or "").strip()
+            or str(ai_output.get("summary") or "").strip()
+            or answer[:200]
+        )
+        return {
+            "answer": answer,
+            "summary": summary,
+            "message_type": "file_answer",
+            "surface": state.surface,
+            "status": status,
+            "blocked": blocked,
+            "paper_format_report": {
+                "score": paper_report.get("score", 0),
+                "issue_count": paper_report.get("issue_count", len(paper_report.get("issues") or [])),
+                "high_count": paper_report.get("high_count", 0),
+                "medium_count": paper_report.get("medium_count", 0),
+                "low_count": paper_report.get("low_count", 0),
+                "summary": paper_report.get("summary", ""),
+                "chat_advice": paper_report.get("chat_advice", ""),
+                "issues": paper_report.get("issues", []),
+                "limitations": paper_report.get("limitations", []),
+                "report_files": paper_report.get("report_files", []),
+                "model_used": paper_report.get("model_used", ai_output.get("model_used")),
+                "document_type": paper_report.get("document_type", ""),
+                "template_id": paper_report.get("template_id", ""),
+                "template_errors": paper_report.get("template_errors", []),
+            },
+            "ui_schema": "paper_review_report_v1",
+        }
+
+    @staticmethod
     def _compose_from_model(state: ManagerState, answer: str) -> dict[str, Any]:
         status, blocked = ChatExecutor._resolve_status(state)
         reason = state.route_plan.reason if state.route_plan else ""
@@ -819,17 +877,22 @@ class ChatExecutor:
                     "medium_count": paper_report.get("medium_count", 0),
                     "low_count": paper_report.get("low_count", 0),
                     "summary": paper_report.get("summary", ""),
+                    "chat_advice": paper_report.get("chat_advice", ""),
+                    "issues": paper_report.get("issues", []),
                     "limitations": paper_report.get("limitations", []),
                     "report_files": paper_report.get("report_files", []),
-                    "model_used": ai_output.get("model_used", True),
+                    "model_used": paper_report.get("model_used", ai_output.get("model_used", True)),
                     "document_type": paper_report.get("document_type", ""),
                     "template_id": paper_report.get("template_id", ""),
                     "template_errors": paper_report.get("template_errors", []),
                 }
                 result["ui_schema"] = "paper_review_report_v1"
-                # Keep answer short when report card is present
-                short_answer = ai_output.get("answer") or paper_report.get("summary") or answer
-                result["answer"] = short_answer[:200]
+                result["answer"] = (
+                    str(paper_report.get("chat_advice") or "").strip()
+                    or str(ai_output.get("answer") or "").strip()
+                    or str(paper_report.get("summary") or "").strip()
+                    or answer
+                )
                 result["summary"] = ai_output.get("summary") or paper_report.get("summary") or result["summary"]
         return result
 

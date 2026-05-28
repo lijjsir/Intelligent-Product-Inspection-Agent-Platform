@@ -132,29 +132,10 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
 
         async def chat(self, messages, **kwargs):
             calls.append(messages)
-            if "Writing Guide Evidence" in messages[1]["content"]:
-                return {
-                    "answer": "写作指南建议补充摘要写法。",
-                    "summary": "指南补充 1 条建议。",
-                    "markdown_report": "# 写作指南补充\n\n应按指南完善摘要。",
-                    "issues": [
-                        {
-                            "title": "摘要写法需人工复核",
-                            "severity": "low",
-                            "category": "guide",
-                            "location": "摘要",
-                            "evidence": "写作指南摘要要求",
-                            "impact": "表达不完整",
-                            "suggestion": "对照指南完善摘要",
-                            "need_human_review": True,
-                        }
-                    ],
-                    "download_title": "指南补充报告",
-                }
             return {
-                "answer": "规则结果已生成。",
-                "summary": "规则发现 1 个问题。",
-                "markdown_report": "# 规则审阅\n\n缺少摘要。",
+                "answer": "规则结果已生成，并参考了写作指南。",
+                "summary": "规则发现 1 个问题，并补充了模板建议。",
+                "markdown_report": "# 规则审阅\n\n缺少摘要。\n\n## 写作指南补充评判\n\n应按指南完善摘要。",
                 "issues": [{"title": "缺少摘要", "severity": "high"}],
                 "download_title": "规则报告",
             }
@@ -179,9 +160,8 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
         org_id="org-1",
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert result["model_used"] is True
-    assert result["guide_review_output"]["summary"] == "指南补充 1 条建议。"
     assert "规则审阅" in result["markdown_report"]
     assert "写作指南补充评判" in result["markdown_report"]
     assert "应按指南完善摘要" in result["markdown_report"]
@@ -189,6 +169,7 @@ async def test_generate_ai_review_output_merges_writing_guide_review(monkeypatch
         "rule_template": "cqupt_graduate_thesis_2022",
         "writing_guide": "附件4-写作指南.docx",
     }
+    assert "模板写作规范参考" in calls[0][1]["content"]
 
 
 @pytest.mark.asyncio

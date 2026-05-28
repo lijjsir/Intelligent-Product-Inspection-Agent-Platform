@@ -103,6 +103,29 @@ function normalizeMessage(message: ChatMessage): ChatMessage {
   };
 }
 
+function mergePaperFormatReport(current: unknown, incoming: unknown) {
+  if (!current || typeof current !== "object") return incoming;
+  if (!incoming || typeof incoming !== "object") return current;
+  return {
+    ...(current as Record<string, unknown>),
+    ...(incoming as Record<string, unknown>),
+  };
+}
+
+function mergePayload(current: ChatMessage["payload"], incoming: ChatMessage["payload"]) {
+  const next = {
+    ...(current || {}),
+    ...(incoming || {}),
+  };
+  if ((current || {}).paper_format_report || (incoming || {}).paper_format_report) {
+    next.paper_format_report = mergePaperFormatReport(
+      (current || {}).paper_format_report,
+      (incoming || {}).paper_format_report,
+    ) as never;
+  }
+  return next;
+}
+
 export const useChatStore = defineStore("chat", () => {
   const loading = ref(false);
   const sessions = ref<ChatSession[]>([]);
@@ -188,10 +211,7 @@ export const useChatStore = defineStore("chat", () => {
       messages.value[index] = {
         ...messages.value[index],
         ...incoming,
-        payload: {
-          ...(messages.value[index].payload || {}),
-          ...(incoming.payload || {}),
-        },
+        payload: mergePayload(messages.value[index].payload || {}, incoming.payload || {}),
       };
     }
   }
@@ -220,6 +240,20 @@ export const useChatStore = defineStore("chat", () => {
     }
     const status = String(message.payload?.status || "").toLowerCase();
     return ["failed", "done", "finished", "completed", "success"].includes(status);
+  }
+
+  function patchMessage(event: ChatStreamEvent) {
+    if (!event.message_id) return;
+    const current = messages.value.find((item) => item.id === event.message_id);
+    if (!current) return;
+    upsertMessage({
+      ...current,
+      content: event.content ?? current.content,
+      message_type: String(event.message_type || event.payload?.message_type || current.message_type || "file_answer"),
+      payload: mergePayload(current.payload || {}, event.payload || {}),
+      created_at: current.created_at || event.ts || new Date().toISOString(),
+    });
+    sortMessages();
   }
 
   function stopPolling() {
@@ -752,6 +786,10 @@ export const useChatStore = defineStore("chat", () => {
         created_at: current?.created_at || event.ts || new Date().toISOString(),
       });
       sortMessages();
+      return;
+    }
+    if (event.event === "message_patch") {
+      patchMessage(event);
       return;
     }
     if (event.event === "message_final" || event.event === "run_failed") {

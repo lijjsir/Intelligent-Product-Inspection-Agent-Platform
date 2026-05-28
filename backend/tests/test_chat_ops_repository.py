@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.dialects import mysql
 from sqlalchemy.exc import MultipleResultsFound
 
+from app.models.chat import ChatMessage
 from app.repositories.chat_repo import ChatMessageRepository, ChatOpsRepository
 
 
@@ -91,3 +93,25 @@ async def test_list_assistant_for_org_allows_global_scope_without_org_filter():
 
     compiled = str(session.statement.compile(compile_kwargs={"literal_binds": True}))
     assert "chat_messages.org_id IS NULL" not in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_for_session_forces_compound_index_on_mysql():
+    session = CaptureSession()
+
+    await ChatMessageRepository(session).list_for_session(
+        org_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        after_seq=0,
+        limit=50,
+    )
+
+    compiled = str(session.statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "FORCE INDEX (idx_chat_messages_org_session_seq)" in compiled
+
+
+def test_chat_message_declares_compound_indexes_for_session_pagination():
+    indexes = {index.name: tuple(column.name for column in index.columns) for index in ChatMessage.__table__.indexes}
+
+    assert indexes["idx_chat_messages_session_seq"] == ("session_id", "seq_no")
+    assert indexes["idx_chat_messages_org_session_seq"] == ("org_id", "session_id", "seq_no")

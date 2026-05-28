@@ -46,73 +46,10 @@ async def test_manager_policy_routes_paper_queries_to_paper_format_check():
 
 @pytest.mark.asyncio
 async def test_manager_loop_returns_paper_format_report(monkeypatch):
-    async def fake_call_model(self, state, request, prompt, **kwargs):
-        return "已完成论文查非，发现摘要缺失和连续空格问题。"
-
     stored_objects: dict[tuple[str, str], tuple[bytes, str | None]] = {}
-    captured_ai_kwargs: dict = {}
-
-    class FakeStorage:
-        def put_bytes(self, *, bucket, object_key, data, content_type=None):
-            stored_objects[(bucket, object_key)] = (data, content_type)
-            return {
-                "bucket": bucket,
-                "object_key": object_key,
-                "url": f"/api/v1/chat/files/{bucket}/{object_key}",
-                "content_type": content_type,
-                "size_bytes": len(data),
-            }
-
-        def get_bytes(self, *, bucket, object_key):
-            return stored_objects.get((bucket, object_key))
-
-    async def fake_ai_review_output(**kwargs):
-        captured_ai_kwargs.update(kwargs)
-        return {
-            "answer": "模型已完成论文查非。",
-            "summary": "模型生成了完整报告。",
-            "markdown_report": "# 模型版论文查非报告\n\n唯一模型报告正文",
-            "issues": [
-                {
-                    "title": "模型不应覆盖规则问题",
-                    "severity": "low",
-                    "category": "text",
-                    "location": "model",
-                    "evidence": "model-only issue",
-                    "impact": "应仅用于表达",
-                    "suggestion": "忽略模型问题来源",
-                    "need_human_review": True,
-                }
-            ],
-            "limitations": [],
-            "download_title": "模型版报告",
-            "model_used": True,
-        }
-
-    monkeypatch.setattr(
-        "agent.router.executors.chat_executor.ChatExecutor._call_model",
-        fake_call_model,
-    )
     monkeypatch.setattr(
         "app.services.object_storage.resolver.read_attachment_bytes",
         lambda attachment: (_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-    )
-    monkeypatch.setattr(
-        "app.services.object_storage.factory.build_object_storage",
-        lambda: FakeStorage(),
-    )
-    monkeypatch.setattr(
-        "agent.tools.paper_review_ai.generate_ai_review_output",
-        fake_ai_review_output,
-    )
-    monkeypatch.setattr(
-        "agent.tools.paper_template_evidence.load_writing_guide_evidence",
-        lambda template_id: {
-            "template_id": template_id,
-            "role": "writing_guide",
-            "file_name": "附件4-写作指南-重庆邮电大学研究生学位论文模板（2022版）V2.0.docx",
-            "text": "摘要应说明研究目的、方法、结果和结论。",
-        },
     )
 
     output = await ManagerLoop().run(
@@ -143,71 +80,20 @@ async def test_manager_loop_returns_paper_format_report(monkeypatch):
 
     assert output.route_decision.sub_route == "paper_format_check"
     assert output.agent_output["message_type"] == "file_answer"
+    assert "已整理出以下修改意见" in output.agent_output["answer"]
     assert paper_reports
     assert paper_reports[0]["content"]["issues"]
-    assert paper_reports[0]["content"]["ai_review_output"]["model_used"] is True
-    assert paper_reports[0]["content"]["writing_guide_evidence"]["role"] == "writing_guide"
-    assert captured_ai_kwargs["guide_evidence"]["file_name"].startswith("附件4-写作指南")
-    assert all(
-        item["code"] != "model-only issue"
-        for item in paper_reports[0]["content"]["issues"]
-    )
+    assert paper_reports[0]["content"]["chat_advice"].startswith("已整理出以下修改意见")
     assert len(paper_reports[0]["content"]["issues"]) == paper_reports[0]["content"]["issue_count"]
-    report_files = paper_reports[0]["content"]["report_files"]
-    markdown_file = next(item for item in report_files if item["format"] == "md")
-    assert markdown_file["url"].startswith("/api/v1/chat/files/chat-reports/")
-    markdown_bytes = stored_objects[(markdown_file["bucket"], markdown_file["object_key"])][0]
-    assert "唯一模型报告正文" in markdown_bytes.decode("utf-8")
+    assert paper_reports[0]["content"]["report_files"] == []
+    assert "enrichment_payload" in paper_reports[0]["content"]
 
 
 @pytest.mark.asyncio
 async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch):
-    stored_objects: dict[tuple[str, str], tuple[bytes, str | None]] = {}
-    captured_ai_kwargs: dict = {}
-
-    class FakeStorage:
-        def put_bytes(self, *, bucket, object_key, data, content_type=None):
-            stored_objects[(bucket, object_key)] = (data, content_type)
-            return {
-                "bucket": bucket,
-                "object_key": object_key,
-                "url": f"/api/v1/chat/files/{bucket}/{object_key}",
-                "content_type": content_type,
-                "size_bytes": len(data),
-            }
-
-    async def fake_ai_review_output(**kwargs):
-        captured_ai_kwargs.update(kwargs)
-        return {
-            "answer": "model answer",
-            "summary": "model summary",
-            "markdown_report": "# report",
-            "issues": [],
-            "limitations": [],
-            "download_title": "report",
-            "model_used": True,
-        }
-
     monkeypatch.setattr(
         "app.services.object_storage.resolver.read_attachment_bytes",
         lambda attachment: (_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-    )
-    monkeypatch.setattr(
-        "app.services.object_storage.factory.build_object_storage",
-        lambda: FakeStorage(),
-    )
-    monkeypatch.setattr(
-        "agent.tools.paper_review_ai.generate_ai_review_output",
-        fake_ai_review_output,
-    )
-    monkeypatch.setattr(
-        "agent.tools.paper_template_evidence.load_writing_guide_evidence",
-        lambda template_id: {
-            "template_id": template_id,
-            "role": "writing_guide",
-            "file_name": "writing-guide.docx",
-            "text": "guide",
-        },
     )
 
     step = AgentPlanStep(
@@ -249,8 +135,7 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
 
     content = artifacts[0].content
     assert content["template_id"] == "cqupt_graduate_thesis_2022"
-    assert content["writing_guide_evidence"]["template_id"] == "cqupt_graduate_thesis_2022"
-    assert captured_ai_kwargs["guide_evidence"]["template_id"] == "cqupt_graduate_thesis_2022"
+    assert content["enrichment_payload"]["template_id"] == "cqupt_graduate_thesis_2022"
 
 
 @pytest.mark.asyncio

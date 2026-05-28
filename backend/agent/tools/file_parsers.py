@@ -64,6 +64,11 @@ def parse_docx_bytes(content: bytes) -> dict:
         WD_ALIGN_PARAGRAPH.DISTRIBUTE: "distribute",
     }
 
+    current_section_title = ""
+    current_section_level = 0
+    current_section_index = 0
+    current_paragraph_no = 0
+
     for index, paragraph in enumerate(doc.paragraphs):
         text = (paragraph.text or "").strip()
         style_name = str(getattr(paragraph.style, "name", "") or "")
@@ -84,6 +89,14 @@ def parse_docx_bytes(content: bytes) -> dict:
         space_after = _to_pt(getattr(para_format, "space_after", None))
         first_line_indent = _to_pt(getattr(para_format, "first_line_indent", None))
         alignment = alignment_map.get(paragraph.alignment, str(paragraph.alignment).lower() if paragraph.alignment is not None else "")
+        if heading_level:
+            current_section_title = text
+            current_section_level = heading_level
+            current_section_index += 1
+            current_paragraph_no = 0
+        elif text:
+            current_paragraph_no += 1
+
         item = {
             "index": index,
             "text": text,
@@ -97,6 +110,10 @@ def parse_docx_bytes(content: bytes) -> dict:
             "space_before_pt": space_before,
             "space_after_pt": space_after,
             "first_line_indent_pt": first_line_indent,
+            "section_title": current_section_title,
+            "section_level": current_section_level,
+            "section_index": current_section_index,
+            "paragraph_no": current_paragraph_no if text and not heading_level else 0,
         }
         paragraphs.append(item)
         if heading_level:
@@ -105,6 +122,7 @@ def parse_docx_bytes(content: bytes) -> dict:
                     "text": text,
                     "level": heading_level,
                     "paragraph_index": index,
+                    "section_index": current_section_index,
                     "font_name": item["font_name"],
                     "font_size_pt": item["font_size_pt"],
                     "bold": bold,
@@ -170,6 +188,8 @@ def parse_tex_bytes(content: bytes) -> dict:
         stripped = line.strip()
         if not stripped or stripped.startswith("%"):
             continue
+        section_title = sections[-1]["title"] if sections else ""
+        section_index = len(sections)
         section_match = re.match(r"\\(part|chapter|section|subsection|subsubsection)\*?\{(.+?)\}", stripped)
         if section_match:
             sections.append(
@@ -179,12 +199,16 @@ def parse_tex_bytes(content: bytes) -> dict:
                     "line": lineno,
                 }
             )
+            section_title = section_match.group(2).strip()
+            section_index = len(sections)
         paragraphs.append(
             {
                 "index": len(paragraphs),
                 "line": lineno,
                 "text": stripped,
                 "heading_level": 0,
+                "section_title": section_title,
+                "section_index": section_index,
             }
         )
     return {

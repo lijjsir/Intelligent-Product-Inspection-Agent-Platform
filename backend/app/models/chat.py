@@ -23,6 +23,10 @@ class ChatSession(Base, TimestampMixin):
 
 class ChatMessage(Base, TimestampMixin):
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("idx_chat_messages_session_seq", "session_id", "seq_no"),
+        Index("idx_chat_messages_org_session_seq", "org_id", "session_id", "seq_no"),
+    )
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
     session_id: Mapped[str] = mapped_column(UUIDBinary, index=True)

@@ -26,6 +26,7 @@ from app.services.chat_trust_scoring_service import (
     build_pending_trust_score,
     trust_payload_from_score,
 )
+from app.services.chat_trust_scoring_dispatcher import enqueue_chat_trust_scoring
 from app.services.runtime_profile_service import build_runtime_prompt_section, resolve_runtime_profile
 from app.services.model_config_service import ModelConfigService
 from app.services.system_rag_service import resolve_and_search_system_rag
@@ -943,22 +944,8 @@ def _build_trust_scoring_request(state: ChatState, payload: dict[str, Any]) -> d
     }
 
 
-def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> None:
-    if not payload:
-        return
-    try:
-        from worker.tasks.chat_trust_scoring_task import score_chat_message
-
-        score_chat_message.delay(payload)
-    except Exception as exc:
-        logger.warning(
-            "trust scoring enqueue failed assistant_message_id=%s trace_id=%s: %s",
-            payload.get("assistant_message_id"),
-            payload.get("trace_id"),
-            exc,
-            exc_info=True,
-        )
-        return
+async def _enqueue_trust_scoring(payload: dict[str, Any] | None) -> str | None:
+    return await enqueue_chat_trust_scoring(payload, logger=logger)
 
 
 async def finalizer(state: ChatState) -> ChatState:
@@ -969,7 +956,7 @@ async def finalizer(state: ChatState) -> ChatState:
     if trust_request:
         trust_score = build_pending_trust_score(**trust_request)
         payload = {**payload, "trust_scoring": trust_payload_from_score(trust_score)}
-        _enqueue_trust_scoring(trust_request)
+        await _enqueue_trust_scoring(trust_request)
     state["response_payload"] = payload
     logger.info(
         "finalizer intent=%s trust_status=%s db_ms=%d total_ms=%d",

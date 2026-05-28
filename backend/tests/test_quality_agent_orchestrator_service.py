@@ -24,7 +24,10 @@ from app.services.quality_agent_orchestrator_service import QualityAgentOrchestr
 
 @pytest.fixture(autouse=True)
 def disable_background_trust_scoring(monkeypatch):
-    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", lambda *_args, **_kwargs: None)
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", _noop)
 
 
 def test_orchestrator_json_sanitizer_drops_callables_from_legacy_state():
@@ -505,7 +508,7 @@ async def test_persist_chat_result_adds_pending_trust_scoring_and_enqueues(monke
     async def fake_emit(event: dict):
         events.append(event)
 
-    def fake_enqueue(_self, payload):
+    async def fake_enqueue(_self, payload):
         queued.append(payload)
 
     monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
@@ -627,7 +630,10 @@ async def test_persist_chat_result_records_chat_token_usage(monkeypatch):
     monkeypatch.setattr(orchestrator_mod, "RagAnalysisRepository", FakeRagAnalysisRepository)
     monkeypatch.setattr(orchestrator_mod, "TokenLedgerRepository", FakeTokenLedgerRepository)
     monkeypatch.setattr(orchestrator_mod, "UserTokenUsageSummaryRepository", FakeUserTokenUsageSummaryRepository)
-    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", lambda *_args, **_kwargs: None)
+    async def _noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_enqueue_trust_scoring", _noop)
 
     request = NormalizedRequest(
         request_id="req-token",
@@ -1155,3 +1161,120 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     assert len(summary_increments) == 1
     assert next(iter(alerts)).endswith(":alert:review")
     assert next(iter(ledgers)).endswith(":token:0:chat-model")
+
+
+@pytest.mark.asyncio
+async def test_enqueue_paper_review_enrichment_updates_same_message(monkeypatch):
+    updates: list[dict] = []
+    emitted: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, _org_id: str, _message_id: str):
+            return SimpleNamespace(
+                content="已整理出以下修改意见：\n1. 示例问题",
+                message_type="file_answer",
+                payload={
+                    "paper_format_report": {
+                        "summary": "初始摘要",
+                    },
+                    "status": "completed",
+                },
+            )
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return SimpleNamespace(
+                content=kwargs["content"],
+                message_type=kwargs["message_type"],
+                payload=kwargs["payload"],
+            )
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    async def fake_enrich(self, *, paper_report, request, emit_patch=None, db_session=None):
+        await emit_patch(
+            content="已整理出以下修改意见：\n1. 示例问题",
+            message_type="file_answer",
+            payload={
+                    "paper_format_report": {
+                        **paper_report,
+                        "summary": "补充后的摘要",
+                        "model_used": True,
+                        "report_files": [
+                            {
+                                "format": "md",
+                                "url": "/api/v1/chat/files/chat-reports/x.md",
+                            "file_name": "论文查非辅助报告.md",
+                            "bucket": "chat-reports",
+                            "object_key": "x.md",
+                            "content_type": "text/markdown",
+                        }
+                    ],
+                    "model_used": True,
+                }
+            },
+        )
+        return paper_report
+
+    async def fake_emit(event: dict):
+        emitted.append(event)
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr("app.services.paper_review_enrichment_service.PaperReviewEnrichmentService.enrich", fake_enrich)
+
+    request = NormalizedRequest(
+        request_id="req-paper-patch",
+        workflow_run_id="wf-paper-patch",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        query="帮我做论文查非",
+    )
+    output = AgentOutput(message_type="file_answer", answer="已整理出以下修改意见：\n1. 示例问题")
+    payload = {
+        "paper_format_report": {
+            "chat_advice": "已整理出以下修改意见：\n1. 示例问题",
+            "summary": "初始摘要",
+            "issues": [{"title": "示例问题", "severity": "high"}],
+            "report_files": [],
+            "enrichment_payload": {"template_id": "cqupt_graduate_thesis_2022"},
+        }
+    }
+
+    await QualityAgentOrchestratorService()._enqueue_paper_review_enrichment(
+        request=request,
+        output=output,
+        response_payload=payload,
+        emit=fake_emit,
+    )
+
+    import asyncio
+    await asyncio.sleep(0)
+
+    assert updates
+    assert updates[0]["message_type"] == "file_answer"
+    assert updates[0]["content"].startswith("已整理出以下修改意见")
+    assert updates[0]["payload"]["paper_format_report"]["summary"] == "补充后的摘要"
+    assert updates[0]["payload"]["paper_format_report"]["model_used"] is True
+    assert emitted
+    assert emitted[0]["event"] == "message_patch"
+    assert emitted[0]["payload"]["paper_format_report"]["report_files"]

@@ -137,6 +137,7 @@ class ChatMessageRepository:
     ) -> list[ChatMessage]:
         result = await self._session.execute(
             select(ChatMessage)
+            .with_hint(ChatMessage, "FORCE INDEX (idx_chat_messages_org_session_seq)", dialect_name="mysql")
             .where(
                 ChatMessage.org_id == org_id,
                 ChatMessage.session_id == session_id,

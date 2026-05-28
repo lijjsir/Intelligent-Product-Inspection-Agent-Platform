@@ -49,6 +49,27 @@ export interface PaperReviewReportFile {
   content_type: string;
 }
 
+export interface PaperReviewIssueLocation {
+  section?: string;
+  section_title?: string;
+  paragraph_index?: number;
+  paragraph_no?: number;
+  line?: number;
+  template_id?: string;
+  display_text?: string;
+}
+
+export interface PaperReviewIssue {
+  code: string;
+  title: string;
+  severity: string;
+  category: string;
+  message: string;
+  evidence: string;
+  location: PaperReviewIssueLocation;
+  suggestion: string;
+}
+
 export interface PaperReviewReport {
   score: number;
   issue_count: number;
@@ -56,9 +77,11 @@ export interface PaperReviewReport {
   medium_count: number;
   low_count: number;
   summary: string;
+  chat_advice?: string;
+  issues?: PaperReviewIssue[];
   limitations: string[];
   report_files: PaperReviewReportFile[];
-  model_used: boolean;
+  model_used?: boolean;
   document_type: string;
   template_id: string;
   template_errors: string[];
@@ -270,7 +293,7 @@ export interface ChatSendResponse {
 }
 
 export interface ChatStreamEvent {
-  event: "run_started" | "message_delta" | "message_final" | "quality_signal" | "run_failed";
+  event: "run_started" | "message_delta" | "message_final" | "message_patch" | "quality_signal" | "run_failed";
   session_id: string;
   message_id?: string | null;
   workflow_run_id?: string | null;
@@ -278,5 +301,6 @@ export interface ChatStreamEvent {
   content?: string | null;
   quality?: ChatMessagePayload["quality"] | null;
   payload?: ChatMessagePayload | null;
+  message_type?: string | null;
   ts?: string | null;
 }

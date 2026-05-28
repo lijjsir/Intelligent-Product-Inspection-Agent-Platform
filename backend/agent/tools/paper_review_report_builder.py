@@ -11,9 +11,6 @@ def build_markdown_report(
     evidence_pack: dict[str, Any],
 ) -> str:
     markdown = str(review_output.get("markdown_report") or "").strip()
-    if markdown:
-        return markdown
-
     doc = evidence_pack.get("document") or {}
     issues = list(review_output.get("issues") or evidence_pack.get("issues") or [])
     limitations = list(
@@ -39,35 +36,38 @@ def build_markdown_report(
     if summary:
         lines.append(f"- 总结：{summary}")
 
+    if markdown:
+        lines.extend(["", "## 二、AI审阅摘要", "", markdown])
+
     if high:
-        lines.extend(["", "## 二、高优先级问题", ""])
+        lines.extend(["", "## 三、高优先级问题", ""])
         for idx, issue in enumerate(high, start=1):
             lines.extend(_format_issue(idx, issue))
 
     if medium:
-        lines.extend(["", "## 三、中优先级问题", ""])
+        lines.extend(["", "## 四、中优先级问题", ""])
         for idx, issue in enumerate(medium, start=1):
             lines.extend(_format_issue(idx, issue))
 
     if low:
-        lines.extend(["", "## 四、低优先级问题", ""])
+        lines.extend(["", "## 五、低优先级问题", ""])
         for idx, issue in enumerate(low, start=1):
             lines.extend(_format_issue(idx, issue))
 
     need_review = [i for i in issues if i.get("need_human_review")]
     if need_review:
-        lines.extend(["", "## 五、需人工复核项", ""])
+        lines.extend(["", "## 六、需人工复核项", ""])
         for idx, issue in enumerate(need_review, start=1):
             lines.append(f"{idx}. **{issue.get('title', '')}** — {issue.get('location', '')}")
 
     if limitations:
-        lines.extend(["", "## 六、局限性说明", ""])
+        lines.extend(["", "## 七、局限性说明", ""])
         for limit in limitations:
             lines.append(f"- {limit}")
 
     lines.extend([
         "",
-        "## 七、修改优先级建议",
+        "## 八、修改优先级建议",
         "",
         "1. 先补充结构缺失内容（摘要、关键词、参考文献）。",
         "2. 再统一标题与正文格式（字号、行距、页边距）。",
@@ -87,15 +87,25 @@ def _format_issue(idx: int, issue: dict[str, Any]) -> list[str]:
     location = ""
     loc = issue.get("location")
     if isinstance(loc, dict):
-        location = str(loc.get("section") or loc.get("paragraph_index") or "")
+        location = str(
+            loc.get("display_text")
+            or loc.get("section_title")
+            or loc.get("section")
+            or loc.get("paragraph_index")
+            or loc.get("line")
+            or ""
+        )
     evidence = str(issue.get("evidence") or "")
     impact = str(issue.get("impact") or "")
     suggestion = str(issue.get("suggestion") or "")
+    severity = str(issue.get("severity") or "")
 
     lines = [
         f"### {idx}. {title}",
         "",
     ]
+    if severity:
+        lines.append(f"- 严重级别：{severity}")
     if category:
         lines.append(f"- 类型：{category}")
     if location:
