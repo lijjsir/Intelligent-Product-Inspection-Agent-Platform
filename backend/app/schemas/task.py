@@ -78,6 +78,7 @@ class TaskResponse(BaseModel):
     id: str
     org_id: str
     org_slug: str | None = None
+    created_by: str
     product_id: str
     spec_code: str
     status: str
@@ -101,6 +102,7 @@ class TaskListItemResponse(BaseModel):
     id: str
     org_id: str
     org_slug: str | None = None
+    created_by: str
     product_id: str
     spec_code: str
     status: str

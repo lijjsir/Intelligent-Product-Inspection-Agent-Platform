@@ -22,6 +22,7 @@ export interface InspectionTask {
   id: string;
   org_id: string;
   org_slug?: string | null;
+  created_by: string;
   product_id: string;
   spec_code: string;
   status: TaskStatus;

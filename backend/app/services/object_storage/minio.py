@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -66,7 +67,11 @@ class MinioObjectStorage:
         self._client.remove_object(bucket, object_key)
 
     def presign_download_url(self, *, bucket: str, object_key: str, expires_seconds: int = 3600) -> str:
-        return self._client.presigned_get_object(bucket, object_key, expires=expires_seconds)
+        return self._client.presigned_get_object(
+            bucket,
+            object_key,
+            expires=timedelta(seconds=expires_seconds),
+        )
 
     def ensure_bucket(self, bucket: str) -> None:
         if not self._client.bucket_exists(bucket):

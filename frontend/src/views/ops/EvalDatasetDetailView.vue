@@ -31,6 +31,10 @@ const selectedSamples = ref<DatasetSample[]>([]);
 const selectedSampleIds = computed(() => selectedSamples.value.map((item) => item.id));
 const sourceDatasetDisplayName = computed(() => evalStore.current?.source_dataset_name || evalStore.current?.source_dataset_id || "-");
 
+function previewMediaUrl(item: { download_url?: string | null; file_url?: string | null }) {
+  return item.download_url || item.file_url || "";
+}
+
 async function loadDetail() {
   if (!resourceId.value) return;
   await evalStore.fetchOne(resourceId.value);
@@ -171,7 +175,7 @@ watch(
         </div>
         <div class="preview-grid" v-if="(evalStore.current?.samples_preview || []).length">
           <div v-for="item in evalStore.current?.samples_preview || []" :key="item.id" class="preview-card">
-            <img v-if="item.sample_type === 'image' && item.file_url" :src="item.file_url" :alt="item.sample_name || item.id" />
+            <img v-if="item.sample_type === 'image' && previewMediaUrl(item)" :src="previewMediaUrl(item)" :alt="item.sample_name || item.id" />
             <div v-else class="text-preview">{{ item.preview_text || item.text_content || "无预览内容" }}</div>
             <strong>{{ item.sample_name || item.dataset_sample_id || item.id }}</strong>
           </div>
@@ -230,8 +234,8 @@ watch(
           title="源样本已删除，当前展示的是评测集内保存的快照内容。"
         />
         <img
-          v-if="previewPayload.sample_type === 'image' && previewPayload.file_url"
-          :src="previewPayload.file_url"
+          v-if="previewPayload.sample_type === 'image' && previewMediaUrl(previewPayload)"
+          :src="previewMediaUrl(previewPayload)"
           :alt="previewPayload.sample_name || previewPayload.id"
           class="preview-image"
         />

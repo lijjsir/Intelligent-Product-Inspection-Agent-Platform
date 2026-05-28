@@ -40,6 +40,8 @@ class FakeDatasetSample:
     source_metadata: dict | None = None
     preview_text: str | None = None
     file_url: str | None = None
+    bucket: str | None = None
+    object_key: str | None = None
     is_augmented: bool = False
     augmentation_source_id: str | None = None
     augmentation_method: str | None = None
@@ -158,6 +160,8 @@ class FakeDatasetSampleRepo:
                 source_metadata={"defect": "scratch"},
                 preview_text="screen-scratch.png",
                 file_url="/uploads/screen-scratch.png",
+                bucket="datasets",
+                object_key="datasets/org-1/ds-1/screen-scratch.png",
             ),
             FakeDatasetSample(
                 id="sample-2",
@@ -658,6 +662,7 @@ async def test_create_eval_dataset_validates_samples_and_counts_items(service):
 
     assert created.source_dataset_id == "ds-1"
     assert created.sample_count == 2
+    assert created.samples_preview[0].download_url == "/api/v1/files/datasets/datasets/org-1/ds-1/screen-scratch.png"
     assert eval_item_repo.items
     assert session.commit_count >= 1
 
@@ -1421,6 +1426,7 @@ async def test_snapshot_items_survive_source_sample_deletion(service):
 
     assert items.items[0].snapshot_deleted_from_source is True
     assert items.items[0].sample_name == "screen-scratch.png"
+    assert items.items[0].download_url == "/api/v1/files/datasets/datasets/org-1/ds-1/screen-scratch.png"
     assert eval_item_repo.items
 
 

@@ -82,6 +82,7 @@ class TaskRepository:
                 load_only(
                     InspectionTask.id,
                     InspectionTask.org_id,
+                    InspectionTask.created_by,
                     InspectionTask.product_id,
                     InspectionTask.spec_code,
                     InspectionTask.status,

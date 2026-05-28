@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import { useAuthStore } from "@/stores/auth.store";
+import { createUuid } from "@/utils/browserCrypto";
 
 export interface PromptTemplate {
   id: string;
@@ -184,7 +185,7 @@ function readStoredTemplates(auth: ReturnType<typeof useAuthStore>): PromptTempl
     return parsed
       .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
       .map((item) => ({
-        id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : crypto.randomUUID(),
+        id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : createUuid(),
         name: typeof item.name === "string" ? item.name.trim() : "",
         description: typeof item.description === "string" ? item.description.trim() : "",
         content: typeof item.content === "string" ? item.content.trim() : "",
@@ -220,7 +221,7 @@ function writeStoredSelectedTemplateId(auth: ReturnType<typeof useAuthStore>, te
 function normalizeTemplate(input: PromptTemplateDraft, existing?: PromptTemplate): PromptTemplate {
   const timestamp = nowIso();
   return {
-    id: existing?.id || crypto.randomUUID(),
+    id: existing?.id || createUuid(),
     name: input.name.trim(),
     description: input.description.trim(),
     content: input.content.trim(),

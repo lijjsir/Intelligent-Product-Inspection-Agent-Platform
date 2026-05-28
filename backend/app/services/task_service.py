@@ -145,7 +145,7 @@ class TaskService:
         task = await self._repo.get_for_user(
             self._task_scope_org_id,
             task_id,
-            owner_user_id=self._owner_user_id,
+            owner_user_id=None,
         )
         await self._annotate_tasks([task] if task else [])
         return task
@@ -156,7 +156,7 @@ class TaskService:
             filters=query.to_filters(),
             page=query.page,
             size=query.size,
-            owner_user_id=self._owner_user_id,
+            owner_user_id=None,
         )
         await self._annotate_tasks(items)
         return items, total
@@ -165,7 +165,7 @@ class TaskService:
         task = await self._repo.get_for_user(
             org_id=self._task_scope_org_id,
             task_id=task_id,
-            owner_user_id=self._owner_user_id,
+            owner_user_id=self._delete_owner_user_id,
         )
         if task is None:
             return None
@@ -190,13 +190,13 @@ class TaskService:
         deleted = await self._repo.soft_delete(
             org_id=self._task_scope_org_id,
             task_id=task_id,
-            owner_user_id=self._owner_user_id,
+            owner_user_id=self._delete_owner_user_id,
         )
         return deleted
 
     @property
-    def _owner_user_id(self) -> str | None:
-        if self._actor_role == ROLE_USER:
+    def _delete_owner_user_id(self) -> str | None:
+        if self._actor_role in {ROLE_USER, ROLE_EXPERT}:
             return self._actor_user_id
         return None
 

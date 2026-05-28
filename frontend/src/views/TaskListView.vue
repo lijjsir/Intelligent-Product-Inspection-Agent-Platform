@@ -12,15 +12,19 @@ import {
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import { useChatStore } from "@/stores/chat.store";
+import { useAuthStore } from "@/stores/auth.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
-import type { TaskStatus } from "@/types/task.types";
+import { sha256Hex } from "@/utils/browserCrypto";
+import { formatServerDateTime } from "@/utils/date-time";
+import type { InspectionTask, TaskStatus } from "@/types/task.types";
 
 const router = useRouter();
 const route = useRoute();
 const taskStore = useTaskStore();
 const chatStore = useChatStore();
 const inspectionSpecStore = useInspectionSpecStore();
+const auth = useAuthStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
@@ -101,6 +105,10 @@ function getStatusType(status: string) {
     reviewing: "warning",
   };
   return map[status] || "info";
+}
+
+function canDeleteTask(row: InspectionTask) {
+  return canCreateTask.value && row.created_by === auth.userId;
 }
 
 function syncFromRoute() {
@@ -206,18 +214,11 @@ function fileToDataUrl(file: File): Promise<string> {
 
 async function fileToHash(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return sha256Hex(buffer);
 }
 
 async function textToHash(value: string): Promise<string> {
-  const buffer = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return sha256Hex(value);
 }
 
 function extractTaskCreateErrorMessage(error: any) {
@@ -461,14 +462,14 @@ watch(
         <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
+            {{ formatServerDateTime(row.created_at) || "-" }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="router.push(`${listBasePath}/${row.id}`)">查看详情</el-button>
             <el-button
-              v-if="canCreateTask"
+              v-if="canDeleteTask(row)"
               link
               type="danger"
               size="small"

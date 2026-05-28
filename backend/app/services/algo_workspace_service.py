@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from app.core.config import settings
 from app.core.datetime import utcnow, utcnow_iso
@@ -1984,6 +1985,8 @@ class AlgoWorkspaceService(TenantAwareService):
                             "preview_text": live_sample.preview_text,
                             "text_content": live_sample.text_content,
                             "file_url": live_sample.file_url,
+                            "bucket": live_sample.bucket,
+                            "object_key": live_sample.object_key,
                             "annotation_data": live_sample.annotation_data,
                             "source_metadata": live_sample.source_metadata,
                         },
@@ -2557,6 +2560,13 @@ class AlgoWorkspaceService(TenantAwareService):
         for item in items:
             snapshot = dict(item.payload_json or {})
             sample = source_map.get(item.dataset_sample_id or "")
+            bucket = getattr(sample, "bucket", None) if sample is not None else snapshot.get("bucket")
+            object_key = getattr(sample, "object_key", None) if sample is not None else snapshot.get("object_key")
+            download_url = (
+                f"/api/v1/files/{quote(str(bucket), safe='')}/{quote(str(object_key), safe='/')}"
+                if bucket and object_key
+                else None
+            )
             data = {
                 "id": item.id,
                 "org_id": item.org_id,
@@ -2570,6 +2580,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "preview_text": snapshot.get("preview_text") if sample is None else sample.preview_text,
                 "text_content": snapshot.get("text_content") if sample is None else sample.text_content,
                 "file_url": snapshot.get("file_url") if sample is None else sample.file_url,
+                "download_url": download_url,
                 "annotation_data": snapshot.get("annotation_data") if sample is None else sample.annotation_data,
                 "source_metadata": snapshot.get("source_metadata") if sample is None else sample.source_metadata,
                 "snapshot_deleted_from_source": sample is None,

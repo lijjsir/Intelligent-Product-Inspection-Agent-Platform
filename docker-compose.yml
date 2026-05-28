@@ -42,7 +42,7 @@ services:
       qdrant:
         condition: service_started
     ports:
-      - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
+      - "0.0.0.0:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - ./backend:/app/backend
 
@@ -140,7 +140,7 @@ services:
       - backend
       - langfuse-web
     ports:
-      - "127.0.0.1:${PIAP_FRONTEND_HOST_PORT:-5173}:5173"
+      - "0.0.0.0:${PIAP_FRONTEND_HOST_PORT:-5173}:5173"
     volumes:
       - ./frontend/src:/app/frontend/src
       - ./frontend/index.html:/app/frontend/index.html

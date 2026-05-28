@@ -87,7 +87,10 @@ class Settings(BaseSettings):
         "http://127.0.0.1:15173",
         "http://localhost:15173",
     ]
-    cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    cors_allow_origin_regex: str = (
+        r"^https?://(localhost|127\.0\.0\.1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|"
+        r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(:\d+)?$"
+    )
 
     langfuse_enabled: bool = True
     langfuse_public_key: str | None = "pk-lf-piap-local"

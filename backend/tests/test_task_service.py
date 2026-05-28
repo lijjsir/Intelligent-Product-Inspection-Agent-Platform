@@ -280,7 +280,7 @@ async def test_create_task_rejects_missing_active_spec(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_tasks_filters_by_owner_for_user_role(monkeypatch):
+async def test_list_tasks_uses_org_scope_for_user_role(monkeypatch):
     repo = FakeTaskRepo(None)
     monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
     monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
@@ -298,7 +298,7 @@ async def test_list_tasks_filters_by_owner_for_user_role(monkeypatch):
             "filters": {"status": "pending"},
             "page": 1,
             "size": 20,
-            "owner_user_id": "user-1",
+            "owner_user_id": None,
         }
     ]
 

@@ -226,6 +226,7 @@ class EvaluationDatasetItemResponse(BaseModel):
     preview_text: str | None = None
     text_content: str | None = None
     file_url: str | None = None
+    download_url: str | None = None
     annotation_data: dict[str, Any] | list[Any] | None = None
     source_metadata: dict[str, Any] | None = None
     snapshot_deleted_from_source: bool = False

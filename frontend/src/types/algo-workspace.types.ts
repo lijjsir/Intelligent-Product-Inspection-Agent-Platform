@@ -373,6 +373,7 @@ export interface EvaluationDatasetItem {
   preview_text?: string | null;
   text_content?: string | null;
   file_url?: string | null;
+  download_url?: string | null;
   annotation_data?: Record<string, unknown> | unknown[] | null;
   source_metadata?: Record<string, unknown> | null;
   snapshot_deleted_from_source: boolean;

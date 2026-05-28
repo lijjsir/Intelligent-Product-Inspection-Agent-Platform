@@ -24,6 +24,7 @@ const drawerOpen = ref(false);
 const previewOpen = ref(false);
 const editingId = ref("");
 const previewing = ref<InspectionSpec | null>(null);
+const togglingKeys = ref<Set<string>>(new Set());
 const scopeMode = ref<"org" | "global">("org");
 const filters = reactive({
   productId: "",
@@ -265,6 +266,46 @@ async function submit() {
   drawerOpen.value = false;
 }
 
+type ToggleField = "auto_pass_enabled" | "is_active";
+
+function toggleKey(row: InspectionSpec, field: ToggleField) {
+  return `${row.id}:${field}`;
+}
+
+function setToggleLoading(row: InspectionSpec, field: ToggleField, loading: boolean) {
+  const next = new Set(togglingKeys.value);
+  const key = toggleKey(row, field);
+  if (loading) {
+    next.add(key);
+  } else {
+    next.delete(key);
+  }
+  togglingKeys.value = next;
+}
+
+function isToggleLoading(row: InspectionSpec, field: ToggleField) {
+  return togglingKeys.value.has(toggleKey(row, field));
+}
+
+async function toggleSpecFlag(row: InspectionSpec, field: ToggleField, value: boolean) {
+  if (isReadonly.value) {
+    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    return;
+  }
+  if (row[field] === value) return;
+  setToggleLoading(row, field, true);
+  try {
+    await store.updateOne(row.id, { [field]: value });
+    const label = field === "auto_pass_enabled" ? "自动放行" : "状态";
+    ElMessage.success(`${label}已${value ? "开启" : "关闭"}`);
+  } catch (error: any) {
+    console.error(error);
+    ElMessage.error(error?.response?.data?.message || "门槛状态更新失败");
+  } finally {
+    setToggleLoading(row, field, false);
+  }
+}
+
 async function remove(id: string) {
   if (isReadonly.value) {
     ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
@@ -376,18 +417,30 @@ onMounted(() => {
         <el-table-column label="必需图片" width="100">
           <template #default="{ row }">{{ row.required_image_count }}</template>
         </el-table-column>
-        <el-table-column label="自动放行" width="100">
+        <el-table-column label="自动放行" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.auto_pass_enabled ? 'success' : 'info'">
-              {{ row.auto_pass_enabled ? "开启" : "关闭" }}
-            </el-tag>
+            <el-switch
+              :model-value="row.auto_pass_enabled"
+              :disabled="isReadonly"
+              :loading="isToggleLoading(row, 'auto_pass_enabled')"
+              inline-prompt
+              active-text="开"
+              inactive-text="关"
+              @change="(value) => toggleSpecFlag(row, 'auto_pass_enabled', Boolean(value))"
+            />
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'info'">
-              {{ row.is_active ? "启用" : "停用" }}
-            </el-tag>
+            <el-switch
+              :model-value="row.is_active"
+              :disabled="isReadonly"
+              :loading="isToggleLoading(row, 'is_active')"
+              inline-prompt
+              active-text="启"
+              inactive-text="停"
+              @change="(value) => toggleSpecFlag(row, 'is_active', Boolean(value))"
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">

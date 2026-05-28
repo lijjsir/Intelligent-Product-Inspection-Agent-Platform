@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { chatApi } from "@/api/chat.api";
 import { ragSpaceApi } from "@/api/rag-space.api";
+import { createUuid } from "@/utils/browserCrypto";
 import type {
   ChatAttachment,
   ChatCreatedTask,
@@ -30,13 +31,6 @@ const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
   latest_task: null,
   selected_tasks: [],
 };
-
-function safeRandomId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `fallback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 function resolveErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null) {
@@ -77,7 +71,7 @@ function normalizeAttachments(value: unknown): ChatAttachment[] {
   return value
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
     .map((item) => ({
-      id: typeof item.id === "string" ? item.id : safeRandomId(),
+      id: typeof item.id === "string" ? item.id : createUuid(),
       name: typeof item.name === "string" ? item.name : "附件",
       url: typeof item.url === "string" ? item.url : "",
       content_type: typeof item.content_type === "string" ? item.content_type : null,
@@ -551,8 +545,8 @@ export const useChatStore = defineStore("chat", () => {
           }
         : { enabled: false, scope_node_ids: [] },
     };
-    const tempUserId = `temp-user-${safeRandomId()}`;
-    const tempAssistantId = `temp-assistant-${safeRandomId()}`;
+    const tempUserId = `temp-user-${createUuid()}`;
+    const tempAssistantId = `temp-assistant-${createUuid()}`;
 
     appendMessages([
       {

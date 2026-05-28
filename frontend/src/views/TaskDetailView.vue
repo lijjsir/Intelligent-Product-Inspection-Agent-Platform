@@ -14,6 +14,8 @@ import {
 import { useChatStore } from "@/stores/chat.store";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useTaskStore } from "@/stores/task.store";
+import { useAuthStore } from "@/stores/auth.store";
+import { formatServerDateTime } from "@/utils/date-time";
 import type { TaskResultIngestResponse, TaskResultIngestTarget, TaskStreamEvent } from "@/types/task.types";
 
 const route = useRoute();
@@ -21,6 +23,7 @@ const router = useRouter();
 const taskStore = useTaskStore();
 const chatStore = useChatStore();
 const datasetStore = useDatasetStore();
+const auth = useAuthStore();
 const { hasRole } = usePermission();
 
 const loading = ref(true);
@@ -59,6 +62,12 @@ const resolvedRagSpaceId = computed(() => ingestForm.value.rag_space_id_manual.t
 const datasetNameOptions = computed(() => datasetStore.nameOptions);
 const resolvedDatasetName = computed(() => ingestForm.value.dataset_name.trim());
 const canOpenIngest = computed(() => currentTask.value?.status === "done" && currentTask.value?.has_result);
+const canDeleteCurrentTask = computed(() => {
+  if (!currentTask.value || currentTask.value.status === "running") return false;
+  if (hasRole([ROLE_ADMIN, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER])) return true;
+  if (hasRole([ROLE_USER, ROLE_EXPERT])) return currentTask.value.created_by === auth.userId;
+  return false;
+});
 const ingestStatusText = computed(() => {
   if (!currentTask.value) return "";
   if (currentTask.value.status !== "done") return "任务完成后才可手动导入。";
@@ -340,7 +349,7 @@ onUnmounted(() => {
           导入检测结果
         </el-button>
         <el-button
-          v-if="taskStore.current.status !== 'running'"
+          v-if="canDeleteCurrentTask"
           type="danger"
           plain
           :loading="deleting"
@@ -361,7 +370,7 @@ onUnmounted(() => {
           <el-descriptions-item label="检测标准">{{ taskStore.current.spec_code }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ taskStore.current.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
-            {{ taskStore.current.created_at ? new Date(taskStore.current.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
+            {{ formatServerDateTime(taskStore.current.created_at) || "-" }}
           </el-descriptions-item>
           <el-descriptions-item label="执行模式">{{ taskStore.current.execution?.mode || "-" }}</el-descriptions-item>
           <el-descriptions-item label="执行 Job">{{ taskStore.current.execution?.job_id || "-" }}</el-descriptions-item>
@@ -395,7 +404,7 @@ onUnmounted(() => {
         <template #header>AI 检测 Agent 实时流</template>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
-          <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="item.ts || ''" placement="top">
+          <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="formatServerDateTime(item.ts) || item.ts || ''" placement="top">
             <div class="event-line">
               <strong>{{ item.type }}</strong>
               <span v-if="item.stage"> / {{ item.stage }}</span>
