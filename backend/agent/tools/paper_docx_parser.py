@@ -273,11 +273,16 @@ def _extract_reference_lines(text: str) -> list[str]:
         line = raw_line.strip()
         if not line:
             continue
-        if "参考文献" in line:
-            in_refs = True
-            continue
-        if in_refs and re.match(r"^\[\d+\]", line):
-            lines.append(line)
+        # Only trigger on exact section header, not on entries that contain the word
+        if in_refs:
+            if re.match(r"^\[\d+\]", line):
+                lines.append(line)
+            # Stop at next major section heading
+            elif re.match(r"^(?:致谢|附录|攻读|发表|在学|致 謝)", line):
+                break
+        else:
+            if line in {"参考文献", "References", "Bibliography", "REFERENCES"}:
+                in_refs = True
     return lines
 
 
