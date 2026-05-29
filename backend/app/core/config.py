@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     paper_check_languagetool_url: str = ""
     paper_check_languagetool_language: str = "zh-CN"
     paper_check_languagetool_timeout_sec: int = 20
+    paper_check_vale_bin: str = "vale"
+    paper_check_vale_config_dir: str = "agent/tools/assets/vale"
+    paper_check_vale_timeout_sec: int = 20
+    paper_check_pycorrector_enabled: bool = True
+    paper_check_macro_correct_enabled: bool = True
+    paper_check_engine_timeout_sec: int = 20
+    paper_check_pycorrector_timeout_sec: int = 8
+    paper_check_pycorrector_chunk_chars: int = 1200
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20

@@ -25,6 +25,10 @@ const instance: AxiosInstance = axios.create({
   timeout: 15000,
 });
 
+function isTimeoutError(error: unknown): boolean {
+  return axios.isAxiosError(error) && (error.code === "ECONNABORTED" || /timeout/i.test(String(error.message || "")));
+}
+
 instance.interceptors.request.use((config: any) => {
   const token = readStoredValue(TOKEN_KEY);
   const orgId = readStoredValue(ORG_ID_KEY);
@@ -104,7 +108,9 @@ instance.interceptors.response.use(
         if (!suppressToast) showToast(serverMessage || "请求失败");
       }
     } else {
-      if (isLoginTokenRequest) {
+      if (isTimeoutError(error)) {
+        if (!suppressToast) showToast("请求超时，后端处理时间过长，请稍后重试");
+      } else if (isLoginTokenRequest) {
         showToast("后端连接失败，登录接口不可达，请确认后端服务和端口已启动");
       } else {
         if (!suppressToast) showToast("后端连接失败，请确认后端服务和端口已启动");

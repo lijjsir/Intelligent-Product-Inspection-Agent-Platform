@@ -74,6 +74,7 @@ export const chatApi = {
     }
     return http.post<{ items: ChatAttachment[] }>("/v1/chat/uploads", form, {
       headers: { "Content-Type": "multipart/form-data" },
+      timeout: 180000,
     });
   },
 

@@ -1,16 +1,37 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import json
+import logging
+import subprocess
+import tempfile
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
 
-from app.core.config import settings
 from agent.tools.paper_format_templates import get_paper_template
+from agent.tools.paper_review_pycorrector import (
+    PycorrectorUnavailableError,
+    normalize_pycorrector_errors,
+    run_pycorrector,
+)
+from agent.tools.paper_review_macro_correct import (
+    MacroCorrectUnavailableError,
+    run_macro_correct_punct,
+    run_macro_correct_token,
+)
+from app.core.config import settings
+from app.services.paper_review_runtime_service import (
+    PaperReviewDependencyError,
+    PaperReviewRuntimeService,
+)
 
 
 DEFAULT_TEMPLATE_ID = "generic_cn_thesis"
+logger = logging.getLogger(__name__)
 
 _ZH_PUNCT = "，。；：？！、''‘’（）《》【】"
 _EN_PUNCT = ",.;:?!()[]\"'"
@@ -37,6 +58,9 @@ class RuleIssue:
     actual: dict[str, Any] | None = None
     source_clause_ids: list[str] | None = None
     parser_confidence: str = "medium"
+    engine: str = "rule"
+    engine_rule_id: str | None = None
+    confidence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -49,6 +73,7 @@ class RuleIssue:
             "location": dict(self.location),
             "suggestion": self.suggestion,
             "parser_confidence": self.parser_confidence,
+            "engine": self.engine,
         }
         if self.expected:
             result["expected"] = dict(self.expected)
@@ -56,6 +81,10 @@ class RuleIssue:
             result["actual"] = dict(self.actual)
         if self.source_clause_ids:
             result["source_clause_ids"] = list(self.source_clause_ids)
+        if self.engine_rule_id:
+            result["engine_rule_id"] = self.engine_rule_id
+        if self.confidence:
+            result["confidence"] = self.confidence
         return result
 
 
@@ -73,12 +102,37 @@ def check_paper_format(
     is_generic_template = effective_template_id == DEFAULT_TEMPLATE_ID and not bool(template_id)
     issues: list[RuleIssue] = []
     limitations: list[str] = []
+    runtime_status: dict[str, Any] | None = None
+
+    if document_type == "docx":
+        runtime_status = PaperReviewRuntimeService.diagnose_sync()
+        parser_limitations = [str(item) for item in list(parsed.get("parser_limitations") or []) if str(item).strip()]
+        limitations.extend(parser_limitations)
+        if not runtime_status.get("ok"):
+            detail = "; ".join(
+                f"{item['name']}: {item.get('detail') or 'unavailable'}"
+                for item in list(runtime_status.get("engine_status") or [])
+                if not item.get("ok")
+            )
+            limitations.append("论文检测环境未就绪，已终止 docx 增强校验。")
+            return {
+                "document_type": document_type,
+                "template_id": effective_template_id,
+                "summary": "论文检测环境未就绪，当前无法完成 docx 增强校验。",
+                "score": 0,
+                "issues": [],
+                "limitations": list(dict.fromkeys(limitations)),
+                "query": query,
+                "engines_used": list(runtime_status.get("engines_used") or []),
+                "engine_status": list(runtime_status.get("engine_status") or []),
+                "runtime_ready": False,
+                "chat_advice": "论文检测环境未就绪，请先安装并配置 python-docx、lxml、pycorrector、macro-correct、LanguageTool 和 Vale 后重试。",
+            }
 
     if document_type == "docx":
         issues.extend(_check_docx_structure(parsed))
-        issues.extend(_check_docx_style(parsed))
-        issues.extend(_check_text_norms(parsed))
         issues.extend(_check_template_rules(parsed, template=template, document_type=document_type))
+        issues.extend(_check_docx_style(parsed))
         issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
         issues.extend(_check_toc_rules(parsed, template=template))
         issues.extend(_check_heading_rules(parsed))
@@ -86,6 +140,7 @@ def check_paper_format(
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
         issues.extend(_check_word_artifact_rules(parsed))
+        issues.extend(_run_docx_text_engines(parsed, file_name=file_name))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
@@ -126,7 +181,6 @@ def check_paper_format(
     elif effective_template_id == "cqupt_graduate_thesis_2022":
         limitations.append("已使用重庆邮电大学研究生学位论文模板（2022版）规则进行辅助校验，仍需以学校最新正式文件为准。")
 
-    issues.extend(_dedupe_issues(_check_language_tool(parsed, file_name=file_name)))
     issues = _dedupe_issues(issues)
     summary = _build_summary(document_type=document_type, issues=issues, limitations=limitations)
 
@@ -138,6 +192,9 @@ def check_paper_format(
         "issues": [item.to_dict() for item in issues],
         "limitations": limitations,
         "query": query,
+        "engines_used": list((runtime_status or {}).get("engines_used") or ["rule"]),
+        "engine_status": list((runtime_status or {}).get("engine_status") or [{"name": "rule", "ok": True, "detail": "built-in"}]),
+        "runtime_ready": bool(runtime_status.get("ok")) if runtime_status is not None else True,
     }
 
 
@@ -370,6 +427,66 @@ def _docx_body_between_sections_exists(parsed: dict[str, Any], rule: dict[str, A
             if text and not paragraph.get("heading_level"):
                 return True
     return False
+
+
+def _find_docx_body_start_word_section_index(parsed: dict[str, Any]) -> int | None:
+    headings = list(parsed.get("headings") or [])
+    paragraphs = list(parsed.get("paragraphs") or [])
+    if not paragraphs:
+        return None
+
+    preface_aliases = ["摘要", "关键词", "关键字", "目录", "引言", "绪论"]
+    ending_aliases = ["参考文献", "致谢"]
+    start_index = None
+    end_index = None
+
+    for heading in headings:
+        text = str(heading.get("text") or "").strip()
+        paragraph_index = heading.get("paragraph_index")
+        if paragraph_index is None:
+            continue
+        if start_index is None and any(alias in text for alias in preface_aliases):
+            start_index = int(paragraph_index)
+        if any(alias in text for alias in ending_aliases):
+            end_index = int(paragraph_index)
+            break
+
+    candidate_headings: list[dict[str, Any]] = []
+    for heading in headings:
+        paragraph_index = heading.get("paragraph_index")
+        level = int(heading.get("level") or 0)
+        if paragraph_index is None or level != 1:
+            continue
+        paragraph_index = int(paragraph_index)
+        if start_index is not None and paragraph_index <= start_index:
+            continue
+        if end_index is not None and paragraph_index >= end_index:
+            continue
+        candidate_headings.append(heading)
+
+    if not candidate_headings:
+        return None
+
+    paragraph_map = {int(item.get("index") or 0): item for item in paragraphs}
+    for heading in candidate_headings:
+        heading_index = int(heading.get("paragraph_index") or 0)
+        next_heading_index = None
+        for sibling in candidate_headings:
+            sibling_index = int(sibling.get("paragraph_index") or 0)
+            if sibling_index > heading_index:
+                next_heading_index = sibling_index
+                break
+        for index in range(heading_index + 1, next_heading_index or len(paragraphs)):
+            paragraph = paragraph_map.get(index)
+            if not paragraph:
+                continue
+            text = str(paragraph.get("text") or "").strip()
+            if text and not paragraph.get("heading_level"):
+                word_section_index = paragraph.get("word_section_index")
+                if isinstance(word_section_index, int):
+                    return word_section_index
+                return 0
+    return None
 
 
 def _check_docx_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -781,7 +898,13 @@ def _check_docx_page_setup(
     expected_header = str(header_footer_content_rule.get("expected_header_text") or "").strip()
     cover_no_hf = bool(header_footer_content_rule.get("cover_no_header_footer"))
     sections = list(parsed.get("sections") or [])
-    header_texts = [str(sec.get("header_text") or "").strip() for sec in sections]
+    body_start_word_section_index = _find_docx_body_start_word_section_index(parsed)
+    header_sections = (
+        sections[body_start_word_section_index:]
+        if isinstance(body_start_word_section_index, int) and body_start_word_section_index < len(sections)
+        else []
+    )
+    header_texts = [str(sec.get("header_text") or "").strip() for sec in header_sections]
     footer_texts = [str(sec.get("footer_text") or "").strip() for sec in sections]
     if expected_header and header_texts:
         any_header_match = any(expected_header in ht for ht in header_texts if ht)
@@ -792,9 +915,9 @@ def _check_docx_page_setup(
                     title="页眉内容与模板要求不一致",
                     severity="medium",
                     category="template",
-                    message=f"模板要求页眉包含 {expected_header}，但未在任何节的页眉中检测到。",
-                    evidence=f"检测到的页眉文本: {[ht[:60] for ht in header_texts if ht][:5]}",
-                    location={"display_text": "页眉区域", "scope": "headers"},
+                    message=f"模板要求正文开始后的页眉包含 {expected_header}，但未在正文范围内的任何节页眉中检测到。",
+                    evidence=f"正文范围内检测到的页眉文本: {[ht[:60] for ht in header_texts if ht][:5]}",
+                    location={"display_text": "正文后的页眉区域", "scope": "headers_after_body"},
                     suggestion=f"在页眉中添加 {expected_header}。",
                     expected={"header_text": expected_header},
                     actual={"header_texts": [ht[:80] for ht in header_texts if ht][:5]},
@@ -933,12 +1056,12 @@ def _check_template_rules(
                     "section_title": paragraph.get("section_title"),
                     "font_name": actual_name or "(样式继承-未识别)",
                     "font_size_pt": actual_size,
-                    "text": str(paragraph.get("text") or "")[:80],
+                    "text": _build_paragraph_evidence_excerpt(paragraph),
                 })
     if font_mismatch_count:
         first_sample = font_mismatch_samples[0] if font_mismatch_samples else {}
         sample_text = "；".join(
-            f"{item.get('display_text')}: font={item.get('font_name')}, size={item.get('font_size_pt')}"
+            f"{item.get('display_text')}: “{item.get('text')}” (font={item.get('font_name')}, size={item.get('font_size_pt')})"
             for item in font_mismatch_samples
         )
         issues.append(
@@ -1121,7 +1244,7 @@ def _check_front_matter_rules(
                     parser_confidence="high",
                 )
             )
-        if allowed_separators and not any(separator in raw_keywords for separator in allowed_separators) and len(keywords) > 1:
+        if allowed_separators and len(keywords) > 1 and not any(separator in raw_keywords for separator in allowed_separators):
             issues.append(
                 RuleIssue(
                     code="abstract.keyword_separator_mismatch",
@@ -1282,10 +1405,20 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
+def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
+    issues: list[RuleIssue] = []
+    issues.extend(_check_text_norms(parsed))
+    issues.extend(_check_pycorrector(parsed))
+    issues.extend(_check_macro_correct(parsed))
+    issues.extend(_check_language_tool(parsed, file_name=file_name))
+    issues.extend(_check_vale(parsed))
+    return issues
+
+
 def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
     base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
     if not base_url:
-        return []
+        raise PaperReviewDependencyError("paper_check_languagetool_url 未配置")
     text = str(parsed.get("text") or "").strip()
     if not text:
         return []
@@ -1312,26 +1445,304 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
         category_name = str(((match.get("rule") or {}).get("category") or {}).get("id") or "text").lower()
         matched_paragraph = _find_paragraph_by_offset(parsed, offset)
         issues.append(
-            RuleIssue(
-                code=f"languagetool.{str((match.get('rule') or {}).get('id') or 'match').lower()}",
-                title="语言校对提示",
-                severity="low",
-                category="text" if category_name else "text",
-                message=message or "检测到可能的语言或标点问题。",
-                evidence=evidence[:80],
-                location=(
-                    {
-                        **_issue_location_from_paragraph(matched_paragraph),
-                        "file": file_name,
-                        "offset": offset,
+                RuleIssue(
+                    code=f"languagetool.{str((match.get('rule') or {}).get('id') or 'match').lower()}",
+                    title="语言校对提示",
+                    severity="low",
+                    category="text" if category_name else "text",
+                    message=message or "检测到可能的语言或标点问题。",
+                    evidence=_build_text_hit_evidence(parsed, offset, offset + max(length, 1), default_text=text)[:120],
+                    location=(
+                        {
+                            **_issue_location_from_paragraph(matched_paragraph),
+                            "file": file_name,
+                            "offset": offset,
                         "length": length,
                     }
                     if str(parsed.get("kind") or "") == "docx"
                     else {"file": file_name, "offset": offset, "length": length, "display_text": "文档文本附近"}
                 ),
-                suggestion=_language_tool_suggestion(match),
+                    suggestion=_language_tool_suggestion(match),
+                    engine="languagetool",
+                    engine_rule_id=str((match.get("rule") or {}).get("id") or "match"),
+                    confidence="medium",
+                    parser_confidence="high",
+                )
+            )
+    return issues
+
+
+def _check_pycorrector(parsed: dict[str, Any]) -> list[RuleIssue]:
+    if not settings.paper_check_pycorrector_enabled:
+        return []
+
+    body_paragraphs = [
+        paragraph
+        for paragraph in list(parsed.get("paragraphs") or [])
+        if str(paragraph.get("text") or "").strip() and not paragraph.get("heading_level")
+    ]
+    if not body_paragraphs:
+        return []
+
+    chunk_limit = max(300, int(settings.paper_check_pycorrector_chunk_chars or 1200))
+    timeout_sec = max(1.0, float(settings.paper_check_pycorrector_timeout_sec or settings.paper_check_engine_timeout_sec or 8))
+    chunks = _build_pycorrector_chunks(body_paragraphs, chunk_limit=chunk_limit)
+    if not chunks:
+        return []
+
+    try:
+        chunk_results = asyncio.run(
+            asyncio.wait_for(
+                asyncio.to_thread(_run_pycorrector_on_chunks, chunks),
+                timeout=timeout_sec,
             )
         )
+    except PycorrectorUnavailableError as exc:
+        raise PaperReviewDependencyError(f"pycorrector 不可用：{exc}") from exc
+    except asyncio.TimeoutError:
+        logger.warning("pycorrector timed out after %.1fs for %d chunks", timeout_sec, len(chunks))
+        return []
+    except Exception as exc:
+        logger.warning("pycorrector failed: %s", exc)
+        return []
+
+    issues: list[RuleIssue] = []
+    for paragraph, wrong, right, begin, end, entrypoint in chunk_results[:30]:
+        text = str(paragraph.get("text") or "").strip()
+        if not text or _should_skip_spelling_hit(text, wrong, right):
+            continue
+        evidence = _build_evidence_excerpt(text, begin, end)
+        location = _issue_location_from_paragraph(paragraph)
+        location["offset"] = begin
+        issues.append(
+            RuleIssue(
+                code="pycorrector.spelling",
+                title="疑似错别字",
+                severity="medium",
+                category="text",
+                message=f"检测到疑似错别字：{wrong} -> {right}。",
+                evidence=evidence,
+                location=location,
+                suggestion=f"将“{wrong}”改为“{right}”，并结合上下文复核。",
+                engine="pycorrector",
+                engine_rule_id=entrypoint,
+                confidence="medium",
+                parser_confidence="high",
+                actual={"wrong": wrong, "right": right},
+            )
+        )
+    return issues
+
+
+def _build_pycorrector_chunks(
+    paragraphs: list[dict[str, Any]],
+    *,
+    chunk_limit: int,
+) -> list[dict[str, Any]]:
+    chunks: list[dict[str, Any]] = []
+    current_items: list[dict[str, Any]] = []
+    current_length = 0
+
+    def flush() -> None:
+        nonlocal current_items, current_length
+        if not current_items:
+            return
+        text_parts: list[str] = []
+        offsets: list[dict[str, Any]] = []
+        cursor = 0
+        for item in current_items:
+            paragraph_text = str(item.get("text") or "")
+            text_parts.append(paragraph_text)
+            offsets.append(
+                {
+                    "paragraph": item,
+                    "start": cursor,
+                    "end": cursor + len(paragraph_text),
+                }
+            )
+            cursor += len(paragraph_text) + 1
+        chunks.append({"text": "\n".join(text_parts), "offsets": offsets})
+        current_items = []
+        current_length = 0
+
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        projected = current_length + len(text) + (1 if current_items else 0)
+        if current_items and projected > chunk_limit:
+            flush()
+        current_items.append(paragraph)
+        current_length += len(text) + (1 if current_items[:-1] else 0)
+    flush()
+    return chunks
+
+
+def _run_pycorrector_on_chunks(chunks: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str, str, int, int, str]]:
+    results: list[tuple[dict[str, Any], str, str, int, int, str]] = []
+    for chunk in chunks:
+        text = str(chunk.get("text") or "")
+        if not text.strip():
+            continue
+        corrected, entrypoint = run_pycorrector(text)
+        for wrong, right, begin, end in normalize_pycorrector_errors(corrected):
+            paragraph, local_begin, local_end = _map_chunk_offset_to_paragraph(chunk, begin, end)
+            if paragraph is None:
+                continue
+            results.append((paragraph, wrong, right, local_begin, local_end, entrypoint))
+    return results
+
+
+def _map_chunk_offset_to_paragraph(
+    chunk: dict[str, Any],
+    begin: int,
+    end: int,
+) -> tuple[dict[str, Any] | None, int, int]:
+    for item in list(chunk.get("offsets") or []):
+        start = int(item.get("start") or 0)
+        stop = int(item.get("end") or start)
+        if start <= begin <= stop:
+            paragraph = item.get("paragraph")
+            local_begin = max(0, begin - start)
+            local_end = max(local_begin + 1, min(stop, end) - start)
+            return paragraph if isinstance(paragraph, dict) else None, local_begin, local_end
+    return None, 0, 0
+
+
+def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
+    if not settings.paper_check_macro_correct_enabled:
+        return []
+    paragraphs = list(parsed.get("paragraphs") or [])
+    if not paragraphs:
+        return []
+
+    issues: list[RuleIssue] = []
+    texts: list[str] = []
+    paragraph_refs: list[dict[str, Any]] = []
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        texts.append(text)
+        paragraph_refs.append(paragraph)
+
+    if not texts:
+        return []
+
+    token_results = None
+    token_entrypoint = ""
+    punct_results = None
+    punct_entrypoint = ""
+    token_error: MacroCorrectUnavailableError | None = None
+    punct_error: MacroCorrectUnavailableError | None = None
+
+    try:
+        token_results, token_entrypoint = run_macro_correct_token(texts)
+    except MacroCorrectUnavailableError as exc:
+        token_error = exc
+    except Exception as exc:
+        logger.warning("macro-correct token detector failed: %s", exc)
+
+    try:
+        punct_results, punct_entrypoint = run_macro_correct_punct(texts)
+    except MacroCorrectUnavailableError as exc:
+        punct_error = exc
+    except Exception as exc:
+        logger.warning("macro-correct punct detector failed: %s", exc)
+
+    if token_results is None and punct_results is None:
+        detail_parts = [str(err) for err in (token_error, punct_error) if err]
+        raise PaperReviewDependencyError(f"macro-correct 不可用：{'; '.join(detail_parts) or 'no callable detector'}")
+
+    combined_hits: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
+    for index, hit in _normalize_macro_correct_batch_hits(token_results):
+        combined_hits.setdefault(index, []).append((hit, token_entrypoint or "macro_correct.token", "中文拼写建议"))
+    for index, hit in _normalize_macro_correct_batch_hits(punct_results):
+        combined_hits.setdefault(index, []).append((hit, punct_entrypoint or "macro_correct.punct", "中文标点建议"))
+
+    for index, paragraph in enumerate(paragraph_refs):
+        text = texts[index]
+        for hit, entrypoint, title in combined_hits.get(index, [])[:10]:
+            begin = int(hit.get("begin") or 0)
+            end = int(hit.get("end") or begin + len(str(hit.get("wrong") or "")))
+            wrong = str(hit.get("wrong") or "").strip()
+            right = str(hit.get("right") or "").strip()
+            if not wrong and not right:
+                continue
+            location = _issue_location_from_paragraph(paragraph)
+            location["offset"] = begin
+            issues.append(
+                RuleIssue(
+                    code=f"macro_correct.{str(hit.get('rule_id') or 'suggestion')}",
+                    title=title,
+                    severity="medium",
+                    category="text",
+                    message=str(hit.get("message") or f"检测到需要调整的表达：{wrong or _build_evidence_excerpt(text, begin, end)}。"),
+                    evidence=_build_evidence_excerpt(text, begin, end),
+                    location=location,
+                    suggestion=str(hit.get("suggestion") or (f"建议改为“{right}”。" if right else "请结合上下文人工复核。")),
+                    engine="macro_correct",
+                    engine_rule_id=entrypoint,
+                    confidence="medium",
+                    parser_confidence="high",
+                    actual={"wrong": wrong, "right": right},
+                )
+            )
+    return issues
+
+
+def _check_vale(parsed: dict[str, Any]) -> list[RuleIssue]:
+    text = _build_vale_input_text(parsed)
+    if not text.strip():
+        return []
+    vale_bin = str(settings.paper_check_vale_bin or "vale").strip() or "vale"
+    config_dir = Path(str(settings.paper_check_vale_config_dir or "").strip() or "agent/tools/assets/vale")
+    if not config_dir.is_absolute():
+        config_dir = Path(__file__).resolve().parents[2] / config_dir
+    config_path = config_dir / ".vale.ini"
+    timeout_sec = float(settings.paper_check_vale_timeout_sec or settings.paper_check_engine_timeout_sec or 20)
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8", delete=False) as fp:
+        fp.write(text)
+        temp_path = fp.name
+    try:
+        completed = subprocess.run(
+            [vale_bin, "--config", str(config_path), "--output", "JSON", temp_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+        if completed.returncode not in {0, 1}:
+            raise PaperReviewDependencyError(f"Vale 执行失败：{completed.stderr.strip() or completed.stdout.strip()}")
+        payload = json.loads(completed.stdout or "{}")
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+    issues: list[RuleIssue] = []
+    for entries in payload.values():
+        for entry in list(entries or [])[:20]:
+            line_no = int(entry.get("Line") or 1)
+            rule_id = str(entry.get("Check") or "style")
+            span = _vale_line_to_paragraph(parsed, line_no)
+            if not span:
+                continue
+            paragraph, evidence = span
+            issues.append(
+                RuleIssue(
+                    code=f"vale.{rule_id.lower()}",
+                    title="写作规范建议",
+                    severity="low",
+                    category="writing",
+                    message=str(entry.get("Message") or "检测到写作规范问题。"),
+                    evidence=evidence,
+                    location=_issue_location_from_paragraph(paragraph),
+                    suggestion=str(entry.get("Message") or "请根据写作规范调整。"),
+                    engine="vale",
+                    engine_rule_id=rule_id,
+                    confidence="medium",
+                    parser_confidence="high",
+                )
+            )
     return issues
 
 
@@ -1488,6 +1899,17 @@ def _build_text_hit_evidence(parsed: dict[str, Any], start: int, end: int, *, de
     return _build_evidence_excerpt(default_text, start, end)
 
 
+def _build_paragraph_evidence_excerpt(paragraph: dict[str, Any] | None, *, max_len: int = 60) -> str:
+    text = re.sub(r"\s+", " ", str((paragraph or {}).get("text") or "")).strip()
+    if not text:
+        return ""
+    sentences = [segment.strip() for segment in re.split(r"(?<=[。！？；.!?])\s*", text) if segment.strip()]
+    snippet = sentences[0] if sentences else text
+    if len(snippet) <= max_len:
+        return snippet
+    return f"{snippet[:max_len].rstrip()}..."
+
+
 def _find_tex_paragraph_by_offset(parsed: dict[str, Any], offset: int) -> dict[str, Any] | None:
     paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
     cursor = 0
@@ -1582,6 +2004,89 @@ def _build_evidence_excerpt(text: str, start: int, end: int, *, radius: int = 12
     if right < len(text):
         excerpt = f"{excerpt}..."
     return excerpt
+
+
+def _should_skip_spelling_hit(text: str, wrong: Any, right: Any) -> bool:
+    wrong_text = str(wrong or "").strip()
+    right_text = str(right or "").strip()
+    if not wrong_text or wrong_text == right_text:
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", wrong_text):
+        return True
+    if re.fullmatch(r"\[[0-9,\-–]+\]", wrong_text):
+        return True
+    if re.search(r"[=∑√≤≥±×÷\\{}]", text):
+        return True
+    return False
+
+
+def _normalize_macro_correct_hits(result: Any) -> list[dict[str, Any]]:
+    if isinstance(result, dict):
+        for key in ("errors", "details", "matches", "data"):
+            value = result.get(key)
+            if isinstance(value, list):
+                return [_normalize_macro_correct_hit(item) for item in value if _normalize_macro_correct_hit(item)]
+        return []
+    if isinstance(result, tuple) and len(result) >= 2 and isinstance(result[1], list):
+        return [_normalize_macro_correct_hit(item) for item in result[1] if _normalize_macro_correct_hit(item)]
+    if isinstance(result, list):
+        return [_normalize_macro_correct_hit(item) for item in result if _normalize_macro_correct_hit(item)]
+    return []
+
+
+def _normalize_macro_correct_batch_hits(result: Any) -> list[tuple[int, dict[str, Any]]]:
+    if not isinstance(result, list):
+        return []
+    normalized: list[tuple[int, dict[str, Any]]] = []
+    for idx, item in enumerate(result):
+        if not isinstance(item, dict):
+            continue
+        for hit in _normalize_macro_correct_hits(item):
+            normalized.append((idx, hit))
+    return normalized
+
+
+def _normalize_macro_correct_hit(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, dict):
+        return {
+            "wrong": item.get("wrong") or item.get("source") or item.get("original"),
+            "right": item.get("right") or item.get("target") or item.get("corrected"),
+            "begin": item.get("begin") or item.get("start_idx") or item.get("offset") or 0,
+            "end": item.get("end") or item.get("end_idx") or item.get("offset_end"),
+            "message": item.get("message") or item.get("detail"),
+            "suggestion": item.get("suggestion"),
+            "rule_id": item.get("rule_id") or item.get("type") or "suggestion",
+        }
+    if isinstance(item, (list, tuple)) and len(item) >= 4:
+        return {
+            "wrong": item[0],
+            "right": item[1],
+            "begin": item[2],
+            "end": item[3],
+            "message": item[4] if len(item) > 4 else "",
+            "suggestion": item[5] if len(item) > 5 else "",
+            "rule_id": item[6] if len(item) > 6 else "suggestion",
+        }
+    return None
+
+
+def _build_vale_input_text(parsed: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for paragraph in list(parsed.get("paragraphs") or []):
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        lines.append(text)
+    return "\n".join(lines)
+
+
+def _vale_line_to_paragraph(parsed: dict[str, Any], line_no: int) -> tuple[dict[str, Any], str] | None:
+    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    if not paragraphs:
+        return None
+    index = max(0, min(len(paragraphs) - 1, line_no - 1))
+    paragraph = paragraphs[index]
+    return paragraph, str(paragraph.get("text") or "").strip()[:120]
 
 
 def _check_heading_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -2028,11 +2533,48 @@ def _check_word_artifact_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
 
 def _dedupe_issues(issues: list[RuleIssue]) -> list[RuleIssue]:
     deduped: list[RuleIssue] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for item in issues:
-        key = (item.code, item.evidence, str(item.location))
+        key = (
+            item.category,
+            str(item.location.get("display_text") or item.location),
+            item.engine,
+            item.evidence,
+        )
         if key in seen:
             continue
         seen.add(key)
         deduped.append(item)
-    return deduped
+    return _merge_similar_issues(deduped)
+
+
+def _merge_similar_issues(issues: list[RuleIssue]) -> list[RuleIssue]:
+    grouped: dict[tuple[str, str], RuleIssue] = {}
+    preserved: list[RuleIssue] = []
+    for item in issues:
+        if item.engine == "rule":
+            preserved.append(item)
+            continue
+        display_text = str(item.location.get("display_text") or item.location)
+        key = (item.category, display_text)
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = item
+            continue
+        grouped[key] = _pick_better_issue(current, item)
+    return preserved + list(grouped.values())
+
+
+def _pick_better_issue(left: RuleIssue, right: RuleIssue) -> RuleIssue:
+    severity_rank = {"high": 3, "medium": 2, "low": 1}
+    left_score = (
+        severity_rank.get(left.severity, 0),
+        len(left.evidence or ""),
+        1 if left.engine in {"pycorrector", "macro_correct", "languagetool", "vale"} else 0,
+    )
+    right_score = (
+        severity_rank.get(right.severity, 0),
+        len(right.evidence or ""),
+        1 if right.engine in {"pycorrector", "macro_correct", "languagetool", "vale"} else 0,
+    )
+    return right if right_score > left_score else left

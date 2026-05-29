@@ -1,0 +1,6 @@
+extends: existence
+message: "数字与单位之间建议保留空格：'%s'"
+level: suggestion
+ignorecase: false
+tokens:
+  - '\d+(?:cm|mm|kg|g|ms|s|%)'
