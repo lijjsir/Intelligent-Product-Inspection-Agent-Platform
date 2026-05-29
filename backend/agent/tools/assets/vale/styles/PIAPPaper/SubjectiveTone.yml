@@ -1,0 +1,10 @@
+extends: existence
+message: "避免使用主观或口语化表达：'%s'"
+level: warning
+ignorecase: false
+tokens:
+  - 我认为
+  - 显然
+  - 非常好
+  - 大家都知道
+  - 其实

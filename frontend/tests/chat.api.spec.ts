@@ -13,6 +13,22 @@ describe("chat api stream", () => {
     postMock.mockReset();
   });
 
+  it("uses extended timeout when uploading chat attachments", async () => {
+    postMock.mockResolvedValue({ data: { data: { items: [] } } });
+    const { chatApi } = await import("@/api/chat.api");
+
+    await chatApi.uploadAttachments([new File(["demo"], "demo.docx")]);
+
+    expect(postMock).toHaveBeenCalledWith(
+      "/v1/chat/uploads",
+      expect.any(FormData),
+      expect.objectContaining({
+        timeout: 180000,
+        headers: { "Content-Type": "multipart/form-data" },
+      }),
+    );
+  });
+
   it("subscribes to named sse message events", async () => {
     const addEventListener = vi.fn();
     const source = {

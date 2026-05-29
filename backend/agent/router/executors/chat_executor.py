@@ -837,6 +837,10 @@ class ChatExecutor:
                 "document_type": paper_report.get("document_type", ""),
                 "template_id": paper_report.get("template_id", ""),
                 "template_errors": paper_report.get("template_errors", []),
+                "engines_used": paper_report.get("engines_used", []),
+                "engine_status": paper_report.get("engine_status", []),
+                "runtime_ready": paper_report.get("runtime_ready", True),
+                "enrichment_payload": paper_report.get("enrichment_payload"),
             },
             "ui_schema": "paper_review_report_v1",
         }
@@ -885,6 +889,10 @@ class ChatExecutor:
                     "document_type": paper_report.get("document_type", ""),
                     "template_id": paper_report.get("template_id", ""),
                     "template_errors": paper_report.get("template_errors", []),
+                    "engines_used": paper_report.get("engines_used", []),
+                    "engine_status": paper_report.get("engine_status", []),
+                    "runtime_ready": paper_report.get("runtime_ready", True),
+                    "enrichment_payload": paper_report.get("enrichment_payload"),
                 }
                 result["ui_schema"] = "paper_review_report_v1"
                 result["answer"] = (

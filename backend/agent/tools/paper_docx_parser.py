@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import zipfile
 from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any
 
 
@@ -13,6 +14,12 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
 
     doc = Document(BytesIO(content))
     style_cache = _build_style_cache(doc)
+    xml_bundle = _parse_docx_xml_bundle(content)
+    xml_paragraphs = list(xml_bundle.get("paragraphs") or [])
+    section_breaks = list(xml_bundle.get("section_breaks") or [])
+    parser_limitations: list[str] = []
+    if xml_bundle.get("error"):
+        parser_limitations.append("底层样式解析未完成，部分版式检查已降级。")
 
     paragraphs = []
     headings = []
@@ -22,11 +29,16 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
     current_section_level = 0
     current_section_index = 0
     current_paragraph_no = 0
+    current_word_section_index = 0
 
     for index, paragraph in enumerate(doc.paragraphs):
+        while current_word_section_index + 1 < len(section_breaks) and index >= int(section_breaks[current_word_section_index + 1]):
+            current_word_section_index += 1
         text = (paragraph.text or "").strip()
         style_name = str(getattr(paragraph.style, "name", "") or "")
+        style_id = str(getattr(paragraph.style, "style_id", "") or "")
         heading_level = _heading_level(style_name)
+        xml_paragraph = xml_paragraphs[index] if index < len(xml_paragraphs) else {}
 
         font_name_raw, font_name_resolved, style_source = _resolve_font(paragraph, style_cache, style_name)
         font_size_raw, font_size_resolved, size_source = _resolve_font_size(paragraph, style_cache, style_name)
@@ -47,8 +59,10 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
 
         item = {
             "index": index,
+            "paragraph_index": index,
             "text": text,
             "style_name": style_name,
+            "style_id": style_id or str(xml_paragraph.get("style_id") or ""),
             "heading_level": heading_level,
             "font_name_raw": font_name_raw,
             "font_name_resolved": font_name_resolved,
@@ -65,7 +79,17 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
             "section_title": current_section_title,
             "section_level": current_section_level,
             "section_index": current_section_index,
+            "word_section_index": current_word_section_index,
             "paragraph_no": current_paragraph_no if text and not heading_level else 0,
+            "xml_path": xml_paragraph.get("xml_path"),
+            "text_runs": list(xml_paragraph.get("text_runs") or []),
+            "numbering": dict(xml_paragraph.get("numbering") or {}),
+            "page_break_before": bool(xml_paragraph.get("page_break_before")),
+            "has_page_break": bool(xml_paragraph.get("has_page_break")),
+            "footnote_refs": list(xml_paragraph.get("footnote_refs") or []),
+            "endnote_refs": list(xml_paragraph.get("endnote_refs") or []),
+            "comment_refs": list(xml_paragraph.get("comment_refs") or []),
+            "field_codes": list(xml_paragraph.get("field_codes") or []),
         }
         paragraphs.append(item)
 
@@ -74,6 +98,7 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
                 "text": text,
                 "level": heading_level,
                 "paragraph_index": index,
+                "section_index": current_section_index,
                 "font_name": font_name_resolved or font_name_raw or "",
                 "font_size_pt": font_size_resolved or font_size_raw,
             })
@@ -105,6 +130,8 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
         "citations": citations,
         "references": _extract_reference_lines(text_content),
         "word_metadata": word_metadata,
+        "parser_limitations": parser_limitations,
+        "ooxml": dict(xml_bundle.get("meta") or {}),
         "text": text_content,
     }
 
@@ -306,6 +333,79 @@ def _parse_docx_package_metadata(content: bytes) -> dict[str, Any]:
     except Exception:
         return metadata
     return metadata
+
+
+def _parse_docx_xml_bundle(content: bytes) -> dict[str, Any]:
+    try:
+        from lxml import etree
+    except Exception as exc:
+        return {"error": str(exc), "paragraphs": [], "meta": {}}
+
+    ns = {
+        "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    }
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            document_xml = archive.read("word/document.xml")
+            root = etree.fromstring(document_xml)
+            paragraphs: list[dict[str, Any]] = []
+            section_breaks: list[int] = [0]
+            for p_idx, p in enumerate(root.xpath(".//w:body/w:p", namespaces=ns)):
+                runs = []
+                for r_idx, run in enumerate(p.xpath("./w:r", namespaces=ns)):
+                    size_val = _first_or_none(run.xpath("./w:rPr/w:sz/@w:val", namespaces=ns))
+                    runs.append({
+                        "index": r_idx,
+                        "text": "".join(str(node) for node in run.xpath(".//w:t/text()", namespaces=ns)),
+                        "font_ascii": _first_or_none(run.xpath("./w:rPr/w:rFonts/@w:ascii", namespaces=ns)),
+                        "font_east_asia": _first_or_none(run.xpath("./w:rPr/w:rFonts/@w:eastAsia", namespaces=ns)),
+                        "font_size_half_points": int(size_val) if str(size_val).isdigit() else None,
+                        "bold": bool(run.xpath("./w:rPr/w:b", namespaces=ns)),
+                        "italic": bool(run.xpath("./w:rPr/w:i", namespaces=ns)),
+                        "superscript": bool(run.xpath("./w:rPr/w:vertAlign[@w:val='superscript']", namespaces=ns)),
+                        "subscript": bool(run.xpath("./w:rPr/w:vertAlign[@w:val='subscript']", namespaces=ns)),
+                    })
+                paragraphs.append({
+                    "xml_path": str(PurePosixPath("word/document.xml") / f"p[{p_idx}]"),
+                    "style_id": _first_or_none(p.xpath("./w:pPr/w:pStyle/@w:val", namespaces=ns)) or "",
+                    "text_runs": runs,
+                    "numbering": {
+                        "num_id": _first_or_none(p.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=ns)),
+                        "ilvl": _first_or_none(p.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=ns)),
+                    },
+                    "page_break_before": bool(p.xpath("./w:pPr/w:pageBreakBefore", namespaces=ns)),
+                    "has_page_break": bool(p.xpath(".//w:br[@w:type='page']", namespaces=ns)),
+                    "footnote_refs": [str(item) for item in p.xpath(".//w:footnoteReference/@w:id", namespaces=ns)],
+                    "endnote_refs": [str(item) for item in p.xpath(".//w:endnoteReference/@w:id", namespaces=ns)],
+                    "comment_refs": [str(item) for item in p.xpath(".//w:commentReference/@w:id", namespaces=ns)],
+                    "field_codes": [str(item).strip() for item in p.xpath(".//w:instrText/text()", namespaces=ns) if str(item).strip()],
+                })
+                if p.xpath("./w:pPr/w:sectPr", namespaces=ns):
+                    next_index = p_idx + 1
+                    if next_index not in section_breaks:
+                        section_breaks.append(next_index)
+            meta = {
+                "paragraph_count": len(paragraphs),
+                "has_comments_xml": _zip_exists(archive, "word/comments.xml"),
+                "has_footnotes_xml": _zip_exists(archive, "word/footnotes.xml"),
+                "has_endnotes_xml": _zip_exists(archive, "word/endnotes.xml"),
+                "has_numbering_xml": _zip_exists(archive, "word/numbering.xml"),
+            }
+            return {"paragraphs": paragraphs, "section_breaks": section_breaks, "meta": meta}
+    except Exception as exc:
+        return {"error": str(exc), "paragraphs": [], "meta": {}}
+
+
+def _zip_exists(archive: zipfile.ZipFile, name: str) -> bool:
+    try:
+        archive.getinfo(name)
+        return True
+    except KeyError:
+        return False
+
+
+def _first_or_none(values: list[Any]) -> Any:
+    return values[0] if values else None
 
 
 def _extract_citations(text: str) -> list[dict[str, Any]]:

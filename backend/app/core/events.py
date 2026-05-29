@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await seed_paper_templates_on_startup()
+    await log_paper_review_runtime_status()
     yield
 
 
@@ -34,3 +35,16 @@ async def seed_paper_templates_on_startup() -> None:
         )
     except Exception as exc:
         logger.warning("paper template bootstrap skipped: %s", exc)
+
+
+async def log_paper_review_runtime_status() -> None:
+    try:
+        from app.services.paper_review_runtime_service import PaperReviewRuntimeService
+
+        result = await PaperReviewRuntimeService.diagnose()
+        if result.get("ok"):
+            logger.info("paper review runtime ready engines=%s", result.get("engines_used"))
+            return
+        logger.warning("paper review runtime not ready details=%s", result.get("engine_status"))
+    except Exception as exc:
+        logger.warning("paper review runtime health check failed: %s", exc)

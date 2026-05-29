@@ -43,7 +43,9 @@ export const ragSpaceApi = {
     for (const file of files) {
       form.append("files", file);
     }
-    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, form);
+    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/documents`, form, {
+      timeout: 180000,
+    });
   },
 
   uploadDocumentsToNode(ragSpaceId: string, nodeId: string, files: File[]) {
@@ -51,7 +53,9 @@ export const ragSpaceApi = {
     for (const file of files) {
       form.append("files", file);
     }
-    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/nodes/${nodeId}/documents`, form);
+    return http.post<RagNode[]>(`/v1/rag-spaces/${ragSpaceId}/nodes/${nodeId}/documents`, form, {
+      timeout: 180000,
+    });
   },
 
   deleteNode(ragSpaceId: string, nodeId: string) {

@@ -68,6 +68,15 @@ export interface PaperReviewIssue {
   evidence: string;
   location: PaperReviewIssueLocation;
   suggestion: string;
+  engine?: string;
+  engine_rule_id?: string;
+  confidence?: string;
+}
+
+export interface PaperReviewEngineStatus {
+  name: string;
+  ok: boolean;
+  detail?: string;
 }
 
 export interface PaperReviewReport {
@@ -85,6 +94,9 @@ export interface PaperReviewReport {
   document_type: string;
   template_id: string;
   template_errors: string[];
+  engines_used?: string[];
+  engine_status?: PaperReviewEngineStatus[];
+  runtime_ready?: boolean;
 }
 
 export type ChatMode = "auto" | "chat" | "inspection";
