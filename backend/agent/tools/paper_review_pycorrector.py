@@ -3,6 +3,8 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any, Callable
 
+from app.core.config import settings
+
 
 class PycorrectorUnavailableError(RuntimeError):
     pass
@@ -15,10 +17,38 @@ def _build_corrector() -> tuple[Callable[[str], Any], str]:
     except Exception as exc:  # pragma: no cover - import path depends on env
         raise PycorrectorUnavailableError(f"import failed: {exc}") from exc
 
-    module_correct = getattr(pycorrector, "correct", None)
-    if callable(module_correct):
-        return module_correct, "pycorrector.correct"
+    entrypoint = str(settings.paper_check_pycorrector_entrypoint or "corrector").strip().lower()
+    if entrypoint in {"corrector", "local", "classic"}:
+        return _build_local_corrector(pycorrector)
+    if entrypoint in {"module", "function"}:
+        module_correct = getattr(pycorrector, "correct", None)
+        if callable(module_correct):
+            return module_correct, "pycorrector.correct"
+        return _build_local_corrector(pycorrector)
+    if entrypoint in {"macbert", "macbert_local"}:
+        return _build_macbert_corrector(pycorrector)
 
+    raise PycorrectorUnavailableError(f"unsupported pycorrector entrypoint: {entrypoint}")
+
+
+def _build_macbert_corrector(pycorrector: Any) -> tuple[Callable[[str], Any], str]:
+    model_dir = str(settings.paper_check_pycorrector_model_dir or "").strip()
+    if not model_dir:
+        raise PycorrectorUnavailableError("MacBert entrypoint requires local paper_check_pycorrector_model_dir")
+    macbert_cls = getattr(pycorrector, "MacBertCorrector", None)
+    if macbert_cls is None:
+        raise PycorrectorUnavailableError("missing pycorrector.MacBertCorrector")
+    try:
+        instance = macbert_cls(model_name_or_path=model_dir)
+    except Exception as exc:
+        raise PycorrectorUnavailableError(f"MacBertCorrector init failed: {exc}") from exc
+    correct = getattr(instance, "macbert_correct", None) or getattr(instance, "correct", None)
+    if callable(correct):
+        return correct, "pycorrector.MacBertCorrector.macbert_correct"
+    raise PycorrectorUnavailableError("MacBertCorrector has no callable macbert_correct/correct")
+
+
+def _build_local_corrector(pycorrector: Any) -> tuple[Callable[[str], Any], str]:
     corrector_cls = getattr(pycorrector, "Corrector", None)
     if corrector_cls is None:
         raise PycorrectorUnavailableError("missing pycorrector.Corrector")

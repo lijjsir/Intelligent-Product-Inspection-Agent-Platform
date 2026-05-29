@@ -1416,6 +1416,8 @@ def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[Ru
 
 
 def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
+    if not settings.paper_check_languagetool_enabled:
+        return []
     base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
     if not base_url:
         raise PaperReviewDependencyError("paper_check_languagetool_url 未配置")

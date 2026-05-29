@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import inspect
 from typing import Any, Callable
+
+from app.core.config import settings
+
+# Patch must happen at module level before any macro_correct sub-imports
+try:
+    import torch.optim
+    import transformers
+
+    if not hasattr(transformers, "AdamW"):
+        transformers.AdamW = torch.optim.AdamW
+except Exception:
+    pass
 
 
 class MacroCorrectUnavailableError(RuntimeError):
@@ -21,8 +34,16 @@ def _get_package_root() -> Path:
     return Path(macro_correct.__file__).resolve().parent
 
 
-def _ensure_local_model_files(package_root: Path, rel_config: Path) -> Path:
-    config_path = package_root / rel_config
+def _resolve_config_path(package_root: Path, configured_path: str, fallback_rel_config: Path) -> Path:
+    if configured_path.strip():
+        config_path = Path(configured_path.strip())
+        if not config_path.is_absolute():
+            config_path = Path.cwd() / config_path
+        return config_path
+    return package_root / fallback_rel_config
+
+
+def _ensure_local_model_files(config_path: Path) -> Path:
     model_path = config_path.parent / "pytorch_model.bin"
     if not config_path.exists() or not model_path.exists():
         raise MacroCorrectUnavailableError(f"local model files missing: {config_path.parent}")
@@ -49,7 +70,9 @@ def _patch_transformers_compat() -> None:
 @lru_cache(maxsize=1)
 def _build_token_detector() -> tuple[Callable[[list[str]], Any], str]:
     package_root = _get_package_root()
-    config_path = _ensure_local_model_files(package_root, _TOKEN_CONFIG_REL)
+    config_path = _ensure_local_model_files(
+        _resolve_config_path(package_root, settings.paper_check_macro_correct_token_config, _TOKEN_CONFIG_REL)
+    )
     _patch_transformers_compat()
     try:
         from macro_correct.predict_csc_token_zh import MacroCSC4Token
@@ -68,14 +91,19 @@ def _build_token_detector() -> tuple[Callable[[list[str]], Any], str]:
 @lru_cache(maxsize=1)
 def _build_punct_detector() -> tuple[Callable[[list[str]], Any], str]:
     package_root = _get_package_root()
-    _ensure_local_model_files(package_root, _PUNCT_CONFIG_REL)
+    punct_config_path = _ensure_local_model_files(
+        _resolve_config_path(package_root, settings.paper_check_macro_correct_punct_config, _PUNCT_CONFIG_REL)
+    )
     _patch_transformers_compat()
     try:
         from macro_correct.predict_csc_punct_zh import MacroCSC4Punct
     except Exception as exc:
         raise MacroCorrectUnavailableError(f"punct detector import failed: {exc}") from exc
     try:
-        detector = MacroCSC4Punct()
+        if "path_config" in inspect.signature(MacroCSC4Punct).parameters:
+            detector = MacroCSC4Punct(path_config=str(punct_config_path))
+        else:
+            detector = MacroCSC4Punct()
     except Exception as exc:
         raise MacroCorrectUnavailableError(f"punct detector init failed: {exc}") from exc
     batch = getattr(detector, "func_csc_punct_batch", None)

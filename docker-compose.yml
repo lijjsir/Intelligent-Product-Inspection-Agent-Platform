@@ -32,6 +32,12 @@ services:
       PIAP_LANGFUSE_ENVIRONMENT: local-self-hosted
       PIAP_LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@piap.local}
       PIAP_LANGFUSE_INIT_USER_PASSWORD: piap_admin_123456
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
+      PIAP_PAPER_CHECK_VALE_BIN: /usr/local/bin/vale
+      PIAP_PAPER_CHECK_PYCORRECTOR_ENTRYPOINT: macbert_local
+      PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR: /opt/piap-paper-assets/macro_correct/token
+      PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG: /opt/piap-paper-assets/macro_correct/token/csc.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
     depends_on:
       mysql:
         condition: service_healthy
@@ -41,6 +47,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      languagetool:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
     volumes:
@@ -74,6 +82,12 @@ services:
       PIAP_LANGFUSE_PROJECT_ID: piap-local
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
+      PIAP_PAPER_CHECK_VALE_BIN: /usr/local/bin/vale
+      PIAP_PAPER_CHECK_PYCORRECTOR_ENTRYPOINT: macbert_local
+      PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR: /opt/piap-paper-assets/macro_correct/token
+      PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG: /opt/piap-paper-assets/macro_correct/token/csc.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
     depends_on:
       mysql:
         condition: service_healthy
@@ -83,6 +97,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      languagetool:
+        condition: service_healthy
     volumes:
       - ./backend:/app/backend
 
@@ -211,6 +227,22 @@ services:
       - "127.0.0.1:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  languagetool:
+    image: erikvl87/languagetool:latest
+    container_name: piap-languagetool
+    environment:
+      Java_Xms: 256m
+      Java_Xmx: 512m
+    ports:
+      - "127.0.0.1:8081:8010"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8010/v2/languages"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
   langfuse-postgres:
     image: postgres:16-alpine
     container_name: piap-langfuse-postgres

@@ -238,6 +238,38 @@ def test_check_macro_correct_uses_batch_detectors(monkeypatch):
     assert any(item.actual == {"wrong": ",", "right": "，"} for item in issues)
 
 
+def test_check_paper_format_requires_optional_docx_engines(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync",
+        lambda: {
+            "ok": False,
+            "status": "unhealthy",
+            "engines_used": ["rule", "pycorrector", "macro_correct", "languagetool", "vale"],
+            "engine_status": [
+                {"name": "docx", "ok": True, "detail": "installed"},
+                {"name": "lxml", "ok": True, "detail": "installed"},
+                {"name": "pycorrector", "ok": False, "detail": "missing"},
+                {"name": "macro_correct", "ok": False, "detail": "missing"},
+                {"name": "languagetool", "ok": False, "detail": "connection refused"},
+                {"name": "vale", "ok": False, "detail": "missing"},
+            ],
+        },
+    )
+
+    report = check_paper_format(
+        parsed=parse_docx_bytes(_build_docx_bytes()),
+        file_name="paper.docx",
+        query="甯垜鏌ラ潪",
+        template_id=None,
+    )
+
+    assert report["runtime_ready"] is False
+    assert report["issues"] == []
+    assert report["score"] == 0
+    assert "论文检测环境未就绪" in report["summary"]
+    assert any(item["name"] == "pycorrector" and not item["ok"] for item in report["engine_status"])
+
+
 def test_check_paper_format_returns_runtime_not_ready_for_docx(monkeypatch):
     monkeypatch.setattr(
         "app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync",

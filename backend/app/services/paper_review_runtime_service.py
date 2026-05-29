@@ -74,7 +74,7 @@ class PaperReviewRuntimeService:
     async def _check_pycorrector() -> dict[str, Any]:
         if not settings.paper_check_pycorrector_enabled:
             return {"name": "pycorrector", "ok": True, "detail": "disabled by config"}
-        result = await asyncio.to_thread(diagnose_pycorrector)
+        result = await _run_diagnostic_probe("pycorrector", diagnose_pycorrector)
         return {
             "name": "pycorrector",
             "ok": bool(result.get("ok")),
@@ -85,7 +85,7 @@ class PaperReviewRuntimeService:
     async def _check_macro_correct() -> dict[str, Any]:
         if not settings.paper_check_macro_correct_enabled:
             return {"name": "macro_correct", "ok": True, "detail": "disabled by config"}
-        result = await asyncio.to_thread(diagnose_macro_correct)
+        result = await _run_diagnostic_probe("macro_correct", diagnose_macro_correct)
         if result.get("ok"):
             return {
                 "name": "macro_correct",
@@ -100,6 +100,8 @@ class PaperReviewRuntimeService:
 
     @staticmethod
     async def _check_languagetool() -> dict[str, Any]:
+        if not settings.paper_check_languagetool_enabled:
+            return {"name": "languagetool", "ok": True, "detail": "disabled by config"}
         base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
         if not base_url:
             return {"name": "languagetool", "ok": False, "detail": "paper_check_languagetool_url is empty"}
@@ -117,6 +119,8 @@ class PaperReviewRuntimeService:
 
     @staticmethod
     async def _check_vale() -> dict[str, Any]:
+        import subprocess
+
         vale_bin = str(settings.paper_check_vale_bin or "vale").strip() or "vale"
         config_dir = Path(str(settings.paper_check_vale_config_dir or "").strip() or "agent/tools/assets/vale")
         resolved_bin = shutil.which(vale_bin) or vale_bin
@@ -127,19 +131,17 @@ class PaperReviewRuntimeService:
         if not config_dir.exists():
             return {"name": "vale", "ok": False, "detail": f"vale config dir not found: {config_dir}"}
         try:
-            proc = await asyncio.create_subprocess_exec(
-                resolved_bin,
-                "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                [resolved_bin, "--version"],
+                capture_output=True,
+                text=True,
                 timeout=float(settings.paper_check_vale_timeout_sec or 20),
+                check=False,
             )
-            if proc.returncode != 0:
-                return {"name": "vale", "ok": False, "detail": (stderr or stdout).decode("utf-8", errors="ignore").strip()}
-            return {"name": "vale", "ok": True, "detail": stdout.decode("utf-8", errors="ignore").strip() or str(config_dir)}
+            if completed.returncode != 0:
+                return {"name": "vale", "ok": False, "detail": (completed.stderr or completed.stdout).strip()}
+            return {"name": "vale", "ok": True, "detail": completed.stdout.strip() or str(config_dir)}
         except Exception as exc:
             return {"name": "vale", "ok": False, "detail": str(exc)}
 
@@ -158,6 +160,14 @@ async def _check_import(module_name: str, display_name: str, *, quiet: bool = Fa
         return {"name": display_name if quiet else module_name, "ok": True, "detail": "installed"}
     except Exception as exc:
         return {"name": display_name if quiet else module_name, "ok": False, "detail": str(exc)}
+
+
+async def _run_diagnostic_probe(name: str, probe) -> dict[str, Any]:
+    timeout_sec = max(1.0, float(settings.paper_check_engine_timeout_sec or 20))
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(probe), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        return {"ok": False, "detail": f"{name} diagnose timed out after {timeout_sec:g}s"}
 
 
 def _run_coro_in_new_loop(coro) -> dict[str, Any]:
