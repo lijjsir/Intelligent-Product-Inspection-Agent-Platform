@@ -29,7 +29,7 @@ def upgrade() -> None:
     tool_versions = sa.Table("tool_versions", metadata, autoload_with=bind)
 
     rows = list(bind.execute(sa.select(tool_registry)).mappings())
-    now = utcnow()
+    now = datetime.now(timezone.utc)
 
     for row in rows:
         existing_definition = bind.execute(
