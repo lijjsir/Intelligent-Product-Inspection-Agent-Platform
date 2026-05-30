@@ -36,6 +36,7 @@ class RagRetrievalService:
         query: str,
         top_k: int = 4,
         scope_node_ids: list[str] | None = None,
+        include_low_confidence_fallback: bool = False,
     ) -> dict[str, Any]:
         started_at = perf_counter()
         if not rag_space_id:
@@ -103,6 +104,10 @@ class RagRetrievalService:
         score_threshold = self._score_threshold()
         candidates = docs[: max(1, top_k)]
         filtered = [item for item in candidates if self._is_relevant(item, threshold=score_threshold)]
+        low_confidence_fallback = False
+        if include_low_confidence_fallback and not filtered and candidates:
+            filtered = [max(candidates, key=lambda item: float(item.get("score") or 0.0))]
+            low_confidence_fallback = True
         selected = [
             {
                 "id": str(item.get("id") or ""),
@@ -126,6 +131,7 @@ class RagRetrievalService:
             "candidate_count": len(candidates),
             "rejected_count": max(0, len(candidates) - len(selected)),
             "score_threshold": score_threshold,
+            "low_confidence_fallback": low_confidence_fallback,
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
         }
 

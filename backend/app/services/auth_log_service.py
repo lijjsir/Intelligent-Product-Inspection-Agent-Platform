@@ -51,7 +51,7 @@ class AuthLogService:
             return await self._repo.write(log)
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
-                await self._repo._session.rollback()
+                await self._rollback_repo_session()
                 return log
             raise
 
@@ -79,9 +79,15 @@ class AuthLogService:
             )
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
-                await self._repo._session.rollback()
+                await self._rollback_repo_session()
                 raise ServiceUnavailableError(AUTH_LOGS_MISSING_MESSAGE) from exc
             raise
+
+    async def _rollback_repo_session(self) -> None:
+        session = getattr(self._repo, "_session", None)
+        rollback = getattr(session, "rollback", None)
+        if callable(rollback):
+            await rollback()
 
     @staticmethod
     def _get_ip_address(request: Request | None) -> str | None:

@@ -1,19 +1,20 @@
-# macro-correct local model assets
+# macro-correct local model assets (legacy dev-only path)
 
-For local, non-container runs, place the `macro-correct` model files here so paper review engines are usable at runtime without downloading from external model hubs.
+For local non-container development, you may place model files here for quick testing.
+However, the recommended approach per PAPER_REVIEW_6_ENGINE_STRICT_DEPLOYMENT.md is:
 
-Docker builds download these assets into `/opt/piap-paper-assets`, because `docker-compose.yml` bind-mounts `./backend` over `/app/backend` during development.
+- **Host**: `.runtime/paper-assets/macro_correct/token/` and `punct/`
+- **Container**: `/opt/piap-paper-assets/macro_correct/token/` and `punct/`
 
-Expected layout:
-
-```text
-backend/agent/tools/assets/macro_correct/
-  token/
-    csc.config
-    pytorch_model.bin
-  punct/
-    sl.config
-    pytorch_model.bin
+Models are downloaded by the `paper-assets-init` service (profile: `paper-check`) via:
+```
+docker compose --profile paper-check up paper-assets-init
 ```
 
-The application treats these as required assets when `PIAP_PAPER_CHECK_MACRO_CORRECT_ENABLED=true`.
+The application reads models from paths configured via:
+- `PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR=/opt/piap-paper-assets/macro_correct/token`
+- `PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG=/opt/piap-paper-assets/macro_correct/token/csc.config`
+- `PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG=/opt/piap-paper-assets/macro_correct/punct/sl.config`
+
+Do NOT place large model files (pytorch_model.bin, etc.) in this directory —
+they belong in `.runtime/paper-assets/` (gitignored, dockerignored).

@@ -331,6 +331,24 @@ def parse_file_content(file_name: str, content: bytes) -> dict:
     return parse_text_bytes(content)
 
 
+def parse_paper_review_file_content_strict(file_name: str, content: bytes) -> dict:
+    """Strict parser for paper review — no fallback, enhanced parsing only."""
+    suffix = Path(file_name).suffix.lower()
+
+    if suffix == ".pdf":
+        from agent.tools.paper_pdf_parser import parse_pdf_enhanced
+        return parse_pdf_enhanced(content)
+
+    if suffix == ".docx":
+        from agent.tools.paper_docx_parser import parse_docx_enhanced
+        return parse_docx_enhanced(content)
+
+    if suffix == ".tex":
+        return parse_tex_bytes(content)
+
+    raise ValueError("论文查非仅支持 docx、pdf、tex，且增强解析失败不得降级。")
+
+
 def _heading_level(style_name: str) -> int:
     match = re.search(r"heading\s*(\d+)", style_name, re.I)
     if match:

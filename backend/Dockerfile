@@ -16,7 +16,7 @@ ARG VALE_VERSION=3.13.0
 COPY backend/requirements.txt ./requirements.txt
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl fonts-wqy-microhei && \
+    apt-get install -y --no-install-recommends ca-certificates curl fonts-wqy-microhei wget && \
     curl -fsSL "https://github.com/vale-cli/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" -o /tmp/vale.tar.gz && \
     tar -xzf /tmp/vale.tar.gz -C /tmp vale && \
     install -m 0755 /tmp/vale /usr/local/bin/vale && \
@@ -27,7 +27,7 @@ RUN apt-get update && \
 
 COPY backend/ ./
 
-RUN PYTHONPATH=. python scripts/download_paper_review_assets.py --base-dir /opt/piap-paper-assets
-RUN PYTHONPATH=. python scripts/prewarm_paper_review_engines.py --vale-bin /usr/local/bin/vale
+# Patch macro_correct for transformers 5.x AdamW compatibility
+RUN PYTHONPATH=. python scripts/patch_macro_correct_transformers.py
 
 EXPOSE 8000

@@ -66,6 +66,18 @@ backend/celerybeat-schedule
 # Playwright MCP
 .playwright-mcp/
 tool-catalog-real-data.png
+# Local runtime assets for paper review engines
+.runtime/
+!.runtime/.gitkeep
+
+# Large model artifacts must never be committed
+**/pytorch_model.bin
+**/*.safetensors
+**/*.ckpt
+**/*.pt
+**/*.onnx
+**/*.bin
+
 # OS / editor
 .DS_Store
 Thumbs.db

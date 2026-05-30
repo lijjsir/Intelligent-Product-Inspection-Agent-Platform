@@ -38,13 +38,16 @@ async def seed_paper_templates_on_startup() -> None:
 
 
 async def log_paper_review_runtime_status() -> None:
-    try:
-        from app.services.paper_review_runtime_service import PaperReviewRuntimeService
+    from app.services.paper_review_runtime_service import PaperReviewRuntimeService
+    from app.core.config import settings
 
-        result = await PaperReviewRuntimeService.diagnose()
-        if result.get("ok"):
-            logger.info("paper review runtime ready engines=%s", result.get("engines_used"))
-            return
-        logger.warning("paper review runtime not ready details=%s", result.get("engine_status"))
-    except Exception as exc:
-        logger.warning("paper review runtime health check failed: %s", exc)
+    result = await PaperReviewRuntimeService.diagnose()
+
+    if result.get("ok"):
+        logger.info("paper review runtime ready engines=%s", result.get("engines_used"))
+        return
+
+    if settings.paper_check_strict_startup:
+        raise RuntimeError(f"paper review runtime not ready: {result.get('engine_status')}")
+
+    logger.warning("paper review runtime not ready details=%s", result.get("engine_status"))

@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     paper_check_engine_timeout_sec: int = 20
     paper_check_pycorrector_timeout_sec: int = 8
     paper_check_pycorrector_chunk_chars: int = 1200
+    paper_check_strict_startup: bool = True
+    paper_check_disable_fallback: bool = True
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20

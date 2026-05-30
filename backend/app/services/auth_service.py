@@ -26,7 +26,9 @@ class AuthService:
             await self._auth_logs.record_login(**payload)
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
-                await self._session.rollback()
+                rollback = getattr(self._session, "rollback", None)
+                if callable(rollback):
+                    await rollback()
                 return
             raise
 

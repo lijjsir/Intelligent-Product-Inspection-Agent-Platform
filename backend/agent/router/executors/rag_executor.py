@@ -34,16 +34,23 @@ class RagExecutor:
         rag_space_name = str((state.selected_rag_space or {}).get("name") or "").strip()
         top_score = 0.0
         retrieval_meta: dict[str, Any] = {}
+        overview_mode = _is_rag_overview_query(state.original_query)
+        latency_ms = 0
+
         if db_session is not None and rag_space_id:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
 
-                result = await RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id).search(
-                    rag_space_id=rag_space_id,
-                    query=state.original_query,
-                    top_k=5,
-                    scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
-                )
+                service = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id)
+                if overview_mode:
+                    result = await service.list_space_documents(rag_space_id=rag_space_id, limit=12)
+                else:
+                    result = await service.search(
+                        rag_space_id=rag_space_id,
+                        query=state.original_query,
+                        top_k=5,
+                        scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
+                    )
                 retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
@@ -52,8 +59,7 @@ class RagExecutor:
             except Exception:
                 hits = []
                 latency_ms = 0
-        else:
-            latency_ms = 0
+
         citations = [
             {
                 "id": str(item.get("chunk_id") or item.get("id") or index),
@@ -61,7 +67,7 @@ class RagExecutor:
                 "source": str(item.get("source") or item.get("full_path") or "rag"),
                 "quote": str(item.get("quote") or item.get("text") or item.get("content") or "")[:220],
                 "score": item.get("score"),
-                "kind": "rag",
+                "kind": str(item.get("kind") or "rag"),
                 "ref": f"RAG-{index}",
             }
             for index, item in enumerate(hits, start=1)
@@ -72,11 +78,12 @@ class RagExecutor:
             {
                 "hit_count": len(hits),
                 "top_score": top_score,
-                "top_k": 5,
+                "top_k": int(retrieval_meta.get("top_k") or (12 if overview_mode else 5)),
                 "latency_ms": latency_ms,
                 "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
                 "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
                 "score_threshold": retrieval_meta.get("score_threshold"),
+                "overview_mode": bool(retrieval_meta.get("overview_mode") or overview_mode),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
                 "hits": hits,
@@ -94,3 +101,23 @@ class RagExecutor:
             ),
             [art],
         )
+
+
+def _is_rag_overview_query(query: str) -> bool:
+    text = str(query or "").lower()
+    return any(
+        term in text
+        for term in (
+            "目录",
+            "列表",
+            "有哪些",
+            "有什么",
+            "包含",
+            "知识库里",
+            "知识库中",
+            "检测标准",
+            "standards",
+            "list",
+            "overview",
+        )
+    )

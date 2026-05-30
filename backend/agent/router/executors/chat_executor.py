@@ -432,6 +432,47 @@ class ChatExecutor:
                     return str(value).strip()
         return ""
 
+    @staticmethod
+    def _rag_prompt_context(state: ManagerState) -> str:
+        rag_artifacts = [art for art in state.artifacts if art.type == "rag_hits"]
+        if not rag_artifacts and not state.selected_rag_space:
+            return ""
+
+        content = dict((rag_artifacts[-1].content if rag_artifacts else {}) or {})
+        hits = [item for item in list(content.get("hits") or []) if isinstance(item, dict)]
+        selected = state.selected_rag_space or {}
+        space_name = str(content.get("rag_space_name") or selected.get("name") or selected.get("id") or "selected RAG space")
+        if bool(content.get("overview_mode")):
+            if not hits:
+                return f"RAG 知识库目录（{space_name}）：未找到可用文档。"
+            lines = [f"RAG 知识库目录（{space_name}）："]
+            for index, hit in enumerate(hits[:12], start=1):
+                title = str(hit.get("title") or hit.get("document_name") or f"文档 {index}")
+                source = str(hit.get("source") or hit.get("full_path") or "")
+                quote = ChatExecutor._hit_quote(hit)[:800]
+                meta = f"[RAG-{index}] {title}"
+                if source:
+                    meta += f" | {source}"
+                lines.append(f"{meta}\n{quote}".strip())
+            return "\n\n".join(lines)
+
+        if not hits:
+            return f"RAG 证据（{space_name}）：未检索到可用片段。"
+
+        lines = [f"RAG 证据（{space_name}）："]
+        for index, hit in enumerate(hits[:5], start=1):
+            title = str(hit.get("title") or hit.get("document_name") or f"片段 {index}")
+            source = str(hit.get("source") or hit.get("full_path") or "")
+            score = hit.get("score")
+            quote = ChatExecutor._hit_quote(hit)[:800]
+            meta = f"[RAG-{index}] {title}"
+            if source:
+                meta += f" | {source}"
+            if score is not None:
+                meta += f" | score={score}"
+            lines.append(f"{meta}\n{quote}")
+        return "\n\n".join(lines)
+
     async def _call_model(
         self,
         state: ManagerState,

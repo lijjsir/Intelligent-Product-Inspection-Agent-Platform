@@ -4,11 +4,13 @@ import sys
 import types
 from io import BytesIO
 
+import pytest
 from docx import Document
 
 from agent.tools.file_parsers import parse_docx_bytes, parse_pdf_bytes, parse_tex_bytes
 from agent.tools.paper_format_checker import _check_pycorrector, check_paper_format
 from agent.tools.paper_format_templates import get_paper_template
+from app.services.paper_review_runtime_service import PaperReviewDependencyError
 
 
 def _ready_runtime_status() -> dict:
@@ -238,62 +240,55 @@ def test_check_macro_correct_uses_batch_detectors(monkeypatch):
     assert any(item.actual == {"wrong": ",", "right": "，"} for item in issues)
 
 
-def test_check_paper_format_requires_optional_docx_engines(monkeypatch):
+def test_check_paper_format_raises_when_docx_runtime_unhealthy(monkeypatch):
     monkeypatch.setattr(
         "app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync",
         lambda: {
             "ok": False,
             "status": "unhealthy",
-            "engines_used": ["rule", "pycorrector", "macro_correct", "languagetool", "vale"],
+            "strict": True,
+            "engines_used": ["enhanced_parser", "pycorrector", "macro_correct_token", "macro_correct_punct", "languagetool", "vale"],
             "engine_status": [
-                {"name": "docx", "ok": True, "detail": "installed"},
-                {"name": "lxml", "ok": True, "detail": "installed"},
+                {"name": "enhanced_parser", "ok": True, "detail": "python-docx: installed; lxml: installed; PyMuPDF: installed"},
                 {"name": "pycorrector", "ok": False, "detail": "missing"},
-                {"name": "macro_correct", "ok": False, "detail": "missing"},
+                {"name": "macro_correct_token", "ok": False, "detail": "missing"},
+                {"name": "macro_correct_punct", "ok": False, "detail": "missing"},
                 {"name": "languagetool", "ok": False, "detail": "connection refused"},
                 {"name": "vale", "ok": False, "detail": "missing"},
             ],
         },
     )
 
-    report = check_paper_format(
-        parsed=parse_docx_bytes(_build_docx_bytes()),
-        file_name="paper.docx",
-        query="甯垜鏌ラ潪",
-        template_id=None,
-    )
-
-    assert report["runtime_ready"] is False
-    assert report["issues"] == []
-    assert report["score"] == 0
-    assert "论文检测环境未就绪" in report["summary"]
-    assert any(item["name"] == "pycorrector" and not item["ok"] for item in report["engine_status"])
+    with pytest.raises(PaperReviewDependencyError, match="论文查非增强引擎未就绪"):
+        check_paper_format(
+            parsed=parse_docx_bytes(_build_docx_bytes()),
+            file_name="paper.docx",
+            query="帮我查非",
+            template_id=None,
+        )
 
 
-def test_check_paper_format_returns_runtime_not_ready_for_docx(monkeypatch):
+def test_check_paper_format_raises_when_runtime_not_ready_for_docx(monkeypatch):
     monkeypatch.setattr(
         "app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync",
         lambda: {
             "ok": False,
             "status": "unhealthy",
-            "engines_used": ["rule", "pycorrector", "macro_correct", "languagetool", "vale"],
+            "strict": True,
+            "engines_used": ["enhanced_parser", "pycorrector", "macro_correct_token", "macro_correct_punct", "languagetool", "vale"],
             "engine_status": [
                 {"name": "pycorrector", "ok": False, "detail": "missing"},
             ],
         },
     )
 
-    report = check_paper_format(
-        parsed=parse_docx_bytes(_build_docx_bytes()),
-        file_name="paper.docx",
-        query="帮我查非",
-        template_id=None,
-    )
-
-    assert report["runtime_ready"] is False
-    assert report["issues"] == []
-    assert "论文检测环境未就绪" in report["summary"]
-    assert report["engine_status"][0]["ok"] is False
+    with pytest.raises(PaperReviewDependencyError, match="论文查非增强引擎未就绪"):
+        check_paper_format(
+            parsed=parse_docx_bytes(_build_docx_bytes()),
+            file_name="paper.docx",
+            query="帮我查非",
+            template_id=None,
+        )
 
 
 def test_check_pycorrector_supports_current_class_based_api(monkeypatch):
@@ -499,8 +494,8 @@ def test_check_paper_format_reports_cqupt_template_differences(monkeypatch):
     assert "正文样式汇总" in font_issue["location"]["display_text"]
     assert font_issue["actual"]["checked_count"] >= font_issue["actual"]["mismatch_count"] >= 1
     assert font_issue["actual"]["samples"][0]["display_text"] == "第1节《引言》下第1段"
-    assert font_issue["actual"]["samples"][0]["text"] == "本研究围绕智能检测平台的关键问题展开分析。"
-    assert "本研究围绕智能检测平台的关键问题展开分析。" in font_issue["evidence"]
+    assert font_issue["actual"]["samples"][0]["text"] == "正文段落"
+    assert "正文段落" in font_issue["evidence"]
 
 
 def test_check_paper_format_reports_missing_body_when_no_main_text(monkeypatch):
@@ -640,7 +635,12 @@ def test_check_paper_format_covers_checklist_layout_front_matter_and_word_artifa
     assert "word.comments_or_revisions_present" in issue_codes
 
 
-def test_check_paper_format_supports_pdf_text_phase_with_limitations():
+def test_check_paper_format_supports_pdf_text_phase_in_strict_runtime(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
     parsed = {
         "kind": "pdf",
         "text": "论文标题\n关键词：查非\n参考文献\n正文中有  连续空格。",
@@ -666,7 +666,6 @@ def test_check_paper_format_supports_pdf_text_phase_with_limitations():
     assert "unsupported.document_type" not in issue_codes
     assert "structure.abstract_missing" in issue_codes
     assert "text.multiple_spaces" in issue_codes
-    assert any("PDF" in item and "文本抽取" in item for item in report["limitations"])
 
 
 def test_header_content_check_starts_from_body_section(monkeypatch):

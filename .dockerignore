@@ -15,3 +15,17 @@ logs
 backend/.env
 **/__pycache__
 **/*.pyc
+
+# Local runtime assets should not enter docker build context
+.runtime/
+runtime/
+runtime_*/
+runtime-*/
+
+# Large model artifacts
+**/pytorch_model.bin
+**/*.safetensors
+**/*.ckpt
+**/*.pt
+**/*.onnx
+**/*.bin

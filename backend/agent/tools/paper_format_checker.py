@@ -104,7 +104,7 @@ def check_paper_format(
     limitations: list[str] = []
     runtime_status: dict[str, Any] | None = None
 
-    if document_type == "docx":
+    if document_type in ("docx", "pdf"):
         runtime_status = PaperReviewRuntimeService.diagnose_sync()
         parser_limitations = [str(item) for item in list(parsed.get("parser_limitations") or []) if str(item).strip()]
         limitations.extend(parser_limitations)
@@ -114,20 +114,7 @@ def check_paper_format(
                 for item in list(runtime_status.get("engine_status") or [])
                 if not item.get("ok")
             )
-            limitations.append("论文检测环境未就绪，已终止 docx 增强校验。")
-            return {
-                "document_type": document_type,
-                "template_id": effective_template_id,
-                "summary": "论文检测环境未就绪，当前无法完成 docx 增强校验。",
-                "score": 0,
-                "issues": [],
-                "limitations": list(dict.fromkeys(limitations)),
-                "query": query,
-                "engines_used": list(runtime_status.get("engines_used") or []),
-                "engine_status": list(runtime_status.get("engine_status") or []),
-                "runtime_ready": False,
-                "chat_advice": "论文检测环境未就绪，请先安装并配置 python-docx、lxml、pycorrector、macro-correct、LanguageTool 和 Vale 后重试。",
-            }
+            raise PaperReviewDependencyError(f"论文查非增强引擎未就绪：{detail}")
 
     if document_type == "docx":
         issues.extend(_check_docx_structure(parsed))
@@ -140,7 +127,7 @@ def check_paper_format(
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
         issues.extend(_check_word_artifact_rules(parsed))
-        issues.extend(_run_docx_text_engines(parsed, file_name=file_name))
+        issues.extend(_run_required_text_engines(parsed, file_name=file_name))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
@@ -160,7 +147,7 @@ def check_paper_format(
         issues.extend(_check_figure_table_rules(parsed))
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
-        limitations.append("当前 PDF 检查主要基于文本抽取，不能完整判断字号、页边距、行距等版面格式。")
+        issues.extend(_run_required_text_engines(parsed, file_name=file_name))
     else:
         limitations.append("当前仅支持 docx、pdf 和 tex 的论文查非检查。")
         issues.append(
@@ -1405,7 +1392,7 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
-def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
+def _run_required_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
     issues.extend(_check_text_norms(parsed))
     issues.extend(_check_pycorrector(parsed))
@@ -1417,7 +1404,7 @@ def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[Ru
 
 def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
     if not settings.paper_check_languagetool_enabled:
-        return []
+        raise PaperReviewDependencyError("LanguageTool 已禁用，但严格模式要求所有增强引擎可用")
     base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
     if not base_url:
         raise PaperReviewDependencyError("paper_check_languagetool_url 未配置")
@@ -1436,8 +1423,8 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
             )
             response.raise_for_status()
             payload = response.json()
-    except Exception:
-        return []
+    except Exception as exc:
+        raise PaperReviewDependencyError(f"LanguageTool 不可用或执行失败：{exc}") from exc
     issues: list[RuleIssue] = []
     for match in list(payload.get("matches") or [])[:20]:
         message = str(match.get("message") or "").strip()
@@ -1476,7 +1463,7 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
 
 def _check_pycorrector(parsed: dict[str, Any]) -> list[RuleIssue]:
     if not settings.paper_check_pycorrector_enabled:
-        return []
+        raise PaperReviewDependencyError("pycorrector 已禁用，但严格模式要求所有增强引擎可用")
 
     body_paragraphs = [
         paragraph
@@ -1501,12 +1488,10 @@ def _check_pycorrector(parsed: dict[str, Any]) -> list[RuleIssue]:
         )
     except PycorrectorUnavailableError as exc:
         raise PaperReviewDependencyError(f"pycorrector 不可用：{exc}") from exc
-    except asyncio.TimeoutError:
-        logger.warning("pycorrector timed out after %.1fs for %d chunks", timeout_sec, len(chunks))
-        return []
+    except asyncio.TimeoutError as exc:
+        raise PaperReviewDependencyError(f"pycorrector 超时：{timeout_sec}s") from exc
     except Exception as exc:
-        logger.warning("pycorrector failed: %s", exc)
-        return []
+        raise PaperReviewDependencyError(f"pycorrector 执行失败：{exc}") from exc
 
     issues: list[RuleIssue] = []
     for paragraph, wrong, right, begin, end, entrypoint in chunk_results[:30]:
@@ -1613,7 +1598,7 @@ def _map_chunk_offset_to_paragraph(
 
 def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
     if not settings.paper_check_macro_correct_enabled:
-        return []
+        raise PaperReviewDependencyError("macro-correct 已禁用，但严格模式要求所有增强引擎可用")
     paragraphs = list(parsed.get("paragraphs") or [])
     if not paragraphs:
         return []
@@ -1652,9 +1637,10 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
     except Exception as exc:
         logger.warning("macro-correct punct detector failed: %s", exc)
 
-    if token_results is None and punct_results is None:
-        detail_parts = [str(err) for err in (token_error, punct_error) if err]
-        raise PaperReviewDependencyError(f"macro-correct 不可用：{'; '.join(detail_parts) or 'no callable detector'}")
+    if token_results is None:
+        raise PaperReviewDependencyError(f"macro-correct token 不可用：{token_error or 'no result'}")
+    if punct_results is None:
+        raise PaperReviewDependencyError(f"macro-correct punct 不可用：{punct_error or 'no result'}")
 
     combined_hits: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
     for index, hit in _normalize_macro_correct_batch_hits(token_results):

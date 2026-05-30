@@ -3,17 +3,25 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 import inspect
+import logging
 from typing import Any, Callable
 
 from app.core.config import settings
 
-# Patch must happen at module level before any macro_correct sub-imports
+# Patch transformers for macro_correct compatibility (AdamW removed in transformers 5.x).
+# Must happen at module level before any macro_correct sub-imports.
 try:
     import torch.optim
     import transformers
 
-    if not hasattr(transformers, "AdamW"):
-        transformers.AdamW = torch.optim.AdamW
+    _adamw = getattr(torch.optim, "AdamW", None)
+    if _adamw is not None:
+        if not hasattr(transformers, "AdamW"):
+            transformers.AdamW = _adamw
+        # _LazyModule (transformers >=5.x) stores exportable objects in _objects
+        _objects = getattr(transformers, "_objects", None)
+        if isinstance(_objects, dict) and "AdamW" not in _objects:
+            _objects["AdamW"] = _adamw
 except Exception:
     pass
 
@@ -64,7 +72,13 @@ def _patch_transformers_compat() -> None:
     except Exception as exc:
         raise MacroCorrectUnavailableError(f"torch.optim import failed: {exc}") from exc
 
-    transformers.AdamW = torch.optim.AdamW
+    _adamw = getattr(torch.optim, "AdamW", None)
+    if _adamw is None:
+        raise MacroCorrectUnavailableError("torch.optim.AdamW not available")
+    transformers.AdamW = _adamw
+    _objects = getattr(transformers, "_objects", None)
+    if isinstance(_objects, dict) and "AdamW" not in _objects:
+        _objects["AdamW"] = _adamw
 
 
 @lru_cache(maxsize=1)
@@ -103,8 +117,18 @@ def _build_punct_detector() -> tuple[Callable[[list[str]], Any], str]:
         if "path_config" in inspect.signature(MacroCSC4Punct).parameters:
             detector = MacroCSC4Punct(path_config=str(punct_config_path))
         else:
-            detector = MacroCSC4Punct()
+            detector = MacroCSC4Punct.__new__(MacroCSC4Punct)
+            detector.logger = logging.getLogger(__name__)
+            detector.path_config = str(punct_config_path)
+            load_model = getattr(detector, "load_trained_model", None)
+            if not callable(load_model):
+                raise MacroCorrectUnavailableError("punct detector cannot load local path_config")
+            load_model(path_config=str(punct_config_path))
+            if getattr(detector, "model_csc", None) is None:
+                raise MacroCorrectUnavailableError("punct detector local model load produced no model")
     except Exception as exc:
+        if isinstance(exc, MacroCorrectUnavailableError):
+            raise
         raise MacroCorrectUnavailableError(f"punct detector init failed: {exc}") from exc
     batch = getattr(detector, "func_csc_punct_batch", None)
     if not callable(batch):
@@ -126,8 +150,12 @@ def diagnose_macro_correct() -> dict[str, Any]:
     except MacroCorrectUnavailableError as exc:
         details.append(str(exc))
 
-    if not entrypoints:
-        return {"ok": False, "detail": "; ".join(details) or "no callable macro-correct detector"}
+    if len(entrypoints) != 2:
+        return {
+            "ok": False,
+            "detail": "; ".join(details) or "macro-correct token and punct detectors are both required",
+            "entrypoints": entrypoints,
+        }
     return {
         "ok": True,
         "detail": ", ".join(entrypoints),

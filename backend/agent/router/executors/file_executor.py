@@ -19,9 +19,10 @@ class FileExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        from agent.tools.file_parsers import parse_file_content
+        from agent.tools.file_parsers import parse_file_content, parse_paper_review_file_content_strict
         from agent.tools.paper_format_checker import check_paper_format
         from agent.tools.paper_format_templates import DEFAULT_STRICT_PAPER_TEMPLATE_ID
+        from app.services.paper_review_runtime_service import PaperReviewDependencyError
         from app.services.object_storage.resolver import read_attachment_bytes
 
         parsed_files: list[dict] = []
@@ -43,8 +44,13 @@ class FileExecutor:
                 continue
             content, content_type = payload
             try:
-                parsed = parse_file_content(str(attachment.get("name") or "attachment.txt"), content)
+                if step.capability_key == "file.paper_format_check":
+                    parsed = parse_paper_review_file_content_strict(str(attachment.get("name") or "attachment.txt"), content)
+                else:
+                    parsed = parse_file_content(str(attachment.get("name") or "attachment.txt"), content)
             except Exception as exc:
+                if step.capability_key == "file.paper_format_check":
+                    raise PaperReviewDependencyError(f"论文查非增强解析失败：{exc}") from exc
                 unsupported.append({**attachment, "reason": str(exc)})
                 continue
             text = str(parsed.get("text") or "")

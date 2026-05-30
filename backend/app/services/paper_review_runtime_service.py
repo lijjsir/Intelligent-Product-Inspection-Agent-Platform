@@ -8,8 +8,11 @@ from typing import Any
 
 import httpx
 
-from agent.tools.paper_review_macro_correct import diagnose_macro_correct
-from agent.tools.paper_review_pycorrector import diagnose_pycorrector
+from agent.tools.paper_review_macro_correct import (
+    MacroCorrectUnavailableError,
+    _build_punct_detector,
+    _build_token_detector,
+)
 from app.core.config import settings
 
 
@@ -18,15 +21,22 @@ class PaperReviewDependencyError(RuntimeError):
 
 
 class PaperReviewRuntimeService:
-    ENGINE_NAMES = ("rule", "pycorrector", "macro_correct", "languagetool", "vale")
+    ENGINE_NAMES = (
+        "enhanced_parser",
+        "pycorrector",
+        "macro_correct_token",
+        "macro_correct_punct",
+        "languagetool",
+        "vale",
+    )
 
     @classmethod
     async def diagnose(cls) -> dict[str, Any]:
         checks = await asyncio.gather(
-            cls._check_python_docx(),
-            cls._check_lxml(),
+            cls._check_enhanced_parser(),
             cls._check_pycorrector(),
-            cls._check_macro_correct(),
+            cls._check_macro_correct_token(),
+            cls._check_macro_correct_punct(),
             cls._check_languagetool(),
             cls._check_vale(),
         )
@@ -35,6 +45,7 @@ class PaperReviewRuntimeService:
         return {
             "ok": ok,
             "status": "healthy" if ok else "unhealthy",
+            "strict": True,
             "engines_used": list(cls.ENGINE_NAMES),
             "engine_status": engines,
             "message": "paper review runtime ready" if ok else "paper review runtime not ready",
@@ -63,18 +74,27 @@ class PaperReviewRuntimeService:
         return status
 
     @staticmethod
-    async def _check_python_docx() -> dict[str, Any]:
-        return await _check_import("docx", "python-docx")
-
-    @staticmethod
-    async def _check_lxml() -> dict[str, Any]:
-        return await _check_import("lxml", "lxml")
+    async def _check_enhanced_parser() -> dict[str, Any]:
+        checks = await asyncio.gather(
+            _check_import("docx", "python-docx"),
+            _check_import("lxml", "lxml"),
+            _check_import("fitz", "PyMuPDF"),
+        )
+        ok = all(item["ok"] for item in checks)
+        detail = "; ".join(
+            f"{item['name']}: {item['detail']}" for item in checks
+        )
+        return {"name": "enhanced_parser", "ok": ok, "detail": detail}
 
     @staticmethod
     async def _check_pycorrector() -> dict[str, Any]:
         if not settings.paper_check_pycorrector_enabled:
-            return {"name": "pycorrector", "ok": True, "detail": "disabled by config"}
-        result = await _run_diagnostic_probe("pycorrector", diagnose_pycorrector)
+            return {"name": "pycorrector", "ok": False, "detail": "disabled but required in strict mode"}
+        from agent.tools import paper_review_pycorrector
+
+        result = await _run_diagnostic_probe("pycorrector", paper_review_pycorrector.diagnose_pycorrector)
+        if not isinstance(result, dict):
+            return {"name": "pycorrector", "ok": False, "detail": "pycorrector diagnose returned no status"}
         return {
             "name": "pycorrector",
             "ok": bool(result.get("ok")),
@@ -82,26 +102,31 @@ class PaperReviewRuntimeService:
         }
 
     @staticmethod
-    async def _check_macro_correct() -> dict[str, Any]:
+    async def _check_macro_correct_token() -> dict[str, Any]:
         if not settings.paper_check_macro_correct_enabled:
-            return {"name": "macro_correct", "ok": True, "detail": "disabled by config"}
-        result = await _run_diagnostic_probe("macro_correct", diagnose_macro_correct)
-        if result.get("ok"):
-            return {
-                "name": "macro_correct",
-                "ok": True,
-                "detail": str(result.get("detail") or ""),
-            }
+            return {"name": "macro_correct_token", "ok": False, "detail": "disabled but required in strict mode"}
+        result = await _run_diagnostic_probe("macro_correct_token", _diagnose_macro_correct_token)
         return {
-            "name": "macro_correct",
-            "ok": False,
-            "detail": str(result.get("detail") or "missing python package macro-correct"),
+            "name": "macro_correct_token",
+            "ok": bool(result.get("ok")),
+            "detail": str(result.get("detail") or ""),
+        }
+
+    @staticmethod
+    async def _check_macro_correct_punct() -> dict[str, Any]:
+        if not settings.paper_check_macro_correct_enabled:
+            return {"name": "macro_correct_punct", "ok": False, "detail": "disabled but required in strict mode"}
+        result = await _run_diagnostic_probe("macro_correct_punct", _diagnose_macro_correct_punct)
+        return {
+            "name": "macro_correct_punct",
+            "ok": bool(result.get("ok")),
+            "detail": str(result.get("detail") or ""),
         }
 
     @staticmethod
     async def _check_languagetool() -> dict[str, Any]:
         if not settings.paper_check_languagetool_enabled:
-            return {"name": "languagetool", "ok": True, "detail": "disabled by config"}
+            return {"name": "languagetool", "ok": False, "detail": "disabled but required in strict mode"}
         base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
         if not base_url:
             return {"name": "languagetool", "ok": False, "detail": "paper_check_languagetool_url is empty"}
@@ -130,6 +155,12 @@ class PaperReviewRuntimeService:
             config_dir = Path(__file__).resolve().parents[2] / config_dir
         if not config_dir.exists():
             return {"name": "vale", "ok": False, "detail": f"vale config dir not found: {config_dir}"}
+        config_path = config_dir / ".vale.ini"
+        if not config_path.exists():
+            return {"name": "vale", "ok": False, "detail": f"vale config file not found: {config_path}"}
+        styles_dir = config_dir / "styles"
+        if not styles_dir.exists():
+            return {"name": "vale", "ok": False, "detail": f"vale styles dir not found: {styles_dir}"}
         try:
             completed = await asyncio.to_thread(
                 subprocess.run,
@@ -154,12 +185,40 @@ class PaperReviewRuntimeService:
         }
 
 
-async def _check_import(module_name: str, display_name: str, *, quiet: bool = False) -> dict[str, Any]:
+def _diagnose_macro_correct_token() -> dict[str, Any]:
+    try:
+        detector, entrypoint = _build_token_detector()
+        return {
+            "ok": True,
+            "detail": entrypoint,
+            "entrypoint": entrypoint,
+        }
+    except MacroCorrectUnavailableError as exc:
+        return {"ok": False, "detail": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "detail": f"macro_correct_token probe failed: {exc}"}
+
+
+def _diagnose_macro_correct_punct() -> dict[str, Any]:
+    try:
+        detector, entrypoint = _build_punct_detector()
+        return {
+            "ok": True,
+            "detail": entrypoint,
+            "entrypoint": entrypoint,
+        }
+    except MacroCorrectUnavailableError as exc:
+        return {"ok": False, "detail": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "detail": f"macro_correct_punct probe failed: {exc}"}
+
+
+async def _check_import(module_name: str, display_name: str) -> dict[str, Any]:
     try:
         importlib.import_module(module_name)
-        return {"name": display_name if quiet else module_name, "ok": True, "detail": "installed"}
+        return {"name": display_name, "ok": True, "detail": "installed"}
     except Exception as exc:
-        return {"name": display_name if quiet else module_name, "ok": False, "detail": str(exc)}
+        return {"name": display_name, "ok": False, "detail": str(exc)}
 
 
 async def _run_diagnostic_probe(name: str, probe) -> dict[str, Any]:

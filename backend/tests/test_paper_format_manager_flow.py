@@ -11,6 +11,7 @@ from agent.router.manager_loop import ManagerLoop
 from agent.router.manager_policy import ManagerPolicy
 from agent.router.manager_state import ManagerState
 from agent.router.executors.file_executor import FileExecutor
+from app.services.paper_review_runtime_service import PaperReviewDependencyError
 
 
 def _docx_bytes() -> bytes:
@@ -209,6 +210,56 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
     content = artifacts[0].content
     assert content["template_id"] == "cqupt_graduate_thesis_2022"
     assert "issues" in content
+
+
+@pytest.mark.asyncio
+async def test_file_executor_fails_paper_check_when_strict_parser_fails(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.object_storage.resolver.read_attachment_bytes",
+        lambda attachment: (b"bad-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    )
+    monkeypatch.setattr(
+        "agent.tools.file_parsers.parse_paper_review_file_content_strict",
+        lambda file_name, content: (_ for _ in ()).throw(RuntimeError("enhanced parser unavailable")),
+    )
+
+    step = AgentPlanStep(
+        step_id="paper-parse-fail",
+        capability_key="file.paper_format_check",
+        agent="chat",
+        operation="paper_format_check",
+        mode="report",
+        input={"attachments": []},
+    )
+    state = ManagerState(
+        request_id="req-parse-fail",
+        workflow_run_id="wf-parse-fail",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        original_query="paper format check",
+        attachments=[
+            {
+                "name": "paper.docx",
+                "kind": "file",
+                "bucket": "test",
+                "object_key": "paper.docx",
+            }
+        ],
+    )
+    request = NormalizedRequest(
+        request_id="req-parse-fail",
+        workflow_run_id="wf-parse-fail",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        query="paper format check",
+        attachments=[NormalizedAttachment(name="paper.docx", kind="file")],
+        ext={"surface": "chat"},
+    )
+
+    with pytest.raises(PaperReviewDependencyError, match="增强解析失败"):
+        await FileExecutor().execute(step, state, request)
 
 
 @pytest.mark.asyncio
