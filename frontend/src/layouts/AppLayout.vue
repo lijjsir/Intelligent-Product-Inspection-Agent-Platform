@@ -105,7 +105,11 @@
       </header>
 
       <main class="flex-1 overflow-x-hidden overflow-y-auto p-4">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <KeepAlive :include="['ChatView']">
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </main>
     </div>
   </div>
