@@ -144,6 +144,10 @@ export const useChatStore = defineStore("chat", () => {
   const trustPollTimer = ref<number | null>(null);
   const trustPollDeadline = ref<number>(0);
   const trustPollInFlight = ref(false);
+  const activeStreamingSessionId = ref<string | null>(null);
+  const thinkingStartedAt = ref<number | null>(null);
+  const thinkingElapsed = ref(0);
+  let _thinkingTimer: ReturnType<typeof setInterval> | null = null;
   const ragSpaces = ref<RagSpace[]>([]);
   const ragSpacesError = ref("");
   const inspectionContext = ref<ChatInspectionContext>({ ...EMPTY_INSPECTION_CONTEXT });
@@ -275,6 +279,24 @@ export const useChatStore = defineStore("chat", () => {
     trustPollInFlight.value = false;
   }
 
+  function startThinkingTimer() {
+    if (_thinkingTimer != null) return;
+    thinkingStartedAt.value = Date.now();
+    thinkingElapsed.value = 0;
+    _thinkingTimer = setInterval(() => {
+      thinkingElapsed.value = Math.floor((Date.now() - (thinkingStartedAt.value || Date.now())) / 1000);
+    }, 1000);
+  }
+
+  function stopThinkingTimer() {
+    if (_thinkingTimer != null) {
+      clearInterval(_thinkingTimer);
+      _thinkingTimer = null;
+    }
+    thinkingStartedAt.value = null;
+    thinkingElapsed.value = 0;
+  }
+
   function closeStreamConnection() {
     if (eventSource.value) {
       eventSource.value.close();
@@ -295,6 +317,8 @@ export const useChatStore = defineStore("chat", () => {
     stopTrustPolling();
     closeStreamConnection();
     finishActiveSend();
+    activeStreamingSessionId.value = null;
+    stopThinkingTimer();
   }
 
   function finalizeStreaming() {
@@ -302,6 +326,8 @@ export const useChatStore = defineStore("chat", () => {
     stopPolling();
     closeStreamConnection();
     finishActiveSend();
+    activeStreamingSessionId.value = null;
+    stopThinkingTimer();
   }
 
   function checkAndFinalizeByMessage(messageId: string) {
@@ -480,7 +506,6 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function createNewSession(title?: string) {
-    stopStreamForIdle();
     const { data } = await chatApi.createSession(title);
     session.value = data.data;
     if (session.value?.id) saveCurrentSession(session.value.id);
@@ -493,7 +518,9 @@ export const useChatStore = defineStore("chat", () => {
     if (session.value?.id === sessionId && messages.value.length > 0) {
       return session.value;
     }
-    stopStreamForIdle();
+    if (session.value?.id && session.value.id !== sessionId && session.value.id !== activeStreamingSessionId.value) {
+      stopStreamForIdle();
+    }
     const found = sessions.value.find((x) => x.id === sessionId);
     session.value = found || null;
     messages.value = [];
@@ -867,12 +894,18 @@ export const useChatStore = defineStore("chat", () => {
         streamPhase.value = "idle";
       };
       eventSource.value = source;
+        activeStreamingSessionId.value = sessionId;
+        startThinkingTimer();
     })();
     try {
       await streamPromise.value;
     } finally {
       streamPromise.value = null;
     }
+  }
+
+  function cancelActiveStream() {
+    stopStreamForIdle();
   }
 
   function stopStream() {
@@ -913,6 +946,10 @@ export const useChatStore = defineStore("chat", () => {
     appendTaskResult,
     submitTask,
     deleteSession,
+    activeStreamingSessionId,
+    thinkingStartedAt,
+    thinkingElapsed,
+    cancelActiveStream,
     stopStream,
   };
 });
