@@ -40,6 +40,8 @@ services:
       PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
       PIAP_PAPER_CHECK_STRICT_STARTUP: "true"
       PIAP_PAPER_CHECK_DISABLE_FALLBACK: "true"
+      PIAP_PAPER_CHECK_ENGINE_TIMEOUT_SEC: "60"
+      PIAP_PAPER_CHECK_PYCORRECTOR_TIMEOUT_SEC: "60"
     depends_on:
       paper-assets-init:
         condition: service_completed_successfully
@@ -96,6 +98,8 @@ services:
       PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
       PIAP_PAPER_CHECK_STRICT_STARTUP: "true"
       PIAP_PAPER_CHECK_DISABLE_FALLBACK: "true"
+      PIAP_PAPER_CHECK_ENGINE_TIMEOUT_SEC: "60"
+      PIAP_PAPER_CHECK_PYCORRECTOR_TIMEOUT_SEC: "60"
     depends_on:
       paper-assets-init:
         condition: service_completed_successfully

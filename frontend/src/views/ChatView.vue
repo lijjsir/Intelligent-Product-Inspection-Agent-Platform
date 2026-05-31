@@ -64,6 +64,7 @@ const taskRules: FormRules = {
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
 const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
 const thinkingPhaseText = computed(() => {
+  if (!chatStore.loading) return "";
   if (chatStore.streamPhase === "connecting") return "正在建立连接...";
   if (chatStore.streamPhase === "streaming") return "智能体分析中...";
   if (chatStore.streamPhase === "closing") return "正在整理结果...";
