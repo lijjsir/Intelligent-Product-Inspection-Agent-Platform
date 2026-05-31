@@ -63,12 +63,20 @@ const taskRules: FormRules = {
 
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
 const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
-const streamStatusText = computed(() => {
-  if (!chatStore.loading) return "";
+const thinkingPhaseText = computed(() => {
   if (chatStore.streamPhase === "connecting") return "正在建立连接...";
-  if (chatStore.streamPhase === "streaming") return "智能体处理中...";
-  if (chatStore.streamPhase === "closing") return "正在整理回复...";
-  return "智能体处理中...";
+  if (chatStore.streamPhase === "streaming") return "智能体分析中...";
+  if (chatStore.streamPhase === "closing") return "正在整理结果...";
+  return "处理中...";
+});
+const thinkingElapsedText = computed(() => {
+  const s = chatStore.thinkingElapsed;
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (s < 3600) return `${m}m${rem.toString().padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h${(m % 60).toString().padStart(2, "0")}m`;
 });
 const FINAL_ASSISTANT_MESSAGE_TYPES = new Set(["assistant_text", "quality_answer", "file_answer", "report_answer", "task_status", "task_result", "image_analysis", "error", "interrupted"]);
 const specOptions = computed(() => inspectionSpecStore.items);
@@ -416,7 +424,7 @@ function streamingPlaceholder(message: ChatMessage) {
   if (attachmentNames.some((name) => name.endsWith(".docx") || name.endsWith(".tex"))) {
     return "正在解析文档并检查格式...";
   }
-  return streamStatusText.value || "智能体处理中...";
+  return thinkingPhaseText.value || "智能体处理中...";
 }
 
 function ensureTypewriter(msgId: string) {
@@ -707,7 +715,17 @@ onMounted(async () => {
   await loadMessageReactions();
 });
 
-onBeforeUnmount(() => { chatStore.stopStream(); disposeTaskStreams(); });
+function handleBeforeUnload() {
+  chatStore.stopStream();
+  disposeTaskStreams();
+}
+onMounted(() => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", handleBeforeUnload);
+  disposeTaskStreams();
+});
 
 watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
@@ -1005,17 +1023,20 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         <div v-if="chatStore.pendingAttachments.length" class="composer-attachments">
           <el-tag v-for="att in chatStore.pendingAttachments" :key="att.id" closable effect="plain" @close="removePendingAttachment(att.id)">{{ att.name }}</el-tag>
         </div>
-        <div v-if="streamStatusText" class="stream-status">
-          <span>{{ streamStatusText }}</span>
+        <div v-if="chatStore.loading" class="thinking-bar">
+          <span class="thinking-spinner"></span>
+          <span class="thinking-phase">{{ thinkingPhaseText }}</span>
+          <span class="thinking-timer">{{ thinkingElapsedText }}</span>
           <el-button
             v-if="chatStore.canCancelResponse"
             size="small"
             type="danger"
             link
             :icon="CircleClose"
+            class="thinking-cancel-btn"
             @click="interruptCurrentResponse()"
           >
-            中断回答
+            中断
           </el-button>
         </div>
         <PromptTemplateTray v-model="input" class="prompt-template-entry" />
@@ -1377,17 +1398,39 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-size: 12px;
 }
 .composer-attachments { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
-.stream-status {
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.thinking-bar {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 12px;
+  padding: 4px 14px;
   border-radius: 999px;
-  background: #f3f4f6;
-  color: #374151;
+  background: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  color: #0f766e;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   margin-bottom: 6px;
+  transition: opacity 0.3s ease-out-quint;
+}
+.thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #ccfbf1;
+  border-top-color: #0d9488;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.thinking-timer {
+  font-variant-numeric: tabular-nums;
+  color: #5eead4;
+  margin-left: 2px;
+}
+.thinking-cancel-btn {
+  margin-left: 4px;
 }
 .prompt-template-entry {
   margin-bottom: 8px;
