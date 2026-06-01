@@ -6,6 +6,8 @@ import json
 from datetime import date
 from typing import Any
 
+import httpx
+
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from app.services.model_config_service import ModelConfigService
@@ -129,7 +131,7 @@ async def generate_ai_review_output(
             },
         )
     except Exception as exc:
-        raise PaperReviewModelError(f"Ai-Review 模型调用失败：{exc}") from exc
+        raise PaperReviewModelError(_build_model_error_message(exc, runtime=runtime)) from exc
 
     normalized = normalize_ai_review_output(response)
     normalized["limitations"] = _sanitize_ai_limitations(
@@ -154,6 +156,20 @@ async def generate_ai_review_output(
             "writing_guide": str(guide_evidence.get("file_name") or ""),
         }
     return normalized
+
+
+def _build_model_error_message(exc: Exception, *, runtime: dict[str, Any]) -> str:
+    if isinstance(exc, httpx.ConnectError):
+        provider = str(runtime.get("provider") or "unknown")
+        endpoint = str(runtime.get("base_url") or "").strip() or "<empty>"
+        hint = "请检查模型服务是否已启动，以及该 endpoint 是否可从当前 backend 进程访问。"
+        if provider == "local_openai":
+            hint = (
+                "请检查本地模型服务是否已启动；如果 backend 运行在 Docker 容器中，"
+                "endpoint 不要使用 127.0.0.1/localhost，应改为 host.docker.internal 或其他容器可达地址。"
+            )
+        return f"Ai-Review 模型调用失败：无法连接到 {provider} 模型端点 {endpoint}。{hint} 原始错误：{exc}"
+    return f"Ai-Review 模型调用失败：{exc}"
 
 
 def build_ai_review_messages(

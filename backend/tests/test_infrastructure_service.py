@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from app.schemas.infrastructure import InfrastructureComponentStatus
@@ -53,3 +54,30 @@ async def test_infrastructure_service_uses_local_storage_name(monkeypatch):
     assert result.name == "Local Storage"
     assert result.kind == "storage"
 
+
+@pytest.mark.asyncio
+async def test_infrastructure_service_reports_actionable_qdrant_connect_error(monkeypatch):
+    service = InfrastructureService(FakeSession())
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            raise httpx.ConnectError("All connection attempts failed", request=None)
+
+    monkeypatch.setattr("app.services.infrastructure_service.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("app.services.infrastructure_service.settings.qdrant_url", "http://127.0.0.1:6333")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.qdrant_docker_url", "http://qdrant:6333")
+
+    result = await service._check_qdrant()
+
+    assert result.status == "unhealthy"
+    assert "http://127.0.0.1:6333" in result.detail
+    assert "127.0.0.1:63330" in result.detail

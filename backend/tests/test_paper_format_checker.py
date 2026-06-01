@@ -5,9 +5,12 @@ import types
 from io import BytesIO
 
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
 
 from agent.tools.file_parsers import parse_docx_bytes, parse_pdf_bytes, parse_tex_bytes
-from agent.tools.paper_format_checker import _check_pycorrector, check_paper_format
+from agent.tools.paper_format_checker import _analyze_reference_entry, _check_pycorrector, check_paper_format
 from agent.tools.paper_format_templates import get_paper_template
 
 
@@ -63,6 +66,42 @@ def test_parse_docx_enhanced_extracts_template_check_metadata():
     assert "xml_path" in parsed["paragraphs"][0]
     assert "text_runs" in parsed["paragraphs"][0]
     assert "word_section_index" in parsed["paragraphs"][0]
+
+
+def test_parse_docx_enhanced_resolves_inherited_paragraph_spacing_from_styles():
+    from agent.tools.paper_docx_parser import parse_docx_enhanced
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "宋体"
+    normal.font.size = Pt(12)
+    normal.paragraph_format.line_spacing = Pt(20)
+    normal.paragraph_format.space_before = Pt(6)
+    normal.paragraph_format.space_after = Pt(8)
+    normal.paragraph_format.first_line_indent = Pt(24)
+    normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+    body_style = doc.styles.add_style("BodyCustom", WD_STYLE_TYPE.PARAGRAPH)
+    body_style.base_style = normal
+    doc.add_paragraph("正文段落", style="BodyCustom")
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    parsed = parse_docx_enhanced(buffer.getvalue())
+
+    paragraph = parsed["paragraphs"][0]
+    assert paragraph["font_name"] == "宋体"
+    assert paragraph["font_size_pt"] == 12.0
+    assert paragraph["line_spacing"] == 20.0
+    assert paragraph["line_spacing_source"] == "paragraph_style"
+    assert paragraph["space_before_pt"] == 6.0
+    assert paragraph["space_before_source"] == "paragraph_style"
+    assert paragraph["space_after_pt"] == 8.0
+    assert paragraph["space_after_source"] == "paragraph_style"
+    assert paragraph["first_line_indent_pt"] == 24.0
+    assert paragraph["first_line_indent_source"] == "paragraph_style"
+    assert paragraph["alignment"] == "justify"
+    assert paragraph["alignment_source"] == "paragraph_style"
 
 
 def test_parse_tex_bytes_extracts_commands_and_sections():
@@ -460,15 +499,68 @@ def test_check_paper_format_reports_cqupt_template_differences(monkeypatch):
     missing_titles = {item["title"] for item in report["issues"] if item["code"] == "template.required_section_missing"}
     assert "模板要求章节缺失：正文" not in missing_titles
     assert "template.margin_mismatch" in issue_codes
-    assert "template.body_font_mismatch" in issue_codes
+    assert "template.body_paragraph_style_mismatch" in issue_codes
     assert any("重庆邮电大学" in item for item in report["limitations"])
-    font_issue = next(item for item in report["issues"] if item["code"] == "template.body_font_mismatch")
+    font_issue = next(item for item in report["issues"] if item["code"] == "template.body_paragraph_style_mismatch")
     assert font_issue["location"]["section_title"] == "引言"
     assert "正文样式汇总" in font_issue["location"]["display_text"]
     assert font_issue["actual"]["checked_count"] >= font_issue["actual"]["mismatch_count"] >= 1
     assert font_issue["actual"]["samples"][0]["display_text"] == "第1节《引言》下第1段"
-    assert font_issue["actual"]["samples"][0]["text"] == "本研究围绕智能检测平台的关键问题展开分析。"
-    assert "本研究围绕智能检测平台的关键问题展开分析。" in font_issue["evidence"]
+    assert font_issue["actual"]["samples"][0]["text"] == "正文段落"
+    assert "正文段落" in font_issue["evidence"]
+
+
+def test_check_paper_format_reports_body_paragraph_spacing_mismatch(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+    parsed = {
+        "kind": "docx",
+        "text": "摘要\n关键词：查非\n目录\n第1章 绪论\n正文段落\n参考文献",
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 0, "section_index": 1},
+            {"text": "目录", "level": 1, "paragraph_index": 2, "section_index": 2},
+            {"text": "第1章 绪论", "level": 1, "paragraph_index": 3, "section_index": 3},
+            {"text": "参考文献", "level": 1, "paragraph_index": 5, "section_index": 4},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "paragraph_no": 0},
+            {"index": 1, "text": "关键词：查非", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 1},
+            {"index": 2, "text": "目录", "heading_level": 1, "section_title": "目录", "section_index": 2, "paragraph_no": 0},
+            {"index": 3, "text": "第1章 绪论", "heading_level": 1, "section_title": "第1章 绪论", "section_index": 3, "paragraph_no": 0, "font_name": "黑体", "font_size_pt": 15, "line_spacing": 20.0, "space_before_pt": 24.0, "space_after_pt": 18.0, "alignment": "center"},
+            {"index": 4, "text": "正文段落", "heading_level": 0, "section_title": "第1章 绪论", "section_index": 3, "paragraph_no": 1, "font_name": "宋体", "font_size_pt": 12.0, "line_spacing": 20.0, "space_before_pt": 6.0, "space_after_pt": 8.0, "first_line_indent_pt": 24.0, "alignment": "justify"},
+            {"index": 5, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 4, "paragraph_no": 0},
+        ],
+        "page_layout": {
+            "page_width_cm": 21.0,
+            "page_height_cm": 29.7,
+            "orientation": "portrait",
+            "top_margin_cm": 3.0,
+            "bottom_margin_cm": 3.0,
+            "left_margin_cm": 3.0,
+            "right_margin_cm": 3.0,
+            "gutter_cm": 0.0,
+            "header_distance_cm": 2.0,
+            "footer_distance_cm": 2.0,
+        },
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="按重庆邮电大学模板查非",
+        template_id="cqupt_graduate_thesis_2022",
+    )
+
+    issue = next(item for item in report["issues"] if item["code"] == "template.body_paragraph_style_mismatch")
+    assert issue["actual"]["samples"][0]["space_before_pt"] == 6.0
+    assert issue["actual"]["samples"][0]["space_after_pt"] == 8.0
+    assert issue["expected"]["space_before_pt"] == 0.0
+    assert issue["expected"]["space_after_pt"] == 0.0
+    assert "before=6.0" in issue["evidence"]
+    assert "after=8.0" in issue["evidence"]
 
 
 def test_check_paper_format_reports_missing_body_when_no_main_text(monkeypatch):
@@ -595,11 +687,13 @@ def test_check_paper_format_covers_checklist_layout_front_matter_and_word_artifa
     assert "template.page_size_mismatch" in issue_codes
     assert "template.gutter_mismatch" in issue_codes
     assert "template.header_footer_mismatch" in issue_codes
+    assert "template.footer_content_mismatch" in issue_codes
     assert "abstract.keyword_count_out_of_range" in issue_codes
     assert "toc.required_entry_missing" in issue_codes
     assert "heading.numbering_discontinuous" in issue_codes
-    assert "style.paragraph_indent_missing" in issue_codes
-    assert "style.line_spacing_small" in issue_codes
+    assert "template.body_paragraph_style_mismatch" in issue_codes
+    assert "style.paragraph_indent_missing" not in issue_codes
+    assert "style.line_spacing_small" not in issue_codes
     assert "figure.referenced_caption_missing" in issue_codes
     assert "table.referenced_caption_missing" in issue_codes
     assert "formula.numbering_discontinuous" in issue_codes
@@ -688,3 +782,100 @@ def test_header_content_check_starts_from_body_section(monkeypatch):
 
     issue_codes = {item["code"] for item in report["issues"]}
     assert "template.header_content_mismatch" not in issue_codes
+
+
+def test_check_paper_format_skips_reference_and_url_noise_but_keeps_real_mixed_punctuation(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+    parsed = {
+        "kind": "docx",
+        "text": "引言\n这是中文,标点混用。\n参考文献\n[1] Smith J. Example Title[J]. Journal, 2020, 1(2): 1-10.\nDOI: 10.1000/182\n",
+        "headings": [{"text": "引言", "level": 1, "paragraph_index": 0, "section_index": 1}],
+        "paragraphs": [
+            {"index": 0, "text": "引言", "heading_level": 1, "section_title": "引言", "section_index": 1, "paragraph_no": 0},
+            {"index": 1, "text": "这是中文,标点混用。", "heading_level": 0, "section_title": "引言", "section_index": 1, "paragraph_no": 1},
+            {"index": 2, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 2, "paragraph_no": 0},
+            {"index": 3, "text": "[1] Smith J. Example Title[J]. Journal, 2020, 1(2): 1-10.", "heading_level": 0, "section_title": "参考文献", "section_index": 2, "paragraph_no": 1},
+            {"index": 4, "text": "DOI: 10.1000/182", "heading_level": 0, "section_title": "参考文献", "section_index": 2, "paragraph_no": 2},
+        ],
+        "page_layout": {},
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="帮我查非",
+        template_id="generic_cn_thesis",
+    )
+
+    mixed_issue = next(item for item in report["issues"] if item["code"] == "text.mixed_punctuation")
+    assert mixed_issue["severity"] == "low"
+    assert mixed_issue["evidence"] == "这是中文,标点混用。"
+    assert mixed_issue["location"]["display_text"] == "第1节《引言》下第1段"
+
+
+def test_footer_page_number_only_accepts_plain_digits(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+    parsed = {
+        "kind": "docx",
+        "text": "摘要\n关键词：查非\n目录\n1 绪论\n正文段落\n参考文献",
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 0, "section_index": 1},
+            {"text": "目录", "level": 1, "paragraph_index": 2, "section_index": 2},
+            {"text": "1 绪论", "level": 1, "paragraph_index": 3, "section_index": 3},
+            {"text": "参考文献", "level": 1, "paragraph_index": 5, "section_index": 4},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "word_section_index": 0, "paragraph_no": 0},
+            {"index": 1, "text": "关键词：查非，测试，样例", "heading_level": 0, "section_title": "摘要", "section_index": 1, "word_section_index": 0, "paragraph_no": 1},
+            {"index": 2, "text": "目录", "heading_level": 1, "section_title": "目录", "section_index": 2, "word_section_index": 1, "paragraph_no": 0},
+            {"index": 3, "text": "1 绪论", "heading_level": 1, "section_title": "1 绪论", "section_index": 3, "word_section_index": 2, "paragraph_no": 0},
+            {"index": 4, "text": "正文段落内容。", "heading_level": 0, "section_title": "1 绪论", "section_index": 3, "word_section_index": 2, "paragraph_no": 1},
+            {"index": 5, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 4, "word_section_index": 2, "paragraph_no": 0},
+        ],
+        "sections": [
+            {"header_text": "", "footer_text": ""},
+            {"header_text": "", "footer_text": ""},
+            {"header_text": "重庆邮电大学硕士学位论文", "footer_text": "1"},
+        ],
+        "page_layout": {
+            "page_width_cm": 21.0,
+            "page_height_cm": 29.7,
+            "orientation": "portrait",
+            "top_margin_cm": 3.0,
+            "bottom_margin_cm": 3.0,
+            "left_margin_cm": 3.0,
+            "right_margin_cm": 3.0,
+            "gutter_cm": 0.0,
+            "header_distance_cm": 2.0,
+            "footer_distance_cm": 2.0,
+        },
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="按重庆邮电大学模板查非",
+        template_id="cqupt_graduate_thesis_2022",
+    )
+
+    issue_codes = {item["code"] for item in report["issues"]}
+    assert "template.footer_content_mismatch" not in issue_codes
+
+
+def test_reference_entry_analysis_relaxes_book_but_checks_online_source():
+    book_check = _analyze_reference_entry("张三. 机器学习导论[M]. 北京: 机械工业出版社, 2020.")
+    assert "缺少卷期页码" not in book_check["problems"]
+
+    thesis_check = _analyze_reference_entry("李四. 智能检测系统研究[D]. 重庆邮电大学, 2022.")
+    assert "缺少学位授予单位" not in thesis_check["problems"]
+
+    online_check = _analyze_reference_entry("王五. 在线资源示例[EB/OL]. 2024.")
+    assert "缺少URL或访问线索" in online_check["problems"]

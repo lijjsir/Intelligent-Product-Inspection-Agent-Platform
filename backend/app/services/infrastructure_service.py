@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.llm.base_url_resolver import resolve_runtime_service_url
 from app.core.config import settings
 from app.schemas.infrastructure import InfrastructureComponentStatus, InfrastructureStatusResponse
 from app.services.object_storage.factory import build_object_storage
@@ -113,16 +114,20 @@ class InfrastructureService:
         started = time.perf_counter()
         checked_at = datetime.now(timezone.utc)
         headers = {"api-key": settings.qdrant_api_key} if settings.qdrant_api_key else None
-        url = f"{settings.qdrant_url.rstrip('/')}/collections/{settings.qdrant_collection}"
+        qdrant_url = resolve_runtime_service_url(
+            settings.qdrant_url,
+            docker_base_url=settings.qdrant_docker_url,
+        )
+        url = f"{qdrant_url}/collections/{settings.qdrant_collection}"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 payload = response.json().get("result") or {}
                 status = payload.get("status") or "healthy"
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 normalized_status = "healthy" if status in {"green", "ok", "healthy"} else "degraded"
-                detail = f"collection={settings.qdrant_collection}, status={status}"
+                detail = f"endpoint={qdrant_url}, collection={settings.qdrant_collection}, status={status}"
                 return InfrastructureComponentStatus(
                     name="Qdrant",
                     kind="vector_db",
@@ -131,6 +136,14 @@ class InfrastructureService:
                     detail=detail,
                     last_check_at=checked_at,
                 )
+        except httpx.ConnectError as exc:
+            return InfrastructureComponentStatus(
+                name="Qdrant",
+                kind="vector_db",
+                status="unhealthy",
+                detail=_qdrant_connect_error_detail(qdrant_url, exc),
+                last_check_at=checked_at,
+            )
         except Exception as exc:
             return InfrastructureComponentStatus(
                 name="Qdrant",
@@ -177,3 +190,12 @@ class InfrastructureService:
                 detail=str(exc),
                 last_check_at=checked_at,
             )
+
+
+def _qdrant_connect_error_detail(qdrant_url: str, exc: Exception) -> str:
+    return (
+        f"无法连接到 Qdrant 端点 {qdrant_url}。"
+        "如果 backend 在宿主机运行且依赖 docker-compose 中的 Qdrant，请使用 http://127.0.0.1:63330；"
+        "如果 backend 在 Docker 容器中运行，请使用 http://qdrant:6333。"
+        f" 原始错误：{exc}"
+    )

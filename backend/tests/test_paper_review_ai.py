@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
 from agent.tools import paper_review_ai
@@ -202,6 +203,48 @@ async def test_generate_ai_review_output_raises_when_runtime_unavailable(monkeyp
         )
 
     assert "未找到可用" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_ai_review_output_surfaces_actionable_connect_error(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            pass
+
+        async def list_runtime_models(self):
+            return [{"id": "model-1", "model_key": "paper-review-model", "model_type": "chat"}]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types, reserve):
+            return {
+                "api_key": None,
+                "base_url": "http://127.0.0.1:11434/v1",
+                "model_id": "paper-review-model",
+                "provider": "local_openai",
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def chat(self, messages, **kwargs):
+            raise httpx.ConnectError("All connection attempts failed")
+
+    monkeypatch.setattr(paper_review_ai, "ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr(paper_review_ai, "LLMGateway", FakeGateway)
+    monkeypatch.setattr(paper_review_ai, "LLMClient", FakeLLMClient)
+
+    with pytest.raises(PaperReviewModelError) as exc_info:
+        await paper_review_ai.generate_ai_review_output(
+            evidence_pack={"document": {"file_name": "paper.docx"}, "issues": []},
+            query="查非",
+            db_session=object(),
+            org_id="org-1",
+        )
+
+    message = str(exc_info.value)
+    assert "无法连接到 local_openai 模型端点 http://127.0.0.1:11434/v1" in message
+    assert "host.docker.internal" in message
 
 
 def test_normalize_ai_review_output_accepts_text_json_payload():

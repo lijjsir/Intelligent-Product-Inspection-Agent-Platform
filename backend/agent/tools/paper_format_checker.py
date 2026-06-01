@@ -181,6 +181,7 @@ def check_paper_format(
     elif effective_template_id == "cqupt_graduate_thesis_2022":
         limitations.append("已使用重庆邮电大学研究生学位论文模板（2022版）规则进行辅助校验，仍需以学校最新正式文件为准。")
 
+    issues = _suppress_template_style_noise(issues, template_id=effective_template_id)
     issues = _dedupe_issues(issues)
     summary = _build_summary(document_type=document_type, issues=issues, limitations=limitations)
 
@@ -328,13 +329,17 @@ def _normalize_required_section_rule(section: Any) -> dict[str, Any]:
         aliases = [str(item).strip() for item in list(section.get("aliases") or []) if str(item).strip()]
         if label and label not in aliases:
             aliases.insert(0, label)
-        return {
+        result = {
             "key": str(section.get("key") or label).strip(),
             "label": label,
             "aliases": aliases or ([label] if label else []),
             "severity": str(section.get("severity") or "").strip() or ("high" if label in {"摘要", "参考文献"} else "medium"),
             "match_mode": str(section.get("match_mode") or "heading_or_text").strip() or "heading_or_text",
         }
+        trigger = section.get("trigger")
+        if isinstance(trigger, dict):
+            result["trigger"] = dict(trigger)
+        return result
     label = str(section).strip()
     return {
         "key": label,
@@ -368,6 +373,110 @@ def _headings_contain_aliases(headings: list[dict[str, Any]], aliases: list[str]
         if any(alias in heading_text for alias in normalized_aliases):
             return True
     return False
+
+
+def _optional_section_required(parsed: dict[str, Any], rule: dict[str, Any]) -> bool:
+    trigger = dict(rule.get("trigger") or {})
+    trigger_type = str(trigger.get("type") or "").strip()
+    if not trigger_type:
+        return False
+    if trigger_type == "min_figure_count":
+        try:
+            threshold = int(trigger.get("value") or 0)
+        except (TypeError, ValueError):
+            return False
+        figure_titles = list(parsed.get("figure_titles") or [])
+        return len(figure_titles) >= threshold
+    if trigger_type == "min_table_count":
+        try:
+            threshold = int(trigger.get("value") or 0)
+        except (TypeError, ValueError):
+            return False
+        table_titles = list(parsed.get("table_titles") or [])
+        return len(table_titles) >= threshold
+    if trigger_type == "contains_any":
+        keywords = [str(item).strip() for item in list(trigger.get("keywords") or []) if str(item).strip()]
+        if not keywords:
+            return False
+        return _contains_any(str(parsed.get("text") or ""), keywords)
+    return False
+
+
+def _template_style_tolerance(rules: dict[str, Any], key: str, fallback: float) -> float:
+    tolerances = dict(rules.get("style_match_tolerance") or {})
+    value = tolerances.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return fallback
+
+
+def _line_spacing_matches(actual: Any, expected: Any, *, tolerance: float) -> bool:
+    if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
+        return True
+    return abs(float(actual) - float(expected)) <= tolerance
+
+
+def _alignment_matches(actual: Any, expected: Any) -> bool:
+    actual_text = str(actual or "").strip().lower()
+    expected_text = str(expected or "").strip().lower()
+    if not actual_text or not expected_text:
+        return True
+    aliases = {
+        "justify": {"justify", "distributed", "distribute", "both"},
+        "center": {"center", "centre"},
+        "left": {"left"},
+        "right": {"right"},
+    }
+    expected_aliases = aliases.get(expected_text, {expected_text})
+    return actual_text in expected_aliases
+
+
+def _value_matches(actual: Any, expected: Any, *, tolerance: float) -> bool:
+    if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
+        return True
+    return abs(float(actual) - float(expected)) <= tolerance
+
+
+def _font_matches(actual: Any, expected: Any) -> bool:
+    actual_text = str(actual or "").strip().lower()
+    expected_text = str(expected or "").strip().lower()
+    if not actual_text or not expected_text:
+        return True
+    if actual_text == expected_text:
+        return True
+    aliases = {
+        "times new roman": {"timesnewromanpsmt", "times new roman"},
+        "宋体": {"宋体", "simsun"},
+        "黑体": {"黑体", "simhei"},
+    }
+    expected_aliases = aliases.get(str(expected or ""), {expected_text})
+    return actual_text in {item.lower() for item in expected_aliases}
+
+
+def _suppress_template_style_noise(issues: list[RuleIssue], *, template_id: str) -> list[RuleIssue]:
+    if template_id != "cqupt_graduate_thesis_2022":
+        return issues
+    issue_codes = {item.code for item in issues}
+    if "template.body_paragraph_style_mismatch" not in issue_codes:
+        return issues
+    suppressed_codes = {"style.line_spacing_small", "style.paragraph_indent_missing"}
+    return [item for item in issues if item.code not in suppressed_codes]
+
+
+def _find_paragraph_by_aliases(parsed: dict[str, Any], aliases: list[str]) -> dict[str, Any] | None:
+    normalized_aliases = [_normalize_loose_text(item) for item in aliases if str(item).strip()]
+    if not normalized_aliases:
+        return None
+    for paragraph in list(parsed.get("paragraphs") or []):
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        normalized_text = _normalize_loose_text(text)
+        if normalized_text in normalized_aliases:
+            return paragraph
+        if any(normalized_text.startswith(alias) for alias in normalized_aliases):
+            return paragraph
+    return None
 
 
 def _docx_body_between_sections_exists(parsed: dict[str, Any], rule: dict[str, Any]) -> bool:
@@ -896,6 +1005,13 @@ def _check_docx_page_setup(
     # Check header/footer text content against template requirements
     header_footer_content_rule = dict(rules.get("header_footer") or {})
     expected_header = str(header_footer_content_rule.get("expected_header_text") or "").strip()
+    expected_header_patterns = [
+        str(item).strip()
+        for item in list(header_footer_content_rule.get("expected_header_patterns") or [])
+        if str(item).strip()
+    ]
+    if expected_header and expected_header not in expected_header_patterns:
+        expected_header_patterns.append(expected_header)
     cover_no_hf = bool(header_footer_content_rule.get("cover_no_header_footer"))
     sections = list(parsed.get("sections") or [])
     body_start_word_section_index = _find_docx_body_start_word_section_index(parsed)
@@ -906,21 +1022,44 @@ def _check_docx_page_setup(
     )
     header_texts = [str(sec.get("header_text") or "").strip() for sec in header_sections]
     footer_texts = [str(sec.get("footer_text") or "").strip() for sec in sections]
-    if expected_header and header_texts:
-        any_header_match = any(expected_header in ht for ht in header_texts if ht)
+    if expected_header_patterns and header_texts:
+        any_header_match = any(
+            any(_header_pattern_matches(ht, pattern) for pattern in expected_header_patterns)
+            for ht in header_texts
+            if ht
+        )
         if any(ht for ht in header_texts) and not any_header_match:
             issues.append(
                 RuleIssue(
                     code="template.header_content_mismatch",
                     title="页眉内容与模板要求不一致",
-                    severity="medium",
+                    severity="low",
                     category="template",
-                    message=f"模板要求正文开始后的页眉包含 {expected_header}，但未在正文范围内的任何节页眉中检测到。",
+                    message="模板要求正文开始后的页眉包含学校学位论文页眉文本，但未在正文范围内的任何节页眉中检测到。",
                     evidence=f"正文范围内检测到的页眉文本: {[ht[:60] for ht in header_texts if ht][:5]}",
                     location={"display_text": "正文后的页眉区域", "scope": "headers_after_body"},
-                    suggestion=f"在页眉中添加 {expected_header}。",
-                    expected={"header_text": expected_header},
+                    suggestion="核对页眉是否为学校学位论文统一页眉文本。",
+                    expected={"header_text_patterns": expected_header_patterns},
                     actual={"header_texts": [ht[:80] for ht in header_texts if ht][:5]},
+                    parser_confidence="high",
+                )
+            )
+    expected_footer_pattern = str(header_footer_content_rule.get("expected_footer_pattern") or "").strip()
+    if expected_footer_pattern == "page_number_only" and footer_texts:
+        invalid_footers = [item for item in footer_texts if item and not _footer_text_is_page_number_only(item)]
+        if invalid_footers:
+            issues.append(
+                RuleIssue(
+                    code="template.footer_content_mismatch",
+                    title="页脚内容与模板要求不一致",
+                    severity="low",
+                    category="template",
+                    message="模板要求页脚仅保留页码，但检测到页脚中存在额外文字。",
+                    evidence=f"页脚文本样例: {[item[:60] for item in invalid_footers[:5]]}",
+                    location={"display_text": "页脚区域", "scope": "footers"},
+                    suggestion="将页脚统一设置为纯页码，移除学校名、章节名或“第X页”等文字。",
+                    expected={"footer_pattern": expected_footer_pattern},
+                    actual={"footer_texts": [item[:80] for item in invalid_footers[:5]]},
                     parser_confidence="high",
                 )
             )
@@ -928,17 +1067,19 @@ def _check_docx_page_setup(
         first_section = sections[0]
         first_header = str(first_section.get("header_text") or "").strip()
         first_footer = str(first_section.get("footer_text") or "").strip()
+        later_headers = [str(sec.get("header_text") or "").strip() for sec in sections[1:]]
+        shared_header = bool(first_header and any(first_header == item for item in later_headers if item))
         if first_header or first_footer:
             issues.append(
                 RuleIssue(
                     code="template.cover_has_header_footer",
-                    title="封面不应包含页眉页脚",
-                    severity="medium",
+                    title="封面页眉页脚设置可疑",
+                    severity="low" if shared_header else "medium",
                     category="template",
-                    message="封面通常不应有页眉和页脚。",
+                    message="封面通常不应与正文共享页眉页脚，当前检测到封面区域存在页眉或页脚。",
                     evidence=f"封面页眉: {repr(first_header[:60])}, 页脚: {repr(first_footer[:60])}",
                     location={"display_text": "封面区域", "section_index": 0},
-                    suggestion="在 Word 中为封面设置独立的节，取消首页页眉页脚。",
+                    suggestion="核对封面是否设置为独立首页，避免与正文共享页眉页脚。",
                     parser_confidence="high",
                 )
             )
@@ -985,6 +1126,31 @@ def _check_template_rules(
                 )
             )
 
+    for section in list(rules.get("optional_sections") or []):
+        section_rule = _normalize_required_section_rule(section)
+        section_name = str(section_rule.get("label") or "")
+        if not section_name or not _optional_section_required(parsed, section_rule):
+            continue
+        if _required_section_present(parsed, section_rule, document_type=document_type):
+            continue
+        issues.append(
+            RuleIssue(
+                code="template.optional_section_missing",
+                title=f"模板条件章节缺失：{section_name}",
+                severity=str(section_rule.get("severity") or "low"),
+                category="template",
+                message=f"按 {template.get('name')} 规则，当前文档已触发《{section_name}》的条件要求，但未识别到该章节。",
+                evidence=f"未找到模板条件章节：{section_name}",
+                location={
+                    "section": section_name,
+                    "template_id": template_id,
+                    "display_text": f"模板条件章节《{section_name}》",
+                },
+                suggestion=f"若文中相关内容较多，请按学校模板补充或核对《{section_name}》章节。",
+                parser_confidence="medium",
+            )
+        )
+
     if document_type != "docx":
         return issues
 
@@ -1021,97 +1187,10 @@ def _check_template_rules(
                 )
                 break
 
-    body_font = dict(rules.get("body_font") or {})
-    body_candidates = _body_paragraph_candidates(parsed)
-    expected_names = {
-        str(body_font.get("zh") or "").lower(),
-        str(body_font.get("en") or "").lower(),
-    } - {""}
-    expected_size = body_font.get("size_pt")
-    font_mismatch_samples: list[dict[str, Any]] = []
-    font_mismatch_count = 0
-    unresolved_font_count = 0
-    for paragraph in body_candidates:
-        actual_name = str(
-            paragraph.get("font_name_resolved") or paragraph.get("font_name") or ""
-        ).lower()
-        actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt")
-        # Font inherited from styles — skip name check when unresolved
-        if actual_name:
-            name_mismatch = actual_name not in expected_names
-        else:
-            name_mismatch = False
-            unresolved_font_count += 1
-        size_mismatch = (
-            isinstance(expected_size, (int, float))
-            and isinstance(actual_size, (int, float))
-            and abs(float(actual_size) - float(expected_size)) > 0.2
-        )
-        if name_mismatch or size_mismatch:
-            font_mismatch_count += 1
-            if len(font_mismatch_samples) < 5:
-                font_mismatch_samples.append({
-                    "paragraph_index": paragraph.get("index"),
-                    "display_text": _issue_location_from_paragraph(paragraph).get("display_text"),
-                    "section_title": paragraph.get("section_title"),
-                    "font_name": actual_name or "(样式继承-未识别)",
-                    "font_size_pt": actual_size,
-                    "text": _build_paragraph_evidence_excerpt(paragraph),
-                })
-    if font_mismatch_count:
-        first_sample = font_mismatch_samples[0] if font_mismatch_samples else {}
-        sample_text = "；".join(
-            f"{item.get('display_text')}: “{item.get('text')}” (font={item.get('font_name')}, size={item.get('font_size_pt')})"
-            for item in font_mismatch_samples
-        )
-        issues.append(
-            RuleIssue(
-                code="template.body_font_mismatch",
-                title="正文字体或字号与学校模板不一致",
-                severity="medium",
-                category="template",
-                message=f"已扫描 {len(body_candidates)} 个正文段落，其中 {font_mismatch_count} 个字体/字号与模板不一致" + (f"，{unresolved_font_count} 个段落字体由样式继承无法识别（不计入差异）" if unresolved_font_count > 0 else ""),
-                evidence=f"不一致段落 {font_mismatch_count}/{len(body_candidates)}" + (f"，{unresolved_font_count} 个为样式继承" if unresolved_font_count > 0 else "") + f"。示例：{sample_text}",
-                location={
-                    "section_title": first_sample.get("section_title"),
-                    "paragraph_index": first_sample.get("paragraph_index"),
-                    "template_id": template_id,
-                    "display_text": f"正文样式汇总（首个示例：{first_sample.get('display_text') or '正文段落'}）",
-                },
-                suggestion="按学校模板统一全文正文的中文字体、英文字体和字号；优先修改正文样式定义，再抽查样例段落。",
-                expected={"zh_font": body_font.get("zh"), "en_font": body_font.get("en"), "font_size_pt": body_font.get("size_pt")},
-                actual={"mismatch_count": font_mismatch_count, "checked_count": len(body_candidates), "samples": font_mismatch_samples},
-                source_clause_ids=["cqupt_2022_body_font"],
-                parser_confidence="medium",
-            )
-        )
-
-    expected_spacing = rules.get("line_spacing")
-    if isinstance(expected_spacing, (int, float)):
-        for paragraph in body_candidates:
-            actual_spacing = paragraph.get("line_spacing")
-            if (
-                isinstance(actual_spacing, (int, float))
-                and float(actual_spacing) <= 5
-                and abs(float(actual_spacing) - float(expected_spacing)) > 0.1
-            ):
-                issues.append(
-                    RuleIssue(
-                        code="template.line_spacing_mismatch",
-                        title="正文行距与学校模板不一致",
-                        severity="low",
-                        category="template",
-                        message=f"正文行距 {actual_spacing} 与模板建议 {expected_spacing} 不一致。",
-                        evidence=f"段落 {paragraph.get('index')}: line_spacing={actual_spacing}",
-                        location={**_issue_location_from_paragraph(paragraph), "template_id": template_id},
-                        suggestion="按学校模板统一正文行距。",
-                        expected={"line_spacing": expected_spacing},
-                        actual={"line_spacing": actual_spacing},
-                        source_clause_ids=["cqupt_2022_body_line_spacing"],
-                        parser_confidence="medium",
-                    )
-                )
-                break
+    issues.extend(_check_template_front_matter_styles(parsed, template=template, rules=rules))
+    issues.extend(_check_template_heading_styles(parsed, template=template, rules=rules))
+    issues.extend(_check_template_body_paragraph_style(parsed, template=template, rules=rules))
+    issues.extend(_check_template_caption_styles(parsed, template=template, rules=rules))
 
     return issues
 
@@ -1208,6 +1287,327 @@ def _check_tex_structure(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
+def _check_template_front_matter_styles(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    rules: dict[str, Any],
+) -> list[RuleIssue]:
+    layout_rules = dict(rules.get("front_matter_layout") or {})
+    if not layout_rules:
+        return []
+    issues: list[RuleIssue] = []
+    font_tol = _template_style_tolerance(rules, "font_size_pt", 0.5)
+    line_tol = _template_style_tolerance(rules, "line_spacing_pt", 1.0)
+    space_before_tol = _template_style_tolerance(rules, "space_before_pt", 1.0)
+    space_after_tol = _template_style_tolerance(rules, "space_after_pt", 1.0)
+
+    checks = [
+        ("abstract_heading", "template.front_matter_style_mismatch", "中文摘要标题样式与模板不一致"),
+        ("en_abstract_heading", "template.front_matter_style_mismatch", "英文摘要标题样式与模板不一致"),
+        ("keywords_line", "template.front_matter_style_mismatch", "中文关键词行样式与模板不一致"),
+        ("en_keywords_line", "template.front_matter_style_mismatch", "英文关键词行样式与模板不一致"),
+    ]
+    for rule_key, issue_code, issue_title in checks:
+        spec = dict(layout_rules.get(rule_key) or {})
+        aliases = [str(item).strip() for item in list(spec.get("aliases") or []) if str(item).strip()]
+        paragraph = _find_paragraph_by_aliases(parsed, aliases)
+        if not paragraph:
+            continue
+        actual_font = paragraph.get("font_name_resolved") or paragraph.get("font_name")
+        actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt")
+        actual_spacing = paragraph.get("line_spacing")
+        actual_before = paragraph.get("space_before_pt")
+        actual_after = paragraph.get("space_after_pt")
+        actual_alignment = str(paragraph.get("alignment") or "").strip().lower()
+        actual_bold = bool(paragraph.get("bold"))
+
+        mismatches: list[str] = []
+        if spec.get("font_name") and not _font_matches(actual_font, spec.get("font_name")):
+            mismatches.append(f"font={actual_font}")
+        if not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol):
+            mismatches.append(f"font_size={actual_size}")
+        if not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=line_tol):
+            mismatches.append(f"line_spacing={actual_spacing}")
+        if not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=space_before_tol):
+            mismatches.append(f"space_before={actual_before}")
+        if not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=space_after_tol):
+            mismatches.append(f"space_after={actual_after}")
+        expected_alignment = str(spec.get("alignment") or "").strip().lower()
+        if expected_alignment and actual_alignment and actual_alignment != expected_alignment:
+            mismatches.append(f"alignment={actual_alignment}")
+        if spec.get("bold") is True and not actual_bold:
+            mismatches.append("bold=False")
+
+        if mismatches:
+            issues.append(
+                RuleIssue(
+                    code=issue_code,
+                    title=issue_title,
+                    severity="medium" if "摘要标题" in issue_title else "low",
+                    category="template",
+                    message=f"按 {template.get('name')} 规则，{issue_title.replace('与模板不一致', '')}未完全匹配模板样式。",
+                    evidence=f"{paragraph.get('text')}: {', '.join(mismatches)}",
+                    location={**_issue_location_from_paragraph(paragraph), "template_id": template.get("template_id")},
+                    suggestion="优先使用学校模板内置样式，避免手工逐段修改造成格式漂移。",
+                    parser_confidence="medium",
+                )
+            )
+    return issues
+
+
+def _check_template_heading_styles(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    rules: dict[str, Any],
+) -> list[RuleIssue]:
+    heading_rules = dict(rules.get("heading_styles") or {})
+    if not heading_rules:
+        return []
+    issues: list[RuleIssue] = []
+    font_tol = _template_style_tolerance(rules, "font_size_pt", 0.5)
+    seen_style_issue = False
+    seen_number_issue = False
+    paragraphs = list(parsed.get("paragraphs") or [])
+    paragraph_map = {item.get("index"): item for item in paragraphs}
+    for heading in list(parsed.get("headings") or []):
+        level = int(heading.get("level") or 0)
+        if level < 1 or level > 4:
+            continue
+        spec = dict(heading_rules.get(f"level_{level}") or {})
+        paragraph = paragraph_map.get(heading.get("paragraph_index"))
+        if not paragraph or not spec:
+            continue
+        text = str(heading.get("text") or "").strip()
+        if not seen_number_issue:
+            patterns = [str(item) for item in list(spec.get("numbering_patterns") or []) if str(item)]
+            if patterns and re.match(r"^(第\d+章|\d+(?:\.\d+)*)\s+", text) and not any(re.match(pattern, text) for pattern in patterns):
+                issues.append(
+                    RuleIssue(
+                        code="template.heading_numbering_mismatch",
+                        title="标题编号样式与模板不一致",
+                        severity="low" if level >= 2 else "medium",
+                        category="template",
+                        message=f"当前 {level} 级标题未匹配模板默认的中文理工科编号样式。",
+                        evidence=text,
+                        location={**_issue_location_from_paragraph(paragraph), "template_id": template.get("template_id")},
+                        suggestion="中文理工科默认建议使用“第1章 / 1.1 / 1.1.1 / 1.1.1.1”样式；若为特殊学科写法，可人工复核后忽略。",
+                        parser_confidence="medium",
+                    )
+                )
+                seen_number_issue = True
+        if seen_style_issue:
+            continue
+        mismatches: list[str] = []
+        allowed_style_names = {str(item).strip().lower() for item in list(spec.get("allowed_style_names") or []) if str(item).strip()}
+        actual_style_name = str(paragraph.get("style_name") or "").strip().lower()
+        if allowed_style_names and actual_style_name not in allowed_style_names:
+            mismatches.append(f"style={paragraph.get('style_name')}")
+        actual_font = paragraph.get("font_name_resolved") or paragraph.get("font_name")
+        if spec.get("font_name") and not _font_matches(actual_font, spec.get("font_name")):
+            mismatches.append(f"font={actual_font}")
+        actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt") or heading.get("font_size_pt")
+        if not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol):
+            mismatches.append(f"font_size={actual_size}")
+        actual_alignment = str(paragraph.get("alignment") or "").strip().lower()
+        if spec.get("alignment") and not _alignment_matches(actual_alignment, spec.get("alignment")):
+            mismatches.append(f"alignment={actual_alignment}")
+        actual_spacing = paragraph.get("line_spacing")
+        if actual_spacing is not None and not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=_template_style_tolerance(rules, "line_spacing_pt", 1.0)):
+            mismatches.append(f"line_spacing={actual_spacing}")
+        actual_before = paragraph.get("space_before_pt")
+        if actual_before is not None and not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=_template_style_tolerance(rules, "space_before_pt", 1.0)):
+            mismatches.append(f"space_before={actual_before}")
+        actual_after = paragraph.get("space_after_pt")
+        if actual_after is not None and not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=_template_style_tolerance(rules, "space_after_pt", 1.0)):
+            mismatches.append(f"space_after={actual_after}")
+        if mismatches:
+            issues.append(
+                RuleIssue(
+                    code="template.heading_style_mismatch",
+                    title="标题样式与模板不一致",
+                    severity="medium",
+                    category="template",
+                    message=f"按 {template.get('name')} 规则，{level} 级标题样式与模板不一致。",
+                    evidence=f"{text}: {', '.join(mismatches)}",
+                    location={**_issue_location_from_paragraph(paragraph), "template_id": template.get("template_id")},
+                    suggestion="优先直接套用模板中的标题样式，而不是复制普通正文后手工调整。",
+                    parser_confidence="medium",
+                )
+            )
+            seen_style_issue = True
+    return issues
+
+
+def _check_template_body_paragraph_style(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    rules: dict[str, Any],
+) -> list[RuleIssue]:
+    spec = dict(rules.get("body_paragraph") or {})
+    body_font = dict(rules.get("body_font") or {})
+    if not spec:
+        spec = {
+            "zh_font": body_font.get("zh"),
+            "en_font": body_font.get("en"),
+            "font_size_pt": body_font.get("size_pt"),
+            "line_spacing": rules.get("line_spacing"),
+        }
+    body_candidates = _body_paragraph_candidates(parsed)
+    if not body_candidates:
+        return []
+    issues: list[RuleIssue] = []
+    font_tol = _template_style_tolerance(rules, "font_size_pt", 0.5)
+    line_tol = _template_style_tolerance(rules, "line_spacing_pt", 1.0)
+    space_before_tol = _template_style_tolerance(rules, "space_before_pt", 1.0)
+    space_after_tol = _template_style_tolerance(rules, "space_after_pt", 1.0)
+    indent_tol = _template_style_tolerance(rules, "first_line_indent_pt", 2.0)
+
+    mismatch_samples: list[dict[str, Any]] = []
+    mismatch_count = 0
+    unresolved_font_count = 0
+    for paragraph in body_candidates:
+        actual_name = paragraph.get("font_name_resolved") or paragraph.get("font_name")
+        actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt")
+        actual_spacing = paragraph.get("line_spacing")
+        actual_before = paragraph.get("space_before_pt")
+        actual_after = paragraph.get("space_after_pt")
+        actual_indent = paragraph.get("first_line_indent_pt")
+        actual_alignment = str(paragraph.get("alignment") or "").strip().lower()
+        if not actual_name:
+            unresolved_font_count += 1
+        font_mismatch = bool(actual_name) and not (
+            _font_matches(actual_name, spec.get("zh_font")) or _font_matches(actual_name, spec.get("en_font"))
+        )
+        size_mismatch = not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol)
+        spacing_mismatch = not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=line_tol)
+        before_mismatch = not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=space_before_tol)
+        after_mismatch = not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=space_after_tol)
+        indent_mismatch = not _value_matches(actual_indent, spec.get("first_line_indent_pt"), tolerance=indent_tol)
+        alignment_mismatch = not _alignment_matches(actual_alignment, spec.get("alignment"))
+        if font_mismatch or size_mismatch or spacing_mismatch or before_mismatch or after_mismatch or indent_mismatch or alignment_mismatch:
+            mismatch_count += 1
+            if len(mismatch_samples) < 5:
+                mismatch_samples.append({
+                    "paragraph_index": paragraph.get("index"),
+                    "display_text": _issue_location_from_paragraph(paragraph).get("display_text"),
+                    "section_title": paragraph.get("section_title"),
+                    "font_name": actual_name or "(样式继承-未识别)",
+                    "font_size_pt": actual_size,
+                    "line_spacing": actual_spacing,
+                    "space_before_pt": actual_before,
+                    "space_after_pt": actual_after,
+                    "first_line_indent_pt": actual_indent,
+                    "alignment": actual_alignment,
+                    "text": _build_paragraph_evidence_excerpt(paragraph),
+                })
+    if mismatch_count:
+        first_sample = mismatch_samples[0]
+        issues.append(
+            RuleIssue(
+                code="template.body_paragraph_style_mismatch",
+                title="正文基础段落样式与模板不一致",
+                severity="medium",
+                category="template",
+                message=f"已扫描 {len(body_candidates)} 个正文段落，其中 {mismatch_count} 个基础样式与模板不一致。"
+                + (f" 另有 {unresolved_font_count} 个段落字体来源未完全解析。" if unresolved_font_count else ""),
+                evidence="；".join(
+                    f"{item.get('display_text')}: “{item.get('text')}” (font={item.get('font_name')}, size={item.get('font_size_pt')}, spacing={item.get('line_spacing')}, before={item.get('space_before_pt')}, after={item.get('space_after_pt')}, indent={item.get('first_line_indent_pt')}, align={item.get('alignment')})"
+                    for item in mismatch_samples
+                ),
+                location={
+                    "section_title": first_sample.get("section_title"),
+                    "paragraph_index": first_sample.get("paragraph_index"),
+                    "template_id": template.get("template_id"),
+                    "display_text": f"正文样式汇总（首个示例：{first_sample.get('display_text')}）",
+                },
+                suggestion="优先统一正文样式定义，再批量刷新正文段落，避免逐段手工修补。",
+                expected=spec,
+                actual={"mismatch_count": mismatch_count, "checked_count": len(body_candidates), "samples": mismatch_samples},
+                parser_confidence="medium",
+            )
+        )
+    return issues
+
+
+def _check_template_caption_styles(
+    parsed: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    rules: dict[str, Any],
+) -> list[RuleIssue]:
+    caption_rules = dict(rules.get("caption_styles") or {})
+    if not caption_rules:
+        return []
+    issues: list[RuleIssue] = []
+    font_tol = _template_style_tolerance(rules, "font_size_pt", 0.5)
+    line_tol = _template_style_tolerance(rules, "line_spacing_pt", 1.0)
+    paragraphs = list(parsed.get("paragraphs") or [])
+    checks = [
+        ("figure_cn", "template.caption_style_mismatch", "中文图题样式与模板不一致"),
+        ("figure_en", "template.caption_style_mismatch", "英文图题样式与模板不一致"),
+        ("table_cn", "template.caption_style_mismatch", "中文表题样式与模板不一致"),
+        ("table_en", "template.caption_style_mismatch", "英文表题样式与模板不一致"),
+    ]
+    for rule_key, issue_code, issue_title in checks:
+        spec = dict(caption_rules.get(rule_key) or {})
+        prefixes = [str(item).strip() for item in list(spec.get("match_prefixes") or []) if str(item).strip()]
+        patterns = str(spec.get("numbering_pattern") or "").strip()
+        candidate = None
+        for paragraph in paragraphs:
+            text = str(paragraph.get("text") or "").strip()
+            if not text:
+                continue
+            if "目录" in str(paragraph.get("section_title") or "") or "table of figures" in str(paragraph.get("style_name") or "").lower():
+                continue
+            if prefixes and not any(text.startswith(prefix) for prefix in prefixes):
+                continue
+            if patterns and not re.match(patterns, text, flags=re.I):
+                continue
+            candidate = paragraph
+            break
+        if not candidate:
+            continue
+        mismatches: list[str] = []
+        allowed_style_names = {str(item).strip().lower() for item in list(spec.get("allowed_style_names") or []) if str(item).strip()}
+        actual_style_name = str(candidate.get("style_name") or "").strip().lower()
+        if allowed_style_names and actual_style_name not in allowed_style_names:
+            mismatches.append(f"style={candidate.get('style_name')}")
+        actual_size = candidate.get("font_size_resolved") or candidate.get("font_size_pt")
+        if not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol):
+            mismatches.append(f"font_size={actual_size}")
+        actual_spacing = candidate.get("line_spacing")
+        if actual_spacing is not None and not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=line_tol):
+            mismatches.append(f"line_spacing={actual_spacing}")
+        actual_alignment = str(candidate.get("alignment") or "").strip().lower()
+        if spec.get("alignment") and not _alignment_matches(actual_alignment, spec.get("alignment")):
+            mismatches.append(f"alignment={actual_alignment}")
+        actual_before = candidate.get("space_before_pt")
+        if actual_before is not None and not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=_template_style_tolerance(rules, "space_before_pt", 1.0)):
+            mismatches.append(f"space_before={actual_before}")
+        actual_after = candidate.get("space_after_pt")
+        if actual_after is not None and not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=_template_style_tolerance(rules, "space_after_pt", 1.0)):
+            mismatches.append(f"space_after={actual_after}")
+        if mismatches:
+            severity = "low" if "英文" in issue_title else "medium"
+            issues.append(
+                RuleIssue(
+                    code=issue_code,
+                    title=issue_title,
+                    severity=severity,
+                    category="template",
+                    message=f"按 {template.get('name')} 规则，{issue_title.replace('与模板不一致', '')}未完全匹配模板样式。",
+                    evidence=f"{candidate.get('text')}: {', '.join(mismatches)}",
+                    location={**_issue_location_from_paragraph(candidate), "template_id": template.get("template_id")},
+                    suggestion="优先采用模板中的图题/表题专用样式，避免正文样式直接套到题注。",
+                    parser_confidence="medium",
+                )
+            )
+    return issues
+
+
 def _check_front_matter_rules(
     parsed: dict[str, Any],
     *,
@@ -1220,8 +1620,8 @@ def _check_front_matter_rules(
     rules = dict(template.get(f"{document_type}_rules") or template.get("docx_rules") or {})
     keyword_rule = dict(rules.get("abstract_keywords") or {})
     min_count = int(keyword_rule.get("min_count") or 3)
-    max_count = int(keyword_rule.get("max_count") or 5)
-    allowed_separators = [str(item) for item in list(keyword_rule.get("separators") or ["；", ";"]) if str(item)]
+    max_count = int(keyword_rule.get("max_count") or 8)
+    allowed_separators = [str(item) for item in list(keyword_rule.get("separators") or ["，", ","]) if str(item)]
     text = str(parsed.get("text") or "")
 
     keyword_match = re.search(r"(?:关键词|关键字)\s*[:：]\s*([^\n]+)", text)
@@ -1282,6 +1682,11 @@ def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> lis
     issues: list[RuleIssue] = []
     rules = dict(template.get("docx_rules") or {})
     required_entries = [str(item).strip() for item in list(rules.get("toc_required_entries") or []) if str(item).strip()]
+    for section in list(rules.get("optional_sections") or []):
+        section_rule = _normalize_required_section_rule(section)
+        if _optional_section_required(parsed, section_rule):
+            required_entries.append(str(section_rule.get("label") or "").strip())
+    required_entries = [item for item in dict.fromkeys(required_entries) if item]
     if not required_entries:
         return issues
     toc_entries = list(parsed.get("toc_entries") or [])
@@ -1315,10 +1720,10 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
     text = str(parsed.get("text") or "")
     paragraphs = list(parsed.get("paragraphs") or [])
-    seen_fullwidth = re.search(r"[Ａ-Ｚａ-ｚ０-９]", text)
+    seen_fullwidth = _find_fullwidth_ascii_hit(parsed)
     if seen_fullwidth:
-        fullwidth_hit = _build_text_hit_location(parsed, seen_fullwidth.start())
-        fullwidth_evidence = _build_text_hit_evidence(parsed, seen_fullwidth.start(), seen_fullwidth.end(), default_text=text)
+        fullwidth_hit = dict(seen_fullwidth.get("location") or _build_text_hit_location(parsed, 0))
+        fullwidth_evidence = str(seen_fullwidth.get("evidence") or _build_text_hit_evidence(parsed, 0, 1, default_text=text))
         issues.append(
             RuleIssue(
                 code="text.fullwidth_ascii",
@@ -1357,7 +1762,7 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
             RuleIssue(
                 code="text.mixed_punctuation",
                 title="中英文标点混用",
-                severity="medium",
+                severity="low",
                 category="text",
                 message=f"检测到全文约 {hit_count} 处中英文标点混用，如中文语境中使用英文括号/逗号，或英文语境中使用中文标点。",
                 evidence=str(mixed_punctuation_hit.get("evidence") or ""),
@@ -1403,6 +1808,46 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
             )
         )
     return issues
+
+
+def _find_fullwidth_ascii_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    fullwidth_pattern = re.compile(r"[Ａ-Ｚａ-ｚ０-９]")
+    kind = str(parsed.get("kind") or "")
+    if kind == "docx":
+        for paragraph in list(parsed.get("paragraphs") or []):
+            text = str(paragraph.get("text") or "").strip()
+            if not text or _should_skip_text_norm_paragraph(paragraph):
+                continue
+            match = fullwidth_pattern.search(text)
+            if match:
+                return {
+                    "evidence": text,
+                    "location": _issue_location_from_paragraph(paragraph),
+                }
+        return None
+    if kind == "pdf":
+        for page in list(parsed.get("pages") or []):
+            text = str(page.get("text") or "").strip()
+            if not text or _should_skip_text_norm_text(text):
+                continue
+            match = fullwidth_pattern.search(text)
+            if match:
+                page_no = page.get("page_no")
+                return {
+                    "evidence": _build_evidence_excerpt(text, match.start(), match.end()),
+                    "location": {"page": page_no, "display_text": f"第 {page_no} 页" if page_no is not None else "PDF 文本附近"},
+                }
+        return None
+    text = str(parsed.get("text") or "")
+    if not text or _should_skip_text_norm_text(text):
+        return None
+    match = fullwidth_pattern.search(text)
+    if not match:
+        return None
+    return {
+        "evidence": _build_evidence_excerpt(text, match.start(), match.end()),
+        "location": _build_text_hit_location(parsed, match.start()),
+    }
 
 
 def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
@@ -1770,7 +2215,7 @@ def _body_paragraph_candidates(parsed: dict[str, Any]) -> list[dict[str, Any]]:
         item for item in paragraphs
         if _looks_like_body_paragraph(item)
     ]
-    return candidates or paragraphs
+    return candidates or [item for item in paragraphs if not _is_front_matter_paragraph(item)]
 
 
 def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
@@ -1778,7 +2223,18 @@ def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
         return False
     section_title = str(paragraph.get("section_title") or "").strip()
     text = str(paragraph.get("text") or "").strip()
+    style_name = str(paragraph.get("style_name") or "").strip().lower()
     if not section_title:
+        return False
+    if style_name in {
+        "中文图题", "多行中文图题", "英文图题", "多行英文图题", "中文表题", "多行表题", "表题", "caption"
+    }:
+        return False
+    if _paragraph_looks_like_caption(paragraph):
+        return False
+    if _looks_like_reference_entry_text(text) or _looks_like_formula_line(text):
+        return False
+    if "目录" in section_title or _looks_like_toc_entry(text):
         return False
     if len(text) < 6 and not re.search(r"[\u4e00-\u9fff].*[\u4e00-\u9fff]", text):
         return False
@@ -1788,7 +2244,10 @@ def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
 def _is_front_matter_paragraph(paragraph: dict[str, Any]) -> bool:
     section_title = str(paragraph.get("section_title") or "")
     text = str(paragraph.get("text") or "")
-    front_keywords = ("摘要", "abstract", "关键词", "keywords", "目录", "图目录", "表目录", "参考文献", "致谢")
+    front_keywords = (
+        "摘要", "abstract", "关键词", "keywords", "目录", "图目录", "表目录",
+        "主要符号表", "缩略词表", "参考文献", "致谢", "作者简介", "基本情况", "附录",
+    )
     lowered = f"{section_title}\n{text}".lower()
     return any(keyword.lower() in lowered for keyword in front_keywords)
 
@@ -1803,12 +2262,124 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
     return any(keyword.lower() in lowered or _normalize_loose_text(keyword) in loose for keyword in keywords)
 
 
+def _looks_like_reference_entry_text(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    if re.match(r"^\[\d+\]\s*", stripped):
+        return True
+    return False
+
+
+def _looks_like_formula_line(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    if re.search(r"[=∑√≤≥±×÷∫]", stripped):
+        return True
+    return bool(re.search(r"[（(]\s*\d+(?:[-.]\d+)*\s*[）)]\s*$", stripped))
+
+
+def _looks_like_toc_entry(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    if re.search(r"\.{2,}\s*[ivxlcdmIVXLCDM\d]+\s*$", stripped):
+        return True
+    return False
+
+
+def _paragraph_looks_like_caption(paragraph: dict[str, Any]) -> bool:
+    text = str(paragraph.get("text") or "").strip()
+    style_name = str(paragraph.get("style_name") or "").strip().lower()
+    if style_name in {"中文图题", "多行中文图题", "英文图题", "多行英文图题", "中文表题", "多行表题", "表题", "caption"}:
+        return True
+    return bool(text) and bool(re.match(r"^(?:图|表|Fig\.|Figure|Table)\s*\d+(?:[-.]\d+)*", text, flags=re.I))
+
+
+def _contains_url_doi_or_email(text: str) -> bool:
+    content = str(text or "")
+    return bool(
+        re.search(r"https?://|www\.", content, flags=re.I)
+        or re.search(r"\bdoi\s*[:：]?\s*10\.\d{4,9}/\S+", content, flags=re.I)
+        or re.search(r"\b10\.\d{4,9}/\S+", content, flags=re.I)
+        or re.search(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", content)
+    )
+
+
+def _english_ratio(text: str) -> float:
+    content = str(text or "")
+    if not content:
+        return 0.0
+    ascii_letters = len(re.findall(r"[A-Za-z]", content))
+    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", content))
+    total = ascii_letters + zh_chars
+    if total <= 0:
+        return 0.0
+    return ascii_letters / total
+
+
+def _should_skip_text_norm_text(text: str, *, section_title: str = "", style_name: str = "") -> bool:
+    content = str(text or "").strip()
+    if not content:
+        return True
+    if _contains_url_doi_or_email(content):
+        return True
+    if _looks_like_reference_entry_text(content) or _looks_like_formula_line(content) or _looks_like_toc_entry(content):
+        return True
+    if "目录" in str(section_title or "") or "table of figures" in str(style_name or "").lower():
+        return True
+    if _english_ratio(content) >= 0.75 and len(re.findall(r"[\u4e00-\u9fff]", content)) <= 2:
+        return True
+    return False
+
+
+def _should_skip_text_norm_paragraph(paragraph: dict[str, Any]) -> bool:
+    text = str(paragraph.get("text") or "").strip()
+    if _paragraph_looks_like_caption(paragraph):
+        return True
+    if _is_front_matter_paragraph(paragraph) and "摘要" not in str(paragraph.get("section_title") or ""):
+        return True
+    if "参考文献" in str(paragraph.get("section_title") or ""):
+        return True
+    return _should_skip_text_norm_text(
+        text,
+        section_title=str(paragraph.get("section_title") or ""),
+        style_name=str(paragraph.get("style_name") or ""),
+    )
+
+
+def _header_pattern_matches(header_text: str, expected_pattern: str) -> bool:
+    normalized_header = _normalize_loose_text(header_text)
+    normalized_pattern = _normalize_loose_text(expected_pattern)
+    if not normalized_header or not normalized_pattern:
+        return False
+    if normalized_pattern in normalized_header:
+        return True
+    if "重庆邮电大学" in header_text and "学位论文" in header_text:
+        header_tokens = {"硕士", "博士", "专业学位"}
+        pattern_tokens = {token for token in header_tokens if token in expected_pattern}
+        if not pattern_tokens:
+            return True
+        return any(token in header_text for token in pattern_tokens)
+    return False
+
+
+def _footer_text_is_page_number_only(text: str) -> bool:
+    stripped = re.sub(r"\s+", "", str(text or ""))
+    if not stripped:
+        return True
+    return bool(re.fullmatch(r"(?:\d+|[ivxlcdmIVXLCDM]+)", stripped))
+
+
 def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(parsed.get("kind") or "")
     if kind == "docx":
         for paragraph in list(parsed.get("paragraphs") or []):
             text = str(paragraph.get("text") or "").strip()
             if not text:
+                continue
+            if _should_skip_text_norm_paragraph(paragraph):
                 continue
             evidence = _extract_mixed_punctuation_evidence(text)
             if evidence:
@@ -1823,6 +2394,8 @@ def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
+            if _should_skip_text_norm_text(text):
+                continue
             evidence = _extract_mixed_punctuation_evidence(text)
             if evidence:
                 return {
@@ -1835,6 +2408,8 @@ def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None
         for page in list(parsed.get("pages") or []):
             text = str(page.get("text") or "").strip()
             if not text:
+                continue
+            if _should_skip_text_norm_text(text):
                 continue
             evidence = _extract_mixed_punctuation_evidence(text)
             if evidence:
@@ -1944,24 +2519,16 @@ def _extract_mixed_punctuation_evidence(text: str) -> str | None:
     escaped_zh = re.escape(_ZH_PUNCT)
     escaped_en = re.escape(_EN_PUNCT)
     suspicious_patterns = [
-        rf"[\u4e00-\u9fff][{escaped_en}]",
-        rf"[{escaped_en}][\u4e00-\u9fff]",
-        rf"[A-Za-z0-9][{escaped_zh}]",
-        rf"[{escaped_zh}][A-Za-z0-9]",
+        rf"[\u4e00-\u9fff]\s*[{escaped_en}]",
+        rf"[{escaped_en}]\s*[\u4e00-\u9fff]",
+        rf"[A-Za-z0-9]\s*[{escaped_zh}]",
+        rf"[{escaped_zh}]\s*[A-Za-z0-9]",
     ]
     for pattern in suspicious_patterns:
         match = re.search(pattern, content)
         if match:
             return _build_evidence_excerpt(content, match.start(), match.end())
-
-    seen_zh = re.search(rf"[{escaped_zh}]", content)
-    seen_en = re.search(rf"[{escaped_en}]", content)
-    if not (seen_zh and seen_en):
-        return None
-
-    start = min(seen_zh.start(), seen_en.start())
-    end = max(seen_zh.end(), seen_en.end())
-    return _build_evidence_excerpt(content, start, end)
+    return None
 
 
 def _count_mixed_punctuation_hits(parsed: dict) -> int:
@@ -1979,17 +2546,22 @@ def _count_mixed_punctuation_hits(parsed: dict) -> int:
     if kind == "docx":
         for paragraph in list(parsed.get("paragraphs") or []):
             text = str(paragraph.get("text") or "")
+            if _should_skip_text_norm_paragraph(paragraph):
+                continue
             for pat in patterns:
                 count += len(re.findall(pat, text))
     elif kind == "pdf":
         for page in list(parsed.get("pages") or []):
             text = str(page.get("text") or "")
+            if _should_skip_text_norm_text(text):
+                continue
             for pat in patterns:
                 count += len(re.findall(pat, text))
     else:
         text = str(parsed.get("text") or "")
-        for pat in patterns:
-            count += len(re.findall(pat, text))
+        if not _should_skip_text_norm_text(text):
+            for pat in patterns:
+                count += len(re.findall(pat, text))
     return count
 
 
@@ -2480,22 +3052,48 @@ def _analyze_reference_entry(text: str) -> dict:
     if not content:
         return {"problems": ["empty"]}
 
-    has_type = bool(re.search(r"\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]", content))
+    type_match = re.search(r"\[([A-Z]{1,3}(?:/[A-Z]{1,3})?)\]", content)
+    ref_type = str(type_match.group(1) if type_match else "").upper()
     has_year = bool(re.search(r"(?:19|20)\d{2}", content))
-    has_source = bool(re.search(r"\][^.[\]]+\.[^.[\]]*$", content)) or bool(re.search(r"\d{4}[,，]\s*\d+", content))
-    has_vol_pages = bool(re.search(r"\d{4}[,，]\s*\d+", content)) or bool(re.search(r"\d+\(\d+\)", content)) or bool(re.search(r":\s*\d+-\d+", content))
     has_period_end = content.rstrip().endswith(".")
+    has_title = bool(re.search(r"\]\s*[^。\n]+[.。]", content))
+    has_url = bool(re.search(r"https?://|www\.|\bdoi\s*[:：]?\s*10\.\d{4,9}/\S+|\b10\.\d{4,9}/\S+", content, flags=re.I))
+    has_source_token = bool(re.search(r"(?:大学|学院|研究所|Institute|University|Press|出版社|期刊|杂志|报)", content, flags=re.I))
+    has_vol_pages = bool(re.search(r"\d+\(\d+\)", content)) or bool(re.search(r":\s*\d+-\d+", content)) or bool(re.search(r"\d{4}[,，]\s*\d+", content))
+    has_patent_no = bool(re.search(r"(?:专利|Patent|CN\d{8,})", content, flags=re.I)) or bool(re.search(r"\b\d{8,}\b", content))
 
     if not has_year:
         problems.append("缺少年份")
-    if not has_type:
+    if not ref_type:
         problems.append("缺少文献类型标识[J/M/D]")
-    if not has_source:
-        problems.append("缺少刊名/出版源")
-    if not has_vol_pages:
-        problems.append("缺少卷期页码")
     if not has_period_end:
         problems.append("末尾缺句号")
+    if not has_title:
+        problems.append("缺少题名或著录分隔")
+
+    if ref_type == "J":
+        if not has_source_token:
+            problems.append("缺少刊名/出版源")
+        if not has_vol_pages:
+            problems.append("缺少卷期页码")
+    elif ref_type == "M":
+        if not has_source_token and "出版社" not in content and "出版" not in content:
+            problems.append("缺少出版地或出版社")
+    elif ref_type == "D":
+        if not has_source_token:
+            problems.append("缺少学位授予单位")
+    elif ref_type == "P":
+        if not has_patent_no:
+            problems.append("缺少专利号或专利标识")
+    elif ref_type in {"C", "R", "S"}:
+        if not has_source_token and not has_url and "会议" not in content and "学报" not in content:
+            problems.append("缺少来源信息")
+    elif ref_type == "EB/OL":
+        if not has_url and "访问日期" not in content and "引用日期" not in content:
+            problems.append("缺少URL或访问线索")
+    elif ref_type:
+        if not has_source_token and not has_url:
+            problems.append("缺少来源信息")
 
     return {"problems": problems}
 

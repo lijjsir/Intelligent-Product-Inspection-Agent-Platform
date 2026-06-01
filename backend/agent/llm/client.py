@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from typing import Any
 
@@ -12,6 +11,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency at runtime
     Ark = None
 
+from agent.llm.base_url_resolver import default_local_openai_base_url, resolve_runtime_base_url
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
 from app.core.config import settings
@@ -35,17 +35,17 @@ class LLMClient:
         self._provider = provider or "volcengine"
         if self._provider == "local_openai":
             self._api_key = api_key
-            self._base_url = (base_url or self._default_local_openai_base_url()).rstrip("/")
+            self._base_url = resolve_runtime_base_url(self._provider, base_url)
             self._model_id = model_id or ""
             self._embed_model = embed_model or ""
         elif self._provider == "deepseek":
             self._api_key = api_key
-            self._base_url = (base_url or "").rstrip("/")
+            self._base_url = resolve_runtime_base_url(self._provider, base_url)
             self._model_id = model_id or ""
             self._embed_model = embed_model or ""
         else:
             self._api_key = api_key
-            self._base_url = (base_url or "").rstrip("/")
+            self._base_url = resolve_runtime_base_url(self._provider, base_url)
             self._model_id = model_id or ""
             self._embed_model = embed_model or ""
         self._task_id = None if task_id is None else str(task_id)
@@ -488,7 +488,31 @@ class LLMClient:
                         )
                         raise status_error
 
-                    data = resp.json()
+                    try:
+                        data = self._decode_json_response(resp, path=path)
+                    except RuntimeError as exc:
+                        last_error = exc
+                        if attempt < self._request_attempts:
+                            await asyncio.sleep(self._retry_delay(attempt))
+                            continue
+                        self._safe_update_observation(
+                            observation,
+                            level="ERROR",
+                            status_message=str(exc),
+                            output={
+                                "status_code": getattr(resp, "status_code", None),
+                                "content_type": self._response_content_type(resp),
+                                "body_preview": self._response_body_preview(resp),
+                            },
+                            metadata={
+                                "status_code": getattr(resp, "status_code", None),
+                                "attempt": attempt,
+                                "response_format_fallback": response_format_fallback,
+                                "content_type": self._response_content_type(resp),
+                                "protocol_error": True,
+                            },
+                        )
+                        raise
                     usage_metadata = self._normalize_usage(data.get("usage") if isinstance(data, dict) else None)
                     cost_details = self._build_cost_details(model_name, usage_metadata)
                     observation_id = self._tracer.current_observation_id()
@@ -536,6 +560,44 @@ class LLMClient:
             data["__meta__"] = meta
         return data
 
+    def _decode_json_response(self, resp: httpx.Response, *, path: str) -> dict[str, Any]:
+        endpoint = f"{self._base_url.rstrip('/')}{path}"
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "模型端点返回了非 JSON 响应："
+                f"endpoint={endpoint}, "
+                f"status={getattr(resp, 'status_code', 'unknown')}, "
+                f"content_type={self._response_content_type(resp)}, "
+                f"body={self._response_body_preview(resp)}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "模型端点返回了意外 JSON 结构："
+                f"endpoint={endpoint}, "
+                f"status={getattr(resp, 'status_code', 'unknown')}, "
+                f"type={type(data).__name__}"
+            )
+        return data
+
+    @staticmethod
+    def _response_content_type(resp: httpx.Response) -> str:
+        headers = getattr(resp, "headers", None)
+        if not headers:
+            return "<missing>"
+        return str(headers.get("content-type") or "<missing>")
+
+    @staticmethod
+    def _response_body_preview(resp: httpx.Response, limit: int = 240) -> str:
+        raw_text = getattr(resp, "text", "")
+        text = re.sub(r"\s+", " ", str(raw_text or "")).strip()
+        if not text:
+            return "<empty>"
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}..."
+
     def _build_observation_metadata(self, *, path: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         metadata: dict[str, Any] = {
             "provider": self._provider,
@@ -552,8 +614,7 @@ class LLMClient:
 
     @staticmethod
     def _default_local_openai_base_url() -> str:
-        running_in_container = os.path.exists("/.dockerenv")
-        return settings.local_openai_docker_base_url if running_in_container else settings.local_openai_base_url
+        return default_local_openai_base_url()
 
     def _build_langfuse_meta(self, *, observation_id: str | None = None) -> dict[str, Any]:
         meta: dict[str, Any] = {}
