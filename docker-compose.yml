@@ -7,6 +7,7 @@ services:
     working_dir: /app/backend
     command: >
       sh -c "PYTHONPATH=. alembic upgrade head &&
+      PYTHONPATH=. python scripts/init_paper_review_runtime.py &&
       python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       PYTHONPATH: /app/backend
@@ -23,7 +24,7 @@ services:
       PIAP_QDRANT_URL: http://qdrant:6333
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://host.docker.internal:8010
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
@@ -41,6 +42,8 @@ services:
       minio:
         condition: service_started
       qdrant:
+        condition: service_started
+      languagetool:
         condition: service_started
     ports:
       - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
@@ -71,7 +74,7 @@ services:
       PIAP_QDRANT_URL: http://qdrant:6333
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://host.docker.internal:8010
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: ${PIAP_LANGFUSE_PUBLIC_HOST:-http://127.0.0.1:30001}
@@ -86,6 +89,8 @@ services:
       minio:
         condition: service_started
       qdrant:
+        condition: service_started
+      languagetool:
         condition: service_started
     volumes:
       - ./backend:/app/backend
@@ -114,7 +119,7 @@ services:
       PIAP_QDRANT_URL: http://qdrant:6333
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://host.docker.internal:8010
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: ${PIAP_LANGFUSE_PUBLIC_HOST:-http://127.0.0.1:3000}
@@ -129,6 +134,8 @@ services:
       minio:
         condition: service_started
       qdrant:
+        condition: service_started
+      languagetool:
         condition: service_started
     volumes:
       - ./backend:/app/backend
@@ -220,6 +227,16 @@ services:
       - "63330:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  languagetool:
+    image: erikvl87/languagetool:latest
+    container_name: piap-languagetool
+    environment:
+      Java_Xms: 256m
+      Java_Xmx: 512m
+      langtool_pipelinePrewarming: "true"
+    ports:
+      - "127.0.0.1:8010:8010"
   langfuse-postgres:
     image: postgres:16-alpine
     container_name: piap-langfuse-postgres

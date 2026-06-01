@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -175,6 +176,34 @@ def _warm_vale() -> None:
     print(f"[ok] vale: {version_text}")
 
 
+def _wait_for_languagetool() -> None:
+    base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
+    if not base_url:
+        print("[skip] languagetool probe skipped: paper_check_languagetool_url is empty")
+        return
+
+    deadline = time.monotonic() + max(float(settings.paper_check_languagetool_timeout_sec or 20), 30.0)
+    last_error = ""
+    probe_url = f"{base_url}/v2/languages"
+    print(f"[run] wait languagetool: {probe_url}")
+
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(
+                probe_url,
+                timeout=httpx.Timeout(5.0, connect=5.0),
+                trust_env=False,
+            )
+            response.raise_for_status()
+            print(f"[ok] languagetool ready: {base_url}")
+            return
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(1)
+
+    raise RuntimeError(f"languagetool not ready: {base_url}; last_error={last_error}")
+
+
 def main() -> int:
     _require_import("kenlm")
     _ensure_macro_correct_models()
@@ -185,6 +214,7 @@ def main() -> int:
     run_pycorrector("这是一个测试。")
     print("[ok] pycorrector warmed")
     _warm_vale()
+    _wait_for_languagetool()
 
     from app.services.paper_review_runtime_service import PaperReviewRuntimeService
 
