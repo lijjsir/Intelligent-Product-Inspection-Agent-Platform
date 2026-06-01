@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from agent.llm.base_url_resolver import resolve_runtime_service_url
 from agent.rag.embedder import Embedder
 from app.core.config import settings
 
@@ -17,7 +18,10 @@ class PaperTemplateClauseRetriever:
             org_id=org_id,
             allow_pseudo_fallback=False,
         )
-        self._qdrant_url = settings.qdrant_url.rstrip("/")
+        self._qdrant_url = resolve_runtime_service_url(
+            settings.qdrant_url,
+            docker_base_url=settings.qdrant_docker_url,
+        )
         self._qdrant_api_key = settings.qdrant_api_key
         self._collection = settings.paper_template_qdrant_collection
 

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.llm.base_url_resolver import resolve_runtime_service_url
 from agent.rag.embedder import Embedder
 from agent.tools.file_parsers import parse_file_content
 from agent.tools.paper_template_indexer import split_guide_into_clauses
@@ -31,7 +32,10 @@ class PaperTemplateIndexService:
         self._template_repo = PaperTemplateRepository(session)
         self._clause_repo = PaperTemplateClauseRepository(session)
         self._embedder = Embedder(org_id=org_id, allow_pseudo_fallback=False)
-        self._qdrant_url = settings.qdrant_url.rstrip("/")
+        self._qdrant_url = resolve_runtime_service_url(
+            settings.qdrant_url,
+            docker_base_url=settings.qdrant_docker_url,
+        )
         self._qdrant_api_key = settings.qdrant_api_key
         self._collection = settings.paper_template_qdrant_collection
 
@@ -167,42 +171,56 @@ class PaperTemplateIndexService:
         if self._qdrant_api_key:
             headers["api-key"] = self._qdrant_api_key
         payload = {"vectors": {"size": vector_size, "distance": "Cosine"}}
-        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
-            existing = await client.get(
-                f"{self._qdrant_url}/collections/{self._collection}",
-                headers=headers,
-            )
-            if existing.status_code == 200:
-                data = existing.json()
-                current_size = (
-                    ((data.get("result") or {}).get("config") or {})
-                    .get("params", {})
-                    .get("vectors", {})
-                    .get("size")
-                )
-                if int(current_size or 0) == int(vector_size):
-                    return
-                await client.delete(
+        try:
+            async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+                existing = await client.get(
                     f"{self._qdrant_url}/collections/{self._collection}",
                     headers=headers,
                 )
-            elif existing.status_code != 404:
-                existing.raise_for_status()
-            await client.put(
-                f"{self._qdrant_url}/collections/{self._collection}",
-                json=payload,
-                headers=headers,
-            )
+                if existing.status_code == 200:
+                    data = existing.json()
+                    current_size = (
+                        ((data.get("result") or {}).get("config") or {})
+                        .get("params", {})
+                        .get("vectors", {})
+                        .get("size")
+                    )
+                    if int(current_size or 0) == int(vector_size):
+                        return
+                    await client.delete(
+                        f"{self._qdrant_url}/collections/{self._collection}",
+                        headers=headers,
+                    )
+                elif existing.status_code != 404:
+                    existing.raise_for_status()
+                await client.put(
+                    f"{self._qdrant_url}/collections/{self._collection}",
+                    json=payload,
+                    headers=headers,
+                )
+        except httpx.ConnectError as exc:
+            raise RuntimeError(self._build_qdrant_connect_error(exc)) from exc
 
     async def _upsert_qdrant_points(self, points: list[dict[str, Any]]) -> None:
         headers = {"Content-Type": "application/json"}
         if self._qdrant_api_key:
             headers["api-key"] = self._qdrant_api_key
         payload = {"points": points}
-        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
-            resp = await client.put(
-                f"{self._qdrant_url}/collections/{self._collection}/points",
-                json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+                resp = await client.put(
+                    f"{self._qdrant_url}/collections/{self._collection}/points",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+        except httpx.ConnectError as exc:
+            raise RuntimeError(self._build_qdrant_connect_error(exc)) from exc
+
+    def _build_qdrant_connect_error(self, exc: Exception) -> str:
+        return (
+            f"模板条款索引失败：无法连接到 Qdrant 端点 {self._qdrant_url}。"
+            "如果 backend 在宿主机运行且依赖 docker-compose 中的 Qdrant，请使用 http://127.0.0.1:63330；"
+            "如果 backend 在 Docker 容器中运行，请使用 http://qdrant:6333。"
+            f" 原始错误：{exc}"
+        )

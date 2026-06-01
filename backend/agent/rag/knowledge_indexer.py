@@ -6,13 +6,17 @@ from typing import Any
 import httpx
 
 from agent.rag.embedder import Embedder
+from agent.llm.base_url_resolver import resolve_runtime_service_url
 from app.core.config import settings
 
 
 class KnowledgeIndexer:
     def __init__(self, *, org_id: str | None = None) -> None:
         self._embedder = Embedder(org_id=org_id)
-        self._qdrant_url = settings.qdrant_url.rstrip("/")
+        self._qdrant_url = resolve_runtime_service_url(
+            settings.qdrant_url,
+            docker_base_url=settings.qdrant_docker_url,
+        )
         self._qdrant_api_key = settings.qdrant_api_key
         self._collection = settings.qdrant_collection
 

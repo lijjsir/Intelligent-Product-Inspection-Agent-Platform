@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 import httpx
 
+from agent.llm.base_url_resolver import resolve_runtime_base_url
 from app.core.config import settings
 
 
@@ -20,7 +21,7 @@ class ModelHealthChecker:
         return checked
 
     async def _check_one(self, item: dict[str, Any]) -> tuple[str, str | None]:
-        endpoint = str(item.get("endpoint") or "").rstrip("/")
+        endpoint = resolve_runtime_base_url(item.get("provider"), item.get("endpoint"))
         if not endpoint:
             return "unhealthy", "missing endpoint"
 

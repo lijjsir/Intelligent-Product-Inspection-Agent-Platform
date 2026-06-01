@@ -1,7 +1,70 @@
 from pathlib import Path
 
-from pydantic import field_validator
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+_JWT_PRIVATE_PLACEHOLDERS = {
+    "",
+    "change_me_private_key",
+    "your_private_key",
+    "replace_me_private_key",
+}
+_JWT_PUBLIC_PLACEHOLDERS = {
+    "",
+    "change_me_public_key",
+    "your_public_key",
+    "replace_me_public_key",
+}
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _dev_jwt_key_paths() -> tuple[Path, Path]:
+    runtime_dir = _project_root() / "runtime" / "jwt"
+    return runtime_dir / "dev_private_key.pem", runtime_dir / "dev_public_key.pem"
+
+
+def _generate_dev_jwt_keypair() -> tuple[str, str]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_pem, public_pem
+
+
+def _ensure_dev_jwt_keypair() -> tuple[str, str]:
+    private_path, public_path = _dev_jwt_key_paths()
+    if private_path.is_file() and public_path.is_file():
+        return (
+            private_path.read_text(encoding="utf-8").strip(),
+            public_path.read_text(encoding="utf-8").strip(),
+        )
+
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    private_pem, public_pem = _generate_dev_jwt_keypair()
+    private_path.write_text(private_pem, encoding="utf-8")
+    public_path.write_text(public_pem, encoding="utf-8")
+    return private_pem.strip(), public_pem.strip()
+
+
+def _is_placeholder_private_key(value: str) -> bool:
+    return value.strip() in _JWT_PRIVATE_PLACEHOLDERS
+
+
+def _is_placeholder_public_key(value: str) -> bool:
+    return value.strip() in _JWT_PUBLIC_PLACEHOLDERS
 
 
 class Settings(BaseSettings):
@@ -15,14 +78,14 @@ class Settings(BaseSettings):
     jwt_exp_minutes: int = 0
     jwt_refresh_days: int = 0
 
-    db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
-    db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
+    db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
+    db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
 
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://127.0.0.1:16379/0"
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 
-    s3_endpoint: str = "http://localhost:9000"
+    s3_endpoint: str = "http://127.0.0.1:19000"
     s3_access_key: str = "piap"
     s3_secret_key: str = "piap_password"
     s3_bucket: str = "piap"
@@ -42,8 +105,8 @@ class Settings(BaseSettings):
     algo_runner_workdir: str = "runtime_algo_workspace"
     algo_runtime_base_url: str = "http://127.0.0.1:18080"
 
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/0"
+    celery_broker_url: str = "redis://127.0.0.1:16379/0"
+    celery_result_backend: str = "redis://127.0.0.1:16379/0"
     gpu_scheduling_strategy: str = "load_balance"
     gpu_heartbeat_timeout_sec: int = 120
     gpu_ssh_connect_timeout_sec: int = 15
@@ -81,11 +144,14 @@ class Settings(BaseSettings):
     paper_check_engine_timeout_sec: int = 20
     paper_check_pycorrector_timeout_sec: int = 8
     paper_check_pycorrector_chunk_chars: int = 1200
+    paper_check_pycorrector_data_dir: str = ""
+    paper_check_pycorrector_language_model: str = "people_chars_lm.klm"
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20
 
-    qdrant_url: str = "http://127.0.0.1:6333"
+    qdrant_url: str = "http://127.0.0.1:63330"
+    qdrant_docker_url: str = "http://qdrant:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
     paper_template_qdrant_collection: str = "paper_template_clauses"
@@ -104,8 +170,8 @@ class Settings(BaseSettings):
     langfuse_enabled: bool = True
     langfuse_public_key: str | None = "pk-lf-piap-local"
     langfuse_secret_key: str | None = "sk-lf-piap-local-secret"
-    langfuse_host: str | None = "http://127.0.0.1:3000"
-    langfuse_public_host: str | None = "http://127.0.0.1:3000"
+    langfuse_host: str | None = "http://127.0.0.1:30001"
+    langfuse_public_host: str | None = "http://127.0.0.1:30001"
     langfuse_project_id: str | None = "piap-local"
     langfuse_environment: str | None = "local-self-hosted"
     langfuse_release: str | None = None
@@ -133,11 +199,19 @@ class Settings(BaseSettings):
 
         candidate = Path(text)
         if not candidate.is_absolute():
-            candidate = Path(__file__).resolve().parents[2] / candidate
+            candidate = _project_root() / candidate
         if candidate.is_file():
             return candidate.read_text(encoding="utf-8").strip()
 
         return normalized
+
+    @model_validator(mode="after")
+    def _ensure_local_jwt_keys(self):
+        private_missing = _is_placeholder_private_key(self.jwt_private_key)
+        public_missing = _is_placeholder_public_key(self.jwt_public_key)
+        if private_missing and public_missing:
+            self.jwt_private_key, self.jwt_public_key = _ensure_dev_jwt_keypair()
+        return self
 
     @field_validator(
         "langfuse_public_key",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 
 import pytest
@@ -57,6 +58,120 @@ async def test_llm_client_disables_env_proxy(monkeypatch):
     data = await client.chat([{"role": "user", "content": "ping"}])
 
     assert data["answer"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_surfaces_non_json_response(monkeypatch):
+    class FakeTracer:
+        enabled = False
+
+        def observe(self, **_kwargs):
+            return nullcontext(None)
+
+        @staticmethod
+        def current_observation_id():
+            return None
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+        request = object()
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        @staticmethod
+        def json():
+            raise json.JSONDecodeError("Expecting value", "", 0)
+
+        text = "<!doctype html><html><body>upstream error</body></html>"
+
+    class FakeClient:
+        calls: list[dict] = []
+
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, path, json=None, headers=None):
+            self.calls.append({"path": path, "json": json, "headers": headers})
+            return FakeResponse()
+
+    monkeypatch.setattr("agent.llm.client.LangfuseTracer", lambda: FakeTracer())
+    monkeypatch.setattr("agent.llm.client.httpx.AsyncClient", FakeClient)
+
+    client = LLMClient(api_key="secret", base_url="https://example.com/api/v3", model_id="chat-1")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await client.chat([{"role": "user", "content": "ping"}])
+
+    assert "非 JSON 响应" in str(exc_info.value)
+    assert "content_type=text/html; charset=utf-8" in str(exc_info.value)
+    assert "upstream error" in str(exc_info.value)
+    assert len(FakeClient.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_llm_client_remaps_local_openai_loopback_endpoint_inside_container(monkeypatch):
+    class FakeTracer:
+        enabled = False
+
+        def observe(self, **_kwargs):
+            return nullcontext(None)
+
+        @staticmethod
+        def current_observation_id():
+            return None
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+        request = object()
+
+        @staticmethod
+        def json():
+            return {
+                "id": "resp-1",
+                "model": "chat-1",
+                "choices": [{"message": {"content": '{"answer":"ok"}'}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    class FakeClient:
+        calls: list[dict] = []
+
+        def __init__(self, *args, **kwargs):
+            self.calls.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, path, json=None, headers=None):
+            return FakeResponse()
+
+    monkeypatch.setattr("agent.llm.client.LangfuseTracer", lambda: FakeTracer())
+    monkeypatch.setattr("agent.llm.client.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: path == "/.dockerenv")
+    monkeypatch.setattr(
+        "agent.llm.base_url_resolver.settings.local_openai_docker_base_url",
+        "http://host.docker.internal:11434/v1",
+    )
+
+    client = LLMClient(
+        provider="local_openai",
+        base_url="http://127.0.0.1:11434/v1",
+        model_id="qwen2.5:7b-instruct",
+    )
+    data = await client.chat([{"role": "user", "content": "ping"}])
+
+    assert data["answer"] == "ok"
+    assert FakeClient.calls[0]["base_url"] == "http://host.docker.internal:11434/v1"
 
 
 @pytest.mark.asyncio
@@ -138,6 +253,48 @@ async def test_retriever_disables_env_proxy(monkeypatch):
     docs = await Retriever().retrieve("scratch defect")
 
     assert docs == []
+
+
+@pytest.mark.asyncio
+async def test_retriever_remaps_qdrant_loopback_inside_container(monkeypatch):
+    class FakeResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"result": []}
+
+    class FakeClient:
+        seen_urls: list[str] = []
+
+        def __init__(self, *args, **kwargs):
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            self.seen_urls.append(url)
+            return FakeResponse()
+
+    async def fake_embed(self, text: str):
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr("agent.rag.retriever.Embedder.embed", fake_embed)
+    monkeypatch.setattr("agent.rag.retriever.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: path == "/.dockerenv")
+    monkeypatch.setattr("agent.rag.retriever.settings.qdrant_url", "http://127.0.0.1:6333")
+    monkeypatch.setattr("agent.rag.retriever.settings.qdrant_docker_url", "http://qdrant:6333")
+
+    docs = await Retriever().retrieve("scratch defect")
+
+    assert docs == []
+    assert FakeClient.seen_urls[0].startswith("http://qdrant:6333/")
 
 
 @pytest.mark.asyncio

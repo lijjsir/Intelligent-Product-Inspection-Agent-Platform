@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import httpx
 
+from agent.llm.base_url_resolver import resolve_runtime_service_url
 from app.core.config import settings
 
 MEMORY_COLLECTION = "piap_shared_memory"
@@ -16,7 +17,10 @@ class MemoryVectorService:
     """Manages Qdrant vector index for shared memory semantic search."""
 
     def __init__(self, collection: str = MEMORY_COLLECTION) -> None:
-        self._qdrant_url = settings.qdrant_url.rstrip("/")
+        self._qdrant_url = resolve_runtime_service_url(
+            settings.qdrant_url,
+            docker_base_url=settings.qdrant_docker_url,
+        )
         self._api_key = settings.qdrant_api_key
         self._collection = collection
 

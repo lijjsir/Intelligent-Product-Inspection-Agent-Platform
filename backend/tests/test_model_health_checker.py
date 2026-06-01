@@ -62,3 +62,50 @@ async def test_health_checker_disables_env_proxy(monkeypatch):
     )
 
     assert checked[0]["health_status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_checker_remaps_local_openai_loopback_endpoint_inside_container(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return [{"id": "qwen2.5:7b-instruct"}]
+
+    class FakeClient:
+        calls: list[dict] = []
+
+        def __init__(self, *args, **kwargs):
+            self.calls.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, path, headers=None):
+            return FakeResponse()
+
+    monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: path == "/.dockerenv")
+    monkeypatch.setattr(
+        "agent.llm.base_url_resolver.settings.local_openai_docker_base_url",
+        "http://host.docker.internal:11434/v1",
+    )
+
+    checked = await ModelHealthChecker().check(
+        [
+            {
+                "id": "cfg-1",
+                "provider": "local_openai",
+                "endpoint": "http://localhost:11434/v1",
+                "model_key": "qwen2.5:7b-instruct",
+            }
+        ]
+    )
+
+    assert FakeClient.calls[0]["base_url"] == "http://host.docker.internal:11434/v1"
+    assert checked[0]["health_status"] == "healthy"

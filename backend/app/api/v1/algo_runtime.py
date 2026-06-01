@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
 
@@ -67,6 +67,6 @@ async def infer_with_deployment(
             request_id=result.get("request_id"),
             error=result.get("error"),
             runtime_registration=runtime_registration,
-            accepted_at=datetime.now(UTC),
+            accepted_at=datetime.now(timezone.utc),
         )
     )

@@ -30,7 +30,6 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
     current_section_index = 0
     current_paragraph_no = 0
     current_word_section_index = 0
-
     for index, paragraph in enumerate(doc.paragraphs):
         while current_word_section_index + 1 < len(section_breaks) and index >= int(section_breaks[current_word_section_index + 1]):
             current_word_section_index += 1
@@ -40,14 +39,51 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
         heading_level = _heading_level(style_name)
         xml_paragraph = xml_paragraphs[index] if index < len(xml_paragraphs) else {}
 
-        font_name_raw, font_name_resolved, style_source = _resolve_font(paragraph, style_cache, style_name)
-        font_size_raw, font_size_resolved, size_source = _resolve_font_size(paragraph, style_cache, style_name)
+        font_name_raw, font_name_resolved, style_source = _resolve_font(paragraph, style_cache, style_name, style_id)
+        font_size_raw, font_size_resolved, size_source = _resolve_font_size(paragraph, style_cache, style_name, style_id)
 
         para_format = paragraph.paragraph_format
-        line_spacing = _to_float(getattr(para_format, "line_spacing", None))
-        space_before = _to_pt(getattr(para_format, "space_before", None))
-        space_after = _to_pt(getattr(para_format, "space_after", None))
-        first_line_indent = _to_pt(getattr(para_format, "first_line_indent", None))
+        line_spacing, line_spacing_source = _resolve_paragraph_metric(
+            direct_value=getattr(para_format, "line_spacing", None),
+            style_cache=style_cache,
+            style_name=style_name,
+            style_id=style_id,
+            key="line_spacing",
+            converter=_to_float,
+        )
+        space_before, space_before_source = _resolve_paragraph_metric(
+            direct_value=getattr(para_format, "space_before", None),
+            style_cache=style_cache,
+            style_name=style_name,
+            style_id=style_id,
+            key="space_before_pt",
+            converter=_to_pt,
+        )
+        space_after, space_after_source = _resolve_paragraph_metric(
+            direct_value=getattr(para_format, "space_after", None),
+            style_cache=style_cache,
+            style_name=style_name,
+            style_id=style_id,
+            key="space_after_pt",
+            converter=_to_pt,
+        )
+        first_line_indent, first_line_indent_source = _resolve_paragraph_metric(
+            direct_value=getattr(para_format, "first_line_indent", None),
+            style_cache=style_cache,
+            style_name=style_name,
+            style_id=style_id,
+            key="first_line_indent_pt",
+            converter=_to_pt,
+        )
+        alignment, alignment_source = _resolve_paragraph_metric(
+            direct_value=paragraph.alignment,
+            style_cache=style_cache,
+            style_name=style_name,
+            style_id=style_id,
+            key="alignment",
+            converter=_alignment_token,
+        )
+        bold = any(bool(getattr(run, "bold", False)) for run in paragraph.runs)
 
         if heading_level:
             current_section_title = text
@@ -73,9 +109,16 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
             "font_size_pt": font_size_resolved or font_size_raw,
             "font_size_source": size_source,
             "line_spacing": line_spacing,
+            "line_spacing_source": line_spacing_source,
             "space_before_pt": space_before,
+            "space_before_source": space_before_source,
             "space_after_pt": space_after,
+            "space_after_source": space_after_source,
             "first_line_indent_pt": first_line_indent,
+            "first_line_indent_source": first_line_indent_source,
+            "alignment": alignment,
+            "alignment_source": alignment_source,
+            "bold": bold,
             "section_title": current_section_title,
             "section_level": current_section_level,
             "section_index": current_section_index,
@@ -137,42 +180,59 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
 
 
 def _build_style_cache(doc) -> dict[str, dict[str, Any]]:
-    cache = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    by_id: dict[str, dict[str, Any]] = {}
+    resolved: dict[str, dict[str, Any]] = {}
+
+    def resolve_style(style) -> dict[str, Any]:
+        if style is None:
+            return {}
+        cache_key = str(getattr(style, "style_id", "") or getattr(style, "name", "") or id(style))
+        if cache_key in resolved:
+            return resolved[cache_key]
+        base_info = resolve_style(getattr(style, "base_style", None))
+        current = {
+            "font_name": _style_font_name(style),
+            "font_size_pt": _to_pt(_safe_getattr(getattr(style, "font", None), "size")),
+            "line_spacing": _to_float(_safe_getattr(getattr(style, "paragraph_format", None), "line_spacing")),
+            "space_before_pt": _to_pt(_safe_getattr(getattr(style, "paragraph_format", None), "space_before")),
+            "space_after_pt": _to_pt(_safe_getattr(getattr(style, "paragraph_format", None), "space_after")),
+            "first_line_indent_pt": _to_pt(_safe_getattr(getattr(style, "paragraph_format", None), "first_line_indent")),
+            "alignment": _alignment_token(_safe_getattr(getattr(style, "paragraph_format", None), "alignment")),
+        }
+        merged = dict(base_info)
+        for key, value in current.items():
+            if value not in (None, ""):
+                merged[key] = value
+            else:
+                merged.setdefault(key, value)
+        resolved[cache_key] = merged
+        return merged
+
     for style in doc.styles:
-        info = {"name": str(style.name) if style.name else "", "type": str(style.type) if style.type else ""}
-        try:
-            info["font_name"] = style.font.name
-            info["font_size"] = style.font.size
-        except Exception:
-            info["font_name"] = None
-            info["font_size"] = None
-        try:
-            info["line_spacing"] = _to_float(getattr(style.paragraph_format, "line_spacing", None))
-        except Exception:
-            info["line_spacing"] = None
-        cache[str(style.name)] = info
-    return cache
+        info = resolve_style(style)
+        style_name = str(getattr(style, "name", "") or "")
+        style_id = str(getattr(style, "style_id", "") or "")
+        if style_name:
+            by_name[style_name] = info
+        if style_id:
+            by_id[style_id] = info
+    return {"by_name": by_name, "by_id": by_id}
 
 
-def _resolve_font(paragraph, style_cache: dict[str, Any], style_name: str) -> tuple:
+def _resolve_font(paragraph, style_cache: dict[str, Any], style_name: str, style_id: str) -> tuple:
     for run in paragraph.runs:
         if run.font.name:
             return run.font.name, run.font.name, "run"
 
-    if style_name and style_name in style_cache:
-        fn = style_cache[style_name].get("font_name")
-        if fn:
-            return None, fn, "paragraph_style"
-
-    if "Normal" in style_cache:
-        fn = style_cache["Normal"].get("font_name")
-        if fn:
-            return None, fn, "normal_style"
+    fn = _style_cache_value(style_cache, style_name=style_name, style_id=style_id, key="font_name")
+    if fn:
+        return None, fn, "paragraph_style"
 
     return None, None, "unresolved"
 
 
-def _resolve_font_size(paragraph, style_cache: dict[str, Any], style_name: str) -> tuple:
+def _resolve_font_size(paragraph, style_cache: dict[str, Any], style_name: str, style_id: str) -> tuple:
     for run in paragraph.runs:
         if run.font.size:
             try:
@@ -180,15 +240,78 @@ def _resolve_font_size(paragraph, style_cache: dict[str, Any], style_name: str) 
             except Exception:
                 pass
 
-    if style_name and style_name in style_cache:
-        fs = style_cache[style_name].get("font_size")
-        if fs:
-            try:
-                return None, round(fs.pt, 2), "paragraph_style"
-            except Exception:
-                pass
+    fs = _style_cache_value(style_cache, style_name=style_name, style_id=style_id, key="font_size_pt")
+    if isinstance(fs, (int, float)):
+        return None, round(float(fs), 2), "paragraph_style"
 
     return None, None, "unresolved"
+
+
+def _resolve_paragraph_metric(
+    *,
+    direct_value,
+    style_cache: dict[str, Any],
+    style_name: str,
+    style_id: str,
+    key: str,
+    converter,
+) -> tuple[Any, str]:
+    direct_resolved = converter(direct_value)
+    if direct_resolved not in (None, ""):
+        return direct_resolved, "paragraph"
+    style_value = _style_cache_value(style_cache, style_name=style_name, style_id=style_id, key=key)
+    if style_value not in (None, ""):
+        return style_value, "paragraph_style"
+    return direct_resolved, "unresolved"
+
+
+def _style_cache_value(style_cache: dict[str, Any], *, style_name: str, style_id: str, key: str) -> Any:
+    by_id = dict(style_cache.get("by_id") or {})
+    by_name = dict(style_cache.get("by_name") or {})
+    candidates = []
+    if style_id:
+        candidates.append(by_id.get(style_id))
+    if style_name:
+        candidates.append(by_name.get(style_name))
+    candidates.append(by_name.get("Normal"))
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        value = item.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _style_font_name(style) -> str | None:
+    try:
+        return getattr(getattr(style, "font", None), "name", None)
+    except Exception:
+        return None
+
+
+def _safe_getattr(value, name: str):
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
+def _alignment_token(value) -> str:
+    raw = str(getattr(value, "name", value) or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith("justify"):
+        return "justify"
+    if raw.startswith("center") or raw.startswith("centre"):
+        return "center"
+    if raw.startswith("right"):
+        return "right"
+    if raw.startswith("left"):
+        return "left"
+    if raw.startswith("distribute") or raw.startswith("distributed"):
+        return "distribute"
+    return raw
 
 
 def _parse_tables(doc) -> list[dict[str, Any]]:
@@ -447,9 +570,12 @@ def _to_float(value) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        numeric = float(value)
     except Exception:
         return None
+    if abs(numeric) > 1000:
+        return round(numeric / 12700, 2)
+    return numeric
 
 
 def _to_pt(value) -> float | None:
