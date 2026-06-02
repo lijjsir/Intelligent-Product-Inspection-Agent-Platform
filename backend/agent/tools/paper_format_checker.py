@@ -2050,12 +2050,13 @@ def _paragraph_role(paragraph: dict[str, Any] | None) -> str:
 def _is_natural_language_role(paragraph: dict[str, Any]) -> bool:
     role = _paragraph_role(paragraph)
     if role:
-        return role in {"body", "abstract_body", "acknowledgement_body"}
+        # Roles that contain natural language prose (for text checking engines)
+        return role in {"body", "abstract_body", "acknowledgement_body", "keywords"}
     if paragraph.get("heading_level"):
         return False
     section_title = str(paragraph.get("section_title") or "").strip().lower()
     text = str(paragraph.get("text") or "").strip()
-    if any(keyword in section_title for keyword in ("目录", "图目录", "表目录", "参考文献")):
+    if any(keyword in section_title for keyword in ("目录", "图目录", "表目录", "参考文献", "references")):
         return False
     if re.match(r"^(?:图|fig(?:ure)?\.?|表|table\.?)\s*\d+", text, re.I):
         return False
@@ -2317,11 +2318,21 @@ def _should_skip_spelling_hit(text: str, wrong: Any, right: Any) -> bool:
     right_text = str(right or "").strip()
     if not wrong_text or wrong_text == right_text:
         return True
+    # Pure ASCII/numbers/underscores (URLs, variable names, etc.)
     if re.fullmatch(r"[A-Za-z0-9_.-]+", wrong_text):
         return True
+    # Citation markers
     if re.fullmatch(r"\[[0-9,\-–]+\]", wrong_text):
         return True
+    # Math-heavy text: formulas, equations
     if re.search(r"[=∑√≤≥±×÷\\{}]", text):
+        return True
+    # Academic term with common suffixes — model often flags these as false positives
+    # Only skip when both wrong and right look like valid academic terms
+    if re.search(r"[一-鿿]{2,4}(?:性|化|度|率|值|量|法|论|学|型|态|体|剂|器|仪|图|表|数|段|层|域|系|组|类|种|项|点|面|线|源|流|波|场|力|能|热|光|电|磁|声|压|温|湿|频|相|位|序|族|基|键|环|链|网|格|模|式|程|期|代|纪|世|界|门|纲|目|科|属|种)\b", wrong_text):
+        return True
+    # Reference format strings: [J], [M], etc.
+    if re.fullmatch(r"\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]", wrong_text):
         return True
     return False
 
@@ -2676,25 +2687,60 @@ def _missing_numbers_in_sequence(numbers: list[str]) -> list[str]:
 
 
 def _find_reference_boundary(text: str) -> int:
-    """Find the character position where the reference list begins."""
+    """Find the character position where the reference list begins.
+
+    Handles multiple patterns:
+    - 参考文献 / References / Bibliography / REFERENCES
+    - Numbered variants: 参考文献[1], References [1]
+    - LaTeX: \\begin{thebibliography}
+    - Section header with numbering: 5 参考文献, Chapter 5 References
+    """
+    ref_headers = [
+        "参考文献",
+        "References",
+        "Bibliography",
+        "REFERENCES",
+        "Works Cited",
+        "Literature Cited",
+        "Reference List",
+    ]
     offset = 0
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
-        if stripped in {"参考文献", "References", "Bibliography", "REFERENCES"}:
-            # Verify it looks like a section header (short line, no brackets)
-            if len(stripped) < 20 and not re.match(r"^\[\d+\]", stripped):
-                return offset + line.find(stripped)
+        if not stripped:
+            offset += len(line)
+            continue
+        # Skip lines that are reference entries themselves
+        if re.match(r"^\[\d+\]\s+", stripped):
+            offset += len(line)
+            continue
+
+        # Exact match
+        if stripped in ref_headers and len(stripped) < 30:
+            return offset + line.find(stripped)
+
+        # Pattern: optional numbering + reference header (e.g. "5 参考文献", "IV. References")
+        for header in ref_headers:
+            if stripped.endswith(header) and len(stripped) < 60:
+                prefix = stripped[: -len(header)].strip()
+                if re.match(r"^[\dIVXivx]+\.?\s*$", prefix) or re.match(r"^(?:第[一二三四五六七八九十\d]+[章节])\s*$", prefix):
+                    return offset + line.find(stripped)
+
+        # LaTeX bibliography
+        if r"\begin{thebibliography}" in stripped:
+            return offset + line.find(stripped)
+        if r"\bibliography{" in stripped:
+            return offset + line.find(stripped)
+
         offset += len(line)
     return -1
 
 def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
-    issues = []
+    issues: list[RuleIssue] = []
     text = str(parsed.get("text") or "")
 
-    # --- Extract in-text citation numbers ---
+    # --- Extract in-text numeric citations ---
     cited_numbers: set[int] = set()
-    # Only extract citations from text before the reference list to avoid
-    # counting reference entries themselves as in-text citations.
     ref_boundary = _find_reference_boundary(text)
     pre_ref_text = text[:ref_boundary] if ref_boundary > 0 else text
     for m in re.finditer(r"\[\s*(\d+(?:\s*[-－–,，、]\s*\d+)*)\s*\]", pre_ref_text):
@@ -2712,6 +2758,12 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                     cited_numbers.add(int(part))
                 except ValueError:
                     pass
+
+    # --- Extract author-year citations from pre-reference text ---
+    author_year_cites = _extract_author_year_citations(pre_ref_text)
+    cited_author_years: set[tuple[str, str]] = set()
+    for cite in author_year_cites:
+        cited_author_years.add((cite["author"].lower(), cite["year"]))
 
     # --- Extract reference entry numbers with multi-line support ---
     ref_numbers: set[int] = set()
@@ -2744,32 +2796,42 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 current_text = m.group(2)
                 ref_numbers.add(current_num)
             elif current_num is not None and line.strip():
-                # Continuation of previous entry (wrapped line)
                 current_text += " " + line.strip()
         if current_num is not None:
             ref_entries[current_num] = current_text.strip()
             ref_entry_items.append((current_num, current_text.strip()))
 
+    # --- Build author index from reference entries for author-year matching ---
+    ref_authors: dict[str, list[tuple[int, str]]] = {}
+    for num, entry_text in ref_entry_items:
+        if num <= 0:
+            continue
+        authors = _extract_entry_first_author(entry_text)
+        for author_key in authors:
+            ref_authors.setdefault(author_key, []).append((num, entry_text))
+
+    # ===== Numeric citation checks =====
     listed_sequence = [num for num, _entry in ref_entry_items]
     if any(num <= 0 for num in listed_sequence):
+        unnumbered = [(num, entry) for num, entry in ref_entry_items if num <= 0]
         issues.append(RuleIssue(
             code="references.numbering_missing",
             title="参考文献条目缺少方括号编号",
             severity="medium",
             category="structure",
             message="识别到部分参考文献条目未以 [序号] 开头。",
-            evidence="；".join(entry[:80] for num, entry in ref_entry_items if num <= 0)[:240],
+            evidence="；".join(entry[:80] for _, entry in unnumbered)[:240],
             location={"display_text": "参考文献章节"},
             suggestion="按 GB/T 7714 顺序编码制格式为每条参考文献添加 [1]、[2] 等连续编号。",
             parser_confidence="high",
             confidence="high",
-            aggregate_count=sum(1 for num in listed_sequence if num <= 0),
+            aggregate_count=len(unnumbered),
             samples=[
                 {"text": entry[:160], "problems": ["缺少方括号编号"]}
-                for num, entry in ref_entry_items
-                if num <= 0
+                for _, entry in unnumbered
             ][:10],
         ))
+
     numbered_sequence = [num for num in listed_sequence if num > 0]
     duplicate_numbers = sorted({num for num in numbered_sequence if numbered_sequence.count(num) > 1})
     if duplicate_numbers:
@@ -2802,9 +2864,12 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             actual={"listed_sequence": numbered_sequence},
         ))
 
-    # --- Cross-reference: citation vs bibliography ---
+    # --- Cross-reference: numeric citation vs bibliography ---
+    has_numeric_citations = bool(cited_numbers)
+    has_author_year_citations = bool(cited_author_years)
+
     missing_in_bib = cited_numbers - ref_numbers
-    if missing_in_bib:
+    if missing_in_bib and has_numeric_citations:
         issues.append(RuleIssue(
             code="references.citation_missing_in_bibliography",
             title="正文引用在参考文献列表中缺失",
@@ -2815,13 +2880,13 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             location={"display_text": "参考文献章节"},
             suggestion="确保正文中每条引用在参考文献列表中都有对应条目。",
             parser_confidence="medium",
-                expected={"cited": sorted(cited_numbers), "listed": sorted(ref_numbers)},
-                actual={"missing_in_bib": sorted(missing_in_bib)},
-                confidence="high",
-            ))
+            expected={"cited": sorted(cited_numbers), "listed": sorted(ref_numbers)},
+            actual={"missing_in_bib": sorted(missing_in_bib)},
+            confidence="high",
+        ))
 
     unused = ref_numbers - cited_numbers
-    if unused and len(ref_numbers) > 3:
+    if unused and len(ref_numbers) > 3 and has_numeric_citations:
         issues.append(RuleIssue(
             code="references.unused_reference",
             title="参考文献列表中部分文献未被正文引用",
@@ -2833,6 +2898,59 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             suggestion="确认这些文献是否确实需要列入，或补充正文引用。",
             parser_confidence="medium",
             confidence="medium",
+        ))
+
+    # --- Author-year cross-reference check ---
+    if has_author_year_citations and ref_authors:
+        unmatched_cites: list[dict[str, str]] = []
+        for author_lower, year in cited_author_years:
+            if author_lower not in ref_authors:
+                unmatched_cites.append({"author": author_lower, "year": year})
+                continue
+            # Check if any entry by this author has matching year
+            year_matched = any(
+                year in entry_text
+                for _num, entry_text in ref_authors[author_lower]
+            )
+            if not year_matched:
+                unmatched_cites.append({"author": author_lower, "year": year, "note": "年份不匹配"})
+
+        if unmatched_cites and len(unmatched_cites) < len(cited_author_years):
+            issues.append(RuleIssue(
+                code="references.author_year_unmatched",
+                title="著者-出版年引用与参考文献列表不匹配",
+                severity="high",
+                category="structure",
+                message=f"检测到 {len(unmatched_cites)} 条著者-出版年引用在参考文献列表中匹配不明确。",
+                evidence="；".join(
+                    f"({c['author']}, {c['year']})" + (f" ({c['note']})" if c.get("note") else "")
+                    for c in unmatched_cites[:5]
+                ),
+                location={"display_text": "参考文献章节"},
+                suggestion="确认著者-出版年引用的作者和年份与参考文献列表完全一致。",
+                parser_confidence="low",
+                confidence="medium",
+                actual={"unmatched": unmatched_cites[:10], "total_ay_cites": len(cited_author_years)},
+                check_scope="author_year_crossref",
+            ))
+
+    # --- Mixed citation style detection ---
+    if has_numeric_citations and has_author_year_citations:
+        issues.append(RuleIssue(
+            code="references.mixed_citation_style",
+            title="引文格式不一致：同时使用了顺序编码制和著者-出版年制",
+            severity="medium",
+            category="structure",
+            message=f"检测到 {len(cited_numbers)} 条数字引用和 {len(cited_author_years)} 条著者-出版年引用混用。",
+            evidence="论文应统一采用单一引用格式（GB/T 7714 顺序编码制或著者-出版年制）。",
+            location={"display_text": "正文引用"},
+            suggestion="统一引用格式，选择顺序编码制（[1][2]）或著者-出版年制（Author, Year）之一。",
+            parser_confidence="high",
+            confidence="high",
+            actual={
+                "numeric_citations": len(cited_numbers),
+                "author_year_citations": len(cited_author_years),
+            },
         ))
 
     # --- Numbering continuity ---
@@ -2855,7 +2973,7 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 confidence="high",
             ))
 
-    # --- Per-entry format analysis with statistics ---
+    # --- Per-entry format analysis with improved GB/T 7714 checks ---
     if ref_entry_items:
         format_issues = []
         for num, entry_text in ref_entry_items[:80]:
@@ -2872,12 +2990,14 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             total = len(ref_entry_items)
             all_problems = list(dict.fromkeys(p for fi in format_issues for p in fi["problems"]))
             sample = format_issues[0]
+            # Map common problems to user-friendly Chinese descriptions
+            problem_cn = _translate_problems_to_chinese(all_problems[:5])
             issues.append(RuleIssue(
                 code="references.format_mismatch",
                 title="参考文献格式不符合 GB/T 7714 要求",
                 severity="medium",
                 category="structure",
-                message=f"{bad_count}/{total} 条参考文献存在格式问题: {'; '.join(all_problems[:5])}。",
+                message=f"{bad_count}/{total} 条参考文献存在格式问题: {problem_cn}。",
                 evidence=f"[{sample['number']}] {sample['text']}",
                 location={"display_text": "参考文献章节"},
                 suggestion="按 GB/T 7714 标准补全条目字段和标点。常见期刊格式: [序号] 作者. 题名[J]. 刊名, 年, 卷(期): 页码.",
@@ -2889,42 +3009,189 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 samples=format_issues[:10],
                 check_scope="gbt7714_local",
             ))
-    elif not ref_numbers and cited_numbers:
+
+    elif not ref_numbers and (cited_numbers or cited_author_years):
+        cite_evidence = (
+            f"正文数字引用: {sorted(cited_numbers)[:20]}" if cited_numbers else ""
+        ) + (
+            f" 著者-出版年引用: {len(cited_author_years)} 条" if cited_author_years else ""
+        )
         issues.append(RuleIssue(
             code="references.bibliography_not_found",
             title="未识别到参考文献列表",
             severity="high",
             category="structure",
-            message="正文中有引用编号但文末未找到参考文献列表。",
-            evidence=f"正文引用: {sorted(cited_numbers)[:20]}",
+            message="正文中有引用但文末未找到参考文献列表。",
+            evidence=cite_evidence.strip(),
             location={"display_text": "文末区域"},
             suggestion="在文末添加参考文献列表，每条以 [序号] 开头。",
             parser_confidence="high",
             confidence="high",
         ))
 
+    # Detect if only author-year citations are used (no numeric citations, but has ref entries)
+    if has_author_year_citations and not has_numeric_citations and ref_numbers:
+        issues.append(RuleIssue(
+            code="references.possible_author_year_style",
+            title="检测到著者-出版年制引用风格",
+            severity="low",
+            category="structure",
+            message=f"论文使用了著者-出版年制引用（{len(cited_author_years)} 处），但参考文献列表使用数字编号。"
+                       "请确认引用格式是否符合目标期刊要求。",
+            evidence="著者-出版年制要求参考文献按作者姓氏字母序排列，不编号。",
+            location={"display_text": "参考文献章节"},
+            suggestion="若采用著者-出版年制，参考文献不应编号，而应按作者字母顺序排列。",
+            parser_confidence="medium",
+            confidence="low",
+        ))
+
     return issues
 
 
+def _extract_author_year_citations(text: str) -> list[dict[str, Any]]:
+    """Extract author-year style citations from text.
+
+    Returns list of dicts with 'author' and 'year' keys.
+    Handles: (Author, 2020), (Author et al., 2020), Author (2020),
+    (张三, 2020), (Smith & Jones, 2019), (WHO, 2020)
+    """
+    results: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    # Parenthetical: (Author, 2020), (Author et al., 2020)
+    paren_pattern = re.compile(
+        r"[(（]\s*"
+        r"((?:[A-Z][a-z]*(?:\s+(?:et\s+al\.?|and|&)\s+[A-Z][a-z]*)?|[A-Z]{2,}|[一-鿿]{1,6}))"
+        r"\s*[,，]\s*"
+        r"((?:19|20)\d{2}[a-z]?)"
+        r"(?:\s*[,，;；]\s*(?:19|20)\d{2}[a-z]?)*"  # optional multi-year
+        r"\s*[)）]"
+    )
+    for match in paren_pattern.finditer(text):
+        author = match.group(1).strip()
+        year = match.group(2).strip()
+        if re.match(r"^(?:see|cf|e\.g\.|i\.e\.|Fig|Table|Equation|Chapter|Section)\b", author, re.I):
+            continue
+        key = (author.lower(), year)
+        if key not in seen:
+            seen.add(key)
+            results.append({"author": author, "year": year, "offset": match.start()})
+
+    # Narrative: Author (2020)
+    narrative_pattern = re.compile(
+        r"((?:[A-Z][a-z]*(?:\s+(?:et\s+al\.?|and|&)\s+[A-Z][a-z]*)?|[A-Z]{2,}|[一-鿿]{1,4}))"
+        r"\s*[(（]\s*((?:19|20)\d{2}[a-z]?)\s*[)）]"
+    )
+    for match in narrative_pattern.finditer(text):
+        author = match.group(1).strip()
+        year = match.group(2).strip()
+        preceding = text[max(0, match.start() - 4):match.start()]
+        if re.search(r"[\[(（]", preceding):
+            continue
+        if re.match(r"^(?:see|cf|e\.g\.|i\.e\.|Fig|Table|Equation|Chapter|Section|第|图|表)\b", author, re.I):
+            continue
+        key = (author.lower(), year)
+        if key not in seen:
+            seen.add(key)
+            results.append({"author": author, "year": year, "offset": match.start()})
+
+    results.sort(key=lambda c: c["offset"])
+    return results
+
+
+def _extract_entry_first_author(entry_text: str) -> list[str]:
+    """Extract possible first-author name keys from a reference entry.
+
+    Returns multiple possible keys for fuzzy matching:
+    - Full first author surname (English or Chinese)
+    - Lowercase normalized form
+    """
+    content = str(entry_text or "").strip()
+    if not content:
+        return []
+
+    keys: list[str] = []
+
+    # English author: "Smith, J." or "Smith J."
+    eng_match = re.match(r"^([A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b", content)
+    if eng_match:
+        surname = eng_match.group(1).lower()
+        keys.append(surname)
+        # Handle compound surnames
+        if "-" in surname:
+            keys.append(surname.split("-")[0])
+
+    # Chinese author: "张三" (first 1-3 Chinese characters)
+    cn_match = re.match(r"^([一-鿿]{1,3})", content)
+    if cn_match:
+        keys.append(cn_match.group(1).lower())
+
+    # Organization author: "WHO", "UNESCO", etc.
+    org_match = re.match(r"^([A-Z]{2,})\b", content)
+    if org_match and not eng_match:
+        keys.append(org_match.group(1).lower())
+
+    return list(dict.fromkeys(keys))  # dedupe preserving order
+
+
+def _translate_problems_to_chinese(problems: list[str]) -> str:
+    """Translate English problem codes to Chinese descriptions."""
+    translations = {
+        "empty": "空条目",
+        "缺少作者或题名分隔": "缺少作者或题名分隔",
+        "缺少年份": "缺少年份",
+        "缺少文献类型标识": "缺少文献类型标识[J][M]等",
+        "缺少刊名/出版源": "缺少刊名或出版源",
+        "缺少卷期页码或出版项": "缺少卷期页码",
+        "末尾缺句号": "条目末尾缺少句号",
+        "缺少DOI或URL": "缺少DOI或访问链接",
+        "缺少页码": "缺少起止页码",
+        "缺少出版地": "缺少出版地",
+        "缺少出版社": "缺少出版社名称",
+    }
+    translated = [translations.get(p, p) for p in problems]
+    return "；".join(translated)
+
+
 def _analyze_reference_entry(text: str) -> dict:
-    """Analyze a single reference entry for GB/T 7714 compliance."""
+    """Analyze a single reference entry for GB/T 7714 compliance.
+
+    Enhanced with more reference type detection and field checks.
+    """
     problems = []
     content = str(text or "").strip()
     if not content:
         return {"problems": ["empty"], "reference_type": ""}
 
+    # Detect reference type [J], [M], [D], [C], [P], [EB/OL], [R], [S], etc.
     type_match = re.search(r"\[([A-Z]{1,3}(?:/[A-Z]{1,3})?)\]", content)
     reference_type = type_match.group(1) if type_match else ""
     has_type = bool(type_match)
     has_year = bool(re.search(r"(?:19|20)\d{2}", content))
-    has_author_title_shape = bool(re.match(r"^.{2,80}?\.\s*.{2,200}?\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]\.", content))
+
+    # Author-title separator pattern: "Author. Title[M]. ..." or "Author. Title [M]. ..."
+    has_author_title_shape = bool(
+        re.match(r"^.{2,80}?\.\s*.{1,300}?(?:\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]\.?)", content)
+        or re.match(r"^.{2,80}?\.\s*.{1,300}?\.", content)
+    )
+
+    # Period at end
     has_period_end = content.rstrip().endswith(".")
+
+    # Source/publisher
     has_source = _reference_has_source(content, reference_type)
+
+    # Volume/issue/pages
     has_vol_pages = _reference_has_required_extent(content, reference_type)
+
+    # DOI or URL (important for electronic resources)
+    has_doi_or_url = bool(re.search(r"(?:doi:|DOI|https?://|检索自|访问日期)", content))
+
+    # Publisher location + name (for books [M], dissertations [D])
+    has_publisher_info = _reference_has_publisher(content, reference_type)
 
     if not has_author_title_shape:
         problems.append("缺少作者或题名分隔")
-    has_period_end = content.rstrip().endswith(".")
 
     if not has_year:
         problems.append("缺少年份")
@@ -2936,8 +3203,33 @@ def _analyze_reference_entry(text: str) -> dict:
         problems.append("缺少卷期页码或出版项")
     if not has_period_end:
         problems.append("末尾缺句号")
+    if reference_type in {"EB/OL", "OL"} and not has_doi_or_url:
+        problems.append("缺少DOI或URL")
+
+    # Type-specific checks
+    if reference_type == "J":
+        if not re.search(r"\d+\(\d+\)|\d+:\d+", content):
+            problems.append("缺少卷期信息")
+        if not re.search(r":\s*\d+\s*[-－–]\s*\d+", content):
+            problems.append("缺少页码")
+    elif reference_type == "M":
+        if not has_publisher_info:
+            problems.append("缺少出版社")
+        if not re.search(r"[,，]\s*(?:19|20)\d{2}", content):
+            problems.append("缺少出版地")
+    elif reference_type == "D":
+        if not ("大学" in content or "学院" in content or "College" in content or "University" in content):
+            problems.append("缺少学位授予单位")
 
     return {"problems": problems, "reference_type": reference_type}
+
+
+def _reference_has_publisher(content: str, reference_type: str) -> bool:
+    """Check if a reference entry has publisher information."""
+    if reference_type not in {"M", "D", "R", "S"}:
+        return True  # not required for journal articles etc.
+    # Look for publisher pattern: City: Publisher, Year
+    return bool(re.search(r"[:：]\s*[^,，.]+[,，]\s*(?:19|20)\d{2}", content))
 
 
 def _reference_has_source(content: str, reference_type: str) -> bool:

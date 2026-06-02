@@ -3,9 +3,23 @@ from __future__ import annotations
 
 import re
 import zipfile
+from collections import Counter
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
+
+# Patterns for structural detection when styles are unreliable
+_HEADING_NUMBERED_PATTERN = re.compile(
+    r"^(?:第[一二三四五六七八九十\d]+[章节部分]|\d+(?:\.\d+)*\s+[^\d\s]|"
+    r"[一二三四五六七八九十]+[、．.\s]|"
+    r"[(（][一二三四五六七八九十\d]+[)）])"
+)
+_ABSTRACT_KEYWORD_MARKERS = ("摘要", "abstract", "关键词", "keywords", "keyword")
+_STRUCTURAL_SECTIONS = {
+    "参考文献", "References", "Bibliography", "REFERENCES",
+    "致谢", "致 謝", "Acknowledgement", "Acknowledgments",
+    "附录", "Appendix", "作者简介", "攻读学位期间",
+}
 
 
 def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
@@ -21,6 +35,9 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
     if xml_bundle.get("error"):
         parser_limitations.append("底层样式解析未完成，部分版式检查已降级。")
 
+    # First pass: collect visual statistics for fallback heading detection
+    body_font_sizes = _collect_body_font_stats(doc)
+
     paragraphs = []
     headings = []
     figure_titles = []
@@ -30,6 +47,7 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
     current_section_index = 0
     current_paragraph_no = 0
     current_word_section_index = 0
+    heading_confidence_issues = 0
 
     for index, paragraph in enumerate(doc.paragraphs):
         while current_word_section_index + 1 < len(section_breaks) and index >= int(section_breaks[current_word_section_index + 1]):
@@ -48,6 +66,24 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
         space_before = _to_pt(getattr(para_format, "space_before", None))
         space_after = _to_pt(getattr(para_format, "space_after", None))
         first_line_indent = _to_pt(getattr(para_format, "first_line_indent", None))
+        alignment = _get_alignment(para_format)
+
+        effective_font_size = font_size_resolved or font_size_raw
+        is_bold = _has_bold_run(paragraph) or _is_bold_style(style_name)
+
+        # Fallback heading detection when no heading style is applied
+        if not heading_level and text and effective_font_size is not None:
+            fallback_level = _detect_heading_by_visual(
+                text=text,
+                font_size=effective_font_size,
+                is_bold=is_bold,
+                alignment=alignment,
+                body_sizes=body_font_sizes,
+                prev_context=paragraphs[-1] if paragraphs else None,
+            )
+            if fallback_level:
+                heading_level = fallback_level
+                heading_confidence_issues += 1
 
         if heading_level:
             current_section_title = text
@@ -90,6 +126,8 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
             "endnote_refs": list(xml_paragraph.get("endnote_refs") or []),
             "comment_refs": list(xml_paragraph.get("comment_refs") or []),
             "field_codes": list(xml_paragraph.get("field_codes") or []),
+            "is_bold": is_bold,
+            "alignment": alignment,
         }
         item["paragraph_role"] = _infer_paragraph_role(
             text=text,
@@ -108,10 +146,17 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
                 "section_index": current_section_index,
                 "font_name": font_name_resolved or font_name_raw or "",
                 "font_size_pt": font_size_resolved or font_size_raw,
+                "detection_source": "style" if _heading_level(style_name) else "visual_fallback",
             })
 
         if text and re.match(r"^(图|Figure)\s*\d+(?:[-.]\d+)*", text, re.I):
             figure_titles.append(text)
+
+    if heading_confidence_issues > 0:
+        parser_limitations.append(
+            f"有 {heading_confidence_issues} 个章节标题通过字号/加粗等视觉特征推断，"
+            f"未使用 Word 标题样式，可能影响结构检查准确度。"
+        )
 
     tables = _parse_tables(doc)
     sections_data = _parse_sections_enhanced(doc)
@@ -142,6 +187,134 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
         "ooxml": dict(xml_bundle.get("meta") or {}),
         "text": text_content,
     }
+
+
+def _collect_body_font_stats(doc) -> dict[str, Any]:
+    """First-pass scan to collect font size distribution for body text.
+    Used to establish a baseline for visual heading detection."""
+    sizes: list[float] = []
+    bold_count = 0
+    total = 0
+    for paragraph in doc.paragraphs:
+        text = (paragraph.text or "").strip()
+        if not text or len(text) < 10:
+            continue
+        style_name = str(getattr(paragraph.style, "name", "") or "")
+        if _heading_level(style_name):
+            continue
+        total += 1
+        is_bold = _has_bold_run(paragraph)
+        if is_bold:
+            bold_count += 1
+        for run in paragraph.runs:
+            if run.font.size:
+                try:
+                    sizes.append(run.font.size.pt)
+                except Exception:
+                    pass
+    if not sizes:
+        return {"median_size": 12.0, "p75_size": 14.0, "bold_ratio": 0.0, "total_body_paras": 0}
+    sorted_sizes = sorted(sizes)
+    n = len(sorted_sizes)
+    median = sorted_sizes[n // 2]
+    p75 = sorted_sizes[int(n * 0.75)]
+    # Build histogram for dominant size detection
+    counter = Counter(round(s, 1) for s in sizes)
+    dominant_size = counter.most_common(1)[0][0] if counter else median
+    return {
+        "median_size": round(median, 1),
+        "p75_size": round(p75, 1),
+        "dominant_size": dominant_size,
+        "bold_ratio": round(bold_count / max(total, 1), 2),
+        "total_body_paras": total,
+        "size_counter": dict(counter.most_common(5)),
+    }
+
+
+def _detect_heading_by_visual(
+    *,
+    text: str,
+    font_size: float,
+    is_bold: bool,
+    alignment: str,
+    body_sizes: dict[str, Any],
+    prev_context: dict[str, Any] | None,
+) -> int:
+    """Detect likely headings from visual properties when no heading style is used.
+
+    Returns heading level (1-3) or 0 if not likely a heading.
+    """
+    if not text or len(text) > 120:
+        return 0
+    dominant = body_sizes.get("dominant_size", 12.0)
+    p75 = body_sizes.get("p75_size", 14.0)
+
+    # Must be at least 2pt larger than dominant body size
+    size_bump = font_size - dominant
+    if size_bump < 1.5:
+        return 0
+
+    # Strong signal: numbered pattern
+    has_numbering = bool(_HEADING_NUMBERED_PATTERN.match(text))
+    # Check if previous paragraph was a heading (headings often cluster)
+    prev_was_heading = bool(prev_context and prev_context.get("heading_level"))
+
+    # Heuristic scoring
+    score = 0
+    if size_bump >= 6:
+        score += 3  # chapter-level
+    elif size_bump >= 3:
+        score += 2  # section-level
+    elif size_bump >= 1.5:
+        score += 1  # subsection-level
+
+    if is_bold:
+        score += 1
+    if alignment == "center":
+        score += 1
+    if has_numbering:
+        score += 2
+    if prev_was_heading:
+        score += 1  # consecutive heading pattern
+
+    if score >= 5:
+        return 1
+    elif score >= 3:
+        return 2
+    elif score >= 2 and has_numbering:
+        return 3
+    return 0
+
+
+def _get_alignment(para_format) -> str:
+    """Extract paragraph alignment as a string."""
+    try:
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        val = getattr(para_format, "alignment", None)
+        if val == WD_ALIGN_PARAGRAPH.CENTER:
+            return "center"
+        if val == WD_ALIGN_PARAGRAPH.LEFT:
+            return "left"
+        if val == WD_ALIGN_PARAGRAPH.RIGHT:
+            return "right"
+        if val == WD_ALIGN_PARAGRAPH.JUSTIFY:
+            return "justify"
+    except Exception:
+        pass
+    return ""
+
+
+def _has_bold_run(paragraph) -> bool:
+    """Check if any run in the paragraph is bold."""
+    for run in paragraph.runs:
+        if run.bold:
+            return True
+    return False
+
+
+def _is_bold_style(style_name: str) -> bool:
+    """Check if style name indicates bold formatting."""
+    return "bold" in str(style_name).lower() or "strong" in str(style_name).lower()
 
 
 def _build_style_cache(doc) -> dict[str, dict[str, Any]]:
@@ -266,8 +439,14 @@ def _infer_paragraph_role(
     if heading_level:
         return "heading"
     loose_content = re.sub(r"\s+", "", content)
-    if content in {"参考文献", "References", "Bibliography", "REFERENCES"} or loose_content in {"摘要", "目录", "图目录", "表目录", "致谢", "作者简介"}:
+    # Structural section headers (often not styled as headings)
+    if content in _STRUCTURAL_SECTIONS or loose_content in {"摘要", "目录", "图目录", "表目录", "致谢", "作者简介"}:
         return "heading"
+    # Chinese/English abstract and keyword markers
+    if content.startswith("摘要") or content.lower().startswith("abstract"):
+        return "heading"
+    if re.match(r"^(?:关键词|Keywords?|Key words?)\s*[：:]", content, re.I):
+        return "keywords"
     if style.startswith("toc") or "table of figures" in style or any("TOC" in str(code) for code in field_codes):
         return "toc"
     if re.match(r"^(?:图|fig(?:ure)?\.?)\s*\d+(?:[-.]\d+)*", content, re.I) or "图题" in style:
@@ -276,16 +455,26 @@ def _infer_paragraph_role(
         return "table_caption"
     if "公式" in style or re.fullmatch(r"[（(]\s*\d+(?:[-.]\d+)*\s*[）)]", content):
         return "formula"
-    if "参考文献" in section or "参考文献" in style or re.match(r"^\[\d+\]\s+", content):
+    if "参考文献" in section or "references" in section or "参考文献" in style or re.match(r"^\[\d+\]\s+", content):
         return "reference_entry"
     if "目录" in section:
         return "toc"
     if "abstract" in section or "摘要" in section:
-        return "abstract_body"
-    if "致谢" in section or "致 謝" in section:
+        if len(content) > 10:
+            return "abstract_body"
+        return "heading"
+    if "关键词" in section or "keywords" in section:
+        return "keywords"
+    if "致谢" in section or "致 謝" in section or "acknowledgement" in section:
         return "acknowledgement_body"
-    if "作者简介" in section or "攻读学位期间" in section or "基本情况" in section:
+    if "作者简介" in section or "攻读学位期间" in section or "基本情况" in section or "profile" in section:
         return "profile"
+    # Author / institution info in front matter
+    if section_title and ("作者" in section_title or "导师" in section_title or "学院" in section_title or "单位" in section_title):
+        return "front_meta"
+    # Funding / project info
+    if re.match(r"^(?:基金|项目|资助|Foundation|Grant|Project)\b", content, re.I):
+        return "funding"
     return "body"
 
 
@@ -586,30 +775,10 @@ def _first_or_none(values: list[Any]) -> Any:
 
 
 def _extract_citations(text: str) -> list[dict[str, Any]]:
-    citations = []
-    for m in re.finditer(r"\[(\d+(?:[,,\-–]\d+)*)\]", text):
-        raw = m.group(0)
-        inner = m.group(1)
-        numbers: list[int] = []
-        for part in re.split(r"[,,，]", inner):
-            part = part.strip()
-            if "-" in part or "–" in part:
-                try:
-                    a_str, b_str = re.split(r"[-–]", part)
-                    numbers.extend(range(int(a_str), int(b_str) + 1))
-                except ValueError:
-                    pass
-            else:
-                try:
-                    numbers.append(int(part))
-                except ValueError:
-                    pass
-        citations.append({"raw": raw, "numbers": numbers, "offset": m.start()})
-    return citations
+    """Extract both numeric-bracket and author-year citations."""
+    citations: list[dict[str, Any]] = []
 
-
-def _extract_citations(text: str) -> list[dict[str, Any]]:
-    citations = []
+    # --- Numeric bracket citations: [1], [2-5], [3, 6, 8-10] ---
     for match in re.finditer(r"\[\s*(\d+(?:\s*[-－–,，、]\s*\d+)*)\s*\]", text):
         raw = match.group(0)
         inner = match.group(1)
@@ -629,7 +798,55 @@ def _extract_citations(text: str) -> list[dict[str, Any]]:
                     numbers.append(int(part))
                 except ValueError:
                     pass
-        citations.append({"raw": raw, "numbers": numbers, "offset": match.start()})
+        citations.append({"raw": raw, "numbers": numbers, "offset": match.start(), "style": "numeric_bracket"})
+
+    # --- Author-year citations in parentheses: (Author, 2020), (Author et al., 2020) ---
+    _AUTHOR_YEAR_PAREN = re.compile(
+        r"[(（]\s*"
+        r"([A-Z][a-z]+(?:\s+(?:et\s+al\.?|and|&)\s+[A-Z][a-z]+)?"
+        r"|[一-鿿]{1,6})"
+        r"\s*[,，]\s*"
+        r"((?:19|20)\d{2}[a-z]?)"
+        r"\s*[)）]"
+    )
+    for match in _AUTHOR_YEAR_PAREN.finditer(text):
+        author = match.group(1).strip()
+        year = match.group(2).strip()
+        # Filter out false positives like "(see Figure 1, 2020)"
+        if re.match(r"^(?:see|cf|e\.g\.|i\.e\.|Fig|Table|Equation)\b", author, re.I):
+            continue
+        citations.append({
+            "raw": match.group(0),
+            "author": author,
+            "year": year,
+            "offset": match.start(),
+            "style": "author_year_paren",
+        })
+
+    # --- Author-year narrative citations: Author (2020), Author et al. (2020) ---
+    _AUTHOR_YEAR_NARRATIVE = re.compile(
+        r"([A-Z][a-z]+(?:\s+(?:et\s+al\.?|and|&)\s+[A-Z][a-z]+)?"
+        r"|[一-鿿]{1,4})"
+        r"\s*[(（]\s*((?:19|20)\d{2}[a-z]?)\s*[)）]"
+    )
+    for match in _AUTHOR_YEAR_NARRATIVE.finditer(text):
+        author = match.group(1).strip()
+        year = match.group(2).strip()
+        # Skip if this is inside a bracket citation context
+        preceding = text[max(0, match.start() - 3):match.start()]
+        if "[" in preceding or "(" in preceding or "（" in preceding:
+            continue
+        if re.match(r"^(?:see|cf|e\.g\.|i\.e\.|Fig|Table|Equation|第|图|表)\b", author, re.I):
+            continue
+        citations.append({
+            "raw": match.group(0),
+            "author": author,
+            "year": year,
+            "offset": match.start(),
+            "style": "author_year_narrative",
+        })
+
+    citations.sort(key=lambda c: c["offset"])
     return citations
 
 
