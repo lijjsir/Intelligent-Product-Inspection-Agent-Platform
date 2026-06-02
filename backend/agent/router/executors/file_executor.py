@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
@@ -8,6 +10,8 @@ from agent.router.executors.base import artifact, observation
 from agent.router.manager_state import ManagerState
 from agent.router.node_registry import route_attachment_to_node
 from agent.llm.gateway import LLMGateway
+
+logger = logging.getLogger(__name__)
 
 
 class FileExecutor:
@@ -22,7 +26,7 @@ class FileExecutor:
         from agent.tools.file_parsers import parse_file_content, parse_paper_review_file_content_strict
         from agent.tools.paper_format_checker import check_paper_format
         from agent.tools.paper_format_templates import DEFAULT_STRICT_PAPER_TEMPLATE_ID
-        from app.services.paper_review_runtime_service import PaperReviewDependencyError
+        from app.services.paper_review_runtime_service import PaperReviewDependencyError, PaperReviewRuntimeService
         from app.services.object_storage.resolver import read_attachment_bytes
 
         parsed_files: list[dict] = []
@@ -32,6 +36,35 @@ class FileExecutor:
         template_id = str((step.input or {}).get("template_id") or "").strip() or None
         if step.capability_key == "file.paper_format_check" and not template_id:
             template_id = DEFAULT_STRICT_PAPER_TEMPLATE_ID
+        if step.capability_key == "file.paper_format_check":
+            await self._emit_paper_progress(
+                state,
+                request,
+                phase="runtime_checking",
+                message="正在检查论文查非增强引擎...",
+            )
+            runtime_started = time.perf_counter()
+            runtime_status = await asyncio.to_thread(PaperReviewRuntimeService.diagnose_sync)
+            runtime_duration_ms = int((time.perf_counter() - runtime_started) * 1000)
+            logger.info("paper review stage completed phase=runtime_checking duration_ms=%s", runtime_duration_ms)
+            await self._emit_paper_progress(
+                state,
+                request,
+                phase="runtime_checking",
+                message="论文查非增强引擎检查完成",
+                duration_ms=runtime_duration_ms,
+            )
+            if not runtime_status.get("ok"):
+                error = self._paper_runtime_error(runtime_status)
+                await self._emit_paper_progress(
+                    state,
+                    request,
+                    phase="failed",
+                    status="failed",
+                    message=error,
+                    payload={"paper_review_error": PaperReviewDependencyError(error, runtime_status=runtime_status).to_payload()},
+                )
+                raise PaperReviewDependencyError(error, runtime_status=runtime_status)
         for attachment in state.attachments:
             node = route_attachment_to_node("chat", attachment)
             if not node:
@@ -45,7 +78,27 @@ class FileExecutor:
             content, content_type = payload
             try:
                 if step.capability_key == "file.paper_format_check":
+                    await self._emit_paper_progress(
+                        state,
+                        request,
+                        phase="parsing_docx",
+                        message=f"正在解析论文文档：{str(attachment.get('name') or 'attachment')}",
+                    )
+                    parse_started = time.perf_counter()
                     parsed = parse_paper_review_file_content_strict(str(attachment.get("name") or "attachment.txt"), content)
+                    parse_duration_ms = int((time.perf_counter() - parse_started) * 1000)
+                    logger.info(
+                        "paper review stage completed phase=parsing_docx file=%s duration_ms=%s",
+                        str(attachment.get("name") or "attachment"),
+                        parse_duration_ms,
+                    )
+                    await self._emit_paper_progress(
+                        state,
+                        request,
+                        phase="parsing_docx",
+                        message=f"论文文档解析完成：{str(attachment.get('name') or 'attachment')}",
+                        duration_ms=parse_duration_ms,
+                    )
                 else:
                     parsed = parse_file_content(str(attachment.get("name") or "attachment.txt"), content)
             except Exception as exc:
@@ -65,15 +118,46 @@ class FileExecutor:
             }
             parsed_files.append(parsed_item)
             if step.capability_key == "file.paper_format_check":
-                paper_reports.append(
-                    await asyncio.to_thread(
-                        check_paper_format,
-                        parsed=parsed,
-                        file_name=parsed_item["name"],
-                        query=state.original_query,
-                        template_id=template_id,
-                    )
+                await self._emit_paper_progress(
+                    state,
+                    request,
+                    phase="rule_checking",
+                    message=f"正在执行论文规则检查：{parsed_item['name']}",
                 )
+                rule_started = time.perf_counter()
+                paper_report = await asyncio.to_thread(
+                    check_paper_format,
+                    parsed=parsed,
+                    file_name=parsed_item["name"],
+                    query=state.original_query,
+                    template_id=template_id,
+                )
+                rule_duration_ms = int((time.perf_counter() - rule_started) * 1000)
+                logger.info(
+                    "paper review stage completed phase=rule_checking file=%s duration_ms=%s",
+                    parsed_item["name"],
+                    rule_duration_ms,
+                )
+                engine_timings = dict(paper_report.get("engine_timings_ms") or {})
+                for engine_phase in ("macro_correct_token", "macro_correct_punct", "languagetool", "vale"):
+                    if engine_phase in engine_timings:
+                        await self._emit_paper_progress(
+                            state,
+                            request,
+                            phase=engine_phase,
+                            message=f"{engine_phase} 完成",
+                            duration_ms=int(engine_timings[engine_phase]),
+                            payload={"paper_review_timings_ms": engine_timings},
+                        )
+                await self._emit_paper_progress(
+                    state,
+                    request,
+                    phase="rule_checking",
+                    message=f"论文规则检查完成：{parsed_item['name']}",
+                    duration_ms=rule_duration_ms,
+                    payload={"paper_review_timings_ms": engine_timings},
+                )
+                paper_reports.append(paper_report)
 
         if step.capability_key == "file.paper_format_check":
             artifact_type = "paper_format_report"
@@ -93,7 +177,7 @@ class FileExecutor:
             self._finalize_paper_report_counts(merged)
             merged.setdefault("report_files", [])
             merged.setdefault("model_used", False)
-            if db_session and parsed_files:
+            if parsed_files:
                 enrichment_payload = self._build_paper_review_enrichment_payload(
                     merged=merged,
                     parsed_files=parsed_files,
@@ -128,6 +212,57 @@ class FileExecutor:
                 metrics={"parsed_file_count": len(parsed_files), "unsupported_count": len(unsupported)},
             ),
             [art],
+        )
+
+    @staticmethod
+    def _paper_runtime_error(runtime_status: dict) -> str:
+        missing = [
+            f"{item.get('name')}: {item.get('detail') or 'unavailable'}"
+            for item in list(runtime_status.get("engine_status") or [])
+            if not item.get("ok")
+        ]
+        detail = "; ".join(missing) if missing else str(runtime_status.get("message") or "paper review runtime not ready")
+        return f"论文查非增强引擎未就绪：{detail}"
+
+    @staticmethod
+    async def _emit_paper_progress(
+        state: ManagerState,
+        request: NormalizedRequest,
+        *,
+        phase: str,
+        status: str = "running",
+        message: str = "",
+        payload: dict | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
+        emit = request.ext.get("emit") if isinstance(request.ext, dict) else None
+        if not callable(emit):
+            return
+        patch_payload = {
+            "status": status,
+            "message_type": "streaming" if status == "running" else "error",
+            "ui_schema": "paper_review_report_v1" if status == "running" else "paper_review_error_v1",
+            "paper_review_status": {
+                "phase": phase,
+                "status": status,
+                "message": message,
+            },
+        }
+        if duration_ms is not None:
+            patch_payload["paper_review_status"]["duration_ms"] = duration_ms
+            patch_payload["duration_ms"] = duration_ms
+        if payload:
+            patch_payload.update(payload)
+        await emit(
+            {
+                "event": "message_patch",
+                "session_id": state.session_id,
+                "message_id": state.assistant_message_id,
+                "workflow_run_id": state.workflow_run_id,
+                "content": message or None,
+                "message_type": "streaming" if status == "running" else "error",
+                "payload": patch_payload,
+            }
         )
 
     @staticmethod
@@ -171,15 +306,20 @@ class FileExecutor:
             base["parsed_files"] = parsed_files
             base["unsupported"] = unsupported
             base["model_summary"] = model_summary
+            if base.get("engine_timings_ms"):
+                base["paper_review_timings_ms"] = dict(base.get("engine_timings_ms") or {})
             base["chat_advice"] = FileExecutor._build_chat_advice(list(base.get("issues") or []))
             return base
         all_issues = []
         limitations = []
         document_types = []
+        paper_review_timings_ms: dict[str, int] = {}
         for item in reports:
             all_issues.extend(list(item.get("issues") or []))
             limitations.extend(list(item.get("limitations") or []))
             document_types.append(str(item.get("document_type") or "unknown"))
+            for key, value in dict(item.get("engine_timings_ms") or {}).items():
+                paper_review_timings_ms[key] = paper_review_timings_ms.get(key, 0) + int(value or 0)
         total_score = sum(int(item.get("score") or 0) for item in reports) // len(reports)
         summary = model_summary or f"已完成 {len(reports)} 个文件的论文查非分析，共发现 {len(all_issues)} 个问题。"
         return {
@@ -193,6 +333,7 @@ class FileExecutor:
             "parsed_files": parsed_files,
             "unsupported": unsupported,
             "model_summary": model_summary,
+            "paper_review_timings_ms": paper_review_timings_ms,
         }
 
     @staticmethod
@@ -209,7 +350,7 @@ class FileExecutor:
         )
         lines = ["已整理出以下修改意见："]
         for idx, issue in enumerate(sorted_issues[:5], start=1):
-            location = FileExecutor._location_text(issue.get("location"))
+            location = str(issue.get("location_summary") or "").strip() or FileExecutor._location_text(issue.get("location"))
             evidence = str(issue.get("evidence") or "").strip() or "无直接证据片段"
             suggestion = str(issue.get("suggestion") or "").strip() or "请结合模板要求人工复核。"
             lines.append(f"{idx}. {str(issue.get('title') or '格式问题')}")

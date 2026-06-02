@@ -9,7 +9,7 @@ from app.services.paper_review_runtime_service import PaperReviewRuntimeService
 
 
 @pytest.mark.asyncio
-async def test_runtime_marks_pycorrector_unhealthy_when_probe_fails(monkeypatch):
+async def test_runtime_diagnose_requires_macro_correct_only(monkeypatch):
     async def _ok_enhanced_parser():
         return {"name": "enhanced_parser", "ok": True, "detail": "python-docx: installed; lxml: installed; PyMuPDF: installed"}
 
@@ -45,18 +45,19 @@ async def test_runtime_marks_pycorrector_unhealthy_when_probe_fails(monkeypatch)
         "app.services.paper_review_runtime_service.PaperReviewRuntimeService._check_vale",
         staticmethod(_ok_vale),
     )
-    monkeypatch.setattr(
-        "agent.tools.paper_review_pycorrector.diagnose_pycorrector",
-        lambda: {"ok": False, "detail": "Corrector init failed: missing kenlm"},
-    )
-
     status = await PaperReviewRuntimeService.diagnose()
 
-    assert status["ok"] is False
+    assert status["ok"] is True
     assert status["strict"] is True
-    pycorrector_status = next(item for item in status["engine_status"] if item["name"] == "pycorrector")
-    assert pycorrector_status["ok"] is False
-    assert "kenlm" in pycorrector_status["detail"]
+    removed_engine = "py" + "corrector"
+    assert removed_engine not in status["engines_used"]
+    assert {item["name"] for item in status["engine_status"]} == {
+        "enhanced_parser",
+        "macro_correct_token",
+        "macro_correct_punct",
+        "languagetool",
+        "vale",
+    }
 
 
 @pytest.mark.asyncio
@@ -90,10 +91,6 @@ async def test_runtime_marks_macro_correct_token_unhealthy_when_probe_fails(monk
         staticmethod(_ok_vale),
     )
     monkeypatch.setattr(
-        "agent.tools.paper_review_pycorrector.diagnose_pycorrector",
-        lambda: {"ok": True, "detail": "pycorrector.correct"},
-    )
-    monkeypatch.setattr(
         "app.services.paper_review_runtime_service._diagnose_macro_correct_token",
         lambda: {"ok": False, "detail": "token detector init failed: missing AdamW"},
     )
@@ -107,12 +104,9 @@ async def test_runtime_marks_macro_correct_token_unhealthy_when_probe_fails(monk
 
 
 @pytest.mark.asyncio
-async def test_runtime_marks_optional_engine_unhealthy_when_probe_times_out(monkeypatch):
+async def test_runtime_marks_macro_correct_token_unhealthy_when_probe_times_out(monkeypatch):
     async def _ok_enhanced_parser():
         return {"name": "enhanced_parser", "ok": True, "detail": "python-docx: installed; lxml: installed; PyMuPDF: installed"}
-
-    async def _ok_macro_token():
-        return {"name": "macro_correct_token", "ok": True, "detail": "macro_correct.MacroCSC4Token.func_csc_token_batch"}
 
     async def _ok_macro_punct():
         return {"name": "macro_correct_punct", "ok": True, "detail": "macro_correct.MacroCSC4Punct.func_csc_punct_batch"}
@@ -129,10 +123,6 @@ async def test_runtime_marks_optional_engine_unhealthy_when_probe_times_out(monk
         staticmethod(_ok_enhanced_parser),
     )
     monkeypatch.setattr(
-        "app.services.paper_review_runtime_service.PaperReviewRuntimeService._check_macro_correct_token",
-        staticmethod(_ok_macro_token),
-    )
-    monkeypatch.setattr(
         "app.services.paper_review_runtime_service.PaperReviewRuntimeService._check_macro_correct_punct",
         staticmethod(_ok_macro_punct),
     )
@@ -145,7 +135,7 @@ async def test_runtime_marks_optional_engine_unhealthy_when_probe_times_out(monk
         staticmethod(_ok_vale),
     )
     monkeypatch.setattr(
-        "agent.tools.paper_review_pycorrector.diagnose_pycorrector",
+        "app.services.paper_review_runtime_service._diagnose_macro_correct_token",
         lambda: time.sleep(5),
     )
 
@@ -154,73 +144,9 @@ async def test_runtime_marks_optional_engine_unhealthy_when_probe_times_out(monk
 
     assert time.monotonic() - started < 3
     assert status["ok"] is False
-    pycorrector_status = next(item for item in status["engine_status"] if item["name"] == "pycorrector")
-    assert pycorrector_status["ok"] is False
-    assert "timed out" in pycorrector_status["detail"]
-
-
-def test_pycorrector_defaults_to_local_corrector(monkeypatch):
-    from agent.tools import paper_review_pycorrector
-
-    paper_review_pycorrector._build_corrector.cache_clear()
-
-    class FakeCorrector:
-        def correct(self, text: str):
-            return {"source": text, "target": text, "errors": []}
-
-    class FailingMacBert:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("MacBert should not be initialized by default")
-
-    fake_module = type(
-        "FakePycorrector",
-        (),
-        {
-            "Corrector": FakeCorrector,
-            "MacBertCorrector": FailingMacBert,
-        },
-    )
-
-    monkeypatch.setattr("app.core.config.settings.paper_check_pycorrector_entrypoint", "corrector")
-    monkeypatch.setitem(__import__("sys").modules, "pycorrector", fake_module)
-
-    correct, entrypoint = paper_review_pycorrector._build_corrector()
-
-    assert entrypoint == "pycorrector.Corrector.correct"
-    assert correct("abc")["errors"] == []
-    paper_review_pycorrector._build_corrector.cache_clear()
-
-
-def test_pycorrector_macbert_entrypoint_requires_local_model_dir(monkeypatch):
-    from agent.tools import paper_review_pycorrector
-
-    paper_review_pycorrector._build_corrector.cache_clear()
-
-    class FakeMacBertCorrector:
-        def __init__(self, model_name_or_path: str):
-            self.model_name_or_path = model_name_or_path
-
-        def correct(self, text: str):
-            return {"source": text, "target": text, "errors": []}
-
-    fake_module = type(
-        "FakePycorrector",
-        (),
-        {
-            "Corrector": object,
-            "MacBertCorrector": FakeMacBertCorrector,
-        },
-    )
-
-    monkeypatch.setattr("app.core.config.settings.paper_check_pycorrector_entrypoint", "macbert_local")
-    monkeypatch.setattr("app.core.config.settings.paper_check_pycorrector_model_dir", "/opt/piap-paper-assets/macro_correct/token")
-    monkeypatch.setitem(__import__("sys").modules, "pycorrector", fake_module)
-
-    correct, entrypoint = paper_review_pycorrector._build_corrector()
-
-    assert entrypoint == "pycorrector.MacBertCorrector.macbert_correct"
-    assert correct("abc")["errors"] == []
-    paper_review_pycorrector._build_corrector.cache_clear()
+    macro_status = next(item for item in status["engine_status"] if item["name"] == "macro_correct_token")
+    assert macro_status["ok"] is False
+    assert "timed out" in macro_status["detail"]
 
 
 def test_macro_correct_requires_local_model_files(monkeypatch, tmp_path):

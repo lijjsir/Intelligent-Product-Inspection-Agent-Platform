@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Awaitable, Callable
 
 from agent.contracts.quality_contracts import NormalizedRequest
@@ -18,6 +19,7 @@ class PaperReviewEnrichmentService:
         paper_report: dict[str, Any],
         request: NormalizedRequest,
         emit_patch: Callable[..., Awaitable[None]] | None = None,
+        emit_progress: Callable[..., Awaitable[None]] | None = None,
         db_session: Any = None,
     ) -> dict[str, Any]:
         merged = dict(paper_report or {})
@@ -43,6 +45,9 @@ class PaperReviewEnrichmentService:
                         guide_evidence.get("error_message", "模板文件加载失败")
                     )
 
+            if callable(emit_progress):
+                await emit_progress("ai_reviewing", "正在生成 Ai-Review 审阅结论...", "running")
+            ai_started = time.perf_counter()
             ai_review_output = await generate_ai_review_output(
                 evidence_pack=dict(payload.get("review_evidence_pack") or {}),
                 guide_evidence=guide_evidence if guide_evidence and not guide_evidence.get("error") else None,
@@ -52,6 +57,17 @@ class PaperReviewEnrichmentService:
                 trace_id=str(payload.get("trace_id") or request.workflow_run_id or request.request_id or ""),
                 task_id=str(payload.get("task_id") or request.session_id or ""),
             )
+            ai_duration_ms = int((time.perf_counter() - ai_started) * 1000)
+            merged.setdefault("paper_review_timings_ms", {})["ai_reviewing"] = ai_duration_ms
+            logger.info("paper review stage completed phase=ai_reviewing duration_ms=%s", ai_duration_ms)
+            if callable(emit_progress):
+                await emit_progress(
+                    "ai_reviewing",
+                    "Ai-Review 论文审阅完成",
+                    "running",
+                    ai_duration_ms,
+                    {"paper_review_timings_ms": dict(merged.get("paper_review_timings_ms") or {})},
+                )
             merged["ai_review_output"] = ai_review_output
             merged["model_used"] = ai_review_output.get("model_used")
 
@@ -69,11 +85,25 @@ class PaperReviewEnrichmentService:
                 merged["model_summary"] = str(ai_review_output.get("summary"))
 
             state = self._build_state(request)
+            if callable(emit_progress):
+                await emit_progress("report_generating", "正在生成查非报告文件...", "running")
+            report_started = time.perf_counter()
             report_files = await FileExecutor._save_report_files(
                 merged=merged,
                 state=state,
                 request=request,
             )
+            report_duration_ms = int((time.perf_counter() - report_started) * 1000)
+            merged.setdefault("paper_review_timings_ms", {})["report_generating"] = report_duration_ms
+            logger.info("paper review stage completed phase=report_generating duration_ms=%s", report_duration_ms)
+            if callable(emit_progress):
+                await emit_progress(
+                    "report_generating",
+                    "查非报告文件生成完成",
+                    "running",
+                    report_duration_ms,
+                    {"paper_review_timings_ms": dict(merged.get("paper_review_timings_ms") or {})},
+                )
             merged["report_files"] = report_files
         except Exception as exc:
             logger.exception(

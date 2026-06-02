@@ -6,6 +6,7 @@ import logging
 import subprocess
 import tempfile
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,11 +14,6 @@ from typing import Any
 import httpx
 
 from agent.tools.paper_format_templates import get_paper_template
-from agent.tools.paper_review_pycorrector import (
-    PycorrectorUnavailableError,
-    normalize_pycorrector_errors,
-    run_pycorrector,
-)
 from agent.tools.paper_review_macro_correct import (
     MacroCorrectUnavailableError,
     run_macro_correct_punct,
@@ -61,6 +57,10 @@ class RuleIssue:
     engine: str = "rule"
     engine_rule_id: str | None = None
     confidence: str | None = None
+    paragraph_role: str | None = None
+    aggregate_count: int | None = None
+    samples: list[dict[str, Any]] | None = None
+    check_scope: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -85,6 +85,14 @@ class RuleIssue:
             result["engine_rule_id"] = self.engine_rule_id
         if self.confidence:
             result["confidence"] = self.confidence
+        if self.paragraph_role:
+            result["paragraph_role"] = self.paragraph_role
+        if self.aggregate_count is not None:
+            result["aggregate_count"] = self.aggregate_count
+        if self.samples is not None:
+            result["samples"] = list(self.samples)
+        if self.check_scope:
+            result["check_scope"] = self.check_scope
         return result
 
 
@@ -103,6 +111,7 @@ def check_paper_format(
     issues: list[RuleIssue] = []
     limitations: list[str] = []
     runtime_status: dict[str, Any] | None = None
+    engine_timings_ms: dict[str, int] = {}
 
     if document_type in ("docx", "pdf"):
         runtime_status = PaperReviewRuntimeService.diagnose_sync()
@@ -125,9 +134,9 @@ def check_paper_format(
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
         issues.extend(_check_formula_rules(parsed))
-        issues.extend(_check_reference_rules(parsed))
+        issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
         issues.extend(_check_word_artifact_rules(parsed))
-        issues.extend(_run_required_text_engines(parsed, file_name=file_name))
+        issues.extend(_run_required_text_engines(parsed, file_name=file_name, timings=engine_timings_ms))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
@@ -136,7 +145,7 @@ def check_paper_format(
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
         issues.extend(_check_formula_rules(parsed))
-        issues.extend(_check_reference_rules(parsed))
+        issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
         limitations.append("LaTeX 仅基于源码检查，不代表最终 PDF 版面完全合规。")
     elif document_type == "pdf":
         issues.extend(_check_pdf_structure(parsed))
@@ -146,8 +155,8 @@ def check_paper_format(
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
         issues.extend(_check_formula_rules(parsed))
-        issues.extend(_check_reference_rules(parsed))
-        issues.extend(_run_required_text_engines(parsed, file_name=file_name))
+        issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
+        issues.extend(_run_required_text_engines(parsed, file_name=file_name, timings=engine_timings_ms))
     else:
         limitations.append("当前仅支持 docx、pdf 和 tex 的论文查非检查。")
         issues.append(
@@ -171,18 +180,90 @@ def check_paper_format(
     issues = _dedupe_issues(issues)
     summary = _build_summary(document_type=document_type, issues=issues, limitations=limitations)
 
+    issue_dicts = [_enrich_issue_dict(item.to_dict(), template=template) for item in issues]
+
     return {
         "document_type": document_type,
         "template_id": effective_template_id,
         "summary": summary,
         "score": _score_issues(issues),
-        "issues": [item.to_dict() for item in issues],
+        "issues": issue_dicts,
         "limitations": limitations,
         "query": query,
         "engines_used": list((runtime_status or {}).get("engines_used") or ["rule"]),
         "engine_status": list((runtime_status or {}).get("engine_status") or [{"name": "rule", "ok": True, "detail": "built-in"}]),
         "runtime_ready": bool(runtime_status.get("ok")) if runtime_status is not None else True,
+        "engine_timings_ms": engine_timings_ms,
+        "quality_flags": _build_quality_flags(parsed),
     }
+
+
+def _enrich_issue_dict(issue: dict[str, Any], *, template: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(issue)
+    enriched.setdefault("location_summary", _brief_location_summary(enriched.get("location")))
+    basis = _lookup_rule_basis(template, str(enriched.get("code") or ""))
+    if basis:
+        enriched.setdefault("rule_basis", basis)
+    return enriched
+
+
+def _lookup_rule_basis(template: dict[str, Any], code: str) -> str:
+    basis_map = dict(template.get("rule_basis") or {})
+    for key in (code, code.split(".", 1)[0] + ".*" if "." in code else ""):
+        if key and basis_map.get(key):
+            return str(basis_map[key])
+    matches = [
+        (str(key), str(value))
+        for key, value in basis_map.items()
+        if str(key).endswith("*") and code.startswith(str(key)[:-1])
+    ]
+    if matches:
+        return sorted(matches, key=lambda item: len(item[0]), reverse=True)[0][1]
+    category = code.split(".", 1)[0] if "." in code else code
+    fallback = {
+        "style": "模板规则数据：正文段落格式、缩进、空行与版式一致性检查。",
+        "heading": "模板规则数据：章节层级、标题编号与正文结构一致性检查。",
+        "toc": "模板规则数据：目录、图目录、表目录及条件章节检查。",
+        "figure": "模板规则数据：图题、图号与正文引用一致性检查。",
+        "table": "模板规则数据：表题、表号与正文引用一致性检查。",
+        "formula": "模板规则数据：公式编号与正文引用一致性检查。",
+        "references": "写作指南引用 GB/T 7714：参考文献著录、编号与正文引用一致性检查。",
+        "text": "写作指南文本规范：中英文混排、全半角标点与空格建议仅作辅助复核。",
+        "abstract": "模板规则数据：摘要与关键词格式检查。",
+        "template": "模板规则数据：学校 Word 模板页面、章节与正文格式检查。",
+        "structure": "模板规则数据：论文组成部分完整性检查。",
+    }
+    return fallback.get(category, "模板规则数据：本地论文查非辅助规则。")
+
+
+def _brief_location_summary(location: object) -> str:
+    if not isinstance(location, dict):
+        return "位置待人工确认"
+    display = str(location.get("display_text") or "").strip()
+    if display:
+        return display[:80]
+    section_title = str(location.get("section_title") or location.get("section") or "").strip()
+    paragraph_no = location.get("paragraph_no")
+    line = location.get("line")
+    page = location.get("page") or location.get("page_no")
+    offset = location.get("offset")
+    if section_title and paragraph_no:
+        return f"{section_title}，第{paragraph_no}段"
+    if section_title and line:
+        return f"{section_title}，第{line}行附近"
+    if section_title:
+        return section_title
+    if page:
+        return f"第{page}页附近"
+    if paragraph_no:
+        return f"第{paragraph_no}段"
+    if line:
+        return f"第{line}行附近"
+    if offset is not None:
+        return f"文本偏移 {offset} 附近"
+    if location.get("file"):
+        return str(location.get("file"))
+    return "位置待人工确认"
 
 
 def _build_summary(*, document_type: str, issues: list[RuleIssue], limitations: list[str]) -> str:
@@ -204,6 +285,10 @@ def _build_summary(*, document_type: str, issues: list[RuleIssue], limitations: 
 def _score_issues(issues: list[RuleIssue]) -> int:
     score = 100
     for item in issues:
+        if item.confidence == "low":
+            continue
+        if item.category in {"text", "writing"} and item.confidence != "high":
+            continue
         if item.severity == "high":
             score -= 12
         elif item.severity == "medium":
@@ -211,6 +296,15 @@ def _score_issues(issues: list[RuleIssue]) -> int:
         else:
             score -= 2
     return max(0, score)
+
+
+def _build_quality_flags(parsed: dict[str, Any]) -> list[str]:
+    if str(parsed.get("kind") or "") != "docx":
+        return []
+    return [
+        "普通文本纠错已跳过目录、图题、表题、公式和参考文献；这些区域由专门规则检查。",
+        "页眉检查区分默认页眉、首页页眉和偶数页页眉。",
+    ]
 
 
 def _issue_location_from_paragraph(
@@ -378,7 +472,7 @@ def _docx_body_between_sections_exists(parsed: dict[str, Any], rule: dict[str, A
             break
     if start_index is None:
         for paragraph in paragraphs:
-            text = str(paragraph.get("text") or "").strip()
+            text = _mask_citation_markers(str(paragraph.get("text") or "").strip())
             if any(alias in text for alias in preface_aliases):
                 start_index = int(paragraph.get("index") or 0)
                 break
@@ -688,6 +782,8 @@ def _check_docx_style(parsed: dict[str, Any]) -> list[RuleIssue]:
     body_candidates = _body_paragraph_candidates(parsed)
     for paragraph in body_candidates[:10]:
         line_spacing = paragraph.get("line_spacing")
+        if _is_fixed_twenty_point_spacing(line_spacing):
+            continue
         if isinstance(line_spacing, (int, float)) and float(line_spacing) < 1.15:
             issues.append(
                 RuleIssue(
@@ -891,11 +987,14 @@ def _check_docx_page_setup(
         if isinstance(body_start_word_section_index, int) and body_start_word_section_index < len(sections)
         else []
     )
-    header_texts = [str(sec.get("header_text") or "").strip() for sec in header_sections]
+    default_header_texts = [_section_header_text(sec, "default") for sec in header_sections]
+    even_header_texts = [_section_header_text(sec, "even") for sec in header_sections]
+    header_texts = [text for pair in zip(default_header_texts, even_header_texts) for text in pair if text]
     footer_texts = [str(sec.get("footer_text") or "").strip() for sec in sections]
     if expected_header and header_texts:
-        any_header_match = any(expected_header in ht for ht in header_texts if ht)
-        if any(ht for ht in header_texts) and not any_header_match:
+        matched_even = any(expected_header in ht for ht in even_header_texts if ht)
+        matched_legacy = not any(even_header_texts) and any(expected_header in ht for ht in default_header_texts if ht)
+        if any(header_texts) and not (matched_even or matched_legacy):
             issues.append(
                 RuleIssue(
                     code="template.header_content_mismatch",
@@ -907,8 +1006,12 @@ def _check_docx_page_setup(
                     location={"display_text": "正文后的页眉区域", "scope": "headers_after_body"},
                     suggestion=f"在页眉中添加 {expected_header}。",
                     expected={"header_text": expected_header},
-                    actual={"header_texts": [ht[:80] for ht in header_texts if ht][:5]},
+                    actual={
+                        "default_header_texts": [ht[:80] for ht in default_header_texts if ht][:5],
+                        "even_header_texts": [ht[:80] for ht in even_header_texts if ht][:5],
+                    },
                     parser_confidence="high",
+                    confidence="high",
                 )
             )
     if cover_no_hf and sections:
@@ -951,8 +1054,11 @@ def _check_template_rules(
         return []
 
     issues: list[RuleIssue] = []
+    conditional_section_keys = {"figure_toc", "table_toc"} if document_type == "docx" else set()
     for section in list(rules.get("required_sections") or []):
         section_rule = _normalize_required_section_rule(section)
+        if str(section_rule.get("key") or "") in conditional_section_keys:
+            continue
         section_name = str(section_rule.get("label") or "")
         if section_name and not _required_section_present(parsed, section_rule, document_type=document_type):
             issues.append(
@@ -1077,6 +1183,8 @@ def _check_template_rules(
     if isinstance(expected_spacing, (int, float)):
         for paragraph in body_candidates:
             actual_spacing = paragraph.get("line_spacing")
+            if _is_fixed_twenty_point_spacing(actual_spacing):
+                continue
             if (
                 isinstance(actual_spacing, (int, float))
                 and float(actual_spacing) <= 5
@@ -1248,7 +1356,8 @@ def _check_front_matter_rules(
                 )
             )
 
-    if re.search(r"(?:摘要|ABSTRACT)[\s\S]{0,600}(?:图\d+|表\d+|\[\d+\]|（\d+(?:[-.]\d+)*）)", text, flags=re.I):
+    abstract_forbidden_hit = _find_abstract_forbidden_content_hit(parsed)
+    if abstract_forbidden_hit:
         issues.append(
             RuleIssue(
                 code="abstract.contains_figure_formula_or_citation",
@@ -1256,13 +1365,44 @@ def _check_front_matter_rules(
                 severity="low",
                 category="structure",
                 message="摘要区域内识别到图表、公式或参考文献编号痕迹。",
-                evidence="摘要附近出现图表/公式/引用编号",
+                evidence=str(abstract_forbidden_hit.get("evidence") or "摘要附近出现图表/公式/引用编号"),
                 location={"section": "abstract", "display_text": "摘要"},
                 suggestion="摘要通常应避免出现图表、公式和参考文献编号。",
                 parser_confidence="medium",
             )
         )
     return issues
+
+
+def _find_abstract_forbidden_content_hit(parsed: dict[str, Any]) -> dict[str, str] | None:
+    for window in _abstract_text_windows(parsed):
+        match = re.search(r"(?:图\d+|表\d+|\[\d+\]|（\d+(?:[-.]\d+)*）)", window, flags=re.I)
+        if match:
+            return {"evidence": _build_evidence_excerpt(window, match.start(), match.end())}
+    return None
+
+
+def _abstract_text_windows(parsed: dict[str, Any]) -> list[str]:
+    paragraphs = list(parsed.get("paragraphs") or [])
+    role_windows = [
+        str(item.get("text") or "").strip()
+        for item in paragraphs
+        if _paragraph_role(item) == "abstract_body" and str(item.get("text") or "").strip()
+    ]
+    if role_windows:
+        return role_windows
+
+    text = str(parsed.get("text") or "")
+    windows: list[str] = []
+    for start_match in re.finditer(r"(?im)^(?:\s*(?:摘要|Abstract)\s*[:：]?.*)$", text):
+        start = start_match.start()
+        tail = text[start:start + 1200]
+        stop = re.search(r"(?im)^\s*(?:关键词|关键字|Keywords?|目录|1[.、\s]|第[一二三四五六七八九十\d]+章)\b", tail[start_match.end() - start:])
+        if stop:
+            windows.append(tail[: start_match.end() - start + stop.start()])
+        else:
+            windows.append(tail[:600])
+    return windows
 
 
 def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> list[RuleIssue]:
@@ -1278,7 +1418,16 @@ def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> lis
         return issues
     toc_text = "\n".join(str(item.get("title") or "") for item in toc_entries) if toc_entries else _toc_text_window(text)
     normalized_toc_text = _normalize_loose_text(toc_text)
-    missing = [entry for entry in required_entries if _normalize_loose_text(entry) not in normalized_toc_text]
+    conditional_rules = dict(rules.get("toc_conditional_entries") or {})
+    conditional_labels = {
+        str(rule.get("label") or "").strip()
+        for rule in conditional_rules.values()
+        if isinstance(rule, dict) and str(rule.get("label") or "").strip()
+    }
+    missing = [
+        entry for entry in required_entries
+        if entry not in conditional_labels and _normalize_loose_text(entry) not in normalized_toc_text
+    ]
     if missing:
         issues.append(
             RuleIssue(
@@ -1293,6 +1442,39 @@ def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> lis
                 expected={"required_entries": required_entries},
                 actual={"missing_entries": missing},
                 parser_confidence="medium" if not toc_entries else "high",
+                confidence="high",
+            )
+        )
+    figure_count = len(list(parsed.get("figure_titles") or []))
+    table_count = len(list(parsed.get("table_titles") or []))
+    combined_count = figure_count + table_count
+    for key, issue_code in (
+        ("figure_toc", "template.figure_toc_conditionally_missing"),
+        ("table_toc", "template.table_toc_conditionally_missing"),
+    ):
+        rule = dict(conditional_rules.get(key) or {})
+        label = str(rule.get("label") or "").strip()
+        if not label or _normalize_loose_text(label) in normalized_toc_text:
+            continue
+        single_count = figure_count if key == "figure_toc" else table_count
+        single_threshold = int(rule.get("single_count_threshold") or 5)
+        combined_threshold = int(rule.get("combined_count_threshold") or 10)
+        if single_count < single_threshold and combined_count < combined_threshold:
+            continue
+        issues.append(
+            RuleIssue(
+                code=issue_code,
+                title=f"目录缺少条件性条目：{label}",
+                severity=str(rule.get("severity") or "medium"),
+                category="structure",
+                message=f"文档包含图 {figure_count} 个、表 {table_count} 个，建议在目录中包含{label}。",
+                evidence=f"目录条目样例：{toc_text[:200]}",
+                location={"section": "toc", "display_text": "目录"},
+                suggestion=f"图表数量较多时，按学校模板补充{label}并更新自动目录。",
+                expected={"conditional_entry": label, "single_count_threshold": single_threshold, "combined_count_threshold": combined_threshold},
+                actual={"figure_count": figure_count, "table_count": table_count, "combined_count": combined_count},
+                parser_confidence="high",
+                confidence="high",
             )
         )
     return issues
@@ -1300,7 +1482,7 @@ def _check_toc_rules(parsed: dict[str, Any], *, template: dict[str, Any]) -> lis
 
 def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
-    text = str(parsed.get("text") or "")
+    text = _build_text_norms_input_text(parsed)
     paragraphs = list(parsed.get("paragraphs") or [])
     seen_fullwidth = re.search(r"[Ａ-Ｚａ-ｚ０-９]", text)
     if seen_fullwidth:
@@ -1392,14 +1574,29 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
     return issues
 
 
-def _run_required_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
+def _run_required_text_engines(parsed: dict[str, Any], *, file_name: str, timings: dict[str, int] | None = None) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
-    issues.extend(_check_text_norms(parsed))
-    issues.extend(_check_pycorrector(parsed))
-    issues.extend(_check_macro_correct(parsed))
-    issues.extend(_check_language_tool(parsed, file_name=file_name))
-    issues.extend(_check_vale(parsed))
+    issues.extend(_timed_issue_check("text_norms", timings, _check_text_norms, parsed))
+    try:
+        issues.extend(_check_macro_correct(parsed, timings=timings))
+    except TypeError as exc:
+        if "timings" not in str(exc):
+            raise
+        issues.extend(_check_macro_correct(parsed))
+    issues.extend(_timed_issue_check("languagetool", timings, _check_language_tool, parsed, file_name=file_name))
+    issues.extend(_timed_issue_check("vale", timings, _check_vale, parsed))
     return issues
+
+
+def _timed_issue_check(name: str, timings: dict[str, int] | None, func, *args, **kwargs) -> list[RuleIssue]:
+    started = time.perf_counter()
+    try:
+        return func(*args, **kwargs)
+    finally:
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        if timings is not None:
+            timings[name] = duration_ms
+        logger.info("paper review engine completed engine=%s duration_ms=%s", name, duration_ms)
 
 
 def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
@@ -1408,7 +1605,7 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
     base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
     if not base_url:
         raise PaperReviewDependencyError("paper_check_languagetool_url 未配置")
-    text = str(parsed.get("text") or "").strip()
+    text = _build_language_tool_input_text(parsed).strip()
     if not text:
         return []
     try:
@@ -1461,145 +1658,10 @@ def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[Rule
     return issues
 
 
-def _check_pycorrector(parsed: dict[str, Any]) -> list[RuleIssue]:
-    if not settings.paper_check_pycorrector_enabled:
-        raise PaperReviewDependencyError("pycorrector 已禁用，但严格模式要求所有增强引擎可用")
-
-    body_paragraphs = [
-        paragraph
-        for paragraph in list(parsed.get("paragraphs") or [])
-        if str(paragraph.get("text") or "").strip() and not paragraph.get("heading_level")
-    ]
-    if not body_paragraphs:
-        return []
-
-    chunk_limit = max(300, int(settings.paper_check_pycorrector_chunk_chars or 1200))
-    timeout_sec = max(1.0, float(settings.paper_check_pycorrector_timeout_sec or settings.paper_check_engine_timeout_sec or 8))
-    chunks = _build_pycorrector_chunks(body_paragraphs, chunk_limit=chunk_limit)
-    if not chunks:
-        return []
-
-    try:
-        chunk_results = asyncio.run(
-            asyncio.wait_for(
-                asyncio.to_thread(_run_pycorrector_on_chunks, chunks),
-                timeout=timeout_sec,
-            )
-        )
-    except PycorrectorUnavailableError as exc:
-        raise PaperReviewDependencyError(f"pycorrector 不可用：{exc}") from exc
-    except asyncio.TimeoutError as exc:
-        raise PaperReviewDependencyError(f"pycorrector 超时：{timeout_sec}s") from exc
-    except Exception as exc:
-        raise PaperReviewDependencyError(f"pycorrector 执行失败：{exc}") from exc
-
-    issues: list[RuleIssue] = []
-    for paragraph, wrong, right, begin, end, entrypoint in chunk_results[:30]:
-        text = str(paragraph.get("text") or "").strip()
-        if not text or _should_skip_spelling_hit(text, wrong, right):
-            continue
-        evidence = _build_evidence_excerpt(text, begin, end)
-        location = _issue_location_from_paragraph(paragraph)
-        location["offset"] = begin
-        issues.append(
-            RuleIssue(
-                code="pycorrector.spelling",
-                title="疑似错别字",
-                severity="medium",
-                category="text",
-                message=f"检测到疑似错别字：{wrong} -> {right}。",
-                evidence=evidence,
-                location=location,
-                suggestion=f"将“{wrong}”改为“{right}”，并结合上下文复核。",
-                engine="pycorrector",
-                engine_rule_id=entrypoint,
-                confidence="medium",
-                parser_confidence="high",
-                actual={"wrong": wrong, "right": right},
-            )
-        )
-    return issues
-
-
-def _build_pycorrector_chunks(
-    paragraphs: list[dict[str, Any]],
-    *,
-    chunk_limit: int,
-) -> list[dict[str, Any]]:
-    chunks: list[dict[str, Any]] = []
-    current_items: list[dict[str, Any]] = []
-    current_length = 0
-
-    def flush() -> None:
-        nonlocal current_items, current_length
-        if not current_items:
-            return
-        text_parts: list[str] = []
-        offsets: list[dict[str, Any]] = []
-        cursor = 0
-        for item in current_items:
-            paragraph_text = str(item.get("text") or "")
-            text_parts.append(paragraph_text)
-            offsets.append(
-                {
-                    "paragraph": item,
-                    "start": cursor,
-                    "end": cursor + len(paragraph_text),
-                }
-            )
-            cursor += len(paragraph_text) + 1
-        chunks.append({"text": "\n".join(text_parts), "offsets": offsets})
-        current_items = []
-        current_length = 0
-
-    for paragraph in paragraphs:
-        text = str(paragraph.get("text") or "").strip()
-        if not text:
-            continue
-        projected = current_length + len(text) + (1 if current_items else 0)
-        if current_items and projected > chunk_limit:
-            flush()
-        current_items.append(paragraph)
-        current_length += len(text) + (1 if current_items[:-1] else 0)
-    flush()
-    return chunks
-
-
-def _run_pycorrector_on_chunks(chunks: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str, str, int, int, str]]:
-    results: list[tuple[dict[str, Any], str, str, int, int, str]] = []
-    for chunk in chunks:
-        text = str(chunk.get("text") or "")
-        if not text.strip():
-            continue
-        corrected, entrypoint = run_pycorrector(text)
-        for wrong, right, begin, end in normalize_pycorrector_errors(corrected):
-            paragraph, local_begin, local_end = _map_chunk_offset_to_paragraph(chunk, begin, end)
-            if paragraph is None:
-                continue
-            results.append((paragraph, wrong, right, local_begin, local_end, entrypoint))
-    return results
-
-
-def _map_chunk_offset_to_paragraph(
-    chunk: dict[str, Any],
-    begin: int,
-    end: int,
-) -> tuple[dict[str, Any] | None, int, int]:
-    for item in list(chunk.get("offsets") or []):
-        start = int(item.get("start") or 0)
-        stop = int(item.get("end") or start)
-        if start <= begin <= stop:
-            paragraph = item.get("paragraph")
-            local_begin = max(0, begin - start)
-            local_end = max(local_begin + 1, min(stop, end) - start)
-            return paragraph if isinstance(paragraph, dict) else None, local_begin, local_end
-    return None, 0, 0
-
-
-def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
+def _check_macro_correct(parsed: dict[str, Any], timings: dict[str, int] | None = None) -> list[RuleIssue]:
     if not settings.paper_check_macro_correct_enabled:
         raise PaperReviewDependencyError("macro-correct 已禁用，但严格模式要求所有增强引擎可用")
-    paragraphs = list(parsed.get("paragraphs") or [])
+    paragraphs = _text_norm_paragraphs(parsed) if str(parsed.get("kind") or "") == "docx" else list(parsed.get("paragraphs") or [])
     if not paragraphs:
         return []
 
@@ -1609,6 +1671,8 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
     for paragraph in paragraphs:
         text = str(paragraph.get("text") or "").strip()
         if not text:
+            continue
+        if not _is_natural_language_role(paragraph) or not _is_chinese_text(text):
             continue
         texts.append(text)
         paragraph_refs.append(paragraph)
@@ -1623,29 +1687,59 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
     token_error: MacroCorrectUnavailableError | None = None
     punct_error: MacroCorrectUnavailableError | None = None
 
+    batch_size = max(1, int(settings.paper_check_macro_correct_batch_size or 8))
+    token_hits: list[tuple[int, dict[str, Any]]] = []
+    punct_hits: list[tuple[int, dict[str, Any]]] = []
+
     try:
-        token_results, token_entrypoint = run_macro_correct_token(texts)
+        token_started = time.perf_counter()
+        token_hits, token_entrypoint = _run_macro_correct_token_batched(texts, batch_size=batch_size)
+        token_duration_ms = int((time.perf_counter() - token_started) * 1000)
+        if timings is not None:
+            timings["macro_correct_token"] = token_duration_ms
+        logger.info("paper review engine completed engine=macro_correct_token duration_ms=%s", token_duration_ms)
     except MacroCorrectUnavailableError as exc:
         token_error = exc
     except Exception as exc:
         logger.warning("macro-correct token detector failed: %s", exc)
 
-    try:
-        punct_results, punct_entrypoint = run_macro_correct_punct(texts)
-    except MacroCorrectUnavailableError as exc:
-        punct_error = exc
-    except Exception as exc:
-        logger.warning("macro-correct punct detector failed: %s", exc)
+    # Punct model (~10 min CPU per large doc) can be toggled off for speed.
+    punct_hits: list[tuple[int, dict[str, Any]]] = []
+    punct_entrypoint = ""
+    punct_skipped = False
+    if settings.paper_check_macro_correct_punct_enabled:
+        _punct_deadline = time.perf_counter() + 1500
+        try:
+            punct_started = time.perf_counter()
+            punct_hits, punct_entrypoint = _run_macro_correct_punct_batched(
+                texts, batch_size=batch_size, deadline_sec=_punct_deadline,
+            )
+            punct_duration_ms = int((time.perf_counter() - punct_started) * 1000)
+            if time.perf_counter() >= _punct_deadline:
+                punct_skipped = True
+                logger.warning("macro_correct punct hit deadline batches_partial=%d", len(punct_hits))
+            if timings is not None:
+                timings["macro_correct_punct"] = punct_duration_ms
+            logger.info("paper review engine completed engine=macro_correct_punct duration_ms=%s", punct_duration_ms)
+        except MacroCorrectUnavailableError as exc:
+            punct_error = exc
+        except Exception as exc:
+            logger.warning("macro-correct punct detector failed: %s", exc)
+    else:
+        punct_skipped = True
+        punct_entrypoint = "macro_correct.punct.disabled"
+        logger.info("paper review engine skipped engine=macro_correct_punct reason=disabled")
 
-    if token_results is None:
+    if token_entrypoint == "":
         raise PaperReviewDependencyError(f"macro-correct token 不可用：{token_error or 'no result'}")
-    if punct_results is None:
+    # Punct is non-fatal: partial results from token are still valuable.
+    if punct_entrypoint == "" and not punct_skipped:
         raise PaperReviewDependencyError(f"macro-correct punct 不可用：{punct_error or 'no result'}")
 
     combined_hits: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
-    for index, hit in _normalize_macro_correct_batch_hits(token_results):
+    for index, hit in token_hits:
         combined_hits.setdefault(index, []).append((hit, token_entrypoint or "macro_correct.token", "中文拼写建议"))
-    for index, hit in _normalize_macro_correct_batch_hits(punct_results):
+    for index, hit in punct_hits:
         combined_hits.setdefault(index, []).append((hit, punct_entrypoint or "macro_correct.punct", "中文标点建议"))
 
     for index, paragraph in enumerate(paragraph_refs):
@@ -1656,6 +1750,8 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
             wrong = str(hit.get("wrong") or "").strip()
             right = str(hit.get("right") or "").strip()
             if not wrong and not right:
+                continue
+            if _should_skip_macro_correct_hit(text=text, wrong=wrong, right=right, title=title):
                 continue
             location = _issue_location_from_paragraph(paragraph)
             location["offset"] = begin
@@ -1674,9 +1770,84 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
                     confidence="medium",
                     parser_confidence="high",
                     actual={"wrong": wrong, "right": right},
+                    paragraph_role=_paragraph_role(paragraph) or None,
+                    check_scope="natural_language_paragraphs",
                 )
             )
-    return issues
+    return _aggregate_macro_correct_issues(issues)
+
+
+def _run_macro_correct_token_batched(texts: list[str], *, batch_size: int) -> tuple[list[tuple[int, dict[str, Any]]], str]:
+    return _run_macro_correct_batched(texts, batch_size=batch_size, runner=run_macro_correct_token)
+
+
+def _aggregate_macro_correct_issues(issues: list[RuleIssue]) -> list[RuleIssue]:
+    if len(issues) <= 30:
+        return issues
+    grouped: dict[str, list[RuleIssue]] = {}
+    for issue in issues:
+        key = "punct" if issue.title == "中文标点建议" else "token"
+        grouped.setdefault(key, []).append(issue)
+    aggregated: list[RuleIssue] = []
+    for key, items in grouped.items():
+        if len(items) <= 20:
+            aggregated.extend(items)
+            continue
+        samples = [
+            {
+                "evidence": item.evidence,
+                "suggestion": item.suggestion,
+                "location": item.location,
+                "actual": item.actual,
+            }
+            for item in items[:10]
+        ]
+        title = "中文标点建议聚合" if key == "punct" else "中文拼写建议聚合"
+        aggregated.append(
+            RuleIssue(
+                code=f"macro_correct.{key}.aggregate",
+                title=title,
+                severity="medium" if key == "token" else "low",
+                category="text",
+                message=f"检测到 {len(items)} 条{title.replace('聚合', '')}，已聚合展示，需结合上下文复核。",
+                evidence="；".join(item.evidence for item in items[:3]),
+                location={"display_text": "正文自然语言段落"},
+                suggestion="优先处理样例中明确影响语义或标点风格统一的问题，不要按机器建议机械全量替换。",
+                engine="macro_correct",
+                engine_rule_id=f"macro_correct.{key}.aggregate",
+                confidence="medium",
+                aggregate_count=len(items),
+                samples=samples,
+                check_scope="natural_language_paragraphs",
+            )
+        )
+    return aggregated
+
+
+def _run_macro_correct_punct_batched(texts: list[str], *, batch_size: int, deadline_sec: float | None = None) -> tuple[list[tuple[int, dict[str, Any]]], str]:
+    return _run_macro_correct_batched(texts, batch_size=batch_size, runner=run_macro_correct_punct, deadline_sec=deadline_sec)
+
+
+def _run_macro_correct_batched(
+    texts: list[str],
+    *,
+    batch_size: int,
+    runner,
+    deadline_sec: float | None = None,
+) -> tuple[list[tuple[int, dict[str, Any]]], str]:
+    hits: list[tuple[int, dict[str, Any]]] = []
+    entrypoint = ""
+    for start in range(0, len(texts), batch_size):
+        if deadline_sec is not None and time.perf_counter() >= deadline_sec:
+            logger.warning("macro_correct batched runner stopped before deadline batches_done=%d batches_total=%d", start // batch_size, (len(texts) + batch_size - 1) // batch_size)
+            break
+        batch = texts[start : start + batch_size]
+        if not batch:
+            continue
+        result, entrypoint = runner(batch)
+        for index, hit in _normalize_macro_correct_batch_hits(result):
+            hits.append((start + index, hit))
+    return hits, entrypoint
 
 
 def _check_vale(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -1741,6 +1912,20 @@ def _language_tool_suggestion(match: dict[str, Any]) -> str:
     return "请结合上下文人工复核该处表述。"
 
 
+def _build_language_tool_input_text(parsed: dict[str, Any]) -> str:
+    if str(parsed.get("kind") or "") != "docx":
+        return str(parsed.get("text") or "")
+    lines: list[str] = []
+    for paragraph in list(parsed.get("paragraphs") or []):
+        text = str(paragraph.get("text") or "").strip()
+        if not text or not _is_natural_language_role(paragraph):
+            continue
+        section = str(paragraph.get("section_title") or "").lower()
+        if "abstract" in section or _is_mostly_english_text(text):
+            lines.append(text)
+    return "\n".join(lines)
+
+
 def _toc_text_window(text: str) -> str:
     content = str(text or "")
     index = content.find("目录")
@@ -1749,11 +1934,58 @@ def _toc_text_window(text: str) -> str:
     return content[index:index + 2000]
 
 
+def _build_text_norms_input_text(parsed: dict[str, Any]) -> str:
+    if str(parsed.get("kind") or "") != "docx":
+        return str(parsed.get("text") or "")
+    selected = _text_norm_paragraphs(parsed)
+    if not selected:
+        return str(parsed.get("text") or "")
+    return "\n".join(_mask_citation_markers(str(item.get("text") or "").strip()) for item in selected if str(item.get("text") or "").strip())
+
+
+def _text_norm_paragraphs(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    if not any(_paragraph_role(item) for item in paragraphs):
+        return paragraphs
+    main_body_start = _find_docx_main_body_start_paragraph_index(parsed)
+    main_body_end = _find_docx_main_body_end_paragraph_index(parsed)
+    selected: list[dict[str, Any]] = []
+    for item in paragraphs:
+        if not _is_natural_language_role(item):
+            continue
+        if _paragraph_role(item) == "body" and not _within_optional_bounds(item.get("index"), start=main_body_start, end=main_body_end):
+            continue
+        selected.append(item)
+    return selected
+
+
+def _body_reference_text(parsed: dict[str, Any]) -> str:
+    if str(parsed.get("kind") or "") != "docx":
+        return str(parsed.get("text") or "")
+    paragraphs = _text_norm_paragraphs(parsed)
+    if not paragraphs:
+        return str(parsed.get("text") or "")
+    return "\n".join(str(item.get("text") or "").strip() for item in paragraphs if str(item.get("text") or "").strip())
+
+
+def _mask_citation_markers(text: str) -> str:
+    return re.sub(r"\[\s*\d+(?:\s*[-－–,，、]\s*\d+)*\s*\]", "", str(text or ""))
+
+
 def _body_paragraph_candidates(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     paragraphs = [
         item for item in list(parsed.get("paragraphs") or [])
         if str(item.get("text") or "").strip() and not item.get("heading_level")
     ]
+    main_body_start = _find_docx_main_body_start_paragraph_index(parsed)
+    main_body_end = _find_docx_main_body_end_paragraph_index(parsed)
+    role_candidates = [
+        item for item in paragraphs
+        if _paragraph_role(item) == "body"
+        and _within_optional_bounds(item.get("index"), start=main_body_start, end=main_body_end)
+    ]
+    if role_candidates:
+        return role_candidates
     candidates = [
         item for item in paragraphs
         if _looks_like_body_paragraph(item)
@@ -1761,7 +1993,45 @@ def _body_paragraph_candidates(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates or paragraphs
 
 
+def _within_optional_bounds(value: Any, *, start: int | None, end: int | None) -> bool:
+    if not isinstance(value, int):
+        return True
+    if start is not None and value < start:
+        return False
+    if end is not None and value >= end:
+        return False
+    return True
+
+
+def _find_docx_main_body_start_paragraph_index(parsed: dict[str, Any]) -> int | None:
+    front_titles = ("摘要", "abstract", "目录", "图目录", "表目录", "主要符号", "缩略词")
+    for heading in list(parsed.get("headings") or []):
+        if int(heading.get("level") or 0) != 1:
+            continue
+        text = str(heading.get("text") or "").strip().lower()
+        if not text or any(title in text for title in front_titles):
+            continue
+        paragraph_index = heading.get("paragraph_index")
+        if isinstance(paragraph_index, int):
+            return paragraph_index
+    return None
+
+
+def _find_docx_main_body_end_paragraph_index(parsed: dict[str, Any]) -> int | None:
+    ending_titles = ("参考文献", "致谢", "致 謝", "作者简介", "附录")
+    for heading in list(parsed.get("headings") or []):
+        text = str(heading.get("text") or "").strip().lower()
+        if any(title in text for title in ending_titles):
+            paragraph_index = heading.get("paragraph_index")
+            if isinstance(paragraph_index, int):
+                return paragraph_index
+    return None
+
+
 def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
+    role = _paragraph_role(paragraph)
+    if role and role != "body":
+        return False
     if _is_front_matter_paragraph(paragraph):
         return False
     section_title = str(paragraph.get("section_title") or "").strip()
@@ -1771,6 +2041,54 @@ def _looks_like_body_paragraph(paragraph: dict[str, Any]) -> bool:
     if len(text) < 6 and not re.search(r"[\u4e00-\u9fff].*[\u4e00-\u9fff]", text):
         return False
     return True
+
+
+def _paragraph_role(paragraph: dict[str, Any] | None) -> str:
+    return str((paragraph or {}).get("paragraph_role") or "").strip()
+
+
+def _is_natural_language_role(paragraph: dict[str, Any]) -> bool:
+    role = _paragraph_role(paragraph)
+    if role:
+        return role in {"body", "abstract_body", "acknowledgement_body"}
+    if paragraph.get("heading_level"):
+        return False
+    section_title = str(paragraph.get("section_title") or "").strip().lower()
+    text = str(paragraph.get("text") or "").strip()
+    if any(keyword in section_title for keyword in ("目录", "图目录", "表目录", "参考文献")):
+        return False
+    if re.match(r"^(?:图|fig(?:ure)?\.?|表|table\.?)\s*\d+", text, re.I):
+        return False
+    if re.fullmatch(r"[（(]\s*\d+(?:[-.]\d+)*\s*[）)]", text):
+        return False
+    return True
+
+
+def _is_chinese_text(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _is_mostly_english_text(text: str) -> bool:
+    content = str(text or "").strip()
+    if not content:
+        return False
+    letters = len(re.findall(r"[A-Za-z]", content))
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", content))
+    return letters >= 8 and letters >= cjk * 2
+
+
+def _is_fixed_twenty_point_spacing(value: Any) -> bool:
+    if not isinstance(value, (int, float)):
+        return False
+    return abs(float(value) - 254000.0) <= 500
+
+
+def _section_header_text(section: dict[str, Any], kind: str) -> str:
+    if kind == "even":
+        return str(section.get("even_header_text") or "").strip()
+    if kind == "first":
+        return str(section.get("first_header_text") or "").strip()
+    return str(section.get("default_header_text") or section.get("header_text") or "").strip()
 
 
 def _is_front_matter_paragraph(paragraph: dict[str, Any]) -> bool:
@@ -1794,8 +2112,8 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 def _find_mixed_punctuation_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(parsed.get("kind") or "")
     if kind == "docx":
-        for paragraph in list(parsed.get("paragraphs") or []):
-            text = str(paragraph.get("text") or "").strip()
+        for paragraph in _text_norm_paragraphs(parsed):
+            text = _mask_citation_markers(str(paragraph.get("text") or "").strip())
             if not text:
                 continue
             evidence = _extract_mixed_punctuation_evidence(text)
@@ -1965,8 +2283,8 @@ def _count_mixed_punctuation_hits(parsed: dict) -> int:
         rf"[{escaped_zh}][A-Za-z0-9]",
     ]
     if kind == "docx":
-        for paragraph in list(parsed.get("paragraphs") or []):
-            text = str(paragraph.get("text") or "")
+        for paragraph in _text_norm_paragraphs(parsed):
+            text = _mask_citation_markers(str(paragraph.get("text") or ""))
             for pat in patterns:
                 count += len(re.findall(pat, text))
     elif kind == "pdf":
@@ -2006,6 +2324,21 @@ def _should_skip_spelling_hit(text: str, wrong: Any, right: Any) -> bool:
     if re.search(r"[=∑√≤≥±×÷\\{}]", text):
         return True
     return False
+
+
+def _should_skip_macro_correct_hit(*, text: str, wrong: Any, right: Any, title: str) -> bool:
+    if _should_skip_spelling_hit(text, wrong, right):
+        return True
+    if title != "中文标点建议":
+        return False
+    wrong_text = str(wrong or "").strip()
+    right_text = str(right or "").strip()
+    return _is_low_confidence_zh_punct_style_swap(wrong_text, right_text)
+
+
+def _is_low_confidence_zh_punct_style_swap(wrong: str, right: str) -> bool:
+    zh_punctuation = set("，。；：？！、")
+    return len(wrong) == 1 and len(right) == 1 and wrong in zh_punctuation and right in zh_punctuation
 
 
 def _normalize_macro_correct_hits(result: Any) -> list[dict[str, Any]]:
@@ -2064,12 +2397,22 @@ def _build_vale_input_text(parsed: dict[str, Any]) -> str:
         text = str(paragraph.get("text") or "").strip()
         if not text:
             continue
+        if str(parsed.get("kind") or "") == "docx":
+            if not _is_natural_language_role(paragraph) or not _is_chinese_text(text):
+                continue
         lines.append(text)
     return "\n".join(lines)
 
 
 def _vale_line_to_paragraph(parsed: dict[str, Any], line_no: int) -> tuple[dict[str, Any], str] | None:
-    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    paragraphs = [
+        item for item in list(parsed.get("paragraphs") or [])
+        if str(item.get("text") or "").strip()
+        and (
+            str(parsed.get("kind") or "") != "docx"
+            or (_is_natural_language_role(item) and _is_chinese_text(str(item.get("text") or "")))
+        )
+    ]
     if not paragraphs:
         return None
     index = max(0, min(len(paragraphs) - 1, line_no - 1))
@@ -2156,7 +2499,7 @@ def _has_previous_sibling_heading(headings: list[dict[str, Any]], current: str) 
 def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues = []
     paragraphs = list(parsed.get("paragraphs") or [])
-    text = str(parsed.get("text") or "")
+    text = _body_reference_text(parsed)
     figure_numbers = []
 
     for p in paragraphs:
@@ -2181,7 +2524,11 @@ def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             break
 
     figure_caption_numbers = {_normalize_number(number) for number, _text, _p in figure_numbers}
-    figure_refs = {_normalize_number(item) for item in re.findall(r"图\s*(\d+(?:[-.]\d+)*)", text)}
+    figure_refs = {
+        _normalize_number(item)
+        for item in re.findall(r"图\s*(\d+(?:[-.]\d+)*)", text)
+        if _looks_like_chapter_scoped_number(item)
+    }
     missing_figure_captions = sorted(figure_refs - figure_caption_numbers)
     if missing_figure_captions:
         issues.append(RuleIssue(
@@ -2209,7 +2556,11 @@ def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             match = re.match(r"^(?:表|Table)\s*(\d+(?:[-.]\d+)*)", p_text, re.I)
             if match:
                 table_caption_numbers.add(_normalize_number(match.group(1)))
-    table_refs = {_normalize_number(item) for item in re.findall(r"表\s*(\d+(?:[-.]\d+)*)", text)}
+    table_refs = {
+        _normalize_number(item)
+        for item in re.findall(r"表\s*(\d+(?:[-.]\d+)*)", text)
+        if _looks_like_chapter_scoped_number(item)
+    }
     missing_table_captions = sorted(table_refs - table_caption_numbers)
     if missing_table_captions:
         issues.append(RuleIssue(
@@ -2229,11 +2580,23 @@ def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
 
 def _check_formula_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     issues: list[RuleIssue] = []
-    text = str(parsed.get("text") or "")
-    defined = {_normalize_number(item) for item in list(parsed.get("formula_numbers") or []) if str(item).strip()}
+    text = _body_reference_text(parsed)
+    defined = {
+        _normalize_number(item)
+        for item in list(parsed.get("formula_numbers") or [])
+        if str(item).strip() and _looks_like_chapter_scoped_number(str(item))
+    }
     if not defined:
-        defined = {_normalize_number(item) for item in re.findall(r"[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)}
-    referenced = {_normalize_number(item) for item in re.findall(r"(?:式|公式)\s*[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)}
+        defined = {
+            _normalize_number(item)
+            for item in re.findall(r"[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)
+            if _looks_like_chapter_scoped_number(item)
+        }
+    referenced = {
+        _normalize_number(item)
+        for item in re.findall(r"(?:式|公式)\s*[（(]\s*(\d+(?:[-.]\d+)*)\s*[）)]", text)
+        if _looks_like_chapter_scoped_number(item)
+    }
     combined = sorted(defined | referenced, key=_number_sort_key)
     missing_between = _missing_numbers_in_sequence(combined)
     if missing_between:
@@ -2266,6 +2629,14 @@ def _check_formula_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
 
 def _normalize_number(value: Any) -> str:
     return str(value or "").strip().replace(".", "-").replace("－", "-").replace("–", "-")
+
+
+def _looks_like_chapter_scoped_number(value: str) -> bool:
+    normalized = _normalize_number(value)
+    parts = normalized.split("-")
+    if len(parts) < 2:
+        return False
+    return all(part.isdigit() for part in parts)
 
 
 def _number_sort_key(value: str) -> tuple[int, ...]:
@@ -2306,12 +2677,14 @@ def _missing_numbers_in_sequence(numbers: list[str]) -> list[str]:
 
 def _find_reference_boundary(text: str) -> int:
     """Find the character position where the reference list begins."""
-    for line in text.splitlines():
+    offset = 0
+    for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped in {"参考文献", "References", "Bibliography", "REFERENCES"}:
             # Verify it looks like a section header (short line, no brackets)
             if len(stripped) < 20 and not re.match(r"^\[\d+\]", stripped):
-                return text.find(line)
+                return offset + line.find(stripped)
+        offset += len(line)
     return -1
 
 def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -2324,13 +2697,13 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     # counting reference entries themselves as in-text citations.
     ref_boundary = _find_reference_boundary(text)
     pre_ref_text = text[:ref_boundary] if ref_boundary > 0 else text
-    for m in re.finditer(r"\[(\d+(?:[,,、\-–]\d+)*)\]", pre_ref_text):
+    for m in re.finditer(r"\[\s*(\d+(?:\s*[-－–,，、]\s*\d+)*)\s*\]", pre_ref_text):
         inner = m.group(1)
-        for part in re.split(r"[,,、]", inner):
+        for part in re.split(r"[,，、]", inner):
             part = part.strip()
-            if "-" in part or "–" in part:
+            if "-" in part or "－" in part or "–" in part:
                 try:
-                    a_str, b_str = re.split(r"[-–]", part)
+                    a_str, b_str = re.split(r"[-－–]", part)
                     cited_numbers.update(range(int(a_str), int(b_str) + 1))
                 except ValueError:
                     pass
@@ -2343,23 +2716,30 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
     # --- Extract reference entry numbers with multi-line support ---
     ref_numbers: set[int] = set()
     ref_entries: dict[int, str] = {}
+    ref_entry_items: list[tuple[int, str]] = []
     raw_refs = list(parsed.get("references") or [])
     if raw_refs:
         for line in raw_refs:
-            m = re.match(r"^\[(\d+)\]\s*(.+)", str(line).strip())
+            raw_line = str(line).strip()
+            m = re.match(r"^\[(\d+)\]\s*[.．]?\s*(.+)", raw_line)
             if m:
                 num = int(m.group(1))
                 ref_numbers.add(num)
-                ref_entries[num] = m.group(2).strip()
+                entry_text = m.group(2).strip()
+                ref_entries.setdefault(num, entry_text)
+                ref_entry_items.append((num, entry_text))
+            elif raw_line:
+                ref_entry_items.append((0, raw_line))
     # Fallback: parse from full text with multi-line entry support
     if not ref_numbers:
         current_num = None
         current_text = ""
         for line in text.splitlines():
-            m = re.match(r"^\[(\d+)\]\s*(.+)", line.strip())
+            m = re.match(r"^\[(\d+)\]\s*[.．]?\s*(.+)", line.strip())
             if m:
                 if current_num is not None:
                     ref_entries[current_num] = current_text.strip()
+                    ref_entry_items.append((current_num, current_text.strip()))
                 current_num = int(m.group(1))
                 current_text = m.group(2)
                 ref_numbers.add(current_num)
@@ -2368,6 +2748,59 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 current_text += " " + line.strip()
         if current_num is not None:
             ref_entries[current_num] = current_text.strip()
+            ref_entry_items.append((current_num, current_text.strip()))
+
+    listed_sequence = [num for num, _entry in ref_entry_items]
+    if any(num <= 0 for num in listed_sequence):
+        issues.append(RuleIssue(
+            code="references.numbering_missing",
+            title="参考文献条目缺少方括号编号",
+            severity="medium",
+            category="structure",
+            message="识别到部分参考文献条目未以 [序号] 开头。",
+            evidence="；".join(entry[:80] for num, entry in ref_entry_items if num <= 0)[:240],
+            location={"display_text": "参考文献章节"},
+            suggestion="按 GB/T 7714 顺序编码制格式为每条参考文献添加 [1]、[2] 等连续编号。",
+            parser_confidence="high",
+            confidence="high",
+            aggregate_count=sum(1 for num in listed_sequence if num <= 0),
+            samples=[
+                {"text": entry[:160], "problems": ["缺少方括号编号"]}
+                for num, entry in ref_entry_items
+                if num <= 0
+            ][:10],
+        ))
+    numbered_sequence = [num for num in listed_sequence if num > 0]
+    duplicate_numbers = sorted({num for num in numbered_sequence if numbered_sequence.count(num) > 1})
+    if duplicate_numbers:
+        issues.append(RuleIssue(
+            code="references.duplicate_number",
+            title="参考文献编号重复",
+            severity="medium",
+            category="structure",
+            message=f"参考文献编号 {duplicate_numbers[:10]} 出现重复。",
+            evidence=f"编号序列: {listed_sequence[:50]}",
+            location={"display_text": "参考文献章节"},
+            suggestion="确保每条参考文献编号唯一，且按出现顺序递增。",
+            parser_confidence="high",
+            confidence="high",
+            actual={"duplicate_numbers": duplicate_numbers},
+        ))
+
+    if numbered_sequence and numbered_sequence != sorted(numbered_sequence):
+        issues.append(RuleIssue(
+            code="references.order_mismatch",
+            title="参考文献编号顺序异常",
+            severity="medium",
+            category="structure",
+            message="参考文献列表编号未按升序排列。",
+            evidence=f"编号序列: {numbered_sequence[:50]}",
+            location={"display_text": "参考文献章节"},
+            suggestion="按正文引用或文末编号顺序重新排列参考文献。",
+            parser_confidence="high",
+            confidence="high",
+            actual={"listed_sequence": numbered_sequence},
+        ))
 
     # --- Cross-reference: citation vs bibliography ---
     missing_in_bib = cited_numbers - ref_numbers
@@ -2382,9 +2815,10 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             location={"display_text": "参考文献章节"},
             suggestion="确保正文中每条引用在参考文献列表中都有对应条目。",
             parser_confidence="medium",
-            expected={"cited": sorted(cited_numbers), "listed": sorted(ref_numbers)},
-            actual={"missing_in_bib": sorted(missing_in_bib)},
-        ))
+                expected={"cited": sorted(cited_numbers), "listed": sorted(ref_numbers)},
+                actual={"missing_in_bib": sorted(missing_in_bib)},
+                confidence="high",
+            ))
 
     unused = ref_numbers - cited_numbers
     if unused and len(ref_numbers) > 3:
@@ -2398,6 +2832,7 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             location={"display_text": "参考文献章节"},
             suggestion="确认这些文献是否确实需要列入，或补充正文引用。",
             parser_confidence="medium",
+            confidence="medium",
         ))
 
     # --- Numbering continuity ---
@@ -2417,33 +2852,42 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
                 parser_confidence="high",
                 expected={"continuous_from": sorted_refs[0], "continuous_to": sorted_refs[-1]},
                 actual={"missing_numbers": gaps},
+                confidence="high",
             ))
 
     # --- Per-entry format analysis with statistics ---
-    if ref_entries:
+    if ref_entry_items:
         format_issues = []
-        for num in sorted(ref_entries)[:50]:
-            entry_text = ref_entries[num]
+        for num, entry_text in ref_entry_items[:80]:
             check = _analyze_reference_entry(entry_text)
             if check["problems"]:
-                format_issues.append({"number": num, "problems": check["problems"], "text": entry_text[:120]})
+                format_issues.append({
+                    "number": num,
+                    "problems": check["problems"],
+                    "reference_type": check.get("reference_type"),
+                    "text": entry_text[:160],
+                })
         if format_issues:
             bad_count = len(format_issues)
-            total = len(ref_entries)
+            total = len(ref_entry_items)
             all_problems = list(dict.fromkeys(p for fi in format_issues for p in fi["problems"]))
             sample = format_issues[0]
             issues.append(RuleIssue(
-                code="references.entry_format_incomplete",
-                title="参考文献著录信息不完整",
+                code="references.format_mismatch",
+                title="参考文献格式不符合 GB/T 7714 要求",
                 severity="medium",
                 category="structure",
                 message=f"{bad_count}/{total} 条参考文献存在格式问题: {'; '.join(all_problems[:5])}。",
                 evidence=f"[{sample['number']}] {sample['text']}",
                 location={"display_text": "参考文献章节"},
-                suggestion="按 GB/T 7714 标准补全各条目缺失的字段。常见期刊格式: [序号] 作者. 题名[J]. 刊名, 年, 卷(期): 页码.",
+                suggestion="按 GB/T 7714 标准补全条目字段和标点。常见期刊格式: [序号] 作者. 题名[J]. 刊名, 年, 卷(期): 页码.",
                 expected={"required_fields": ["author", "title", "year", "source"]},
-                actual={"bad_count": bad_count, "total_count": total, "common_problems": all_problems},
-                parser_confidence="medium",
+                actual={"bad_count": bad_count, "total_count": total, "problem_kinds": all_problems},
+                parser_confidence="high",
+                confidence="high",
+                aggregate_count=bad_count,
+                samples=format_issues[:10],
+                check_scope="gbt7714_local",
             ))
     elif not ref_numbers and cited_numbers:
         issues.append(RuleIssue(
@@ -2456,6 +2900,7 @@ def _check_reference_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             location={"display_text": "文末区域"},
             suggestion="在文末添加参考文献列表，每条以 [序号] 开头。",
             parser_confidence="high",
+            confidence="high",
         ))
 
     return issues
@@ -2466,26 +2911,72 @@ def _analyze_reference_entry(text: str) -> dict:
     problems = []
     content = str(text or "").strip()
     if not content:
-        return {"problems": ["empty"]}
+        return {"problems": ["empty"], "reference_type": ""}
 
-    has_type = bool(re.search(r"\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]", content))
+    type_match = re.search(r"\[([A-Z]{1,3}(?:/[A-Z]{1,3})?)\]", content)
+    reference_type = type_match.group(1) if type_match else ""
+    has_type = bool(type_match)
     has_year = bool(re.search(r"(?:19|20)\d{2}", content))
-    has_source = bool(re.search(r"\][^.[\]]+\.[^.[\]]*$", content)) or bool(re.search(r"\d{4}[,，]\s*\d+", content))
-    has_vol_pages = bool(re.search(r"\d{4}[,，]\s*\d+", content)) or bool(re.search(r"\d+\(\d+\)", content)) or bool(re.search(r":\s*\d+-\d+", content))
+    has_author_title_shape = bool(re.match(r"^.{2,80}?\.\s*.{2,200}?\[[A-Z]{1,3}(?:/[A-Z]{1,3})?\]\.", content))
+    has_period_end = content.rstrip().endswith(".")
+    has_source = _reference_has_source(content, reference_type)
+    has_vol_pages = _reference_has_required_extent(content, reference_type)
+
+    if not has_author_title_shape:
+        problems.append("缺少作者或题名分隔")
     has_period_end = content.rstrip().endswith(".")
 
     if not has_year:
         problems.append("缺少年份")
     if not has_type:
-        problems.append("缺少文献类型标识[J/M/D]")
+        problems.append("缺少文献类型标识")
     if not has_source:
         problems.append("缺少刊名/出版源")
     if not has_vol_pages:
-        problems.append("缺少卷期页码")
+        problems.append("缺少卷期页码或出版项")
     if not has_period_end:
         problems.append("末尾缺句号")
 
-    return {"problems": problems}
+    return {"problems": problems, "reference_type": reference_type}
+
+
+def _reference_has_source(content: str, reference_type: str) -> bool:
+    if not reference_type:
+        return False
+    after_type = content.split(f"[{reference_type}]", 1)[-1].strip()
+    if reference_type in {"J", "C", "D", "R", "S", "M"}:
+        return bool(after_type) and "." in after_type
+    if reference_type == "P":
+        return bool(re.search(r":\s*[^.]+?\[P\]\.?\s*(?:19|20)\d{2}", content))
+    if reference_type in {"EB/OL", "OL"}:
+        return bool(re.search(r"(https?://|doi:|DOI|检索|访问)", content))
+    return bool(after_type)
+
+
+def _reference_has_required_extent(content: str, reference_type: str) -> bool:
+    if not reference_type:
+        return False
+    if reference_type == "J":
+        return bool(
+            re.search(r"(?:19|20)\d{2}[,，]\s*\d+", content)
+            or re.search(r"\d+\(\d+\)", content)
+            or re.search(r":\s*\d+\s*[-－–]\s*\d+", content)
+        )
+    if reference_type == "M":
+        return bool(re.search(r"[:：]\s*[^,，.]+[,，]\s*(?:19|20)\d{2}", content))
+    if reference_type == "D":
+        return bool(re.search(r"[:：]\s*[^,，.]+[,，]\s*(?:19|20)\d{2}", content) or "大学" in content or "学院" in content)
+    if reference_type == "C":
+        return bool(re.search(r"//|Proceedings|会议|Conference|[:：].*(?:19|20)\d{2}", content))
+    if reference_type == "R":
+        return bool(re.search(r"[:：]\s*[^,，.]+[,，]\s*(?:19|20)\d{2}", content) or "报告" in content)
+    if reference_type == "P":
+        return bool(re.search(r"(?:19|20)\d{2}[-./年]\d{1,2}", content))
+    if reference_type in {"EB/OL", "OL"}:
+        return bool(re.search(r"(?:19|20)\d{2}[-./年]\d{1,2}", content))
+    if reference_type == "S":
+        return bool(re.search(r"(?:19|20)\d{2}", content))
+    return bool(re.search(r"(?:19|20)\d{2}", content))
 
 
 def _reference_entry_has_basic_gbt7714_shape(line: str) -> bool:
@@ -2558,11 +3049,11 @@ def _pick_better_issue(left: RuleIssue, right: RuleIssue) -> RuleIssue:
     left_score = (
         severity_rank.get(left.severity, 0),
         len(left.evidence or ""),
-        1 if left.engine in {"pycorrector", "macro_correct", "languagetool", "vale"} else 0,
+        1 if left.engine in {"macro_correct", "languagetool", "vale"} else 0,
     )
     right_score = (
         severity_rank.get(right.severity, 0),
         len(right.evidence or ""),
-        1 if right.engine in {"pycorrector", "macro_correct", "languagetool", "vale"} else 0,
+        1 if right.engine in {"macro_correct", "languagetool", "vale"} else 0,
     )
     return right if right_score > left_score else left

@@ -12,7 +12,6 @@ docker compose --profile paper-check up paper-assets-init
 ```
 
 The application reads models from paths configured via:
-- `PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR=/opt/piap-paper-assets/macro_correct/token`
 - `PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG=/opt/piap-paper-assets/macro_correct/token/csc.config`
 - `PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG=/opt/piap-paper-assets/macro_correct/punct/sl.config`
 

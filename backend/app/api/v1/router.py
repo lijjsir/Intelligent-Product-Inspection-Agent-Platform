@@ -19,6 +19,7 @@ from app.api.v1 import (
     feedbacks,
     exports,
     gpu_nodes,
+    health,
     organizations,
     paper_templates,
     paper_review_runtime,
@@ -43,6 +44,7 @@ from app.api.v1 import (
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
+router.include_router(health.router)
 router.include_router(roles.router, prefix="/roles", tags=["roles"])
 router.include_router(organizations.router, prefix="/organizations", tags=["organizations"])
 router.include_router(users.router, prefix="/users", tags=["users"])

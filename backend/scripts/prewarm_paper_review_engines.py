@@ -6,7 +6,6 @@ import subprocess
 import sys
 
 from agent.tools.paper_review_macro_correct import diagnose_macro_correct
-from agent.tools.paper_review_pycorrector import diagnose_pycorrector
 
 
 def main() -> int:
@@ -15,12 +14,6 @@ def main() -> int:
     args = parser.parse_args()
 
     failures: list[str] = []
-
-    pycorrector_status = diagnose_pycorrector()
-    if not pycorrector_status.get("ok"):
-        failures.append(f"pycorrector: {pycorrector_status.get('detail') or 'unavailable'}")
-    else:
-        print(f"pycorrector ready: {pycorrector_status.get('detail')}")
 
     macro_status = diagnose_macro_correct()
     if not macro_status.get("ok"):

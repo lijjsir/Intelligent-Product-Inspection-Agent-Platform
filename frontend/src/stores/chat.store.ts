@@ -17,7 +17,8 @@ import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
-const PAPER_REVIEW_POLL_TIMEOUT_MS = 180000;
+const PAPER_REVIEW_POLL_TIMEOUT_MS = 660000;
+const BACKGROUND_POLL_REQUEST_TIMEOUT_MS = 60000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 35000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
@@ -125,6 +126,11 @@ function mergePayload(current: ChatMessage["payload"], incoming: ChatMessage["pa
     ) as never;
   }
   return next;
+}
+
+function isPaperReviewAttachmentName(name: string) {
+  const lower = name.toLowerCase();
+  return lower.endsWith(".docx") || lower.endsWith(".pdf") || lower.endsWith(".tex");
 }
 
 export const useChatStore = defineStore("chat", () => {
@@ -341,7 +347,7 @@ export const useChatStore = defineStore("chat", () => {
 
   function startFallbackPolling(sessionId: string, messageId: string) {
     if (!messageId || pollTimer.value != null) return;
-    pollDeadline.value = Date.now() + POLL_TIMEOUT_MS;
+    pollDeadline.value = Date.now() + (hasPaperReviewContext(messageId) ? PAPER_REVIEW_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS);
     streamPhase.value = "streaming";
 
     const tick = async () => {
@@ -350,8 +356,7 @@ export const useChatStore = defineStore("chat", () => {
         return;
       }
       // Adaptive timeout: extend deadline when paper_format_report is detected (AI Review takes 60-120s)
-      const current = messages.value.find((item) => item.id === messageId);
-      if (current?.payload?.paper_format_report && pollDeadline.value < Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS) {
+      if (hasPaperReviewContext(messageId) && pollDeadline.value < Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS) {
         pollDeadline.value = Math.max(pollDeadline.value, Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS);
       }
       if (Date.now() > pollDeadline.value) {
@@ -365,7 +370,10 @@ export const useChatStore = defineStore("chat", () => {
       }
       pollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500, {
+          suppressErrorToast: true,
+          timeout: BACKGROUND_POLL_REQUEST_TIMEOUT_MS,
+        });
         appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
         if (checkAndFinalizeByMessage(messageId)) {
@@ -380,6 +388,18 @@ export const useChatStore = defineStore("chat", () => {
     };
 
     pollTimer.value = window.setTimeout(tick, POLL_INTERVAL_MS);
+  }
+
+  function hasPaperReviewContext(messageId: string) {
+    const target = messages.value.find((item) => item.id === messageId);
+    if (target?.payload?.paper_format_report || target?.payload?.paper_review_status) return true;
+    const targetOrder = target ? orderNo(target) : 0;
+    const previousUser = [...messages.value]
+      .filter((item) => item.role === "user" && (!targetOrder || orderNo(item) < targetOrder))
+      .sort((a, b) => orderNo(b) - orderNo(a))[0];
+    return Boolean(
+      previousUser?.payload?.attachment_echo?.some((item) => isPaperReviewAttachmentName(item.name)),
+    );
   }
 
   function hasReviewingTrustScore(messageId: string) {
@@ -406,7 +426,10 @@ export const useChatStore = defineStore("chat", () => {
       }
       trustPollInFlight.value = true;
       try {
-        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500, {
+          suppressErrorToast: true,
+          timeout: BACKGROUND_POLL_REQUEST_TIMEOUT_MS,
+        });
         appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
       } catch {
@@ -702,6 +725,14 @@ export const useChatStore = defineStore("chat", () => {
           payload: {
             status: "running",
             workflow_run_id: data.data.workflow_run_id,
+            attachment_echo: [...pendingAttachments.value],
+            paper_review_status: pendingAttachments.value.some((item) => isPaperReviewAttachmentName(item.name))
+              ? {
+                  phase: "queued",
+                  status: "running",
+                  message: "论文查非任务已提交，正在等待后端处理...",
+                }
+              : undefined,
           },
           created_at: new Date().toISOString(),
         },

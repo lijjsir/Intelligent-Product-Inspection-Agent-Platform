@@ -144,6 +144,11 @@ function paperScoreTagType(score: number) {
   return "danger";
 }
 
+function missingPaperReviewEngines(message: ChatMessage): Array<{ name?: string; detail?: string }> {
+  const value = message.payload?.paper_review_error?.missing_engines;
+  return Array.isArray(value) ? value as Array<{ name?: string; detail?: string }> : [];
+}
+
 function downloadReport(file: { url: string; file_name: string }) {
   const a = document.createElement("a");
   a.href = file.url;
@@ -894,6 +899,25 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
 
+              <div v-if="message.payload?.ui_schema === 'paper_review_error_v1'" class="paper-review-error-card">
+                <el-alert
+                  type="error"
+                  show-icon
+                  :closable="false"
+                  :title="message.payload.error_message || message.payload.error || '论文查非处理失败'"
+                />
+                <div v-if="missingPaperReviewEngines(message).length" class="pre-engine-list">
+                  <div
+                    v-for="engine in missingPaperReviewEngines(message)"
+                    :key="engine.name"
+                    class="pre-engine-item"
+                  >
+                    <strong>{{ engine.name }}</strong>
+                    <span>{{ engine.detail }}</span>
+                  </div>
+                </div>
+              </div>
+
               <!-- Paper review report card -->
               <div v-if="message.payload?.paper_format_report" class="paper-review-card">
                 <div class="prc-header">
@@ -1321,6 +1345,27 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .prc-limitations { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
 .prc-limit-tag { font-size: 11px; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
 .prc-no-files { font-size: 12px; color: #94a3b8; }
+.paper-review-error-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+.pre-engine-list {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #7f1d1d;
+}
+.pre-engine-item {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 8px;
+}
+.pre-engine-item span { word-break: break-word; }
 
 /* ── Task card ── */
 .task-card {

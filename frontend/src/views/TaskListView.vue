@@ -447,6 +447,14 @@ watch(
     </div>
 
     <div class="card-surface">
+      <el-alert
+        v-if="taskStore.listError"
+        class="m-4"
+        type="warning"
+        :closable="false"
+        :title="taskStore.listError"
+        show-icon
+      />
       <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
         <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />

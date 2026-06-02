@@ -41,7 +41,7 @@ async def log_paper_review_runtime_status() -> None:
     from app.services.paper_review_runtime_service import PaperReviewRuntimeService
     from app.core.config import settings
 
-    result = await PaperReviewRuntimeService.diagnose()
+    result = await PaperReviewRuntimeService.diagnose(load_models=False)
 
     if result.get("ok"):
         logger.info("paper review runtime ready engines=%s", result.get("engines_used"))

@@ -8,23 +8,6 @@ from typing import Any, Callable
 
 from app.core.config import settings
 
-# Patch transformers for macro_correct compatibility (AdamW removed in transformers 5.x).
-# Must happen at module level before any macro_correct sub-imports.
-try:
-    import torch.optim
-    import transformers
-
-    _adamw = getattr(torch.optim, "AdamW", None)
-    if _adamw is not None:
-        if not hasattr(transformers, "AdamW"):
-            transformers.AdamW = _adamw
-        # _LazyModule (transformers >=5.x) stores exportable objects in _objects
-        _objects = getattr(transformers, "_objects", None)
-        if isinstance(_objects, dict) and "AdamW" not in _objects:
-            _objects["AdamW"] = _adamw
-except Exception:
-    pass
-
 
 class MacroCorrectUnavailableError(RuntimeError):
     pass

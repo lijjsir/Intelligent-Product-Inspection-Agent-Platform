@@ -84,9 +84,9 @@ def build_markdown_report(
 def _format_issue(idx: int, issue: dict[str, Any]) -> list[str]:
     title = issue.get("title") or issue.get("code") or f"问题 {idx}"
     category = issue.get("category", "")
-    location = ""
+    location = str(issue.get("location_summary") or "").strip()
     loc = issue.get("location")
-    if isinstance(loc, dict):
+    if not location and isinstance(loc, dict):
         location = str(
             loc.get("display_text")
             or loc.get("section_title")

@@ -5,6 +5,11 @@ from typing import Any
 
 DEFAULT_STRICT_PAPER_TEMPLATE_ID = "cqupt_graduate_thesis_2022"
 
+PAPER_FORMAT_TEMPLATE_ALIASES = {
+    "cqupt_graduate_2022": DEFAULT_STRICT_PAPER_TEMPLATE_ID,
+    "cqupt_2022": DEFAULT_STRICT_PAPER_TEMPLATE_ID,
+}
+
 
 PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
     "generic_cn_thesis": {
@@ -12,6 +17,13 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
         "name": "通用中文论文模板",
         "version": "v1",
         "description": "用于第一版论文查非功能的通用规则集。",
+        "rule_basis": {
+            "structure.*": "模板规则数据：required_sections。",
+            "abstract.*": "模板规则数据：abstract_keywords 与摘要规范。",
+            "references.*": "模板规则数据：required_sections.references；参考文献格式按 GB/T 7714 本地规则辅助检查。",
+            "text.*": "模板规则数据：文本规范辅助检查。",
+            "unsupported.*": "系统能力边界：当前查非支持 docx、pdf、tex。",
+        },
         "docx_rules": {
             "required_sections": ["摘要", "关键词", "参考文献"],
         },
@@ -25,6 +37,29 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
         "name": "重庆邮电大学研究生学位论文模板（2022版）",
         "version": "V2.0",
         "description": "基于重庆邮电大学研究生学位论文 Word 模板与写作指南的辅助查非规则。",
+        "rule_basis": {
+            "structure.*": "模板规则数据：docx_rules.required_sections；来源为重庆邮电大学研究生学位论文模板（2022版）章节要求。",
+            "template.required_section_missing": "模板规则数据：docx_rules.required_sections；来源为重庆邮电大学研究生学位论文模板（2022版）必备章节要求。",
+            "template.page_size_mismatch": "模板规则数据：docx_rules.page_size_cm；来源为重庆邮电大学研究生学位论文模板（2022版）页面设置。",
+            "template.margin_mismatch": "模板规则数据：docx_rules.page_margin_cm；来源为重庆邮电大学研究生学位论文模板（2022版）页面设置。",
+            "template.header_footer_mismatch": "模板规则数据：docx_rules.header_footer；来源为重庆邮电大学研究生学位论文模板（2022版）页眉页脚设置。",
+            "template.cover_has_header_footer": "模板规则数据：docx_rules.header_footer.cover_no_header_footer；来源为重庆邮电大学研究生学位论文模板（2022版）封面设置。",
+            "template.body_font_mismatch": "模板规则数据：docx_rules.body_font；来源为重庆邮电大学研究生学位论文模板（2022版）正文格式设置。",
+            "template.line_spacing_mismatch": "模板规则数据：docx_rules.line_spacing；来源为重庆邮电大学研究生学位论文模板（2022版）正文段落设置。",
+            "template.*": "模板规则数据：docx_rules.required_sections、page_size_cm、page_margin_cm、header_footer、body_font、line_spacing。",
+            "toc.required_entry_missing": "模板规则数据：docx_rules.toc_required_entries；来源为重庆邮电大学研究生学位论文模板（2022版）目录条目要求。",
+            "abstract.*": "写作指南“中、英文摘要”与模板规则数据 abstract_keywords；关键词数量为 3-8 个，摘要避免图表、公式和参考文献编号。",
+            "toc.*": "模板规则数据：docx_rules.toc_required_entries 与 toc_conditional_entries。",
+            "heading.*": "模板规则数据：章节层级与正文结构检查。",
+            "style.*": "模板规则数据：body_font、line_spacing 与正文段落格式。",
+            "figure.*": "模板规则数据：图题/图号与正文引用一致性检查。",
+            "table.*": "模板规则数据：表题/表号与正文引用一致性检查。",
+            "formula.*": "模板规则数据：公式编号与正文引用一致性检查。",
+            "references.*": "写作指南“参考文献和引文标注”：执行 GB/T 7714-2015；引用过的文献必须著录，未引用文献不得虚列。",
+            "text.*": "写作指南“字体和段落”：中英文混排标点与全半角规范；文本建议仅作辅助复核。",
+            "word.*": "模板提交规范：正式提交稿应清理批注、修订和隐藏文字。",
+            "unsupported.*": "系统能力边界：当前查非支持 docx、pdf、tex。",
+        },
         "storage": {
             "bucket": "paper-templates",
             "files": [
@@ -146,6 +181,10 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
                 "致谢",
             ],
             "toc_required_entries": ["摘要", "ABSTRACT", "图目录", "表目录", "参考文献", "致谢"],
+            "toc_conditional_entries": {
+                "figure_toc": {"label": "图目录", "single_count_threshold": 5, "combined_count_threshold": 10, "severity": "medium"},
+                "table_toc": {"label": "表目录", "single_count_threshold": 5, "combined_count_threshold": 10, "severity": "medium"},
+            },
             "page_size_cm": {"width": 21.0, "height": 29.7, "tolerance": 0.2},
             "page_orientation": "portrait",
             "page_margin_cm": {
@@ -166,7 +205,7 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
             },
             "abstract_keywords": {
                 "min_count": 3,
-                "max_count": 5,
+                "max_count": 8,
                 "separators": ["；", ";"],
             },
             "body_font": {
@@ -189,6 +228,7 @@ PAPER_FORMAT_TEMPLATES: dict[str, dict[str, Any]] = {
 
 
 def get_paper_template(template_id: str | None) -> dict[str, Any]:
+    template_id = PAPER_FORMAT_TEMPLATE_ALIASES.get(str(template_id or ""), template_id)
     if template_id and template_id in PAPER_FORMAT_TEMPLATES:
         return PAPER_FORMAT_TEMPLATES[template_id]
     return PAPER_FORMAT_TEMPLATES["generic_cn_thesis"]

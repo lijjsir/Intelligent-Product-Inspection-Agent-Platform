@@ -21,9 +21,10 @@ export const chatApi = {
     return http.post<ChatSession>("/v1/chat/sessions", { title });
   },
 
-  listMessages(sessionId: string, afterSeq = 0, limit = 200) {
+  listMessages(sessionId: string, afterSeq = 0, limit = 200, config?: ApiRequestConfig) {
     return http.get<ChatMessage[]>(`/v1/chat/sessions/${sessionId}/messages`, {
-      params: { after_seq: afterSeq, limit },
+      ...config,
+      params: { ...config?.params, after_seq: afterSeq, limit },
     });
   },
 

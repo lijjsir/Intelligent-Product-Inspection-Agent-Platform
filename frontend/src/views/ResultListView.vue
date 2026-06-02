@@ -163,6 +163,14 @@ const VERDICT_LABELS: Record<string, string> = {
     </div>
 
     <div class="card-surface">
+      <el-alert
+        v-if="store.listError"
+        class="m-4"
+        type="warning"
+        :closable="false"
+        :title="store.listError"
+        show-icon
+      />
       <el-table :data="store.items" v-loading="store.loading" size="small" class="list-table">
         <el-table-column prop="id" label="结果ID" min-width="220" show-overflow-tooltip />
         <el-table-column prop="task_id" label="任务ID" min-width="220" show-overflow-tooltip />

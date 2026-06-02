@@ -16,4 +16,4 @@ async def paper_review_runtime_health(
     current: CurrentUser = Depends(get_current_user),
 ):
     require_role("infrastructure", current.role)
-    return ResponseEnvelope(data=await PaperReviewRuntimeService.diagnose())
+    return ResponseEnvelope(data=await PaperReviewRuntimeService.diagnose(load_models=False))

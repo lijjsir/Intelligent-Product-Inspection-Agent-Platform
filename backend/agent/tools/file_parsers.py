@@ -115,6 +115,12 @@ def parse_docx_bytes(content: bytes) -> dict:
             "section_index": current_section_index,
             "paragraph_no": current_paragraph_no if text and not heading_level else 0,
         }
+        item["paragraph_role"] = _infer_docx_paragraph_role(
+            text=text,
+            style_name=style_name,
+            heading_level=heading_level,
+            section_title=current_section_title,
+        )
         paragraphs.append(item)
         if heading_level:
             headings.append(
@@ -133,6 +139,12 @@ def parse_docx_bytes(content: bytes) -> dict:
 
     sections = []
     for section in doc.sections:
+        default_header_text = _docx_part_text(section.header)
+        first_header_text = _docx_part_text(section.first_page_header)
+        even_header_text = _docx_part_text(section.even_page_header)
+        default_footer_text = _docx_part_text(section.footer)
+        first_footer_text = _docx_part_text(section.first_page_footer)
+        even_footer_text = _docx_part_text(section.even_page_footer)
         sections.append(
             {
                 "start_type": str(getattr(section.start_type, "name", "") or ""),
@@ -144,16 +156,14 @@ def parse_docx_bytes(content: bytes) -> dict:
                 "right_margin_cm": _to_cm(getattr(section, "right_margin", None)),
                 "header_distance_cm": _to_cm(getattr(section, "header_distance", None)),
                 "footer_distance_cm": _to_cm(getattr(section, "footer_distance", None)),
-                "header_text": "\n".join(
-                    (paragraph.text or "").strip()
-                    for paragraph in section.header.paragraphs
-                    if (paragraph.text or "").strip()
-                ),
-                "footer_text": "\n".join(
-                    (paragraph.text or "").strip()
-                    for paragraph in section.footer.paragraphs
-                    if (paragraph.text or "").strip()
-                ),
+                "header_text": default_header_text,
+                "footer_text": default_footer_text,
+                "default_header_text": default_header_text,
+                "first_header_text": first_header_text,
+                "even_header_text": even_header_text,
+                "default_footer_text": default_footer_text,
+                "first_footer_text": first_footer_text,
+                "even_footer_text": even_footer_text,
             }
         )
 
@@ -168,6 +178,46 @@ def parse_docx_bytes(content: bytes) -> dict:
         "sections": sections,
         "text": "\n".join(text_lines),
     }
+
+
+def _docx_part_text(part) -> str:
+    return "\n".join(
+        (paragraph.text or "").strip()
+        for paragraph in part.paragraphs
+        if (paragraph.text or "").strip()
+    )
+
+
+def _infer_docx_paragraph_role(*, text: str, style_name: str, heading_level: int, section_title: str) -> str:
+    content = str(text or "").strip()
+    style = str(style_name or "").strip().lower()
+    section = str(section_title or "").strip().lower()
+    if not content:
+        return "blank"
+    if heading_level:
+        return "heading"
+    loose_content = re.sub(r"\s+", "", content)
+    if content in {"参考文献", "References", "Bibliography", "REFERENCES"} or loose_content in {"摘要", "目录", "图目录", "表目录", "致谢", "作者简介"}:
+        return "heading"
+    if style.startswith("toc") or "table of figures" in style:
+        return "toc"
+    if re.match(r"^(?:图|fig(?:ure)?\.?)\s*\d+(?:[-.]\d+)*", content, re.I) or "图题" in style or style == "caption":
+        return "figure_caption"
+    if re.match(r"^(?:表|table\.?)\s*\d+(?:[-.]\d+)*", content, re.I) or "表题" in style:
+        return "table_caption"
+    if "公式" in style or re.fullmatch(r"[（(]\s*\d+(?:[-.]\d+)*\s*[）)]", content):
+        return "formula"
+    if "参考文献" in section or "参考文献" in style or re.match(r"^\[\d+\]\s+", content):
+        return "reference_entry"
+    if "目录" in section:
+        return "toc"
+    if "abstract" in section or "摘要" in section:
+        return "abstract_body"
+    if "致谢" in section or "致 謝" in section:
+        return "acknowledgement_body"
+    if "作者简介" in section or "攻读学位期间" in section or "基本情况" in section:
+        return "profile"
+    return "body"
 
 
 def parse_tex_bytes(content: bytes) -> dict:

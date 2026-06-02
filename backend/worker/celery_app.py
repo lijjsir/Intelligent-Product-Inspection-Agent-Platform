@@ -7,6 +7,9 @@ celery_app.conf.broker_url = settings.celery_broker_url
 celery_app.conf.result_backend = settings.celery_result_backend
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
+celery_app.conf.task_routes = {
+    "worker.tasks.paper_review_chat_task.run_paper_review_chat_workflow": {"queue": "paper_review"},
+}
 celery_app.conf.imports = (
     "worker.tasks.alert_dispatch_task",
     "worker.tasks.health_check_task",
@@ -15,6 +18,7 @@ celery_app.conf.imports = (
     "worker.tasks.dataset_pipeline_task",
     "worker.tasks.algo_workspace_task",
     "worker.tasks.langfuse_sync_task",
+    "worker.tasks.paper_review_chat_task",
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
 )
@@ -43,6 +47,7 @@ from worker.tasks import (  # noqa: E402,F401
     health_check_task,
     inspection_task,
     langfuse_sync_task,
+    paper_review_chat_task,
     report_generate_task,
     stability_task,
 )

@@ -1207,7 +1207,7 @@ async def test_enqueue_paper_review_enrichment_updates_same_message(monkeypatch)
         async def touch(self, org_id: str, user_id: str, session_id: str):
             return None
 
-    async def fake_enrich(self, *, paper_report, request, emit_patch=None, db_session=None):
+    async def fake_enrich(self, *, paper_report, request, emit_patch=None, emit_progress=None, db_session=None):
         await emit_patch(
             content="已整理出以下修改意见：\n1. 示例问题",
             message_type="file_answer",
@@ -1278,3 +1278,101 @@ async def test_enqueue_paper_review_enrichment_updates_same_message(monkeypatch)
     assert emitted
     assert emitted[0]["event"] == "message_patch"
     assert emitted[0]["payload"]["paper_format_report"]["report_files"]
+
+
+@pytest.mark.asyncio
+async def test_persist_chat_result_marks_paper_review_failed_when_ai_review_fails(monkeypatch):
+    updates: list[dict] = []
+    events: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield FakeSession()
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, _org_id: str, _message_id: str):
+            return SimpleNamespace(content="", message_type="streaming", payload={"status": "running"})
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return SimpleNamespace(
+                content=kwargs["content"],
+                message_type=kwargs["message_type"],
+                payload=kwargs["payload"],
+            )
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def touch(self, org_id: str, user_id: str, session_id: str):
+            return None
+
+    async def fake_emit(event: dict):
+        events.append(event)
+
+    async def fail_enrich(self, *, paper_report, request, emit_patch=None, emit_progress=None, db_session=None):
+        from agent.tools.paper_review_ai import PaperReviewModelError
+
+        raise PaperReviewModelError("Ai-Review timeout")
+
+    async def fake_record_route_decision_log(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(orchestrator_mod, "get_session", fake_get_session)
+    monkeypatch.setattr(orchestrator_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(orchestrator_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(
+        "app.services.paper_review_enrichment_service.PaperReviewEnrichmentService.enrich",
+        fail_enrich,
+    )
+    monkeypatch.setattr(QualityAgentOrchestratorService, "_record_route_decision_log", fake_record_route_decision_log)
+
+    request = NormalizedRequest(
+        request_id="req-paper-ai-fail",
+        workflow_run_id="wf-paper-ai-fail",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+        query="帮我做论文查非",
+        ext={"emit": fake_emit},
+    )
+    output = AgentOutput(
+        message_type="file_answer",
+        answer="规则检查阶段摘要",
+        summary="规则检查阶段摘要",
+        paper_format_report={
+            "summary": "规则检查阶段摘要",
+            "issues": [{"title": "示例问题", "severity": "high"}],
+            "report_files": [],
+            "enrichment_payload": {"template_id": "cqupt_graduate_thesis_2022"},
+        },
+        ui_schema="paper_review_report_v1",
+        route_decision=RouteDecision(
+            mode="router_enabled",
+            selected_agent="chat",
+            sub_route="paper_format_check",
+            reason="paper_format_check",
+            signals=RouteSignals(has_file_attachments=True, attachment_types=["docx"]),
+        ),
+    )
+
+    success = await QualityAgentOrchestratorService()._persist_chat_result(request, output)
+
+    assert success is False
+    assert len(updates) == 1
+    assert updates[0]["message_type"] == "error"
+    assert updates[0]["payload"]["ui_schema"] == "paper_review_error_v1"
+    assert updates[0]["payload"]["error_code"] == "paper_review_model_failed"
+    assert "Ai-Review timeout" in updates[0]["payload"]["error_message"]
+    assert [event["event"] for event in events].count("message_final") == 1
+    assert events[-1]["event"] == "message_final"
+    assert events[-1]["payload"]["status"] == "failed"

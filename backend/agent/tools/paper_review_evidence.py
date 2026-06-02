@@ -30,6 +30,11 @@ def build_review_evidence_pack(
             "template_id": template_id,
             "page_count": _page_count(parsed, document_type),
             "word_count": _word_count(parsed),
+            "paragraph_count": len(list(parsed.get("paragraphs") or [])),
+            "section_count": parsed.get("section_count"),
+            "reference_count": len(list(parsed.get("references") or [])),
+            "figure_count": len(list(parsed.get("figure_titles") or [])),
+            "table_count": len(list(parsed.get("table_titles") or [])),
         },
         "score": check_result.get("score", 0),
         "limitations": list(check_result.get("limitations") or []),
@@ -196,12 +201,13 @@ def _collect_evidence_snippets(
 def _page_count(parsed: dict[str, Any], document_type: str) -> int | None:
     if document_type == "pdf":
         return parsed.get("page_count")
-    if document_type == "docx":
-        sections = list(parsed.get("sections") or [])
-        return len(sections) or None
     return None
 
 
 def _word_count(parsed: dict[str, Any]) -> int | None:
     text = str(parsed.get("text") or "")
-    return len(text.replace("\n", " ").split()) if text.strip() else None
+    if not text.strip():
+        return None
+    cjk_count = len([ch for ch in text if "\u4e00" <= ch <= "\u9fff"])
+    latin_words = len([item for item in text.replace("\n", " ").split() if any(ch.isascii() and ch.isalpha() for ch in item)])
+    return cjk_count + latin_words

@@ -212,6 +212,14 @@ class QualityAgentOrchestratorService:
                 "image_urls": list(task_form_defaults.get("image_urls") or []),
             }
 
+        paper_review_failed = await self._try_complete_paper_review_enrichment(
+            request=request,
+            output=output,
+            emit=emit,
+        )
+        if paper_review_failed is not None:
+            return paper_review_failed
+
         response_payload = self._build_response_payload(
             request=request,
             output=output,
@@ -336,13 +344,142 @@ class QualityAgentOrchestratorService:
             payload=response_payload,
             quality=dict(output.quality or {}),
         )
-        await self._enqueue_paper_review_enrichment(
+        return materialization_error is None
+
+    async def _try_complete_paper_review_enrichment(
+        self,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        emit,
+    ) -> bool | None:
+        paper_report = output.paper_format_report
+        if not isinstance(paper_report, dict):
+            return None
+        if not paper_report.get("enrichment_payload"):
+            return None
+
+        async def emit_progress(
+            phase: str,
+            message: str,
+            status: str = "running",
+            duration_ms: int | None = None,
+            payload: dict[str, Any] | None = None,
+        ) -> None:
+            patch_payload = {
+                "status": status,
+                "message_type": "streaming" if status == "running" else "error",
+                "ui_schema": "paper_review_report_v1" if status == "running" else "paper_review_error_v1",
+                "paper_review_status": {
+                    "phase": phase,
+                    "status": status,
+                    "message": message,
+                },
+            }
+            if duration_ms is not None:
+                patch_payload["duration_ms"] = duration_ms
+                patch_payload["paper_review_status"]["duration_ms"] = duration_ms
+            if payload:
+                patch_payload.update(payload)
+            await ChatMessageLifecycleService.emit_patch(
+                emit,
+                session_id=request.session_id,
+                assistant_message_id=request.assistant_message_id,
+                workflow_run_id=request.workflow_run_id,
+                content=message,
+                message_type="streaming" if status == "running" else "error",
+                payload=patch_payload,
+            )
+
+        try:
+            await emit_progress("ai_reviewing", "正在执行 Ai-Review 论文审阅...")
+            async with get_session() as session:
+                enriched = await PaperReviewEnrichmentService().enrich(
+                    paper_report=paper_report,
+                    request=request,
+                    emit_patch=None,
+                    emit_progress=emit_progress,
+                    db_session=session,
+                )
+            output.paper_format_report = enriched
+            output.answer = str(enriched.get("chat_advice") or enriched.get("summary") or output.answer or "")
+            output.summary = str(enriched.get("summary") or output.summary or output.answer or "")
+            output.message_type = "file_answer"
+            output.ui_schema = "paper_review_report_v1"
+            return None
+        except Exception as exc:
+            logger.exception(
+                "paper review finalization failed session_id=%s assistant_message_id=%s",
+                request.session_id,
+                request.assistant_message_id,
+            )
+            await emit_progress("failed", str(exc), status="failed")
+            await self._persist_paper_review_failure(request=request, output=output, error=exc, emit=emit)
+            return False
+
+    async def _persist_paper_review_failure(
+        self,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        error: Exception,
+        emit,
+    ) -> None:
+        error_message = str(error) or "论文查非处理失败"
+        error_code = self._paper_review_error_code(error_message)
+        payload = self._build_response_payload(
             request=request,
             output=output,
-            response_payload=response_payload,
-            emit=emit,
+            task_form_defaults=dict(output.task_draft or {}),
+            materialized_task=None,
+            materialization_error=error_message,
         )
-        return materialization_error is None
+        payload.update(
+            {
+                "status": "failed",
+                "message_type": "error",
+                "ui_schema": "paper_review_error_v1",
+                "error": error_message,
+                "error_code": error_code,
+                "error_message": error_message,
+            }
+        )
+        async with get_session() as session:
+            lifecycle = ChatMessageLifecycleService(
+                session,
+                message_repository_cls=ChatMessageRepository,
+                session_repository_cls=ChatSessionRepository,
+            )
+            await lifecycle.complete_turn(
+                org_id=request.org_id,
+                user_id=str(request.user_id or ""),
+                session_id=str(request.session_id),
+                assistant_message_id=str(request.assistant_message_id),
+                content=error_message,
+                message_type="error",
+                payload=payload,
+            )
+            await session.commit()
+        await ChatMessageLifecycleService.emit_final(
+            emit,
+            session_id=request.session_id,
+            assistant_message_id=request.assistant_message_id,
+            workflow_run_id=request.workflow_run_id,
+            content=error_message,
+            payload=payload,
+            quality={},
+        )
+
+    @staticmethod
+    def _paper_review_error_code(message: str) -> str:
+        text = str(message or "")
+        if "报告生成" in text:
+            return "paper_review_report_failed"
+        if "模板" in text or "条款" in text or "RAG" in text or "Qdrant" in text:
+            return "paper_review_template_retrieval_failed"
+        if "引擎" in text or "runtime" in text or "not ready" in text:
+            return "paper_review_runtime_not_ready"
+        return "paper_review_model_failed"
 
     async def _enqueue_paper_review_enrichment(
         self,
@@ -786,6 +923,18 @@ class QualityAgentOrchestratorService:
             payload["paper_format_report"] = output.paper_format_report
         if output.ui_schema:
             payload["ui_schema"] = output.ui_schema
+        extra = getattr(output, "model_extra", None) or {}
+        for key in (
+            "status",
+            "error",
+            "error_code",
+            "error_message",
+            "paper_review_error",
+            "engine_status",
+            "runtime_status",
+        ):
+            if key in extra and extra[key] is not None:
+                payload[key] = extra[key]
         return payload
 
     async def _materialize_chat_output(

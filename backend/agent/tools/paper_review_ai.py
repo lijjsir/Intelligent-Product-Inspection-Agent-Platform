@@ -28,7 +28,9 @@ DEFAULT_AI_REVIEW_PROMPT = """你是论文格式与规范审阅助手。
 3. 不得新增没有 evidence 支撑的问题
 4. 不得编造论文内容、学校名称、参考文献信息
 5. 没有证据支撑的问题必须拒绝输出
-6. 输出必须是合法 JSON，不要输出 JSON 之外的任何文本
+6. 不得把 aggregate_count/samples 聚合问题扩写成逐条硬伤，必须保留置信度和需人工复核含义
+7. 不得编造页数、字数、词数；document.page_count 为 null 时只能写“Word 页数无法从 DOCX 结构可靠获得”
+8. 输出必须是合法 JSON，不要输出 JSON 之外的任何文本
 
 返回 JSON 格式（所有字段必填）：
 {
@@ -199,6 +201,9 @@ def build_ai_review_messages(
         "请基于以上证据生成完整审阅报告 JSON。"
         "markdown_report 必须详细充实，不少于500字。"
         "不得编造任何不在 issues 或 template_clauses 中的内容。"
+        "不得编造页数、字数、词数；document.page_count 为 null 时不要写具体页数。"
+        "聚合问题只能按 aggregate_count 与 samples 汇总说明，不得扩写成多条确定问题。"
+        "必须保留 issue.confidence、parser_confidence、samples 所表达的置信度和人工复核边界。"
         "limitations 只能逐字复制 Review Evidence Pack.limitations，不能自行扩展为“规则引擎未覆盖/需人工复核/仅第1段证据”等结论。"
         "不要输出 JSON 以外的文本。"
     )

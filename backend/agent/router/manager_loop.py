@@ -42,6 +42,8 @@ class ManagerLoop:
         self._gateway = LLMGateway()
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
+        import logging
+        _run_log = logging.getLogger(__name__)
         state = self._policy.initialize_state(request)
         state.manager_model = await self._resolve_manager_model(state, db_session=db_session)
         self._start_chat_trace(state)
@@ -51,8 +53,10 @@ class ManagerLoop:
         while self._can_continue(state):
             remaining_timeout = (state.timeout_ms / 1000) - (perf_counter() - started_at)
             if remaining_timeout <= 0:
-                state.errors.append({"message": "Manager Agent 执行超时", "need_user_input": False, "missing_inputs": []})
+                msg = "Manager Agent 执行超时"
+                state.errors.append({"message": msg, "need_user_input": False, "missing_inputs": []})
                 state.final_action = "fail"
+                _run_log.warning("manager_loop timeout after %.1fs", perf_counter() - started_at)
                 break
             understanding = await self._policy.understand(state)
             plan = await self._policy.plan(state, understanding)
@@ -61,10 +65,12 @@ class ManagerLoop:
 
             validation = self._validate_plan(state, plan)
             if not validation.allowed:
-                state.errors.append(validation.to_error())
+                err = validation.to_error()
+                state.errors.append(err)
                 state.final_action = "ask_user" if validation.need_user_input else "fail"
                 state.missing_inputs = list(validation.missing_inputs or [])
                 blocked_by_missing_inputs = validation.need_user_input
+                _run_log.warning("manager_loop plan rejected reason=%s need_input=%s", validation.message, validation.need_user_input)
                 break
 
             state.iteration += 1
@@ -81,6 +87,7 @@ class ManagerLoop:
             except asyncio.TimeoutError:
                 state.errors.append({"message": "Manager Agent dispatch 超时", "need_user_input": False, "missing_inputs": []})
                 state.final_action = "fail"
+                _run_log.warning("manager_loop dispatch timeout after %.1fs", perf_counter() - started_at)
                 break
             state.last_artifact_counts.append(len(state.artifacts))
 
@@ -207,6 +214,7 @@ class ManagerLoop:
     def _compose_final(self, state: ManagerState, *, blocked_by_missing_inputs: bool) -> AgentRouterOutput:
         import logging
         _log = logging.getLogger(__name__)
+        t0 = perf_counter()
         composed = self._find_composed(state)
         if composed is None:
             composed = self._recover_file_artifact_response(state)
@@ -222,9 +230,10 @@ class ManagerLoop:
         composed_status = "blocked" if status == "blocked" else "failed" if status == "failed" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
         message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
+        error_messages = [e.get("message", str(e)) for e in state.errors] if state.errors else []
         _log.info(
             "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
-            "message_type=%s errors=%d obs_failures=%d",
+            "message_type=%s errors=%d obs_failures=%d n_artifacts=%d n_observations=%d error_msgs=%s",
             plan.reason if plan else "no-plan",
             sub_route,
             composed is not None,
@@ -232,12 +241,19 @@ class ManagerLoop:
             message_type,
             len(state.errors),
             sum(1 for o in state.observations if o.status == "failed"),
+            len(state.artifacts),
+            len(state.observations),
+            error_messages,
         )
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
         citations = self._citations(state, answer=answer)
         rag_summary = self._rag_summary(state, answer=answer)
+        t1 = perf_counter()
         raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
         persistable_output = self._persistable_output(state, answer=answer, sub_route=sub_route)
+        _log.info("_compose_final payload assembled in %.3fs", perf_counter() - t1)
+        t2 = perf_counter()
+        _state_dump = self._lightweight_state_dump(state)
         agent_output = {
             "message_type": message_type,
             "answer": answer,
@@ -249,7 +265,7 @@ class ManagerLoop:
             "task_draft": None,
             "created_task": None,
             "persistable_output": persistable_output,
-            "raw_state": {"response_payload": raw_payload, "manager_state": self._state_dump(state)},
+            "raw_state": {"response_payload": raw_payload, "manager_state": _state_dump},
             **raw_payload,
         }
         decision = AgentRouteDecision(
@@ -270,6 +286,7 @@ class ManagerLoop:
                     agent_output[key] = value
         if status == "failed" and sub_route == "paper_format_check":
             error_message = self._latest_failure_message(state) or "论文查非处理失败"
+            error_payload = self._latest_error_payload(state)
             agent_output.update(
                 {
                     "message_type": "error",
@@ -278,17 +295,22 @@ class ManagerLoop:
                     "ui_schema": "paper_review_error_v1",
                     "status": "failed",
                     "error": error_message,
-                    "error_code": self._paper_review_error_code(error_message),
+                    "error_code": error_payload.get("error_code") or self._paper_review_error_code(error_message),
                     "error_message": error_message,
+                    "paper_review_error": error_payload or None,
+                    "engine_status": error_payload.get("engine_status") or [],
+                    "runtime_status": error_payload.get("runtime_status") or None,
                 }
             )
 
-        return AgentRouterOutput(
+        output = AgentRouterOutput(
             route_decision=decision,
             agent_output=agent_output,
             status=status,
             degrade_reason=state.errors[-1]["message"] if state.errors else None,
         )
+        _log.info("_compose_final total=%0.3fs state_dump=%0.3fs", perf_counter() - t0, perf_counter() - t2)
+        return output
 
     @staticmethod
     def _find_composed(state: ManagerState) -> dict[str, Any] | None:
@@ -518,6 +540,16 @@ class ManagerLoop:
         return ""
 
     @staticmethod
+    def _latest_error_payload(state: ManagerState) -> dict[str, Any]:
+        for observation in reversed(state.observations):
+            if observation.status != "failed":
+                continue
+            payload = dict((observation.metrics or {}).get("error_payload") or {})
+            if payload:
+                return payload
+        return {}
+
+    @staticmethod
     def _paper_review_error_code(message: str) -> str:
         text = str(message or "")
         if "报告生成" in text:
@@ -676,3 +708,40 @@ class ManagerLoop:
     @staticmethod
     def _state_dump(state: ManagerState) -> dict[str, Any]:
         return json.loads(state.model_dump_json())
+
+    @staticmethod
+    def _lightweight_state_dump(state: ManagerState) -> dict[str, Any]:
+        """Returns a lightweight state summary — skips full artifact/observation payloads.
+
+        Full ``state.model_dump_json()`` is O(all-artifacts + all-observations).
+        For paper review tasks with large documents that is the bottleneck in
+        ``_compose_final``.  This method includes only metadata-sized fields.
+        """
+        return {
+            "request_id": state.request_id,
+            "workflow_run_id": state.workflow_run_id,
+            "surface": state.surface,
+            "iteration": state.iteration,
+            "satisfied": state.satisfied,
+            "satisfaction_score": state.satisfaction_score,
+            "final_action": state.final_action,
+            "errors": list(state.errors),
+            "missing_inputs": list(state.missing_inputs),
+            "artifact_summary": [
+                {
+                    "type": a.type,
+                    "source_agent": a.source_agent,
+                    "confidence": a.confidence,
+                    "content_keys": list(a.content.keys()) if isinstance(a.content, dict) else None,
+                }
+                for a in state.artifacts
+            ],
+            "observation_summary": [
+                {
+                    "capability_key": o.capability_key,
+                    "status": o.status,
+                    "summary": (o.summary or "")[:200],
+                }
+                for o in state.observations
+            ],
+        }

@@ -270,6 +270,14 @@ export interface ChatMessagePayload {
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   paper_format_report?: PaperReviewReport | null;
+  paper_review_status?: {
+    phase?: string;
+    status?: string;
+    message?: string;
+  } | null;
+  paper_review_error?: Record<string, unknown> | null;
+  error_code?: string;
+  error_message?: string;
   message_type?: string;
   status?: string;
   workflow_run_id?: string;

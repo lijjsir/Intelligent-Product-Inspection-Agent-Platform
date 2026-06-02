@@ -10,20 +10,33 @@ import type {
   TaskStreamEvent,
 } from "@/types/task.types";
 
+const BACKEND_UNAVAILABLE_MESSAGE = "后端暂不可用，正在恢复连接；已保留当前列表数据。";
+
 export const useTaskStore = defineStore("task", () => {
   const items = ref<InspectionTask[]>([]);
   const current = ref<InspectionTask | null>(null);
   const total = ref(0);
   const loading = ref(false);
+  const listError = ref("");
 
   const count = computed(() => items.value.length);
 
   async function fetchTasks(query: TaskListQuery) {
     loading.value = true;
     try {
-      const { data } = await taskApi.list(query);
+      const { data } = await taskApi.list(query, { suppressErrorToast: true });
       items.value = data.data.items;
       total.value = data.data.total;
+      listError.value = "";
+      return data.data;
+    } catch {
+      listError.value = BACKEND_UNAVAILABLE_MESSAGE;
+      return {
+        items: items.value,
+        total: total.value,
+        page: Number(query.page || 1),
+        size: Number(query.size || items.value.length || 20),
+      };
     } finally {
       loading.value = false;
     }
@@ -100,6 +113,7 @@ export const useTaskStore = defineStore("task", () => {
     items.value = [];
     current.value = null;
     total.value = 0;
+    listError.value = "";
   }
 
   return {
@@ -107,6 +121,7 @@ export const useTaskStore = defineStore("task", () => {
     current,
     total,
     loading,
+    listError,
     count,
     fetchTasks,
     fetchTask,

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     db_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
     db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:3306/piap_main"
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout_sec: int = 10
 
     redis_url: str = "redis://localhost:6379/0"
     rate_limit_rpm_default: int = 60
@@ -70,6 +73,7 @@ class Settings(BaseSettings):
     trust_review_model: str = "qwen2.5:7b-instruct"
     trust_review_timeout_sec: int = 30
     trust_scoring_enabled: bool = True
+    chat_stream_token_ttl_sec: int = 900
     paper_check_languagetool_enabled: bool = True
     paper_check_languagetool_url: str = ""
     paper_check_languagetool_language: str = "zh-CN"
@@ -77,17 +81,16 @@ class Settings(BaseSettings):
     paper_check_vale_bin: str = "vale"
     paper_check_vale_config_dir: str = "agent/tools/assets/vale"
     paper_check_vale_timeout_sec: int = 20
-    paper_check_pycorrector_enabled: bool = True
-    paper_check_pycorrector_entrypoint: str = "corrector"
-    paper_check_pycorrector_model_dir: str = ""
     paper_check_macro_correct_enabled: bool = True
     paper_check_macro_correct_token_config: str = "agent/tools/assets/macro_correct/token/csc.config"
     paper_check_macro_correct_punct_config: str = "agent/tools/assets/macro_correct/punct/sl.config"
+    paper_check_macro_correct_punct_enabled: bool = True
     paper_check_engine_timeout_sec: int = 20
-    paper_check_pycorrector_timeout_sec: int = 8
-    paper_check_pycorrector_chunk_chars: int = 1200
+    paper_check_macro_correct_batch_size: int = 8
     paper_check_strict_startup: bool = True
     paper_check_disable_fallback: bool = True
+    paper_review_task_soft_time_limit_sec: int = 1800
+    paper_review_task_time_limit_sec: int = 1860
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 20

@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import type { InspectionResult, ResultListItem, ResultListQuery } from "@/types/result.types";
 import type { PagedResponse } from "@/types/common.types";
 
@@ -8,8 +8,8 @@ export interface ReviewSubmit {
 }
 
 export const resultApi = {
-  list(query: ResultListQuery) {
-    return http.get<PagedResponse<ResultListItem>>("/v1/results", { params: query });
+  list(query: ResultListQuery, config?: ApiRequestConfig) {
+    return http.get<PagedResponse<ResultListItem>>("/v1/results", { ...config, params: query });
   },
   getByTask(taskId: string) {
     return http.get<InspectionResult>(`/v1/results/by-task/${taskId}`);

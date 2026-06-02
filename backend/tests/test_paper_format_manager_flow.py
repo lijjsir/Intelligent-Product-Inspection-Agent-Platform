@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from io import BytesIO
 
@@ -28,10 +28,10 @@ def _ready_runtime_status() -> dict:
     return {
         "ok": True,
         "status": "healthy",
-        "engines_used": ["rule", "pycorrector", "macro_correct", "languagetool", "vale"],
+        "engines_used": ["enhanced_parser", "macro_correct_token", "macro_correct_punct", "languagetool", "vale"],
         "engine_status": [
-            {"name": "pycorrector", "ok": True, "detail": "installed"},
-            {"name": "macro_correct", "ok": True, "detail": "installed"},
+            {"name": "macro_correct_token", "ok": True, "detail": "installed"},
+            {"name": "macro_correct_punct", "ok": True, "detail": "installed"},
             {"name": "languagetool", "ok": True, "detail": "http://localhost:8010"},
             {"name": "vale", "ok": True, "detail": "vale 3"},
         ],
@@ -63,7 +63,6 @@ async def test_manager_policy_routes_paper_queries_to_paper_format_check():
 async def test_manager_loop_returns_paper_format_report(monkeypatch):
     stored_objects: dict[tuple[str, str], tuple[bytes, str | None]] = {}
     monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
-    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
@@ -112,7 +111,6 @@ async def test_manager_loop_returns_paper_format_report(monkeypatch):
 @pytest.mark.asyncio
 async def test_manager_loop_preserves_paper_report_when_composed_response_is_missing(monkeypatch):
     monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
-    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
@@ -161,7 +159,6 @@ async def test_manager_loop_preserves_paper_report_when_composed_response_is_mis
 @pytest.mark.asyncio
 async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch):
     monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
-    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
@@ -214,6 +211,7 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_file_executor_fails_paper_check_when_strict_parser_fails(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
     monkeypatch.setattr(
         "app.services.object_storage.resolver.read_attachment_bytes",
         lambda attachment: (b"bad-docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
@@ -263,9 +261,80 @@ async def test_file_executor_fails_paper_check_when_strict_parser_fails(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_file_executor_checks_paper_runtime_before_parsing(monkeypatch):
+    parsed_called = False
+
+    def not_ready_runtime_status() -> dict:
+        return {
+            "ok": False,
+            "status": "unhealthy",
+            "engine_status": [
+                {"name": "macro_correct_token", "ok": False, "detail": "model missing"},
+            ],
+        }
+
+    def parse_should_not_run(_file_name, _content):
+        nonlocal parsed_called
+        parsed_called = True
+        return {"kind": "docx", "text": "should not parse"}
+
+    monkeypatch.setattr(
+        "app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync",
+        not_ready_runtime_status,
+    )
+    monkeypatch.setattr(
+        "app.services.object_storage.resolver.read_attachment_bytes",
+        lambda attachment: (_docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    )
+    monkeypatch.setattr(
+        "agent.tools.file_parsers.parse_paper_review_file_content_strict",
+        parse_should_not_run,
+    )
+
+    step = AgentPlanStep(
+        step_id="paper-runtime-fail",
+        capability_key="file.paper_format_check",
+        agent="chat",
+        operation="paper_format_check",
+        mode="report",
+        input={"attachments": []},
+    )
+    state = ManagerState(
+        request_id="req-runtime-fail",
+        workflow_run_id="wf-runtime-fail",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        original_query="paper format check",
+        attachments=[
+            {
+                "name": "paper.docx",
+                "kind": "file",
+                "bucket": "test",
+                "object_key": "paper.docx",
+            }
+        ],
+    )
+    request = NormalizedRequest(
+        request_id="req-runtime-fail",
+        workflow_run_id="wf-runtime-fail",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        query="paper format check",
+        attachments=[NormalizedAttachment(name="paper.docx", kind="file")],
+        ext={"surface": "chat"},
+    )
+
+    with pytest.raises(PaperReviewDependencyError, match="macro_correct_token"):
+        await FileExecutor().execute(step, state, request)
+
+    assert parsed_called is False
+
+
+@pytest.mark.asyncio
 async def test_manager_loop_first_stage_still_returns_file_answer_when_ai_review_would_fail(monkeypatch):
     monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
-    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
     monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])

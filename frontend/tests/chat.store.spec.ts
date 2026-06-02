@@ -214,9 +214,86 @@ describe("chat store", () => {
     await store.sendMessage({ message: "hello" });
     await vi.advanceTimersByTimeAsync(1200);
 
-    expect(chatApi.listMessages).toHaveBeenCalledWith("session-1", 1, 500);
+    expect(chatApi.listMessages).toHaveBeenCalledWith(
+      "session-1",
+      1,
+      500,
+      expect.objectContaining({ suppressErrorToast: true, timeout: 60000 }),
+    );
     expect(store.messages.map((item) => item.id)).toEqual(["msg-user", "msg-assistant"]);
     expect(store.messages[1].content).toBe("answer");
     expect(store.messages[1].seq_no).toBe(2);
+  });
+
+  it("keeps fallback polling alive for long paper review requests", async () => {
+    vi.useFakeTimers();
+    const { chatApi } = await import("@/api/chat.api");
+
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: { data: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" } },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.stream = vi.fn().mockRejectedValue(new Error("stream unavailable"));
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "帮我查非",
+            payload: {},
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-1",
+        },
+      },
+    });
+    chatApi.listMessages = vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: "msg-assistant",
+            session_id: "session-1",
+            seq_no: 2,
+            role: "assistant",
+            message_type: "streaming",
+            content: "正在执行 Ai-Review 论文审阅...",
+            payload: {
+              status: "running",
+              paper_review_status: {
+                phase: "ai_reviewing",
+                status: "running",
+                message: "正在执行 Ai-Review 论文审阅...",
+              },
+            },
+            created_at: "",
+          },
+        ],
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("session");
+    store.replacePendingAttachments([
+      {
+        id: "att-1",
+        name: "paper.docx",
+        url: "/api/v1/chat/files/chat-attachments/paper.docx",
+        content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes: 1024,
+        kind: "document",
+      },
+    ]);
+
+    await store.sendMessage({ message: "帮我查非" });
+    await vi.advanceTimersByTimeAsync(30000);
+
+    expect(chatApi.listMessages).toHaveBeenCalled();
+    expect(store.loading).toBe(true);
+    expect(store.messages[1].message_type).toBe("streaming");
   });
 });

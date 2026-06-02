@@ -7,11 +7,15 @@ services:
     working_dir: /app/backend
     command: >
       sh -c "PYTHONPATH=. alembic upgrade head &&
-      python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+      python -m uvicorn main:app --host 0.0.0.0 --port 8000"
     environment:
+      TZ: Asia/Shanghai
       PYTHONPATH: /app/backend
       PIAP_DB_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
       PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_DB_POOL_SIZE: "10"
+      PIAP_DB_MAX_OVERFLOW: "20"
+      PIAP_DB_POOL_TIMEOUT_SEC: "10"
       PIAP_REDIS_URL: redis://redis:6379/0
       PIAP_CELERY_BROKER_URL: redis://redis:6379/0
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -34,14 +38,16 @@ services:
       PIAP_LANGFUSE_INIT_USER_PASSWORD: piap_admin_123456
       PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
       PIAP_PAPER_CHECK_VALE_BIN: /usr/local/bin/vale
-      PIAP_PAPER_CHECK_PYCORRECTOR_ENTRYPOINT: macbert_local
-      PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR: /opt/piap-paper-assets/macro_correct/token
       PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG: /opt/piap-paper-assets/macro_correct/token/csc.config
       PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_ENABLED: "true"
       PIAP_PAPER_CHECK_STRICT_STARTUP: "true"
       PIAP_PAPER_CHECK_DISABLE_FALLBACK: "true"
       PIAP_PAPER_CHECK_ENGINE_TIMEOUT_SEC: "60"
-      PIAP_PAPER_CHECK_PYCORRECTOR_TIMEOUT_SEC: "60"
+      PIAP_PAPER_CHECK_MACRO_CORRECT_BATCH_SIZE: "8"
+      PIAP_PAPER_REVIEW_TASK_SOFT_TIME_LIMIT_SEC: "1800"
+      PIAP_PAPER_REVIEW_TASK_TIME_LIMIT_SEC: "1860"
+      PIAP_CHAT_STREAM_TOKEN_TTL_SEC: "900"
     depends_on:
       paper-assets-init:
         condition: service_completed_successfully
@@ -68,11 +74,15 @@ services:
       dockerfile: backend/Dockerfile
     container_name: piap-celery-worker
     working_dir: /app/backend
-    command: python -m celery -A worker.celery_app.celery_app worker -l info
+    command: python -m celery -A worker.celery_app.celery_app worker -l info -Q celery --concurrency=1 --prefetch-multiplier=1 --max-tasks-per-child=1
     environment:
+      TZ: Asia/Shanghai
       PYTHONPATH: /app/backend
       PIAP_DB_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
       PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_DB_POOL_SIZE: "10"
+      PIAP_DB_MAX_OVERFLOW: "20"
+      PIAP_DB_POOL_TIMEOUT_SEC: "10"
       PIAP_REDIS_URL: redis://redis:6379/0
       PIAP_CELERY_BROKER_URL: redis://redis:6379/0
       PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -92,14 +102,79 @@ services:
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
       PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
       PIAP_PAPER_CHECK_VALE_BIN: /usr/local/bin/vale
-      PIAP_PAPER_CHECK_PYCORRECTOR_ENTRYPOINT: macbert_local
-      PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR: /opt/piap-paper-assets/macro_correct/token
       PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG: /opt/piap-paper-assets/macro_correct/token/csc.config
       PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_ENABLED: "true"
       PIAP_PAPER_CHECK_STRICT_STARTUP: "true"
       PIAP_PAPER_CHECK_DISABLE_FALLBACK: "true"
       PIAP_PAPER_CHECK_ENGINE_TIMEOUT_SEC: "60"
-      PIAP_PAPER_CHECK_PYCORRECTOR_TIMEOUT_SEC: "60"
+      PIAP_PAPER_CHECK_MACRO_CORRECT_BATCH_SIZE: "8"
+      PIAP_PAPER_REVIEW_TASK_SOFT_TIME_LIMIT_SEC: "1800"
+      PIAP_PAPER_REVIEW_TASK_TIME_LIMIT_SEC: "1860"
+      PIAP_CHAT_STREAM_TOKEN_TTL_SEC: "900"
+    depends_on:
+      paper-assets-init:
+        condition: service_completed_successfully
+        required: false
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      languagetool:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./.runtime/paper-assets:/opt/piap-paper-assets:ro
+
+  celery-paper-worker:
+    image: intelligent-product-inspection-agent-platform-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: piap-celery-paper-worker
+    working_dir: /app/backend
+    command: python -m celery -A worker.celery_app.celery_app worker -l info -Q paper_review --concurrency=1 --prefetch-multiplier=1 --max-tasks-per-child=1
+    environment:
+      TZ: Asia/Shanghai
+      PYTHONPATH: /app/backend
+      PIAP_DB_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
+      PIAP_DB_POOL_SIZE: "10"
+      PIAP_DB_MAX_OVERFLOW: "20"
+      PIAP_DB_POOL_TIMEOUT_SEC: "10"
+      PIAP_REDIS_URL: redis://redis:6379/0
+      PIAP_CELERY_BROKER_URL: redis://redis:6379/0
+      PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PIAP_S3_ENDPOINT: http://minio:9000
+      PIAP_S3_ACCESS_KEY: piap
+      PIAP_S3_SECRET_KEY: piap_password
+      PIAP_OBJECT_STORAGE_BACKEND: minio
+      PIAP_RAG_STORAGE_BUCKET: rag-docs
+      PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+      PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
+      PIAP_LANGFUSE_ENABLED: "true"
+      PIAP_LANGFUSE_HOST: http://langfuse-web:3000
+      PIAP_LANGFUSE_PUBLIC_HOST: http://127.0.0.1:3000
+      PIAP_LANGFUSE_PROJECT_ID: piap-local
+      PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
+      PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
+      PIAP_PAPER_CHECK_VALE_BIN: /usr/local/bin/vale
+      PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG: /opt/piap-paper-assets/macro_correct/token/csc.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG: /opt/piap-paper-assets/macro_correct/punct/sl.config
+      PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_ENABLED: "true"
+      PIAP_PAPER_CHECK_STRICT_STARTUP: "true"
+      PIAP_PAPER_CHECK_DISABLE_FALLBACK: "true"
+      PIAP_PAPER_CHECK_ENGINE_TIMEOUT_SEC: "60"
+      PIAP_PAPER_CHECK_MACRO_CORRECT_BATCH_SIZE: "8"
+      PIAP_PAPER_REVIEW_TASK_SOFT_TIME_LIMIT_SEC: "1800"
+      PIAP_PAPER_REVIEW_TASK_TIME_LIMIT_SEC: "1860"
+      PIAP_CHAT_STREAM_TOKEN_TTL_SEC: "900"
     depends_on:
       paper-assets-init:
         condition: service_completed_successfully
@@ -126,6 +201,7 @@ services:
     working_dir: /app/backend
     command: python -m celery -A worker.celery_app.celery_app beat -l info
     environment:
+      TZ: Asia/Shanghai
       PYTHONPATH: /app/backend
       PIAP_DB_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
       PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:piap@mysql:3306/piap_main
@@ -166,6 +242,7 @@ services:
     container_name: piap-frontend
     working_dir: /app/frontend
     environment:
+      TZ: Asia/Shanghai
       VITE_PROXY_TARGET: http://backend:8000
       VITE_LANGFUSE_PROXY_TARGET: http://langfuse-web:3000
     depends_on:
@@ -187,6 +264,8 @@ services:
       dockerfile: backend/Dockerfile
     container_name: piap-paper-assets-init
     working_dir: /app/backend
+    environment:
+      TZ: Asia/Shanghai
     command: >
       sh -c "PYTHONPATH=. python scripts/download_paper_review_assets.py
       --base-dir /opt/piap-paper-assets
@@ -202,6 +281,7 @@ services:
     container_name: piap-mysql
     command: ["--default-authentication-plugin=mysql_native_password"]
     environment:
+      TZ: Asia/Shanghai
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: piap_main
       MYSQL_USER: piap
@@ -220,6 +300,8 @@ services:
   redis:
     image: redis:7
     container_name: piap-redis
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:16379:6379"
     healthcheck:
@@ -232,6 +314,7 @@ services:
     image: rabbitmq:3-management
     container_name: piap-rabbitmq
     environment:
+      TZ: Asia/Shanghai
       RABBITMQ_DEFAULT_USER: piap
       RABBITMQ_DEFAULT_PASS: piap
       RABBITMQ_DEFAULT_VHOST: piap
@@ -244,6 +327,7 @@ services:
     container_name: piap-minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
+      TZ: Asia/Shanghai
       MINIO_ROOT_USER: piap
       MINIO_ROOT_PASSWORD: piap_password
     ports:
@@ -255,6 +339,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: piap-qdrant
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:6333:6333"
     volumes:
@@ -264,6 +350,7 @@ services:
     image: erikvl87/languagetool:latest
     container_name: piap-languagetool
     environment:
+      TZ: Asia/Shanghai
       Java_Xms: 256m
       Java_Xmx: 512m
     ports:
@@ -281,7 +368,7 @@ services:
       POSTGRES_DB: langfuse
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse
-      TZ: UTC
+      TZ: Asia/Shanghai
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -297,7 +384,7 @@ services:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: clickhouse
       CLICKHOUSE_PASSWORD: clickhouse
-      TZ: UTC
+      TZ: Asia/Shanghai
     volumes:
       - langfuse_clickhouse_data:/var/lib/clickhouse
       - langfuse_clickhouse_logs:/var/log/clickhouse-server
@@ -311,6 +398,8 @@ services:
     image: redis:7
     container_name: piap-langfuse-redis
     command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_PASSWORD:-langfuse-redis-password}"]
+    environment:
+      TZ: Asia/Shanghai
     volumes:
       - langfuse_redis_data:/data
     healthcheck:
@@ -327,7 +416,7 @@ services:
     environment:
       MINIO_ROOT_USER: langfuse
       MINIO_ROOT_PASSWORD: langfuse_password
-      TZ: UTC
+      TZ: Asia/Shanghai
     volumes:
       - langfuse_minio_data:/data
     healthcheck:
@@ -349,6 +438,7 @@ services:
       langfuse-minio:
         condition: service_healthy
     environment:
+      TZ: Asia/Shanghai
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       DIRECT_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       NEXTAUTH_URL: http://127.0.0.1:3000
@@ -402,6 +492,7 @@ services:
       langfuse-minio:
         condition: service_healthy
     environment:
+      TZ: Asia/Shanghai
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       DIRECT_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
       NEXTAUTH_URL: http://127.0.0.1:3000

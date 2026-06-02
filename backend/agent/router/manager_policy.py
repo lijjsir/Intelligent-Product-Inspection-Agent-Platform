@@ -183,7 +183,7 @@ class ManagerPolicy:
         surface_policy = SURFACE_MODE_POLICY.get(surface, SURFACE_MODE_POLICY["chat"])
         allowed_modes = list(ext.get("allowed_modes") or surface_policy["allowed_modes"])
         forbidden_modes = list(ext.get("forbidden_modes") or surface_policy.get("forbidden_modes") or [])
-        budget = self._budget_for_surface(surface)
+        budget = self._budget_for_surface(surface, request=request)
         return ManagerState(
             request_id=request.request_id,
             workflow_run_id=request.workflow_run_id or request.request_id,
@@ -397,11 +397,25 @@ class ManagerPolicy:
             return "quality_task"
         return "chat"
 
-    @staticmethod
-    def _budget_for_surface(surface: str) -> dict[str, int]:
+    def _budget_for_surface(self, surface: str, request: NormalizedRequest | None = None) -> dict[str, int]:
         if surface == "quality_task":
             return {"max_iterations": 5, "max_tool_calls": 8, "max_llm_calls": 5, "timeout_ms": 60000}
+        if request and self._has_paper_review_attachment(request):
+            from app.core.config import settings
+            _soft = max(10, int(settings.paper_review_task_soft_time_limit_sec or 840))
+            return {"max_iterations": 3, "max_tool_calls": 5, "max_llm_calls": 5, "timeout_ms": (_soft - 10) * 1000}
         return {"max_iterations": 2, "max_tool_calls": 3, "max_llm_calls": 3, "timeout_ms": 600000}
+
+    @staticmethod
+    def _has_paper_review_attachment(request: NormalizedRequest) -> bool:
+        if not request or not request.attachments:
+            return False
+        doc_exts = {".docx", ".doc", ".pdf", ".tex", ".wps"}
+        for att in request.attachments:
+            name = str(getattr(att, "name", "") or "")
+            if any(name.lower().endswith(ext) for ext in doc_exts):
+                return True
+        return False
 
     @staticmethod
     def _clean(value: str) -> str:

@@ -13,6 +13,7 @@ from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailabl
 from app.core.ids import uuid7
 from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER, require_role
 from app.core.security import create_stream_token, safe_decode_token
+from app.core.config import settings
 from app.repositories.chat_repo import ChatMessageRepository, ChatOpsRepository, ChatSessionRepository
 from app.repositories.task_repo import TaskRepository
 from app.schemas.chat import (
@@ -37,6 +38,18 @@ logger = logging.getLogger(__name__)
 _ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
 _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
 
+_PAPER_REVIEW_KEYWORDS = (
+    "查非",
+    "论文",
+    "格式",
+    "审阅",
+    "审查",
+    "ai-review",
+    "paper_format",
+    "paper format",
+)
+_PAPER_REVIEW_EXTENSIONS = (".docx", ".pdf", ".tex")
+
 
 @lru_cache(maxsize=1)
 def get_quality_agent_orchestrator() -> QualityAgentOrchestratorService:
@@ -52,6 +65,35 @@ def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: 
         _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.pop(assistant_message_id, None)
 
     task.add_done_callback(cleanup)
+
+
+def _is_paper_review_request(message: str, ext_payload: dict[str, Any]) -> bool:
+    attachments = list(ext_payload.get("attachments") or [])
+    has_paper_file = any(
+        str(item.get("name") or "").strip().lower().endswith(_PAPER_REVIEW_EXTENSIONS)
+        for item in attachments
+        if isinstance(item, dict)
+    )
+    if not has_paper_file:
+        return False
+    text = f"{message} {ext_payload.get('route_hint') or ''} {ext_payload.get('intent') or ''}".lower()
+    return any(keyword.lower() in text for keyword in _PAPER_REVIEW_KEYWORDS)
+
+
+async def _enqueue_paper_review_workflow(payload: dict[str, Any]) -> None:
+    try:
+        from worker.tasks.paper_review_chat_task import run_paper_review_chat_workflow
+
+        run_paper_review_chat_workflow.apply_async(
+            args=(payload,),
+            task_id=str(payload.get("workflow_run_id") or "") or None,
+            ignore_result=True,
+            queue="paper_review",
+        )
+    except Exception as exc:
+        from worker.tasks.paper_review_chat_task import _persist_paper_review_failure
+
+        await _persist_paper_review_failure(payload, exc, error_code="paper_review_dispatch_failed")
 
 
 def get_current_user_for_stream(
@@ -162,7 +204,8 @@ class ChatService:
                 org_scope = None if self._current.role == ROLE_ADMIN else self._org_id
                 if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
-        expires_at = utcnow() + timedelta(minutes=10)
+        ttl_seconds = max(600, int(settings.chat_stream_token_ttl_sec or 900))
+        expires_at = utcnow() + timedelta(seconds=ttl_seconds)
         token = create_stream_token(
             self._user_id,
             extra={
@@ -177,7 +220,7 @@ class ChatService:
                 "resource": resource,
                 "resource_id": resource_id,
             },
-            ttl_seconds=600,
+            ttl_seconds=ttl_seconds,
         )
         return StreamSessionResponse(
             stream_token=token,
@@ -244,17 +287,33 @@ class ChatService:
             await session_repo.touch(self._org_id, self._user_id, session_id)
             await session.commit()
 
-        workflow_task = asyncio.create_task(
-            self._run_workflow(
-                session_id=session_id,
-                assistant_message_id=str(assistant_message.id),
-                request=payload.model_copy(update={"ext": ext_payload}),
-                workflow_run_id=workflow_run_id,
-                current_user_seq_no=int(user_message.seq_no or 0),
-                assistant_message_seq_no=int(assistant_message.seq_no or 0),
+        workflow_request = payload.model_copy(update={"ext": ext_payload})
+        if _is_paper_review_request(payload.message, ext_payload):
+            await _enqueue_paper_review_workflow(
+                {
+                    "org_id": self._org_id,
+                    "user_id": self._user_id,
+                    "session_id": session_id,
+                    "assistant_message_id": str(assistant_message.id),
+                    "workflow_run_id": workflow_run_id,
+                    "current_user_seq_no": int(user_message.seq_no or 0),
+                    "assistant_message_seq_no": int(assistant_message.seq_no or 0),
+                    "request": workflow_request.model_dump(mode="json"),
+                    "current": self._current.model_dump(mode="json"),
+                }
             )
-        )
-        _track_chat_workflow(workflow_run_id, str(assistant_message.id), workflow_task)
+        else:
+            workflow_task = asyncio.create_task(
+                self._run_workflow(
+                    session_id=session_id,
+                    assistant_message_id=str(assistant_message.id),
+                    request=workflow_request,
+                    workflow_run_id=workflow_run_id,
+                    current_user_seq_no=int(user_message.seq_no or 0),
+                    assistant_message_seq_no=int(assistant_message.seq_no or 0),
+                )
+            )
+            _track_chat_workflow(workflow_run_id, str(assistant_message.id), workflow_task)
 
         return ChatSendResponse(
             session=ChatSessionResponse.model_validate(chat_session),

@@ -622,6 +622,148 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_enqueue_paper_review_workflow_routes_to_dedicated_queue(monkeypatch):
+    captured: list[dict] = []
+
+    class FakeTask:
+        @staticmethod
+        def apply_async(**kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr(
+        "worker.tasks.paper_review_chat_task.run_paper_review_chat_workflow",
+        FakeTask(),
+    )
+
+    await chat_service_mod._enqueue_paper_review_workflow(
+        {
+            "workflow_run_id": "workflow-1",
+            "assistant_message_id": "assistant-1",
+        }
+    )
+
+    assert captured == [
+        {
+            "args": (
+                {
+                    "workflow_run_id": "workflow-1",
+                    "assistant_message_id": "assistant-1",
+                },
+            ),
+            "task_id": "workflow-1",
+            "ignore_result": True,
+            "queue": "paper_review",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_message_enqueues_paper_review_to_celery_without_local_task(monkeypatch):
+    queued_payloads: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeChatSessionRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, org_id: str, user_id: str, session_id: str):
+            assert org_id == "org-1"
+            assert user_id == "user-1"
+            assert session_id == "session-1"
+            return SimpleNamespace(
+                id=session_id,
+                org_id=org_id,
+                user_id=user_id,
+                title="paper",
+                status="active",
+                last_message_at=None,
+                created_at=None,
+                updated_at=None,
+            )
+
+        async def touch(self, *_args, **_kwargs):
+            return None
+
+    class FakeChatMessageRepository:
+        def __init__(self, _session):
+            self._count = 0
+
+        async def create(self, **kwargs):
+            self._count += 1
+            role = kwargs["role"]
+            return SimpleNamespace(
+                id=f"{role}-message",
+                session_id=kwargs["session_id"],
+                seq_no=1 if role == "user" else 2,
+                role=role,
+                message_type=kwargs["message_type"],
+                content=kwargs["content"],
+                payload=kwargs["payload"],
+                created_at=None,
+            )
+
+    class FakeChatOpsRepository:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def ensure_chat_binding(self):
+            return None
+
+    async def fake_enqueue(payload: dict):
+        queued_payloads.append(payload)
+
+    def fail_create_task(*_args, **_kwargs):
+        raise AssertionError("paper review workflow must not run in uvicorn event loop")
+
+    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chat_service_mod, "ChatSessionRepository", FakeChatSessionRepository)
+    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeChatMessageRepository)
+    monkeypatch.setattr(chat_service_mod, "ChatOpsRepository", FakeChatOpsRepository)
+    monkeypatch.setattr(chat_service_mod, "_enqueue_paper_review_workflow", fake_enqueue, raising=False)
+    monkeypatch.setattr(chat_service_mod.asyncio, "create_task", fail_create_task)
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+
+    response = await service.send_message(
+        "session-1",
+        chat_service_mod.ChatMessageSendRequest(
+            message="请查非",
+            ext={
+                "attachments": [
+                    {
+                        "name": "paper.docx",
+                        "url": "/api/v1/chat/files/chat-attachments/paper.docx",
+                        "kind": "document",
+                    }
+                ]
+            },
+        ),
+    )
+
+    assert response.assistant_message_id == "assistant-message"
+    assert len(queued_payloads) == 1
+    queued = queued_payloads[0]
+    assert queued["session_id"] == "session-1"
+    assert queued["assistant_message_id"] == "assistant-message"
+    assert queued["request"]["message"] == "请查非"
+    assert queued["current"]["role"] == "user"
+
+
 def test_smalltalk_answer_remembers_user_name_from_history():
     answer = _smalltalk_answer(
         "我叫什么名字",

@@ -94,11 +94,19 @@ class ManagerDispatcher:
                             db_session=db_session,
                         )
                     except Exception as exc:
+                        metrics = {}
+                        to_payload = getattr(exc, "to_payload", None)
+                        if callable(to_payload):
+                            try:
+                                metrics["error_payload"] = to_payload()
+                            except Exception:
+                                metrics = {}
                         step_observation = observation(
                             step,
                             status="failed",
                             summary="能力执行失败",
                             error=str(exc),
+                            metrics=metrics,
                         )
                         step_artifacts = []
                 observations.append(step_observation)

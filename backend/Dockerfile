@@ -3,8 +3,6 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIAP_PAPER_CHECK_PYCORRECTOR_ENTRYPOINT=macbert_local \
-    PIAP_PAPER_CHECK_PYCORRECTOR_MODEL_DIR=/opt/piap-paper-assets/macro_correct/token \
     PIAP_PAPER_CHECK_MACRO_CORRECT_TOKEN_CONFIG=/opt/piap-paper-assets/macro_correct/token/csc.config \
     PIAP_PAPER_CHECK_MACRO_CORRECT_PUNCT_CONFIG=/opt/piap-paper-assets/macro_correct/punct/sl.config \
     PIAP_PAPER_CHECK_VALE_BIN=/usr/local/bin/vale

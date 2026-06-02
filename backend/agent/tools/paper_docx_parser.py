@@ -91,6 +91,13 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
             "comment_refs": list(xml_paragraph.get("comment_refs") or []),
             "field_codes": list(xml_paragraph.get("field_codes") or []),
         }
+        item["paragraph_role"] = _infer_paragraph_role(
+            text=text,
+            style_name=style_name,
+            heading_level=heading_level,
+            section_title=current_section_title,
+            field_codes=item["field_codes"],
+        )
         paragraphs.append(item)
 
         if heading_level:
@@ -111,6 +118,7 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
     text_content = "\n".join(p["text"] for p in paragraphs if p["text"])
     citations = _extract_citations(text_content)
     table_titles = _extract_titles(text_content, r"^(?:表|Table)\s*\d+(?:[-.]\d+)*[^\n]*")
+    reference_lines = _extract_reference_lines(text_content) or _extract_reference_paragraph_lines(paragraphs)
     formula_numbers = _extract_formula_numbers(paragraphs, text_content)
     toc_entries = _extract_toc_entries(paragraphs)
     word_metadata = _parse_docx_package_metadata(content)
@@ -128,7 +136,7 @@ def parse_docx_enhanced(content: bytes) -> dict[str, Any]:
         "section_count": len(doc.sections),
         "page_layout": sections_data[0] if sections_data else {},
         "citations": citations,
-        "references": _extract_reference_lines(text_content),
+        "references": reference_lines,
         "word_metadata": word_metadata,
         "parser_limitations": parser_limitations,
         "ooxml": dict(xml_bundle.get("meta") or {}),
@@ -204,6 +212,12 @@ def _parse_sections_enhanced(doc) -> list[dict[str, Any]]:
     for section in doc.sections:
         page_width = _to_cm(getattr(section, "page_width", None))
         page_height = _to_cm(getattr(section, "page_height", None))
+        default_header_text = _part_text(section.header)
+        first_header_text = _part_text(section.first_page_header)
+        even_header_text = _part_text(section.even_page_header)
+        default_footer_text = _part_text(section.footer)
+        first_footer_text = _part_text(section.first_page_footer)
+        even_footer_text = _part_text(section.even_page_footer)
         sections.append({
             "start_type": str(getattr(getattr(section, "start_type", None), "name", "") or getattr(section, "start_type", "") or ""),
             "page_width_cm": page_width,
@@ -220,14 +234,77 @@ def _parse_sections_enhanced(doc) -> list[dict[str, Any]]:
             "gutter_cm": _to_cm(getattr(section, "gutter", None)),
             "header_distance_cm": _to_cm(getattr(section, "header_distance", None)),
             "footer_distance_cm": _to_cm(getattr(section, "footer_distance", None)),
-            "header_text": "\n".join(
-                (p.text or "").strip() for p in section.header.paragraphs if (p.text or "").strip()
-            ),
-            "footer_text": "\n".join(
-                (p.text or "").strip() for p in section.footer.paragraphs if (p.text or "").strip()
-            ),
+            "header_text": default_header_text,
+            "footer_text": default_footer_text,
+            "default_header_text": default_header_text,
+            "first_header_text": first_header_text,
+            "even_header_text": even_header_text,
+            "default_footer_text": default_footer_text,
+            "first_footer_text": first_footer_text,
+            "even_footer_text": even_footer_text,
         })
     return sections
+
+
+def _part_text(part) -> str:
+    return "\n".join((p.text or "").strip() for p in part.paragraphs if (p.text or "").strip())
+
+
+def _infer_paragraph_role(
+    *,
+    text: str,
+    style_name: str,
+    heading_level: int,
+    section_title: str,
+    field_codes: list[Any],
+) -> str:
+    content = str(text or "").strip()
+    style = str(style_name or "").strip().lower()
+    section = str(section_title or "").strip().lower()
+    if not content:
+        return "blank"
+    if heading_level:
+        return "heading"
+    loose_content = re.sub(r"\s+", "", content)
+    if content in {"参考文献", "References", "Bibliography", "REFERENCES"} or loose_content in {"摘要", "目录", "图目录", "表目录", "致谢", "作者简介"}:
+        return "heading"
+    if style.startswith("toc") or "table of figures" in style or any("TOC" in str(code) for code in field_codes):
+        return "toc"
+    if re.match(r"^(?:图|fig(?:ure)?\.?)\s*\d+(?:[-.]\d+)*", content, re.I) or "图题" in style:
+        return "figure_caption"
+    if re.match(r"^(?:表|table\.?)\s*\d+(?:[-.]\d+)*", content, re.I) or "表题" in style:
+        return "table_caption"
+    if "公式" in style or re.fullmatch(r"[（(]\s*\d+(?:[-.]\d+)*\s*[）)]", content):
+        return "formula"
+    if "参考文献" in section or "参考文献" in style or re.match(r"^\[\d+\]\s+", content):
+        return "reference_entry"
+    if "目录" in section:
+        return "toc"
+    if "abstract" in section or "摘要" in section:
+        return "abstract_body"
+    if "致谢" in section or "致 謝" in section:
+        return "acknowledgement_body"
+    if "作者简介" in section or "攻读学位期间" in section or "基本情况" in section:
+        return "profile"
+    return "body"
+
+
+def _extract_reference_paragraph_lines(paragraphs: list[dict[str, Any]]) -> list[str]:
+    refs: list[str] = []
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "").strip()
+        if not text:
+            continue
+        if paragraph.get("paragraph_role") == "reference_entry":
+            if re.match(r"^\[\d+\]\s*", text):
+                refs.append(text)
+                continue
+            numbering = dict(paragraph.get("numbering") or {})
+            if numbering.get("num_id"):
+                refs.append(f"[{len(refs) + 1}] {text}")
+            else:
+                refs.append(text)
+    return refs
 
 
 def _extract_titles(text: str, pattern: str) -> list[str]:
@@ -348,9 +425,24 @@ def _parse_docx_xml_bundle(content: bytes) -> dict[str, Any]:
         with zipfile.ZipFile(BytesIO(content)) as archive:
             document_xml = archive.read("word/document.xml")
             root = etree.fromstring(document_xml)
+            numbering_definitions = _parse_numbering_definitions(archive, ns, etree)
+            style_numbering = _parse_paragraph_style_numbering(archive, ns, etree)
+            numbering_counters: dict[tuple[str, str], int] = {}
             paragraphs: list[dict[str, Any]] = []
             section_breaks: list[int] = [0]
             for p_idx, p in enumerate(root.xpath(".//w:body/w:p", namespaces=ns)):
+                style_id = _first_or_none(p.xpath("./w:pPr/w:pStyle/@w:val", namespaces=ns)) or ""
+                direct_num_id = _first_or_none(p.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=ns))
+                direct_ilvl = _first_or_none(p.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=ns))
+                style_num = style_numbering.get(str(style_id), {}) if style_id else {}
+                num_id = str(direct_num_id or style_num.get("num_id") or "")
+                ilvl = str(direct_ilvl or style_num.get("ilvl") or "0")
+                numbering = _resolve_paragraph_numbering(
+                    num_id=num_id,
+                    ilvl=ilvl,
+                    numbering_definitions=numbering_definitions,
+                    counters=numbering_counters,
+                )
                 runs = []
                 for r_idx, run in enumerate(p.xpath("./w:r", namespaces=ns)):
                     size_val = _first_or_none(run.xpath("./w:rPr/w:sz/@w:val", namespaces=ns))
@@ -367,12 +459,9 @@ def _parse_docx_xml_bundle(content: bytes) -> dict[str, Any]:
                     })
                 paragraphs.append({
                     "xml_path": str(PurePosixPath("word/document.xml") / f"p[{p_idx}]"),
-                    "style_id": _first_or_none(p.xpath("./w:pPr/w:pStyle/@w:val", namespaces=ns)) or "",
+                    "style_id": style_id,
                     "text_runs": runs,
-                    "numbering": {
-                        "num_id": _first_or_none(p.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=ns)),
-                        "ilvl": _first_or_none(p.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=ns)),
-                    },
+                    "numbering": numbering,
                     "page_break_before": bool(p.xpath("./w:pPr/w:pageBreakBefore", namespaces=ns)),
                     "has_page_break": bool(p.xpath(".//w:br[@w:type='page']", namespaces=ns)),
                     "footnote_refs": [str(item) for item in p.xpath(".//w:footnoteReference/@w:id", namespaces=ns)],
@@ -390,10 +479,98 @@ def _parse_docx_xml_bundle(content: bytes) -> dict[str, Any]:
                 "has_footnotes_xml": _zip_exists(archive, "word/footnotes.xml"),
                 "has_endnotes_xml": _zip_exists(archive, "word/endnotes.xml"),
                 "has_numbering_xml": _zip_exists(archive, "word/numbering.xml"),
+                "numbering_definition_count": len(numbering_definitions.get("num_to_abstract", {})),
+                "style_numbering_count": len(style_numbering),
             }
             return {"paragraphs": paragraphs, "section_breaks": section_breaks, "meta": meta}
     except Exception as exc:
         return {"error": str(exc), "paragraphs": [], "meta": {}}
+
+
+def _parse_numbering_definitions(archive: zipfile.ZipFile, ns: dict[str, str], etree) -> dict[str, Any]:
+    definitions: dict[str, Any] = {"num_to_abstract": {}, "levels": {}, "overrides": {}}
+    if not _zip_exists(archive, "word/numbering.xml"):
+        return definitions
+    try:
+        root = etree.fromstring(archive.read("word/numbering.xml"))
+    except Exception:
+        return definitions
+
+    for abstract in root.xpath(".//w:abstractNum", namespaces=ns):
+        abstract_id = str(_first_or_none(abstract.xpath("./@w:abstractNumId", namespaces=ns)) or "")
+        if not abstract_id:
+            continue
+        for level in abstract.xpath("./w:lvl", namespaces=ns):
+            ilvl = str(_first_or_none(level.xpath("./@w:ilvl", namespaces=ns)) or "0")
+            start = _first_or_none(level.xpath("./w:start/@w:val", namespaces=ns))
+            definitions["levels"][(abstract_id, ilvl)] = {
+                "start": int(start) if str(start).isdigit() else 1,
+                "num_fmt": str(_first_or_none(level.xpath("./w:numFmt/@w:val", namespaces=ns)) or "decimal"),
+                "lvl_text": str(_first_or_none(level.xpath("./w:lvlText/@w:val", namespaces=ns)) or "%1"),
+            }
+
+    for num in root.xpath(".//w:num", namespaces=ns):
+        num_id = str(_first_or_none(num.xpath("./@w:numId", namespaces=ns)) or "")
+        abstract_id = str(_first_or_none(num.xpath("./w:abstractNumId/@w:val", namespaces=ns)) or "")
+        if num_id and abstract_id:
+            definitions["num_to_abstract"][num_id] = abstract_id
+        for override in num.xpath("./w:lvlOverride", namespaces=ns):
+            ilvl = str(_first_or_none(override.xpath("./@w:ilvl", namespaces=ns)) or "0")
+            start_override = _first_or_none(override.xpath("./w:startOverride/@w:val", namespaces=ns))
+            if str(start_override).isdigit():
+                definitions["overrides"][(num_id, ilvl)] = int(start_override)
+    return definitions
+
+
+def _parse_paragraph_style_numbering(archive: zipfile.ZipFile, ns: dict[str, str], etree) -> dict[str, dict[str, str]]:
+    style_numbering: dict[str, dict[str, str]] = {}
+    if not _zip_exists(archive, "word/styles.xml"):
+        return style_numbering
+    try:
+        root = etree.fromstring(archive.read("word/styles.xml"))
+    except Exception:
+        return style_numbering
+
+    for style in root.xpath(".//w:style[@w:type='paragraph']", namespaces=ns):
+        style_id = str(_first_or_none(style.xpath("./@w:styleId", namespaces=ns)) or "")
+        num_id = str(_first_or_none(style.xpath("./w:pPr/w:numPr/w:numId/@w:val", namespaces=ns)) or "")
+        ilvl = str(_first_or_none(style.xpath("./w:pPr/w:numPr/w:ilvl/@w:val", namespaces=ns)) or "0")
+        if style_id and num_id:
+            style_numbering[style_id] = {"num_id": num_id, "ilvl": ilvl}
+    return style_numbering
+
+
+def _resolve_paragraph_numbering(
+    *,
+    num_id: str,
+    ilvl: str,
+    numbering_definitions: dict[str, Any],
+    counters: dict[tuple[str, str], int],
+) -> dict[str, Any]:
+    if not num_id:
+        return {"num_id": None, "ilvl": None}
+
+    abstract_id = str((numbering_definitions.get("num_to_abstract") or {}).get(num_id) or "")
+    level = dict((numbering_definitions.get("levels") or {}).get((abstract_id, ilvl)) or {})
+    start = int((numbering_definitions.get("overrides") or {}).get((num_id, ilvl)) or level.get("start") or 1)
+    key = (num_id, ilvl)
+    if key not in counters:
+        counters[key] = start
+    else:
+        counters[key] += 1
+
+    ordinal = counters[key]
+    lvl_text = str(level.get("lvl_text") or "%1")
+    label = re.sub(r"%\d+", str(ordinal), lvl_text)
+    return {
+        "num_id": num_id,
+        "ilvl": ilvl,
+        "abstract_num_id": abstract_id or None,
+        "num_fmt": str(level.get("num_fmt") or "decimal"),
+        "lvl_text": lvl_text,
+        "ordinal": ordinal,
+        "label": label,
+    }
 
 
 def _zip_exists(archive: zipfile.ZipFile, name: str) -> bool:
@@ -428,6 +605,31 @@ def _extract_citations(text: str) -> list[dict[str, Any]]:
                 except ValueError:
                     pass
         citations.append({"raw": raw, "numbers": numbers, "offset": m.start()})
+    return citations
+
+
+def _extract_citations(text: str) -> list[dict[str, Any]]:
+    citations = []
+    for match in re.finditer(r"\[\s*(\d+(?:\s*[-－–,，、]\s*\d+)*)\s*\]", text):
+        raw = match.group(0)
+        inner = match.group(1)
+        numbers: list[int] = []
+        for part in re.split(r"[,，、]", inner):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part or "－" in part or "–" in part:
+                try:
+                    start_text, end_text = re.split(r"[-－–]", part)
+                    numbers.extend(range(int(start_text), int(end_text) + 1))
+                except ValueError:
+                    pass
+            else:
+                try:
+                    numbers.append(int(part))
+                except ValueError:
+                    pass
+        citations.append({"raw": raw, "numbers": numbers, "offset": match.start()})
     return citations
 
 
