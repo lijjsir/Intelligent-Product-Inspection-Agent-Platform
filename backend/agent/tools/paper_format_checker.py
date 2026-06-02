@@ -133,6 +133,7 @@ def check_paper_format(
         issues.extend(_check_toc_rules(parsed, template=template))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_figure_table_placement(parsed, template=template))
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
         issues.extend(_check_word_artifact_rules(parsed))
@@ -144,6 +145,7 @@ def check_paper_format(
         issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_figure_table_placement(parsed, template=template))
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
         limitations.append("LaTeX 仅基于源码检查，不代表最终 PDF 版面完全合规。")
@@ -154,6 +156,7 @@ def check_paper_format(
         issues.extend(_check_front_matter_rules(parsed, template=template, document_type=document_type))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_figure_table_placement(parsed, template=template))
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_timed_issue_check("reference_rules", engine_timings_ms, _check_reference_rules, parsed))
         issues.extend(_run_required_text_engines(parsed, file_name=file_name, timings=engine_timings_ms))
@@ -2505,6 +2508,387 @@ def _has_previous_sibling_heading(headings: list[dict[str, Any]], current: str) 
         if match and match.group(1) == expected:
             return True
     return False
+
+
+def _check_figure_table_placement(parsed: dict[str, Any], template: dict[str, Any] | None = None) -> list[RuleIssue]:
+    """Check that figures and tables appear after (or near) their first text mention.
+
+    Detects:
+    - Figure/table caption appearing before its first in-text reference
+    - Figure/table too far from its first reference (across many paragraphs or pages)
+    - Figure/table referenced but caption not found nearby
+    """
+    issues: list[RuleIssue] = []
+    paragraphs = list(parsed.get("paragraphs") or [])
+    text = str(parsed.get("text") or "")
+    doc_type = str(parsed.get("kind") or "text")
+
+    # Default thresholds (can be overridden by template)
+    max_para_distance = 30  # paragraphs between mention and figure/table
+    max_page_distance = 3   # pages between mention and figure/table
+
+    # Override from template rules if available
+    placement_rules = dict((template or {}).get("figure_table_placement") or {})
+    if placement_rules:
+        max_para_distance = int(placement_rules.get("max_paragraph_distance", max_para_distance))
+        max_page_distance = int(placement_rules.get("max_page_distance", max_page_distance))
+
+    # ── Build figure/table caption position map ──
+    figure_positions: dict[str, dict[str, Any]] = {}  # normalized_number -> {para_index, page, text}
+    table_positions: dict[str, dict[str, Any]] = {}
+
+    for para in paragraphs:
+        p_text = str(para.get("text") or "").strip()
+        role = str(para.get("paragraph_role") or "")
+        para_index = para.get("paragraph_index") if "paragraph_index" in para else para.get("index", 0)
+        page_no = para.get("page_no")
+
+        # Figure captions
+        fig_match = re.match(r"^(?:图|Fig(?:ure)?\.?)\s*(\d+(?:[-.]\d+)*)", p_text, re.I)
+        if fig_match or role == "figure_caption":
+            num = fig_match.group(1) if fig_match else _extract_number_from_text(p_text, "图")
+            if num:
+                num = _normalize_number(num)
+                if num not in figure_positions:
+                    figure_positions[num] = {
+                        "caption_text": p_text[:100],
+                        "para_index": para_index,
+                        "page_no": page_no,
+                    }
+
+        # Table captions
+        tbl_match = re.match(r"^(?:表|Table\.?)\s*(\d+(?:[-.]\d+)*)", p_text, re.I)
+        if tbl_match or role == "table_caption":
+            num = tbl_match.group(1) if tbl_match else _extract_number_from_text(p_text, "表")
+            if num:
+                num = _normalize_number(num)
+                if num not in table_positions:
+                    table_positions[num] = {
+                        "caption_text": p_text[:100],
+                        "para_index": para_index,
+                        "page_no": page_no,
+                    }
+
+    # Fallback: extract from figure_titles / table_titles if paragraph scan found nothing
+    if not figure_positions:
+        for title in list(parsed.get("figure_titles") or []):
+            m = re.match(r"^(?:图|Fig(?:ure)?\.?)\s*(\d+(?:[-.]\d+)*)", str(title).strip(), re.I)
+            if m:
+                num = _normalize_number(m.group(1))
+                figure_positions[num] = {"caption_text": str(title)[:100], "para_index": -1, "page_no": None}
+    if not table_positions:
+        for title in list(parsed.get("table_titles") or []):
+            m = re.match(r"^(?:表|Table\.?)\s*(\d+(?:[-.]\d+)*)", str(title).strip(), re.I)
+            if m:
+                num = _normalize_number(m.group(1))
+                table_positions[num] = {"caption_text": str(title)[:100], "para_index": -1, "page_no": None}
+
+    # ── Find first mention of each figure/table in text ──
+    # Use body paragraphs only (skip captions, headings, TOC, references)
+    body_only = [p for p in paragraphs if _is_body_or_abstract(p)]
+
+    def _find_first_mention(target_num: str, prefix_patterns: list[str]) -> dict[str, Any] | None:
+        """Find the first paragraph that mentions the target figure/table number."""
+        for para in body_only:
+            p_text = str(para.get("text") or "")
+            for prefix in prefix_patterns:
+                pattern = rf"{prefix}\s*{re.escape(target_num)}\b"
+                if re.search(pattern, p_text):
+                    return {
+                        "para_index": para.get("paragraph_index", para.get("index", 0)),
+                        "page_no": para.get("page_no"),
+                        "mention_text": p_text[:100],
+                    }
+            # Also handle range mentions like "图 3-5" or "图 3～5"
+            if "-" in target_num or "－" in target_num or "–" in target_num:
+                parts = re.split(r"[-－–]", target_num)
+                if len(parts) == 2:
+                    try:
+                        lo, hi = int(parts[0]), int(parts[1])
+                        for prefix in prefix_patterns:
+                            for n in range(lo, hi + 1):
+                                if re.search(rf"{prefix}\s*{n}\b", p_text):
+                                    return {
+                                        "para_index": para.get("paragraph_index", para.get("index", 0)),
+                                        "page_no": para.get("page_no"),
+                                        "mention_text": p_text[:100],
+                                    }
+                    except ValueError:
+                        pass
+        return None
+
+    # ── Check figure placement ──
+    figure_prefixes = [r"图", r"如图", r"见图", r"Fig(?:ure)?\.?", r"fig(?:ure)?\.?"]
+    misplaced_figures: list[dict[str, Any]] = []
+    distant_figures: list[dict[str, Any]] = []
+    unreferenced_figures: list[dict[str, Any]] = []
+
+    for num, pos_info in figure_positions.items():
+        caption_idx = pos_info["para_index"]
+        caption_page = pos_info.get("page_no")
+        mention = _find_first_mention(num, figure_prefixes)
+
+        if mention is None:
+            unreferenced_figures.append({"num": num, "caption": pos_info["caption_text"]})
+            continue
+
+        mention_idx = mention["para_index"]
+        mention_page = mention.get("page_no")
+
+        # Figure caption should NOT appear before its first mention
+        if caption_idx >= 0 and mention_idx >= 0 and caption_idx < mention_idx:
+            misplaced_figures.append({
+                "num": num,
+                "caption_text": pos_info["caption_text"],
+                "caption_pos": caption_idx,
+                "mention_pos": mention_idx,
+                "mention_text": mention["mention_text"],
+            })
+        # Figure should not be too far from its first mention
+        elif caption_idx >= 0 and mention_idx >= 0:
+            distance = caption_idx - mention_idx
+            if distance > max_para_distance:
+                distant_figures.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "distance": distance,
+                    "caption_pos": caption_idx,
+                    "mention_pos": mention_idx,
+                })
+        # Page-based check for PDFs (where paragraph index might not be reliable)
+        elif caption_page is not None and mention_page is not None:
+            page_gap = caption_page - mention_page
+            if page_gap < 0:  # caption on earlier page than mention
+                misplaced_figures.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "caption_page": caption_page,
+                    "mention_page": mention_page,
+                    "page_gap": page_gap,
+                })
+            elif page_gap > max_page_distance:
+                distant_figures.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "caption_page": caption_page,
+                    "mention_page": mention_page,
+                    "page_gap": page_gap,
+                })
+
+    # ── Check table placement ──
+    table_prefixes = [r"表", r"如表", r"见表", r"Table\.?"]
+    misplaced_tables: list[dict[str, Any]] = []
+    distant_tables: list[dict[str, Any]] = []
+    unreferenced_tables: list[dict[str, Any]] = []
+
+    for num, pos_info in table_positions.items():
+        caption_idx = pos_info["para_index"]
+        caption_page = pos_info.get("page_no")
+        mention = _find_first_mention(num, table_prefixes)
+
+        if mention is None:
+            unreferenced_tables.append({"num": num, "caption": pos_info["caption_text"]})
+            continue
+
+        mention_idx = mention["para_index"]
+        mention_page = mention.get("page_no")
+
+        if caption_idx >= 0 and mention_idx >= 0 and caption_idx < mention_idx:
+            misplaced_tables.append({
+                "num": num,
+                "caption_text": pos_info["caption_text"],
+                "caption_pos": caption_idx,
+                "mention_pos": mention_idx,
+                "mention_text": mention["mention_text"],
+            })
+        elif caption_idx >= 0 and mention_idx >= 0:
+            distance = caption_idx - mention_idx
+            if distance > max_para_distance:
+                distant_tables.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "distance": distance,
+                    "caption_pos": caption_idx,
+                    "mention_pos": mention_idx,
+                })
+        elif caption_page is not None and mention_page is not None:
+            page_gap = caption_page - mention_page
+            if page_gap < 0:
+                misplaced_tables.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "caption_page": caption_page,
+                    "mention_page": mention_page,
+                    "page_gap": page_gap,
+                })
+            elif page_gap > max_page_distance:
+                distant_tables.append({
+                    "num": num,
+                    "caption_text": pos_info["caption_text"],
+                    "caption_page": caption_page,
+                    "mention_page": mention_page,
+                    "page_gap": page_gap,
+                })
+
+    # ── Generate issues ──
+    if misplaced_figures:
+        samples = misplaced_figures[:5]
+        issues.append(RuleIssue(
+            code="figure.placed_before_mention",
+            title="图题出现在正文引用之前",
+            severity="high",
+            category="structure",
+            message=f"检测到 {len(misplaced_figures)} 个图的图题出现在正文首次引用之前，图表应紧接首次引用的段落之后。",
+            evidence="；".join(
+                f"图{s['num']}在图题位置({s.get('caption_pos', s.get('caption_page', '?'))})，"
+                f"首次引用位置({s.get('mention_pos', s.get('mention_page', '?'))})"
+                for s in samples
+            ),
+            location={"display_text": "图表位置"},
+            suggestion="将每个图表移动到正文中首次引用它的段落之后。图表不应出现在引用它的文字之前。",
+            parser_confidence="high",
+            confidence="high",
+            aggregate_count=len(misplaced_figures),
+            samples=[{
+                "figure": f"图{s['num']}",
+                "caption": s["caption_text"],
+                "mention": s.get("mention_text", ""),
+                "caption_para": s.get("caption_pos"),
+                "mention_para": s.get("mention_pos"),
+            } for s in samples],
+            check_scope="figure_placement",
+        ))
+
+    if misplaced_tables:
+        samples = misplaced_tables[:5]
+        issues.append(RuleIssue(
+            code="table.placed_before_mention",
+            title="表题出现在正文引用之前",
+            severity="high",
+            category="structure",
+            message=f"检测到 {len(misplaced_tables)} 个表的表题出现在正文首次引用之前，表格应紧接首次引用的段落之后。",
+            evidence="；".join(
+                f"表{s['num']}在表题位置({s.get('caption_pos', s.get('caption_page', '?'))})，"
+                f"首次引用位置({s.get('mention_pos', s.get('mention_page', '?'))})"
+                for s in samples
+            ),
+            location={"display_text": "图表位置"},
+            suggestion="将每个表格移动到正文中首次引用它的段落之后。表格不应出现在引用它的文字之前。",
+            parser_confidence="high",
+            confidence="high",
+            aggregate_count=len(misplaced_tables),
+            samples=[{
+                "table": f"表{s['num']}",
+                "caption": s["caption_text"],
+                "mention": s.get("mention_text", ""),
+                "caption_para": s.get("caption_pos"),
+                "mention_para": s.get("mention_pos"),
+            } for s in samples],
+            check_scope="table_placement",
+        ))
+
+    if distant_figures:
+        samples = distant_figures[:5]
+        issues.append(RuleIssue(
+            code="figure.far_from_mention",
+            title="图表距离首次引用过远",
+            severity="medium",
+            category="structure",
+            message=f"检测到 {len(distant_figures)} 个图距离正文首次引用超过 {max_para_distance} 个段落（或 {max_page_distance} 页），"
+                    f"建议图表紧接首次引用的段落。",
+            evidence="；".join(
+                f"图{s['num']}距离首次引用{s.get('distance', s.get('page_gap', '?'))}"
+                f"{'段' if 'distance' in s else '页'}"
+                for s in samples
+            ),
+            location={"display_text": "图表位置"},
+            suggestion="将图表移动到首次引用的段落附近，避免跨页过多导致阅读不便。",
+            parser_confidence="high",
+            confidence="medium",
+            aggregate_count=len(distant_figures),
+            samples=[{"figure": f"图{s['num']}", "distance": s.get("distance", s.get("page_gap"))} for s in samples],
+            check_scope="figure_placement",
+        ))
+
+    if distant_tables:
+        samples = distant_tables[:5]
+        issues.append(RuleIssue(
+            code="table.far_from_mention",
+            title="表格距离首次引用过远",
+            severity="medium",
+            category="structure",
+            message=f"检测到 {len(distant_tables)} 个表距离正文首次引用超过 {max_para_distance} 个段落（或 {max_page_distance} 页）。",
+            evidence="；".join(
+                f"表{s['num']}距离首次引用{s.get('distance', s.get('page_gap', '?'))}"
+                f"{'段' if 'distance' in s else '页'}"
+                for s in samples
+            ),
+            location={"display_text": "图表位置"},
+            suggestion="将表格移动到首次引用的段落附近。",
+            parser_confidence="high",
+            confidence="medium",
+            aggregate_count=len(distant_tables),
+            samples=[{"table": f"表{s['num']}", "distance": s.get("distance", s.get("page_gap"))} for s in samples],
+            check_scope="table_placement",
+        ))
+
+    # Report unreferenced figures/tables
+    if unreferenced_figures and len(unreferenced_figures) <= len(figure_positions) * 0.5:
+        issues.append(RuleIssue(
+            code="figure.not_referenced_in_text",
+            title="部分图题在正文中未被引用",
+            severity="medium",
+            category="structure",
+            message=f"检测到 {len(unreferenced_figures)} 个图在正文中未找到引用: "
+                    f"{', '.join(f['num'] for f in unreferenced_figures[:5])}。",
+            evidence="；".join(f"图{f['num']}: {f['caption']}" for f in unreferenced_figures[:3]),
+            location={"display_text": "图表引用"},
+            suggestion="确保正文中对每个图都有'如图 X 所示'或'见图 X'等引用。",
+            parser_confidence="medium",
+            confidence="medium",
+            aggregate_count=len(unreferenced_figures),
+            check_scope="figure_placement",
+        ))
+
+    if unreferenced_tables and len(unreferenced_tables) <= len(table_positions) * 0.5:
+        issues.append(RuleIssue(
+            code="table.not_referenced_in_text",
+            title="部分表题在正文中未被引用",
+            severity="medium",
+            category="structure",
+            message=f"检测到 {len(unreferenced_tables)} 个表在正文中未找到引用: "
+                    f"{', '.join(t['num'] for t in unreferenced_tables[:5])}。",
+            evidence="；".join(f"表{t['num']}: {t['caption']}" for t in unreferenced_tables[:3]),
+            location={"display_text": "图表引用"},
+            suggestion="确保正文中对每个表都有'如表 X 所示'或'见表 X'等引用。",
+            parser_confidence="medium",
+            confidence="medium",
+            aggregate_count=len(unreferenced_tables),
+            check_scope="table_placement",
+        ))
+
+    return issues
+
+
+def _is_body_or_abstract(paragraph: dict[str, Any]) -> bool:
+    """Check if a paragraph is body text or abstract (where figure/table references appear)."""
+    role = str(paragraph.get("paragraph_role") or "")
+    if role in {"body", "abstract_body", "acknowledgement_body"}:
+        return True
+    if not role and not paragraph.get("heading_level"):
+        p_text = str(paragraph.get("text") or "").strip()
+        # Skip figure/table captions themselves
+        if re.match(r"^(?:图|Fig|表|Table)\s*\d+", p_text, re.I):
+            return False
+        if len(p_text) > 20:
+            return True
+    return False
+
+
+def _extract_number_from_text(text: str, prefix: str) -> str | None:
+    """Extract figure/table number from text that may not match the standard pattern."""
+    m = re.search(rf"{prefix}\s*(\d+(?:[-.]\d+)*)", str(text), re.I)
+    return m.group(1) if m else None
 
 
 def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
