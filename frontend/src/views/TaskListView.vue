@@ -15,6 +15,7 @@ import { useChatStore } from "@/stores/chat.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import type { TaskStatus } from "@/types/task.types";
+import { formatServerDateTime } from "@/utils/date-time";
 
 const router = useRouter();
 const route = useRoute();
@@ -57,6 +58,10 @@ const pageDescription = computed(() =>
     ? "这里查看平台侧已经物化的任务和执行状态，筛选、排查和跳转都保持在运维入口。"
     : "这里展示用户侧创建和执行的检测任务，也可以继续新建任务。"
 );
+
+function formatTaskTime(value?: string | null) {
+  return formatServerDateTime(value, { includeSeconds: true }) || "-";
+}
 
 function parseImageUrlLines(value: string) {
   return value
@@ -461,7 +466,7 @@ watch(
         <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
+            {{ formatTaskTime(row.created_at) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
