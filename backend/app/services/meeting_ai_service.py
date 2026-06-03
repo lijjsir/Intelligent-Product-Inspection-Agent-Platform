@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.repositories.meeting_repo import MeetingRepository
 from app.schemas.meeting import MeetingMessageResponse
+from app.services.ai_response_text import normalize_ai_response_content
 from app.services.model_config_service import ModelConfigService
 
 logger = logging.getLogger(__name__)
@@ -236,15 +237,22 @@ class MeetingAiService:
         agent_id: str,
         agent_name: str,
         content: str,
+        metadata_json: dict[str, Any] | None = None,
     ) -> MeetingMessageResponse:
+        display_content, response_metadata = normalize_ai_response_content(content)
+        next_metadata = {
+            **(metadata_json or {}),
+            **response_metadata,
+        } or None
         message = await self._repo.create_message(
             org_id=self._org_id,
             room_id=room_id,
             user_id=self._user_id,
             username=agent_name,
-            content=content,
+            content=display_content,
             message_type="agent",
             agent_id=agent_id,
+            metadata_json=next_metadata,
         )
         response = MeetingMessageResponse.model_validate(message)
 

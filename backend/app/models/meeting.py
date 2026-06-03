@@ -90,3 +90,59 @@ class MeetingMessage(Base, TimestampMixin):
     message_type: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
     agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     mentions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quote_message_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class MemoryScopeBinding(Base, TimestampMixin):
+    __tablename__ = "memory_scope_bindings"
+    __table_args__ = (
+        Index("idx_memory_scope_bindings_memory", "org_id", "memory_id"),
+        Index("idx_memory_scope_bindings_scope", "org_id", "scope_type", "scope_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    permission: Mapped[str] = mapped_column(String(32), nullable=False, default="read")
+    created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+
+
+class MemoryTransferLog(Base, TimestampMixin):
+    __tablename__ = "memory_transfer_logs"
+    __table_args__ = (
+        Index("idx_memory_transfer_logs_memory", "org_id", "memory_id"),
+        Index("idx_memory_transfer_logs_target", "org_id", "to_scope_type", "to_scope_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    from_scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    to_scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    transfer_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    operator_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+
+
+class MeetingActionItem(Base, TimestampMixin):
+    __tablename__ = "meeting_action_items"
+    __table_args__ = (
+        Index("idx_meeting_action_items_room_status", "org_id", "room_id", "status"),
+        Index("idx_meeting_action_items_owner", "org_id", "owner_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    source_message_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)

@@ -13,6 +13,15 @@ from app.repositories.meeting_repo import MeetingRepository
 from app.schemas.common import ResponseEnvelope
 from app.schemas.meeting import (
     MeetingAddAgentRequest,
+    MeetingActionItemCreateRequest,
+    MeetingActionItemResponse,
+    MeetingActionItemUpdateRequest,
+    MeetingAgentRunRequest,
+    MeetingAgentRunResponse,
+    MeetingMemoryExtractRequest,
+    MeetingMemoryResponse,
+    MeetingMemoryTransferRequest,
+    MeetingMemoryUpdateRequest,
     MeetingMessageCreateRequest,
     MeetingMessageResponse,
     MeetingRoomAgentResponse,
@@ -21,6 +30,7 @@ from app.schemas.meeting import (
     MeetingRoomJoinRequest,
     MeetingRoomMemberResponse,
     MeetingRoomResponse,
+    MeetingRoomUpdateRequest,
 )
 from app.schemas.user import CurrentUser
 from app.services.meeting_service import MeetingService
@@ -97,6 +107,39 @@ async def get_room_detail(
     return ResponseEnvelope(data=await service.get_room_detail(room_id))
 
 
+@router.put("/rooms/{room_id}", response_model=ResponseEnvelope[MeetingRoomResponse])
+async def update_room(
+    room_id: str,
+    body: MeetingRoomUpdateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    if body.title is None:
+        return ResponseEnvelope(data=(await service.get_room_detail(room_id)))
+    return ResponseEnvelope(data=await service.update_room_title(room_id, body.title))
+
+
+@router.post("/rooms/{room_id}/close", response_model=ResponseEnvelope[MeetingRoomResponse])
+async def close_room(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.close_room(room_id))
+
+
+@router.post("/rooms/{room_id}/archive", response_model=ResponseEnvelope[MeetingRoomResponse])
+async def archive_room(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.archive_room(room_id))
+
+
 # ── Messages ──────────────────────────────────────────────────────
 
 @router.delete("/rooms/{room_id}", response_model=ResponseEnvelope[dict])
@@ -130,7 +173,147 @@ async def send_message(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.send_message(room_id, body.content))
+    return ResponseEnvelope(data=await service.send_message(room_id, body.content, body.quote_message_id))
+
+
+@router.post("/rooms/{room_id}/messages/{message_id}/quote", response_model=ResponseEnvelope[MeetingMessageResponse])
+async def quote_message(
+    room_id: str,
+    message_id: str,
+    body: MeetingMessageCreateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.quote_message(room_id, message_id, body.content))
+
+
+# ── General Agent ─────────────────────────────────────────────────────
+
+@router.post("/rooms/{room_id}/agent/run", response_model=ResponseEnvelope[MeetingAgentRunResponse])
+async def run_general_agent(
+    room_id: str,
+    body: MeetingAgentRunRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.run_general_agent(room_id, body))
+
+
+# ── Meeting memories ──────────────────────────────────────────────────
+
+@router.get("/rooms/{room_id}/memories", response_model=ResponseEnvelope[list[MeetingMemoryResponse]])
+async def list_room_memories(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_room_memories(room_id))
+
+
+@router.post("/rooms/{room_id}/memories/extract", response_model=ResponseEnvelope[list[MeetingMemoryResponse]])
+async def extract_room_memories(
+    room_id: str,
+    body: MeetingMemoryExtractRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    candidates = await service.extract_memories(room_id, body)
+    memories = [
+        MeetingMemoryResponse(
+            memory_id=item.memory_id,
+            title=item.title,
+            content=item.content,
+            summary=item.summary,
+            memory_type=item.memory_type,
+            status=item.status,
+            scope="meeting",
+            confidence=item.confidence,
+            source_message_id=item.source_message_id,
+            created_at=item.created_at,
+        )
+        for item in candidates
+    ]
+    return ResponseEnvelope(data=memories)
+
+
+@router.post("/memories/{memory_id}/confirm", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def confirm_memory(
+    memory_id: str,
+    body: MeetingMemoryUpdateRequest | None = None,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.confirm_memory(memory_id, body))
+
+
+@router.post("/memories/{memory_id}/reject", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def reject_memory(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.reject_memory(memory_id))
+
+
+@router.post("/memories/{memory_id}/transfer", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def transfer_memory(
+    memory_id: str,
+    body: MeetingMemoryTransferRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.transfer_memory(memory_id, body))
+
+
+# ── Action items ──────────────────────────────────────────────────────
+
+@router.get("/rooms/{room_id}/action-items", response_model=ResponseEnvelope[list[MeetingActionItemResponse]])
+async def list_action_items(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_action_items(room_id))
+
+
+@router.post("/rooms/{room_id}/action-items", response_model=ResponseEnvelope[MeetingActionItemResponse])
+async def create_action_item(
+    room_id: str,
+    body: MeetingActionItemCreateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.create_action_item(room_id, body))
+
+
+@router.put("/action-items/{action_item_id}", response_model=ResponseEnvelope[MeetingActionItemResponse])
+async def update_action_item(
+    action_item_id: str,
+    body: MeetingActionItemUpdateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.update_action_item(action_item_id, body))
+
+
+@router.post("/action-items/{action_item_id}/complete", response_model=ResponseEnvelope[MeetingActionItemResponse])
+async def complete_action_item(
+    action_item_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.complete_action_item(action_item_id))
 
 
 # ── AI Assistant ──────────────────────────────────────────────────

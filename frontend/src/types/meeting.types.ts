@@ -1,4 +1,4 @@
-export type MessageType = "user" | "agent" | "agent_streaming" | "system";
+export type MessageType = "user" | "agent" | "agent_streaming" | "system" | "summary" | "action_item";
 
 export interface MentionInfo {
   agent_id: string;
@@ -15,6 +15,8 @@ export interface MeetingMessage {
   message_type: MessageType;
   agent_id?: string | null;
   mentions?: MentionInfo[] | null;
+  quote_message_id?: string | null;
+  metadata_json?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -69,6 +71,102 @@ export interface MeetingRoomJoin {
 export interface MeetingAddAgentRequest {
   agent_id: string;
   role: string;
+}
+
+export type MeetingAgentSubgraph =
+  | "risk_forecast"
+  | "evidence_query"
+  | "standard_explain"
+  | "meeting_summary"
+  | "memory_transfer"
+  | "action_items";
+
+export interface MeetingMemoryScope {
+  include_meeting: boolean;
+  include_project_shared: boolean;
+  include_personal_authorized: boolean;
+}
+
+export interface MeetingAgentRunRequest {
+  query: string;
+  mode?: "auto" | MeetingAgentSubgraph;
+  memory_scope?: MeetingMemoryScope;
+}
+
+export interface MeetingMemorySource {
+  memory_id: string;
+  scope: string;
+  title: string;
+  summary: string;
+}
+
+export interface MeetingCandidateMemory {
+  memory_id: string;
+  title: string;
+  content: string;
+  summary: string;
+  memory_type: string;
+  status: string;
+  recommended_scope: string;
+  confidence?: number | null;
+  source_message_id?: string | null;
+  created_at?: string | null;
+}
+
+export interface MeetingAgentRunResponse {
+  selected_subgraph: MeetingAgentSubgraph | string;
+  answer: string;
+  message: MeetingMessage;
+  memory_sources: MeetingMemorySource[];
+  candidate_memories: MeetingCandidateMemory[];
+}
+
+export interface MeetingMemory {
+  memory_id: string;
+  title: string;
+  content: string;
+  summary: string;
+  memory_type: string;
+  status: string;
+  scope: string;
+  confidence?: number | null;
+  source_message_id?: string | null;
+  created_by?: string | null;
+  confirmed_by?: string | null;
+  confirmed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MeetingActionItem {
+  id: string;
+  room_id: string;
+  title: string;
+  description?: string | null;
+  owner_id?: string | null;
+  owner_name: string;
+  due_at?: string | null;
+  status: "open" | "in_progress" | "done" | "cancelled" | string;
+  source_message_id?: string | null;
+  created_by: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MeetingActionItemCreate {
+  title: string;
+  description?: string | null;
+  owner_id?: string | null;
+  due_at?: string | null;
+  source_message_id?: string | null;
+}
+
+export interface MeetingActionItemUpdate {
+  title?: string | null;
+  description?: string | null;
+  owner_id?: string | null;
+  due_at?: string | null;
+  status?: "open" | "in_progress" | "done" | "cancelled" | string | null;
 }
 
 // ── SSE Event Types ──────────────────────────────────────────────

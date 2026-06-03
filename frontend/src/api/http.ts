@@ -22,7 +22,7 @@ export interface ApiRequestConfig extends AxiosRequestConfig {
 
 const instance: AxiosInstance = axios.create({
   baseURL: apiBase,
-  timeout: 15000,
+  timeout: 60000,
 });
 
 function isTimeoutError(error: unknown): boolean {
@@ -71,6 +71,26 @@ const showToast = (message: string) => {
   }, 3000);
 };
 
+function resolveServerMessage(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const payload = data as Record<string, unknown>;
+  if (typeof payload.message === "string" && payload.message.trim()) return payload.message;
+  if (typeof payload.detail === "string" && payload.detail.trim()) return payload.detail;
+  if (Array.isArray(payload.detail) && payload.detail.length > 0) {
+    return payload.detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return String(item);
+        const row = item as Record<string, unknown>;
+        const loc = Array.isArray(row.loc) ? row.loc.join(".") : "";
+        const msg = typeof row.msg === "string" ? row.msg : "";
+        return [loc, msg].filter(Boolean).join(": ");
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return "";
+}
+
 const redirectToLogin = () => {
   const currentPath = window.location.pathname;
   if (currentPath === "/login" || currentPath === "/register") {
@@ -86,7 +106,7 @@ instance.interceptors.response.use(
   (response: any) => response,
   (error: any) => {
     const response = error.response;
-    const serverMessage = response?.data?.message;
+    const serverMessage = resolveServerMessage(response?.data);
     const requestUrl = String(error?.config?.url || "");
     const isLoginTokenRequest = requestUrl.includes("/v1/auth/token");
     const suppressToast = Boolean((error?.config as ApiRequestConfig | undefined)?.suppressErrorToast);

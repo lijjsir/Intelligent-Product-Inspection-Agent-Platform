@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.exceptions import ForbiddenError
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_service as meeting_service_mod
 from app.repositories.meeting_repo import MeetingRepository
+from app.schemas.meeting import (
+    MeetingActionItemCreateRequest,
+    MeetingAgentRunRequest,
+    MeetingMemoryUpdateRequest,
+)
 
 
 class FakeSession:
@@ -52,6 +58,8 @@ class FakeMeetingRepo:
             message_type=kwargs.get("message_type", "user"),
             agent_id=kwargs.get("agent_id"),
             mentions=kwargs.get("mentions"),
+            quote_message_id=kwargs.get("quote_message_id"),
+            metadata_json=kwargs.get("metadata_json"),
             created_at=None,
             updated_at=None,
         )
@@ -130,13 +138,68 @@ async def test_send_message_triggers_meeting_ai_special_mention_without_room_age
 
     service._parse_mentions = fake_parse_mentions
 
-    result = await service.send_message("room-1", "@AI 助手 你能做什么")
+    result = await service.send_message("room-1", "@智能助手 你能做什么")
 
-    assert result.content == "@AI 助手 你能做什么"
-    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "ai_assistant", "agent_name": "AI 助手"}]
+    assert result.content == "@智能助手 你能做什么"
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "ai_assistant", "agent_name": "智能助手"}]
     assert len(scheduled_tasks) == 1
     await asyncio.wait_for(scheduled_tasks[0], timeout=1)
     assert invoked_room_ids == ["room-1"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_blocks_closed_room():
+    class ClosedRoomRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1", status="closed")
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = ClosedRoomRepo()
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError):
+        await service.send_message("room-1", "关闭后不能继续发言")
+
+    assert service._repo.created_messages == []
+
+
+@pytest.mark.asyncio
+async def test_send_message_triggers_general_agent_special_mention(monkeypatch):
+    fake_repo = FakeMeetingRepo()
+    fake_users = FakeUsersRepo()
+    fake_session = FakeSession()
+    scheduled_tasks: list[asyncio.Task] = []
+    invoked_queries: list[tuple[str, str]] = []
+    real_create_task = asyncio.create_task
+
+    async def fake_invoke_general_agent_reply(*, room_id: str, query: str):
+        invoked_queries.append((room_id, query))
+
+    def tracking_create_task(coro):
+        task = real_create_task(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(meeting_service_mod, "MeetingRepository", lambda session: fake_repo)
+    monkeypatch.setattr(meeting_service_mod.asyncio, "create_task", tracking_create_task)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = fake_users
+    service._invoke_general_agent_reply = fake_invoke_general_agent_reply
+
+    async def fake_parse_mentions(content: str, room_id: str):
+        return []
+
+    service._parse_mentions = fake_parse_mentions
+
+    result = await service.send_message("room-1", "@总智能体 帮我总结这次会议")
+
+    assert result.content == "@总智能体 帮我总结这次会议"
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "general_agent", "agent_name": "总智能体"}]
+    assert len(scheduled_tasks) == 1
+    await asyncio.wait_for(scheduled_tasks[0], timeout=1)
+    assert invoked_queries == [("room-1", "@总智能体 帮我总结这次会议")]
 
 
 @pytest.mark.asyncio
@@ -224,10 +287,222 @@ async def test_parse_mentions_supports_single_agent_short_aliases():
 def test_contains_meeting_ai_mention_supports_spaced_and_compact_aliases():
     service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
 
+    assert service._contains_meeting_ai_mention("@智能助手 你能做什么") is True
     assert service._contains_meeting_ai_mention("@AI 助手 你能做什么") is True
     assert service._contains_meeting_ai_mention("@AI助手 你能做什么") is True
     assert service._contains_meeting_ai_mention("请 @AI助手 帮忙") is True
     assert service._contains_meeting_ai_mention("@ai please help") is False
+
+
+def test_contains_general_agent_mention_supports_spaced_and_compact_aliases():
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+
+    assert service._contains_general_agent_mention("@总智能体 帮我总结会议") is True
+    assert service._contains_general_agent_mention("@总Agent 帮我总结会议") is True
+    assert service._contains_general_agent_mention("@总 Agent 帮我总结会议") is True
+    assert service._contains_general_agent_mention("请 @general agent summarize") is True
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_routes_summary_and_creates_candidate_memory(monkeypatch):
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50):
+            return [
+                SimpleNamespace(id="msg-1", content="本次会议确认 P001 下月需要提高抽检比例", message_type="user"),
+                SimpleNamespace(id="msg-2", content="行动项：Bob 负责复核检测标准", message_type="user"),
+            ]
+
+        async def list_memory_items_for_room(
+            self,
+            *,
+            org_id: str,
+            room_id: str,
+            project_id: str = "default",
+            include_project_shared: bool = True,
+            statuses=None,
+            limit: int = 50,
+        ):
+            if statuses == ["active"]:
+                return [
+                    SimpleNamespace(
+                        memory_id="mem_active_1",
+                        content_summary="P001 最近批次风险上升",
+                        content_json={"title": "P001 风险上升", "recommended_scope": "project_shared"},
+                        confidence=0.8,
+                        status="active",
+                        memory_type="decision",
+                        created_by="user-1",
+                        created_at=None,
+                        updated_at=None,
+                        scope_json={"project_id": "default"},
+                    )
+                ]
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(query="请总结本次会议并提取候选记忆", mode="meeting_summary"),
+    )
+
+    assert result.selected_subgraph == "meeting_summary"
+    assert "会议纪要" in result.answer
+    assert result.memory_sources[0].memory_id == "mem_active_1"
+    assert len(result.candidate_memories) == 2
+    assert fake_repo.created_messages[-1]["agent_id"] == "general_agent"
+    assert fake_repo.created_messages[-1]["metadata_json"]["selected_subgraph"] == "meeting_summary"
+    assert fake_repo.scope_bindings[0]["scope_type"] == "meeting_room"
+    assert fake_repo.transfer_logs[0]["status"] == "candidate"
+    assert published[-1]["event"] == "message_created"
+
+
+@pytest.mark.asyncio
+async def test_confirm_memory_publishes_project_scope_binding():
+    memory = SimpleNamespace(
+        memory_id="mem_meeting_1",
+        content_summary="P001 下月提高抽检比例",
+        content_json={
+            "title": "P001 抽检策略",
+            "content": "P001 下月提高抽检比例",
+            "memory_type": "decision",
+            "source_id": "room-1",
+            "project_id": "default",
+        },
+        scope_json={"meeting_room_id": "room-1", "project_id": "default"},
+        confidence=0.65,
+        status="candidate",
+        memory_type="task_episode",
+        created_by="user-1",
+        created_at=None,
+        updated_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory if memory_id == memory.memory_id else None
+
+        async def update_memory_item(self, *, org_id: str, memory_id: str, status=None, content_summary=None, content_json=None):
+            if status is not None:
+                memory.status = status
+            if content_summary is not None:
+                memory.content_summary = content_summary
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.confirm_memory(
+        "mem_meeting_1",
+        MeetingMemoryUpdateRequest(title="P001 抽检策略", content="P001 下月提高抽检比例", scope="project_shared"),
+    )
+
+    assert result.status == "active"
+    assert result.scope == "project_shared"
+    assert result.confirmed_by == "user-1"
+    assert fake_repo.scope_bindings[-1]["scope_type"] == "project"
+    assert fake_repo.transfer_logs[-1]["status"] == "confirmed"
+    assert fake_repo.created_messages[-1]["message_type"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_action_item_create_and_complete_flow():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.action_items = {}
+
+        async def create_action_item(self, **kwargs):
+            row = SimpleNamespace(
+                id="action-1",
+                room_id=kwargs["room_id"],
+                title=kwargs["title"],
+                description=kwargs["description"],
+                owner_id=kwargs["owner_id"],
+                due_at=kwargs["due_at"],
+                status="open",
+                source_message_id=kwargs["source_message_id"],
+                created_by=kwargs["created_by"],
+                created_at=None,
+                updated_at=None,
+            )
+            self.action_items[row.id] = row
+            return row
+
+        async def get_action_item(self, org_id: str, action_item_id: str):
+            return self.action_items.get(action_item_id)
+
+        async def update_action_item(self, org_id: str, action_item_id: str, **fields):
+            row = self.action_items[action_item_id]
+            for key, value in fields.items():
+                if value is not None:
+                    setattr(row, key, value)
+            return row
+
+    fake_repo = FakeRepo()
+    fake_users = FakeUsersRepo()
+    fake_users.users[("org-1", "user-2")] = FakeUser("bob")
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = fake_users
+
+    created = await service.create_action_item(
+        "room-1",
+        MeetingActionItemCreateRequest(title="复核检测标准", description="确认 P001 判定依据", owner_id="user-2"),
+    )
+    completed = await service.complete_action_item(created.id)
+
+    assert created.title == "复核检测标准"
+    assert created.owner_name == "bob"
+    assert completed.status == "done"
+    assert fake_repo.created_messages[0]["message_type"] == "system"
+    assert fake_repo.created_messages[-1]["content"] == "行动项已完成：复核检测标准"
 
 
 @pytest.mark.asyncio

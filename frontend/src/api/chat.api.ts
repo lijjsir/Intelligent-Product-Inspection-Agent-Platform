@@ -13,8 +13,8 @@ import type {
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const chatApi = {
-  listSessions(limit = 100) {
-    return http.get<ChatSession[]>("/v1/chat/sessions", { params: { limit } });
+  listSessions(limit = 100, config?: ApiRequestConfig) {
+    return http.get<ChatSession[]>("/v1/chat/sessions", { ...config, params: { ...(config?.params || {}), limit } });
   },
 
   createSession(title?: string) {

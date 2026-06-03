@@ -13,11 +13,12 @@ import type {
   ChatStreamPhase,
   ChatStreamEvent,
 } from "@/types/chat.types";
+import { normalizeAiResponseText } from "@/utils/ai-response";
 import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 25000;
-const PAPER_REVIEW_POLL_TIMEOUT_MS = 180000;
+const PAPER_REVIEW_POLL_TIMEOUT_MS = 600000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 35000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
@@ -52,6 +53,13 @@ function resolveErrorMessage(error: unknown, fallback: string) {
     return candidate.response?.data?.message || candidate.message || fallback;
   }
   return fallback;
+}
+
+function looksLikePaperReview(message: string, attachments: ChatAttachment[]) {
+  const text = String(message || "");
+  const hasPaperIntent = /查非|论文|格式|排版|模板|错别字|标点/.test(text);
+  const hasDocument = attachments.some((item) => /\.(docx|pdf|tex)$/i.test(item.name || item.url || ""));
+  return hasPaperIntent && hasDocument;
 }
 
 function orderNo(message: ChatMessage) {
@@ -94,10 +102,15 @@ function normalizeMessage(message: ChatMessage): ChatMessage {
   const payloadAttachments = normalizeAttachments(payload.attachment_echo);
   const selected = normalizeSelectedRagSpace(payload.selected_rag_space) ?? normalizeSelectedRagSpace(ext?.selected_rag_space);
   const attachments = payloadAttachments.length > 0 ? payloadAttachments : normalizeAttachments(ext?.attachments);
+  const normalized =
+    message.role === "assistant"
+      ? normalizeAssistantContent(message.content, payload)
+      : { content: message.content, payload };
   return {
     ...message,
+    content: normalized.content,
     payload: {
-      ...payload,
+      ...normalized.payload,
       selected_rag_space: selected,
       attachment_echo: attachments,
     },
@@ -127,6 +140,20 @@ function mergePayload(current: ChatMessage["payload"], incoming: ChatMessage["pa
   return next;
 }
 
+function normalizeAssistantContent(content: string, payload: ChatMessagePayload = {}) {
+  const normalized = normalizeAiResponseText(content);
+  if (normalized.content === content.trim() && !normalized.summary) {
+    return { content, payload };
+  }
+  return {
+    content: normalized.content,
+    payload: {
+      ...payload,
+      ...(normalized.summary ? { summary: normalized.summary } : {}),
+    },
+  };
+}
+
 export const useChatStore = defineStore("chat", () => {
   const loading = ref(false);
   const sessions = ref<ChatSession[]>([]);
@@ -141,6 +168,7 @@ export const useChatStore = defineStore("chat", () => {
   const pollTimer = ref<number | null>(null);
   const pollDeadline = ref<number>(0);
   const pollInFlight = ref(false);
+  const activeFallbackTimeoutMs = ref(POLL_TIMEOUT_MS);
   const trustPollTimer = ref<number | null>(null);
   const trustPollDeadline = ref<number>(0);
   const trustPollInFlight = ref(false);
@@ -247,11 +275,13 @@ export const useChatStore = defineStore("chat", () => {
     if (!event.message_id) return;
     const current = messages.value.find((item) => item.id === event.message_id);
     if (!current) return;
+    const nextPayload = mergePayload(current.payload || {}, event.payload || {});
+    const normalized = normalizeAssistantContent(event.content ?? current.content, nextPayload);
     upsertMessage({
       ...current,
-      content: event.content ?? current.content,
+      content: normalized.content,
       message_type: String(event.message_type || event.payload?.message_type || current.message_type || "file_answer"),
-      payload: mergePayload(current.payload || {}, event.payload || {}),
+      payload: normalized.payload,
       created_at: current.created_at || event.ts || new Date().toISOString(),
     });
     sortMessages();
@@ -264,6 +294,7 @@ export const useChatStore = defineStore("chat", () => {
     }
     pollDeadline.value = 0;
     pollInFlight.value = false;
+    activeFallbackTimeoutMs.value = POLL_TIMEOUT_MS;
   }
 
   function stopTrustPolling() {
@@ -313,9 +344,9 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
-  function startFallbackPolling(sessionId: string, messageId: string) {
+  function startFallbackPolling(sessionId: string, messageId: string, timeoutMs = POLL_TIMEOUT_MS) {
     if (!messageId || pollTimer.value != null) return;
-    pollDeadline.value = Date.now() + POLL_TIMEOUT_MS;
+    pollDeadline.value = Date.now() + timeoutMs;
     streamPhase.value = "streaming";
 
     const tick = async () => {
@@ -395,7 +426,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function fetchSessions() {
-    const { data } = await chatApi.listSessions(200);
+    const { data } = await chatApi.listSessions(200, { suppressErrorToast: true, timeout: 60000 });
     sessions.value = data.data;
     return sessions.value;
   }
@@ -562,6 +593,8 @@ export const useChatStore = defineStore("chat", () => {
     if (!session.value) return null;
     const sessionId = session.value.id;
     stopStreamForIdle();
+    const usePaperReviewDeadline = looksLikePaperReview(payload.message, pendingAttachments.value);
+    activeFallbackTimeoutMs.value = usePaperReviewDeadline ? PAPER_REVIEW_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS;
 
     const clientSeqStart = allocateClientSeq(2);
     const selected = getSelectedRagSpaceSnapshot();
@@ -683,7 +716,11 @@ export const useChatStore = defineStore("chat", () => {
       clearPendingAttachments();
       await fetchSessions();
       if (!streamStarted || !eventSource.value) {
-        startFallbackPolling(sessionId, data.data.assistant_message_id);
+        startFallbackPolling(
+          sessionId,
+          data.data.assistant_message_id,
+          usePaperReviewDeadline ? PAPER_REVIEW_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS,
+        );
       } else if (!checkAndFinalizeByMessage(data.data.assistant_message_id)) {
         streamPhase.value = streamConnected.value ? "streaming" : "connecting";
       }
@@ -806,6 +843,7 @@ export const useChatStore = defineStore("chat", () => {
         basePayload.ui_schema = event.payload.ui_schema;
         basePayload.trace_url = event.payload.trace_url || event.payload.trust_scoring?.trace_url;
       }
+      const normalized = normalizeAssistantContent(event.content || current?.content || "", basePayload);
       upsertMessage({
         id: event.message_id,
         session_id: event.session_id,
@@ -816,8 +854,8 @@ export const useChatStore = defineStore("chat", () => {
           event.event === "run_failed"
             ? "error"
             : String(basePayload.message_type || current?.message_type || "quality_answer"),
-        content: event.content || current?.content || "",
-        payload: basePayload,
+        content: normalized.content,
+        payload: normalized.payload,
         created_at: current?.created_at || event.ts || new Date().toISOString(),
       });
       sortMessages();
@@ -861,7 +899,7 @@ export const useChatStore = defineStore("chat", () => {
         closeStreamConnection();
         if (activeAssistantMessageId.value) {
           streamPhase.value = "streaming";
-          startFallbackPolling(sessionId, activeAssistantMessageId.value);
+          startFallbackPolling(sessionId, activeAssistantMessageId.value, activeFallbackTimeoutMs.value);
           return;
         }
         streamPhase.value = "idle";

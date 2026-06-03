@@ -10,6 +10,7 @@ from agent.adapters.factory import AgentAdapterFactory
 from agent.llm.gateway import LLMGateway
 from app.core.ids import uuid7
 from app.repositories.meeting_repo import MeetingRepository
+from app.services.ai_response_text import normalize_ai_response_content
 from app.services.model_config_service import ModelConfigService
 from app.services.stream_service import meeting_stream_broker
 from infra.database.session import get_session
@@ -104,6 +105,7 @@ class MeetingAgentService:
                 emit=emit,
                 runtime_model=runtime_model,
             )
+            display_content, response_metadata = normalize_ai_response_content(full_content)
 
             async with get_session() as session:
                 repo = MeetingRepository(session)
@@ -112,9 +114,10 @@ class MeetingAgentService:
                     room_id=room_id,
                     user_id=user_id,
                     username=agent_name,
-                    content=full_content,
+                    content=display_content,
                     message_type="agent",
                     agent_id=agent_def_id,
+                    metadata_json=response_metadata or None,
                 )
                 await session.commit()
 
@@ -127,7 +130,7 @@ class MeetingAgentService:
                     "agent_id": agent_def_id,
                     "agent_name": agent_name,
                     "workflow_run_id": workflow_run_id,
-                    "content": full_content,
+                    "content": display_content,
                 }
             )
         except Exception as exc:
@@ -311,15 +314,17 @@ class MeetingAgentService:
                     )
                     if not content:
                         continue
+                    display_content, response_metadata = normalize_ai_response_content(content)
 
                     await repo.create_message(
                         org_id=org_id,
                         room_id=room_id,
                         user_id=user_id,
                         username=agent_name,
-                        content=content,
+                        content=display_content,
                         message_type="agent",
                         agent_id=str(room_agent.agent_id),
+                        metadata_json=response_metadata or None,
                     )
                     await session.commit()
 
@@ -332,7 +337,7 @@ class MeetingAgentService:
                             "agent_id": str(room_agent.agent_id),
                             "agent_name": agent_name,
                             "workflow_run_id": workflow_run_id,
-                            "content": content,
+                            "content": display_content,
                         }
                     )
                 except NotImplementedError:

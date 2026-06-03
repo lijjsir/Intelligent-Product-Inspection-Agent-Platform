@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 _ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
 _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
+_STALE_CHAT_WORKFLOW_GRACE_MINUTES = 5
+_STALE_CHAT_WORKFLOW_CONTENT = (
+    "这次论文查非任务因后端服务重启或热更新被中断，已经停止运行。"
+    "请重新发送论文查非请求。"
+)
 
 
 @lru_cache(maxsize=1)
@@ -52,6 +57,19 @@ def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: 
         _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.pop(assistant_message_id, None)
 
     task.add_done_callback(cleanup)
+
+
+async def mark_interrupted_chat_workflows_on_startup() -> int:
+    async with get_session() as session:
+        repo = ChatMessageRepository(session)
+        count = await repo.mark_stale_running_assistant_messages(
+            older_than=utcnow(),
+            content=_STALE_CHAT_WORKFLOW_CONTENT,
+            reason="backend_startup_recovered_orphaned_workflow",
+            limit=1000,
+        )
+        await session.commit()
+        return count
 
 
 def get_current_user_for_stream(
@@ -114,6 +132,8 @@ class ChatService:
             if not await session_repo.get(self._org_id, self._user_id, session_id):
                 raise NotFoundError("chat session not found")
             repo = ChatMessageRepository(session)
+            await self._recover_orphaned_running_messages(repo, session_id)
+            await session.commit()
             rows = await repo.list_for_session(
                 org_id=self._org_id,
                 session_id=session_id,
@@ -121,6 +141,25 @@ class ChatService:
                 limit=limit,
             )
             return [ChatMessageResponse.model_validate(item) for item in rows]
+
+    async def _recover_orphaned_running_messages(
+        self,
+        repo: ChatMessageRepository,
+        session_id: str,
+    ) -> int:
+        active_message_ids = {
+            message_id
+            for message_id, workflow_run_id in _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.items()
+            if (task := _ACTIVE_CHAT_WORKFLOWS.get(workflow_run_id)) is not None and not task.done()
+        }
+        return await repo.mark_stale_running_assistant_messages(
+            org_id=self._org_id,
+            session_id=session_id,
+            older_than=utcnow() - timedelta(minutes=_STALE_CHAT_WORKFLOW_GRACE_MINUTES),
+            exclude_message_ids=active_message_ids,
+            content=_STALE_CHAT_WORKFLOW_CONTENT,
+            reason="orphaned_chat_workflow_not_active_in_backend",
+        )
 
     async def get_inspection_context(self) -> dict[str, Any]:
         try:

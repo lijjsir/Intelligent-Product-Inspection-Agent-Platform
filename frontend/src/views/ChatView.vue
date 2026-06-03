@@ -12,8 +12,10 @@ import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
+import { normalizeAiResponseText } from "@/utils/ai-response";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
+import { formatServerDateTime } from "@/utils/date-time";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -91,10 +93,7 @@ const editingMessageId = ref("");
 const editingContent = ref("");
 
 function formatTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return formatServerDateTime(value, { compactDate: true, includeSeconds: true });
 }
 
 function roleLabel(role: ChatMessage["role"]) {
@@ -179,7 +178,7 @@ async function ensureInspectionSpecsLoaded(force = false) {
   if (!specsLoadPromise) {
     specsLoadPromise = (async () => {
       try {
-        await inspectionSpecStore.fetchAll();
+        await inspectionSpecStore.fetchAll({ suppressErrorToast: true, timeout: 60000 });
       } catch (error) {
         ElMessage.error("检测标准加载失败，请稍后重试。");
         console.error(error);
@@ -394,21 +393,48 @@ function messageAttachments(message: ChatMessage): ChatAttachment[] {
   return [...(message.payload?.attachment_echo || [])];
 }
 
-// ── Typewriter effect ────────────────────────────────────────────
+// Typewriter effect
 const typewriterPos = ref<Record<string, number>>({});
 const typewriterTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+function looksLikeAnswerSummaryEnvelope(content: string): boolean {
+  const text = content.trim();
+  return (
+    /["'](?:answer|summary)["']\s*:/.test(text)
+    || /^(?:answer|summary|text)(?:\s*[:：]|\s*$)/i.test(text)
+    || /^answer\s+summary\b/i.test(text)
+    || /^```(?:json)?\s*\{?/i.test(text)
+    || /^\{\s*["']?(?:a|an|ans|answer|s|su|sum|summary|text)?/i.test(text)
+  );
+}
+
+function displayAssistantContent(content: string, fallback = "", limit?: number): string {
+  const normalized = normalizeAiResponseText(content);
+  const changed = normalized.content !== content.trim() || Boolean(normalized.summary);
+  if (changed) {
+    return typeof limit === "number" ? normalized.content.slice(0, limit) : normalized.content;
+  }
+  if (looksLikeAnswerSummaryEnvelope(content)) {
+    return fallback;
+  }
+  return typeof limit === "number" ? content.slice(0, limit) : content;
+}
 
 function getDisplayedContent(message: ChatMessage): string {
   if (message.role !== "assistant") return message.content;
   const pos = typewriterPos.value[message.id];
   if (pos === undefined) {
     if (message.message_type === "streaming") {
-      if (message.content) return message.content;
+      if (message.content) return displayAssistantContent(message.content, streamingPlaceholder(message));
       return streamingPlaceholder(message);
     }
-    return message.content;
+    return displayAssistantContent(message.content);
   }
-  return message.content.slice(0, pos);
+  return displayAssistantContent(message.content, streamingPlaceholder(message), pos);
+}
+
+function getCopyContent(message: ChatMessage): string {
+  return message.role === "assistant" ? normalizeAiResponseText(message.content).content : message.content;
 }
 
 function streamingPlaceholder(message: ChatMessage) {
@@ -451,7 +477,7 @@ function disposeAllTypewriters() {
   typewriterPos.value = {};
 }
 
-// Only START typewriters — never stop them from the watch.
+// Only start typewriters here; each timer stops itself when the message is done.
 // The timer self-destructs when content is fully revealed AND streaming ended.
 watch(
   () =>
@@ -747,7 +773,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :icon="Promotion"
             @click="webSearchEnabled = !webSearchEnabled"
           >
-            {{ webSearchEnabled ? '联网搜索·开' : '联网搜索' }}
+            {{ webSearchEnabled ? '联网搜索 · 开' : '联网搜索' }}
           </el-button>
         </el-tooltip>
         <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
@@ -760,7 +786,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       v-if="chatStore.ragSpacesError"
       class="alert-bar"
       type="warning" :closable="false" show-icon
-      title="知识库暂不可用" :description="chatStore.ragSpacesError"
+      title="知识库暂不可用"
+      :description="chatStore.ragSpacesError"
     />
 
     <ChatInspectionContextPanel
@@ -878,10 +905,10 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <!-- Paper review report card -->
               <div v-if="message.payload?.paper_format_report" class="paper-review-card">
                 <div class="prc-header">
-                  <span class="prc-title">论文查非辅助报告</span>
+                  <span class="prc-title">论文格式检查报告</span>
                   <div class="prc-header-right">
                     <el-tag v-if="message.payload.paper_format_report.model_used === false" size="small" type="warning" effect="dark">
-                      模型未生效-仅规则检查
+                      模型未生效，仅规则检查
                     </el-tag>
                     <el-tag size="small" effect="dark" :type="paperScoreTagType(message.payload.paper_format_report.score)">
                       {{ message.payload.paper_format_report.score }} / 100
@@ -973,7 +1000,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
                 <div class="task-action-note">
                   <strong>当前还是任务草稿</strong>
-                  <span>你可以继续追问识别依据、补充检测关注点或修改字段；点确认后才会创建正式任务并进入执行队列。</span>
+                  <span>你可以继续追问识别依据、补充检测关注点或修改字段；确认后才会创建正式任务并进入执行队列。</span>
                 </div>
                 <el-alert v-if="message.payload?.missing_slots?.length" type="info" :closable="false" show-icon title="任务信息还不完整，请补充后再提交。" />
                 <div class="task-actions-btns">
@@ -988,7 +1015,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               :show-feedback="isVisibleAssistantAnswer(message)"
               :show-retry="isVisibleAssistantAnswer(message)"
               :retry-disabled="chatStore.loading"
-              @copy="copyToClipboard(message.content, '消息已复制')"
+              @copy="copyToClipboard(getCopyContent(message), '消息已复制')"
               @edit="editUserMessage(message)"
               @like="submitChatFeedback(message, 'up')"
               @dislike="submitChatFeedback(message, 'down')"
@@ -1092,7 +1119,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   gap: 0;
 }
 
-/* ── Toolbar ── */
+/* Toolbar */
 .toolbar {
   display: flex;
   align-items: center;
@@ -1112,7 +1139,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .token-badge { font-size: 12px; color: #6b7280; white-space: nowrap; }
 .rag-select { width: 180px; }
 
-/* ── Alert ── */
+/* Alert */
 .alert-bar { margin: 0 12px; border-radius: 10px; }
 
 .inspection-context-strip {
@@ -1128,7 +1155,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   background: #fff;
 }
 
-/* ── Message list ── */
+/* Message list */
 .message-list {
   overflow-y: auto;
   padding: 12px 20px;
@@ -1161,7 +1188,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .role-name { font-weight: 600; color: #374151; }
 .time { font-variant-numeric: tabular-nums; }
 
-/* ── Bubble ── */
+/* Bubble */
 .bubble {
   max-width: min(860px, 92%);
   padding: 12px 16px;
@@ -1253,7 +1280,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .att-link:hover { background: #d1d5db; }
 .bubble.user .att-link { background: rgba(255,255,255,0.15); color: #e5e7eb; }
 
-/* ── Result card ── */
+/* Result card */
 .result-card {
   margin-top: 10px;
   padding: 14px;
@@ -1276,7 +1303,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .rc-sources { max-width: 50%; }
 .rc-sync { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-/* ── Paper review report card ── */
+/* Paper review report card */
 .paper-review-card {
   margin-top: 10px;
   padding: 14px;
@@ -1300,7 +1327,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .prc-limit-tag { font-size: 11px; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
 .prc-no-files { font-size: 12px; color: #94a3b8; }
 
-/* ── Task card ── */
+/* Task card */
 .task-card {
   margin-top: 10px;
   padding: 14px;
@@ -1358,7 +1385,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .task-spec-preview-grid span { color: #64748b; }
 .task-spec-preview-grid strong { color: #111827; font-weight: 700; }
 
-/* ── Composer ── */
+/* Composer */
 .composer {
   padding: 10px 16px;
   border-top: 1px solid #e5e7eb;

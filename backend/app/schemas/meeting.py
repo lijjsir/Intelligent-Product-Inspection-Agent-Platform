@@ -17,6 +17,11 @@ class MeetingRoomJoinRequest(BaseModel):
 
 class MeetingMessageCreateRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
+    quote_message_id: str | None = None
+
+
+class MeetingRoomUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class MeetingRoomResponse(BaseModel):
@@ -45,6 +50,8 @@ class MeetingMessageResponse(BaseModel):
     message_type: str = "user"
     agent_id: str | None = None
     mentions: list[dict] | None = None
+    quote_message_id: str | None = None
+    metadata_json: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -87,6 +94,113 @@ class MeetingRoomMemberResponse(BaseModel):
 class MeetingRoomDetailResponse(MeetingRoomResponse):
     agents: list[MeetingRoomAgentResponse] = []
     members: list[MeetingRoomMemberResponse] = []
+
+
+class MeetingMemoryScopeRequest(BaseModel):
+    include_meeting: bool = True
+    include_project_shared: bool = True
+    include_personal_authorized: bool = False
+
+
+class MeetingAgentRunRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    mode: str = Field(default="auto", pattern="^(auto|risk_forecast|evidence_query|standard_explain|meeting_summary|memory_transfer|action_items)$")
+    memory_scope: MeetingMemoryScopeRequest = Field(default_factory=MeetingMemoryScopeRequest)
+
+
+class MeetingMemorySourceResponse(BaseModel):
+    memory_id: str
+    scope: str = "project_shared"
+    title: str = ""
+    summary: str = ""
+
+
+class MeetingCandidateMemoryResponse(BaseModel):
+    memory_id: str
+    title: str
+    content: str
+    summary: str = ""
+    memory_type: str = "decision"
+    status: str = "candidate"
+    recommended_scope: str = "project_shared"
+    confidence: float | None = None
+    source_message_id: str | None = None
+    created_at: datetime | None = None
+
+
+class MeetingAgentRunResponse(BaseModel):
+    selected_subgraph: str
+    answer: str
+    message: MeetingMessageResponse
+    memory_sources: list[MeetingMemorySourceResponse] = []
+    candidate_memories: list[MeetingCandidateMemoryResponse] = []
+
+
+class MeetingMemoryExtractRequest(BaseModel):
+    topic: str | None = Field(default=None, max_length=200)
+    max_items: int = Field(default=3, ge=1, le=10)
+
+
+class MeetingMemoryResponse(BaseModel):
+    memory_id: str
+    title: str
+    content: str
+    summary: str = ""
+    memory_type: str
+    status: str
+    scope: str = "meeting"
+    confidence: float | None = None
+    source_message_id: str | None = None
+    created_by: str | None = None
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MeetingMemoryUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    scope: str = Field(default="project_shared", pattern="^(meeting|project_shared)$")
+
+
+class MeetingMemoryTransferRequest(BaseModel):
+    to_scope_type: str = Field(default="project", pattern="^(user|meeting_room|project|org)$")
+    to_scope_id: str = Field(default="default", min_length=1, max_length=128)
+    transfer_reason: str | None = Field(default=None, max_length=1000)
+
+
+class MeetingActionItemCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    owner_id: str | None = None
+    due_at: datetime | None = None
+    source_message_id: str | None = None
+
+
+class MeetingActionItemUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    owner_id: str | None = None
+    due_at: datetime | None = None
+    status: str | None = Field(default=None, pattern="^(open|in_progress|done|cancelled)$")
+
+
+class MeetingActionItemResponse(BaseModel):
+    id: str
+    room_id: str
+    title: str
+    description: str | None = None
+    owner_id: str | None = None
+    owner_name: str = ""
+    due_at: datetime | None = None
+    status: str = "open"
+    source_message_id: str | None = None
+    created_by: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 # ── Admin schemas ────────────────────────────────────────────────

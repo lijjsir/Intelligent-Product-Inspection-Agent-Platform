@@ -5,9 +5,10 @@ from datetime import datetime
 from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.datetime import utcnow
+from app.core.datetime import utcnow, utcnow_iso
 from app.models.agent_ops import AgentDefinition, IntentRoute
 from app.models.chat import ChatMessage, ChatSession
+from app.services.ai_response_text import normalize_ai_response_content
 
 
 class ChatSessionRepository:
@@ -188,12 +189,61 @@ class ChatMessageRepository:
         obj = await self.get(org_id, message_id)
         if not obj:
             return None
-        obj.content = content
+        display_content, response_metadata = normalize_ai_response_content(content)
+        next_payload = dict(payload or {})
+        if response_metadata:
+            next_payload.update(response_metadata)
+        obj.content = display_content
         obj.message_type = message_type
-        obj.payload = payload
+        obj.payload = next_payload if payload is not None or response_metadata else None
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["updated_at"])
         return obj
+
+    async def mark_stale_running_assistant_messages(
+        self,
+        *,
+        older_than: datetime,
+        org_id: str | None = None,
+        session_id: str | None = None,
+        exclude_message_ids: set[str] | None = None,
+        limit: int = 200,
+        content: str,
+        reason: str = "orphaned_workflow",
+    ) -> int:
+        stmt = select(ChatMessage).where(
+            ChatMessage.role == "assistant",
+            ChatMessage.message_type == "streaming",
+            ChatMessage.updated_at < older_than,
+            ChatMessage.deleted_at.is_(None),
+        )
+        if org_id:
+            stmt = stmt.where(ChatMessage.org_id == org_id)
+        if session_id:
+            stmt = stmt.where(ChatMessage.session_id == session_id)
+        if exclude_message_ids:
+            stmt = stmt.where(ChatMessage.id.notin_(list(exclude_message_ids)))
+        result = await self._session.execute(stmt.order_by(ChatMessage.updated_at.asc()).limit(limit))
+        rows = list(result.scalars().all())
+        now = utcnow_iso()
+        for message in rows:
+            payload = dict(message.payload or {})
+            payload.update(
+                {
+                    "status": "failed",
+                    "message_type": "error",
+                    "error_type": "workflow_interrupted",
+                    "error": reason,
+                    "failed_at": now,
+                    "stale_cleanup": True,
+                }
+            )
+            message.content = content
+            message.message_type = "error"
+            message.payload = payload
+        if rows:
+            await self._session.flush()
+        return len(rows)
 
 
 class ChatOpsRepository:

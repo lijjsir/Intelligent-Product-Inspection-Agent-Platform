@@ -7,7 +7,17 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
-from app.models.meeting import MeetingAgentDefinition, MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
+from app.models.meeting import (
+    MeetingActionItem,
+    MeetingAgentDefinition,
+    MeetingMessage,
+    MeetingRoom,
+    MeetingRoomAgent,
+    MeetingRoomMember,
+    MemoryScopeBinding,
+    MemoryTransferLog,
+)
+from app.models.memory import MemoryItem
 
 
 class MeetingRepository:
@@ -56,6 +66,25 @@ class MeetingRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def update_room(
+        self,
+        org_id: str,
+        room_id: str,
+        *,
+        title: str | None = None,
+        status: str | None = None,
+    ) -> MeetingRoom | None:
+        room = await self.get_room(org_id, room_id)
+        if room is None:
+            return None
+        if title is not None:
+            room.title = title
+        if status is not None:
+            room.status = status
+        await self._session.flush()
+        await self._session.refresh(room, attribute_names=["created_at", "updated_at"])
+        return room
 
     async def list_joined_rooms(self, org_id: str, user_id: str, limit: int = 100) -> list[MeetingRoom]:
         result = await self._session.execute(
@@ -149,6 +178,8 @@ class MeetingRepository:
         message_type: str = "user",
         agent_id: str | None = None,
         mentions: dict | None = None,
+        quote_message_id: str | None = None,
+        metadata_json: dict | None = None,
     ) -> MeetingMessage:
         message = MeetingMessage(
             org_id=org_id,
@@ -160,12 +191,25 @@ class MeetingRepository:
             message_type=message_type,
             agent_id=agent_id,
             mentions=mentions,
+            quote_message_id=quote_message_id,
+            metadata_json=metadata_json,
         )
         self._session.add(message)
         await self._session.flush()
         await self._session.refresh(message, attribute_names=["created_at", "updated_at"])
         await self.touch_room(org_id, room_id)
         return message
+
+    async def get_message(self, org_id: str, room_id: str, message_id: str) -> MeetingMessage | None:
+        result = await self._session.execute(
+            select(MeetingMessage).where(
+                MeetingMessage.org_id == org_id,
+                MeetingMessage.room_id == room_id,
+                MeetingMessage.id == message_id,
+                MeetingMessage.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_messages(
         self,
@@ -424,3 +468,203 @@ class MeetingRepository:
             .group_by(MeetingMessage.room_id)
         )
         return {str(room_id): int(count) for room_id, count in result.all()}
+
+    # ── Meeting memory bindings ─────────────────────────────────────────
+
+    async def create_memory_item(self, item: MemoryItem) -> MemoryItem:
+        self._session.add(item)
+        await self._session.flush()
+        await self._session.refresh(item, attribute_names=["created_at", "updated_at"])
+        return item
+
+    async def get_memory_item(self, org_id: str, memory_id: str) -> MemoryItem | None:
+        result = await self._session.execute(
+            select(MemoryItem).where(
+                MemoryItem.org_id == org_id,
+                MemoryItem.memory_id == memory_id,
+                MemoryItem.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create_memory_scope_binding(
+        self,
+        *,
+        org_id: str,
+        memory_id: str,
+        scope_type: str,
+        scope_id: str,
+        permission: str,
+        created_by: str,
+    ) -> MemoryScopeBinding:
+        binding = MemoryScopeBinding(
+            org_id=org_id,
+            memory_id=memory_id,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            permission=permission,
+            created_by=created_by,
+        )
+        self._session.add(binding)
+        await self._session.flush()
+        return binding
+
+    async def create_memory_transfer_log(
+        self,
+        *,
+        org_id: str,
+        memory_id: str,
+        from_scope_type: str,
+        from_scope_id: str,
+        to_scope_type: str,
+        to_scope_id: str,
+        transfer_reason: str | None,
+        status: str,
+        operator_id: str,
+    ) -> MemoryTransferLog:
+        row = MemoryTransferLog(
+            org_id=org_id,
+            memory_id=memory_id,
+            from_scope_type=from_scope_type,
+            from_scope_id=from_scope_id,
+            to_scope_type=to_scope_type,
+            to_scope_id=to_scope_id,
+            transfer_reason=transfer_reason,
+            status=status,
+            operator_id=operator_id,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return row
+
+    async def list_memory_items_for_room(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        project_id: str = "default",
+        include_project_shared: bool = True,
+        statuses: Sequence[str] | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        scope_filters = [
+            (MemoryScopeBinding.scope_type == "meeting_room") & (MemoryScopeBinding.scope_id == room_id)
+        ]
+        if include_project_shared:
+            scope_filters.append(
+                (MemoryScopeBinding.scope_type == "project") & (MemoryScopeBinding.scope_id == project_id)
+            )
+        stmt = (
+            select(MemoryItem)
+            .join(
+                MemoryScopeBinding,
+                (MemoryScopeBinding.org_id == MemoryItem.org_id)
+                & (MemoryScopeBinding.memory_id == MemoryItem.memory_id),
+            )
+            .where(
+                MemoryItem.org_id == org_id,
+                MemoryItem.deleted_at.is_(None),
+                MemoryScopeBinding.deleted_at.is_(None),
+                MemoryScopeBinding.permission.in_(["read", "write", "transfer", "confirm"]),
+                or_(*scope_filters),
+            )
+            .order_by(MemoryItem.updated_at.desc())
+            .limit(limit)
+        )
+        if statuses:
+            stmt = stmt.where(MemoryItem.status.in_(list(statuses)))
+        result = await self._session.execute(stmt)
+        seen: set[str] = set()
+        items: list[MemoryItem] = []
+        for item in result.scalars().all():
+            memory_id = str(item.memory_id)
+            if memory_id in seen:
+                continue
+            seen.add(memory_id)
+            items.append(item)
+        return items
+
+    async def update_memory_item(
+        self,
+        *,
+        org_id: str,
+        memory_id: str,
+        status: str | None = None,
+        content_summary: str | None = None,
+        content_json: dict | None = None,
+    ) -> MemoryItem | None:
+        item = await self.get_memory_item(org_id, memory_id)
+        if item is None:
+            return None
+        if status is not None:
+            item.status = status
+        if content_summary is not None:
+            item.content_summary = content_summary
+        if content_json is not None:
+            item.content_json = content_json
+        await self._session.flush()
+        await self._session.refresh(item, attribute_names=["created_at", "updated_at"])
+        return item
+
+    # ── Meeting action items ───────────────────────────────────────────
+
+    async def create_action_item(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        title: str,
+        description: str | None,
+        owner_id: str | None,
+        due_at: datetime | None,
+        source_message_id: str | None,
+        created_by: str,
+    ) -> MeetingActionItem:
+        row = MeetingActionItem(
+            org_id=org_id,
+            room_id=room_id,
+            title=title,
+            description=description,
+            owner_id=owner_id,
+            due_at=due_at,
+            source_message_id=source_message_id,
+            created_by=created_by,
+            status="open",
+        )
+        self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row, attribute_names=["created_at", "updated_at"])
+        return row
+
+    async def list_action_items(self, org_id: str, room_id: str) -> list[MeetingActionItem]:
+        result = await self._session.execute(
+            select(MeetingActionItem)
+            .where(
+                MeetingActionItem.org_id == org_id,
+                MeetingActionItem.room_id == room_id,
+                MeetingActionItem.deleted_at.is_(None),
+            )
+            .order_by(MeetingActionItem.status.asc(), MeetingActionItem.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def get_action_item(self, org_id: str, action_item_id: str) -> MeetingActionItem | None:
+        result = await self._session.execute(
+            select(MeetingActionItem).where(
+                MeetingActionItem.org_id == org_id,
+                MeetingActionItem.id == action_item_id,
+                MeetingActionItem.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_action_item(self, org_id: str, action_item_id: str, **fields) -> MeetingActionItem | None:
+        row = await self.get_action_item(org_id, action_item_id)
+        if row is None:
+            return None
+        for key, value in fields.items():
+            if value is not None and hasattr(row, key):
+                setattr(row, key, value)
+        await self._session.flush()
+        await self._session.refresh(row, attribute_names=["created_at", "updated_at"])
+        return row
