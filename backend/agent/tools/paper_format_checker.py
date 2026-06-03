@@ -8,6 +8,7 @@ import tempfile
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import httpx
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 _ZH_PUNCT = "，。；：？！、''‘’（）《》【】"
 _EN_PUNCT = ",.;:?!()[]\"'"
+_LIKELY_DUPLICATE_CHARS = set("的了是在和与及对为把被将有中")
 _SECTION_CMD_LEVEL = {
     "part": 0,
     "chapter": 1,
@@ -137,10 +139,12 @@ def check_paper_format(
         issues.extend(_check_toc_rules(parsed, template=template))
         issues.extend(_check_heading_rules(parsed))
         issues.extend(_check_figure_table_rules(parsed))
+        issues.extend(_check_caption_number_spacing(parsed))
         issues.extend(_check_formula_rules(parsed))
         issues.extend(_check_reference_rules(parsed))
+        issues.extend(_check_latin_term_consistency(parsed))
         issues.extend(_check_word_artifact_rules(parsed))
-        issues.extend(_run_docx_text_engines(parsed, file_name=file_name))
+        issues.extend(_run_docx_text_engines(parsed, file_name=file_name, query=query))
     elif document_type == "tex":
         issues.extend(_check_tex_structure(parsed))
         issues.extend(_check_text_norms(parsed))
@@ -1555,7 +1559,8 @@ def _check_template_caption_styles(
         spec = dict(caption_rules.get(rule_key) or {})
         prefixes = [str(item).strip() for item in list(spec.get("match_prefixes") or []) if str(item).strip()]
         patterns = str(spec.get("numbering_pattern") or "").strip()
-        candidate = None
+        mismatched_candidates: list[tuple[dict[str, Any], list[str]]] = []
+        checked_count = 0
         for paragraph in paragraphs:
             text = str(paragraph.get("text") or "").strip()
             if not text:
@@ -1566,45 +1571,66 @@ def _check_template_caption_styles(
                 continue
             if patterns and not re.match(patterns, text, flags=re.I):
                 continue
-            candidate = paragraph
-            break
-        if not candidate:
+            checked_count += 1
+            candidate_mismatches: list[str] = []
+            allowed_style_names = {str(item).strip().lower() for item in list(spec.get("allowed_style_names") or []) if str(item).strip()}
+            actual_style_name = str(paragraph.get("style_name") or "").strip().lower()
+            if allowed_style_names and actual_style_name not in allowed_style_names:
+                candidate_mismatches.append(f"style={paragraph.get('style_name')}")
+            actual_size = paragraph.get("font_size_resolved") or paragraph.get("font_size_pt")
+            if not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol):
+                candidate_mismatches.append(f"font_size={actual_size}")
+            actual_spacing = paragraph.get("line_spacing")
+            if actual_spacing is not None and not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=line_tol):
+                candidate_mismatches.append(f"line_spacing={actual_spacing}")
+            actual_alignment = str(paragraph.get("alignment") or "").strip().lower()
+            if spec.get("alignment") and not _alignment_matches(actual_alignment, spec.get("alignment")):
+                candidate_mismatches.append(f"alignment={actual_alignment}")
+            actual_before = paragraph.get("space_before_pt")
+            if actual_before is not None and not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=_template_style_tolerance(rules, "space_before_pt", 1.0)):
+                candidate_mismatches.append(f"space_before={actual_before}")
+            actual_after = paragraph.get("space_after_pt")
+            if actual_after is not None and not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=_template_style_tolerance(rules, "space_after_pt", 1.0)):
+                candidate_mismatches.append(f"space_after={actual_after}")
+            if candidate_mismatches:
+                mismatched_candidates.append((paragraph, candidate_mismatches))
+        if not mismatched_candidates:
             continue
-        mismatches: list[str] = []
-        allowed_style_names = {str(item).strip().lower() for item in list(spec.get("allowed_style_names") or []) if str(item).strip()}
-        actual_style_name = str(candidate.get("style_name") or "").strip().lower()
-        if allowed_style_names and actual_style_name not in allowed_style_names:
-            mismatches.append(f"style={candidate.get('style_name')}")
-        actual_size = candidate.get("font_size_resolved") or candidate.get("font_size_pt")
-        if not _value_matches(actual_size, spec.get("font_size_pt"), tolerance=font_tol):
-            mismatches.append(f"font_size={actual_size}")
-        actual_spacing = candidate.get("line_spacing")
-        if actual_spacing is not None and not _line_spacing_matches(actual_spacing, spec.get("line_spacing"), tolerance=line_tol):
-            mismatches.append(f"line_spacing={actual_spacing}")
-        actual_alignment = str(candidate.get("alignment") or "").strip().lower()
-        if spec.get("alignment") and not _alignment_matches(actual_alignment, spec.get("alignment")):
-            mismatches.append(f"alignment={actual_alignment}")
-        actual_before = candidate.get("space_before_pt")
-        if actual_before is not None and not _value_matches(actual_before, spec.get("space_before_pt"), tolerance=_template_style_tolerance(rules, "space_before_pt", 1.0)):
-            mismatches.append(f"space_before={actual_before}")
-        actual_after = candidate.get("space_after_pt")
-        if actual_after is not None and not _value_matches(actual_after, spec.get("space_after_pt"), tolerance=_template_style_tolerance(rules, "space_after_pt", 1.0)):
-            mismatches.append(f"space_after={actual_after}")
-        if mismatches:
-            severity = "low" if "英文" in issue_title else "medium"
-            issues.append(
-                RuleIssue(
-                    code=issue_code,
-                    title=issue_title,
-                    severity=severity,
-                    category="template",
-                    message=f"按 {template.get('name')} 规则，{issue_title.replace('与模板不一致', '')}未完全匹配模板样式。",
-                    evidence=f"{candidate.get('text')}: {', '.join(mismatches)}",
-                    location={**_issue_location_from_paragraph(candidate), "template_id": template.get("template_id")},
-                    suggestion="优先采用模板中的图题/表题专用样式，避免正文样式直接套到题注。",
-                    parser_confidence="medium",
-                )
+        samples = mismatched_candidates[:5]
+        first_candidate = samples[0][0]
+        severity = "low" if "英文" in issue_title else "medium"
+        evidence = "；".join(
+            f"{paragraph.get('text')}: {', '.join(mismatches)}"
+            for paragraph, mismatches in samples
+        )
+        issues.append(
+            RuleIssue(
+                code=issue_code,
+                title=issue_title,
+                severity=severity,
+                category="template",
+                message=(
+                    f"按 {template.get('name')} 规则，{issue_title.replace('与模板不一致', '')}未完全匹配模板样式；"
+                    f"已检查 {checked_count} 个候选，发现 {len(mismatched_candidates)} 个不一致。"
+                ),
+                evidence=evidence,
+                location={**_issue_location_from_paragraph(first_candidate), "template_id": template.get("template_id")},
+                suggestion="优先采用模板中的图题/表题专用样式，避免正文样式直接套到题注。",
+                actual={
+                    "mismatch_count": len(mismatched_candidates),
+                    "checked_count": checked_count,
+                    "samples": [
+                        {
+                            "paragraph_index": paragraph.get("index"),
+                            "text": paragraph.get("text"),
+                            "mismatches": mismatches,
+                        }
+                        for paragraph, mismatches in samples
+                    ],
+                },
+                parser_confidence="medium",
             )
+        )
     return issues
 
 
@@ -1772,6 +1798,21 @@ def _check_text_norms(parsed: dict[str, Any]) -> list[RuleIssue]:
                 parser_confidence="medium",
             )
         )
+    repeated_char_hit = _find_repeated_chinese_char_hit(parsed)
+    if repeated_char_hit:
+        issues.append(
+            RuleIssue(
+                code="text.duplicate_chinese_char",
+                title="疑似连续重复字",
+                severity="low",
+                category="text",
+                message="检测到疑似手误造成的连续重复汉字。",
+                evidence=str(repeated_char_hit.get("evidence") or ""),
+                location=dict(repeated_char_hit.get("location") or {"scope": "document", "display_text": "文档文本附近"}),
+                suggestion="核对该处是否为误输入的重复字；若是叠词或专有表达，可忽略。",
+                parser_confidence="medium",
+            )
+        )
     for paragraph in paragraphs[:30]:
         content = str(paragraph.get("text") or "")
         if paragraph.get("heading_level") and content.endswith(tuple(_ZH_PUNCT + _EN_PUNCT)):
@@ -1850,14 +1891,82 @@ def _find_fullwidth_ascii_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
+def _find_repeated_chinese_char_hit(parsed: dict[str, Any]) -> dict[str, Any] | None:
+    kind = str(parsed.get("kind") or "")
+    pattern = re.compile(r"([\u4e00-\u9fff])\1")
+    if kind == "docx":
+        for paragraph in list(parsed.get("paragraphs") or []):
+            text = str(paragraph.get("text") or "").strip()
+            if not text or _should_skip_text_norm_paragraph(paragraph):
+                continue
+            match = _find_likely_duplicate_char_match(text, pattern)
+            if match:
+                return {
+                    "evidence": _build_evidence_excerpt(text, match.start(), match.end()),
+                    "location": _issue_location_from_paragraph(paragraph),
+                }
+        return None
+    if kind == "pdf":
+        for page in list(parsed.get("pages") or []):
+            text = str(page.get("text") or "").strip()
+            if not text or _should_skip_text_norm_text(text):
+                continue
+            match = _find_likely_duplicate_char_match(text, pattern)
+            if match:
+                page_no = page.get("page_no")
+                return {
+                    "evidence": _build_evidence_excerpt(text, match.start(), match.end()),
+                    "location": {"page": page_no, "display_text": f"第 {page_no} 页" if page_no is not None else "PDF 文本附近"},
+                }
+        return None
+    text = str(parsed.get("text") or "")
+    if not text or _should_skip_text_norm_text(text):
+        return None
+    match = _find_likely_duplicate_char_match(text, pattern)
+    if not match:
+        return None
+    return {
+        "evidence": _build_evidence_excerpt(text, match.start(), match.end()),
+        "location": _build_text_hit_location(parsed, match.start()),
+    }
+
+
+def _find_likely_duplicate_char_match(text: str, pattern: re.Pattern[str]) -> re.Match[str] | None:
+    for match in pattern.finditer(str(text or "")):
+        char = match.group(1)
+        if char in _LIKELY_DUPLICATE_CHARS:
+            return match
+        if match.end() < len(text) and text[match.end()] == char:
+            return match
+    return None
+
+
+def _run_docx_text_engines(parsed: dict[str, Any], *, file_name: str, query: str = "") -> list[RuleIssue]:
     issues: list[RuleIssue] = []
     issues.extend(_check_text_norms(parsed))
-    issues.extend(_check_pycorrector(parsed))
-    issues.extend(_check_macro_correct(parsed))
+    if _query_requests_spelling_review(query):
+        issues.extend(_check_pycorrector(parsed))
+        issues.extend(_check_macro_correct(parsed))
     issues.extend(_check_language_tool(parsed, file_name=file_name))
     issues.extend(_check_vale(parsed))
     return issues
+
+
+def _query_requests_spelling_review(query: str) -> bool:
+    text = str(query or "").lower()
+    spelling_keywords = (
+        "错别字",
+        "错字",
+        "拼写",
+        "病句",
+        "语病",
+        "文字校对",
+        "润色",
+        "typo",
+        "spelling",
+        "proofread",
+    )
+    return any(keyword in text for keyword in spelling_keywords)
 
 
 def _check_language_tool(parsed: dict[str, Any], *, file_name: str) -> list[RuleIssue]:
@@ -2074,6 +2183,125 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
     if not texts:
         return []
 
+    chunk_limit = max(300, int(settings.paper_check_macro_correct_chunk_chars or 1800))
+    timeout_sec = max(1.0, float(settings.paper_check_macro_correct_timeout_sec or settings.paper_check_engine_timeout_sec or 45))
+    batches = _build_macro_correct_batches(paragraph_refs, texts, chunk_limit=chunk_limit)
+    started_at = perf_counter()
+    processed = 0
+    macro_punct_issues = 0
+    max_macro_punct_issues = 20
+
+    for batch in batches:
+        elapsed = perf_counter() - started_at
+        if elapsed >= timeout_sec:
+            logger.warning(
+                "macro-correct stopped after %.1fs; processed %d/%d paragraphs",
+                elapsed,
+                processed,
+                len(texts),
+            )
+            issues.append(
+                RuleIssue(
+                    code="macro_correct.partial_timeout",
+                    title="中文辅助模型检查未覆盖全文",
+                    severity="low",
+                    category="runtime",
+                    message=f"macro_correct 已处理 {processed}/{len(texts)} 个段落后达到耗时预算。",
+                    evidence="macro_correct timeout budget reached",
+                    location={"file": str(parsed.get("file_name") or "document")},
+                    suggestion="如需对整篇论文做更深的错别字/标点模型复核，可提高 PIAP_PAPER_CHECK_MACRO_CORRECT_TIMEOUT_SEC 后重试。",
+                    engine="macro_correct",
+                    engine_rule_id="timeout_budget",
+                    confidence="high",
+                    parser_confidence="high",
+                )
+            )
+            break
+
+        try:
+            token_results, token_entrypoint, punct_results, punct_entrypoint = _run_macro_correct_batch(
+                list(batch.get("texts") or [])
+            )
+        except MacroCorrectUnavailableError as exc:
+            raise PaperReviewDependencyError(f"macro-correct 不可用：{exc}") from exc
+
+        combined_hits: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
+        for index, hit in _normalize_macro_correct_batch_hits(token_results):
+            combined_hits.setdefault(index, []).append((hit, token_entrypoint or "macro_correct.token", "中文拼写建议"))
+        for index, hit in _normalize_macro_correct_batch_hits(punct_results):
+            combined_hits.setdefault(index, []).append((hit, punct_entrypoint or "macro_correct.punct", "中文标点建议"))
+
+        batch_refs = list(batch.get("paragraph_refs") or [])
+        batch_texts = list(batch.get("texts") or [])
+        for index, paragraph in enumerate(batch_refs):
+            text = str(batch_texts[index] if index < len(batch_texts) else "")
+            for hit, entrypoint, title in combined_hits.get(index, [])[:10]:
+                begin = int(hit.get("begin") or 0)
+                end = int(hit.get("end") or begin + len(str(hit.get("wrong") or "")))
+                wrong = str(hit.get("wrong") or "").strip()
+                right = str(hit.get("right") or "").strip()
+                if _should_skip_macro_correct_hit(text, wrong, right):
+                    continue
+                is_punct_suggestion = title == "中文标点建议"
+                if is_punct_suggestion and macro_punct_issues >= max_macro_punct_issues:
+                    continue
+                location = _issue_location_from_paragraph(paragraph)
+                location["offset"] = begin
+                issues.append(
+                    RuleIssue(
+                        code=f"macro_correct.{str(hit.get('rule_id') or 'suggestion')}",
+                        title=title,
+                        severity="low" if is_punct_suggestion else "medium",
+                        category="text",
+                        message=str(hit.get("message") or f"检测到需要调整的表达：{wrong or _build_evidence_excerpt(text, begin, end)}。"),
+                        evidence=_build_evidence_excerpt(text, begin, end),
+                        location=location,
+                        suggestion=str(hit.get("suggestion") or (f"建议改为“{right}”。" if right else "请结合上下文人工复核。")),
+                        engine="macro_correct",
+                        engine_rule_id=entrypoint,
+                        confidence="low" if is_punct_suggestion else "medium",
+                        parser_confidence="high",
+                        actual={"wrong": wrong, "right": right},
+                    )
+                )
+                if is_punct_suggestion:
+                    macro_punct_issues += 1
+        processed += len(batch_texts)
+    return issues
+
+
+def _build_macro_correct_batches(
+    paragraph_refs: list[dict[str, Any]],
+    texts: list[str],
+    *,
+    chunk_limit: int,
+) -> list[dict[str, Any]]:
+    batches: list[dict[str, Any]] = []
+    current_refs: list[dict[str, Any]] = []
+    current_texts: list[str] = []
+    current_chars = 0
+
+    def flush() -> None:
+        nonlocal current_refs, current_texts, current_chars
+        if not current_texts:
+            return
+        batches.append({"paragraph_refs": current_refs, "texts": current_texts})
+        current_refs = []
+        current_texts = []
+        current_chars = 0
+
+    for paragraph, text in zip(paragraph_refs, texts):
+        projected = current_chars + len(text)
+        if current_texts and projected > chunk_limit:
+            flush()
+        current_refs.append(paragraph)
+        current_texts.append(text)
+        current_chars += len(text)
+    flush()
+    return batches
+
+
+def _run_macro_correct_batch(texts: list[str]) -> tuple[Any, str, Any, str]:
     token_results = None
     token_entrypoint = ""
     punct_results = None
@@ -2097,43 +2325,8 @@ def _check_macro_correct(parsed: dict[str, Any]) -> list[RuleIssue]:
 
     if token_results is None and punct_results is None:
         detail_parts = [str(err) for err in (token_error, punct_error) if err]
-        raise PaperReviewDependencyError(f"macro-correct 不可用：{'; '.join(detail_parts) or 'no callable detector'}")
-
-    combined_hits: dict[int, list[tuple[dict[str, Any], str, str]]] = {}
-    for index, hit in _normalize_macro_correct_batch_hits(token_results):
-        combined_hits.setdefault(index, []).append((hit, token_entrypoint or "macro_correct.token", "中文拼写建议"))
-    for index, hit in _normalize_macro_correct_batch_hits(punct_results):
-        combined_hits.setdefault(index, []).append((hit, punct_entrypoint or "macro_correct.punct", "中文标点建议"))
-
-    for index, paragraph in enumerate(paragraph_refs):
-        text = texts[index]
-        for hit, entrypoint, title in combined_hits.get(index, [])[:10]:
-            begin = int(hit.get("begin") or 0)
-            end = int(hit.get("end") or begin + len(str(hit.get("wrong") or "")))
-            wrong = str(hit.get("wrong") or "").strip()
-            right = str(hit.get("right") or "").strip()
-            if not wrong and not right:
-                continue
-            location = _issue_location_from_paragraph(paragraph)
-            location["offset"] = begin
-            issues.append(
-                RuleIssue(
-                    code=f"macro_correct.{str(hit.get('rule_id') or 'suggestion')}",
-                    title=title,
-                    severity="medium",
-                    category="text",
-                    message=str(hit.get("message") or f"检测到需要调整的表达：{wrong or _build_evidence_excerpt(text, begin, end)}。"),
-                    evidence=_build_evidence_excerpt(text, begin, end),
-                    location=location,
-                    suggestion=str(hit.get("suggestion") or (f"建议改为“{right}”。" if right else "请结合上下文人工复核。")),
-                    engine="macro_correct",
-                    engine_rule_id=entrypoint,
-                    confidence="medium",
-                    parser_confidence="high",
-                    actual={"wrong": wrong, "right": right},
-                )
-            )
-    return issues
+        raise MacroCorrectUnavailableError("; ".join(detail_parts) or "no callable detector")
+    return token_results, token_entrypoint, punct_results, punct_entrypoint
 
 
 def _check_vale(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -2592,6 +2785,22 @@ def _should_skip_spelling_hit(text: str, wrong: Any, right: Any) -> bool:
     return False
 
 
+def _should_skip_macro_correct_hit(text: str, wrong: Any, right: Any) -> bool:
+    wrong_text = str(wrong or "").strip()
+    right_text = str(right or "").strip()
+    if not wrong_text and not right_text:
+        return True
+    if wrong_text == right_text:
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_.:/\\-]+", wrong_text):
+        return True
+    if re.fullmatch(r"\[[0-9,\-–]+\]", wrong_text):
+        return True
+    if re.search(r"[=∑√≤≥±×÷\\{}]", text):
+        return True
+    return False
+
+
 def _normalize_macro_correct_hits(result: Any) -> list[dict[str, Any]]:
     if isinstance(result, dict):
         for key in ("errors", "details", "matches", "data"):
@@ -2809,6 +3018,82 @@ def _check_figure_table_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
         ))
 
     return issues
+
+
+def _check_caption_number_spacing(parsed: dict[str, Any]) -> list[RuleIssue]:
+    paragraphs = [
+        item
+        for item in list(parsed.get("paragraphs") or [])
+        if str(item.get("text") or "").strip()
+    ]
+    hits_by_label: dict[str, list[tuple[str, dict[str, Any] | None]]] = {"图": [], "表": []}
+    seen: set[str] = set()
+
+    for paragraph in paragraphs:
+        text = str(paragraph.get("text") or "").strip()
+        if _should_skip_caption_spacing_paragraph(paragraph):
+            continue
+        match = re.match(r"^(?P<label>[图表])(?P<number>\d+(?:[-.]\d+)*)(?![-.\d])(?P<next>\S)", text)
+        if not match:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        hits_by_label[match.group("label")].append((text, paragraph))
+
+    if not paragraphs:
+        for label, key in (("图", "figure_titles"), ("表", "table_titles")):
+            for raw_title in list(parsed.get(key) or []):
+                text = str(raw_title or "").strip()
+                match = re.match(rf"^{label}\d+(?:[-.]\d+)*(?![-.\d])\S", text)
+                if match and text not in seen:
+                    seen.add(text)
+                    hits_by_label[label].append((text, None))
+
+    issues: list[RuleIssue] = []
+    issue_meta = {
+        "图": ("figure.caption_number_spacing", "图题编号后缺少空格", "图3-1 标题"),
+        "表": ("table.caption_number_spacing", "表题编号后缺少空格", "表3-1 标题"),
+    }
+    for label, hits in hits_by_label.items():
+        if not hits:
+            continue
+        code, title, expected_example = issue_meta[label]
+        samples = hits[:10]
+        first_paragraph = next((paragraph for _text, paragraph in samples if paragraph), None)
+        location = _issue_location_from_paragraph(first_paragraph) if first_paragraph else {"display_text": title}
+        issues.append(
+            RuleIssue(
+                code=code,
+                title=title,
+                severity="medium",
+                category="format",
+                message=f"发现 {len(hits)} 个{label}题编号后未留空格，和模板示例“{expected_example}”不一致。",
+                evidence="；".join(text for text, _paragraph in samples),
+                location=location,
+                suggestion=f"将{label}题编号后补一个半角空格，例如“{expected_example}”。",
+                expected={"pattern": expected_example},
+                actual={"count": len(hits), "samples": [text for text, _paragraph in samples]},
+                parser_confidence="high",
+            )
+        )
+    return issues
+
+
+def _should_skip_caption_spacing_paragraph(paragraph: dict[str, Any]) -> bool:
+    text = str(paragraph.get("text") or "").strip()
+    if not text:
+        return True
+    if "目录" in str(paragraph.get("section_title") or ""):
+        return True
+    if _looks_like_reference_entry_text(text) or _looks_like_formula_line(text) or _looks_like_toc_entry(text):
+        return True
+    if len(text) > 120 and not _paragraph_looks_like_caption(paragraph):
+        return True
+    style_name = str(paragraph.get("style_name") or "").strip().lower()
+    if "table of figures" in style_name:
+        return True
+    return False
 
 
 def _check_formula_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
@@ -3127,6 +3412,88 @@ def _check_word_artifact_rules(parsed: dict[str, Any]) -> list[RuleIssue]:
             },
         )
     ]
+
+
+def _check_latin_term_consistency(parsed: dict[str, Any]) -> list[RuleIssue]:
+    paragraphs = [item for item in list(parsed.get("paragraphs") or []) if str(item.get("text") or "").strip()]
+    token_counts: dict[str, int] = {}
+    token_forms: dict[str, str] = {}
+    first_locations: dict[str, dict[str, Any]] = {}
+
+    if paragraphs:
+        for paragraph in paragraphs:
+            text = str(paragraph.get("text") or "")
+            for token in _extract_latin_term_tokens(text):
+                lowered = token.lower()
+                token_counts[lowered] = token_counts.get(lowered, 0) + 1
+                token_forms.setdefault(lowered, token)
+                first_locations.setdefault(lowered, _issue_location_from_paragraph(paragraph))
+    else:
+        for token in _extract_latin_term_tokens(str(parsed.get("text") or "")):
+            lowered = token.lower()
+            token_counts[lowered] = token_counts.get(lowered, 0) + 1
+            token_forms.setdefault(lowered, token)
+
+    suspicious: list[dict[str, Any]] = []
+    for lowered, count in sorted(token_counts.items(), key=lambda item: (-len(item[0]), item[0])):
+        form = token_forms.get(lowered, lowered)
+        if len(form) < 5 or len(form) > 40:
+            continue
+        if not _looks_like_technical_latin_token(form):
+            continue
+        if len(form) < 2 or form[-1].lower() != form[-2].lower():
+            continue
+        canonical = form[:-1]
+        canonical_lowered = canonical.lower()
+        canonical_count = token_counts.get(canonical_lowered, 0)
+        if canonical_count <= 0 or count > canonical_count:
+            continue
+        suspicious.append(
+            {
+                "variant": form,
+                "canonical": token_forms.get(canonical_lowered, canonical),
+                "variant_count": count,
+                "canonical_count": canonical_count,
+                "location": first_locations.get(lowered, {"display_text": "文档文本附近"}),
+            }
+        )
+
+    if not suspicious:
+        return []
+
+    samples = suspicious[:5]
+    return [
+        RuleIssue(
+            code="term.possible_typo_variant",
+            title="英文术语疑似拼写不一致",
+            severity="medium",
+            category="text",
+            message=f"发现 {len(suspicious)} 个英文/模型名写法疑似多写末尾字母，建议人工核对。",
+            evidence="；".join(
+                f"{item['variant']} -> {item['canonical']} (出现 {item['variant_count']}/{item['canonical_count']} 次)"
+                for item in samples
+            ),
+            location=dict(samples[0]["location"]),
+            suggestion="若为同一术语或模型名，请统一为全文中更常见的写法；若确为不同名称，可忽略该建议。",
+            actual={"samples": samples},
+            parser_confidence="medium",
+        )
+    ]
+
+
+def _extract_latin_term_tokens(text: str) -> list[str]:
+    return re.findall(r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]{3,})(?![A-Za-z0-9])", str(text or ""))
+
+
+def _looks_like_technical_latin_token(token: str) -> bool:
+    value = str(token or "")
+    if not value:
+        return False
+    if any(char.isdigit() for char in value):
+        return True
+    if any(char.isupper() for char in value[1:]):
+        return True
+    return value.isupper()
 
 
 def _dedupe_issues(issues: list[RuleIssue]) -> list[RuleIssue]:

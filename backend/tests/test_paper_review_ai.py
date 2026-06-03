@@ -109,6 +109,54 @@ async def test_generate_ai_review_output_uses_configured_chat_model(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_generate_ai_review_output_falls_back_when_markdown_report_missing(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            pass
+
+        async def list_runtime_models(self):
+            return [{"id": "model-1", "model_key": "paper-review-model", "model_type": "chat"}]
+
+    class FakeGateway:
+        async def select_runtime(self, models, *, model_types, reserve):
+            return {
+                "api_key": "test-key",
+                "base_url": "https://llm.example/v1",
+                "model_id": "paper-review-model",
+                "provider": "local_openai",
+            }
+
+    class FakeLLMClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def chat(self, messages, **kwargs):
+            return {
+                "text": "# AI Review\n\n模型已经给出了审阅意见，但没有按 JSON 字段返回 markdown_report。"
+            }
+
+    monkeypatch.setattr(paper_review_ai, "ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr(paper_review_ai, "LLMGateway", FakeGateway)
+    monkeypatch.setattr(paper_review_ai, "LLMClient", FakeLLMClient)
+
+    result = await paper_review_ai.generate_ai_review_output(
+        evidence_pack={
+            "document": {"file_name": "paper.docx", "document_type": "docx"},
+            "score": 0,
+            "issues": [{"code": "spell", "severity": "medium"}],
+            "limitations": [],
+        },
+        query="论文查非",
+        db_session=object(),
+        org_id="org-1",
+    )
+
+    assert result["model_used"] is True
+    assert result["format_fallback"] is True
+    assert "模型已经给出了审阅意见" in result["markdown_report"]
+
+
+@pytest.mark.asyncio
 async def test_generate_ai_review_output_includes_guide_clauses(monkeypatch):
     calls: list[list[dict[str, str]]] = []
 
@@ -267,6 +315,23 @@ def test_normalize_ai_review_output_accepts_text_json_payload():
     assert result["summary"] == "done"
     assert result["markdown_report"] == "# report"
     assert result["download_title"] == "title"
+
+
+def test_normalize_ai_review_output_accepts_single_issue_object():
+    result = paper_review_ai.normalize_ai_review_output(
+        {
+            "code": "wording",
+            "title": "表述不准确",
+            "severity": "medium",
+            "location": "第 1 段",
+            "evidence": "建议：建议改为“祛”。",
+            "suggestion": "将建议内容改为更准确的动词。",
+        }
+    )
+
+    assert result["issues"][0]["code"] == "wording"
+    assert "表述不准确" in result["summary"]
+    assert "将建议内容改为更准确的动词" in result["markdown_report"]
 
 
 @pytest.mark.asyncio

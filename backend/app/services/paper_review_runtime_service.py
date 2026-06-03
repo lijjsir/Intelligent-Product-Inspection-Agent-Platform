@@ -35,7 +35,11 @@ class PaperReviewRuntimeService:
         return {
             "ok": ok,
             "status": "healthy" if ok else "unhealthy",
-            "engines_used": list(cls.ENGINE_NAMES),
+            "engines_used": [
+                item["name"]
+                for item in engines
+                if item["name"] in cls.ENGINE_NAMES and item.get("enabled", True)
+            ],
             "engine_status": engines,
             "message": "paper review runtime ready" if ok else "paper review runtime not ready",
         }
@@ -73,7 +77,7 @@ class PaperReviewRuntimeService:
     @staticmethod
     async def _check_pycorrector() -> dict[str, Any]:
         if not settings.paper_check_pycorrector_enabled:
-            return {"name": "pycorrector", "ok": True, "detail": "disabled by config"}
+            return {"name": "pycorrector", "ok": True, "enabled": False, "detail": "disabled by config"}
         result = await asyncio.to_thread(diagnose_pycorrector)
         return {
             "name": "pycorrector",
@@ -84,7 +88,7 @@ class PaperReviewRuntimeService:
     @staticmethod
     async def _check_macro_correct() -> dict[str, Any]:
         if not settings.paper_check_macro_correct_enabled:
-            return {"name": "macro_correct", "ok": True, "detail": "disabled by config"}
+            return {"name": "macro_correct", "ok": True, "enabled": False, "detail": "disabled by config"}
         result = await asyncio.to_thread(diagnose_macro_correct)
         if result.get("ok"):
             return {
@@ -148,6 +152,7 @@ class PaperReviewRuntimeService:
         return {
             "name": str(item.get("name") or ""),
             "ok": bool(item.get("ok")),
+            "enabled": bool(item.get("enabled", True)),
             "detail": str(item.get("detail") or ""),
         }
 

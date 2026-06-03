@@ -10,7 +10,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt
 
 from agent.tools.file_parsers import parse_docx_bytes, parse_pdf_bytes, parse_tex_bytes
-from agent.tools.paper_format_checker import _analyze_reference_entry, _check_pycorrector, check_paper_format
+from agent.tools.paper_format_checker import (
+    _analyze_reference_entry,
+    _check_caption_number_spacing,
+    _check_latin_term_consistency,
+    _check_pycorrector,
+    _check_template_caption_styles,
+    check_paper_format,
+)
 from agent.tools.paper_format_templates import get_paper_template
 
 
@@ -213,6 +220,132 @@ def test_check_paper_format_reports_fullwidth_ascii_with_exact_location(monkeypa
     assert fullwidth_issue["location"]["display_text"] == "第1节《摘要》下第1段"
 
 
+def test_check_paper_format_default_query_skips_spelling_engines(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+
+    def fail_pycorrector(parsed):
+        raise AssertionError("pycorrector should not run for default format checks")
+
+    def fail_macro_correct(parsed):
+        raise AssertionError("macro_correct should not run for default format checks")
+
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", fail_pycorrector)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", fail_macro_correct)
+
+    parsed = {
+        "kind": "docx",
+        "text": "摘要\n关键词：查非\n1 绪论\n这里有  连续空格。\n参考文献",
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 0, "section_index": 1},
+            {"text": "1 绪论", "level": 1, "paragraph_index": 2, "section_index": 2},
+            {"text": "参考文献", "level": 1, "paragraph_index": 4, "section_index": 3},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "paragraph_no": 0},
+            {"index": 1, "text": "关键词：查非", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 1},
+            {"index": 2, "text": "1 绪论", "heading_level": 1, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 0},
+            {"index": 3, "text": "这里有  连续空格。", "heading_level": 0, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 1},
+            {"index": 4, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 3, "paragraph_no": 0},
+        ],
+        "page_layout": {},
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="帮我做论文查非，重点检查格式",
+        template_id="generic_cn_thesis",
+    )
+
+    issue_codes = {item["code"] for item in report["issues"]}
+    assert "text.multiple_spaces" in issue_codes
+    assert "pycorrector.spelling" not in issue_codes
+
+
+def test_check_paper_format_spelling_query_opts_into_spelling_engines(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+    called = {"pycorrector": False, "macro_correct": False}
+
+    def fake_pycorrector(parsed):
+        called["pycorrector"] = True
+        return []
+
+    def fake_macro_correct(parsed):
+        called["macro_correct"] = True
+        return []
+
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", fake_pycorrector)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", fake_macro_correct)
+
+    parsed = {
+        "kind": "docx",
+        "text": "摘要\n关键词：查非\n1 绪论\n正文段落。\n参考文献",
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 0, "section_index": 1},
+            {"text": "1 绪论", "level": 1, "paragraph_index": 2, "section_index": 2},
+            {"text": "参考文献", "level": 1, "paragraph_index": 4, "section_index": 3},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "paragraph_no": 0},
+            {"index": 1, "text": "关键词：查非", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 1},
+            {"index": 2, "text": "1 绪论", "heading_level": 1, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 0},
+            {"index": 3, "text": "正文段落。", "heading_level": 0, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 1},
+            {"index": 4, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 3, "paragraph_no": 0},
+        ],
+        "page_layout": {},
+    }
+
+    check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="帮我检查格式和错别字",
+        template_id="generic_cn_thesis",
+    )
+
+    assert called == {"pycorrector": True, "macro_correct": True}
+
+
+def test_check_paper_format_reports_likely_duplicate_chinese_char(monkeypatch):
+    monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_pycorrector", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_macro_correct", lambda parsed: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_language_tool", lambda parsed, file_name: [])
+    monkeypatch.setattr("agent.tools.paper_format_checker._check_vale", lambda parsed: [])
+    parsed = {
+        "kind": "docx",
+        "text": "摘要\n关键词：查非\n1 绪论\n本文的的实验结果如下。\n人人都可以复核该结果。\n参考文献",
+        "headings": [
+            {"text": "摘要", "level": 1, "paragraph_index": 0, "section_index": 1},
+            {"text": "1 绪论", "level": 1, "paragraph_index": 2, "section_index": 2},
+            {"text": "参考文献", "level": 1, "paragraph_index": 5, "section_index": 3},
+        ],
+        "paragraphs": [
+            {"index": 0, "text": "摘要", "heading_level": 1, "section_title": "摘要", "section_index": 1, "paragraph_no": 0},
+            {"index": 1, "text": "关键词：查非", "heading_level": 0, "section_title": "摘要", "section_index": 1, "paragraph_no": 1},
+            {"index": 2, "text": "1 绪论", "heading_level": 1, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 0},
+            {"index": 3, "text": "本文的的实验结果如下。", "heading_level": 0, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 1},
+            {"index": 4, "text": "人人都可以复核该结果。", "heading_level": 0, "section_title": "1 绪论", "section_index": 2, "paragraph_no": 2},
+            {"index": 5, "text": "参考文献", "heading_level": 1, "section_title": "参考文献", "section_index": 3, "paragraph_no": 0},
+        ],
+        "page_layout": {},
+    }
+
+    report = check_paper_format(
+        parsed=parsed,
+        file_name="paper.docx",
+        query="帮我查格式",
+        template_id="generic_cn_thesis",
+    )
+
+    duplicate_issue = next(item for item in report["issues"] if item["code"] == "text.duplicate_chinese_char")
+    assert "本文的的实验结果如下。" == duplicate_issue["evidence"]
+    assert duplicate_issue["location"]["display_text"] == "第2节《1 绪论》下第1段"
+
+
 def test_check_paper_format_reports_tex_limitations():
     parsed = parse_tex_bytes(
         r"""
@@ -273,6 +406,8 @@ def test_check_macro_correct_uses_batch_detectors(monkeypatch):
 
     assert len(issues) == 2
     assert {item.engine_rule_id for item in issues} == {"macro_correct.token", "macro_correct.punct"}
+    assert next(item for item in issues if item.engine_rule_id == "macro_correct.token").severity == "medium"
+    assert next(item for item in issues if item.engine_rule_id == "macro_correct.punct").severity == "low"
     assert any(item.actual == {"wrong": "錯", "right": "错"} for item in issues)
     assert any(item.actual == {"wrong": ",", "right": "，"} for item in issues)
 
@@ -304,6 +439,8 @@ def test_check_paper_format_returns_runtime_not_ready_for_docx(monkeypatch):
 
 
 def test_check_pycorrector_supports_current_class_based_api(monkeypatch):
+    monkeypatch.setattr("agent.tools.paper_format_checker.settings.paper_check_pycorrector_enabled", True)
+
     class FakeCorrector:
         def correct(self, text: str):
             assert text == "这是測试段落。"
@@ -339,6 +476,7 @@ def test_check_pycorrector_supports_current_class_based_api(monkeypatch):
 
 
 def test_check_pycorrector_chunks_document_and_maps_back_to_paragraph(monkeypatch):
+    monkeypatch.setattr("agent.tools.paper_format_checker.settings.paper_check_pycorrector_enabled", True)
     monkeypatch.setattr("agent.tools.paper_format_checker.settings.paper_check_pycorrector_chunk_chars", 20)
     monkeypatch.setattr("agent.tools.paper_format_checker.settings.paper_check_pycorrector_timeout_sec", 5)
 
@@ -879,3 +1017,79 @@ def test_reference_entry_analysis_relaxes_book_but_checks_online_source():
 
     online_check = _analyze_reference_entry("王五. 在线资源示例[EB/OL]. 2024.")
     assert "缺少URL或访问线索" in online_check["problems"]
+
+
+def test_caption_style_check_scans_later_caption_candidates():
+    template = get_paper_template("cqupt_graduate_thesis_2022")
+    rules = dict(template.get("docx_rules") or {})
+    parsed = {
+        "kind": "docx",
+        "paragraphs": [
+            {
+                "index": 1,
+                "text": "图3-1 总体框架",
+                "style_name": "中文图题",
+                "font_size_pt": 10.5,
+                "line_spacing": 20.0,
+                "alignment": "center",
+                "section_title": "3 实验",
+                "section_index": 3,
+                "paragraph_no": 4,
+            },
+            {
+                "index": 8,
+                "text": "图3-7 特征图可视化",
+                "style_name": "Normal",
+                "font_size_pt": 10.5,
+                "line_spacing": 20.0,
+                "alignment": "center",
+                "section_title": "3 实验",
+                "section_index": 3,
+                "paragraph_no": 12,
+            },
+        ],
+    }
+
+    issues = _check_template_caption_styles(parsed, template=template, rules=rules)
+
+    issue = next(item for item in issues if item.code == "template.caption_style_mismatch")
+    assert "图3-7 特征图可视化" in issue.evidence
+    assert "style=Normal" in issue.evidence
+    assert issue.actual["mismatch_count"] == 1
+
+
+def test_caption_number_spacing_groups_missing_space_samples():
+    parsed = {
+        "kind": "docx",
+        "paragraphs": [
+            {"index": 1, "text": "表3-1不同数据集上各方法的结果", "style_name": "中文表题", "section_title": "3 实验", "section_index": 3, "paragraph_no": 5},
+            {"index": 2, "text": "表3-2消融实验", "style_name": "中文表题", "section_title": "3 实验", "section_index": 3, "paragraph_no": 8},
+            {"index": 3, "text": "图3-7 特征图可视化", "style_name": "中文图题", "section_title": "3 实验", "section_index": 3, "paragraph_no": 12},
+        ],
+    }
+
+    issues = _check_caption_number_spacing(parsed)
+
+    assert len(issues) == 1
+    assert issues[0].code == "table.caption_number_spacing"
+    assert issues[0].actual["count"] == 2
+    assert "表3-1不同数据集上各方法的结果" in issues[0].evidence
+    assert "图3-7 特征图可视化" not in issues[0].evidence
+
+
+def test_latin_term_consistency_flags_repeated_suffix_variant():
+    parsed = {
+        "kind": "docx",
+        "paragraphs": [
+            {"index": 1, "text": "本文提出 GFRSNet 模型并在数据集上验证。", "section_title": "4 实验", "section_index": 4, "paragraph_no": 1},
+            {"index": 2, "text": "Fig.4-5 GFRSNet ablation experiment", "section_title": "4 实验", "section_index": 4, "paragraph_no": 2},
+            {"index": 3, "text": "图4-5 GFRSNett消融实验", "section_title": "4 实验", "section_index": 4, "paragraph_no": 3},
+        ],
+    }
+
+    issues = _check_latin_term_consistency(parsed)
+
+    assert len(issues) == 1
+    assert issues[0].code == "term.possible_typo_variant"
+    assert "GFRSNett -> GFRSNet" in issues[0].evidence
+    assert issues[0].location["display_text"] == "第4节《4 实验》下第3段"

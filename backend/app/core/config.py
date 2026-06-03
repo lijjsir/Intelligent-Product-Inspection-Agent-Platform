@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     paper_check_engine_timeout_sec: int = 20
     paper_check_pycorrector_timeout_sec: int = 8
     paper_check_pycorrector_chunk_chars: int = 1200
+    paper_check_macro_correct_timeout_sec: int = 45
+    paper_check_macro_correct_chunk_chars: int = 1800
     paper_check_pycorrector_data_dir: str = ""
     paper_check_pycorrector_language_model: str = "people_chars_lm.klm"
     vision_detector_url: str = ""
