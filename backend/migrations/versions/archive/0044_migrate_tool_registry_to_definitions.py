@@ -20,6 +20,10 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     metadata = sa.MetaData()

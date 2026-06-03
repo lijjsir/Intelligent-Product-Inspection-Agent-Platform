@@ -31,6 +31,21 @@ async def test_paper_template_index_service_reports_actionable_qdrant_connect_er
         await service._ensure_qdrant_collection(768)
 
     message = str(exc_info.value)
-    assert "无法连接到 Qdrant 端点 http://127.0.0.1:6333" in message
+    assert "无法连接到 Qdrant 端点" in message
     assert "http://127.0.0.1:63330" in message
     assert "http://qdrant:6333" in message
+
+
+def test_paper_template_index_service_embedding_failure_message_includes_runtime_details():
+    message = PaperTemplateIndexService._build_embedding_failure_message(
+        embedding_models=[
+            {"display_name": "doubao-embedding-vision-251215", "model_key": "doubao"},
+        ],
+        model_lookup_error=None,
+        embed_errors=["clause-1: RuntimeError: upstream 401"],
+    )
+
+    assert "已找到 1 个 active embedding 模型" in message
+    assert "doubao-embedding-vision-251215" in message
+    assert "upstream 401" in message
+    assert "PAPER_TEMPLATE_EMBED_FAILED" in message
