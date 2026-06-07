@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.datetime import utcnow
 from app.models.meeting import (
     MeetingActionItem,
+    MeetingAgentQueryAudit,
     MeetingAgentDefinition,
     MeetingMessage,
     MeetingRoom,
@@ -32,6 +33,11 @@ class MeetingRepository:
         title: str,
         access_code: str,
         password_hash: str | None,
+        room_type: str = "quality_business",
+        visibility: str = "private",
+        allowed_data_domains: list[str] | None = None,
+        memory_policy: dict | None = None,
+        audit_policy: dict | None = None,
     ) -> MeetingRoom:
         room = MeetingRoom(
             org_id=org_id,
@@ -40,6 +46,11 @@ class MeetingRepository:
             password_hash=password_hash,
             created_by=user_id,
             status="active",
+            room_type=room_type,
+            visibility=visibility,
+            allowed_data_domains=allowed_data_domains,
+            memory_policy=memory_policy,
+            audit_policy=audit_policy,
         )
         self._session.add(room)
         await self._session.flush()
@@ -74,6 +85,9 @@ class MeetingRepository:
         *,
         title: str | None = None,
         status: str | None = None,
+        room_type: str | None = None,
+        visibility: str | None = None,
+        allowed_data_domains: list[str] | None = None,
     ) -> MeetingRoom | None:
         room = await self.get_room(org_id, room_id)
         if room is None:
@@ -82,6 +96,12 @@ class MeetingRepository:
             room.title = title
         if status is not None:
             room.status = status
+        if room_type is not None:
+            room.room_type = room_type
+        if visibility is not None:
+            room.visibility = visibility
+        if allowed_data_domains is not None:
+            room.allowed_data_domains = allowed_data_domains
         await self._session.flush()
         await self._session.refresh(room, attribute_names=["created_at", "updated_at"])
         return room
@@ -148,6 +168,21 @@ class MeetingRepository:
             .order_by(MeetingRoomMember.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def update_member_role(
+        self,
+        org_id: str,
+        room_id: str,
+        user_id: str,
+        role: str,
+    ) -> MeetingRoomMember | None:
+        member = await self.get_member(org_id, room_id, user_id)
+        if member is None:
+            return None
+        member.role = role
+        await self._session.flush()
+        await self._session.refresh(member, attribute_names=["created_at", "updated_at"])
+        return member
 
     async def _lock_room_for_message_seq(self, *, org_id: str, room_id: str) -> None:
         await self._session.execute(
@@ -264,12 +299,86 @@ class MeetingRepository:
 
     # ── Agent management ──────────────────────────────────────────
 
-    async def add_agent(self, *, org_id: str, room_id: str, agent_id: str, added_by: str, role: str = "participant") -> MeetingRoomAgent:
-        row = MeetingRoomAgent(org_id=org_id, room_id=room_id, agent_id=agent_id, added_by=added_by, role=role)
+    async def add_agent(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        agent_id: str,
+        added_by: str,
+        role: str = "participant",
+        allowed_domains: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> MeetingRoomAgent:
+        row = MeetingRoomAgent(
+            org_id=org_id,
+            room_id=room_id,
+            agent_id=agent_id,
+            added_by=added_by,
+            role=role,
+            allowed_domains=allowed_domains,
+            allowed_tools=allowed_tools,
+        )
         self._session.add(row)
         await self._session.flush()
         await self._session.refresh(row, attribute_names=["created_at", "updated_at"])
         return row
+
+    async def create_agent_query_audit(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        user_id: str,
+        agent_id: str,
+        question: str,
+        intent: str | None,
+        requested_domains: list[str],
+        allowed_domains: list[str],
+        denied_domains: list[str],
+        tool_calls: list[dict] | None = None,
+        source_refs: list[dict] | None = None,
+        redacted_fields: list[str] | None = None,
+        decision: str = "allowed",
+    ) -> MeetingAgentQueryAudit:
+        row = MeetingAgentQueryAudit(
+            org_id=org_id,
+            room_id=room_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            question=question,
+            intent=intent,
+            requested_domains=requested_domains,
+            allowed_domains=allowed_domains,
+            denied_domains=denied_domains,
+            tool_calls=tool_calls or [],
+            source_refs=source_refs or [],
+            redacted_fields=redacted_fields or [],
+            decision=decision,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        await self._session.refresh(row, attribute_names=["created_at", "updated_at"])
+        return row
+
+    async def list_agent_query_audits(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        limit: int = 50,
+    ) -> list[MeetingAgentQueryAudit]:
+        result = await self._session.execute(
+            select(MeetingAgentQueryAudit)
+            .where(
+                MeetingAgentQueryAudit.org_id == org_id,
+                MeetingAgentQueryAudit.room_id == room_id,
+                MeetingAgentQueryAudit.deleted_at.is_(None),
+            )
+            .order_by(MeetingAgentQueryAudit.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def remove_agent(self, org_id: str, room_id: str, agent_id: str) -> bool:
         result = await self._session.execute(

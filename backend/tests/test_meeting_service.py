@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.router.contracts import AgentRouteDecision, AgentRouterOutput
 from app.core.exceptions import ForbiddenError
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_service as meeting_service_mod
@@ -12,6 +13,7 @@ from app.repositories.meeting_repo import MeetingRepository
 from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingAgentRunRequest,
+    MeetingMemoryExtractRequest,
     MeetingMemoryUpdateRequest,
 )
 
@@ -92,32 +94,33 @@ async def test_send_message_triggers_mentions_only_not_autonomous(monkeypatch):
     service._users = fake_users
 
     async def fake_parse_mentions(content: str, room_id: str):
-        return [{"agent_id": "agent-1", "agent_name": "AI 助手"}]
+        return [{"agent_id": "agent-1", "agent_name": "质检Agent"}]
 
     service._parse_mentions = fake_parse_mentions
 
-    result = await service.send_message("room-1", "@AI 助手 看一下")
+    result = await service.send_message("room-1", "@质检Agent 看一下")
 
-    assert result.content == "@AI 助手 看一下"
+    assert result.content == "@质检Agent 看一下"
     assert autonomous_called is False
-    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "agent-1", "agent_name": "AI 助手"}]
+    assert fake_session.commits == 1
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "agent-1", "agent_name": "质检Agent"}]
 
 
 @pytest.mark.asyncio
-async def test_send_message_triggers_meeting_ai_special_mention_without_room_agent(monkeypatch):
+async def test_send_message_routes_legacy_ai_alias_to_general_agent(monkeypatch):
     fake_repo = FakeMeetingRepo()
     fake_users = FakeUsersRepo()
     fake_session = FakeSession()
     scheduled_tasks: list[asyncio.Task] = []
-    invoked_room_ids: list[str] = []
+    invoked_queries: list[tuple[str, str]] = []
     real_create_task = asyncio.create_task
 
     class FakeAgentService:
         async def invoke_agent(self, **kwargs):
-            raise AssertionError("room agent invocation should not run for built-in meeting ai mention")
+            raise AssertionError("room agent invocation should not run for built-in total agent alias")
 
-    async def fake_invoke_meeting_ai_reply(*, room_id: str):
-        invoked_room_ids.append(room_id)
+    async def fake_invoke_general_agent_reply(*, room_id: str, query: str):
+        invoked_queries.append((room_id, query))
 
     def tracking_create_task(coro):
         task = real_create_task(coro)
@@ -131,20 +134,21 @@ async def test_send_message_triggers_meeting_ai_special_mention_without_room_age
     service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
     service._repo = fake_repo
     service._users = fake_users
-    service._invoke_meeting_ai_reply = fake_invoke_meeting_ai_reply
+    service._invoke_general_agent_reply = fake_invoke_general_agent_reply
 
     async def fake_parse_mentions(content: str, room_id: str):
         return []
 
     service._parse_mentions = fake_parse_mentions
 
-    result = await service.send_message("room-1", "@智能助手 你能做什么")
+    result = await service.send_message("room-1", "@AI 助手 你能做什么")
 
-    assert result.content == "@智能助手 你能做什么"
-    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "ai_assistant", "agent_name": "智能助手"}]
+    assert result.content == "@AI 助手 你能做什么"
+    assert fake_session.commits == 1
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "general_agent", "agent_name": "会议Agent"}]
     assert len(scheduled_tasks) == 1
     await asyncio.wait_for(scheduled_tasks[0], timeout=1)
-    assert invoked_room_ids == ["room-1"]
+    assert invoked_queries == [("room-1", "@AI 助手 你能做什么")]
 
 
 @pytest.mark.asyncio
@@ -193,13 +197,51 @@ async def test_send_message_triggers_general_agent_special_mention(monkeypatch):
 
     service._parse_mentions = fake_parse_mentions
 
-    result = await service.send_message("room-1", "@总智能体 帮我总结这次会议")
+    result = await service.send_message("room-1", "@会议Agent 帮我总结这次会议")
 
-    assert result.content == "@总智能体 帮我总结这次会议"
-    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "general_agent", "agent_name": "总智能体"}]
+    assert result.content == "@会议Agent 帮我总结这次会议"
+    assert fake_session.commits == 1
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "general_agent", "agent_name": "会议Agent"}]
     assert len(scheduled_tasks) == 1
     await asyncio.wait_for(scheduled_tasks[0], timeout=1)
-    assert invoked_queries == [("room-1", "@总智能体 帮我总结这次会议")]
+    assert invoked_queries == [("room-1", "@会议Agent 帮我总结这次会议")]
+
+
+@pytest.mark.asyncio
+async def test_send_message_can_skip_general_agent_auto_trigger(monkeypatch):
+    fake_repo = FakeMeetingRepo()
+    fake_users = FakeUsersRepo()
+    fake_session = FakeSession()
+    scheduled_tasks: list[asyncio.Task] = []
+    real_create_task = asyncio.create_task
+
+    def tracking_create_task(coro):
+        task = real_create_task(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(meeting_service_mod, "MeetingRepository", lambda session: fake_repo)
+    monkeypatch.setattr(meeting_service_mod.asyncio, "create_task", tracking_create_task)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = fake_users
+
+    async def fake_parse_mentions(content: str, room_id: str):
+        return []
+
+    service._parse_mentions = fake_parse_mentions
+
+    result = await service.send_message(
+        "room-1",
+        "@会议Agent 帮我总结这次会议",
+        skip_agent_trigger=True,
+    )
+
+    assert result.content == "@会议Agent 帮我总结这次会议"
+    assert fake_session.commits == 1
+    assert fake_repo.created_messages[0]["mentions"] == [{"agent_id": "general_agent", "agent_name": "会议Agent"}]
+    assert scheduled_tasks == []
 
 
 @pytest.mark.asyncio
@@ -263,6 +305,54 @@ async def test_list_room_members_resolves_host_and_usernames():
 
 
 @pytest.mark.asyncio
+async def test_meeting_creator_can_assign_member_host_role():
+    member = SimpleNamespace(
+        id="member-2",
+        room_id="room-1",
+        user_id="user-2",
+        role="member",
+        created_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        async def update_member_role(self, org_id: str, room_id: str, user_id: str, role: str):
+            if user_id != member.user_id:
+                return None
+            member.role = role
+            return member
+
+    fake_users = FakeUsersRepo()
+    fake_users.users[("org-1", "user-2")] = FakeUser("bob")
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeRepo()
+    service._users = fake_users
+
+    updated = await service.update_member_role("room-1", "user-2", "host")
+
+    assert updated.username == "bob"
+    assert updated.role == "host"
+    assert service._repo.created_messages[-1]["content"] == "成员「bob」已设为主持人。"
+
+
+@pytest.mark.asyncio
+async def test_non_creator_cannot_assign_member_role():
+    class FakeRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id="member-2", org_id=org_id, room_id=room_id, user_id=user_id, role="host")
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-2")
+    service._repo = FakeRepo()
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError):
+        await service.update_member_role("room-1", "user-3", "host")
+
+
+@pytest.mark.asyncio
 async def test_parse_mentions_supports_single_agent_short_aliases():
     class FakeRoomAgent:
         agent_id = "11111111-1111-1111-1111-111111111111"
@@ -297,6 +387,9 @@ def test_contains_meeting_ai_mention_supports_spaced_and_compact_aliases():
 def test_contains_general_agent_mention_supports_spaced_and_compact_aliases():
     service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
 
+    assert service._contains_general_agent_mention("@会议 Agent 帮我总结会议") is True
+    assert service._contains_general_agent_mention("@会议Agent 帮我总结会议") is True
+    assert service._contains_general_agent_mention("@agent 最近的质检任务情况是怎样的") is True
     assert service._contains_general_agent_mention("@总智能体 帮我总结会议") is True
     assert service._contains_general_agent_mention("@总Agent 帮我总结会议") is True
     assert service._contains_general_agent_mention("@总 Agent 帮我总结会议") is True
@@ -375,13 +468,133 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
     )
 
     assert result.selected_subgraph == "meeting_summary"
-    assert "会议纪要" in result.answer
+    assert "当前会议上下文" in result.answer
     assert result.memory_sources[0].memory_id == "mem_active_1"
     assert len(result.candidate_memories) == 2
     assert fake_repo.created_messages[-1]["agent_id"] == "general_agent"
     assert fake_repo.created_messages[-1]["metadata_json"]["selected_subgraph"] == "meeting_summary"
     assert fake_repo.scope_bindings[0]["scope_type"] == "meeting_room"
     assert fake_repo.transfer_logs[0]["status"] == "candidate"
+    assert published[-1]["event"] == "message_created"
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_intro_question_returns_capability_intro(monkeypatch):
+    class FakeRepo(FakeMeetingRepo):
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50):
+            return [
+                SimpleNamespace(id="msg-1", content="@会议Agent 你会干什么？", message_type="user"),
+            ]
+
+        async def list_memory_items_for_room(
+            self,
+            *,
+            org_id: str,
+            room_id: str,
+            project_id: str = "default",
+            include_project_shared: bool = True,
+            statuses=None,
+            limit: int = 50,
+        ):
+            return []
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_session = FakeSession()
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(query="@会议Agent 你会干什么？", mode="auto"),
+    )
+
+    assert result.selected_subgraph == "capability_intro"
+    assert "我是会议Agent" in result.answer
+    assert result.candidate_memories == []
+    assert fake_session.commits == 1
+    assert fake_repo.created_messages[-1]["metadata_json"]["selected_subgraph"] == "capability_intro"
+    assert published[-1]["event"] == "message_created"
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_auto_routes_to_agent_manager(monkeypatch):
+    captured_payloads: list[dict] = []
+
+    class FakeRepo(FakeMeetingRepo):
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50):
+            return [
+                SimpleNamespace(id="msg-1", seq_no=1, username="alice", content="我们刚才提到了最近的质检任务。", message_type="user"),
+                SimpleNamespace(id="msg-2", seq_no=2, username="bob", content="关注未完成任务。", message_type="user"),
+            ]
+
+    class FakeAgentManagerService:
+        async def run_chat(self, payload: dict, db_session=None):
+            captured_payloads.append(payload)
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="inspection_task",
+                    sub_route="quality_task_status",
+                    intent="quality_task_status",
+                    confidence=0.9,
+                    reason="quality_task_status",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "answer": "最近质检任务只读查询完成。",
+                    "summary": "质检任务状态查询完成",
+                    "message_type": "task_status",
+                    "capabilities_used": ["quality.task.status", "chat.response.compose"],
+                    "trace_id": "trace-1",
+                },
+                status="completed",
+            )
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_session = FakeSession()
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod, "AgentManagerService", FakeAgentManagerService)
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    async def fake_build_inspection_context():
+        return {"stats": {"total": 2}}
+
+    service._build_meeting_inspection_context = fake_build_inspection_context
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(query="@会议Agent 最近的质检任务情况是怎样的", mode="auto"),
+    )
+
+    assert result.selected_subgraph == "quality_task_status"
+    assert "只读查询完成" in result.answer
+    assert result.memory_sources == []
+    assert result.candidate_memories == []
+    assert captured_payloads[0]["query"] == "最近的质检任务情况是怎样的"
+    assert captured_payloads[0]["ext"]["surface"] == "chat"
+    assert captured_payloads[0]["ext"]["forbidden_modes"] == ["action"]
+    assert captured_payloads[0]["ext"]["inspection_context"]["stats"]["total"] == 2
+    assert fake_session.commits == 1
+    metadata = fake_repo.created_messages[-1]["metadata_json"]
+    assert metadata["selected_subgraph"] == "quality_task_status"
+    assert metadata["route_source"] == "agent_manager"
+    assert metadata["selected_agent"] == "inspection_task"
+    assert metadata["capabilities_used"] == ["quality.task.status", "chat.response.compose"]
     assert published[-1]["event"] == "message_created"
 
 
@@ -451,6 +664,49 @@ async def test_confirm_memory_publishes_project_scope_binding():
 
 
 @pytest.mark.asyncio
+async def test_meeting_memory_review_requires_host():
+    memory = SimpleNamespace(
+        memory_id="mem_meeting_1",
+        content_summary="P001 下月提高抽检比例",
+        content_json={
+            "title": "P001 抽检策略",
+            "content": "P001 下月提高抽检比例",
+            "memory_type": "decision",
+            "source_id": "room-1",
+            "project_id": "default",
+        },
+        scope_json={"meeting_room_id": "room-1", "project_id": "default"},
+        confidence=0.65,
+        status="candidate",
+        memory_type="task_episode",
+        created_by="user-1",
+        created_at=None,
+        updated_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id="member-2", org_id=org_id, room_id=room_id, user_id=user_id, role="member")
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory if memory_id == memory.memory_id else None
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-2")
+    service._repo = FakeRepo()
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError):
+        await service.extract_memories("room-1", MeetingMemoryExtractRequest())
+    with pytest.raises(ForbiddenError):
+        await service.confirm_memory("mem_meeting_1", MeetingMemoryUpdateRequest(scope="project_shared"))
+    with pytest.raises(ForbiddenError):
+        await service.reject_memory("mem_meeting_1")
+
+
+@pytest.mark.asyncio
 async def test_action_item_create_and_complete_flow():
     class FakeRepo(FakeMeetingRepo):
         def __init__(self):
@@ -502,7 +758,7 @@ async def test_action_item_create_and_complete_flow():
     assert created.owner_name == "bob"
     assert completed.status == "done"
     assert fake_repo.created_messages[0]["message_type"] == "system"
-    assert fake_repo.created_messages[-1]["content"] == "行动项已完成：复核检测标准"
+    assert fake_repo.created_messages[-1]["content"] == "会议待办已完成：复核检测标准"
 
 
 @pytest.mark.asyncio

@@ -5,12 +5,16 @@ import type {
   MeetingActionItem,
   MeetingActionItemCreate,
   MeetingActionItemUpdate,
+  MeetingAgentQueryAudit,
   MeetingAgentRunResponse,
   MeetingAgentRunRequest,
   MeetingAgentSubgraph,
+  MeetingContextPreview,
+  MeetingDataDomain,
   MeetingMemory,
   MeetingMessage,
   MeetingRoom,
+  MeetingRoomCreate,
   MeetingRoomAgent,
   MeetingRoomMember,
   MeetingStreamEvent,
@@ -27,6 +31,8 @@ export const useMeetingStore = defineStore("meeting", () => {
   const members = ref<MeetingRoomMember[]>([]);
   const memories = ref<MeetingMemory[]>([]);
   const actionItems = ref<MeetingActionItem[]>([]);
+  const contextPreview = ref<MeetingContextPreview | null>(null);
+  const agentQueryAudits = ref<MeetingAgentQueryAudit[]>([]);
   const activeRoomId = ref("");
   const eventSource = shallowRef<EventSource | null>(null);
   const streamConnected = ref(false);
@@ -84,6 +90,14 @@ export const useMeetingStore = defineStore("meeting", () => {
     });
   }
 
+  function removePendingAgentMessage(agentId?: string | null, messageId?: string | null) {
+    messages.value = messages.value.filter((message) => {
+      if (message.message_type !== "agent_streaming") return true;
+      if (messageId && message.id === messageId) return false;
+      return agentId ? message.agent_id !== agentId : true;
+    });
+  }
+
   // ── Computed ───────────────────────────────────────────────────
 
   const activeRoom = computed(() => rooms.value.find((r) => r.id === activeRoomId.value) || null);
@@ -112,8 +126,14 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function createRoom(title: string, password?: string | null) {
-    const { data } = await meetingApi.createRoom({ title, password: password || null });
+  async function createRoom(title: string, password?: string | null, options?: Partial<MeetingRoomCreate>) {
+    const { data } = await meetingApi.createRoom({
+      title,
+      password: password || null,
+      room_type: options?.room_type || "quality_business",
+      visibility: options?.visibility || "private",
+      allowed_data_domains: options?.allowed_data_domains || null,
+    });
     const room = unwrap<MeetingRoom>(data);
     rooms.value = [room, ...rooms.value.filter((r) => r.id !== room.id)];
     activeRoomId.value = room.id;
@@ -133,6 +153,15 @@ export const useMeetingStore = defineStore("meeting", () => {
     const { data } = await meetingApi.updateRoom(activeRoom.value.id, { title });
     const room = unwrap<MeetingRoom>(data);
     rooms.value = rooms.value.map((item) => (item.id === room.id ? { ...item, ...room } : item));
+    return room;
+  }
+
+  async function updateRoomSettings(payload: Partial<MeetingRoomCreate>) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.updateRoom(activeRoom.value.id, payload);
+    const room = unwrap<MeetingRoom>(data);
+    rooms.value = rooms.value.map((item) => (item.id === room.id ? { ...item, ...room } : item));
+    await loadContextPreview();
     return room;
   }
 
@@ -177,11 +206,11 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function sendMessage(content: string, quoteMessageId?: string | null) {
+  async function sendMessage(content: string, quoteMessageId?: string | null, options?: { skipAgentTrigger?: boolean }) {
     if (!canSend.value || !activeRoom.value) return null;
     sending.value = true;
     try {
-      const { data } = await meetingApi.sendMessage(activeRoom.value.id, content, quoteMessageId);
+      const { data } = await meetingApi.sendMessage(activeRoom.value.id, content, quoteMessageId, options);
       const msg = unwrap<MeetingMessage>(data);
       upsertMessage(msg);
       return msg;
@@ -244,7 +273,7 @@ export const useMeetingStore = defineStore("meeting", () => {
       auto: "请根据当前会议上下文判断需要调用的能力，并给出可追溯回答。",
       meeting_summary: "请总结本次会议，提取关键结论和可沉淀记忆。",
       memory_transfer: "请从本次会议中提取候选记忆，等待人工确认后再共享。",
-      action_items: "请从本次会议中提取行动项线索。",
+      action_items: "请从本次会议中提取会议待办线索。",
       risk_forecast: "请基于会议上下文和已确认共享记忆，预测后续检测风险。",
       evidence_query: "请基于会议上下文查询或整理检测证据线索。",
       standard_explain: "请基于会议上下文解释相关标准和判定依据。",
@@ -256,18 +285,53 @@ export const useMeetingStore = defineStore("meeting", () => {
     if (!activeRoom.value) {
       memories.value = [];
       actionItems.value = [];
+      contextPreview.value = null;
+      agentQueryAudits.value = [];
       return;
     }
     loadingContext.value = true;
     try {
-      const [memoryResp, actionResp] = await Promise.all([
+      const [memoryResp, actionResp, previewResp] = await Promise.all([
         meetingApi.listMemories(activeRoom.value.id),
         meetingApi.listActionItems(activeRoom.value.id),
+        meetingApi.getContextPreview(activeRoom.value.id).catch(() => null),
       ]);
       memories.value = unwrap<MeetingMemory[]>(memoryResp.data);
       actionItems.value = unwrap<MeetingActionItem[]>(actionResp.data);
+      contextPreview.value = previewResp ? unwrap<MeetingContextPreview>(previewResp.data) : null;
+      await loadAgentQueryAudits();
     } finally {
       loadingContext.value = false;
+    }
+  }
+
+  async function loadContextPreview() {
+    if (!activeRoom.value) {
+      contextPreview.value = null;
+      return null;
+    }
+    try {
+      const { data } = await meetingApi.getContextPreview(activeRoom.value.id);
+      contextPreview.value = unwrap<MeetingContextPreview>(data);
+      return contextPreview.value;
+    } catch {
+      contextPreview.value = null;
+      return null;
+    }
+  }
+
+  async function loadAgentQueryAudits(limit = 20) {
+    if (!activeRoom.value) {
+      agentQueryAudits.value = [];
+      return [];
+    }
+    try {
+      const { data } = await meetingApi.listAgentQueryAudits(activeRoom.value.id, limit);
+      agentQueryAudits.value = unwrap<MeetingAgentQueryAudit[]>(data);
+      return agentQueryAudits.value;
+    } catch {
+      agentQueryAudits.value = [];
+      return [];
     }
   }
 
@@ -356,16 +420,29 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function deleteRoom() {
-    if (!activeRoom.value) return;
-    await meetingApi.deleteRoom(activeRoom.value.id);
-    rooms.value = rooms.value.filter((r) => r.id !== activeRoomId.value);
-    activeRoomId.value = rooms.value[0]?.id || "";
-    messages.value = [];
-    agents.value = [];
-    members.value = [];
-    memories.value = [];
-    actionItems.value = [];
+  async function updateMemberRole(memberUserId: string, role: "host" | "member") {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.updateMemberRole(activeRoom.value.id, memberUserId, { role });
+    const member = unwrap<MeetingRoomMember>(data);
+    members.value = members.value.map((item) => (item.user_id === member.user_id ? member : item));
+    return member;
+  }
+
+  async function deleteRoom(roomId = activeRoom.value?.id || "") {
+    if (!roomId) return;
+    const deletedActiveRoom = roomId === activeRoomId.value;
+    await meetingApi.deleteRoom(roomId);
+    rooms.value = rooms.value.filter((r) => r.id !== roomId);
+    if (deletedActiveRoom) {
+      activeRoomId.value = rooms.value[0]?.id || "";
+      messages.value = [];
+      agents.value = [];
+      members.value = [];
+      memories.value = [];
+      actionItems.value = [];
+      contextPreview.value = null;
+      agentQueryAudits.value = [];
+    }
   }
 
   async function loadAvailableAgentDefs() {
@@ -377,11 +454,22 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function addAgentToRoom(agentDefId: string, role = "participant") {
+  async function addAgentToRoom(
+    agentDefId: string,
+    role = "participant",
+    allowedDomains?: MeetingDataDomain[] | null,
+    allowedTools?: string[] | null
+  ) {
     if (!activeRoom.value) return null;
-    const { data } = await meetingApi.addAgent(activeRoom.value.id, { agent_id: agentDefId, role });
+    const { data } = await meetingApi.addAgent(activeRoom.value.id, {
+      agent_id: agentDefId,
+      role,
+      allowed_domains: allowedDomains || null,
+      allowed_tools: allowedTools || null,
+    });
     const agent = unwrap<MeetingRoomAgent>(data);
     agents.value = [...agents.value, agent];
+    await loadContextPreview();
     return agent;
   }
 
@@ -389,6 +477,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     if (!activeRoom.value) return;
     await meetingApi.removeAgent(activeRoom.value.id, agentId);
     agents.value = agents.value.filter((a) => a.agent_id !== agentId);
+    await loadContextPreview();
   }
 
   // ── SSE Stream ─────────────────────────────────────────────────
@@ -424,6 +513,9 @@ export const useMeetingStore = defineStore("meeting", () => {
   function handleStreamEvent(evt: MeetingStreamEvent) {
     switch (evt.event) {
       case "message_created": {
+        if (evt.message.message_type === "agent" && evt.message.agent_id) {
+          removePendingAgentMessage(evt.message.agent_id);
+        }
         upsertMessage(evt.message);
         loadRooms();
         if (evt.message.agent_id === "general_agent" || evt.message.message_type === "system") {
@@ -433,6 +525,18 @@ export const useMeetingStore = defineStore("meeting", () => {
       }
       case "agent_run_started": {
         streamingContent.value = { ...streamingContent.value, [evt.message_id]: "" };
+        upsertMessage({
+          id: evt.message_id,
+          room_id: activeRoomId.value,
+          user_id: evt.agent_id,
+          username: evt.agent_name,
+          seq_no: messages.value.length + 1,
+          content: "",
+          message_type: "agent_streaming",
+          agent_id: evt.agent_id,
+          metadata_json: { workflow_run_id: evt.workflow_run_id },
+          created_at: new Date().toISOString(),
+        } as MeetingMessage);
         break;
       }
       case "message_delta": {
@@ -468,12 +572,14 @@ export const useMeetingStore = defineStore("meeting", () => {
         const next = { ...streamingContent.value };
         delete next[evt.message_id];
         streamingContent.value = next;
+        removePendingAgentMessage(null, evt.message_id);
         break;
       }
       case "agent_run_failed": {
         const next = { ...streamingContent.value };
         delete next[evt.message_id];
         streamingContent.value = next;
+        removePendingAgentMessage(null, evt.message_id);
         const errMsg = `[${evt.agent_name}] 响应失败: ${evt.error}`;
         upsertMessage({
           id: evt.message_id,
@@ -513,16 +619,16 @@ export const useMeetingStore = defineStore("meeting", () => {
     rooms, messages, agents, members, activeRoomId, eventSource, streamConnected,
     streamingContent, loadingRooms, loadingMessages, sending, messageReactions, aiThinking, summarizing,
     generalAgentRunning, memoryExtracting, loadingContext, actionItemSaving,
-    memories, actionItems,
+    memories, actionItems, contextPreview, agentQueryAudits,
     // computed
     activeRoom, canSend, lastMessageSeq, candidateMemories, confirmedMemories, openActionItems,
     // actions
-    loadRooms, createRoom, joinRoom, updateRoomTitle, closeRoom, archiveRoom,
+    loadRooms, createRoom, joinRoom, updateRoomTitle, updateRoomSettings, closeRoom, archiveRoom,
     loadMessages, sendMessage,
-    requestAiReply, summarizeMeeting, runGeneralAgent, loadMeetingContext, extractMemories,
+    requestAiReply, summarizeMeeting, runGeneralAgent, loadMeetingContext, loadContextPreview, loadAgentQueryAudits, extractMemories,
     confirmMemory, rejectMemory,
     createActionItem, updateActionItem, completeActionItem,
-    loadAgents, loadMembers, deleteRoom,
+    loadAgents, loadMembers, updateMemberRole, deleteRoom,
     availableAgentDefs, loadAvailableAgentDefs, addAgentToRoom, removeAgentFromRoom,
     connectStream, disconnectStream, handleStreamEvent,
     setReaction,

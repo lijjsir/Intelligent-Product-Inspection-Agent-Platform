@@ -58,6 +58,7 @@ from app.models.algo_resources import (
 )
 from app.models.meeting import (
     MeetingActionItem,
+    MeetingAgentQueryAudit,
     MeetingMessage,
     MeetingRoom,
     MeetingRoomAgent,
@@ -149,6 +150,7 @@ __all__ = [
     "MemoryScopeBinding",
     "MemoryTransferLog",
     "MeetingActionItem",
+    "MeetingAgentQueryAudit",
     "RagSpace",
     "RagNode",
     "RagDocument",

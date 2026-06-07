@@ -5,15 +5,19 @@ import type {
   MeetingActionItemCreate,
   MeetingActionItemUpdate,
   MeetingAddAgentRequest,
+  MeetingAgentQueryAudit,
   MeetingAgentRunRequest,
   MeetingAgentRunResponse,
+  MeetingContextPreview,
   MeetingMemory,
+  MeetingMemberRoleUpdate,
   MeetingMessage,
   MeetingRoom,
   MeetingRoomAgent,
   MeetingRoomCreate,
   MeetingRoomDetail,
   MeetingRoomJoin,
+  MeetingRoomUpdate,
   MeetingRoomMember,
   MeetingStreamEvent,
 } from "@/types/meeting.types";
@@ -37,7 +41,7 @@ export const meetingApi = {
     return http.get<MeetingRoomDetail>(`/v1/meetings/rooms/${roomId}`);
   },
 
-  updateRoom(roomId: string, payload: { title?: string | null }) {
+  updateRoom(roomId: string, payload: MeetingRoomUpdate) {
     return http.put<MeetingRoom>(`/v1/meetings/rooms/${roomId}`, payload);
   },
 
@@ -55,10 +59,11 @@ export const meetingApi = {
     });
   },
 
-  sendMessage(roomId: string, content: string, quoteMessageId?: string | null) {
+  sendMessage(roomId: string, content: string, quoteMessageId?: string | null, options?: { skipAgentTrigger?: boolean }) {
     return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/messages`, {
       content,
       quote_message_id: quoteMessageId || null,
+      skip_agent_trigger: Boolean(options?.skipAgentTrigger),
     });
   },
 
@@ -82,6 +87,16 @@ export const meetingApi = {
 
   runGeneralAgent(roomId: string, payload: MeetingAgentRunRequest) {
     return http.post<MeetingAgentRunResponse>(`/v1/meetings/rooms/${roomId}/agent/run`, payload);
+  },
+
+  getContextPreview(roomId: string) {
+    return http.get<MeetingContextPreview>(`/v1/meetings/rooms/${roomId}/context-preview`);
+  },
+
+  listAgentQueryAudits(roomId: string, limit = 50) {
+    return http.get<MeetingAgentQueryAudit[]>(`/v1/meetings/rooms/${roomId}/agent-query-audits`, {
+      params: { limit },
+    });
   },
 
   listMemories(roomId: string) {
@@ -132,6 +147,10 @@ export const meetingApi = {
 
   listMembers(roomId: string) {
     return http.get<MeetingRoomMember[]>(`/v1/meetings/rooms/${roomId}/members`);
+  },
+
+  updateMemberRole(roomId: string, memberUserId: string, payload: MeetingMemberRoleUpdate) {
+    return http.put<MeetingRoomMember>(`/v1/meetings/rooms/${roomId}/members/${memberUserId}/role`, payload);
   },
 
   // ── Agent Definitions ─────────────────────────────────────────

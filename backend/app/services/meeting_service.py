@@ -10,8 +10,16 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.ids import uuid7
 from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.ids import uuid7
+from app.core.permissions import (
+    ROLE_ADMIN,
+    ROLE_ALGORITHM_ENGINEER,
+    ROLE_APP_DEVELOPER,
+    ROLE_EXPERT,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_USER,
+)
 from app.core.security import hash_password, verify_password
 from app.models.memory import MemoryItem
 from app.repositories.meeting_repo import MeetingRepository
@@ -20,9 +28,11 @@ from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingActionItemResponse,
     MeetingActionItemUpdateRequest,
+    MeetingAgentQueryAuditResponse,
     MeetingAgentRunRequest,
     MeetingAgentRunResponse,
     MeetingCandidateMemoryResponse,
+    MeetingContextPreviewResponse,
     MeetingDiscussionStartResponse,
     MeetingMemoryExtractRequest,
     MeetingMemoryResponse,
@@ -36,17 +46,85 @@ from app.schemas.meeting import (
     MeetingRoomMemberResponse,
     MeetingRoomResponse,
 )
+from app.services.agent_manager_service import AgentManagerService
+from app.services.chat_context_service import ChatContextService
 from app.services.meeting_agent_service import MeetingAgentService
 from app.services.stream_service import meeting_stream_broker
 from infra.database.session import get_session
 
 _MENTION_DELIMITER_RE = re.compile(r"(?=$|[\s,.;:!?，。；：！？])")
-_MEETING_AI_AGENT_ID = "ai_assistant"
-_MEETING_AI_AGENT_NAME = "智能助手"
+_MEETING_AI_AGENT_NAME = "AI助手"
 _MEETING_GENERAL_AGENT_ID = "general_agent"
-_MEETING_GENERAL_AGENT_NAME = "总智能体"
+_MEETING_GENERAL_AGENT_NAME = "会议Agent"
 _DEFAULT_PROJECT_ID = "default"
 logger = logging.getLogger(__name__)
+
+_ALL_DATA_DOMAINS = [
+    "quality",
+    "standard",
+    "meeting",
+    "memory",
+    "platform_ops",
+    "model_billing",
+    "org_admin",
+    "data_access",
+    "security_audit",
+    "ai_conversation",
+]
+_ROOM_TYPE_LABELS = {
+    "quality_business": "质检业务会议室",
+    "platform_ops": "平台运营会议室",
+    "org_admin": "组织管理会议室",
+    "data_ops": "数据接入会议室",
+    "memory_governance": "记忆治理会议室",
+    "general": "普通协作会议室",
+}
+_ROOM_TYPE_DOMAIN_DEFAULTS = {
+    "quality_business": ["quality", "standard", "meeting", "memory"],
+    "platform_ops": ["platform_ops", "model_billing", "data_access", "meeting", "memory"],
+    "org_admin": ["org_admin", "security_audit", "meeting"],
+    "data_ops": ["data_access", "platform_ops", "meeting", "memory"],
+    "memory_governance": ["memory", "meeting", "security_audit"],
+    "general": ["meeting", "memory"],
+}
+_ROLE_DOMAIN_ALLOW = {
+    ROLE_USER: {"quality", "standard", "meeting", "memory", "ai_conversation"},
+    ROLE_EXPERT: {"quality", "standard", "meeting", "memory", "ai_conversation"},
+    ROLE_PLATFORM_OPERATOR: {"platform_ops", "model_billing", "data_access", "meeting", "memory", "security_audit"},
+    ROLE_APP_DEVELOPER: {"platform_ops", "model_billing", "data_access", "meeting", "memory", "security_audit"},
+    ROLE_ALGORITHM_ENGINEER: {"platform_ops", "model_billing", "data_access", "meeting", "memory"},
+    ROLE_ADMIN: set(_ALL_DATA_DOMAINS),
+}
+_ROOM_QUERY_EXAMPLES = {
+    "quality_business": ["前两天质检任务情况怎么样？", "这个批次有哪些待复核风险？", "这个标准版本怎么判？"],
+    "platform_ops": ["当前有哪些 Agent 在运行？", "模型配置和成本情况是什么？", "最近路由失败率为什么升高？"],
+    "org_admin": ["组织成员和角色有哪些？", "谁最近改过权限？", "管理员操作记录有哪些？"],
+    "data_ops": ["有哪些数据源接入？", "RAG 空间同步状态如何？", "哪些连接器最近失败？"],
+    "memory_governance": ["有哪些候选记忆待确认？", "共享记忆有没有冲突？", "哪些记忆需要回滚？"],
+    "general": ["总结当前会议。", "提取会议待办。", "把刚才讨论整理成候选记忆。"],
+}
+_ROOM_GUARDRAILS = [
+    "Agent 只能代用户查询其本来有权限的数据。",
+    "具体事实查业务库，经验规律查记忆库。",
+    "AI 会话内容是原始事件，不自动成为共享记忆。",
+    "API Key、Token、密码、连接串等敏感凭据不会明文返回。",
+]
+_SENSITIVE_QUERY_TERMS = (
+    "api key",
+    "apikey",
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "pwd",
+    "connection string",
+    "连接串",
+    "密钥",
+    "密码",
+    "令牌",
+    "私钥",
+)
+_CORE_CONTEXT_DOMAINS = {"meeting", "memory"}
 
 
 def _is_valid_uuid(value: str) -> bool:
@@ -62,10 +140,11 @@ def _normalize_name(value: str) -> str:
 
 
 class MeetingService:
-    def __init__(self, session: AsyncSession, org_id: str, user_id: str):
+    def __init__(self, session: AsyncSession, org_id: str, user_id: str, role: str = ROLE_USER):
         self._session = session
         self._org_id = org_id
         self._user_id = user_id
+        self._role = role or ROLE_USER
         self._repo = MeetingRepository(session)
         self._users = UserRepository(session)
 
@@ -73,14 +152,35 @@ class MeetingService:
         rooms = await self._repo.list_joined_rooms(self._org_id, self._user_id, limit=limit)
         return await self._serialize_rooms(rooms)
 
-    async def create_room(self, title: str, password: str | None = None) -> MeetingRoomResponse:
+    async def create_room(
+        self,
+        title: str,
+        password: str | None = None,
+        room_type: str = "quality_business",
+        visibility: str = "private",
+        allowed_data_domains: list[str] | None = None,
+    ) -> MeetingRoomResponse:
         clean_title = title.strip() or "会议室"
+        normalized_room_type = self._normalize_room_type(room_type)
+        effective_domains = self._effective_domains_for_create(normalized_room_type, allowed_data_domains)
         room = await self._repo.create_room(
             org_id=self._org_id,
             user_id=self._user_id,
             title=clean_title[:120],
             access_code=await self._generate_access_code(),
             password_hash=hash_password(password) if password else None,
+            room_type=normalized_room_type,
+            visibility=visibility or "private",
+            allowed_data_domains=effective_domains,
+            memory_policy={
+                "candidate_default_scope": "meeting_room",
+                "publish_requires_confirmation": True,
+            },
+            audit_policy={
+                "enabled": True,
+                "record_agent_queries": True,
+                "redact_sensitive_fields": True,
+            },
         )
         return (await self._serialize_rooms([room]))[0]
 
@@ -105,6 +205,38 @@ class MeetingService:
             raise NotFoundError("meeting room not found")
         await self._publish_system_message(room_id, f"会议标题已更新为「{clean_title[:120]}」。")
         return (await self._serialize_rooms([room]))[0]
+
+    async def update_room_settings(
+        self,
+        room_id: str,
+        *,
+        title: str | None = None,
+        room_type: str | None = None,
+        visibility: str | None = None,
+        allowed_data_domains: list[str] | None = None,
+    ) -> MeetingRoomResponse:
+        await self._ensure_host(room_id)
+        room = await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
+        normalized_room_type = self._normalize_room_type(room_type or str(getattr(room, "room_type", "quality_business")))
+        effective_domains = (
+            self._effective_domains_for_create(normalized_room_type, allowed_data_domains)
+            if allowed_data_domains is not None or room_type is not None
+            else None
+        )
+        updated = await self._repo.update_room(
+            self._org_id,
+            room_id,
+            title=title.strip()[:120] if title else None,
+            room_type=normalized_room_type if room_type is not None else None,
+            visibility=visibility,
+            allowed_data_domains=effective_domains,
+        )
+        if not updated:
+            raise NotFoundError("meeting room not found")
+        await self._publish_system_message(room_id, "会议室权限边界已更新。")
+        return (await self._serialize_rooms([updated]))[0]
 
     async def close_room(self, room_id: str) -> MeetingRoomResponse:
         await self._ensure_host(room_id)
@@ -145,6 +277,7 @@ class MeetingService:
         room_id: str,
         content: str,
         quote_message_id: str | None = None,
+        skip_agent_trigger: bool = False,
     ) -> MeetingMessageResponse:
         await self._ensure_active_member(room_id)
         user = await self._users.get_by_id(self._org_id, self._user_id)
@@ -154,12 +287,11 @@ class MeetingService:
             quoted = await self._repo.get_message(self._org_id, room_id, quote_message_id)
             if not quoted:
                 raise NotFoundError("quoted meeting message not found")
-        mentions = await self._parse_mentions(clean_content, room_id)
-        ai_mentioned = not mentions and self._contains_meeting_ai_mention(clean_content)
-        general_agent_mentioned = not mentions and self._contains_general_agent_mention(clean_content)
+        general_agent_mentioned = self._contains_general_agent_mention(clean_content)
+        legacy_ai_alias_mentioned = not general_agent_mentioned and self._contains_meeting_ai_mention(clean_content)
+        mentions = [] if (general_agent_mentioned or legacy_ai_alias_mentioned) else await self._parse_mentions(clean_content, room_id)
+        general_agent_mentioned = general_agent_mentioned or legacy_ai_alias_mentioned
         stored_mentions = list(mentions)
-        if ai_mentioned:
-            stored_mentions.append({"agent_id": _MEETING_AI_AGENT_ID, "agent_name": _MEETING_AI_AGENT_NAME})
         if general_agent_mentioned:
             stored_mentions.append({"agent_id": _MEETING_GENERAL_AGENT_ID, "agent_name": _MEETING_GENERAL_AGENT_NAME})
 
@@ -175,6 +307,7 @@ class MeetingService:
         )
         response = MeetingMessageResponse.model_validate(message)
 
+        await self._session.commit()
         await meeting_stream_broker.publish(
             room_id,
             {"event": "message_created", "room_id": room_id, "message": response.model_dump()},
@@ -195,9 +328,7 @@ class MeetingService:
                         username=username,
                     )
                 )
-        if ai_mentioned:
-            asyncio.create_task(self._invoke_meeting_ai_reply(room_id=room_id))
-        if general_agent_mentioned:
+        if general_agent_mentioned and not skip_agent_trigger:
             asyncio.create_task(
                 self._invoke_general_agent_reply(room_id=room_id, query=clean_content)
             )
@@ -238,28 +369,34 @@ class MeetingService:
             topic_message=MeetingMessageResponse.model_validate(topic_message),
         )
 
-    async def add_agent_to_room(self, room_id: str, agent_id: str, role: str = "participant") -> MeetingRoomAgentResponse:
+    async def add_agent_to_room(
+        self,
+        room_id: str,
+        agent_id: str,
+        role: str = "participant",
+        allowed_domains: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> MeetingRoomAgentResponse:
         await self._ensure_member(room_id)
+        room = await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
         existing = await self._repo.get_agent(self._org_id, room_id, agent_id)
         if existing:
             raise ForbiddenError("agent is already in this meeting room")
 
         agent_name = await self._resolve_visible_agent_name(agent_id)
+        effective_domains = self._agent_allowed_domains(room, allowed_domains)
         row = await self._repo.add_agent(
             org_id=self._org_id,
             room_id=room_id,
             agent_id=agent_id,
             added_by=self._user_id,
             role=role,
+            allowed_domains=effective_domains,
+            allowed_tools=self._normalize_tool_list(allowed_tools),
         )
-        return MeetingRoomAgentResponse(
-            id=str(row.id),
-            room_id=str(row.room_id),
-            agent_id=str(row.agent_id),
-            agent_name=agent_name,
-            role=str(row.role),
-            added_by=str(row.added_by),
-        )
+        return self._serialize_agent_row(row, agent_name=agent_name)
 
     async def remove_agent_from_room(self, room_id: str, agent_id: str) -> None:
         await self._ensure_member(room_id)
@@ -274,36 +411,35 @@ class MeetingService:
         for row in rows:
             agent_id = str(row.agent_id)
             agent_name = await self._resolve_visible_agent_name(agent_id)
-            results.append(
-                MeetingRoomAgentResponse(
-                    id=str(row.id),
-                    room_id=str(row.room_id),
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    role=str(row.role),
-                    added_by=str(row.added_by),
-                )
-            )
+            results.append(self._serialize_agent_row(row, agent_name=agent_name))
         return results
 
     async def list_room_members(self, room_id: str) -> list[MeetingRoomMemberResponse]:
         await self._ensure_member(room_id)
         rows = await self._repo.list_members(self._org_id, room_id)
-        results: list[MeetingRoomMemberResponse] = []
-        for row in rows:
-            user_id = str(row.user_id)
-            user = await self._users.get_by_id(self._org_id, user_id)
-            results.append(
-                MeetingRoomMemberResponse(
-                    id=str(row.id),
-                    room_id=str(row.room_id),
-                    user_id=user_id,
-                    username=user.username if user else user_id[-8:],
-                    role=str(row.role),
-                    joined_at=row.created_at,
-                )
-            )
-        return results
+        return [await self._serialize_member(row) for row in rows]
+
+    async def update_member_role(
+        self,
+        room_id: str,
+        member_user_id: str,
+        role: str,
+    ) -> MeetingRoomMemberResponse:
+        room = await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
+        if str(room.created_by) != self._user_id:
+            raise ForbiddenError("only the meeting creator can assign member permissions")
+        if str(member_user_id) == str(room.created_by) and role != "host":
+            raise ForbiddenError("the meeting creator must remain a host")
+        row = await self._repo.update_member_role(self._org_id, room_id, member_user_id, role)
+        if row is None:
+            raise NotFoundError("meeting member not found")
+        await self._publish_system_message(
+            room_id,
+            f"成员「{(await self._serialize_member(row)).username}」已设为{self._member_role_label(role)}。",
+        )
+        return await self._serialize_member(row)
 
     async def delete_room(self, room_id: str) -> None:
         room = await self._repo.get_room(self._org_id, room_id)
@@ -320,59 +456,153 @@ class MeetingService:
         admin_svc = MeetingAdminService(self._session, self._org_id)
         return await admin_svc.get_room_detail(room_id)
 
+    async def get_context_preview(self, room_id: str) -> MeetingContextPreviewResponse:
+        room = await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
+        member = await self._repo.get_member(self._org_id, room_id, self._user_id)
+        if not member:
+            raise ForbiddenError("join the meeting room before viewing context")
+
+        allowed_domains = self._effective_domains_for_room(room)
+        denied_domains = [domain for domain in _ALL_DATA_DOMAINS if domain not in allowed_domains]
+        agent_rows = await self._repo.get_agents(self._org_id, room_id)
+        agent_permissions: list[dict[str, Any]] = []
+        for row in agent_rows:
+            agent_id = str(row.agent_id)
+            agent_permissions.append(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": await self._resolve_visible_agent_name(agent_id),
+                    "role": str(row.role),
+                    "allowed_domains": self._agent_allowed_domains(room, getattr(row, "allowed_domains", None)),
+                    "allowed_tools": self._normalize_tool_list(getattr(row, "allowed_tools", None)),
+                }
+            )
+
+        room_type = self._normalize_room_type(str(getattr(room, "room_type", "quality_business")))
+        return MeetingContextPreviewResponse(
+            room_id=room_id,
+            room_type=room_type,
+            room_type_label=_ROOM_TYPE_LABELS.get(room_type, room_type),
+            user_role=self._role,
+            room_role=str(getattr(member, "role", "member") or "member"),
+            allowed_domains=allowed_domains,
+            denied_domains=denied_domains,
+            agent_permissions=agent_permissions,
+            query_examples=list(_ROOM_QUERY_EXAMPLES.get(room_type) or _ROOM_QUERY_EXAMPLES["general"]),
+            guardrails=list(_ROOM_GUARDRAILS),
+        )
+
+    async def list_agent_query_audits(self, room_id: str, limit: int = 50) -> list[MeetingAgentQueryAuditResponse]:
+        await self._ensure_host(room_id)
+        rows = await self._repo.list_agent_query_audits(org_id=self._org_id, room_id=room_id, limit=limit)
+        return [self._serialize_agent_query_audit(row) for row in rows]
+
     async def run_general_agent(
         self,
         room_id: str,
         request: MeetingAgentRunRequest,
     ) -> MeetingAgentRunResponse:
         await self._ensure_member(room_id)
-        selected_subgraph = self._select_general_agent_subgraph(request.query, request.mode)
-        memory_sources = await self._collect_memory_sources(room_id, request.memory_scope)
-        recent_messages = await self._repo.list_recent_messages(
-            org_id=self._org_id,
-            room_id=room_id,
-            limit=80,
-        )
-        answer = self._build_general_agent_answer(
-            selected_subgraph=selected_subgraph,
-            query=request.query,
-            messages=recent_messages,
-            memory_sources=memory_sources,
-        )
-        candidate_memories: list[MeetingCandidateMemoryResponse] = []
-        if selected_subgraph in {"meeting_summary", "memory_transfer"}:
-            candidate_memories = await self._extract_candidate_memories_from_messages(
-                room_id,
-                max_items=2 if selected_subgraph == "meeting_summary" else 3,
-                topic=request.query,
-            )
-
-        message = await self._repo.create_message(
-            org_id=self._org_id,
-            room_id=room_id,
-            user_id=self._user_id,
-            username=_MEETING_GENERAL_AGENT_NAME,
-            content=answer,
-            message_type="agent",
-            agent_id=_MEETING_GENERAL_AGENT_ID,
-            metadata_json={
-                "selected_subgraph": selected_subgraph,
-                "memory_sources": [item.model_dump(mode="json") for item in memory_sources],
-                "candidate_memories": [item.model_dump(mode="json") for item in candidate_memories],
-            },
-        )
-        response_message = MeetingMessageResponse.model_validate(message)
+        room = await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
+        workflow_run_id = str(uuid7())
+        agent_message_id = str(uuid7())
         await meeting_stream_broker.publish(
             room_id,
-            {"event": "message_created", "room_id": room_id, "message": response_message.model_dump()},
+            {
+                "event": "agent_run_started",
+                "room_id": room_id,
+                "message_id": agent_message_id,
+                "agent_id": _MEETING_GENERAL_AGENT_ID,
+                "agent_name": _MEETING_GENERAL_AGENT_NAME,
+                "workflow_run_id": workflow_run_id,
+            },
         )
-        return MeetingAgentRunResponse(
-            selected_subgraph=selected_subgraph,
-            answer=answer,
-            message=response_message,
-            memory_sources=memory_sources,
-            candidate_memories=candidate_memories,
-        )
+
+        try:
+            selected_subgraph = self._select_general_agent_subgraph(request.query, request.mode)
+            if selected_subgraph == "agent_manager":
+                return await self._run_agent_manager_for_meeting(room_id, request, room=room)
+
+            memory_sources: list[MeetingMemorySourceResponse] = []
+            recent_messages: list[Any] = []
+            memory_sources = await self._collect_memory_sources(room_id, request.memory_scope)
+            recent_messages = await self._repo.list_recent_messages(
+                org_id=self._org_id,
+                room_id=room_id,
+                limit=80,
+            )
+            answer = self._build_general_agent_answer(
+                selected_subgraph=selected_subgraph,
+                query=request.query,
+                messages=recent_messages,
+                memory_sources=memory_sources,
+            )
+            candidate_memories: list[MeetingCandidateMemoryResponse] = []
+            if selected_subgraph in {"meeting_summary", "memory_transfer"}:
+                candidate_memories = await self._extract_candidate_memories_from_messages(
+                    room_id,
+                    max_items=2 if selected_subgraph == "meeting_summary" else 3,
+                    topic=request.query,
+                )
+
+            message = await self._repo.create_message(
+                org_id=self._org_id,
+                room_id=room_id,
+                user_id=self._user_id,
+                username=_MEETING_GENERAL_AGENT_NAME,
+                content=answer,
+                message_type="agent",
+                agent_id=_MEETING_GENERAL_AGENT_ID,
+                metadata_json={
+                    "selected_subgraph": selected_subgraph,
+                    "memory_sources": [item.model_dump(mode="json") for item in memory_sources],
+                    "candidate_memories": [item.model_dump(mode="json") for item in candidate_memories],
+                },
+            )
+            response_message = MeetingMessageResponse.model_validate(message)
+            await self._record_agent_query_audit(
+                room=room,
+                question=request.query,
+                intent=selected_subgraph,
+                source_refs=[
+                    {"type": "meeting_message", "id": str(message.id)},
+                    *[
+                        {"type": "memory", "id": item.memory_id, "scope": item.scope}
+                        for item in memory_sources
+                    ],
+                ],
+                tool_calls=[],
+            )
+            await self._session.commit()
+            await meeting_stream_broker.publish(
+                room_id,
+                {"event": "message_created", "room_id": room_id, "message": response_message.model_dump()},
+            )
+            return MeetingAgentRunResponse(
+                selected_subgraph=selected_subgraph,
+                answer=answer,
+                message=response_message,
+                memory_sources=memory_sources,
+                candidate_memories=candidate_memories,
+            )
+        except Exception as exc:
+            await meeting_stream_broker.publish(
+                room_id,
+                {
+                    "event": "agent_run_failed",
+                    "room_id": room_id,
+                    "message_id": agent_message_id,
+                    "agent_id": _MEETING_GENERAL_AGENT_ID,
+                    "agent_name": _MEETING_GENERAL_AGENT_NAME,
+                    "workflow_run_id": workflow_run_id,
+                    "error": str(exc) or exc.__class__.__name__,
+                },
+            )
+            raise
 
     async def list_room_memories(self, room_id: str) -> list[MeetingMemoryResponse]:
         await self._ensure_member(room_id)
@@ -391,7 +621,7 @@ class MeetingService:
         room_id: str,
         request: MeetingMemoryExtractRequest,
     ) -> list[MeetingCandidateMemoryResponse]:
-        await self._ensure_member(room_id)
+        await self._ensure_host(room_id)
         return await self._extract_candidate_memories_from_messages(
             room_id,
             max_items=request.max_items,
@@ -409,7 +639,7 @@ class MeetingService:
         room_id = self._memory_room_id(item)
         if not room_id:
             raise ForbiddenError("memory is not sourced from a meeting room")
-        await self._ensure_member(room_id)
+        await self._ensure_host(room_id)
 
         content_json = dict(item.content_json or {})
         if request and request.title:
@@ -456,7 +686,7 @@ class MeetingService:
         room_id = self._memory_room_id(item)
         if not room_id:
             raise ForbiddenError("memory is not sourced from a meeting room")
-        await self._ensure_member(room_id)
+        await self._ensure_host(room_id)
         updated = await self._repo.update_memory_item(
             org_id=self._org_id,
             memory_id=memory_id,
@@ -533,7 +763,7 @@ class MeetingService:
             source_message_id=request.source_message_id,
             created_by=self._user_id,
         )
-        await self._publish_system_message(room_id, f"已新增行动项：{row.title}")
+        await self._publish_system_message(room_id, f"已新增会议待办：{row.title}")
         return await self._serialize_action_item(row)
 
     async def update_action_item(
@@ -562,7 +792,7 @@ class MeetingService:
             raise NotFoundError("meeting action item not found")
         await self._ensure_member(str(row.room_id))
         updated = await self._repo.update_action_item(self._org_id, action_item_id, status="done")
-        await self._publish_system_message(str(row.room_id), f"行动项已完成：{row.title}")
+        await self._publish_system_message(str(row.room_id), f"会议待办已完成：{row.title}")
         return await self._serialize_action_item(updated or row)
 
     async def _ensure_member(self, room_id: str) -> None:
@@ -609,21 +839,226 @@ class MeetingService:
         )
         return response
 
+    async def _serialize_member(self, row: Any) -> MeetingRoomMemberResponse:
+        user_id = str(row.user_id)
+        user = await self._users.get_by_id(self._org_id, user_id)
+        return MeetingRoomMemberResponse(
+            id=str(row.id),
+            room_id=str(row.room_id),
+            user_id=user_id,
+            username=user.username if user else user_id[-8:],
+            role=str(row.role),
+            joined_at=row.created_at,
+        )
+
+    @staticmethod
+    def _member_role_label(role: str) -> str:
+        return "主持人" if role == "host" else "成员"
+
     def _select_general_agent_subgraph(self, query: str, mode: str) -> str:
         if mode != "auto":
             return "action_items" if mode == "action_items" else mode
         normalized = query.lower()
-        if any(word in normalized for word in ("风险", "预测", "下月", "下个月", "risk")):
-            return "risk_forecast"
-        if any(word in normalized for word in ("证据", "检测结果", "批次", "任务", "evidence")):
-            return "evidence_query"
-        if any(word in normalized for word in ("标准", "判定", "依据", "解释", "standard")):
-            return "standard_explain"
+        compact = _normalize_name(query)
+        intro_phrases = (
+            "你会干什么",
+            "你能做什么",
+            "你会做什么",
+            "你可以做什么",
+            "能干什么",
+            "有什么功能",
+            "介绍一下",
+        )
+        if any(phrase in normalized or phrase in compact for phrase in intro_phrases):
+            return "capability_intro"
+        if any(word in normalized for word in ("总结", "纪要", "归纳", "小结", "summary", "summarize")):
+            return "meeting_summary"
         if any(word in normalized for word in ("记忆", "沉淀", "共享", "transfer", "memory")):
             return "memory_transfer"
         if any(word in normalized for word in ("行动项", "待办", "todo", "action")):
             return "action_items"
-        return "meeting_summary"
+        return "agent_manager"
+
+    async def _run_agent_manager_for_meeting(
+        self,
+        room_id: str,
+        request: MeetingAgentRunRequest,
+        *,
+        room: Any | None = None,
+    ) -> MeetingAgentRunResponse:
+        room = room or await self._repo.get_room(self._org_id, room_id)
+        if not room:
+            raise NotFoundError("meeting room not found")
+        recent_messages = await self._repo.list_recent_messages(
+            org_id=self._org_id,
+            room_id=room_id,
+            limit=24,
+        )
+        room_type = self._normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business"))
+        allowed_domains = self._effective_domains_for_room(room)
+        query = self._clean_general_agent_query(request.query)
+        payload = {
+            "request_id": str(uuid7()),
+            "workflow_run_id": str(uuid7()),
+            "session_id": f"meeting:{room_id}",
+            "assistant_message_id": str(uuid7()),
+            "org_id": self._org_id,
+            "user_id": self._user_id,
+            "workspace": "meeting_room",
+            "plan_tier": "basic",
+            "capabilities": [],
+            "query": query,
+            "metadata": {
+                "source": "meeting_room",
+                "room_id": room_id,
+                "project_id": _DEFAULT_PROJECT_ID,
+                "meeting_agent_name": _MEETING_GENERAL_AGENT_NAME,
+                "room_type": room_type,
+                "allowed_data_domains": allowed_domains,
+            },
+            "ext": {
+                "surface": "chat",
+                "allowed_modes": ["answer", "report"],
+                "forbidden_modes": ["action"],
+                "history_messages": self._meeting_history_messages(recent_messages),
+                "inspection_context": await self._build_meeting_inspection_context(),
+                "meeting_context": {
+                    "room_id": room_id,
+                    "room_type": room_type,
+                    "project_id": _DEFAULT_PROJECT_ID,
+                    "allowed_data_domains": allowed_domains,
+                    "denied_data_domains": [domain for domain in _ALL_DATA_DOMAINS if domain not in allowed_domains],
+                    "recent_messages": self._meeting_context_messages(recent_messages),
+                    "project_binding": "unbound",
+                },
+            },
+            "attachments": [],
+            "image_urls": [],
+        }
+        router_output = await AgentManagerService().run_chat(payload, db_session=self._session)
+        route_decision = router_output.route_decision
+        agent_output = dict(router_output.agent_output or {})
+        answer = self._agent_manager_answer(agent_output, router_output.status)
+        selected_subgraph = str(route_decision.sub_route or "general_chat")
+        message = await self._repo.create_message(
+            org_id=self._org_id,
+            room_id=room_id,
+            user_id=self._user_id,
+            username=_MEETING_GENERAL_AGENT_NAME,
+            content=answer,
+            message_type="agent",
+            agent_id=_MEETING_GENERAL_AGENT_ID,
+            metadata_json={
+                "selected_subgraph": selected_subgraph,
+                "route_source": "agent_manager",
+                "selected_agent": route_decision.selected_agent,
+                "route_decision": route_decision.model_dump(mode="json"),
+                "manager_status": router_output.status,
+                "degrade_reason": router_output.degrade_reason,
+                "capabilities_used": list(agent_output.get("capabilities_used") or []),
+                "message_type": agent_output.get("message_type"),
+                "trace_id": agent_output.get("trace_id"),
+                "trace_url": agent_output.get("trace_url"),
+                "citations": list(agent_output.get("citations") or []),
+                "rag_summary": agent_output.get("rag_summary"),
+            },
+        )
+        response_message = MeetingMessageResponse.model_validate(message)
+        await self._record_agent_query_audit(
+            room=room,
+            question=request.query,
+            intent=selected_subgraph,
+            source_refs=[
+                {"type": "meeting_message", "id": str(message.id)},
+                *[
+                    {"type": "citation", **citation}
+                    for citation in list(agent_output.get("citations") or [])
+                    if isinstance(citation, dict)
+                ],
+            ],
+            tool_calls=[
+                {"name": str(item), "source": "agent_manager"}
+                for item in list(agent_output.get("capabilities_used") or [])
+            ],
+        )
+        await self._session.commit()
+        await meeting_stream_broker.publish(
+            room_id,
+            {"event": "message_created", "room_id": room_id, "message": response_message.model_dump()},
+        )
+        return MeetingAgentRunResponse(
+            selected_subgraph=selected_subgraph,
+            answer=answer,
+            message=response_message,
+            memory_sources=[],
+            candidate_memories=[],
+        )
+
+    async def _build_meeting_inspection_context(self) -> dict[str, Any]:
+        try:
+            user = await self._users.get_by_id(self._org_id, self._user_id)
+            role = str(getattr(user, "role", "") or ROLE_USER)
+            return await ChatContextService(
+                self._session,
+                org_id=self._org_id,
+                user_id=self._user_id,
+                role=role,
+            ).build_inspection_context(recent_limit=6, summary_window=12)
+        except Exception:
+            logger.debug("meeting inspection context build skipped", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _agent_manager_answer(agent_output: dict[str, Any], status: str) -> str:
+        answer = str(agent_output.get("answer") or agent_output.get("summary") or "").strip()
+        if answer:
+            return answer
+        if status == "blocked":
+            return "当前请求被页面边界阻止：会议室只能做只读问答和上下文整理，不能直接创建或执行正式质检任务。"
+        if status == "failed":
+            return "会议Agent这次没有生成有效回复，请稍后重试。"
+        return "我已收到你的请求，但当前没有生成有效回复。"
+
+    @staticmethod
+    def _meeting_history_messages(messages: list[Any]) -> list[dict[str, str]]:
+        history: list[dict[str, str]] = []
+        for message in messages[-12:]:
+            content = str(getattr(message, "content", "") or "").strip()
+            if not content:
+                continue
+            message_type = str(getattr(message, "message_type", "user") or "user")
+            role = "assistant" if message_type in {"agent", "agent_streaming", "summary", "system"} else "user"
+            username = str(getattr(message, "username", "") or "").strip()
+            history.append({"role": role, "content": f"{username}: {content}"[:1200] if username else content[:1200]})
+        return history
+
+    @staticmethod
+    def _meeting_context_messages(messages: list[Any]) -> list[dict[str, Any]]:
+        context: list[dict[str, Any]] = []
+        for message in messages[-12:]:
+            content = str(getattr(message, "content", "") or "").strip()
+            if not content:
+                continue
+            context.append(
+                {
+                    "seq_no": int(getattr(message, "seq_no", 0) or 0),
+                    "username": str(getattr(message, "username", "") or ""),
+                    "message_type": str(getattr(message, "message_type", "") or ""),
+                    "content": content[:1200],
+                }
+            )
+        return context
+
+    @staticmethod
+    def _clean_general_agent_query(query: str) -> str:
+        cleaned = str(query or "").strip()
+        mention_pattern = re.compile(
+            r"@\s*(会议\s*Agent|AI\s*助手|智能助手|总\s*Agent|总智能体|agent|general\s*agent)",
+            re.IGNORECASE,
+        )
+        cleaned = mention_pattern.sub("", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ，。；:：")
+        return cleaned or str(query or "").strip()
 
     async def _collect_memory_sources(
         self,
@@ -670,10 +1105,20 @@ class MeetingService:
         ]
         recent = user_messages[-8:]
         source_lines = "\n".join(f"- {item.title}: {item.summary}" for item in memory_sources[:5])
+        if selected_subgraph == "capability_intro":
+            return (
+                "我是会议Agent，负责在这个会议室里把讨论内容整理成可执行、可追溯的结果。\n\n"
+                "我现在可以做这些事：\n"
+                "1. 回答你在会议里点名提出的问题。\n"
+                "2. 基于当前会议内容生成会议纪要。\n"
+                "3. 从讨论中提取候选记忆，等你确认后再发布为项目共享记忆。\n"
+                "4. 整理会议待办线索，辅助分配责任人和后续跟进。\n"
+                "5. 根据会议上下文做检测风险、检测证据、标准解释的讨论型整理。\n\n"
+                "当前版本还没有真正绑定项目和质检任务，所以我不会自动知道全部质检任务；需要你在会议里提到产品、批次、任务，或后续接入结构化绑定。"
+            )
         if selected_subgraph == "risk_forecast":
             return (
-                "已路由到「风险预测」子图。\n"
-                "第一版先基于会议上下文和已确认共享记忆给出讨论型预测建议：\n"
+                "我先基于会议上下文和已确认共享记忆给出讨论型预测建议：\n"
                 "1. 优先关注会议中被反复提及的产品、批次和缺陷类型。\n"
                 "2. 对缺少检测任务或结果来源的结论标记为待核验。\n"
                 "3. 后续接入 inspection_tasks / inspection_results 后，可补充分数化风险排序。\n\n"
@@ -682,32 +1127,27 @@ class MeetingService:
             )
         if selected_subgraph == "evidence_query":
             return (
-                "已路由到「检测证据」子图。\n"
-                "当前版本会先从会议上下文中定位产品、批次、任务 ID 等线索；真正的检测证据列表需要后续接入检测任务与结果表。\n\n"
+                "我会先从会议上下文中定位产品、批次、任务 ID 等线索；真正的检测证据列表需要后续接入检测任务与结果表。\n\n"
                 f"本次查询：{query}\n"
                 f"会议线索：\n{self._bullet_recent(recent)}"
             )
         if selected_subgraph == "standard_explain":
             return (
-                "已路由到「标准解释」子图。\n"
-                "当前版本会把会议中的判定争议、标准名和缺陷描述整理为待解释问题；接入 RAG 标准条款后可返回具体引用依据。\n\n"
+                "我会把会议中的判定争议、标准名和缺陷描述整理为待解释问题；接入 RAG 标准条款后可返回具体引用依据。\n\n"
                 f"本次查询：{query}\n"
                 f"相关上下文：\n{self._bullet_recent(recent)}"
             )
         if selected_subgraph == "memory_transfer":
             return (
-                "已路由到「记忆转移」子图。\n"
                 "我已根据会议内容生成候选记忆，等待用户确认后才会发布为项目共享记忆；原始会议聊天不会跨会议共享。\n\n"
                 f"候选依据：\n{self._bullet_recent(recent[-5:])}"
             )
         if selected_subgraph == "action_items":
             return (
-                "已路由到「行动项」子图。\n"
-                "建议把会议中的明确责任、截止时间和复核要求拆成行动项；右侧面板可以继续新增、更新和完成。\n\n"
+                "建议把会议中的明确责任、截止时间和复核要求拆成会议待办；右侧面板可以继续新增、更新和完成。\n\n"
                 f"可提取线索：\n{self._bullet_recent(recent[-5:])}"
             )
         return (
-            "已路由到「会议纪要」子图。\n"
             "下面是基于当前会议上下文的第一版整理：\n\n"
             f"核心讨论：\n{self._bullet_recent(recent)}\n\n"
             f"已确认共享记忆：\n{source_lines or '- 暂无'}\n\n"
@@ -798,7 +1238,7 @@ class MeetingService:
                 from_scope_id=room_id,
                 to_scope_type="project",
                 to_scope_id=_DEFAULT_PROJECT_ID,
-                transfer_reason="总智能体从会议上下文提取候选记忆",
+                transfer_reason="会议Agent从会议上下文提取候选记忆",
                 status="candidate",
                 operator_id=self._user_id,
             )
@@ -890,6 +1330,202 @@ class MeetingService:
         content_json = item.content_json or {}
         return str(scope_json.get("meeting_room_id") or content_json.get("source_id") or "") or None
 
+    @staticmethod
+    def _normalize_room_type(value: str | None) -> str:
+        room_type = str(value or "quality_business").strip()
+        return room_type if room_type in _ROOM_TYPE_DOMAIN_DEFAULTS else "quality_business"
+
+    @staticmethod
+    def _ordered_domains(domains: set[str] | list[str] | tuple[str, ...]) -> list[str]:
+        domain_set = set(domains)
+        return [domain for domain in _ALL_DATA_DOMAINS if domain in domain_set]
+
+    @staticmethod
+    def _normalize_domain_list(values: Any) -> list[str]:
+        if values is None:
+            return []
+        if isinstance(values, str):
+            raw_values = re.split(r"[\s,，;；]+", values)
+        elif isinstance(values, (list, tuple, set)):
+            raw_values = list(values)
+        else:
+            return []
+
+        seen: set[str] = set()
+        result: list[str] = []
+        valid_domains = set(_ALL_DATA_DOMAINS)
+        for value in raw_values:
+            domain = str(value or "").strip()
+            if not domain or domain not in valid_domains or domain in seen:
+                continue
+            seen.add(domain)
+            result.append(domain)
+        return result
+
+    def _role_allowed_domains(self) -> set[str]:
+        role = str(self._role or ROLE_USER)
+        if role in _ROLE_DOMAIN_ALLOW:
+            return set(_ROLE_DOMAIN_ALLOW[role])
+        if role in {"member", "quality_operator"}:
+            return {"quality", "standard", "meeting", "memory", "ai_conversation"}
+        if role in {"quality_expert", "quality_manager"}:
+            return {"quality", "standard", "meeting", "memory", "security_audit", "ai_conversation"}
+        if role == "platform_operator":
+            return set(_ROLE_DOMAIN_ALLOW[ROLE_PLATFORM_OPERATOR])
+        if role == "org_admin":
+            return {"org_admin", "security_audit", "meeting", "memory", "ai_conversation"}
+        return set(_ROLE_DOMAIN_ALLOW[ROLE_USER])
+
+    def _room_default_domains(self, room_type: str) -> list[str]:
+        normalized = self._normalize_room_type(room_type)
+        return list(_ROOM_TYPE_DOMAIN_DEFAULTS.get(normalized) or _ROOM_TYPE_DOMAIN_DEFAULTS["quality_business"])
+
+    def _effective_domains_for_create(self, room_type: str, requested: list[str] | None) -> list[str]:
+        role_allowed = self._role_allowed_domains()
+        requested_domains = self._normalize_domain_list(requested)
+        base_domains = set(requested_domains or self._room_default_domains(room_type))
+        effective = base_domains & role_allowed
+        if "meeting" in role_allowed:
+            effective.add("meeting")
+        if not effective and "memory" in role_allowed:
+            effective.add("memory")
+        return self._ordered_domains(effective)
+
+    def _effective_domains_for_room(self, room: Any) -> list[str]:
+        room_type = self._normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business"))
+        stored_domains = self._normalize_domain_list(getattr(room, "allowed_data_domains", None))
+        role_allowed = self._role_allowed_domains()
+        effective = set(stored_domains or self._room_default_domains(room_type)) & role_allowed
+        if "meeting" in role_allowed:
+            effective.add("meeting")
+        return self._ordered_domains(effective)
+
+    def _agent_allowed_domains(self, room: Any, requested: list[str] | None) -> list[str]:
+        room_domains = set(self._effective_domains_for_room(room))
+        requested_domains = self._normalize_domain_list(requested)
+        if not requested_domains:
+            return self._ordered_domains(room_domains)
+        return self._ordered_domains(set(requested_domains) & room_domains)
+
+    @staticmethod
+    def _normalize_tool_list(tools: Any) -> list[str]:
+        if tools is None:
+            return []
+        if isinstance(tools, str):
+            raw_tools = re.split(r"[\s,，;；]+", tools)
+        elif isinstance(tools, (list, tuple, set)):
+            raw_tools = list(tools)
+        else:
+            return []
+
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in raw_tools:
+            tool = re.sub(r"\s+", "", str(value or "").strip())
+            if not tool or tool in seen:
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", tool):
+                continue
+            seen.add(tool)
+            result.append(tool)
+        return result
+
+    def _requested_domains_for_intent(self, intent: str | None, question: str) -> list[str]:
+        intent_key = str(intent or "").strip()
+        if intent_key in {"capability_intro", "meeting_summary", "action_items", "memory_transfer"}:
+            return ["meeting", "memory"]
+        if intent_key in {"risk_forecast", "evidence_query", "standard_explain"}:
+            return ["quality", "standard", "meeting", "memory"]
+
+        normalized = str(question or "").lower()
+        compact = _normalize_name(question)
+        domains: set[str] = set(_CORE_CONTEXT_DOMAINS)
+        keyword_groups = [
+            (("质检", "检测", "任务", "缺陷", "复核", "批次", "产品", "quality", "inspection"), {"quality", "standard"}),
+            (("标准", "条款", "判定", "standard"), {"standard"}),
+            (("模型", "价格", "成本", "供应商", "billing", "model", "price", "cost"), {"platform_ops", "model_billing"}),
+            (("agent", "智能体", "路由", "trace", "prompt", "运行", "队列"), {"platform_ops"}),
+            (("组织", "成员", "角色", "权限", "部门", "admin", "审计记录"), {"org_admin", "security_audit"}),
+            (("数据源", "连接器", "rag", "同步", "索引", "dataset", "connector"), {"data_access", "platform_ops"}),
+            (("会话", "聊天记录", "私聊", "conversation", "chat history"), {"ai_conversation", "security_audit"}),
+            (("记忆", "候选记忆", "共享记忆", "memory"), {"memory"}),
+        ]
+        for keywords, mapped_domains in keyword_groups:
+            if any(keyword in normalized or keyword in compact for keyword in keywords):
+                domains.update(mapped_domains)
+        return self._ordered_domains(domains)
+
+    @staticmethod
+    def _redacted_fields_for_question(question: str) -> list[str]:
+        normalized = str(question or "").lower()
+        if not any(term in normalized for term in _SENSITIVE_QUERY_TERMS):
+            return []
+        return ["api_key", "secret_key", "token", "password", "connection_string"]
+
+    def _serialize_agent_row(self, row: Any, *, agent_name: str = "") -> MeetingRoomAgentResponse:
+        return MeetingRoomAgentResponse(
+            id=str(row.id),
+            room_id=str(row.room_id),
+            agent_id=str(row.agent_id),
+            agent_name=agent_name,
+            role=str(row.role),
+            added_by=str(row.added_by),
+            allowed_domains=self._normalize_domain_list(getattr(row, "allowed_domains", None)),
+            allowed_tools=self._normalize_tool_list(getattr(row, "allowed_tools", None)),
+        )
+
+    def _serialize_agent_query_audit(self, row: Any) -> MeetingAgentQueryAuditResponse:
+        return MeetingAgentQueryAuditResponse(
+            id=str(row.id),
+            room_id=str(row.room_id),
+            user_id=str(row.user_id),
+            agent_id=str(row.agent_id),
+            question=str(row.question),
+            intent=str(row.intent) if row.intent else None,
+            requested_domains=self._normalize_domain_list(getattr(row, "requested_domains", None)),
+            allowed_domains=self._normalize_domain_list(getattr(row, "allowed_domains", None)),
+            denied_domains=self._normalize_domain_list(getattr(row, "denied_domains", None)),
+            tool_calls=list(getattr(row, "tool_calls", None) or []),
+            source_refs=list(getattr(row, "source_refs", None) or []),
+            redacted_fields=[str(item) for item in (getattr(row, "redacted_fields", None) or [])],
+            decision=str(getattr(row, "decision", "allowed") or "allowed"),
+            created_at=getattr(row, "created_at", None),
+        )
+
+    async def _record_agent_query_audit(
+        self,
+        *,
+        room: Any,
+        question: str,
+        intent: str | None,
+        source_refs: list[dict] | None = None,
+        tool_calls: list[dict] | None = None,
+    ) -> None:
+        create_audit = getattr(self._repo, "create_agent_query_audit", None)
+        if create_audit is None:
+            return
+
+        requested_domains = self._requested_domains_for_intent(intent, question)
+        room_domains = set(self._effective_domains_for_room(room))
+        allowed_domains = self._ordered_domains(set(requested_domains) & room_domains)
+        denied_domains = self._ordered_domains(set(requested_domains) - room_domains)
+        decision = "allowed" if not denied_domains else ("partial" if allowed_domains else "denied")
+        await create_audit(
+            org_id=self._org_id,
+            room_id=str(getattr(room, "id", "") or ""),
+            user_id=self._user_id,
+            agent_id=_MEETING_GENERAL_AGENT_ID,
+            question=str(question or "").strip()[:4000],
+            intent=intent,
+            requested_domains=requested_domains,
+            allowed_domains=allowed_domains,
+            denied_domains=denied_domains,
+            tool_calls=tool_calls or [],
+            source_refs=source_refs or [],
+            redacted_fields=self._redacted_fields_for_question(question),
+            decision=decision,
+        )
+
     async def _serialize_action_item(self, row) -> MeetingActionItemResponse:
         owner_name = ""
         if row.owner_id:
@@ -921,12 +1557,17 @@ class MeetingService:
                 title=str(room.title),
                 access_code=str(room.access_code),
                 created_by=str(room.created_by),
-                status=str(room.status),
+                status=str(getattr(room, "status", "active") or "active"),
+                room_type=self._normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business")),
+                visibility=str(getattr(room, "visibility", "private") or "private"),
+                allowed_data_domains=self._effective_domains_for_room(room),
+                memory_policy=getattr(room, "memory_policy", None) or {},
+                audit_policy=getattr(room, "audit_policy", None) or {},
                 member_count=counts.get(str(room.id), 0),
                 agent_count=agent_counts.get(str(room.id), 0),
-                last_message_at=room.last_message_at,
-                created_at=room.created_at,
-                updated_at=room.updated_at,
+                last_message_at=getattr(room, "last_message_at", None),
+                created_at=getattr(room, "created_at", None),
+                updated_at=getattr(room, "updated_at", None),
             )
             for room in rooms
         ]
@@ -992,7 +1633,7 @@ class MeetingService:
         return mentions
 
     def _contains_meeting_ai_mention(self, content: str) -> bool:
-        aliases = {_MEETING_AI_AGENT_NAME, "AI 助手", "AI助手"}
+        aliases = {_MEETING_AI_AGENT_NAME, "AI 助手", "AI助手", "智能助手"}
         compact_name = _normalize_name(_MEETING_AI_AGENT_NAME)
         if compact_name:
             aliases.add(compact_name)
@@ -1004,8 +1645,23 @@ class MeetingService:
         return False
 
     def _contains_general_agent_mention(self, content: str) -> bool:
+        compact_content = _normalize_name(content)
+        compact_builtin_mentions = {
+            f"@{_normalize_name(_MEETING_GENERAL_AGENT_NAME)}",
+            "@agent",
+            "@会议agent",
+            "@总agent",
+            "@总智能体",
+        }
+        if any(item in compact_content for item in compact_builtin_mentions):
+            return True
+
         aliases = {
             _MEETING_GENERAL_AGENT_NAME,
+            "agent",
+            "会议 Agent",
+            "会议Agent",
+            "总智能体",
             "总Agent",
             "总 Agent",
             "总AI",
@@ -1027,25 +1683,38 @@ class MeetingService:
                     return True
         return False
 
-    async def _invoke_meeting_ai_reply(self, *, room_id: str) -> None:
-        from app.services.meeting_ai_service import MeetingAiService
-
-        try:
-            async with get_session() as session:
-                service = MeetingAiService(session, self._org_id, self._user_id)
-                await service.ai_respond(room_id)
-                await session.commit()
-        except Exception:
-            logger.exception("meeting ai mention invocation failed room_id=%s", room_id)
-
     async def _invoke_general_agent_reply(self, *, room_id: str, query: str) -> None:
         try:
             async with get_session() as session:
-                service = MeetingService(session, self._org_id, self._user_id)
+                service = MeetingService(session, self._org_id, self._user_id, role=self._role)
                 await service.run_general_agent(
                     room_id,
                     MeetingAgentRunRequest(query=query, mode="auto"),
                 )
                 await session.commit()
-        except Exception:
+        except Exception as exc:
             logger.exception("meeting general agent invocation failed room_id=%s", room_id)
+            await self._publish_general_agent_failure(room_id=room_id, error=str(exc) or exc.__class__.__name__)
+
+    async def _publish_general_agent_failure(self, *, room_id: str, error: str) -> None:
+        try:
+            async with get_session() as session:
+                repo = MeetingRepository(session)
+                message = await repo.create_message(
+                    org_id=self._org_id,
+                    room_id=room_id,
+                    user_id=self._user_id,
+                    username=_MEETING_GENERAL_AGENT_NAME,
+                    content=f"[会议Agent] 响应失败: {error}",
+                    message_type="agent",
+                    agent_id=_MEETING_GENERAL_AGENT_ID,
+                    metadata_json={"selected_subgraph": "failure"},
+                )
+                response = MeetingMessageResponse.model_validate(message)
+                await session.commit()
+                await meeting_stream_broker.publish(
+                    room_id,
+                    {"event": "message_created", "room_id": room_id, "message": response.model_dump()},
+                )
+        except Exception:
+            logger.exception("meeting general agent failure message publish failed room_id=%s", room_id)

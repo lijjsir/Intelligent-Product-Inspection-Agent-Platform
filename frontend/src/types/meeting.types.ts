@@ -1,4 +1,22 @@
 export type MessageType = "user" | "agent" | "agent_streaming" | "system" | "summary" | "action_item";
+export type MeetingRoomType =
+  | "quality_business"
+  | "platform_ops"
+  | "org_admin"
+  | "data_ops"
+  | "memory_governance"
+  | "general";
+export type MeetingDataDomain =
+  | "quality"
+  | "standard"
+  | "meeting"
+  | "memory"
+  | "platform_ops"
+  | "model_billing"
+  | "org_admin"
+  | "data_access"
+  | "security_audit"
+  | "ai_conversation";
 
 export interface MentionInfo {
   agent_id: string;
@@ -28,6 +46,8 @@ export interface MeetingRoomAgent {
   agent_name: string;
   role: "participant" | "observer";
   added_by: string;
+  allowed_domains: MeetingDataDomain[];
+  allowed_tools: string[];
 }
 
 export interface MeetingRoomMember {
@@ -39,6 +59,10 @@ export interface MeetingRoomMember {
   joined_at?: string | null;
 }
 
+export interface MeetingMemberRoleUpdate {
+  role: "host" | "member";
+}
+
 export interface MeetingRoom {
   id: string;
   org_id: string;
@@ -46,6 +70,11 @@ export interface MeetingRoom {
   access_code: string;
   created_by: string;
   status: string;
+  room_type: MeetingRoomType;
+  visibility: "private" | "team" | "org" | "restricted" | string;
+  allowed_data_domains: MeetingDataDomain[];
+  memory_policy?: Record<string, unknown> | null;
+  audit_policy?: Record<string, unknown> | null;
   member_count: number;
   agent_count?: number;
   last_message_at?: string | null;
@@ -61,6 +90,16 @@ export interface MeetingRoomDetail extends MeetingRoom {
 export interface MeetingRoomCreate {
   title: string;
   password?: string | null;
+  room_type?: MeetingRoomType;
+  visibility?: "private" | "team" | "org" | "restricted";
+  allowed_data_domains?: MeetingDataDomain[] | null;
+}
+
+export interface MeetingRoomUpdate {
+  title?: string | null;
+  room_type?: MeetingRoomType | null;
+  visibility?: "private" | "team" | "org" | "restricted" | null;
+  allowed_data_domains?: MeetingDataDomain[] | null;
 }
 
 export interface MeetingRoomJoin {
@@ -71,6 +110,44 @@ export interface MeetingRoomJoin {
 export interface MeetingAddAgentRequest {
   agent_id: string;
   role: string;
+  allowed_domains?: MeetingDataDomain[] | null;
+  allowed_tools?: string[] | null;
+}
+
+export interface MeetingContextPreview {
+  room_id: string;
+  room_type: MeetingRoomType | string;
+  room_type_label: string;
+  user_role: string;
+  room_role: string;
+  allowed_domains: MeetingDataDomain[];
+  denied_domains: MeetingDataDomain[];
+  agent_permissions: Array<{
+    agent_id: string;
+    agent_name: string;
+    role: string;
+    allowed_domains: MeetingDataDomain[];
+    allowed_tools: string[];
+  }>;
+  query_examples: string[];
+  guardrails: string[];
+}
+
+export interface MeetingAgentQueryAudit {
+  id: string;
+  room_id: string;
+  user_id: string;
+  agent_id: string;
+  question: string;
+  intent?: string | null;
+  requested_domains: MeetingDataDomain[];
+  allowed_domains: MeetingDataDomain[];
+  denied_domains: MeetingDataDomain[];
+  tool_calls: Array<Record<string, unknown>>;
+  source_refs: Array<Record<string, unknown>>;
+  redacted_fields: string[];
+  decision: "allowed" | "partial" | "denied" | string;
+  created_at?: string | null;
 }
 
 export type MeetingAgentSubgraph =

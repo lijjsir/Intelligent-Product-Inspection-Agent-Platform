@@ -34,20 +34,27 @@ class RagExecutor:
         rag_space_name = str((state.selected_rag_space or {}).get("name") or "").strip()
         top_score = 0.0
         retrieval_meta: dict[str, Any] = {}
+        overview_mode = self._is_overview_query(state.original_query)
+        top_k = 12 if overview_mode else 5
         if db_session is not None and rag_space_id:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
 
-                result = await RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id).search(
-                    rag_space_id=rag_space_id,
-                    query=state.original_query,
-                    top_k=5,
-                    scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
-                )
+                service = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id)
+                if overview_mode and hasattr(service, "list_space_documents"):
+                    result = await service.list_space_documents(rag_space_id=rag_space_id, limit=top_k)
+                else:
+                    result = await service.search(
+                        rag_space_id=rag_space_id,
+                        query=state.original_query,
+                        top_k=top_k,
+                        scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
+                    )
                 retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
+                top_k = int(result.get("top_k") or top_k)
                 latency_ms = int(result.get("latency_ms") or 0)
             except Exception:
                 hits = []
@@ -72,13 +79,14 @@ class RagExecutor:
             {
                 "hit_count": len(hits),
                 "top_score": top_score,
-                "top_k": 5,
+                "top_k": top_k,
                 "latency_ms": latency_ms,
                 "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
                 "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
                 "score_threshold": retrieval_meta.get("score_threshold"),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
+                "overview_mode": bool(retrieval_meta.get("overview_mode") or overview_mode),
                 "hits": hits,
             },
             confidence=top_score or None,
@@ -94,3 +102,13 @@ class RagExecutor:
             ),
             [art],
         )
+
+    @staticmethod
+    def _is_overview_query(query: str) -> bool:
+        text = str(query or "").strip().lower()
+        if not text:
+            return False
+        if any(word in text for word in ("有哪些", "有什么", "包含", "目录", "列表", "列出", "知识库里", "知识库中")):
+            return True
+        compact = "".join(text.split())
+        return "检测标准" in compact and len(compact) <= 12

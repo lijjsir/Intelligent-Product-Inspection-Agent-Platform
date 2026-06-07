@@ -149,6 +149,19 @@ async def test_task_status_uses_task_status_message_type(mock_chat_model):
 
 
 @pytest.mark.asyncio
+async def test_recent_quality_task_wording_routes_to_task_status(mock_chat_model):
+    output = await ManagerLoop().run(
+        _request(
+            query="最近的质检任务情况是怎样的",
+            ext={"surface": "chat"},
+        )
+    )
+
+    assert output.route_decision.sub_route == "quality_task_status"
+    assert output.agent_output["message_type"] == "task_status"
+
+
+@pytest.mark.asyncio
 async def test_selected_rag_space_forces_rag_for_general_question(mock_chat_model):
     output = await ManagerLoop().run(
         _request(

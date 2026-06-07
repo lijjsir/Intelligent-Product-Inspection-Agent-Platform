@@ -19,7 +19,12 @@ TASK_PATTERNS = [
         r"quality inspection|inspection task|start inspection",
     ]
 ]
-REPORT_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"报告|上次检测|检测结果|失败原因|任务状态|status|report"]]
+REPORT_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"报告|上次检测|检测结果|失败原因|任务状态|任务情况|质检任务|检测任务|status|report",
+    ]
+]
 SUMMARY_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"总结|概括|摘要|summary"]]
 PAPER_FORMAT_PATTERNS = [
     re.compile(pattern, re.I)
@@ -281,7 +286,12 @@ class ManagerPolicy:
                 entities=self._extract_entities(query, state.attachments),
             )
         if self._matches(query, REPORT_PATTERNS):
-            capability = "quality.task.status" if "状态" in query or "status" in query.lower() else "quality.report.query"
+            capability = (
+                "quality.task.status"
+                if any(word in query for word in ("任务状态", "任务情况", "质检任务", "检测任务", "进度"))
+                or "status" in query.lower()
+                else "quality.report.query"
+            )
             return Understanding(
                 goal="只读查询质量检测报告或任务状态",
                 intent=capability.replace(".", "_"),

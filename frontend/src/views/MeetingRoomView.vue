@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ChatDotRound, Check, Close, CopyDocument, Delete, EditPen, FolderOpened, Key, MagicStick, Plus, Promotion, RefreshRight, Share, Tickets, User } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight, ChatDotRound, Check, Close, CopyDocument, Delete, EditPen, FolderOpened, Key, MagicStick, Plus, Promotion, RefreshRight, Share, User } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type StyleValue } from "vue";
 import { feedbackApi } from "@/api/feedback.api";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useMeetingStore } from "@/stores/meeting.store";
-import type { MeetingAgentSubgraph, MeetingMemory, MeetingMessage } from "@/types/meeting.types";
+import type { MeetingDataDomain, MeetingMemory, MeetingMessage, MeetingRoom, MeetingRoomMember, MeetingRoomType } from "@/types/meeting.types";
 import { normalizeAiResponseText } from "@/utils/ai-response";
 import { writeTextToClipboard } from "@/utils/clipboard";
 
@@ -15,6 +15,7 @@ const store = useMeetingStore();
 
 const roomTitle = ref("会议室");
 const roomPassword = ref("");
+const roomType = ref<MeetingRoomType>("quality_business");
 const joinCode = ref("");
 const joinPassword = ref("");
 const hubMode = ref<"create" | "join">("create");
@@ -25,12 +26,49 @@ const actionOwnerId = ref("");
 const quotedMessage = ref<MeetingMessage | null>(null);
 const messageListRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
-const mentionableAgents = computed(() => store.agents.filter((agent) => agent.role === "participant"));
+const leftPanelWidth = ref(260);
+const rightPanelWidth = ref(300);
+const leftPanelCollapsed = ref(false);
+const rightPanelCollapsed = ref(false);
+const resizingPanel = ref<"" | "left" | "right">("");
+let stopResizeListeners: (() => void) | null = null;
+
+const PANEL_WIDTHS = {
+  left: { min: 220, max: 420 },
+  right: { min: 260, max: 520 },
+};
+
+const roomTypeOptions: Array<{ value: MeetingRoomType; label: string; note: string }> = [
+  { value: "quality_business", label: "质检业务", note: "任务、结果、标准" },
+  { value: "platform_ops", label: "平台运营", note: "Agent、模型、路由" },
+  { value: "org_admin", label: "组织管理", note: "成员、角色、审计" },
+  { value: "data_ops", label: "数据接入", note: "数据源、RAG、同步" },
+  { value: "memory_governance", label: "记忆治理", note: "候选、共享、冲突" },
+  { value: "general", label: "普通协作", note: "会议、资料、纪要" },
+];
+
+const roomTypeLabels = Object.fromEntries(roomTypeOptions.map((item) => [item.value, item.label])) as Record<string, string>;
+const domainLabels: Record<string, string> = {
+  quality: "质检业务",
+  standard: "质检标准",
+  meeting: "会议协作",
+  memory: "记忆",
+  platform_ops: "平台运营",
+  model_billing: "模型成本",
+  org_admin: "组织管理",
+  data_access: "数据接入",
+  security_audit: "安全审计",
+  ai_conversation: "AI 会话",
+};
+
+const meetingLayoutStyle = computed<StyleValue>(() => ({
+  "--left-panel-width": leftPanelCollapsed.value ? "52px" : `${leftPanelWidth.value}px`,
+  "--right-panel-width": rightPanelCollapsed.value ? "52px" : `${rightPanelWidth.value}px`,
+}));
+
 const mentionTargets = computed(() => {
   const entries = [
-    { id: "general_agent", agent_name: "总智能体" },
-    { id: "ai_assistant", agent_name: "智能助手" },
-    ...mentionableAgents.value,
+    { id: "general_agent", agent_name: "会议Agent" },
   ];
   const seen = new Set<string>();
   return entries.filter((item) => {
@@ -56,6 +94,19 @@ const hostMember = computed(() => {
 });
 const visibleMemberCount = computed(() => store.members.length || store.activeRoom?.member_count || 0);
 const canManageRoom = computed(() => Boolean(store.activeRoom && store.activeRoom.created_by === auth.userId));
+const canReviewMemory = computed(() => {
+  if (!store.activeRoom) return false;
+  if (store.activeRoom.created_by === auth.userId) return true;
+  return store.members.some((member) => member.user_id === auth.userId && member.role === "host");
+});
+const roomTitleCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const room of store.rooms) {
+    const title = room.title.trim() || "会议室";
+    counts.set(title, (counts.get(title) || 0) + 1);
+  }
+  return counts;
+});
 const roomStatusLabel = computed(() => {
   const status = store.activeRoom?.status || "";
   if (status === "active") return "进行中";
@@ -63,52 +114,85 @@ const roomStatusLabel = computed(() => {
   if (status === "archived") return "已归档";
   return status || "未选择";
 });
+const activeRoomTypeLabel = computed(() => {
+  const previewLabel = store.contextPreview?.room_type_label;
+  if (previewLabel) return previewLabel;
+  return roomTypeLabel(store.activeRoom?.room_type);
+});
+const contextAllowedDomains = computed(() => store.contextPreview?.allowed_domains || store.activeRoom?.allowed_data_domains || []);
+const contextDeniedDomains = computed(() => store.contextPreview?.denied_domains || []);
 
-const agentActions: Array<{ mode: "auto" | MeetingAgentSubgraph; label: string }> = [
-  { mode: "auto", label: "询问智能体" },
-  { mode: "meeting_summary", label: "生成纪要" },
-  { mode: "memory_transfer", label: "提取记忆" },
-  { mode: "action_items", label: "生成行动项" },
-  { mode: "risk_forecast", label: "风险预测" },
-  { mode: "evidence_query", label: "查询证据" },
-];
+function canDeleteRoom(room: MeetingRoom) {
+  return room.created_by === auth.userId;
+}
 
-const subgraphLabels: Record<string, string> = {
-  risk_forecast: "风险预测",
-  evidence_query: "检测证据",
-  standard_explain: "标准解释",
-  meeting_summary: "会议纪要",
-  memory_transfer: "记忆转移",
-  action_items: "行动项",
-};
+function roomTypeLabel(value?: string | null) {
+  return roomTypeLabels[String(value || "quality_business")] || "质检业务";
+}
+
+function domainLabel(value: string) {
+  return domainLabels[value] || value;
+}
+
+function roomDomainPreview(room: MeetingRoom) {
+  const domains = room.allowed_data_domains || [];
+  if (!domains.length) return roomTypeLabel(room.room_type);
+  return domains.slice(0, 2).map(domainLabel).join("、") + (domains.length > 2 ? ` +${domains.length - 2}` : "");
+}
+
+function auditDecisionLabel(value: string) {
+  if (value === "allowed") return "允许";
+  if (value === "partial") return "部分";
+  if (value === "denied") return "拒绝";
+  return value || "未知";
+}
+
+function auditDecisionClass(value: string) {
+  if (value === "allowed") return "audit-allowed";
+  if (value === "partial") return "audit-partial";
+  if (value === "denied") return "audit-denied";
+  return "";
+}
+
+function hasMeetingAgentMention(content: string) {
+  return content.replace(/\s+/g, "").toLowerCase().includes("@会议agent");
+}
 
 function memberRoleLabel(role: string) {
   return role === "host" ? "主持人" : "成员";
+}
+
+function normalizedMemberRole(role: string): "host" | "member" {
+  return role === "host" ? "host" : "member";
 }
 
 function memberInitial(name: string) {
   return (name || "?").trim().slice(0, 1).toUpperCase();
 }
 
+function parseApiTime(value?: string | null) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const date = new Date(hasTimezone ? raw : `${raw}Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatTime(value?: string | null) {
   if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  const date = parseApiTime(value);
+  if (!date) return value;
   return date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function subgraphLabel(value?: unknown) {
-  const key = String(value || "");
-  return subgraphLabels[key] || key;
+function roomDisplayTitle(room: { title: string; access_code: string }) {
+  const title = room.title.trim() || "会议室";
+  return (roomTitleCounts.value.get(title) || 0) > 1 ? `${title} · ${room.access_code}` : title;
 }
 
-function messageSubgraph(message: MeetingMessage) {
-  return message.metadata_json?.selected_subgraph as string | undefined;
-}
-
-function messageMemorySources(message: MeetingMessage) {
-  const sources = message.metadata_json?.memory_sources;
-  return Array.isArray(sources) ? sources as Array<{ title?: string; summary?: string }> : [];
+function roomRecentLabel(room: { last_message_at?: string | null; updated_at?: string | null; created_at?: string | null }) {
+  const value = room.last_message_at || room.updated_at || room.created_at;
+  return formatTime(value);
 }
 
 function memoryConfidence(memory: MeetingMemory) {
@@ -124,7 +208,59 @@ function quotedMessageTitle(messageId?: string | null) {
 }
 
 function displayMessageContent(message: MeetingMessage): string {
+  if (message.message_type === "agent_streaming") return "会议Agent正在整理回复...";
   return message.message_type === "agent" ? normalizeAiResponseText(message.content).content : message.content;
+}
+
+function clampPanelWidth(panel: "left" | "right", value: number) {
+  const limits = PANEL_WIDTHS[panel];
+  return Math.min(limits.max, Math.max(limits.min, Math.round(value)));
+}
+
+function stopPanelResize() {
+  if (stopResizeListeners) {
+    stopResizeListeners();
+    stopResizeListeners = null;
+  }
+  resizingPanel.value = "";
+}
+
+function startPanelResize(panel: "left" | "right", event: PointerEvent) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  stopPanelResize();
+
+  const startX = event.clientX;
+  const startWidth = panel === "left" ? leftPanelWidth.value : rightPanelWidth.value;
+  const previousCursor = document.body.style.cursor;
+  const previousUserSelect = document.body.style.userSelect;
+  resizingPanel.value = panel;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+
+  const onPointerMove = (moveEvent: PointerEvent) => {
+    const delta = panel === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+    const nextWidth = clampPanelWidth(panel, startWidth + delta);
+    if (panel === "left") {
+      leftPanelWidth.value = nextWidth;
+    } else {
+      rightPanelWidth.value = nextWidth;
+    }
+  };
+  const onPointerUp = () => {
+    document.body.style.cursor = previousCursor;
+    document.body.style.userSelect = previousUserSelect;
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    stopResizeListeners = null;
+    resizingPanel.value = "";
+  };
+
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+  stopResizeListeners = onPointerUp;
 }
 
 async function copyToClipboard(text: string, successText = "已复制") {
@@ -199,7 +335,9 @@ function onInputKeydown(event: KeyboardEvent) {
 
 async function createRoom() {
   try {
-    const room = await store.createRoom(roomTitle.value.trim() || "会议室", roomPassword.value.trim() || null);
+    const room = await store.createRoom(roomTitle.value.trim() || "会议室", roomPassword.value.trim() || null, {
+      room_type: roomType.value,
+    });
     roomTitle.value = "会议室";
     roomPassword.value = "";
     ElMessage.success(`会议室已创建，会议码 ${room.access_code}`);
@@ -226,52 +364,43 @@ async function sendMessage() {
   if (!store.canSend) return;
   const content = input.value.trim();
   if (!content) return;
-  await store.sendMessage(content, quotedMessage.value?.id || null);
-  input.value = "";
-  quotedMessage.value = null;
-  await scrollToBottom();
-}
-
-async function requestAiReply() {
-  if (!store.activeRoom) return;
   try {
-    await store.requestAiReply();
+    const shouldAskMeetingAgent = hasMeetingAgentMention(content);
+    const message = await store.sendMessage(content, quotedMessage.value?.id || null, {
+      skipAgentTrigger: shouldAskMeetingAgent,
+    });
+    if (!message) return;
+    input.value = "";
+    quotedMessage.value = null;
     await scrollToBottom();
+    if (shouldAskMeetingAgent) {
+      await runGeneralAgent(content);
+    }
   } catch (error) {
-    ElMessage.error("智能助手回复失败，请稍后重试。");
+    ElMessage.error("消息发送失败，请稍后重试。");
     console.error(error);
   }
 }
 
-async function summarizeMeeting() {
+async function runGeneralAgent(query = "") {
   if (!store.activeRoom) return;
   try {
-    await store.summarizeMeeting();
+    const result = await store.runGeneralAgent("auto", query);
     await scrollToBottom();
-    ElMessage.success("会议纪要已生成。");
+    if (result) {
+      ElMessage.success("会议Agent已回复。");
+    }
   } catch (error) {
-    ElMessage.error("生成会议纪要失败，请稍后重试。");
-    console.error(error);
-  }
-}
-
-async function runGeneralAgent(mode: "auto" | MeetingAgentSubgraph) {
-  if (!store.activeRoom) return;
-  try {
-    await store.runGeneralAgent(mode);
-    await scrollToBottom();
-    ElMessage.success(`${subgraphLabel(mode === "auto" ? "meeting_summary" : mode)}已生成。`);
-  } catch (error) {
-    ElMessage.error("智能体执行失败，请稍后重试。");
+    ElMessage.error("会议Agent回应失败，请稍后重试。");
     console.error(error);
   }
 }
 
 async function extractCandidateMemories() {
-  if (!store.activeRoom) return;
+  if (!store.activeRoom || !canReviewMemory.value) return;
   try {
     const list = await store.extractMemories();
-    ElMessage.success(list.length ? "候选记忆已提取。" : "暂无候选记忆。");
+    ElMessage.success(list.length ? "候选记忆已提取。" : "暂无可提取的候选记忆。");
   } catch (error) {
     ElMessage.error("提取候选记忆失败，请稍后重试。");
     console.error(error);
@@ -279,6 +408,7 @@ async function extractCandidateMemories() {
 }
 
 async function confirmCandidateMemory(memory: MeetingMemory) {
+  if (!canReviewMemory.value) return;
   try {
     await store.confirmMemory(memory.memory_id, { title: memory.title, content: memory.content });
     ElMessage.success("记忆已发布为项目共享记忆");
@@ -289,11 +419,23 @@ async function confirmCandidateMemory(memory: MeetingMemory) {
 }
 
 async function rejectCandidateMemory(memory: MeetingMemory) {
+  if (!canReviewMemory.value) return;
   try {
     await store.rejectMemory(memory.memory_id);
     ElMessage.success("候选记忆已拒绝");
   } catch (error) {
     ElMessage.error("拒绝记忆失败，请稍后重试。");
+    console.error(error);
+  }
+}
+
+async function updateMemberRole(member: MeetingRoomMember, role: "host" | "member") {
+  if (!store.activeRoom || !canManageRoom.value || normalizedMemberRole(member.role) === role) return;
+  try {
+    await store.updateMemberRole(member.user_id, role);
+    ElMessage.success(`已设为${memberRoleLabel(role)}`);
+  } catch (error) {
+    ElMessage.error("成员权限更新失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -310,9 +452,9 @@ async function createActionItem() {
     actionTitle.value = "";
     actionDescription.value = "";
     actionOwnerId.value = "";
-    ElMessage.success("行动项已新增");
+    ElMessage.success("会议待办已新增");
   } catch (error) {
-    ElMessage.error("新增行动项失败，请稍后重试。");
+    ElMessage.error("新增会议待办失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -320,9 +462,9 @@ async function createActionItem() {
 async function completeActionItem(actionItemId: string) {
   try {
     await store.completeActionItem(actionItemId);
-    ElMessage.success("行动项已完成");
+    ElMessage.success("会议待办已完成");
   } catch (error) {
-    ElMessage.error("更新行动项失败，请稍后重试。");
+    ElMessage.error("更新会议待办失败，请稍后重试。");
     console.error(error);
   }
 }
@@ -395,15 +537,15 @@ async function quoteMessage(message: MeetingMessage) {
   inputRef.value?.focus();
 }
 
-async function handleDeleteRoom() {
-  if (!store.activeRoom) return;
+async function handleDeleteRoom(room: MeetingRoom) {
+  if (!canDeleteRoom(room)) return;
   try {
     await ElMessageBox.confirm(
-      `确定删除会议室「${store.activeRoom.title}」吗？删除后所有成员都将无法继续访问。`,
+      `确定删除会议室「${room.title}」吗？删除后所有成员都将无法继续访问。`,
       "确认删除",
       { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
     );
-    await store.deleteRoom();
+    await store.deleteRoom(room.id);
     ElMessage.success("会议室已删除");
   } catch {
     // cancelled or error
@@ -422,8 +564,6 @@ async function loadActiveRoomData(newId: string) {
   const results = await Promise.allSettled([
     store.loadMessages(0),
     store.loadMembers(),
-    store.loadAgents(),
-    store.loadAvailableAgentDefs(),
     store.loadMeetingContext(),
   ]);
   const failed = results.find((item) => item.status === "rejected");
@@ -464,14 +604,36 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  stopPanelResize();
   store.disconnectStream();
 });
 </script>
 
 <template>
-  <div class="meeting-page">
-    <aside class="meeting-sidebar">
-      <section class="sidebar-section">
+  <div
+    class="meeting-page"
+    :class="{
+      'is-left-collapsed': leftPanelCollapsed,
+      'is-right-collapsed': rightPanelCollapsed,
+      'is-resizing-left': resizingPanel === 'left',
+      'is-resizing-right': resizingPanel === 'right',
+    }"
+    :style="meetingLayoutStyle"
+  >
+    <aside class="meeting-sidebar" :class="{ 'panel-collapsed': leftPanelCollapsed }">
+      <button
+        type="button"
+        class="panel-toggle panel-toggle-left"
+        :aria-label="leftPanelCollapsed ? '展开会议入口' : '收起会议入口'"
+        :title="leftPanelCollapsed ? '展开会议入口' : '收起会议入口'"
+        @click="leftPanelCollapsed = !leftPanelCollapsed"
+      >
+        <ArrowRight v-if="leftPanelCollapsed" />
+        <ArrowLeft v-else />
+      </button>
+      <div class="panel-collapsed-label">会议入口</div>
+      <div class="panel-content">
+        <section class="sidebar-section">
         <p class="section-kicker">会议入口</p>
         <h1>会议室</h1>
         <p class="section-copy">创建新会议，或使用别人发来的会议码加入。</p>
@@ -503,6 +665,17 @@ onBeforeUnmount(() => {
             <el-input v-model="roomTitle" placeholder="会议室" />
           </label>
           <label>
+            <span>房间类型</span>
+            <el-select v-model="roomType" placeholder="选择房间类型">
+              <el-option
+                v-for="item in roomTypeOptions"
+                :key="item.value"
+                :label="`${item.label} · ${item.note}`"
+                :value="item.value"
+              />
+            </el-select>
+          </label>
+          <label>
             <span>入会密码（可选）</span>
             <el-input v-model="roomPassword" type="password" show-password placeholder="可留空" />
           </label>
@@ -520,26 +693,54 @@ onBeforeUnmount(() => {
           </label>
           <el-button :icon="Key" @click="joinRoom">加入会议</el-button>
         </div>
-      </section>
+        </section>
 
-      <section class="room-list">
+        <section class="room-list">
         <div class="room-list-head">
           <h2>我加入过的会议</h2>
           <el-button text :icon="RefreshRight" :loading="store.loadingRooms" @click="store.loadRooms()" aria-label="刷新会议列表" />
         </div>
-        <button
+        <div
           v-for="room in store.rooms"
           :key="room.id"
-          type="button"
           class="room-item"
           :class="{ 'room-item-active': room.id === store.activeRoomId }"
+          role="button"
+          tabindex="0"
           @click="store.activeRoomId = room.id"
+          @keydown.enter="store.activeRoomId = room.id"
         >
-          <span class="room-title">{{ room.title }}</span>
-          <span class="room-meta">{{ room.access_code }} · {{ room.member_count }} 人</span>
-        </button>
+          <span class="room-item-head">
+            <span class="room-title">{{ roomDisplayTitle(room) }}</span>
+            <el-button
+              v-if="canDeleteRoom(room)"
+              text
+              type="danger"
+              size="small"
+              :icon="Delete"
+              class="room-delete-button"
+              aria-label="删除会议"
+              title="删除会议"
+              @click.stop="handleDeleteRoom(room)"
+            />
+          </span>
+          <span class="room-meta">
+            <span>{{ room.access_code }} · {{ room.member_count }} 人</span>
+            <span>{{ roomTypeLabel(room.room_type) }} · {{ roomDomainPreview(room) }}</span>
+            <span v-if="roomRecentLabel(room)">最近 {{ roomRecentLabel(room) }}</span>
+          </span>
+        </div>
         <p v-if="!store.rooms.length && !store.loadingRooms" class="empty-note">暂无加入过的会议</p>
-      </section>
+        </section>
+      </div>
+      <div
+        v-if="!leftPanelCollapsed"
+        class="panel-resizer panel-resizer-left"
+        role="separator"
+        aria-label="调整左侧面板宽度"
+        aria-orientation="vertical"
+        @pointerdown="startPanelResize('left', $event)"
+      />
     </aside>
 
     <section class="meeting-room">
@@ -549,15 +750,17 @@ onBeforeUnmount(() => {
           <h2>{{ store.activeRoom?.title || "实时会议协作" }}</h2>
           <div v-if="store.activeRoom && hostMember" class="room-submeta">
             <span class="host-pill">主持人 {{ hostMember.username }}</span>
+            <span class="room-type-pill">{{ activeRoomTypeLabel }}</span>
             <span class="status-pill" :class="`status-${store.activeRoom.status}`">{{ roomStatusLabel }}</span>
           </div>
         </div>
-        <div class="room-header-right">
-          <el-button v-if="store.activeRoom && canManageRoom" size="small" :icon="EditPen" @click="editRoomTitle">
-            改标题
-          </el-button>
+        <div v-if="store.activeRoom" class="room-header-right">
+          <div class="room-toolbar-main">
+            <div class="room-code">
+              <span>会议码</span>
+              <strong>{{ store.activeRoom.access_code }}</strong>
+            </div>
           <el-popover
-            v-if="store.activeRoom"
             placement="bottom-end"
             :width="340"
             trigger="click"
@@ -582,7 +785,17 @@ onBeforeUnmount(() => {
                   <strong>{{ member.username }}</strong>
                   <small>{{ member.user_id === auth.userId ? "当前账号" : member.user_id.slice(-8) }}</small>
                 </span>
-                <span class="member-role" :class="{ 'member-role-host': member.role === 'host' }">
+                <el-select
+                  v-if="canManageRoom && member.user_id !== store.activeRoom.created_by"
+                  :model-value="normalizedMemberRole(member.role)"
+                  size="small"
+                  class="member-role-select"
+                  @change="(role) => updateMemberRole(member, role as 'host' | 'member')"
+                >
+                  <el-option label="主持人" value="host" />
+                  <el-option label="成员" value="member" />
+                </el-select>
+                <span v-else class="member-role" :class="{ 'member-role-host': member.role === 'host' }">
                   {{ memberRoleLabel(member.role) }}
                 </span>
               </div>
@@ -590,7 +803,6 @@ onBeforeUnmount(() => {
           </el-popover>
 
           <el-popover
-            v-if="store.activeRoom"
             placement="bottom-end"
             :width="360"
             trigger="click"
@@ -618,113 +830,40 @@ onBeforeUnmount(() => {
             </div>
           </el-popover>
 
-          <!-- Agent Management -->
-          <el-popover
-            v-if="store.activeRoom"
-            placement="bottom-end"
-            :width="320"
-            trigger="click"
-          >
-            <template #reference>
-              <el-button size="small">
-                管理智能体 ({{ store.agents.length }})
-              </el-button>
-            </template>
-            <div class="agent-panel">
-              <div class="agent-panel-head">
-                <span>会议室智能体</span>
-                <el-dropdown @command="(id: string) => store.addAgentToRoom(id)">
-                  <el-button size="small" text type="primary">
-                    + 添加
-                  </el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item
-                        v-for="ad in store.availableAgentDefs"
-                        :key="ad.id"
-                        :command="ad.id"
-                        :disabled="store.agents.some(a => a.agent_id === ad.id)"
-                      >
-                        {{ ad.name }}
-                      </el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-              <div v-if="store.agents.length === 0" class="agent-panel-empty">
-                暂未添加智能体，点击“+ 添加”选择
-              </div>
-              <div v-for="agent in store.agents" :key="agent.id" class="agent-item">
-                <span class="agent-item-name">{{ agent.agent_name }}</span>
-                <span class="agent-item-role">{{ agent.role === 'observer' ? '旁听' : '参与' }}</span>
-                <el-button
-                  size="small"
-                  type="danger"
-                  text
-                  @click="store.removeAgentFromRoom(agent.agent_id)"
-                >
-                  移除
-                </el-button>
-              </div>
-            </div>
-          </el-popover>
-
-          <!-- AI actions are explicit: normal chat should not make the assistant interrupt every message. -->
-          <el-button
-            v-if="store.activeRoom"
-            type="primary"
-            plain
-            :icon="MagicStick"
-            :loading="store.aiThinking"
-            size="small"
-            @click="requestAiReply"
-          >
-            请智能助手回复
-          </el-button>
-          <el-button
-            v-if="store.activeRoom"
-            :loading="store.summarizing"
-            size="small"
-            @click="summarizeMeeting"
-          >
-            总结会议
-          </el-button>
-          <div v-if="store.activeRoom" class="room-code">
-            <span>会议码</span>
-            <strong>{{ store.activeRoom.access_code }}</strong>
           </div>
-          <el-button v-if="store.activeRoom && canManageRoom && store.activeRoom.status === 'active'" size="small" :icon="Close" @click="closeRoom">
-            关闭
-          </el-button>
-          <el-button v-if="store.activeRoom && canManageRoom && store.activeRoom.status !== 'archived'" size="small" :icon="FolderOpened" @click="archiveRoom">
-            归档
-          </el-button>
-          <el-button v-if="store.activeRoom && canManageRoom" text type="danger" :icon="Delete" @click="handleDeleteRoom">
-            删除
-          </el-button>
+          <div v-if="canManageRoom" class="room-toolbar-admin">
+            <el-button size="small" :icon="EditPen" @click="editRoomTitle">
+              改标题
+            </el-button>
+            <el-button v-if="store.activeRoom.status === 'active'" size="small" :icon="Close" @click="closeRoom">
+              关闭
+            </el-button>
+            <el-button v-if="store.activeRoom.status !== 'archived'" size="small" :icon="FolderOpened" @click="archiveRoom">
+              归档
+            </el-button>
+          </div>
         </div>
-        <p v-if="!store.activeRoom" class="room-hint">创建或加入会议后开始聊天 · 可点名智能体或手动请智能助手回复</p>
+        <p v-else class="room-hint">创建或加入会议后开始聊天，也可以点名 @会议Agent。</p>
       </header>
 
       <div ref="messageListRef" v-loading="store.loadingMessages" class="message-list">
         <div v-if="!store.activeRoom" class="empty-state">
           <ChatDotRound />
           <h3>会议内容将在这里实时同步</h3>
-          <p>发言和智能助手回复都会沉淀在同一条时间线中。</p>
+          <p>发言和会议Agent回复都会沉淀在同一条时间线中。</p>
         </div>
 
         <div v-else-if="store.messages.length === 0 && !store.loadingMessages" class="empty-state">
           <ChatDotRound />
           <h3>会议内容将在这里实时同步</h3>
-          <p>输入会议消息后回车发送；需要智能助手时可以点名智能体、请智能助手回复或总结会议。</p>
+          <p>输入会议消息后回车发送；需要会议Agent时可以直接点名 @会议Agent。</p>
         </div>
 
-        <!-- AI thinking indicator -->
-        <div v-if="store.aiThinking" class="ai-thinking-bar">
+        <div v-if="store.generalAgentRunning" class="ai-thinking-bar">
           <span class="ai-thinking-dots">
             <span class="dot" /><span class="dot" /><span class="dot" />
           </span>
-          智能助手思考中...
+          会议Agent处理中...
         </div>
 
         <article
@@ -733,27 +872,32 @@ onBeforeUnmount(() => {
           :id="`meeting-message-${message.id}`"
           class="message-row"
           :class="{
-            'message-row-own': message.user_id === auth.userId && message.message_type !== 'agent',
-            'message-row-agent': message.message_type === 'agent',
+            'message-row-own': message.user_id === auth.userId && !['agent', 'agent_streaming'].includes(message.message_type),
+            'message-row-agent': ['agent', 'agent_streaming'].includes(message.message_type),
           }"
         >
           <div class="message-meta">
-            <span v-if="message.message_type === 'agent'" class="agent-tag">智能体</span>
+            <span v-if="['agent', 'agent_streaming'].includes(message.message_type)" class="agent-tag">会议Agent</span>
             <span v-else-if="message.message_type === 'system'" class="system-tag">系统</span>
-            <span>{{ message.username }}</span>
+            <span v-else>{{ message.username }}</span>
             <time>{{ formatTime(message.created_at) }}</time>
           </div>
           <div v-if="message.quote_message_id" class="quoted-message">
             {{ quotedMessageTitle(message.quote_message_id) }}
           </div>
-          <div class="message-bubble" :class="{ 'agent-bubble': message.message_type === 'agent' }">
-            {{ displayMessageContent(message) }}
+          <div
+            class="message-bubble"
+            :class="{
+              'agent-bubble': ['agent', 'agent_streaming'].includes(message.message_type),
+              'agent-streaming-bubble': message.message_type === 'agent_streaming',
+            }"
+          >
+            <span v-if="message.message_type === 'agent_streaming'" class="inline-thinking-dots">
+              <span class="dot" /><span class="dot" /><span class="dot" />
+            </span>
+            <span>{{ displayMessageContent(message) }}</span>
           </div>
-          <div v-if="messageSubgraph(message)" class="message-route">
-            <span>子图：{{ subgraphLabel(messageSubgraph(message)) }}</span>
-            <span v-if="messageMemorySources(message).length">引用 {{ messageMemorySources(message).length }} 条记忆</span>
-          </div>
-          <div class="message-toolbar">
+          <div v-if="message.message_type !== 'agent_streaming'" class="message-toolbar">
             <MessageActionBar
               :reaction="store.messageReactions[message.id] || ''"
               show-feedback
@@ -791,7 +935,7 @@ onBeforeUnmount(() => {
           class="composer-textarea"
           :disabled="!store.activeRoom || store.activeRoom.status !== 'active'"
           rows="1"
-          :placeholder="store.activeRoom?.status === 'active' ? '输入消息后按回车发送，可用 @总智能体 或 @智能助手 点名。' : '会议已关闭或归档，只能查看历史。'"
+          :placeholder="store.activeRoom?.status === 'active' ? '输入消息后按回车发送，可用 @会议Agent 点名。' : '会议已关闭或归档，只能查看历史。'"
           @keydown="onInputKeydown"
         />
         <el-button type="primary" :icon="Promotion" :loading="store.sending" :disabled="!store.canSend" @click="sendMessage">
@@ -800,48 +944,104 @@ onBeforeUnmount(() => {
       </footer>
     </section>
 
-    <aside class="meeting-context" v-loading="store.loadingContext">
-      <section class="context-card context-agent">
+    <aside class="meeting-context" :class="{ 'panel-collapsed': rightPanelCollapsed }" v-loading="store.loadingContext">
+      <button
+        type="button"
+        class="panel-toggle panel-toggle-right"
+        :aria-label="rightPanelCollapsed ? '展开上下文面板' : '收起上下文面板'"
+        :title="rightPanelCollapsed ? '展开上下文面板' : '收起上下文面板'"
+        @click="rightPanelCollapsed = !rightPanelCollapsed"
+      >
+        <ArrowLeft v-if="rightPanelCollapsed" />
+        <ArrowRight v-else />
+      </button>
+      <div class="panel-collapsed-label">上下文</div>
+      <div class="panel-content context-panel-content">
+        <section class="context-card boundary-card">
         <div class="context-head">
           <div>
-            <p class="section-kicker">总智能体</p>
-            <h2>总智能体控制区</h2>
+            <p class="section-kicker">边界</p>
+            <h2>可查询范围</h2>
           </div>
-          <el-button text :icon="RefreshRight" @click="store.loadMeetingContext()" />
+          <span class="count-pill">{{ contextAllowedDomains.length }}</span>
         </div>
-        <div class="agent-action-grid">
-          <el-button
-            v-for="action in agentActions"
-            :key="action.mode"
-            size="small"
-            :loading="store.generalAgentRunning"
-            :disabled="!store.activeRoom"
-            @click="runGeneralAgent(action.mode)"
+        <div v-if="store.activeRoom" class="boundary-summary">
+          <span>{{ activeRoomTypeLabel }}</span>
+          <span>{{ store.contextPreview?.user_role || "user" }}</span>
+          <span>{{ store.contextPreview?.room_role || "member" }}</span>
+        </div>
+        <div v-if="contextAllowedDomains.length" class="domain-chip-list">
+          <span v-for="domain in contextAllowedDomains" :key="domain" class="domain-chip domain-chip-allowed">
+            {{ domainLabel(domain) }}
+          </span>
+        </div>
+        <div v-if="contextDeniedDomains.length" class="domain-chip-list domain-chip-list-muted">
+          <span v-for="domain in contextDeniedDomains.slice(0, 6)" :key="domain" class="domain-chip domain-chip-denied">
+            {{ domainLabel(domain) }}
+          </span>
+        </div>
+        <div v-if="store.contextPreview?.agent_permissions.length" class="agent-permission-list">
+          <div v-for="agent in store.contextPreview.agent_permissions" :key="agent.agent_id" class="agent-permission-item">
+            <strong>{{ agent.agent_name }}</strong>
+            <small>{{ agent.allowed_domains.map(domainLabel).join("、") || "未授权数据域" }}</small>
+          </div>
+        </div>
+        <div v-if="store.contextPreview?.query_examples.length" class="query-example-list">
+          <button
+            v-for="example in store.contextPreview.query_examples.slice(0, 3)"
+            :key="example"
+            type="button"
+            @click="input = `@会议Agent ${example}`"
           >
-            {{ action.label }}
-          </el-button>
+            {{ example }}
+          </button>
         </div>
-        <el-button
-          class="context-wide-button"
-          size="small"
-          type="primary"
-          plain
-          :icon="MagicStick"
-          :loading="store.memoryExtracting"
-          :disabled="!store.activeRoom"
-          @click="extractCandidateMemories"
-        >
-          提取候选记忆
-        </el-button>
-      </section>
+        </section>
 
-      <section class="context-card">
+        <section v-if="canReviewMemory" class="context-card audit-card">
+        <div class="context-head">
+          <div>
+            <p class="section-kicker">审计</p>
+            <h2>Agent 查询</h2>
+          </div>
+          <span class="count-pill">{{ store.agentQueryAudits.length }}</span>
+        </div>
+        <div v-if="!store.agentQueryAudits.length" class="context-empty">暂无查询记录</div>
+        <article v-for="audit in store.agentQueryAudits.slice(0, 4)" :key="audit.id" class="audit-item">
+          <div class="audit-item-head">
+            <span :class="['audit-decision', auditDecisionClass(audit.decision)]">
+              {{ auditDecisionLabel(audit.decision) }}
+            </span>
+            <time>{{ formatTime(audit.created_at) }}</time>
+          </div>
+          <p>{{ audit.question }}</p>
+          <small>
+            {{ audit.allowed_domains.map(domainLabel).join("、") || "无允许域" }}
+            <template v-if="audit.denied_domains.length"> / 拒绝 {{ audit.denied_domains.map(domainLabel).join("、") }}</template>
+          </small>
+        </article>
+        </section>
+
+        <section class="context-card">
         <div class="context-head">
           <div>
             <p class="section-kicker">记忆</p>
             <h2>候选记忆</h2>
           </div>
-          <span class="count-pill">{{ store.candidateMemories.length }}</span>
+          <div class="context-head-actions">
+            <el-button
+              v-if="canReviewMemory"
+              text
+              size="small"
+              :icon="MagicStick"
+              :loading="store.memoryExtracting"
+              :disabled="!store.activeRoom"
+              @click="extractCandidateMemories"
+            >
+              提取
+            </el-button>
+            <span class="count-pill">{{ store.candidateMemories.length }}</span>
+          </div>
         </div>
         <div v-if="!store.candidateMemories.length" class="context-empty">暂无候选记忆</div>
         <article v-for="memory in store.candidateMemories" :key="memory.memory_id" class="memory-item">
@@ -850,23 +1050,23 @@ onBeforeUnmount(() => {
             <span v-if="memoryConfidence(memory)">{{ memoryConfidence(memory) }}</span>
           </div>
           <p>{{ memory.content }}</p>
-          <div class="memory-actions">
+          <div v-if="canReviewMemory" class="memory-actions">
             <el-button size="small" type="primary" :icon="Check" @click="confirmCandidateMemory(memory)">确认</el-button>
             <el-button size="small" :icon="Close" @click="rejectCandidateMemory(memory)">拒绝</el-button>
           </div>
         </article>
-      </section>
+        </section>
 
-      <section class="context-card">
+        <section class="context-card">
         <div class="context-head">
           <div>
             <p class="section-kicker">行动</p>
-            <h2>行动项</h2>
+            <h2>会议待办</h2>
           </div>
           <span class="count-pill">{{ store.openActionItems.length }}</span>
         </div>
         <div class="action-create">
-          <el-input v-model="actionTitle" size="small" placeholder="新行动项" @keydown.enter="createActionItem" />
+          <el-input v-model="actionTitle" size="small" placeholder="新待办" @keydown.enter="createActionItem" />
           <el-input v-model="actionDescription" size="small" placeholder="补充说明（可选）" />
           <el-select v-model="actionOwnerId" size="small" clearable placeholder="负责人">
             <el-option
@@ -880,7 +1080,7 @@ onBeforeUnmount(() => {
             新增
           </el-button>
         </div>
-        <div v-if="!store.actionItems.length" class="context-empty">暂无行动项</div>
+        <div v-if="!store.actionItems.length" class="context-empty">暂无会议待办</div>
         <article v-for="item in store.actionItems" :key="item.id" class="action-item" :class="{ 'action-done': item.status === 'done' }">
           <div>
             <strong>{{ item.title }}</strong>
@@ -889,9 +1089,9 @@ onBeforeUnmount(() => {
           </div>
           <el-button v-if="item.status !== 'done'" text :icon="Check" @click="completeActionItem(item.id)" />
         </article>
-      </section>
+        </section>
 
-      <section class="context-card">
+        <section class="context-card">
         <div class="context-head">
           <div>
             <p class="section-kicker">共享</p>
@@ -904,23 +1104,29 @@ onBeforeUnmount(() => {
           <strong>{{ memory.title }}</strong>
           <p>{{ memory.summary || memory.content }}</p>
         </article>
-      </section>
+        </section>
 
-      <section class="context-card">
+        <section class="context-card">
         <div class="context-head">
           <div>
             <p class="section-kicker">房间</p>
-            <h2>成员与智能体</h2>
+            <h2>成员</h2>
           </div>
           <span class="count-pill">{{ visibleMemberCount }}</span>
         </div>
         <div class="compact-roster">
           <span v-for="member in store.members" :key="member.id">{{ member.username }}</span>
         </div>
-        <div class="compact-agents">
-          <span v-for="agent in store.agents" :key="agent.id"><Tickets /> {{ agent.agent_name }}</span>
-        </div>
-      </section>
+        </section>
+      </div>
+      <div
+        v-if="!rightPanelCollapsed"
+        class="panel-resizer panel-resizer-right"
+        role="separator"
+        aria-label="调整右侧面板宽度"
+        aria-orientation="vertical"
+        @pointerdown="startPanelResize('right', $event)"
+      />
     </aside>
   </div>
 </template>
@@ -930,8 +1136,20 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 340px;
-  gap: 16px;
+  grid-template-columns: var(--left-panel-width, 260px) minmax(520px, 1fr) var(--right-panel-width, 300px);
+  gap: 12px;
+  transition: grid-template-columns 180ms ease;
+}
+
+.meeting-page.is-resizing-left,
+.meeting-page.is-resizing-right {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.meeting-page.is-resizing-left .meeting-room,
+.meeting-page.is-resizing-right .meeting-room {
+  pointer-events: none;
 }
 
 .meeting-sidebar,
@@ -945,17 +1163,140 @@ onBeforeUnmount(() => {
 }
 
 .meeting-sidebar {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  position: relative;
   overflow: hidden;
 }
 
 .meeting-context {
+  position: relative;
+  overflow: visible;
+}
+
+.panel-content {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  transition: opacity 150ms ease, visibility 150ms ease;
+}
+
+.context-panel-content {
   display: flex;
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
-  padding: 12px;
+  padding: 46px 12px 12px;
+}
+
+.panel-toggle {
+  position: absolute;
+  z-index: 8;
+  top: 10px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #52525b;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.panel-toggle:hover {
+  border-color: #18181b;
+  color: #111827;
+}
+
+.panel-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.panel-toggle-left {
+  right: 8px;
+}
+
+.panel-toggle-right {
+  left: 8px;
+  right: auto;
+}
+
+.panel-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-collapsed .panel-content {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel-collapsed .panel-toggle {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+.panel-collapsed-label {
+  display: none;
+  color: #71717a;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  writing-mode: vertical-rl;
+}
+
+.panel-collapsed .panel-collapsed-label {
+  display: block;
+}
+
+.panel-resizer {
+  position: absolute;
+  z-index: 7;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: col-resize;
+}
+
+.panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 150ms ease;
+}
+
+.panel-resizer:hover::after,
+.meeting-page.is-resizing-left .panel-resizer-left::after,
+.meeting-page.is-resizing-right .panel-resizer-right::after {
+  background: #18181b;
+}
+
+.panel-resizer-left {
+  right: -7px;
+}
+
+.panel-resizer-left::after {
+  right: 5px;
+}
+
+.panel-resizer-right {
+  left: -7px;
+}
+
+.panel-resizer-right::after {
+  left: 5px;
 }
 
 .sidebar-section {
@@ -1081,15 +1422,50 @@ label span {
   color: #fff;
 }
 
+.room-item-head {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .room-title {
+  min-width: 0;
   color: inherit;
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.room-delete-button {
+  flex: 0 0 auto;
+  opacity: 0;
+  margin-top: -4px;
+  margin-right: -6px;
+  color: #dc2626;
+}
+
+.room-item:hover .room-delete-button,
+.room-item:focus-visible .room-delete-button,
+.room-item-active .room-delete-button {
+  opacity: 1;
+}
+
+.room-item:hover .room-delete-button,
+.room-item-active .room-delete-button {
+  color: #fecaca;
 }
 
 .room-meta,
 .empty-note {
   color: #71717a;
   font-size: 12px;
+}
+
+.room-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .room-item-active .room-meta,
@@ -1121,7 +1497,8 @@ label span {
 }
 
 .room-title-block {
-  min-width: 180px;
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .room-submeta {
@@ -1167,12 +1544,43 @@ label span {
   color: #0e7490;
 }
 
+.room-type-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .room-header-right {
+  display: flex;
+  flex: 1 1 360px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.room-toolbar-main,
+.room-toolbar-admin {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+}
+
+.room-toolbar-admin {
+  color: #71717a;
+}
+
+.room-toolbar-admin :deep(.el-button) {
+  margin-left: 0;
 }
 
 .room-code {
@@ -1340,55 +1748,20 @@ label span {
   color: #9a3412;
 }
 
-/* Agent Panel */
-.agent-panel {
-  max-height: 360px;
-  overflow-y: auto;
+.member-role-select {
+  width: 86px;
 }
 
-.agent-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #f4f4f5;
+.member-role-select :deep(.el-select__wrapper) {
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px #e4e4e7 inset;
 }
 
-.agent-panel-head span {
-  font-weight: 700;
-  font-size: 14px;
-  color: #111827;
-}
-
-.agent-panel-empty {
-  padding: 20px 0;
-  color: #a1a1aa;
-  font-size: 13px;
-  text-align: center;
-}
-
-.agent-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid #fafafa;
-}
-
-.agent-item-name {
-  flex: 1;
-  font-weight: 600;
-  font-size: 13px;
-  color: #111827;
-}
-
-.agent-item-role {
+.member-role-select :deep(.el-select__selected-item) {
   font-size: 11px;
-  color: #71717a;
-  background: #f4f4f5;
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-weight: 600;
 }
 
 /* Messages */
@@ -1509,21 +1882,6 @@ label span {
 .agent-bubble {
   border-left: 3px solid #2563eb;
   border-radius: 5px 16px 16px 16px;
-  background: #eff6ff;
-}
-
-.message-route {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  max-width: min(720px, 82%);
-  color: #2563eb;
-  font-size: 12px;
-}
-
-.message-route span {
-  padding: 2px 7px;
-  border-radius: 999px;
   background: #eff6ff;
 }
 
@@ -1667,6 +2025,17 @@ label span {
   gap: 10px;
 }
 
+.context-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.context-head-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
 .context-head h2 {
   margin-top: 3px;
   color: #111827;
@@ -1688,26 +2057,175 @@ label span {
   font-weight: 700;
 }
 
-.agent-action-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.agent-action-grid :deep(.el-button) {
-  width: 100%;
-  margin-left: 0;
-}
-
-.context-wide-button {
-  width: 100%;
-}
-
 .context-empty {
   padding: 14px 0;
   color: #a1a1aa;
   font-size: 13px;
   text-align: center;
+}
+
+.boundary-card {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.boundary-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.boundary-summary span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.domain-chip-list,
+.query-example-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.domain-chip-list-muted {
+  padding-top: 8px;
+  border-top: 1px dashed #d4d4d8;
+}
+
+.domain-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.domain-chip-allowed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.domain-chip-denied {
+  background: #f4f4f5;
+  color: #71717a;
+}
+
+.agent-permission-list {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-permission-item {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.agent-permission-item strong {
+  color: #111827;
+  font-size: 12px;
+}
+
+.agent-permission-item small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.query-example-list button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.query-example-list button:hover {
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.audit-card {
+  background: #fff;
+}
+
+.audit-item {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid #f1f5f9;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.audit-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audit-item-head time {
+  color: #a1a1aa;
+  font-size: 11px;
+}
+
+.audit-decision {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f4f4f5;
+  color: #52525b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.audit-allowed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.audit-partial {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.audit-denied {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.audit-item p {
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.audit-item small {
+  color: #71717a;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .memory-item,
@@ -1776,15 +2294,13 @@ label span {
   opacity: 0.62;
 }
 
-.compact-roster,
-.compact-agents {
+.compact-roster {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.compact-roster span,
-.compact-agents span {
+.compact-roster span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1795,15 +2311,11 @@ label span {
   font-size: 12px;
 }
 
-.compact-agents svg {
-  width: 13px;
-  height: 13px;
-}
-
 /* Responsive */
 @media (max-width: 920px) {
   .meeting-page {
     grid-template-columns: 1fr;
+    gap: 12px;
     overflow-y: auto;
   }
 
@@ -1817,6 +2329,26 @@ label span {
 
   .meeting-context {
     min-height: 420px;
+  }
+
+  .panel-toggle,
+  .panel-resizer,
+  .panel-collapsed-label {
+    display: none;
+  }
+
+  .panel-collapsed {
+    display: block;
+  }
+
+  .panel-collapsed .panel-content {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .context-panel-content {
+    padding: 12px;
   }
 }
 

@@ -404,7 +404,8 @@ class ChatExecutor:
         if not hits:
             return f"RAG 证据（{space_name}）：未检索到可用片段。"
 
-        lines = [f"RAG 证据（{space_name}）："]
+        overview_mode = bool(content.get("overview_mode"))
+        lines = [f"RAG 知识库目录（{space_name}）：" if overview_mode else f"RAG 证据（{space_name}）："]
         for index, hit in enumerate(hits[:5], start=1):
             title = str(hit.get("title") or hit.get("document_name") or f"片段 {index}")
             source = str(hit.get("source") or hit.get("full_path") or "")

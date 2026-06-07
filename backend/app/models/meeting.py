@@ -24,6 +24,11 @@ class MeetingRoom(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    room_type: Mapped[str] = mapped_column(String(32), nullable=False, default="quality_business")
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
+    allowed_data_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    memory_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    audit_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class MeetingRoomMember(Base, TimestampMixin):
@@ -54,6 +59,8 @@ class MeetingRoomAgent(Base, TimestampMixin):
     agent_id: Mapped[str] = mapped_column(String(64), index=True)
     added_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
     role: Mapped[str] = mapped_column(String(24), nullable=False, default="participant")
+    allowed_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    allowed_tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class MeetingAgentDefinition(Base, TimestampMixin):
@@ -146,3 +153,27 @@ class MeetingActionItem(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
     source_message_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
+
+
+class MeetingAgentQueryAudit(Base, TimestampMixin):
+    __tablename__ = "meeting_agent_query_audits"
+    __table_args__ = (
+        Index("idx_meeting_agent_query_audits_room", "org_id", "room_id"),
+        Index("idx_meeting_agent_query_audits_user", "org_id", "user_id"),
+        Index("idx_meeting_agent_query_audits_agent", "org_id", "agent_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    user_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    agent_id: Mapped[str] = mapped_column(String(64), index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requested_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    allowed_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    denied_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tool_calls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    source_refs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    redacted_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, default="allowed")

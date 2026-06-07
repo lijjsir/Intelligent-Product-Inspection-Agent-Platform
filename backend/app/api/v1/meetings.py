@@ -16,12 +16,15 @@ from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingActionItemResponse,
     MeetingActionItemUpdateRequest,
+    MeetingAgentQueryAuditResponse,
     MeetingAgentRunRequest,
     MeetingAgentRunResponse,
+    MeetingContextPreviewResponse,
     MeetingMemoryExtractRequest,
     MeetingMemoryResponse,
     MeetingMemoryTransferRequest,
     MeetingMemoryUpdateRequest,
+    MeetingMemberRoleUpdateRequest,
     MeetingMessageCreateRequest,
     MeetingMessageResponse,
     MeetingRoomAgentResponse,
@@ -42,7 +45,7 @@ router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 def _build_service(db, current: CurrentUser) -> MeetingService:
     require_role("meeting", current.role)
-    return MeetingService(db, current.org_id, current.user_id)
+    return MeetingService(db, current.org_id, current.user_id, role=current.role)
 
 
 def _get_user_for_stream(token: str = Query(default="")) -> CurrentUser:
@@ -84,7 +87,15 @@ async def create_room(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.create_room(body.title, body.password))
+    return ResponseEnvelope(
+        data=await service.create_room(
+            body.title,
+            body.password,
+            room_type=body.room_type,
+            visibility=body.visibility,
+            allowed_data_domains=body.allowed_data_domains,
+        )
+    )
 
 
 @router.post("/rooms/join", response_model=ResponseEnvelope[MeetingRoomResponse])
@@ -115,9 +126,15 @@ async def update_room(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    if body.title is None:
-        return ResponseEnvelope(data=(await service.get_room_detail(room_id)))
-    return ResponseEnvelope(data=await service.update_room_title(room_id, body.title))
+    return ResponseEnvelope(
+        data=await service.update_room_settings(
+            room_id,
+            title=body.title,
+            room_type=body.room_type,
+            visibility=body.visibility,
+            allowed_data_domains=body.allowed_data_domains,
+        )
+    )
 
 
 @router.post("/rooms/{room_id}/close", response_model=ResponseEnvelope[MeetingRoomResponse])
@@ -173,7 +190,14 @@ async def send_message(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.send_message(room_id, body.content, body.quote_message_id))
+    return ResponseEnvelope(
+        data=await service.send_message(
+            room_id,
+            body.content,
+            quote_message_id=body.quote_message_id,
+            skip_agent_trigger=body.skip_agent_trigger,
+        )
+    )
 
 
 @router.post("/rooms/{room_id}/messages/{message_id}/quote", response_model=ResponseEnvelope[MeetingMessageResponse])
@@ -199,6 +223,27 @@ async def run_general_agent(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.run_general_agent(room_id, body))
+
+
+@router.get("/rooms/{room_id}/context-preview", response_model=ResponseEnvelope[MeetingContextPreviewResponse])
+async def get_context_preview(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.get_context_preview(room_id))
+
+
+@router.get("/rooms/{room_id}/agent-query-audits", response_model=ResponseEnvelope[list[MeetingAgentQueryAuditResponse]])
+async def list_agent_query_audits(
+    room_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_agent_query_audits(room_id, limit=limit))
 
 
 # ── Meeting memories ──────────────────────────────────────────────────
@@ -418,6 +463,18 @@ async def list_room_members(
     return ResponseEnvelope(data=await service.list_room_members(room_id))
 
 
+@router.put("/rooms/{room_id}/members/{member_user_id}/role", response_model=ResponseEnvelope[MeetingRoomMemberResponse])
+async def update_room_member_role(
+    room_id: str,
+    member_user_id: str,
+    body: MeetingMemberRoleUpdateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.update_member_role(room_id, member_user_id, body.role))
+
+
 @router.post("/rooms/{room_id}/agents", response_model=ResponseEnvelope[MeetingRoomAgentResponse])
 async def add_agent_to_room(
     room_id: str,
@@ -426,7 +483,15 @@ async def add_agent_to_room(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.add_agent_to_room(room_id, body.agent_id, body.role))
+    return ResponseEnvelope(
+        data=await service.add_agent_to_room(
+            room_id,
+            body.agent_id,
+            body.role,
+            allowed_domains=body.allowed_domains,
+            allowed_tools=body.allowed_tools,
+        )
+    )
 
 
 @router.delete("/rooms/{room_id}/agents/{agent_id}", response_model=ResponseEnvelope[dict])

@@ -68,9 +68,9 @@ const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+
 const streamStatusText = computed(() => {
   if (!chatStore.loading) return "";
   if (chatStore.streamPhase === "connecting") return "正在建立连接...";
-  if (chatStore.streamPhase === "streaming") return "智能体处理中...";
+  if (chatStore.streamPhase === "streaming") return "Agent 处理中...";
   if (chatStore.streamPhase === "closing") return "正在整理回复...";
-  return "智能体处理中...";
+  return "Agent 处理中...";
 });
 const FINAL_ASSISTANT_MESSAGE_TYPES = new Set(["assistant_text", "quality_answer", "file_answer", "report_answer", "task_status", "task_result", "image_analysis", "error", "interrupted"]);
 const specOptions = computed(() => inspectionSpecStore.items);
@@ -98,7 +98,7 @@ function formatTime(value?: string | null) {
 
 function roleLabel(role: ChatMessage["role"]) {
   if (role === "user") return "你";
-  if (role === "assistant") return "智能体";
+  if (role === "assistant") return "Agent";
   return "系统";
 }
 
@@ -442,7 +442,7 @@ function streamingPlaceholder(message: ChatMessage) {
   if (attachmentNames.some((name) => name.endsWith(".docx") || name.endsWith(".tex"))) {
     return "正在解析文档并检查格式...";
   }
-  return streamStatusText.value || "智能体处理中...";
+  return streamStatusText.value || "Agent 处理中...";
 }
 
 function ensureTypewriter(msgId: string) {

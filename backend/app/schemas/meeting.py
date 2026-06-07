@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 class MeetingRoomCreateRequest(BaseModel):
     title: str = Field(default="会议室", min_length=1, max_length=120)
     password: str | None = Field(default=None, max_length=64)
+    room_type: str = Field(
+        default="quality_business",
+        pattern="^(quality_business|platform_ops|org_admin|data_ops|memory_governance|general)$",
+    )
+    visibility: str = Field(default="private", pattern="^(private|team|org|restricted)$")
+    allowed_data_domains: list[str] | None = None
 
 
 class MeetingRoomJoinRequest(BaseModel):
@@ -18,10 +24,17 @@ class MeetingRoomJoinRequest(BaseModel):
 class MeetingMessageCreateRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
     quote_message_id: str | None = None
+    skip_agent_trigger: bool = False
 
 
 class MeetingRoomUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
+    room_type: str | None = Field(
+        default=None,
+        pattern="^(quality_business|platform_ops|org_admin|data_ops|memory_governance|general)$",
+    )
+    visibility: str | None = Field(default=None, pattern="^(private|team|org|restricted)$")
+    allowed_data_domains: list[str] | None = None
 
 
 class MeetingRoomResponse(BaseModel):
@@ -31,6 +44,11 @@ class MeetingRoomResponse(BaseModel):
     access_code: str
     created_by: str
     status: str
+    room_type: str = "quality_business"
+    visibility: str = "private"
+    allowed_data_domains: list[str] = []
+    memory_policy: dict | None = None
+    audit_policy: dict | None = None
     member_count: int = 0
     agent_count: int = 0
     last_message_at: datetime | None = None
@@ -69,6 +87,8 @@ class MeetingDiscussionStartResponse(BaseModel):
 class MeetingAddAgentRequest(BaseModel):
     agent_id: str = Field(..., min_length=1)
     role: str = Field(default="participant", pattern="^(participant|observer)$")
+    allowed_domains: list[str] | None = None
+    allowed_tools: list[str] | None = None
 
 
 class MeetingRoomAgentResponse(BaseModel):
@@ -78,6 +98,8 @@ class MeetingRoomAgentResponse(BaseModel):
     agent_name: str = ""
     role: str
     added_by: str
+    allowed_domains: list[str] = []
+    allowed_tools: list[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -91,9 +113,45 @@ class MeetingRoomMemberResponse(BaseModel):
     joined_at: datetime | None = None
 
 
+class MeetingMemberRoleUpdateRequest(BaseModel):
+    role: str = Field(..., pattern="^(host|member)$")
+
+
 class MeetingRoomDetailResponse(MeetingRoomResponse):
     agents: list[MeetingRoomAgentResponse] = []
     members: list[MeetingRoomMemberResponse] = []
+
+
+class MeetingContextPreviewResponse(BaseModel):
+    room_id: str
+    room_type: str
+    room_type_label: str
+    user_role: str
+    room_role: str
+    allowed_domains: list[str] = []
+    denied_domains: list[str] = []
+    agent_permissions: list[dict] = []
+    query_examples: list[str] = []
+    guardrails: list[str] = []
+
+
+class MeetingAgentQueryAuditResponse(BaseModel):
+    id: str
+    room_id: str
+    user_id: str
+    agent_id: str
+    question: str
+    intent: str | None = None
+    requested_domains: list[str] = []
+    allowed_domains: list[str] = []
+    denied_domains: list[str] = []
+    tool_calls: list[dict] = []
+    source_refs: list[dict] = []
+    redacted_fields: list[str] = []
+    decision: str = "allowed"
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class MeetingMemoryScopeRequest(BaseModel):
