@@ -36,6 +36,16 @@ class MemoryItemRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_idempotency_key(self, idempotency_key: str) -> MemoryItem | None:
+        result = await self._session.execute(
+            select(MemoryItem).where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.idempotency_key == idempotency_key,
+                MemoryItem.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_by_org(
         self,
         status: str | None = None,
@@ -67,6 +77,8 @@ class MemoryItemRepository:
         memory_types: list[str] | None = None,
         user_id: str | None = None,
         task_id: str | None = None,
+        product_line: str | None = None,
+        rag_space_id: str | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         stmt = select(MemoryItem).where(
@@ -83,8 +95,31 @@ class MemoryItemRepository:
             stmt = stmt.where(
                 (MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None))
             )
+        else:
+            stmt = stmt.where(MemoryItem.user_id.is_(None))
         if task_id:
-            stmt = stmt.where(MemoryItem.scope_json.contains({"task_id": task_id}))
+            stmt = stmt.where(
+                MemoryItem.scope_json.contains({"task_id": task_id})
+            )
+        if product_line:
+            stmt = stmt.where(
+                MemoryItem.scope_json.contains({"product_line": product_line})
+            )
+        if rag_space_id:
+            stmt = stmt.where(
+                MemoryItem.scope_json.contains({"rag_space_id": rag_space_id})
+            )
+        # Exclude memories that are old versions (target of a version_of edge)
+        from app.models.memory import MemoryDependencyEdge as MDE
+        versioned_out = (
+            select(MDE.target_memory_id)
+            .where(
+                MDE.org_id == self._org_id,
+                MDE.edge_type == "version_of",
+                MDE.deleted_at.is_(None),
+            )
+        )
+        stmt = stmt.where(MemoryItem.memory_id.not_in(versioned_out))
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -114,6 +149,29 @@ class MemoryItemRepository:
                 MemoryItem.deleted_at.is_(None),
             )
             .values(trust_score=trust_score)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_index_status(
+        self,
+        memory_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        values: dict[str, Any] = {
+            "index_status": status,
+            "index_error": error,
+            "last_indexed_at": datetime.now(timezone.utc),
+        }
+        stmt = (
+            update(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.memory_id == memory_id,
+                MemoryItem.deleted_at.is_(None),
+            )
+            .values(**values)
         )
         await self._session.execute(stmt)
         await self._session.flush()

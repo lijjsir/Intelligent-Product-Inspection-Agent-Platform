@@ -1,20 +1,29 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useRoute } from "vue-router";
 
 import AlgoResourceDetail from "@/components/business/algo/AlgoResourceDetail.vue";
 import { useFineTuneStore } from "@/stores/fineTune.store";
 import { buildTrainingSummaryViewModel } from "@/utils/algoResultSummary";
 
 const store = useFineTuneStore();
+const route = useRoute();
 const current = computed(() => store.current);
+const isTrainingJobsRoute = computed(() => route.path.startsWith("/ops/training/jobs"));
+const pageTitle = computed(() => (isTrainingJobsRoute.value ? "训练任务详情" : "微调详情"));
+const backPath = computed(() => (isTrainingJobsRoute.value ? "/ops/training/jobs" : "/ops/training/fine-tune"));
+const intro = computed(() =>
+  isTrainingJobsRoute.value
+    ? "查看训练任务的数据集绑定、超参数、产出物和执行日志。"
+    : "查看微调任务的数据集绑定、LoRA 参数、有效超参数、产出物和执行日志。");
 const summaryView = computed(() => buildTrainingSummaryViewModel(current.value));
 </script>
 
 <template>
   <AlgoResourceDetail
-    title="微调详情"
+    :title="pageTitle"
     :store="store"
-    back-path="/ops/training/fine-tune"
+    :back-path="backPath"
     :auto-refresh-when-running="true"
     :relation-sections="[
       { label: '源数据集', value: (item) => item?.source_dataset_name || item?.source_dataset_id },
@@ -22,7 +31,7 @@ const summaryView = computed(() => buildTrainingSummaryViewModel(current.value))
       { label: '基础模型', value: (item) => item?.model_config_ref?.display_name || item?.model_config_ref?.model_key || item?.model_config_id },
       { label: '实验', value: (item) => item?.experiment_name || item?.experiment_id },
     ]"
-    intro="查看微调任务的数据集绑定、LoRA 参数、有效超参数、产出物和执行日志。"
+    :intro="intro"
     :highlights="summaryView.highlights"
     :metrics="summaryView.metrics"
     :artifacts="summaryView.artifacts"
@@ -30,7 +39,7 @@ const summaryView = computed(() => buildTrainingSummaryViewModel(current.value))
   >
     <section v-if="current?.execution_mode === 'gpu_ssh'" class="card-surface p-4">
       <h3 class="mb-3">GPU 执行信息</h3>
-      <p class="text-sm text-slate-600">当前微调任务已绑定 GPU 节点执行，具体分配与命令摘要已合并到结果摘要中。</p>
+      <p class="text-sm text-slate-600">当前任务已绑定 GPU 节点执行，具体分配与命令摘要已合并到结果摘要中。</p>
       <pre class="mt-4 overflow-auto rounded-xl bg-slate-900 p-3 text-xs text-slate-100">{{ JSON.stringify(current?.result_summary?.remote_execution || {}, null, 2) }}</pre>
     </section>
     <section v-if="summaryView.artifacts.length" class="card-surface p-4">

@@ -37,10 +37,10 @@ async def memory_search(
         task_id: Optional task to scope by.
 
     Returns:
-        A memory_context dict with items, warnings, and degraded flag.
+        A memory_context dict with items.
     """
     if not memory_service:
-        return {"items": [], "warnings": ["memory_service_unavailable"], "degraded": True}
+        return {"items": [], "error": "memory_service_unavailable"}
 
     from agent.contracts.memory_contracts import MemoryType, ScopeFilter, Workspace, MemorySearchRequest
 
@@ -60,8 +60,8 @@ async def memory_search(
     resp = await memory_service.search(req)
     return {
         "items": [item.model_dump() for item in resp.items],
-        "warnings": resp.warnings,
-        "degraded": resp.degraded,
+        "policy_version": resp.policy_version,
+        "trace_id": resp.trace_id,
     }
 
 
@@ -234,7 +234,7 @@ async def memory_apply_rollback(
         operator_id: User/admin ID performing the rollback.
         trace_id: Audit trace ID.
         target_memory_ids: List of memory IDs to act upon.
-        action: delete / degrade / isolate / patch / branch.
+        action: delete / degrade / isolate / patch.
         reason: Justification for the rollback.
         require_human_review: If True, rollback enters pending review state.
         workspace: Must be ops or governance.
@@ -246,29 +246,24 @@ async def memory_apply_rollback(
     if not governance_service:
         return {"error": "governance_service_unavailable"}
 
-    from agent.contracts.memory_contracts import MemoryRollbackRequest, RollbackAction, Workspace
+    from app.schemas.memory import RollbackAction, Workspace
 
-    req = MemoryRollbackRequest(
-        org_id=org_id,
-        workspace=Workspace(workspace),
-        operator_id=operator_id,
-        trace_id=trace_id,
+    rollback_action = RollbackAction(action)
+    if rollback_action == RollbackAction.BRANCH:
+        return {"error": "unsupported_rollback_action", "message": "BRANCH rollback is not supported"}
+
+    workspace_value = Workspace(workspace).value
+    rollback_svc = governance_service
+    resp = await rollback_svc.plan_rollback(
         root_memory_id=root_memory_id,
-        rollback_action=RollbackAction(action),
+        operator_id=operator_id,
+        operator_role="agent",
+        workspace=workspace_value,
+        trace_id=trace_id,
+        action=rollback_action,
         target_memory_ids=target_memory_ids,
         reason=reason,
         require_human_review=require_human_review,
-    )
-    rollback_svc = governance_service
-    resp = await rollback_svc.execute_rollback(
-        root_memory_id=req.root_memory_id,
-        operator_id=req.operator_id,
-        workspace=req.workspace.value,
-        trace_id=req.trace_id,
-        action=req.rollback_action,
-        target_memory_ids=req.target_memory_ids,
-        reason=req.reason,
-        require_human_review=req.require_human_review,
     )
     return resp.model_dump()
 

@@ -8,6 +8,25 @@ from agent.router.executors.base import artifact, observation
 from agent.router.manager_state import ManagerState
 
 
+def _is_rag_overview_query(query: str) -> bool:
+    text = str(query or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "检测标准",
+            "知识库目录",
+            "目录",
+            "有哪些标准",
+            "有哪些文件",
+            "包含什么",
+            "列出",
+            "overview",
+        )
+    )
+
+
 class RagExecutor:
     async def execute(
         self,
@@ -38,12 +57,16 @@ class RagExecutor:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
 
-                result = await RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id).search(
-                    rag_space_id=rag_space_id,
-                    query=state.original_query,
-                    top_k=5,
-                    scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
-                )
+                service = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id)
+                if _is_rag_overview_query(state.original_query):
+                    result = await service.list_space_documents(rag_space_id=rag_space_id, limit=12)
+                else:
+                    result = await service.search(
+                        rag_space_id=rag_space_id,
+                        query=state.original_query,
+                        top_k=5,
+                        scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
+                    )
                 retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
@@ -77,6 +100,8 @@ class RagExecutor:
                 "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
                 "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
                 "score_threshold": retrieval_meta.get("score_threshold"),
+                "low_confidence_fallback": bool(retrieval_meta.get("low_confidence_fallback")),
+                "overview_mode": bool(retrieval_meta.get("overview_mode")),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
                 "hits": hits,

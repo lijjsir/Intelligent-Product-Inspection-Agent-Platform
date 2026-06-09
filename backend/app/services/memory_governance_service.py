@@ -11,7 +11,7 @@ from typing import Any
 
 from app.core.ids import uuid7
 from app.models.approval import Approval
-from app.models.memory import MemoryEvaluation, MemoryRollback
+from app.models.memory import MemoryDependencyEdge, MemoryEvaluation, MemoryItem, MemoryRollback
 from app.repositories.approval_repo import ApprovalRepository
 from app.repositories.memory_repo import (
     MemoryDependencyRepository,
@@ -200,7 +200,7 @@ class MemoryRollbackService:
         self._approval_repo = ApprovalRepository(session)
         self._vector = vector_service
 
-    async def execute_rollback(
+    async def plan_rollback(
         self,
         root_memory_id: str,
         operator_id: str,
@@ -213,12 +213,104 @@ class MemoryRollbackService:
         require_human_review: bool = False,
         propagation_graph: dict | None = None,
     ) -> MemoryRollbackResponse:
+        """Phase 1: Create rollback plan and approval. Does NOT execute if review required."""
+        if action == RollbackAction.BRANCH:
+            raise ValueError("BRANCH rollback is not supported")
+
         rollback_id = f"rb_{uuid.uuid4().hex[:12]}"
 
-        # Snapshot before
+        if require_human_review:
+            rollback_record = MemoryRollback(
+                id=str(uuid7()),
+                org_id=self._org_id,
+                rollback_id=rollback_id,
+                root_memory_id=root_memory_id,
+                operator_id=operator_id,
+                workspace=workspace,
+                rollback_action=action.value,
+                target_memory_ids=target_memory_ids,
+                propagation_graph_json=propagation_graph,
+                reason=reason,
+                require_human_review=True,
+                review_status=ReviewStatus.PENDING.value,
+                trace_id=trace_id,
+            )
+            await self._rollback_repo.create(rollback_record)
+
+            approval_id = await self._create_followup_approval(
+                rollback_id=rollback_id,
+                root_memory_id=root_memory_id,
+                operator_id=operator_id,
+                operator_role=operator_role,
+                workspace=workspace,
+                action=action,
+                target_memory_ids=target_memory_ids,
+                reason=reason,
+                propagation_graph=propagation_graph,
+                affected_count=len(target_memory_ids),
+                require_human_review=True,
+            )
+
+            return MemoryRollbackResponse(
+                rollback_id=rollback_id,
+                root_memory_id=root_memory_id,
+                action=action,
+                affected_count=0,
+                review_status=ReviewStatus.PENDING,
+                approval_id=approval_id,
+            )
+
+        # No review needed — execute immediately
+        return await self._apply_rollback(
+            rollback_id=rollback_id,
+            root_memory_id=root_memory_id,
+            operator_id=operator_id,
+            workspace=workspace,
+            trace_id=trace_id,
+            action=action,
+            target_memory_ids=target_memory_ids,
+            reason=reason,
+            propagation_graph=propagation_graph,
+        )
+
+    async def apply_rollback(self, rollback_id: str) -> MemoryRollbackResponse:
+        """Phase 2: Execute a previously planned rollback after approval."""
+        rollback_record = await self._rollback_repo.get_by_rollback_id(rollback_id)
+        if not rollback_record:
+            raise ValueError(f"Rollback {rollback_id} not found")
+        if rollback_record.review_status != ReviewStatus.PENDING.value:
+            raise ValueError(f"Rollback {rollback_id} is not in pending state")
+
+        return await self._apply_rollback(
+            rollback_id=rollback_id,
+            root_memory_id=rollback_record.root_memory_id,
+            operator_id=rollback_record.operator_id,
+            workspace=rollback_record.workspace,
+            trace_id=rollback_record.trace_id or "",
+            action=RollbackAction(rollback_record.rollback_action),
+            target_memory_ids=list(rollback_record.target_memory_ids or []),
+            reason=rollback_record.reason or "",
+            propagation_graph=rollback_record.propagation_graph_json,
+        )
+
+    async def _apply_rollback(
+        self,
+        rollback_id: str,
+        root_memory_id: str,
+        operator_id: str,
+        workspace: str,
+        trace_id: str,
+        action: RollbackAction,
+        target_memory_ids: list[str],
+        reason: str,
+        propagation_graph: dict | None = None,
+    ) -> MemoryRollbackResponse:
+        """Internal: execute the actual rollback actions."""
+        if action == RollbackAction.BRANCH:
+            raise ValueError("BRANCH rollback is not supported")
+
         before_snapshot = await self._snapshot(target_memory_ids)
 
-        # Apply action
         affected = 0
         for mid in target_memory_ids:
             memory = await self._item_repo.get_by_memory_id(mid)
@@ -250,39 +342,13 @@ class MemoryRollbackService:
                 affected += 1
 
             elif action == RollbackAction.PATCH:
-                # Soft-delete original and expect a new version via write_candidate
-                await self._item_repo.soft_delete(mid)
+                await self._apply_patch(mid, propagation_graph=propagation_graph, trace_id=trace_id)
                 affected += 1
 
-            elif action == RollbackAction.BRANCH:
-                await self._item_repo.update_status(mid, MemoryStatus.ISOLATED.value)
-                affected += 1
-
-        # Snapshot after
         after_snapshot = await self._snapshot(target_memory_ids)
 
-        review_status = (
-            ReviewStatus.PENDING if require_human_review else ReviewStatus.NOT_REQUIRED
-        )
-
-        rollback_record = MemoryRollback(
-            id=str(uuid7()),
-            org_id=self._org_id,
-            rollback_id=rollback_id,
-            root_memory_id=root_memory_id,
-            operator_id=operator_id,
-            workspace=workspace,
-            rollback_action=action.value,
-            target_memory_ids=target_memory_ids,
-            propagation_graph_json=propagation_graph,
-            before_snapshot_json=before_snapshot,
-            after_snapshot_json=after_snapshot,
-            reason=reason,
-            require_human_review=require_human_review,
-            review_status=review_status.value,
-            trace_id=trace_id,
-        )
-        await self._rollback_repo.create(rollback_record)
+        # Update rollback record
+        await self._rollback_repo.update_review_status(rollback_id, ReviewStatus.APPROVED.value)
 
         # Record event
         from app.models.memory import MemoryEvent
@@ -303,30 +369,97 @@ class MemoryRollbackService:
         )
         await self._event_repo.create(event)
 
-        approval_id = await self._create_followup_approval(
-            rollback_id=rollback_id,
-            root_memory_id=root_memory_id,
-            operator_id=operator_id,
-            operator_role=operator_role,
-            workspace=workspace,
-            action=action,
-            target_memory_ids=target_memory_ids,
-            reason=reason,
-            propagation_graph=propagation_graph,
-            affected_count=affected,
-            require_human_review=require_human_review,
-        )
-
         return MemoryRollbackResponse(
             rollback_id=rollback_id,
             root_memory_id=root_memory_id,
             action=action,
             affected_count=affected,
-            review_status=review_status,
-            approval_id=approval_id,
+            review_status=ReviewStatus.APPROVED,
             before_snapshot=before_snapshot,
             after_snapshot=after_snapshot,
         )
+
+    async def _apply_patch(
+        self,
+        memory_id: str,
+        *,
+        propagation_graph: dict | None = None,
+        trace_id: str | None = None,
+    ) -> str:
+        """Apply PATCH by isolating the old memory and creating a replacement version."""
+        old_item = await self._item_repo.get_by_memory_id(memory_id)
+        if not old_item:
+            raise ValueError(f"Memory {memory_id} not found")
+
+        patch_payload = dict((propagation_graph or {}).get("patch") or {})
+        content_summary = str(patch_payload.get("content_summary") or "").strip()
+        if not content_summary:
+            raise ValueError("PATCH rollback requires propagation_graph.patch.content_summary")
+        content_json = patch_payload.get("content_json")
+        if content_json is None:
+            content_json = dict(old_item.content_json or {})
+
+        await self._item_repo.update_status(memory_id, MemoryStatus.ISOLATED.value)
+        if self._vector:
+            await self._vector.delete_memory(memory_id)
+
+        new_memory_id = f"mem_{uuid.uuid4().hex[:12]}"
+        replacement = MemoryItem(
+            id=str(uuid7()),
+            memory_id=new_memory_id,
+            org_id=self._org_id,
+            user_id=old_item.user_id,
+            workspace=old_item.workspace,
+            memory_type=old_item.memory_type,
+            scope_json=old_item.scope_json,
+            content_summary=content_summary,
+            content_json=content_json,
+            source_event_ids=old_item.source_event_ids,
+            evidence_pointers=old_item.evidence_pointers,
+            version_parent_id=memory_id,
+            trust_score=old_item.trust_score,
+            confidence=old_item.confidence,
+            usage_policy=old_item.usage_policy,
+            ttl_policy=old_item.ttl_policy,
+            privacy_level=old_item.privacy_level,
+            status=MemoryStatus.ACTIVE.value,
+            rollback_policy=getattr(old_item, "rollback_policy", None),
+            created_by=getattr(old_item, "created_by", None),
+            created_by_type=getattr(old_item, "created_by_type", None),
+            trace_id=trace_id or old_item.trace_id,
+            expires_at=old_item.expires_at,
+            source_trace_id=getattr(old_item, "source_trace_id", None) or old_item.trace_id,
+            source_task_id=getattr(old_item, "source_task_id", None),
+            index_status="pending",
+            index_error=None,
+            policy_key=getattr(old_item, "policy_key", None),
+            policy_version=getattr(old_item, "policy_version", None),
+            last_accessed_at=datetime.now(timezone.utc),
+            access_count=0,
+        )
+        await self._item_repo.create(replacement)
+        await self._dep_repo.create(MemoryDependencyEdge(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            source_memory_id=new_memory_id,
+            target_memory_id=memory_id,
+            edge_type=EdgeType.VERSION_OF.value,
+            strength=1.0,
+        ))
+
+        if self._vector:
+            await self._vector.upsert_memory(
+                memory_id=new_memory_id,
+                org_id=self._org_id,
+                user_id=str(old_item.user_id or ""),
+                workspace=old_item.workspace,
+                memory_type=old_item.memory_type,
+                status=MemoryStatus.ACTIVE.value,
+                summary=content_summary,
+                trust_score=float(old_item.trust_score or 0),
+                confidence=float(old_item.confidence or 0),
+            )
+        return new_memory_id
 
     async def _snapshot(self, memory_ids: list[str]) -> dict:
         snapshot: dict[str, Any] = {}
@@ -348,7 +481,7 @@ class MemoryRollbackService:
     ) -> bool:
         if require_human_review:
             return True
-        if action in {RollbackAction.DELETE, RollbackAction.PATCH, RollbackAction.BRANCH}:
+        if action in {RollbackAction.DELETE, RollbackAction.PATCH}:
             return True
         return len(target_memory_ids) >= 5
 
@@ -360,7 +493,7 @@ class MemoryRollbackService:
     ) -> str:
         if require_human_review or len(target_memory_ids) >= 10:
             return "critical"
-        if action in {RollbackAction.DELETE, RollbackAction.PATCH, RollbackAction.BRANCH} or len(target_memory_ids) >= 5:
+        if action in {RollbackAction.DELETE, RollbackAction.PATCH} or len(target_memory_ids) >= 5:
             return "high"
         return "medium"
 

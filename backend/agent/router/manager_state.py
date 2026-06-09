@@ -27,6 +27,11 @@ class ManagerState(BaseModel):
     inspection_context: dict[str, Any] | None = None
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
+    shared_memory_context: dict[str, Any] | None = None
+    conversation_summary: str | None = None
+    session_facts: dict[str, Any] = Field(default_factory=dict)
+    pending_action: dict[str, Any] | None = None
+    short_term_memory: dict[str, Any] | None = None
     force_web_search: bool = False
     template_id: str | None = None
 

@@ -82,6 +82,21 @@ def get_current_user_for_stream(
     )
 
 
+def _make_embedder_factory(org_id: str, user_id: str | None, trace_id: str | None):
+    from agent.rag.embedder import Embedder
+
+    async def factory(text: str) -> list[float]:
+        embedder = Embedder(
+            org_id=org_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            allow_pseudo_fallback=False,
+        )
+        return await embedder.embed(text)
+
+    return factory
+
+
 class ChatService:
     def __init__(self, *, org_id: str, user_id: str, current: CurrentUser):
         self._org_id = org_id
@@ -448,25 +463,94 @@ class ChatService:
             ext_payload["idempotency_key"] = (
                 f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
             )
-            # Load recent history (exclude current user message)
-            async with get_session() as hist_session:
-                hist_repo = ChatMessageRepository(hist_session)
-                hist_rows = await hist_repo.list_for_session(
-                    org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
+            # Load shared memory context for this query
+            ext_payload["shared_memory_context"] = None
+            try:
+                from app.schemas.memory import MemorySearchRequest, Workspace as MemWorkspace
+                from app.services.memory_service import MemoryService
+                from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
+
+                memory_search_req = MemorySearchRequest(
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    workspace=MemWorkspace.APP,
+                    query=request.message.strip(),
+                    scope_filter=None,
+                    top_k=5,
                 )
-                ext_payload["history_messages"] = [
-                    {"role": m.role, "content": m.content}
-                    for m in hist_rows
-                    if int(m.seq_no or 0) < current_user_seq_no
-                ][-10:]
-                if ext_payload.get("inspection_context_enabled") is True:
-                    context_service = ChatContextService(
-                        hist_session,
-                        org_id=self._org_id,
+                vector_svc = MemoryVectorService(
+                    embedder_factory=_make_embedder_factory(self._org_id, self._user_id, None),
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                )
+                async with get_session() as mem_session:
+                    memory_svc = MemoryService(mem_session, self._org_id, vector_service=vector_svc)
+                    result = await memory_svc.search(memory_search_req)
+                    if result.items:
+                        ext_payload["shared_memory_context"] = {
+                            "items": [
+                                {
+                                    "memory_id": item.memory_id,
+                                    "memory_type": item.memory_type,
+                                    "summary": item.summary,
+                                    "score": item.score,
+                                    "confidence": item.confidence,
+                                    "trust_score": item.trust_score,
+                                }
+                                for item in result.items
+                            ],
+                            "policy_version": result.policy_version,
+                        }
+            except MemoryVectorServiceError:
+                raise
+            except Exception:
+                raise
+
+            # Load short-term memory context (replaces raw DB history read)
+            ext_payload["history_messages"] = []
+            ext_payload["conversation_summary"] = None
+            ext_payload["session_facts"] = {}
+            ext_payload["pending_action"] = None
+            ext_payload["short_term_memory"] = None
+            try:
+                from app.services.short_term_memory_service import ShortTermMemoryService
+
+                async with get_session() as stm_session:
+                    stm_svc = ShortTermMemoryService(stm_session, self._org_id)
+                    stm = await stm_svc.build_context(
                         user_id=self._user_id,
-                        role=self._current.role,
+                        session_id=session_id,
+                        current_user_seq_no=current_user_seq_no,
                     )
-                    try:
+                    ext_payload["history_messages"] = stm["recent_messages"]
+                    ext_payload["conversation_summary"] = stm["conversation_summary"]
+                    ext_payload["session_facts"] = stm["session_facts"]
+                    ext_payload["pending_action"] = stm["pending_action"]
+                    ext_payload["short_term_memory"] = {
+                        "conversation_summary": stm["conversation_summary"],
+                        "session_facts": stm["session_facts"],
+                        "pending_action": stm["pending_action"],
+                        "awaiting_confirmation": stm.get("awaiting_confirmation"),
+                        "task_draft": stm.get("task_draft"),
+                        "task_form_defaults": stm.get("task_form_defaults"),
+                        "missing_slots": stm.get("missing_slots"),
+                        "paper_review_status": stm.get("paper_review_status"),
+                        "selected_rag_space": stm["selected_rag_space"],
+                        "token_budget": stm["token_budget"],
+                    }
+            except Exception:
+                raise
+
+            # Load inspection context
+            if ext_payload.get("inspection_context_enabled") is True:
+                try:
+                    async with get_session() as ctx_session:
+                        context_service = ChatContextService(
+                            ctx_session,
+                            org_id=self._org_id,
+                            user_id=self._user_id,
+                            role=self._current.role,
+                        )
                         selected_task_ids = [
                             str(item)
                             for item in list(ext_payload.get("selected_inspection_task_ids") or [])
@@ -475,13 +559,13 @@ class ChatService:
                         ext_payload["inspection_context"] = await context_service.build_inspection_context(
                             selected_task_ids=selected_task_ids
                         )
-                    except Exception:
-                        logger.debug("chat inspection context build skipped", exc_info=True)
-                        ext_payload["inspection_context"] = self._empty_inspection_context(scope="unavailable")
-                else:
-                    ext_payload.pop("inspection_context", None)
-                    ext_payload.pop("selected_inspection_task_ids", None)
-            await self._orchestrator.run_chat(
+                except Exception:
+                    logger.debug("chat inspection context build skipped", exc_info=True)
+                    ext_payload["inspection_context"] = self._empty_inspection_context(scope="unavailable")
+            else:
+                ext_payload.pop("inspection_context", None)
+                ext_payload.pop("selected_inspection_task_ids", None)
+            result = await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),
                     "workflow_run_id": workflow_run_id,
@@ -506,6 +590,54 @@ class ChatService:
                     ],
                 }
             )
+            # After successful orchestration, attempt low-risk candidate memory extraction
+            try:
+                from app.services.memory_candidate_service import MemoryCandidateService
+                from app.services.memory_service import MemoryService
+                from app.services.memory_vector_service import MemoryVectorService
+
+                agent_output = result.get("agent_output", {})
+                answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
+                task_id = str(
+                    ext_payload.get("selected_inspection_task_ids", [None])[0]
+                ) if ext_payload.get("selected_inspection_task_ids") else None
+
+                candidate_svc = MemoryCandidateService(
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                )
+                candidates = await candidate_svc.extract_from_chat_result(
+                    trace_id=workflow_run_id,
+                    user_message=request.message.strip(),
+                    assistant_answer=answer_text,
+                    task_id=task_id,
+                )
+                if candidates:
+                    async with get_session() as mem_session:
+                        vector_svc = MemoryVectorService(
+                            embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                            org_id=self._org_id,
+                            user_id=self._user_id,
+                        )
+                        memory_svc = MemoryService(mem_session, self._org_id, vector_service=vector_svc)
+                        for candidate in candidates:
+                            try:
+                                await memory_svc.write_candidate(candidate)
+                            except Exception:
+                                logger.debug("Candidate memory write skipped", exc_info=True)
+            except Exception:
+                logger.debug("Memory candidate extraction skipped", exc_info=True)
+
+            # Trigger session summarization
+            try:
+                from app.services.chat_session_summary_service import ChatSessionSummaryService
+                async with get_session() as summary_session:
+                    summary_svc = ChatSessionSummaryService(summary_session, self._org_id, self._user_id)
+                    await summary_svc.maybe_summarize(session_id)
+                    await summary_session.commit()
+            except Exception as exc:
+                raise RuntimeError(f"short-term memory summary failed: {exc}") from exc
+
         except Exception as exc:
             logger.exception(
                 "chat workflow failed session_id=%s assistant_message_id=%s workflow_run_id=%s",
@@ -518,6 +650,13 @@ class ChatService:
                 "请稍后重试，或补充更明确的检测标准、产品信息和问题细节。"
             )
             failure_payload = {"status": "failed", "error": str(exc)}
+            error_message = str(exc) or exc.__class__.__name__
+            content = f"聊天任务执行失败：{error_message}"
+            failure_payload = {
+                "status": "failed",
+                "error_code": "CHAT_WORKFLOW_FAILED",
+                "error": error_message,
+            }
             async with get_session() as session:
                 repo = ChatMessageRepository(session)
                 await repo.update_assistant_message(

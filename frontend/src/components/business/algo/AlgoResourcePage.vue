@@ -26,6 +26,7 @@ const props = defineProps<{
   buildPayload: (form: { name: string; description: string; config_json: string }) => Record<string, unknown>;
   populateForm?: (item: TItem) => void;
   detailDescription?: (item: TItem | null) => string;
+  detailPath?: (id: string) => string;
   showLaunch?: boolean;
 }>();
 
@@ -106,7 +107,7 @@ async function remove(id: string) {
 }
 
 async function openDetail(id: string) {
-  const detailPath = props.store.detailPath?.(id);
+  const detailPath = props.detailPath?.(id) ?? props.store.detailPath?.(id);
   if (detailPath) {
     await router.push(detailPath);
     return;

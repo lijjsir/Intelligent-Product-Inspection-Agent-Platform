@@ -35,6 +35,7 @@ class MemoryStatus(str, Enum):
     DISABLED = "disabled"
     DELETED = "deleted"
     EXPIRED = "expired"
+    CONTESTED = "contested"
 
 
 class EventType(str, Enum):
@@ -51,7 +52,6 @@ class EventType(str, Enum):
     MEMORY_ROLLBACK_PLANNED = "memory.rollback_planned"
     MEMORY_ROLLBACK_APPLIED = "memory.rollback_applied"
     MEMORY_EVALUATION_COMPLETED = "memory.evaluation_completed"
-    MEMORY_DEGRADED = "memory.degraded"
 
 
 class EdgeType(str, Enum):
@@ -149,6 +149,8 @@ class MemoryWriteResponse(BaseModel):
     trust_score: float | None = None
     confidence: float | None = None
     warnings: list[str] = Field(default_factory=list)
+    policy_key: str | None = None
+    policy_version: str | None = None
 
 
 # ---- Search ----
@@ -184,16 +186,17 @@ class MemorySearchItem(BaseModel):
 class MemorySearchResponse(BaseModel):
     memory_context: dict | None = None
     items: list[MemorySearchItem] = Field(default_factory=list)
-    degraded: bool = False
-    warnings: list[str] = Field(default_factory=list)
+    policy_version: str = "default:v1"
+    trace_id: str | None = None
+    conflict_info: dict | None = None
 
     @model_validator(mode="after")
     def ensure_context(self) -> MemorySearchResponse:
         if self.memory_context is None:
             self.memory_context = {
                 "items": [item.model_dump() for item in self.items],
-                "warnings": self.warnings,
-                "degraded": self.degraded,
+                "policy_version": self.policy_version,
+                "trace_id": self.trace_id,
             }
         return self
 

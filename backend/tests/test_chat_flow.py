@@ -575,7 +575,8 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
             ]
 
     class FakeSession:
-        pass
+        async def commit(self):
+            return None
 
     class FakeSessionContext:
         async def __aenter__(self):
@@ -596,6 +597,38 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
     monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+
+    async def fake_memory_search(self, request):
+        return SimpleNamespace(items=[], policy_version="retrieval:v1")
+
+    async def fake_short_term_context(self, **kwargs):
+        return {
+            "recent_messages": [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ],
+            "conversation_summary": "short summary",
+            "session_facts": {"preferred_language": "zh-CN"},
+            "pending_action": None,
+            "awaiting_confirmation": None,
+            "task_draft": None,
+            "task_form_defaults": None,
+            "missing_slots": None,
+            "paper_review_status": None,
+            "selected_rag_space": None,
+            "token_budget": {"truncated": False},
+        }
+
+    async def fake_summary(self, session_id):
+        return False
+
+    import app.services.memory_service as memory_service_mod
+    import app.services.short_term_memory_service as stm_service_mod
+    import app.services.chat_session_summary_service as summary_service_mod
+
+    monkeypatch.setattr(memory_service_mod.MemoryService, "search", fake_memory_search)
+    monkeypatch.setattr(stm_service_mod.ShortTermMemoryService, "build_context", fake_short_term_context)
+    monkeypatch.setattr(summary_service_mod.ChatSessionSummaryService, "maybe_summarize", fake_summary)
 
     service = ChatService(
         org_id="org-1",
@@ -620,6 +653,8 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
     ]
+    assert ext["conversation_summary"] == "short summary"
+    assert ext["session_facts"] == {"preferred_language": "zh-CN"}
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():
@@ -631,6 +666,71 @@ def test_smalltalk_answer_remembers_user_name_from_history():
         ],
     )
     assert answer == "你之前告诉过我，你叫tgg。"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_surfaces_memory_error_to_frontend(monkeypatch):
+    updates: list[dict] = []
+    events: list[dict] = []
+
+    class FakeRepo:
+        def __init__(self, _session):
+            pass
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeBroker:
+        async def publish(self, _session_id: str, event: dict):
+            events.append(event)
+
+    class FakeOrchestrator:
+        async def run_chat(self, payload: dict):
+            raise AssertionError("orchestrator should not run after memory failure")
+
+    async def failing_memory_search(self, request):
+        raise RuntimeError("short-term memory database column missing")
+
+    import app.services.memory_service as memory_service_mod
+
+    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
+    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+    monkeypatch.setattr(memory_service_mod.MemoryService, "search", failing_memory_search)
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+    service._orchestrator = FakeOrchestrator()
+
+    await service._run_workflow(
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
+        workflow_run_id="workflow-1",
+        current_user_seq_no=3,
+        assistant_message_seq_no=4,
+    )
+
+    assert updates[0]["message_type"] == "error"
+    assert updates[0]["payload"]["error_code"] == "CHAT_WORKFLOW_FAILED"
+    assert "short-term memory database column missing" in updates[0]["content"]
+    assert events[-1]["event"] == "run_failed"
+    assert "short-term memory database column missing" in events[-1]["content"]
 
 
 def test_extract_named_user_from_history_reads_latest_name():

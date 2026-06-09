@@ -81,6 +81,16 @@ class ApprovalService:
         approval.review_comment = (comment or "").strip() or None
         approval.reviewed_at = datetime.now(timezone.utc)
         await self._repo.update(approval)
+
+        # If memory governance approval, trigger rollback apply
+        if approval.source_module == "memory_governance":
+            try:
+                from app.services.memory_governance_service import MemoryRollbackService
+                rollback_svc = MemoryRollbackService(self._session, self._org_id)
+                await rollback_svc.apply_rollback(approval.source_id)
+            except Exception:
+                pass
+
         await self._write_audit_log(approval, reviewer_id, "approve")
         return approval
 

@@ -28,6 +28,7 @@ class MemoryStatus(str, Enum):
     DISABLED = "disabled"
     DELETED = "deleted"
     EXPIRED = "expired"
+    CONTESTED = "contested"
 
 
 class UsagePolicy(str, Enum):
@@ -52,7 +53,6 @@ class EventType(str, Enum):
     MEMORY_ROLLBACK_PLANNED = "memory.rollback_planned"
     MEMORY_ROLLBACK_APPLIED = "memory.rollback_applied"
     MEMORY_EVALUATION_COMPLETED = "memory.evaluation_completed"
-    MEMORY_DEGRADED = "memory.degraded"
 
 
 class EdgeType(str, Enum):
@@ -157,6 +157,8 @@ class MemoryWriteResponse(BaseModel):
     trust_score: float | None = None
     confidence: float | None = None
     warnings: list[str] = Field(default_factory=list)
+    policy_key: str | None = None
+    policy_version: str | None = None
 
 
 # ---- Search / Retrieval ----
@@ -175,6 +177,7 @@ class MemorySearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     scope_filter: ScopeFilter | None = None
     top_k: int = Field(default=5, ge=1, le=10)
+    trace_id: str | None = None
 
 
 class MemorySearchItem(BaseModel):
@@ -191,15 +194,67 @@ class MemorySearchItem(BaseModel):
 
 class MemoryContext(BaseModel):
     items: list[MemorySearchItem] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    degraded: bool = False
 
 
 class MemorySearchResponse(BaseModel):
     memory_context: MemoryContext
     items: list[MemorySearchItem] = Field(default_factory=list)
-    degraded: bool = False
-    warnings: list[str] = Field(default_factory=list)
+    policy_version: str = "default:v1"
+    trace_id: str | None = None
+    conflict_info: dict | None = None
+
+
+class MemoryErrorDetail(BaseModel):
+    error_code: str
+    message: str
+    trace_id: str | None = None
+
+
+class MemoryErrorResponse(BaseModel):
+    detail: MemoryErrorDetail
+
+
+# ---- Conflict Detection & Arbitration ----
+
+class ConflictRelation(str, Enum):
+    CONTRADICTS = "contradicts"
+    SUPPORTS = "supports"
+    UNRELATED = "unrelated"
+    REFINES = "refines"
+
+
+class ConflictItem(BaseModel):
+    memory_id: str
+    summary: str
+    memory_type: str
+    confidence: float | None = None
+    trust_score: float | None = None
+
+
+class ConflictDetail(BaseModel):
+    edge_id: str
+    source_memory: ConflictItem
+    target_memory: ConflictItem
+    relation: ConflictRelation
+    created_at: str | None = None
+
+
+class ConflictListResponse(BaseModel):
+    conflicts: list[ConflictDetail] = Field(default_factory=list)
+    total: int = 0
+
+
+class ConflictResolveRequest(BaseModel):
+    action: str = Field(..., description="keep_A / keep_B / merge / dismiss")
+    reviewer_id: str = Field(..., min_length=1)
+    comment: str | None = None
+
+
+class ConflictResolveResponse(BaseModel):
+    resolution: str
+    source_memory_status: str
+    target_memory_status: str
+    merged_memory_id: str | None = None
 
 
 # ---- Events ----

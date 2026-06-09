@@ -13,24 +13,16 @@ from typing import Any, Literal
 from langgraph.graph import END, StateGraph
 
 from agent.graphs.memory_manager.nodes import (
-    candidate_memory_builder,
     contamination_monitor_node,
     governance_recovery_agent,
-    lab_detection_agent,
     manager_route_policy,
-    market_monitor_agent,
     memory_context_loader,
     propagation_graph_node,
     provenance_node,
-    public_opinion_agent,
-    quality_judgement_agent,
     replay_evaluation_node,
     request_intake,
     result_synthesizer,
     rollback_planner_node,
-    supervision_sampling_agent,
-    trend_evolution_agent,
-    write_gate_node,
 )
 from agent.graphs.memory_manager.state import MemoryAgentState
 
@@ -44,47 +36,20 @@ def build_graph() -> StateGraph:
     builder.add_node("memory_context_loader", memory_context_loader)
     builder.add_node("manager_route_policy", manager_route_policy)
 
-    # Professional agent nodes
-    builder.add_node("market_monitor_agent", market_monitor_agent)
-    builder.add_node("public_opinion_agent", public_opinion_agent)
-    builder.add_node("trend_evolution_agent", trend_evolution_agent)
-    builder.add_node("supervision_sampling_agent", supervision_sampling_agent)
-    builder.add_node("lab_detection_agent", lab_detection_agent)
-    builder.add_node("quality_judgement_agent", quality_judgement_agent)
-
-    # Memory lifecycle nodes
-    builder.add_node("candidate_memory_builder", candidate_memory_builder)
-    builder.add_node("write_gate_node", write_gate_node)
-    builder.add_node("contamination_monitor_node", contamination_monitor_node)
-    builder.add_node("result_synthesizer", result_synthesizer)
-
     # Governance branch nodes
+    builder.add_node("contamination_monitor_node", contamination_monitor_node)
     builder.add_node("provenance_node", provenance_node)
     builder.add_node("propagation_graph_node", propagation_graph_node)
     builder.add_node("rollback_planner_node", rollback_planner_node)
     builder.add_node("governance_recovery_agent", governance_recovery_agent)
     builder.add_node("replay_evaluation_node", replay_evaluation_node)
+    builder.add_node("result_synthesizer", result_synthesizer)
 
     # Edges
     builder.set_entry_point("request_intake")
     builder.add_edge("request_intake", "memory_context_loader")
     builder.add_edge("memory_context_loader", "manager_route_policy")
-
-    # Manager routes to professional agents
-    builder.add_edge("manager_route_policy", "market_monitor_agent")
-    builder.add_edge("manager_route_policy", "public_opinion_agent")
-    builder.add_edge("manager_route_policy", "trend_evolution_agent")
-    builder.add_edge("manager_route_policy", "quality_judgement_agent")
-
-    # All professional agents feed into candidate_memory_builder
-    builder.add_edge("market_monitor_agent", "candidate_memory_builder")
-    builder.add_edge("public_opinion_agent", "candidate_memory_builder")
-    builder.add_edge("trend_evolution_agent", "candidate_memory_builder")
-    builder.add_edge("quality_judgement_agent", "candidate_memory_builder")
-
-    # Memory lifecycle
-    builder.add_edge("candidate_memory_builder", "write_gate_node")
-    builder.add_edge("write_gate_node", "contamination_monitor_node")
+    builder.add_edge("manager_route_policy", "contamination_monitor_node")
 
     # Conditional: alert -> governance branch, else -> result
     builder.add_conditional_edges(
@@ -128,3 +93,14 @@ class MemoryManagerGraph:
     @property
     def builder(self) -> StateGraph:
         return self._graph
+
+
+def make_checkpointer():
+    """Create a MySQL-backed checkpointer for MemoryManagerGraph."""
+    from infra.database.session import create_session
+    from agent.graphs.memory_manager.checkpointer import MySQLCheckpointer
+
+    async def session_factory():
+        return create_session()
+
+    return MySQLCheckpointer(session_factory)

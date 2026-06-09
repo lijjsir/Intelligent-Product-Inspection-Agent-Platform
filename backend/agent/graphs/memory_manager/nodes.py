@@ -2,14 +2,13 @@
 
 Node topology:
   request_intake -> memory_context_loader -> manager_route_policy
-  -> [market_monitor, public_opinion, trend_evolution,
-      supervision_sampling, lab_detection, quality_judgement]
-  -> candidate_memory_builder -> write_gate_node -> contamination_monitor_node
+  -> contamination_monitor_node
   -> {no alert: result_synthesizer}
   -> {alert: provenance_node -> propagation_graph_node -> rollback_planner_node
        -> governance_recovery_agent -> replay_evaluation_node -> result_synthesizer}
 
-Nodes never write directly to ORM or Qdrant — they delegate to service layer.
+Nodes delegate to real service layer (MemoryService, MemoryGovernanceService).
+Never write directly to ORM or Qdrant.
 """
 from __future__ import annotations
 
@@ -40,7 +39,7 @@ def _event(event_type: str, memory_id: str | None = None, trace_id: str | None =
 async def request_intake(state: MemoryAgentState) -> dict[str, Any]:
     """Record input.received event and normalize task context."""
     ctx = state.get("task_context", {})
-    events = state.get("memory_events", [])
+    events = list(state.get("memory_events", []))
     events.append(_event(
         "input.received",
         trace_id=ctx.get("trace_id"),
@@ -53,192 +52,58 @@ async def request_intake(state: MemoryAgentState) -> dict[str, Any]:
 
 
 async def memory_context_loader(state: MemoryAgentState) -> dict[str, Any]:
-    """Load relevant memory context for the current task.
-
-    In production, this calls MemoryService.search().
-    Here we produce the placeholder structure expected by downstream nodes.
-    """
+    """Load relevant memory context via MemoryService.search()."""
     ctx = state.get("task_context", {})
-    mc = state.get("memory_context", {})
-    if not mc:
-        mc = {"items": [], "warnings": [], "degraded": False}
-    events = state.get("memory_events", [])
+    events = list(state.get("memory_events", []))
+
+    try:
+        from app.schemas.memory import MemorySearchRequest, Workspace as MemWorkspace
+        from app.services.memory_service import MemoryService
+        from app.services.memory_vector_service import MemoryVectorService
+        from infra.database.session import get_session
+
+        org_id = str(ctx.get("org_id") or "")
+        query = str(ctx.get("query") or ctx.get("original_query") or "")
+
+        if org_id and query:
+            async with get_session() as session:
+                vector_svc = MemoryVectorService()
+                memory_svc = MemoryService(session, org_id, vector_service=vector_svc)
+                req = MemorySearchRequest(
+                    org_id=org_id,
+                    user_id=ctx.get("user_id"),
+                    workspace=MemWorkspace.APP,
+                    query=query,
+                    top_k=5,
+                )
+                resp = await memory_svc.search(req)
+                mc = {
+                    "items": [item.model_dump() for item in resp.items],
+                    "policy_version": resp.policy_version,
+                    "trace_id": resp.trace_id,
+                }
+        else:
+            mc = {"items": []}
+    except Exception:
+        mc = {"items": []}
+
     events.append(_event(
         "memory.retrieval_completed",
         trace_id=ctx.get("trace_id"),
         payload={"item_count": len(mc.get("items", []))},
     ))
-    return {
-        "memory_context": mc,
-        "memory_events": events,
-    }
+    return {"memory_context": mc, "memory_events": events}
 
 
 async def manager_route_policy(state: MemoryAgentState) -> dict[str, Any]:
-    """MemoryManagerAgent: route to appropriate professional agents.
-
-    Determines which agents to invoke based on task context and alerts.
-    Marks the routing decision in agent_outputs.
-    """
-    ctx = state.get("task_context", {})
+    """Pass-through routing node. Professional agents will be added in future iterations."""
     agent_outputs = state.get("agent_outputs", {})
     agent_outputs["manager"] = {
-        "decision": "route",
-        "routed_agents": [
-            "market_monitor",
-            "quality_judgement",
-        ],
-        "trace_id": ctx.get("trace_id"),
+        "decision": "pass_through",
+        "routed_agents": [],
+        "note": "Professional agents not yet implemented — skipping to governance monitor",
     }
     return {"agent_outputs": agent_outputs}
-
-
-# ---------------------------------------------------------------------------
-# Professional Agent Nodes
-# Each produces structured output that enters candidate_memory_builder.
-# ---------------------------------------------------------------------------
-
-async def market_monitor_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["market_monitor"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def public_opinion_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["public_opinion"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def trend_evolution_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["trend_evolution"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def supervision_sampling_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["supervision_sampling"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def lab_detection_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["lab_detection"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def quality_judgement_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["quality_judgement"] = {
-        "status": "completed",
-        "findings": [],
-        "evidence_chain": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-# ---------------------------------------------------------------------------
-# Candidate Memory Builder
-# ---------------------------------------------------------------------------
-
-async def candidate_memory_builder(state: MemoryAgentState) -> dict[str, Any]:
-    """Collect outputs from all professional agents and build candidate memories.
-
-    Each professional agent's output may contain candidate_memories.
-    This node aggregates them into structured_memory with status=candidate.
-    """
-    ctx = state.get("task_context", {})
-    agent_outputs = state.get("agent_outputs", {})
-    structured = list(state.get("structured_memory", []))
-    events = state.get("memory_events", [])
-
-    for agent_name, output in agent_outputs.items():
-        if agent_name == "manager":
-            continue
-        candidates = output.get("candidate_memories", [])
-        for cand in candidates:
-            mid = cand.get("memory_id") or f"mem_{uuid.uuid4().hex[:12]}"
-            cand["memory_id"] = mid
-            cand.setdefault("status", "candidate")
-            structured.append(cand)
-            events.append(_event(
-                "memory.candidate_created",
-                memory_id=mid,
-                trace_id=ctx.get("trace_id"),
-                payload={"agent": agent_name},
-            ))
-
-    return {
-        "structured_memory": structured,
-        "memory_events": events,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Write Gate
-# ---------------------------------------------------------------------------
-
-async def write_gate_node(state: MemoryAgentState) -> dict[str, Any]:
-    """Write gate: validate candidates and promote passing ones to active.
-
-    In production, delegates to MemoryWriteGateService via MemoryService.write_candidate().
-    Nodes never write ORM directly.
-    """
-    structured = list(state.get("structured_memory", []))
-    events = state.get("memory_events", [])
-    ctx = state.get("task_context", {})
-
-    for idx, item in enumerate(structured):
-        if item.get("status") == "candidate":
-            has_source = bool(item.get("source") or item.get("trace_id"))
-            has_scope = bool(
-                item.get("scope")
-                or item.get("task_id")
-                or ctx.get("task_id")
-            )
-            if has_source and has_scope:
-                structured[idx]["status"] = "active"
-                structured[idx]["trust_score"] = item.get("confidence", 0.5)
-                events.append(_event(
-                    "memory.write_created",
-                    memory_id=item.get("memory_id"),
-                    trace_id=ctx.get("trace_id"),
-                ))
-            else:
-                structured[idx]["status"] = "isolated"
-                events.append(_event(
-                    "memory.write_rejected",
-                    memory_id=item.get("memory_id"),
-                    trace_id=ctx.get("trace_id"),
-                    payload={"reason": "missing source or scope"},
-                ))
-
-    return {
-        "structured_memory": structured,
-        "memory_events": events,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +113,7 @@ async def write_gate_node(state: MemoryAgentState) -> dict[str, Any]:
 async def contamination_monitor_node(state: MemoryAgentState) -> dict[str, Any]:
     """Detect contamination signals in recent events and memories.
 
-    Checks for conflict warnings, anomalous trust scores, and cross-boundary reads.
+    Checks for conflict warnings, anomalous trust scores, and failed index status.
     Sets contamination_alerts if issues found.
     """
     alerts = list(state.get("contamination_alerts", []))
@@ -278,6 +143,15 @@ async def contamination_monitor_node(state: MemoryAgentState) -> dict[str, Any]:
                 "trust_score": trust,
             })
 
+    # Check for failed index status
+    for item in structured:
+        if item.get("index_status") == "failed":
+            alerts.append({
+                "alert_type": "index_failed",
+                "memory_id": item.get("memory_id"),
+                "index_error": item.get("index_error", "unknown"),
+            })
+
     has_alert = len(alerts) > 0
     return {
         "contamination_alerts": alerts,
@@ -296,29 +170,37 @@ async def contamination_monitor_node(state: MemoryAgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 async def provenance_node(state: MemoryAgentState) -> dict[str, Any]:
-    """Reconstruct source event chains for contaminated memories."""
+    """Reconstruct source event chains via MemoryProvenanceService."""
     alerts = state.get("contamination_alerts", [])
-    events = state.get("memory_events", [])
+    events = list(state.get("memory_events", []))
     ctx = state.get("task_context", {})
 
+    from app.services.memory_governance_service import MemoryProvenanceService
+    from infra.database.session import get_session
+
+    org_id = str(ctx.get("org_id") or "")
     provenance = {"chains": []}
-    for alert in alerts:
-        mid = alert.get("memory_id")
-        if mid:
-            chain_events = [e for e in events if e.get("memory_id") == mid]
-            provenance["chains"].append({
-                "memory_id": mid,
-                "alert_type": alert.get("alert_type"),
-                "related_events": [
-                    {"event_id": e["event_id"], "event_type": e["event_type"]}
-                    for e in chain_events
-                ],
-            })
-            events.append(_event(
-                "memory.propagation_graph_created",
-                memory_id=mid,
-                trace_id=ctx.get("trace_id"),
-            ))
+
+    if org_id and alerts:
+        async with get_session() as session:
+            prov_svc = MemoryProvenanceService(session, org_id)
+            for alert in alerts:
+                mid = alert.get("memory_id")
+                if mid:
+                    try:
+                        chain = await prov_svc.trace_provenance(mid)
+                        provenance["chains"].append(chain)
+                    except Exception:
+                        provenance["chains"].append({
+                            "memory_id": mid,
+                            "alert_type": alert.get("alert_type"),
+                            "error": "provenance_trace_failed",
+                        })
+                    events.append(_event(
+                        "memory.propagation_graph_created",
+                        memory_id=mid,
+                        trace_id=ctx.get("trace_id"),
+                    ))
 
     return {
         "memory_events": events,
@@ -330,11 +212,15 @@ async def provenance_node(state: MemoryAgentState) -> dict[str, Any]:
 
 
 async def propagation_graph_node(state: MemoryAgentState) -> dict[str, Any]:
-    """Build contamination propagation subgraph from dependency edges."""
+    """Build contamination propagation subgraph via MemoryPropagationService."""
     alerts = state.get("contamination_alerts", [])
-    edges = state.get("dependency_edges", [])
+    events = list(state.get("memory_events", []))
     ctx = state.get("task_context", {})
 
+    from app.services.memory_governance_service import MemoryPropagationService
+    from infra.database.session import get_session
+
+    org_id = str(ctx.get("org_id") or "")
     graph: dict[str, Any] = {
         "direct_contaminated": [],
         "indirect_contaminated": [],
@@ -342,56 +228,53 @@ async def propagation_graph_node(state: MemoryAgentState) -> dict[str, Any]:
         "nodes": [],
     }
 
-    for alert in alerts:
-        mid = alert.get("memory_id")
-        if mid:
-            graph["direct_contaminated"].append(mid)
-            graph["nodes"].append({
-                "memory_id": mid,
-                "classification": "direct_contaminated",
-                "depth": 0,
-            })
-            # Walk forward through dependency edges
-            for edge in edges:
-                if edge.get("source_memory_id") == mid:
-                    target = edge.get("target_memory_id")
-                    if target and target not in graph["direct_contaminated"]:
-                        graph["indirect_contaminated"].append(target)
-                        graph["nodes"].append({
-                            "memory_id": target,
-                            "classification": "indirect_contaminated",
-                            "depth": 1,
-                            "edge_type": edge.get("edge_type"),
-                        })
+    if org_id and alerts:
+        async with get_session() as session:
+            prop_svc = MemoryPropagationService(session, org_id)
+            for alert in alerts:
+                mid = alert.get("memory_id")
+                if mid:
+                    try:
+                        from agent.contracts.memory_contracts import EdgeType
+                        resp = await prop_svc.build_propagation_graph(
+                            root_memory_id=mid,
+                            max_depth=4,
+                            include_edge_types=[
+                                EdgeType.DERIVED_FROM,
+                                EdgeType.VERSION_OF,
+                                EdgeType.CITED_AS_EVIDENCE,
+                            ],
+                        )
+                        graph["direct_contaminated"].extend(resp.direct_contaminated)
+                        graph["indirect_contaminated"].extend(resp.indirect_contaminated)
+                        graph["suspected"].extend(resp.suspected)
+                        for node in resp.nodes:
+                            graph["nodes"].append(node.model_dump())
+                    except Exception:
+                        pass
 
-    events = state.get("memory_events", [])
     events.append(_event(
         "memory.propagation_graph_created",
         trace_id=ctx.get("trace_id"),
         payload={"node_count": len(graph["nodes"])},
     ))
-
-    return {
-        "propagation_graph": graph,
-        "memory_events": events,
-    }
+    return {"propagation_graph": graph, "memory_events": events}
 
 
 async def rollback_planner_node(state: MemoryAgentState) -> dict[str, Any]:
-    """Generate candidate rollback plans from propagation graph."""
+    """Generate candidate rollback plans from propagation graph with policy-driven review settings."""
     pg = state.get("propagation_graph", {})
     ctx = state.get("task_context", {})
+    events = list(state.get("memory_events", []))
 
-    plan: dict[str, Any] = {
-        "actions": [],
-    }
+    plan: dict[str, Any] = {"actions": []}
 
     for mid in pg.get("direct_contaminated", []):
         plan["actions"].append({
             "memory_id": mid,
             "action": "isolate",
             "reason": "direct contamination",
-            "require_human_review": False,
+            "require_human_review": len(pg.get("direct_contaminated", [])) >= 5,
         })
     for mid in pg.get("indirect_contaminated", []):
         plan["actions"].append({
@@ -401,95 +284,131 @@ async def rollback_planner_node(state: MemoryAgentState) -> dict[str, Any]:
             "require_human_review": False,
         })
 
-    events = state.get("memory_events", [])
     events.append(_event(
         "memory.rollback_planned",
         trace_id=ctx.get("trace_id"),
         payload={"action_count": len(plan["actions"])},
     ))
-
-    return {
-        "rollback_plan": plan,
-        "memory_events": events,
-    }
+    return {"rollback_plan": plan, "memory_events": events}
 
 
 async def governance_recovery_agent(state: MemoryAgentState) -> dict[str, Any]:
-    """GovernanceRecoveryAgent: execute rollback plan actions.
-
-    In production, delegates to MemoryRollbackService.
-    """
+    """Execute rollback plan via MemoryRollbackService (two-phase)."""
     plan = state.get("rollback_plan", {})
     ctx = state.get("task_context", {})
-    structured = list(state.get("structured_memory", []))
-    events = state.get("memory_events", [])
-    edges = list(state.get("dependency_edges", []))
+    events = list(state.get("memory_events", []))
 
-    for action in plan.get("actions", []):
-        mid = action.get("memory_id")
-        act = action.get("action", "degrade")
-        for idx, item in enumerate(structured):
-            if item.get("memory_id") == mid:
-                if act == "isolate":
-                    structured[idx]["status"] = "isolated"
-                elif act == "degrade":
-                    structured[idx]["trust_score"] = (item.get("trust_score", 0.5) or 0.5) * 0.5
-                elif act == "delete":
-                    structured[idx]["status"] = "deleted"
-                break
-        events.append(_event(
-            "memory.rollback_applied",
-            memory_id=mid,
-            trace_id=ctx.get("trace_id"),
-            payload={"action": act},
-        ))
+    from app.schemas.memory import RollbackAction
+    from app.services.memory_governance_service import MemoryRollbackService
+    from infra.database.session import get_session
+
+    org_id = str(ctx.get("org_id") or "")
+    applied = 0
+
+    if org_id and plan.get("actions"):
+        async with get_session() as session:
+            rollback_svc = MemoryRollbackService(session, org_id)
+            for action in plan["actions"]:
+                mid = action.get("memory_id")
+                act = action.get("action", "isolate")
+                require_review = bool(action.get("require_human_review", False))
+                try:
+                    rb_action_map = {
+                        "delete": RollbackAction.DELETE,
+                        "degrade": RollbackAction.DEGRADE,
+                        "isolate": RollbackAction.ISOLATE,
+                        "patch": RollbackAction.PATCH,
+                    }
+                    rb_action = rb_action_map.get(act, RollbackAction.ISOLATE)
+                    resp = await rollback_svc.plan_rollback(
+                        root_memory_id=mid or "",
+                        operator_id=str(ctx.get("user_id") or "system"),
+                        operator_role="admin",
+                        workspace=ctx.get("workspace", "app"),
+                        trace_id=ctx.get("trace_id", ""),
+                        action=rb_action,
+                        target_memory_ids=[mid] if mid else [],
+                        reason=action.get("reason", "contamination recovery"),
+                        require_human_review=require_review,
+                    )
+                    applied += resp.affected_count
+                    events.append(_event(
+                        "memory.rollback_applied",
+                        memory_id=mid,
+                        trace_id=ctx.get("trace_id"),
+                        payload={
+                            "action": act,
+                            "review_status": resp.review_status.value,
+                            "rollback_id": resp.rollback_id,
+                        },
+                    ))
+                except Exception:
+                    events.append(_event(
+                        "memory.rollback_applied",
+                        memory_id=mid,
+                        trace_id=ctx.get("trace_id"),
+                        payload={"action": act, "error": "rollback_failed"},
+                    ))
 
     return {
-        "structured_memory": structured,
         "memory_events": events,
         "agent_outputs": {
             **state.get("agent_outputs", {}),
             "governance_recovery": {
                 "status": "completed",
-                "actions_applied": len(plan.get("actions", [])),
+                "actions_applied": applied,
             },
         },
     }
 
 
 async def replay_evaluation_node(state: MemoryAgentState) -> dict[str, Any]:
-    """Evaluate recovery effectiveness using task segment replay and metric comparison."""
-    alerts = state.get("contamination_alerts", [])
+    """Evaluate recovery effectiveness via MemoryEvaluationService."""
     plan = state.get("rollback_plan", {})
     ctx = state.get("task_context", {})
+    events = list(state.get("memory_events", []))
 
-    actions = plan.get("actions", [])
-    affected = len(alerts)
+    from app.services.memory_governance_service import MemoryEvaluationService
+    from infra.database.session import get_session
 
+    org_id = str(ctx.get("org_id") or "")
     eval_result: dict[str, Any] = {
-        "metrics": {
-            "contamination_detection_rate": 1.0 if affected > 0 else 0.0,
-            "propagation_coverage": min(1.0, len(actions) / max(1, affected)),
-            "residual_contamination_rate": 0.0,
-            "recovery_cost": len(actions),
-        },
-        "conclusion": (
-            f"Recovery applied {len(actions)} actions across {affected} alert(s). "
-            "All active memories contained."
-        ),
+        "metrics": {"actions_applied": len(plan.get("actions", []))},
+        "conclusion": "No evaluation performed.",
     }
 
-    events = state.get("memory_events", [])
+    # Find rollback_id from events
+    rollback_id = None
+    for evt in events:
+        if evt.get("event_type") == "memory.rollback_applied":
+            payload = evt.get("payload", {})
+            rid = payload.get("rollback_id")
+            if rid:
+                rollback_id = rid
+                break
+
+    if org_id and rollback_id:
+        async with get_session() as session:
+            eval_svc = MemoryEvaluationService(session, org_id)
+            try:
+                resp = await eval_svc.evaluate_recovery(
+                    rollback_id=rollback_id,
+                    trace_id=ctx.get("trace_id"),
+                )
+                eval_result = {
+                    "evaluation_id": resp.evaluation_id,
+                    "metrics": resp.metrics,
+                    "conclusion": resp.conclusion,
+                }
+            except Exception:
+                pass
+
     events.append(_event(
         "memory.evaluation_completed",
         trace_id=ctx.get("trace_id"),
-        payload=eval_result["metrics"],
+        payload=eval_result.get("metrics", {}),
     ))
-
-    return {
-        "evaluation_result": eval_result,
-        "memory_events": events,
-    }
+    return {"evaluation_result": eval_result, "memory_events": events}
 
 
 # ---------------------------------------------------------------------------
@@ -497,21 +416,17 @@ async def replay_evaluation_node(state: MemoryAgentState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 async def result_synthesizer(state: MemoryAgentState) -> dict[str, Any]:
-    """Assemble final result layer output with evidence chains and warnings."""
-    agent_outputs = state.get("agent_outputs", {})
-    eval_result = state.get("evaluation_result", {})
+    """Assemble final result with governance summary."""
     mc = state.get("memory_context", {})
+    pg = state.get("propagation_graph", {})
+    eval_result = state.get("evaluation_result", {})
     ctx = state.get("task_context", {})
 
     final = {
         "status": "completed",
         "memory_sources_used": len(mc.get("items", [])),
+        "contamination_nodes": len(pg.get("nodes", [])),
         "evaluation": eval_result,
-        "agent_summaries": [
-            {"agent": name, "status": out.get("status")}
-            for name, out in agent_outputs.items()
-            if name != "manager"
-        ],
         "trace_id": ctx.get("trace_id"),
     }
 

@@ -19,6 +19,10 @@ class ChatSession(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_facts_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    summary_seq_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    context_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
 
 class ChatMessage(Base, TimestampMixin):

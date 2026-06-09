@@ -175,7 +175,6 @@ class LLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
         else:
-            payload["response_format"] = {"type": "json_object"}
             self._ensure_json_prompt_hint(payload)
         return payload
 
