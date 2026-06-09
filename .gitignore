@@ -19,6 +19,9 @@ frontend/dist/
 frontend/node_modules/.vite/
 frontend/logs/
 
+# Docs (moved out of git tracking)
+docs/
+
 # Local env / secrets
 .env
 *.env.local
