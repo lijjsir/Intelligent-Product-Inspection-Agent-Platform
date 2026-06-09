@@ -1,7 +1,7 @@
 """ConflictDetectionService - two-phase conflict detection during memory search.
 
 Phase 1: cosine similarity filtering on recalled items (>0.75 threshold).
-Phase 2: LLM judgment classifying each pair as CONTRADICTS/SUPPORTS/UNRELATED/REFINES.
+Phase 2: LLM judgment classifying each pair as CONTRADICTS/UNRELATED.
 """
 from __future__ import annotations
 
@@ -14,18 +14,25 @@ logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.75
 
-LLM_JUDGE_PROMPT = """You are evaluating two memory claims from a product inspection system. Output ONLY one word:
+LLM_JUDGE_PROMPT = """You are evaluating the relationship between two shared memory claims from a product inspection system. Output ONLY valid JSON, no explanation.
 
-- CONTRADICTS: the claims cannot both be true
-- SUPPORTS: claim B supports claim A
-- REFINES: claim B is a more specific or updated version of claim A
-- UNRELATED: no logical relationship between the claims
+Memory A:
+  memory_id={id_a}
+  memory_type={type_a}
+  summary={summary_a}
 
-Claim A ({type_a}): {summary_a}
+Memory B:
+  memory_id={id_b}
+  memory_type={type_b}
+  summary={summary_b}
 
-Claim B ({type_b}): {summary_b}
+Judge the relationship from A to B (relation_from_a_to_b):
 
-Relationship:"""
+- contradicts: A and B cannot both be true
+- unrelated: no clear logical relationship
+
+Output format:
+{{"relation": "contradicts|unrelated", "confidence": 0.0-1.0, "reason": "brief reason"}}"""
 
 
 @dataclass
@@ -33,6 +40,8 @@ class ConflictPair:
     source_memory_id: str
     target_memory_id: str
     relation: ConflictRelation
+    confidence: float = 0.0
+    reason: str | None = None
     source_score: float = 0.0
     target_score: float = 0.0
 
@@ -41,7 +50,6 @@ class ConflictPair:
 class ConflictDetectionResult:
     pairs: list[ConflictPair] = field(default_factory=list)
     contested_ids: set[str] = field(default_factory=set)
-    refine_pairs: list[tuple[str, str]] = field(default_factory=list)
 
 
 class ConflictDetectionService:
@@ -74,13 +82,10 @@ class ConflictDetectionService:
 
         result = ConflictDetectionResult()
         for pair in pairs:
+            result.pairs.append(pair)
             if pair.relation == ConflictRelation.CONTRADICTS:
-                result.pairs.append(pair)
                 result.contested_ids.add(pair.source_memory_id)
                 result.contested_ids.add(pair.target_memory_id)
-            elif pair.relation == ConflictRelation.REFINES:
-                result.pairs.append(pair)
-                result.refine_pairs.append((pair.target_memory_id, pair.source_memory_id))
 
         return result
 
@@ -113,11 +118,13 @@ class ConflictDetectionService:
 
         for a, b in candidates:
             try:
-                relation = await self._judge_pair(a, b)
+                relation, confidence, reason = await self._judge_pair(a, b)
                 pairs.append(ConflictPair(
                     source_memory_id=str(a.get("memory_id", "")),
                     target_memory_id=str(b.get("memory_id", "")),
                     relation=relation,
+                    confidence=confidence,
+                    reason=reason,
                     source_score=float(a.get("score", 0)),
                     target_score=float(b.get("score", 0)),
                 ))
@@ -127,16 +134,19 @@ class ConflictDetectionService:
 
         return pairs
 
-    async def _judge_pair(self, a: dict, b: dict) -> ConflictRelation:
-        """Call LLM to judge relationship between two memory claims."""
+    async def _judge_pair(self, a: dict, b: dict) -> tuple[ConflictRelation, float, str | None]:
+        """Call LLM to judge relationship. Returns (relation, confidence, reason)."""
+        import json
         from agent.llm.client import LLMClient
         from agent.llm.gateway import LLMGateway
         from app.services.model_config_service import ModelConfigService
         from infra.database.session import get_session
 
         prompt = LLM_JUDGE_PROMPT.format(
+            id_a=str(a.get("memory_id", "")),
             type_a=str(a.get("memory_type", "")),
             summary_a=str(a.get("summary", "")),
+            id_b=str(b.get("memory_id", "")),
             type_b=str(b.get("memory_type", "")),
             summary_b=str(b.get("summary", "")),
         )
@@ -158,12 +168,27 @@ class ConflictDetectionService:
             response = await client.chat(
                 [{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=8,
+                max_tokens=128,
                 observation_name="memory.conflict_judge",
             )
 
-        raw = str(response.get("content", "")).strip().upper()
-        for rel in ConflictRelation:
-            if rel.value.upper() in raw:
-                return rel
-        return ConflictRelation.UNRELATED
+        raw = str(response.get("content", "")).strip()
+        try:
+            data = json.loads(raw)
+            rel_str = str(data.get("relation", "")).strip().lower()
+            confidence = float(data.get("confidence", 0.5))
+            reason = str(data.get("reason", "")) or None
+        except (json.JSONDecodeError, ValueError):
+            # Fallback: try old single-word parsing
+            raw_upper = raw.upper()
+            for rel in ConflictRelation:
+                if rel.value.upper() in raw_upper:
+                    return rel, 0.5, None
+            return ConflictRelation.UNRELATED, 0.0, None
+
+        relation_map = {
+            "contradicts": ConflictRelation.CONTRADICTS,
+            "unrelated": ConflictRelation.UNRELATED,
+        }
+        relation = relation_map.get(rel_str, ConflictRelation.UNRELATED)
+        return relation, max(0.0, min(1.0, confidence)), reason

@@ -17,7 +17,6 @@ class MemoryItem(Base):
     memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
     org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
     user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    workspace: Mapped[str] = mapped_column(String(32), nullable=False)
     memory_type: Mapped[str] = mapped_column(String(64), nullable=False)
     scope_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -33,6 +32,16 @@ class MemoryItem(Base):
     index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     policy_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     policy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    candidate_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    canonical_claim: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    negative_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conflict_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rag_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    agent_verifier_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    human_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    promotion_score: Mapped[float | None] = mapped_column(DECIMAL(6, 4), nullable=True)
+    last_supported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -61,6 +70,31 @@ class MemoryItem(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
 
+class MemoryCandidateSupport(Base):
+    __tablename__ = "memory_candidate_supports"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: None)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    candidate_memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    support_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_agent: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rag_space_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chunk_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evidence_pointer: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    similarity: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    weight: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
 class MemoryEvent(Base):
     __tablename__ = "memory_events"
 
@@ -68,7 +102,6 @@ class MemoryEvent(Base):
     event_id: Mapped[str] = mapped_column(String(64), nullable=False)
     org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
     user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
-    workspace: Mapped[str] = mapped_column(String(32), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     source_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
     agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -113,7 +146,6 @@ class MemoryPolicy(Base):
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: None)
     org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
-    workspace: Mapped[str] = mapped_column(String(32), nullable=False)
     policy_key: Mapped[str] = mapped_column(String(128), nullable=False)
     policy_type: Mapped[str] = mapped_column(String(64), nullable=False)
     config_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -141,7 +173,6 @@ class MemoryRollback(Base):
     rollback_id: Mapped[str] = mapped_column(String(64), nullable=False)
     root_memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
     operator_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
-    workspace: Mapped[str] = mapped_column(String(32), nullable=False)
     rollback_action: Mapped[str] = mapped_column(String(32), nullable=False)
     target_memory_ids: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     propagation_graph_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)

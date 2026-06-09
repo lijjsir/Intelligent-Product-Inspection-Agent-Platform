@@ -13,7 +13,6 @@ from app.schemas.memory import (
     MemorySource,
     MemoryType,
     MemoryWriteRequest,
-    Workspace,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +42,7 @@ class MemoryCandidateService:
         user_message: str,
         assistant_answer: str,
         task_id: str | None = None,
+        short_term_memory: dict | None = None,
     ) -> list[MemoryWriteRequest]:
         """Extract candidates from a completed chat exchange."""
         candidates: list[MemoryWriteRequest] = []
@@ -51,6 +51,7 @@ class MemoryCandidateService:
         pref_req = self._extract_user_preference(
             trace_id=trace_id,
             user_message=user_message,
+            short_term_memory=short_term_memory,
         )
         if pref_req:
             candidates.append(pref_req)
@@ -62,6 +63,7 @@ class MemoryCandidateService:
                 task_id=task_id,
                 user_message=user_message,
                 assistant_answer=assistant_answer,
+                short_term_memory=short_term_memory,
             )
             if task_req:
                 candidates.append(task_req)
@@ -85,7 +87,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="rag", trace_id=trace_id),
             memory_type=MemoryType.RAG_USAGE_MEMORY,
             scope=MemoryScope(rag_space_id=rag_space_id),
@@ -111,7 +113,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.GOVERNANCE,
+
             source=MemorySource(kind="human_review", trace_id=trace_id),
             memory_type=MemoryType.GOVERNANCE_MEMORY,
             scope=MemoryScope(),
@@ -130,17 +132,19 @@ class MemoryCandidateService:
         self,
         trace_id: str,
         user_message: str,
+        short_term_memory: dict | None = None,
     ) -> MemoryWriteRequest | None:
-        msg = user_message.strip()
+        msg = self._find_reusable_preference(user_message, short_term_memory)
         if len(msg) < MIN_SUMMARY_LENGTH:
             return None
-        if not any(kw in msg.lower() for kw in PREFERENCE_KEYWORDS):
-            return None
+        evidence = self._short_term_evidence(short_term_memory)
+        if msg != user_message.strip():
+            evidence["extracted_from"] = "short_term_memory.recent_messages"
 
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="user", trace_id=trace_id),
             memory_type=MemoryType.USER_PREFERENCE,
             scope=MemoryScope(),
@@ -148,6 +152,7 @@ class MemoryCandidateService:
                 summary=msg[:MAX_SUMMARY_LENGTH],
                 preferences=[msg[:200]],
             ),
+            evidence_pointers=evidence or None,
             confidence=0.6,
             ttl_policy="90d",
             trace_id=trace_id,
@@ -159,23 +164,89 @@ class MemoryCandidateService:
         task_id: str,
         user_message: str,
         assistant_answer: str,
+        short_term_memory: dict | None = None,
     ) -> MemoryWriteRequest | None:
         summary = assistant_answer.strip()
         if len(summary) < MIN_SUMMARY_LENGTH:
             return None
+        evidence = self._short_term_evidence(short_term_memory)
+        stm_facts = self._short_term_facts(short_term_memory)
 
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="agent_message", trace_id=trace_id, task_id=task_id),
             memory_type=MemoryType.TASK_EPISODE,
             scope=MemoryScope(task_id=task_id),
             content=MemoryContent(
                 summary=f"Task result: {summary[:MAX_SUMMARY_LENGTH]}",
-                facts=[f"query: {user_message[:200]}"],
+                facts=[f"query: {user_message[:200]}", *stm_facts],
             ),
+            evidence_pointers=evidence or None,
             confidence=0.5,
             ttl_policy="30d",
             trace_id=trace_id,
         )
+
+    @staticmethod
+    def _find_reusable_preference(user_message: str, short_term_memory: dict | None) -> str:
+        current = user_message.strip()
+        if MemoryCandidateService._looks_like_preference(current):
+            return current
+
+        if not isinstance(short_term_memory, dict):
+            return ""
+
+        for message in reversed(list(short_term_memory.get("recent_messages") or [])[-8:]):
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") != "user":
+                continue
+            content = str(message.get("content") or "").strip()
+            if MemoryCandidateService._looks_like_preference(content):
+                return content
+        return ""
+
+    @staticmethod
+    def _looks_like_preference(text: str) -> bool:
+        msg = text.strip().lower()
+        if len(msg) < MIN_SUMMARY_LENGTH:
+            return False
+        return any(kw in msg for kw in PREFERENCE_KEYWORDS)
+
+    @staticmethod
+    def _short_term_evidence(short_term_memory: dict | None) -> dict:
+        if not isinstance(short_term_memory, dict):
+            return {}
+
+        evidence: dict = {}
+        summary = str(short_term_memory.get("conversation_summary") or "").strip()
+        if summary:
+            evidence["short_term_summary"] = summary[:500]
+
+        session_facts = short_term_memory.get("session_facts")
+        if isinstance(session_facts, dict) and session_facts:
+            evidence["short_term_fact_keys"] = sorted(str(key) for key in session_facts.keys())[:20]
+
+        recent_messages = short_term_memory.get("recent_messages")
+        if isinstance(recent_messages, list):
+            evidence["short_term_recent_count"] = len(recent_messages)
+
+        return evidence
+
+    @staticmethod
+    def _short_term_facts(short_term_memory: dict | None) -> list[str]:
+        if not isinstance(short_term_memory, dict):
+            return []
+
+        facts: list[str] = []
+        summary = str(short_term_memory.get("conversation_summary") or "").strip()
+        if summary:
+            facts.append(f"short_term_summary: {summary[:200]}")
+
+        session_facts = short_term_memory.get("session_facts")
+        if isinstance(session_facts, dict):
+            for key, value in list(session_facts.items())[:5]:
+                facts.append(f"session_fact.{key}: {str(value)[:120]}")
+        return facts

@@ -7,6 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import (
+    MemoryCandidateSupport,
     MemoryDependencyEdge,
     MemoryEvaluation,
     MemoryEvent,
@@ -20,6 +21,10 @@ class MemoryItemRepository:
     def __init__(self, session: AsyncSession, org_id: str):
         self._session = session
         self._org_id = org_id
+
+    @staticmethod
+    def _scope_equals(field: str, value: str):
+        return MemoryItem.scope_json[field].as_string() == value
 
     async def create(self, item: MemoryItem) -> MemoryItem:
         self._session.add(item)
@@ -46,11 +51,30 @@ class MemoryItemRepository:
         )
         return result.scalar_one_or_none()
 
+    async def find_candidate_by_key(
+        self,
+        *,
+        memory_type: str,
+        candidate_key: str,
+        user_id: str | None = None,
+        scope: dict | None = None,
+    ) -> MemoryItem | None:
+        stmt = select(MemoryItem).where(
+            MemoryItem.org_id == self._org_id,
+            MemoryItem.memory_type == memory_type,
+            MemoryItem.status.in_(("candidate", "active")),
+            MemoryItem.candidate_key == candidate_key,
+            MemoryItem.deleted_at.is_(None),
+        )
+        if user_id:
+            stmt = stmt.where((MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None)))
+        result = await self._session.execute(stmt.order_by(MemoryItem.updated_at.desc()).limit(1))
+        return result.scalar_one_or_none()
+
     async def list_by_org(
         self,
         status: str | None = None,
         memory_type: str | None = None,
-        workspace: str | None = None,
         user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -63,8 +87,6 @@ class MemoryItemRepository:
             stmt = stmt.where(MemoryItem.status == status)
         if memory_type:
             stmt = stmt.where(MemoryItem.memory_type == memory_type)
-        if workspace:
-            stmt = stmt.where(MemoryItem.workspace == workspace)
         if user_id:
             stmt = stmt.where(MemoryItem.user_id == user_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).offset(offset).limit(limit)
@@ -73,7 +95,6 @@ class MemoryItemRepository:
 
     async def list_active_by_scope(
         self,
-        workspace: str,
         memory_types: list[str] | None = None,
         user_id: str | None = None,
         task_id: str | None = None,
@@ -83,7 +104,6 @@ class MemoryItemRepository:
     ) -> list[MemoryItem]:
         stmt = select(MemoryItem).where(
             MemoryItem.org_id == self._org_id,
-            MemoryItem.workspace == workspace,
             MemoryItem.status == "active",
             MemoryItem.deleted_at.is_(None),
             MemoryItem.expires_at.is_(None)
@@ -98,17 +118,11 @@ class MemoryItemRepository:
         else:
             stmt = stmt.where(MemoryItem.user_id.is_(None))
         if task_id:
-            stmt = stmt.where(
-                MemoryItem.scope_json.contains({"task_id": task_id})
-            )
+            stmt = stmt.where(self._scope_equals("task_id", task_id))
         if product_line:
-            stmt = stmt.where(
-                MemoryItem.scope_json.contains({"product_line": product_line})
-            )
+            stmt = stmt.where(self._scope_equals("product_line", product_line))
         if rag_space_id:
-            stmt = stmt.where(
-                MemoryItem.scope_json.contains({"rag_space_id": rag_space_id})
-            )
+            stmt = stmt.where(self._scope_equals("rag_space_id", rag_space_id))
         # Exclude memories that are old versions (target of a version_of edge)
         from app.models.memory import MemoryDependencyEdge as MDE
         versioned_out = (
@@ -121,6 +135,70 @@ class MemoryItemRepository:
         )
         stmt = stmt.where(MemoryItem.memory_id.not_in(versioned_out))
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_retrievable_by_scope(
+        self,
+        memory_types: list[str] | None = None,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        product_line: str | None = None,
+        rag_space_id: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        """Retrievable shared memory is active only."""
+        stmt = select(MemoryItem).where(
+            MemoryItem.org_id == self._org_id,
+            MemoryItem.status == "active",
+            MemoryItem.deleted_at.is_(None),
+            MemoryItem.expires_at.is_(None)
+            | (MemoryItem.expires_at > datetime.now(timezone.utc)),
+        )
+        if memory_types:
+            stmt = stmt.where(MemoryItem.memory_type.in_(memory_types))
+        if user_id:
+            stmt = stmt.where(
+                (MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None))
+            )
+        else:
+            stmt = stmt.where(MemoryItem.user_id.is_(None))
+        if task_id:
+            stmt = stmt.where(self._scope_equals("task_id", task_id))
+        if product_line:
+            stmt = stmt.where(self._scope_equals("product_line", product_line))
+        if rag_space_id:
+            stmt = stmt.where(self._scope_equals("rag_space_id", rag_space_id))
+        # Exclude old versions
+        from app.models.memory import MemoryDependencyEdge as MDE
+        versioned_out = (
+            select(MDE.target_memory_id)
+            .where(
+                MDE.org_id == self._org_id,
+                MDE.edge_type == "version_of",
+                MDE.deleted_at.is_(None),
+            )
+        )
+        stmt = stmt.where(MemoryItem.memory_id.not_in(versioned_out))
+        stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_promotion_candidates(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[MemoryItem]:
+        stmt = (
+            select(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.status == "candidate",
+                MemoryItem.deleted_at.is_(None),
+            )
+            .order_by(MemoryItem.updated_at.desc())
+            .limit(limit)
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -152,6 +230,20 @@ class MemoryItemRepository:
         )
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def update_candidate_stats(self, memory_id: str, **values) -> MemoryItem | None:
+        item = await self.get_by_memory_id(memory_id)
+        if not item:
+            return None
+
+        for key, value in values.items():
+            if key.endswith("_delta"):
+                attr = key[: -len("_delta")]
+                setattr(item, attr, int(getattr(item, attr, 0) or 0) + int(value or 0))
+            elif hasattr(item, key):
+                setattr(item, key, value)
+        await self._session.flush()
+        return item
 
     async def update_index_status(
         self,
@@ -247,6 +339,57 @@ class MemoryEventRepository:
         return result.scalar_one_or_none()
 
 
+class MemoryCandidateSupportRepository:
+    def __init__(self, session: AsyncSession, org_id: str):
+        self._session = session
+        self._org_id = org_id
+
+    async def create(self, support: MemoryCandidateSupport) -> MemoryCandidateSupport:
+        self._session.add(support)
+        await self._session.flush()
+        return support
+
+    async def list_by_candidate(self, candidate_memory_id: str) -> list[MemoryCandidateSupport]:
+        result = await self._session.execute(
+            select(MemoryCandidateSupport)
+            .where(
+                MemoryCandidateSupport.org_id == self._org_id,
+                MemoryCandidateSupport.candidate_memory_id == candidate_memory_id,
+            )
+            .order_by(MemoryCandidateSupport.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def stats_for_candidate(self, candidate_memory_id: str) -> dict[str, float | int]:
+        supports = await self.list_by_candidate(candidate_memory_id)
+        if not supports:
+            return {
+                "support_count": 0,
+                "negative_count": 0,
+                "conflict_count": 0,
+                "rag_evidence_count": 0,
+                "agent_verifier_count": 0,
+                "unique_task_count": 0,
+                "avg_confidence": 0.0,
+            }
+
+        return {
+            "support_count": sum(1 for s in supports if s.support_type not in {"negative", "conflict"}),
+            "negative_count": sum(1 for s in supports if s.support_type == "negative"),
+            "conflict_count": sum(1 for s in supports if s.support_type == "conflict"),
+            "rag_evidence_count": sum(1 for s in supports if s.support_type == "rag_evidence"),
+            "agent_verifier_count": len({
+                str(s.source_agent)
+                for s in supports
+                if s.support_type == "agent_verifier" and s.source_agent
+            }),
+            "unique_task_count": len({str(s.task_id) for s in supports if s.task_id}),
+            "avg_confidence": (
+                sum(float(s.confidence or 0) for s in supports) / len(supports)
+            ),
+        }
+
+
 class MemoryDependencyRepository:
     def __init__(self, session: AsyncSession, org_id: str):
         self._session = session
@@ -256,6 +399,94 @@ class MemoryDependencyRepository:
         self._session.add(edge)
         await self._session.flush()
         return edge
+
+    async def get_active_edge(
+        self,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+    ) -> MemoryDependencyEdge | None:
+        result = await self._session.execute(
+            select(MemoryDependencyEdge).where(
+                MemoryDependencyEdge.org_id == self._org_id,
+                MemoryDependencyEdge.source_memory_id == source_memory_id,
+                MemoryDependencyEdge.target_memory_id == target_memory_id,
+                MemoryDependencyEdge.edge_type == edge_type,
+                MemoryDependencyEdge.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert_edge(
+        self,
+        *,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+        strength: float = 1.0,
+        source_event_id: str | None = None,
+        target_event_id: str | None = None,
+        scope_json: dict | None = None,
+        metadata_json: dict | None = None,
+    ) -> MemoryDependencyEdge:
+        existing = await self.get_active_edge(
+            source_memory_id=source_memory_id,
+            target_memory_id=target_memory_id,
+            edge_type=edge_type,
+        )
+
+        if existing:
+            existing.strength = max(float(existing.strength or 0), strength)
+            existing.metadata_json = self._merge_edge_metadata(
+                existing.metadata_json,
+                metadata_json,
+            )
+            if source_event_id:
+                existing.source_event_id = source_event_id
+            if target_event_id:
+                existing.target_event_id = target_event_id
+            if scope_json:
+                existing.scope_json = scope_json
+            await self._session.flush()
+            return existing
+
+        from app.core.ids import uuid7
+        edge = MemoryDependencyEdge(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            source_memory_id=source_memory_id,
+            target_memory_id=target_memory_id,
+            source_event_id=source_event_id,
+            target_event_id=target_event_id,
+            edge_type=edge_type,
+            strength=strength,
+            scope_json=scope_json,
+            metadata_json=metadata_json,
+        )
+        return await self.create(edge)
+
+    @staticmethod
+    def _merge_edge_metadata(old: dict | None, new: dict | None) -> dict:
+        from datetime import datetime, timezone
+        merged = dict(old or {})
+        incoming = dict(new or {})
+
+        observed_count = int(merged.get("observed_count") or 1)
+        incoming_count = int(incoming.get("observed_count") or 1)
+
+        merged.update(incoming)
+        merged["observed_count"] = observed_count + incoming_count
+        merged["last_observed_at"] = incoming.get("last_observed_at") or datetime.now(timezone.utc).isoformat()
+
+        return merged
+
+    async def list_upstream(self, memory_id: str) -> list[MemoryDependencyEdge]:
+        """Return edges where memory_id is the source (who this memory depends on)."""
+        return await self.list_by_source(memory_id)
+
+    async def list_downstream(self, memory_id: str) -> list[MemoryDependencyEdge]:
+        """Return edges where memory_id is the target (who depends on this memory)."""
+        return await self.list_by_target(memory_id)
 
     async def list_by_source(self, source_memory_id: str) -> list[MemoryDependencyEdge]:
         result = await self._session.execute(
@@ -340,11 +571,10 @@ class MemoryPolicyRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_by_workspace(self, workspace: str) -> list[MemoryPolicy]:
+    async def list_all(self) -> list[MemoryPolicy]:
         result = await self._session.execute(
             select(MemoryPolicy).where(
                 MemoryPolicy.org_id == self._org_id,
-                MemoryPolicy.workspace == workspace,
                 MemoryPolicy.deleted_at.is_(None),
             )
         )

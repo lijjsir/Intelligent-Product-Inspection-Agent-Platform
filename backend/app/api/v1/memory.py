@@ -17,6 +17,10 @@ from app.api.v1.deps import get_current_user, get_db
 from app.core.permissions import require_role
 from app.schemas.common import ResponseEnvelope
 from app.schemas.memory import (
+    CandidateListItem,
+    CandidateSupportCreate,
+    ConflictCheckInput,
+    ConflictCheckOutput,
     ConflictResolveRequest,
     MemoryEvaluationRequest,
     MemoryEvaluationResponse,
@@ -28,30 +32,49 @@ from app.schemas.memory import (
     MemoryRollbackResponse,
     MemorySearchRequest,
     MemorySearchResponse,
+    MemoryStatus,
     MemoryWriteRequest,
     MemoryWriteResponse,
-    Workspace,
+    PromotionEvaluationResponse,
+    SearchWithConflictGuardRequest,
+    SearchWithConflictGuardResponse,
 )
 from app.schemas.user import CurrentUser
 from app.services.memory_service import MemoryService
-from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
+from app.services.memory_vector_service import (
+    CANDIDATE_MEMORY_COLLECTION,
+    MemoryVectorService,
+    MemoryVectorServiceError,
+)
 from app.services.memory_governance_service import (
     MemoryPropagationService,
     MemoryRollbackService,
     MemoryEvaluationService,
 )
+from app.services.retrieval_conflict_guard import RetrievalConflictGuard
 
 router = APIRouter()
 
 
-def _get_memory_service(db, org_id: str, vector_svc: MemoryVectorService | None = None) -> MemoryService:
-    return MemoryService(db, org_id, vector_service=vector_svc)
+def _get_memory_service(
+    db,
+    org_id: str,
+    vector_svc: MemoryVectorService | None = None,
+    candidate_vector_svc: MemoryVectorService | None = None,
+) -> MemoryService:
+    return MemoryService(
+        db,
+        org_id,
+        vector_service=vector_svc,
+        candidate_vector_service=candidate_vector_svc,
+    )
 
 
 def _build_vector_service(
     org_id: str,
     user_id: str | None = None,
     trace_id: str | None = None,
+    collection: str | None = None,
 ) -> MemoryVectorService:
     """Build MemoryVectorService with a real Embedder factory."""
     from agent.rag.embedder import Embedder
@@ -66,6 +89,7 @@ def _build_vector_service(
         return await embedder.embed(text)
 
     return MemoryVectorService(
+        collection=collection or "piap_shared_memory",
         embedder_factory=embedder_factory,
         org_id=org_id,
         user_id=user_id,
@@ -110,7 +134,13 @@ async def write_candidate(
             "trace_id": body.trace_id,
         })
 
-    service = _get_memory_service(db, org_id, vector_svc)
+    candidate_vector_svc = _build_vector_service(
+        org_id,
+        current.user_id,
+        body.trace_id,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, org_id, vector_svc, candidate_vector_svc)
     try:
         resp = await service.write_candidate(body)
     except Exception as exc:
@@ -120,6 +150,172 @@ async def write_candidate(
             "trace_id": body.trace_id,
         })
 
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.get("/candidates", response_model=ResponseEnvelope[list[CandidateListItem]])
+async def list_candidates(
+    status: str = Query(default=MemoryStatus.CANDIDATE.value),
+    memory_type: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """List candidate memories for governance review."""
+    require_role("memory_governance", current.role)
+    service = _get_memory_service(db, current.org_id)
+    resp = await service.list_candidates(
+        status=status,
+        memory_type=memory_type,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/support", response_model=ResponseEnvelope[PromotionEvaluationResponse | None])
+async def support_candidate(
+    memory_id: str,
+    body: CandidateSupportCreate,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Append support evidence and evaluate promotion."""
+    require_role("memory_governance", current.role)
+    vector_svc = _build_vector_service(current.org_id, current.user_id, body.trace_id)
+    candidate_vector_svc = _build_vector_service(
+        current.org_id,
+        current.user_id,
+        body.trace_id,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
+    resp = await service.add_candidate_support(memory_id, body)
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/approve", response_model=ResponseEnvelope[PromotionEvaluationResponse])
+async def approve_candidate(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Human approval: candidate can promote immediately if not blocked."""
+    require_role("memory_governance", current.role)
+    vector_svc = _build_vector_service(current.org_id, current.user_id, None)
+    candidate_vector_svc = _build_vector_service(
+        current.org_id,
+        current.user_id,
+        None,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
+    resp = await service.approve_candidate(
+        memory_id,
+        reviewer_id=current.user_id,
+        trace_id=f"memory-approve-{memory_id}",
+    )
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/reject", response_model=ResponseEnvelope[PromotionEvaluationResponse])
+async def reject_candidate(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Reject a candidate and disable it."""
+    require_role("memory_governance", current.role)
+    service = _get_memory_service(db, current.org_id)
+    resp = await service.reject_candidate(
+        memory_id,
+        reviewer_id=current.user_id,
+        trace_id=f"memory-reject-{memory_id}",
+        reason="manual_reject",
+    )
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/isolate", response_model=ResponseEnvelope[PromotionEvaluationResponse])
+async def isolate_candidate(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Isolate a candidate from promotion and retrieval."""
+    require_role("memory_governance", current.role)
+    candidate_vector_svc = _build_vector_service(
+        current.org_id,
+        current.user_id,
+        None,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, current.org_id, candidate_vector_svc=candidate_vector_svc)
+    resp = await service.isolate_candidate(memory_id, trace_id=f"memory-isolate-{memory_id}")
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/contest", response_model=ResponseEnvelope[PromotionEvaluationResponse])
+async def contest_candidate(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Mark a candidate as contested."""
+    require_role("memory_governance", current.role)
+    service = _get_memory_service(db, current.org_id)
+    resp = await service.contest_candidate(memory_id, trace_id=f"memory-contest-{memory_id}")
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/{memory_id}/evaluate-promotion", response_model=ResponseEnvelope[PromotionEvaluationResponse])
+async def evaluate_candidate_promotion(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Evaluate one candidate for promotion."""
+    require_role("memory_governance", current.role)
+    vector_svc = _build_vector_service(current.org_id, current.user_id, None)
+    candidate_vector_svc = _build_vector_service(
+        current.org_id,
+        current.user_id,
+        None,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
+    resp = await service.evaluate_candidate_promotion(memory_id)
+    await db.commit()
+    return ResponseEnvelope(data=resp)
+
+
+@router.post("/candidates/evaluate-batch", response_model=ResponseEnvelope[list[PromotionEvaluationResponse]])
+async def evaluate_candidate_batch(
+    limit: int = Query(default=100, ge=1, le=500),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Evaluate recent candidates for promotion."""
+    require_role("memory_governance", current.role)
+    vector_svc = _build_vector_service(current.org_id, current.user_id, None)
+    candidate_vector_svc = _build_vector_service(
+        current.org_id,
+        current.user_id,
+        None,
+        collection=CANDIDATE_MEMORY_COLLECTION,
+    )
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
+    resp = await service.evaluate_batch_candidates(limit=limit)
+    await db.commit()
     return ResponseEnvelope(data=resp)
 
 
@@ -229,8 +425,6 @@ async def build_propagation_graph(
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
-    if body.workspace != "governance":
-        raise HTTPException(status_code=403, detail="requires governance workspace")
 
     svc = MemoryPropagationService(db, org_id)
     resp = await svc.build_propagation_graph(
@@ -256,8 +450,6 @@ async def execute_rollback(
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
-    if body.workspace not in (Workspace.OPS, Workspace.GOVERNANCE):
-        raise HTTPException(status_code=403, detail="requires ops or governance workspace")
 
     vector_svc = _build_vector_service(org_id, current.user_id, body.trace_id)
     svc = MemoryRollbackService(db, org_id, vector_svc)
@@ -266,7 +458,6 @@ async def execute_rollback(
             root_memory_id=body.root_memory_id,
             operator_id=body.operator_id,
             operator_role=current.role,
-            workspace=body.workspace.value,
             trace_id=body.trace_id,
             action=body.rollback_action,
             target_memory_ids=body.target_memory_ids,
@@ -333,7 +524,6 @@ async def upsert_policy(
         policy = MemoryPolicy(
             id=str(uuid7()),
             org_id=current.org_id,
-            workspace=body.workspace.value,
             policy_key=policy_key,
             policy_type=body.policy_type.value,
             config_json=body.config,
@@ -345,7 +535,6 @@ async def upsert_policy(
         policy = MemoryPolicy(
             id=str(uuid7()),
             org_id=current.org_id,
-            workspace=body.workspace.value,
             policy_key=policy_key,
             policy_type=body.policy_type.value,
             config_json=body.config,
@@ -357,7 +546,6 @@ async def upsert_policy(
     return ResponseEnvelope(data=MemoryPolicyResponse(
         policy_key=policy_key,
         policy_type=body.policy_type,
-        workspace=body.workspace,
         config=body.config,
         status=body.status,
         version=policy.version,
@@ -367,7 +555,6 @@ async def upsert_policy(
 
 @router.get("/policies")
 async def list_policies(
-    workspace: str | None = Query(default=None),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -376,12 +563,11 @@ async def list_policies(
     from app.repositories.memory_repo import MemoryPolicyRepository
 
     repo = MemoryPolicyRepository(db, current.org_id)
-    policies = await repo.list_by_workspace(workspace or "ops")
+    policies = await repo.list_all()
     return ResponseEnvelope(data=[
         {
             "policy_key": p.policy_key,
             "policy_type": p.policy_type,
-            "workspace": p.workspace,
             "status": p.status,
             "version": p.version,
         }
@@ -557,3 +743,153 @@ async def resolve_conflict(
         "target_memory_status": "active" if body.action == "keep_B" else "isolated",
         "merged_memory_id": merged_id,
     })
+
+
+# ---------------------------------------------------------------
+# Search with Conflict Guard
+# ---------------------------------------------------------------
+
+@router.post("/search-with-conflict-guard", response_model=ResponseEnvelope[SearchWithConflictGuardResponse])
+async def search_with_conflict_guard(
+    body: SearchWithConflictGuardRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Enhanced memory search with retrieval-phase conflict detection.
+
+    Runs RAG + Memory retrieval, then applies RetrievalConflictGuard
+    to filter/suppress/downrank conflicting memories before returning context.
+    """
+    require_role("memory_governance", current.role)
+
+    org_id = current.org_id
+    if not org_id:
+        raise HTTPException(status_code=400, detail="missing org_id")
+
+    # 1. RAG retrieval (if rag_space_id provided)
+    rag_hits: list[dict] = []
+    if body.rag_space_id and body.enable_conflict_guard:
+        from app.services.rag_retrieval_service import RagRetrievalService
+        rag_svc = RagRetrievalService(db, org_id=org_id, user_id=body.user_id)
+        rag_result = await rag_svc.search(
+            rag_space_id=body.rag_space_id,
+            query=body.query,
+            top_k=body.top_k_rag,
+        )
+        rag_hits = rag_result.get("hits", [])
+
+    # 2. Memory retrieval
+    memory_svc = _get_memory_service(db, org_id)
+    memory_search = MemorySearchRequest(
+        org_id=body.org_id or org_id,
+        user_id=body.user_id,
+        query=body.query,
+        scope_filter=body.scope_filter,
+        top_k=body.top_k_memory,
+        trace_id=body.trace_id,
+    )
+    memory_result = await memory_svc.search(memory_search)
+    memory_hits = [
+        {
+            "memory_id": item.memory_id,
+            "memory_type": item.memory_type,
+            "summary": item.summary,
+            "score": item.score,
+            "confidence": item.confidence,
+            "trust_score": item.trust_score,
+            "source": item.source,
+            "usage_policy": item.usage_policy,
+            "warnings": item.warnings,
+        }
+        for item in memory_result.items
+    ]
+
+    # 3. Conflict guard
+    guard_output: dict = {
+        "rag_hits": rag_hits,
+        "memory_hits": memory_hits,
+        "conflicts": [],
+        "suppressed_memory_ids": [],
+        "downranked_memory_ids": [],
+        "warnings": [],
+    }
+    if body.enable_conflict_guard and (rag_hits or memory_hits):
+        guard = RetrievalConflictGuard(
+            org_id=org_id,
+            user_id=body.user_id,
+            trace_id=body.trace_id,
+        )
+        guard_output = await guard.check(
+            query=body.query,
+            rag_hits=rag_hits,
+            memory_hits=memory_hits,
+            session_facts=body.session_facts,
+            tool_results=body.tool_results,
+        )
+
+    return ResponseEnvelope(data=SearchWithConflictGuardResponse(
+        rag_hits=guard_output["rag_hits"],
+        memory_hits=guard_output["memory_hits"],
+        conflicts=guard_output["conflicts"],
+        suppressed_memory_ids=guard_output["suppressed_memory_ids"],
+        downranked_memory_ids=guard_output.get("downranked_memory_ids", []),
+        policy={
+            "rag_over_memory": True,
+            "session_over_memory": True,
+            "tool_over_memory": True,
+        },
+        trace_id=body.trace_id,
+    ))
+
+
+# ---------------------------------------------------------------
+# Conflict Check (Debug)
+# ---------------------------------------------------------------
+
+@router.post("/conflicts/check", response_model=ResponseEnvelope[ConflictCheckOutput])
+async def check_single_conflict(
+    body: ConflictCheckInput,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Debug endpoint: check if a single memory conflicts with given RAG hits.
+
+    Does NOT modify database state.
+    """
+    guard = RetrievalConflictGuard(
+        org_id=current.org_id,
+        user_id=None,
+        trace_id=None,
+    )
+    result = await guard.check(
+        query=body.query,
+        rag_hits=body.rag_hits,
+        memory_hits=[{
+            "memory_id": body.memory_id,
+            "summary": body.memory_summary,
+            "memory_type": "unknown",
+            "score": 1.0,
+            "confidence": None,
+            "trust_score": None,
+            "source": {},
+        }],
+        session_facts=body.session_facts,
+    )
+
+    conflicts = result.get("conflicts", [])
+    if conflicts:
+        top = conflicts[0]
+        verdict = top.get("verdict", "uncertain")
+        confidence = float(top.get("confidence", 0))
+        reason = top.get("reason", "")
+    else:
+        verdict = "support"
+        confidence = 0.0
+        reason = None
+
+    return ResponseEnvelope(data=ConflictCheckOutput(
+        memory_id=body.memory_id,
+        verdict=verdict,
+        confidence=confidence,
+        reason=reason,
+        conflicts=conflicts,
+    ))

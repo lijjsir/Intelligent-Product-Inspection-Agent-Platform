@@ -1,0 +1,86 @@
+"""MemoryGraphFactory — creates the appropriate MemoryGraphStore backend."""
+from __future__ import annotations
+
+import logging
+
+from app.core.config import settings
+from app.services.memory_graph_store import MemoryGraphStore, MySQLMemoryGraphStore
+
+logger = logging.getLogger(__name__)
+
+
+class DualWriteMemoryGraphStore(MemoryGraphStore):
+    """Writes to both MySQL and Neo4j, reads from the configured read backend."""
+
+    def __init__(self, mysql_store: MySQLMemoryGraphStore, neo4j_store: MemoryGraphStore,
+                 read_backend: str = "mysql"):
+        self._mysql = mysql_store
+        self._neo4j = neo4j_store
+        self._read_backend = read_backend
+
+    @property
+    def _reader(self) -> MemoryGraphStore:
+        return self._neo4j if self._read_backend == "neo4j" else self._mysql
+
+    async def upsert_memory_node(self, node):
+        await self._mysql.upsert_memory_node(node)
+        await self._neo4j.upsert_memory_node(node)
+
+    async def upsert_rag_chunk_node(self, *args, **kwargs):
+        await self._neo4j.upsert_rag_chunk_node(*args, **kwargs)
+
+    async def create_memory_edge(self, edge):
+        await self._mysql.create_memory_edge(edge)
+        await self._neo4j.create_memory_edge(edge)
+
+    async def create_memory_rag_edge(self, *args, **kwargs):
+        await self._neo4j.create_memory_rag_edge(*args, **kwargs)
+
+    async def build_propagation_graph(self, *args, **kwargs):
+        return await self._reader.build_propagation_graph(*args, **kwargs)
+
+    async def trace_provenance(self, *args, **kwargs):
+        return await self._reader.trace_provenance(*args, **kwargs)
+
+    async def find_conflict_chain(self, *args, **kwargs):
+        return await self._reader.find_conflict_chain(*args, **kwargs)
+
+    async def create_event_memory_edge(self, *args, **kwargs):
+        await self._neo4j.create_event_memory_edge(*args, **kwargs)
+
+    async def create_agent_memory_edge(self, *args, **kwargs):
+        await self._neo4j.create_agent_memory_edge(*args, **kwargs)
+
+    async def health_check(self) -> bool:
+        return await self._neo4j.health_check()
+
+
+def build_memory_graph_store(session, org_id: str) -> MemoryGraphStore:
+    """Factory: returns the correct MemoryGraphStore based on settings."""
+    write_backend = settings.memory_graph_write_backend
+    read_backend = settings.memory_graph_read_backend
+
+    mysql_store = MySQLMemoryGraphStore(session, org_id)
+
+    if write_backend == "mysql":
+        return mysql_store
+
+    if not settings.neo4j_enabled:
+        logger.info("Neo4j disabled, using MySQLMemoryGraphStore")
+        return mysql_store
+
+    from app.services.neo4j_memory_graph_store import Neo4jMemoryGraphStore
+
+    neo4j_store = Neo4jMemoryGraphStore(
+        uri=settings.neo4j_uri,
+        username=settings.neo4j_username,
+        password=settings.neo4j_password,
+        database=settings.neo4j_database,
+    )
+
+    if write_backend == "neo4j":
+        if read_backend == "neo4j":
+            return neo4j_store
+        return DualWriteMemoryGraphStore(mysql_store, neo4j_store, read_backend="mysql")
+
+    return DualWriteMemoryGraphStore(mysql_store, neo4j_store, read_backend=read_backend)

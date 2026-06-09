@@ -87,10 +87,16 @@ class MemoryProvenanceService:
 class MemoryPropagationService:
     """Builds contamination propagation subgraph from dependency edges."""
 
-    EDGE_TYPES_FORWARD = [
-        "derived_from", "read_by", "used_as_tool_param",
-        "cited_as_evidence", "version_of", "merged_from",
-        "summarized_from", "planned_from",
+    # Only provenance edges participate in default contamination propagation.
+    # Semantic edges and audit edges do NOT propagate contamination.
+    PROPAGATION_EDGE_TYPES = [
+        EdgeType.VERSION_OF.value,
+        EdgeType.SUMMARIZED_FROM.value,
+        EdgeType.MERGED_FROM.value,
+        EdgeType.DERIVED_FROM.value,
+        EdgeType.CITED_AS_EVIDENCE.value,
+        EdgeType.PLANNED_FROM.value,
+        EdgeType.ROLLBACK_DEPENDS_ON.value,
     ]
 
     def __init__(self, session, org_id: str):
@@ -105,7 +111,7 @@ class MemoryPropagationService:
         max_depth: int = 4,
         include_edge_types: list[EdgeType] | None = None,
     ) -> MemoryPropagationResponse:
-        edge_types = [e.value for e in include_edge_types] if include_edge_types else self.EDGE_TYPES_FORWARD
+        edge_types = [e.value for e in include_edge_types] if include_edge_types else self.PROPAGATION_EDGE_TYPES
         visited: dict[str, PropagationNode] = {}
         direct: list[str] = []
         indirect: list[str] = []
@@ -155,15 +161,15 @@ class MemoryPropagationService:
             if depth >= max_depth:
                 continue
 
-            edges = await self._dep_repo.list_by_source(current)
+            # Find downstream memories that depend on the contaminated node
+            edges = await self._dep_repo.list_by_target(current)
             for edge in edges:
                 if edge.edge_type not in edge_types:
                     continue
-                target = edge.target_memory_id
-                if target in visited:
-                    # Append additional parent
-                    if parent_id and parent_id not in visited[target].affected_by:
-                        visited[target].affected_by.append(parent_id)
+                downstream = edge.source_memory_id  # the memory that depends on current
+                if downstream in visited:
+                    if parent_id and parent_id not in visited[downstream].affected_by:
+                        visited[downstream].affected_by.append(parent_id)
                     continue
 
                 # Classify
@@ -177,14 +183,14 @@ class MemoryPropagationService:
                     classification = "indirect_contaminated"
 
                 node = PropagationNode(
-                    memory_id=target,
+                    memory_id=downstream,
                     classification=classification,
                     depth=depth + 1,
                     edge_type=edge.edge_type,
                     affected_by=[current],
                 )
-                visited[target] = node
-                queue.append((target, depth + 1, edge.edge_type, current))
+                visited[downstream] = node
+                queue.append((downstream, depth + 1, edge.edge_type, current))
 
 
 class MemoryRollbackService:
@@ -205,7 +211,6 @@ class MemoryRollbackService:
         root_memory_id: str,
         operator_id: str,
         operator_role: str,
-        workspace: str,
         trace_id: str,
         action: RollbackAction,
         target_memory_ids: list[str],
@@ -226,7 +231,6 @@ class MemoryRollbackService:
                 rollback_id=rollback_id,
                 root_memory_id=root_memory_id,
                 operator_id=operator_id,
-                workspace=workspace,
                 rollback_action=action.value,
                 target_memory_ids=target_memory_ids,
                 propagation_graph_json=propagation_graph,
@@ -242,7 +246,6 @@ class MemoryRollbackService:
                 root_memory_id=root_memory_id,
                 operator_id=operator_id,
                 operator_role=operator_role,
-                workspace=workspace,
                 action=action,
                 target_memory_ids=target_memory_ids,
                 reason=reason,
@@ -265,7 +268,6 @@ class MemoryRollbackService:
             rollback_id=rollback_id,
             root_memory_id=root_memory_id,
             operator_id=operator_id,
-            workspace=workspace,
             trace_id=trace_id,
             action=action,
             target_memory_ids=target_memory_ids,
@@ -285,7 +287,6 @@ class MemoryRollbackService:
             rollback_id=rollback_id,
             root_memory_id=rollback_record.root_memory_id,
             operator_id=rollback_record.operator_id,
-            workspace=rollback_record.workspace,
             trace_id=rollback_record.trace_id or "",
             action=RollbackAction(rollback_record.rollback_action),
             target_memory_ids=list(rollback_record.target_memory_ids or []),
@@ -298,7 +299,6 @@ class MemoryRollbackService:
         rollback_id: str,
         root_memory_id: str,
         operator_id: str,
-        workspace: str,
         trace_id: str,
         action: RollbackAction,
         target_memory_ids: list[str],
@@ -356,7 +356,6 @@ class MemoryRollbackService:
             id=str(uuid7()),
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
             org_id=self._org_id,
-            workspace=workspace,
             event_type="memory.rollback_applied",
             trace_id=trace_id,
             memory_id=root_memory_id,
@@ -409,7 +408,6 @@ class MemoryRollbackService:
             memory_id=new_memory_id,
             org_id=self._org_id,
             user_id=old_item.user_id,
-            workspace=old_item.workspace,
             memory_type=old_item.memory_type,
             scope_json=old_item.scope_json,
             content_summary=content_summary,
@@ -438,21 +436,25 @@ class MemoryRollbackService:
             access_count=0,
         )
         await self._item_repo.create(replacement)
-        await self._dep_repo.create(MemoryDependencyEdge(
-            id=str(uuid7()),
-            org_id=self._org_id,
+        await self._dep_repo.upsert_edge(
             source_memory_id=new_memory_id,
             target_memory_id=memory_id,
             edge_type=EdgeType.VERSION_OF.value,
             strength=1.0,
-        ))
+            metadata_json={
+                "edge_group": "provenance",
+                "relation_source": "rollback_patch",
+                "reason": "patch replacement version",
+                "observed_count": 1,
+                "last_observed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
         if self._vector:
             await self._vector.upsert_memory(
                 memory_id=new_memory_id,
                 org_id=self._org_id,
                 user_id=str(old_item.user_id or ""),
-                workspace=old_item.workspace,
                 memory_type=old_item.memory_type,
                 status=MemoryStatus.ACTIVE.value,
                 summary=content_summary,
@@ -503,7 +505,6 @@ class MemoryRollbackService:
         root_memory_id: str,
         operator_id: str,
         operator_role: str,
-        workspace: str,
         action: RollbackAction,
         target_memory_ids: list[str],
         reason: str,
@@ -523,7 +524,6 @@ class MemoryRollbackService:
             risk_level=self._resolve_risk_level(action, target_memory_ids, require_human_review),
             payload_json={
                 "rollback_id": rollback_id,
-                "workspace": workspace,
                 "root_memory_id": root_memory_id,
                 "action": action.value,
                 "target_memory_ids": target_memory_ids,

@@ -239,7 +239,6 @@ class ChatService:
                 message_type="text",
                 payload={
                     "schema_version": payload.schema_version,
-                    "workspace": payload.workspace,
                     "metadata": payload.metadata or {},
                     "ext": ext_payload,
                 },
@@ -466,14 +465,13 @@ class ChatService:
             # Load shared memory context for this query
             ext_payload["shared_memory_context"] = None
             try:
-                from app.schemas.memory import MemorySearchRequest, Workspace as MemWorkspace
+                from app.schemas.memory import MemorySearchRequest
                 from app.services.memory_service import MemoryService
                 from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
 
                 memory_search_req = MemorySearchRequest(
                     org_id=self._org_id,
                     user_id=self._user_id,
-                    workspace=MemWorkspace.APP,
                     query=request.message.strip(),
                     scope_filter=None,
                     top_k=5,
@@ -501,6 +499,37 @@ class ChatService:
                             ],
                             "policy_version": result.policy_version,
                         }
+                        # Apply lightweight conflict guard to shared memory results
+                        if result.items:
+                            from app.services.retrieval_conflict_guard import RetrievalConflictGuard
+                            guard = RetrievalConflictGuard(
+                                org_id=self._org_id,
+                                user_id=self._user_id,
+                                trace_id=None,
+                            )
+                            mem_dicts = [
+                                {
+                                    "memory_id": item.memory_id,
+                                    "memory_type": item.memory_type,
+                                    "summary": item.summary,
+                                    "score": item.score,
+                                    "confidence": item.confidence,
+                                    "trust_score": item.trust_score,
+                                    "source": item.source,
+                                    "warnings": item.warnings,
+                                }
+                                for item in result.items
+                            ]
+                            guard_result = guard.check_sync(
+                                query=request.message.strip(),
+                                memory_hits=mem_dicts,
+                                session_facts=ext_payload.get("session_facts"),
+                            )
+                            ext_payload["shared_memory_context"]["conflict_guard"] = {
+                                "conflicts": guard_result["conflicts"],
+                                "suppressed_memory_ids": guard_result["suppressed_memory_ids"],
+                                "downranked_memory_ids": guard_result["downranked_memory_ids"],
+                            }
             except MemoryVectorServiceError:
                 raise
             except Exception:
@@ -575,7 +604,6 @@ class ChatService:
                     "user_id": self._user_id,
                     "plan_tier": self._current.plan_tier,
                     "capabilities": self._current.capabilities,
-                    "workspace": request.workspace,
                     "query": request.message.strip(),
                     "metadata": dict(request.metadata or {}),
                     "ext": ext_payload,
@@ -594,7 +622,7 @@ class ChatService:
             try:
                 from app.services.memory_candidate_service import MemoryCandidateService
                 from app.services.memory_service import MemoryService
-                from app.services.memory_vector_service import MemoryVectorService
+                from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
 
                 agent_output = result.get("agent_output", {})
                 answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
@@ -611,6 +639,7 @@ class ChatService:
                     user_message=request.message.strip(),
                     assistant_answer=answer_text,
                     task_id=task_id,
+                    short_term_memory=ext_payload.get("short_term_memory"),
                 )
                 if candidates:
                     async with get_session() as mem_session:
@@ -619,7 +648,18 @@ class ChatService:
                             org_id=self._org_id,
                             user_id=self._user_id,
                         )
-                        memory_svc = MemoryService(mem_session, self._org_id, vector_service=vector_svc)
+                        candidate_vector_svc = MemoryVectorService(
+                            collection=CANDIDATE_MEMORY_COLLECTION,
+                            embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                            org_id=self._org_id,
+                            user_id=self._user_id,
+                        )
+                        memory_svc = MemoryService(
+                            mem_session,
+                            self._org_id,
+                            vector_service=vector_svc,
+                            candidate_vector_service=candidate_vector_svc,
+                        )
                         for candidate in candidates:
                             try:
                                 await memory_svc.write_candidate(candidate)

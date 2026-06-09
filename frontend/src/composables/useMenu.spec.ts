@@ -11,7 +11,6 @@ import {
   ROLE_PLATFORM_OPERATOR,
 } from "@/constants/roles";
 import { opsRoutes } from "@/router/routes/ops.routes";
-import { ROLE_KEY, ROLES_KEY } from "@/utils/auth-session";
 
 function flattenTitles() {
   const { menu } = useMenu();
@@ -121,15 +120,6 @@ describe("useMenu", () => {
     expect(titles).toContain("告警规则");
     expect(titles).not.toContain("告警管理");
     expect(paths).toContain("/governance/admin/alert-rules");
-  });
-
-  it("grants admins access to the ops workspace for shared management pages", () => {
-    sessionStorage.setItem(ROLE_KEY, ROLE_ADMIN);
-    sessionStorage.setItem(ROLES_KEY, JSON.stringify([ROLE_ADMIN]));
-    setActivePinia(createPinia());
-    const auth = useAuthStore();
-
-    expect(auth.workspaces).toContain("ops");
   });
 
   it("exposes the governance analytics center in admin navigation", () => {

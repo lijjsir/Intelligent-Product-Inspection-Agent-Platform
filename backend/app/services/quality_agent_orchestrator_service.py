@@ -116,7 +116,6 @@ class QualityAgentOrchestratorService:
             assistant_message_id=str(payload["assistant_message_id"]),
             org_id=str(payload["org_id"]),
             user_id=str(payload["user_id"]),
-            workspace=str(payload.get("workspace") or "app"),
             plan_tier=str(payload.get("plan_tier") or "basic"),
             capabilities=list(payload.get("capabilities") or []),
             query=str(payload.get("query") or ""),
@@ -275,6 +274,11 @@ class QualityAgentOrchestratorService:
                     metadata = dict(item.metadata or {})
                     metadata.setdefault("agent", output.route_decision.selected_agent)
                     metadata.setdefault("sub_route", output.route_decision.sub_route)
+                    trace_id = item.trace_id or (
+                        output.persistable_output.quality_trace.trace_id
+                        if output.persistable_output and output.persistable_output.quality_trace
+                        else None
+                    ) or request.workflow_run_id or request.request_id
                     create_log = getattr(rag_repo, "create_log_once", rag_repo.create_log)
                     await create_log(
                         {
@@ -292,17 +296,18 @@ class QualityAgentOrchestratorService:
                             "source_graph": item.source_graph,
                             "agent_name": item.agent_name or output.route_decision.selected_agent,
                             "sub_route": item.sub_route or output.route_decision.sub_route,
-                            "trace_id": item.trace_id
-                            or (
-                                output.persistable_output.quality_trace.trace_id
-                                if output.persistable_output and output.persistable_output.quality_trace
-                                else None
-                            )
-                            or request.workflow_run_id
-                            or request.request_id,
+                            "trace_id": trace_id,
                             "top_score": float(item.top_score or metadata.get("top_score") or 0.0),
                             "metadata_json": metadata,
                         }
+                    )
+                    await self._write_rag_usage_candidate(
+                        session,
+                        request=request,
+                        trace_id=str(trace_id or request.workflow_run_id or request.request_id),
+                        query=str(item.query or ""),
+                        rag_space_id=str(item.rag_space_id or ""),
+                        hit_count=int(item.hit_count or 0),
                     )
                 await self._persist_rag_tool_executions(
                     session,
@@ -343,6 +348,67 @@ class QualityAgentOrchestratorService:
             emit=emit,
         )
         return materialization_error is None
+
+    async def _write_rag_usage_candidate(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        trace_id: str,
+        query: str,
+        rag_space_id: str,
+        hit_count: int,
+    ) -> None:
+        if not query.strip() or not rag_space_id.strip():
+            return
+        try:
+            from app.services.memory_candidate_service import MemoryCandidateService
+            from app.services.memory_service import MemoryService
+            from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+
+            async def embedder_factory(text: str) -> list[float]:
+                from agent.rag.embedder import Embedder
+
+                embedder = Embedder(
+                    org_id=request.org_id,
+                    user_id=str(request.user_id or "") or None,
+                    trace_id=trace_id,
+                    allow_pseudo_fallback=False,
+                )
+                return await embedder.embed(text)
+
+            candidate = await MemoryCandidateService(
+                org_id=request.org_id,
+                user_id=str(request.user_id or "") or None,
+            ).extract_from_rag_query(
+                trace_id=trace_id,
+                query=query,
+                rag_space_id=rag_space_id,
+                hit_count=hit_count,
+            )
+            if candidate is None:
+                return
+            shared_vector = MemoryVectorService(
+                embedder_factory=embedder_factory,
+                org_id=request.org_id,
+                user_id=str(request.user_id or "") or None,
+                trace_id=trace_id,
+            )
+            candidate_vector = MemoryVectorService(
+                collection=CANDIDATE_MEMORY_COLLECTION,
+                embedder_factory=embedder_factory,
+                org_id=request.org_id,
+                user_id=str(request.user_id or "") or None,
+                trace_id=trace_id,
+            )
+            await MemoryService(
+                session,
+                request.org_id,
+                vector_service=shared_vector,
+                candidate_vector_service=candidate_vector,
+            ).write_candidate(candidate)
+        except Exception:
+            logger.debug("RAG usage candidate write skipped", exc_info=True)
 
     async def _enqueue_paper_review_enrichment(
         self,
@@ -650,7 +716,7 @@ class QualityAgentOrchestratorService:
                     "result_id": None,
                     "model_config_id": None,
                     "model_key": item.model_key,
-                    "product_line": str(request.workspace or "chat"),
+                    "product_line": "chat",
                     "trace_id": item.trace_id,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,

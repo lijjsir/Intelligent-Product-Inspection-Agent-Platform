@@ -60,6 +60,7 @@ from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomAgent, Me
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
+    MemoryCandidateSupport,
     MemoryDependencyEdge,
     MemoryEvaluation,
     MemoryEvent,
@@ -144,6 +145,7 @@ __all__ = [
     "RagDocumentChunk",
     "RagIndexJob",
     "MemoryItem",
+    "MemoryCandidateSupport",
     "MemoryEvent",
     "MemoryDependencyEdge",
     "MemoryPolicy",

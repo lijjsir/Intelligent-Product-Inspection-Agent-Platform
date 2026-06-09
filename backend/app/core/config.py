@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     neo4j_username: str = "neo4j"
     neo4j_password: str = "neo4j_password"
     neo4j_database: str = "neo4j"
+    memory_graph_write_backend: str = "dual"  # mysql | neo4j | dual
+    memory_graph_read_backend: str = "mysql"   # mysql | neo4j
     algo_runner_workdir: str = "runtime_algo_workspace"
     algo_runtime_base_url: str = "http://127.0.0.1:18080"
 

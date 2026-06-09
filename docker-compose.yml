@@ -38,6 +38,11 @@ services:
       PIAP_LANGFUSE_ENVIRONMENT: local-self-hosted
       PIAP_LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@piap.local}
       PIAP_LANGFUSE_INIT_USER_PASSWORD: piap_admin_123456
+      PIAP_NEO4J_ENABLED: "true"
+      PIAP_NEO4J_URI: bolt://neo4j:7687
+      PIAP_NEO4J_USERNAME: neo4j
+      PIAP_NEO4J_PASSWORD: neo4j_password
+      PIAP_NEO4J_DATABASE: neo4j
     depends_on:
       mysql:
         condition: service_healthy
@@ -47,6 +52,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      neo4j:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
     volumes:
@@ -86,6 +93,11 @@ services:
       PIAP_LANGFUSE_PROJECT_ID: piap-local
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+      PIAP_NEO4J_ENABLED: "true"
+      PIAP_NEO4J_URI: bolt://neo4j:7687
+      PIAP_NEO4J_USERNAME: neo4j
+      PIAP_NEO4J_PASSWORD: neo4j_password
+      PIAP_NEO4J_DATABASE: neo4j
     depends_on:
       mysql:
         condition: service_healthy
@@ -95,6 +107,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      neo4j:
+        condition: service_healthy
     volumes:
       - ./backend:/app/backend
     extra_hosts:
@@ -132,6 +146,11 @@ services:
       PIAP_LANGFUSE_PROJECT_ID: piap-local
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
+      PIAP_NEO4J_ENABLED: "true"
+      PIAP_NEO4J_URI: bolt://neo4j:7687
+      PIAP_NEO4J_USERNAME: neo4j
+      PIAP_NEO4J_PASSWORD: neo4j_password
+      PIAP_NEO4J_DATABASE: neo4j
     depends_on:
       mysql:
         condition: service_healthy
@@ -141,6 +160,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      neo4j:
+        condition: service_healthy
     volumes:
       - ./backend:/app/backend
     extra_hosts:
@@ -231,6 +252,25 @@ services:
       - "63330:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:5
+    container_name: piap-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   languagetool:
     image: erikvl87/languagetool:latest
@@ -413,6 +453,8 @@ volumes:
   mysql_data:
   minio_data:
   qdrant_data:
+  neo4j_data:
+  neo4j_logs:
   langfuse_postgres_data:
   langfuse_clickhouse_data:
   langfuse_clickhouse_logs:

@@ -435,7 +435,6 @@ export interface InfrastructureStatus {
 
 export interface MemorySearchQueryPayload {
   org_id: string;
-  workspace: "governance" | "ops" | "app";
   query: string;
   user_id?: string | null;
   top_k?: number;
@@ -469,6 +468,51 @@ export interface MemorySearchResult {
   warnings: string[];
 }
 
+export interface CandidateMemoryItem {
+  memory_id: string;
+  memory_type: string;
+  status: string;
+  summary: string;
+  candidate_key?: string | null;
+  canonical_claim?: Record<string, unknown> | null;
+  support_count: number;
+  negative_count: number;
+  conflict_count: number;
+  rag_evidence_count: number;
+  agent_verifier_count: number;
+  human_approved: boolean;
+  promotion_score?: number | null;
+  confidence?: number | null;
+  trust_score?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_supported_at?: string | null;
+}
+
+export interface CandidateSupportPayload {
+  support_type?: string;
+  source_kind?: string | null;
+  source_agent?: string | null;
+  task_id?: string | null;
+  trace_id?: string | null;
+  rag_space_id?: string | null;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  evidence_pointer?: Record<string, unknown> | null;
+  confidence?: number | null;
+  similarity?: number | null;
+  weight?: number | null;
+}
+
+export interface PromotionEvaluationResult {
+  memory_id: string;
+  status: string;
+  promotion_score: number;
+  promoted: boolean;
+  reason?: string | null;
+  blocked_reasons: string[];
+}
+
 export interface MemoryEventItem {
   event_id: string;
   event_type: string;
@@ -497,7 +541,6 @@ export interface MemoryPropagationGraph {
 
 export interface MemoryRollbackPayload {
   org_id: string;
-  workspace: "governance" | "ops";
   operator_id: string;
   trace_id: string;
   root_memory_id: string;
@@ -521,7 +564,6 @@ export interface MemoryRollbackResult {
 
 export interface MemoryEvaluationPayload {
   org_id: string;
-  workspace?: "governance";
   rollback_id: string;
   task_id?: string | null;
   trace_id?: string | null;
@@ -540,7 +582,6 @@ export interface MemoryEvaluationResult {
 export interface MemoryPolicy {
   policy_key: string;
   policy_type: string;
-  workspace: string;
   config?: Record<string, unknown> | null;
   status: string;
   version: number;
@@ -548,7 +589,6 @@ export interface MemoryPolicy {
 }
 
 export interface MemoryPolicyUpsertPayload {
-  workspace: "governance" | "ops" | "app";
   policy_type: "write_gate" | "retrieval" | "rollback" | "audit";
   config: Record<string, unknown>;
   status?: string;

@@ -10,13 +10,9 @@ import {
   ROLE_ALGORITHM_ENGINEER,
   ROLE_USER,
   ROLE_EXPERT,
-  WORKSPACE_APP,
-  WORKSPACE_GOVERNANCE,
-  WORKSPACE_OPS,
 } from "@/constants/roles";
 import {
   CAPABILITIES_KEY,
-  DEFAULT_WORKSPACE_KEY,
   ORG_ID_KEY,
   PLAN_TIER_KEY,
   ROLE_KEY,
@@ -24,7 +20,6 @@ import {
   TOKEN_KEY,
   USER_ID_KEY,
   USERNAME_KEY,
-  WORKSPACES_KEY,
   clearStoredAuthSession,
   readStoredArray,
   readStoredValue,
@@ -41,37 +36,9 @@ export const useAuthStore = defineStore("auth", () => {
   const roles = ref<string[]>(readStoredArray(ROLES_KEY));
   const planTier = ref(readStoredValue(PLAN_TIER_KEY) || "basic");
   const capabilities = ref<string[]>(readStoredArray(CAPABILITIES_KEY));
-  const workspaces = ref<string[]>(readStoredArray(WORKSPACES_KEY));
-  const defaultWorkspace = ref(readStoredValue(DEFAULT_WORKSPACE_KEY) || WORKSPACE_APP);
-
-  function deriveWorkspacesFromRoles(rs: string[]) {
-    const workspacesForRoles: string[] = [];
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
-      workspacesForRoles.push(WORKSPACE_APP);
-    }
-    if (
-      rs.includes(ROLE_ADMIN)
-      || rs.includes(ROLE_APP_DEVELOPER)
-      || rs.includes(ROLE_PLATFORM_OPERATOR)
-      || rs.includes(ROLE_ALGORITHM_ENGINEER)
-    ) {
-      workspacesForRoles.push(WORKSPACE_OPS);
-    }
-    if (rs.includes(ROLE_ADMIN)) {
-      workspacesForRoles.push(WORKSPACE_GOVERNANCE);
-    }
-    return Array.from(new Set(workspacesForRoles));
-  }
 
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
-  }
-  {
-    const derived = deriveWorkspacesFromRoles(roles.value);
-    workspaces.value = Array.from(new Set([...(workspaces.value || []), ...derived]));
-    if (!workspaces.value.length) {
-      workspaces.value = [WORKSPACE_APP];
-    }
   }
 
   const isAuthed = computed(() => Boolean(token.value));
@@ -92,10 +59,6 @@ export const useAuthStore = defineStore("auth", () => {
     roles.value = normalizeRoles(session);
     planTier.value = session.plan_tier || "basic";
     capabilities.value = [...(session.capabilities || [])];
-    const sessionWorkspaces = [...(session.workspaces || [])];
-    const derivedWorkspaces = deriveWorkspacesFromRoles(roles.value);
-    workspaces.value = Array.from(new Set([...(sessionWorkspaces.length ? sessionWorkspaces : [WORKSPACE_APP]), ...derivedWorkspaces]));
-    defaultWorkspace.value = session.default_workspace || workspaces.value[0] || WORKSPACE_APP;
 
     setStoredValue(TOKEN_KEY, token.value);
     setStoredValue(ORG_ID_KEY, orgId.value);
@@ -105,8 +68,6 @@ export const useAuthStore = defineStore("auth", () => {
     setStoredArray(ROLES_KEY, roles.value);
     setStoredValue(PLAN_TIER_KEY, planTier.value);
     setStoredArray(CAPABILITIES_KEY, capabilities.value);
-    setStoredArray(WORKSPACES_KEY, workspaces.value);
-    setStoredValue(DEFAULT_WORKSPACE_KEY, defaultWorkspace.value);
     userStore.current = {
       id: session.user_id,
       org_id: session.org_id,
@@ -152,14 +113,8 @@ export const useAuthStore = defineStore("auth", () => {
     roles.value = [];
     planTier.value = "basic";
     capabilities.value = [];
-    workspaces.value = [];
-    defaultWorkspace.value = WORKSPACE_APP;
     clearStoredAuthSession();
     userStore.$reset();
-  }
-
-  function hasWorkspace(workspace: string) {
-    return workspaces.value.includes(workspace);
   }
 
   function hasCapability(capability: string) {
@@ -193,8 +148,6 @@ export const useAuthStore = defineStore("auth", () => {
     roles,
     planTier,
     capabilities,
-    workspaces,
-    defaultWorkspace,
     userId,
     username,
     isAuthed,
@@ -202,7 +155,6 @@ export const useAuthStore = defineStore("auth", () => {
     login,
     register,
     logout,
-    hasWorkspace,
     hasCapability,
     resolveDefaultRoute,
   };

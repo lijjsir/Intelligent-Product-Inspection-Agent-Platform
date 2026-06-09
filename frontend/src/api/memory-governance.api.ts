@@ -1,5 +1,7 @@
 import { http } from "./http";
 import type {
+  CandidateMemoryItem,
+  CandidateSupportPayload,
   MemoryEvaluationPayload,
   MemoryEvaluationResult,
   MemoryEventItem,
@@ -10,16 +12,43 @@ import type {
   MemoryRollbackResult,
   MemorySearchQueryPayload,
   MemorySearchResult,
+  PromotionEvaluationResult,
 } from "@/types/governance.types";
 
 export const memoryGovernanceApi = {
   search(payload: MemorySearchQueryPayload) {
     return http.post<MemorySearchResult>("/v1/memory/search", payload);
   },
+  listCandidates(params?: { status?: string; memory_type?: string; user_id?: string; limit?: number; offset?: number }) {
+    return http.get<CandidateMemoryItem[]>("/v1/memory/candidates", { params });
+  },
+  supportCandidate(memoryId: string, payload: CandidateSupportPayload) {
+    return http.post<PromotionEvaluationResult | null>(`/v1/memory/candidates/${memoryId}/support`, payload);
+  },
+  approveCandidate(memoryId: string) {
+    return http.post<PromotionEvaluationResult>(`/v1/memory/candidates/${memoryId}/approve`);
+  },
+  rejectCandidate(memoryId: string) {
+    return http.post<PromotionEvaluationResult>(`/v1/memory/candidates/${memoryId}/reject`);
+  },
+  isolateCandidate(memoryId: string) {
+    return http.post<PromotionEvaluationResult>(`/v1/memory/candidates/${memoryId}/isolate`);
+  },
+  contestCandidate(memoryId: string) {
+    return http.post<PromotionEvaluationResult>(`/v1/memory/candidates/${memoryId}/contest`);
+  },
+  evaluateCandidate(memoryId: string) {
+    return http.post<PromotionEvaluationResult>(`/v1/memory/candidates/${memoryId}/evaluate-promotion`);
+  },
+  evaluateCandidateBatch(limit = 100) {
+    return http.post<PromotionEvaluationResult[]>("/v1/memory/candidates/evaluate-batch", null, {
+      params: { limit },
+    });
+  },
   listEvents(params: { memory_id?: string; event_type?: string; trace_id?: string; limit?: number }) {
     return http.get<MemoryEventItem[]>("/v1/memory/events", { params });
   },
-  buildPropagationGraph(payload: { org_id: string; workspace: "governance"; root_memory_id: string; trace_id?: string; max_depth?: number }) {
+  buildPropagationGraph(payload: { org_id: string; root_memory_id: string; trace_id?: string; max_depth?: number }) {
     return http.post<MemoryPropagationGraph>("/v1/memory/contamination/graph", payload);
   },
   executeRollback(payload: MemoryRollbackPayload) {
@@ -28,7 +57,7 @@ export const memoryGovernanceApi = {
   evaluateRecovery(payload: MemoryEvaluationPayload) {
     return http.post<MemoryEvaluationResult>("/v1/memory/evaluation/replay", payload);
   },
-  listPolicies(params?: { workspace?: string }) {
+  listPolicies(params?: Record<string, unknown>) {
     return http.get<MemoryPolicy[]>("/v1/memory/policies", { params });
   },
   upsertPolicy(policyKey: string, payload: MemoryPolicyUpsertPayload) {

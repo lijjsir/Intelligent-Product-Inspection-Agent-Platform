@@ -13,12 +13,6 @@ from app.core.datetime import utcnow
 
 # ---- Enums ----
 
-class Workspace(str, Enum):
-    APP = "app"
-    OPS = "ops"
-    GOVERNANCE = "governance"
-
-
 class MemoryType(str, Enum):
     USER_PREFERENCE = "user_preference"
     TASK_EPISODE = "task_episode"
@@ -44,6 +38,10 @@ class EventType(str, Enum):
     TOOL_CALLED = "tool.called"
     AGENT_MESSAGE_CREATED = "agent.message_created"
     MEMORY_CANDIDATE_CREATED = "memory.candidate_created"
+    MEMORY_CANDIDATE_SUPPORTED = "memory.candidate_supported"
+    MEMORY_CANDIDATE_MERGED = "memory.candidate_merged"
+    MEMORY_CANDIDATE_REJECTED = "memory.candidate_rejected"
+    MEMORY_PROMOTED_TO_ACTIVE = "memory.promoted_to_active"
     MEMORY_WRITE_CREATED = "memory.write_created"
     MEMORY_WRITE_REJECTED = "memory.write_rejected"
     MEMORY_RETRIEVAL_COMPLETED = "memory.retrieval_completed"
@@ -54,17 +52,34 @@ class EventType(str, Enum):
     MEMORY_EVALUATION_COMPLETED = "memory.evaluation_completed"
 
 
+PROVENANCE_EDGE_VALUES = {
+    "version_of",
+    "summarized_from",
+    "merged_from",
+    "derived_from",
+    "cited_as_evidence",
+    "planned_from",
+    "rollback_depends_on",
+}
+
+
 class EdgeType(str, Enum):
-    DERIVED_FROM = "derived_from"
-    READ_BY = "read_by"
-    USED_AS_TOOL_PARAM = "used_as_tool_param"
-    CITED_AS_EVIDENCE = "cited_as_evidence"
+    # Provenance edges: written by system context during memory write.
     VERSION_OF = "version_of"
-    MERGED_FROM = "merged_from"
-    CONFLICTS_WITH = "conflicts_with"
     SUMMARIZED_FROM = "summarized_from"
+    MERGED_FROM = "merged_from"
+    DERIVED_FROM = "derived_from"
+    CITED_AS_EVIDENCE = "cited_as_evidence"
     PLANNED_FROM = "planned_from"
     ROLLBACK_DEPENDS_ON = "rollback_depends_on"
+
+    # Semantic edge: only conflicts_with is persisted (has actionable value —
+    # next retrieval can check existing conflicts and skip LLM detection).
+    CONFLICTS_WITH = "conflicts_with"
+
+    # Audit-only edges — NOT for default propagation, NOT for semantic relation.
+    READ_BY = "read_by"
+    USED_AS_TOOL_PARAM = "used_as_tool_param"
 
 
 class RollbackAction(str, Enum):
@@ -73,6 +88,21 @@ class RollbackAction(str, Enum):
     ISOLATE = "isolate"
     PATCH = "patch"
     BRANCH = "branch"
+
+
+class MemoryDependencyInput(BaseModel):
+    """Explicit provenance dependency declaration in write request."""
+    target_memory_id: str = Field(..., min_length=1)
+    edge_type: EdgeType
+    strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    reason: str | None = None
+    metadata: dict | None = None
+
+    @model_validator(mode="after")
+    def validate_provenance_edge(self) -> MemoryDependencyInput:
+        if self.edge_type.value not in PROVENANCE_EDGE_VALUES:
+            raise ValueError("dependency_edges only accepts provenance edge types")
+        return self
 
 
 class ReviewStatus(str, Enum):
@@ -88,6 +118,7 @@ class MemorySource(BaseModel):
     kind: str
     task_id: str | None = None
     trace_id: str | None = None
+    agent_id: str | None = None
 
 
 class MemoryContent(BaseModel):
@@ -108,13 +139,13 @@ class MemoryScope(BaseModel):
 class MemoryWriteRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     source: MemorySource
     memory_type: MemoryType
     scope: MemoryScope | None = None
     content: MemoryContent
     evidence_pointers: dict | None = None
     version_parent_id: str | None = None
+    dependency_edges: list[MemoryDependencyInput] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     ttl_policy: str = "90d"
     privacy_level: str = "tenant_private"
@@ -136,10 +167,6 @@ class MemoryWriteRequest(BaseModel):
         if self.memory_type == MemoryType.RAG_USAGE_MEMORY:
             if not self.scope or not self.scope.rag_space_id:
                 raise ValueError("rag_usage_memory requires rag_space_id in scope")
-        if self.memory_type == MemoryType.AGENT_OPS_MEMORY and self.workspace != Workspace.OPS:
-            raise ValueError("agent_ops_memory must use ops workspace")
-        if self.memory_type == MemoryType.GOVERNANCE_MEMORY and self.workspace != Workspace.GOVERNANCE:
-            raise ValueError("governance_memory must use governance workspace")
         return self
 
 
@@ -151,6 +178,30 @@ class MemoryWriteResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     policy_key: str | None = None
     policy_version: str | None = None
+
+
+class CandidateSupportCreate(BaseModel):
+    support_type: str = Field(default="support", min_length=1)
+    source_kind: str | None = None
+    source_agent: str | None = None
+    task_id: str | None = None
+    trace_id: str | None = None
+    rag_space_id: str | None = None
+    document_id: str | None = None
+    chunk_id: str | None = None
+    evidence_pointer: dict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    weight: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class PromotionEvaluationResponse(BaseModel):
+    memory_id: str
+    status: MemoryStatus
+    promotion_score: float
+    promoted: bool = False
+    reason: str | None = None
+    blocked_reasons: list[str] = Field(default_factory=list)
 
 
 # ---- Search ----
@@ -165,7 +216,6 @@ class ScopeFilter(BaseModel):
 class MemorySearchRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     query: str = Field(..., min_length=1)
     scope_filter: ScopeFilter | None = None
     top_k: int = Field(default=5, ge=1, le=10)
@@ -207,7 +257,6 @@ class MemoryEventPayload(BaseModel):
     event_id: str = Field(..., min_length=1)
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     event_type: EventType
     source_kind: str | None = None
     agent_id: str | None = None
@@ -226,15 +275,17 @@ class MemoryEventPayload(BaseModel):
 
 class MemoryPropagationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = "governance"
     root_memory_id: str = Field(..., min_length=1)
     trace_id: str | None = None
     max_depth: int = Field(default=4, ge=1, le=10)
     include_edge_types: list[EdgeType] = Field(default_factory=lambda: [
-        EdgeType.DERIVED_FROM,
-        EdgeType.READ_BY,
-        EdgeType.USED_AS_TOOL_PARAM,
         EdgeType.VERSION_OF,
+        EdgeType.SUMMARIZED_FROM,
+        EdgeType.MERGED_FROM,
+        EdgeType.DERIVED_FROM,
+        EdgeType.CITED_AS_EVIDENCE,
+        EdgeType.PLANNED_FROM,
+        EdgeType.ROLLBACK_DEPENDS_ON,
     ])
 
 
@@ -259,7 +310,6 @@ class MemoryPropagationResponse(BaseModel):
 
 class MemoryRollbackRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: Workspace
     operator_id: str = Field(..., min_length=1)
     trace_id: str = Field(..., min_length=1)
     root_memory_id: str = Field(..., min_length=1)
@@ -284,7 +334,6 @@ class MemoryRollbackResponse(BaseModel):
 
 class MemoryEvaluationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = "governance"
     rollback_id: str = Field(..., min_length=1)
     task_id: str | None = None
     trace_id: str | None = None
@@ -304,7 +353,6 @@ class MemoryEvaluationResponse(BaseModel):
 
 class MemoryPolicyContract(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: Workspace
     policy_key: str
     policy_type: str
     config: dict
