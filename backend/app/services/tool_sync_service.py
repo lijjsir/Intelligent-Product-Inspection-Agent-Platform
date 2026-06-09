@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.ids import uuid7
 from app.models.tool import ToolDefinition, ToolSyncEvent, ToolVersion
 from app.repositories.tool_repo import ToolRepository
@@ -35,10 +36,14 @@ class ToolSyncService:
 
     async def scan_and_sync(self) -> dict[str, Any]:
         manifests = self.collect_manifests()
-        results = {"created": 0, "updated": 0, "unchanged": 0, "details": []}
+        results = {"created": 0, "updated": 0, "unchanged": 0, "disabled": 0, "details": []}
 
         for manifest in manifests:
             result = await self._sync_one(manifest)
+            results["details"].append(result)
+            results[result["action"]] += 1
+
+        for result in await self._sync_disabled_tools():
             results["details"].append(result)
             results[result["action"]] += 1
 
@@ -51,12 +56,39 @@ class ToolSyncService:
     def collect_manifests() -> list[dict[str, Any]]:
         manifests = []
         for module_name in BUILTIN_MODULES:
+            if module_name == "agent.tools.builtin.paper_format_tools" and not settings.paper_review_enabled:
+                continue
             try:
                 module = importlib.import_module(module_name)
                 manifests.extend(getattr(module, "TOOL_MANIFESTS", []))
             except ImportError:
                 continue
         return manifests
+
+    async def _sync_disabled_tools(self) -> list[dict[str, Any]]:
+        if settings.paper_review_enabled:
+            return []
+
+        disabled_keys = ["file.paper_format_check"]
+        results: list[dict[str, Any]] = []
+        for tool_key in disabled_keys:
+            existing = await self._repo.get_by_tool_key(self._org_id, tool_key)
+            if not existing:
+                continue
+            if existing.status != "inactive":
+                old_hash = existing.manifest_hash
+                await self._repo.save(existing, {"status": "inactive", "health_status": "disabled"})
+                await self._write_sync_event(
+                    existing.id,
+                    "disabled",
+                    old_hash,
+                    old_hash,
+                    f"builtin tool {tool_key} disabled by config",
+                )
+                results.append({"tool_key": tool_key, "action": "disabled"})
+                continue
+            results.append({"tool_key": tool_key, "action": "unchanged"})
+        return results
 
     async def _sync_one(self, manifest: dict[str, Any]) -> dict[str, Any]:
         tool_key = manifest["tool_key"]

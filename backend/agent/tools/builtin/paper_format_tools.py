@@ -44,6 +44,11 @@ def check(
     query: str = "",
     template_id: str | None = None,
 ) -> dict[str, Any]:
+    from app.core.config import settings
+
+    if not settings.paper_review_enabled:
+        raise RuntimeError("paper review is disabled by config")
+
     from agent.tools.paper_format_checker import check_paper_format
 
     result = check_paper_format(

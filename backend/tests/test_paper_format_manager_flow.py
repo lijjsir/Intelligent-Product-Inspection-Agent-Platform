@@ -59,6 +59,28 @@ async def test_manager_policy_routes_paper_queries_to_paper_format_check():
 
 
 @pytest.mark.asyncio
+async def test_manager_policy_skips_paper_route_when_disabled(monkeypatch):
+    monkeypatch.setattr("agent.router.manager_policy.settings.paper_review_enabled", False)
+    policy = ManagerPolicy()
+    request = NormalizedRequest(
+        request_id="req-disabled",
+        workflow_run_id="wf-disabled",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        query="please check this paper format",
+        attachments=[NormalizedAttachment(name="paper.docx", kind="file")],
+        ext={"surface": "chat"},
+    )
+
+    state = policy.initialize_state(request)
+    understanding = await policy.understand(state)
+
+    assert understanding.intent == "file_qa"
+    assert understanding.needs == ["file.qa", "chat.response.compose"]
+
+
+@pytest.mark.asyncio
 async def test_manager_loop_returns_paper_format_report(monkeypatch):
     stored_objects: dict[tuple[str, str], tuple[bytes, str | None]] = {}
     monkeypatch.setattr("app.services.paper_review_runtime_service.PaperReviewRuntimeService.diagnose_sync", _ready_runtime_status)

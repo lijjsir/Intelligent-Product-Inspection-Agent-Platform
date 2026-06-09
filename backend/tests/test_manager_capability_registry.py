@@ -32,6 +32,14 @@ def test_capabilities_for_surface_only_returns_allowed_agents_and_modes():
     assert all(item.mode in {"answer", "report"} for item in chat_capabilities.values())
 
 
+def test_capabilities_for_surface_excludes_paper_check_when_disabled(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.paper_review_enabled", False)
+
+    chat_capabilities = capabilities_for_surface("chat")
+
+    assert "file.paper_format_check" not in chat_capabilities
+
+
 def test_node_spec_declares_local_routing_model_requirements():
     spec = NodeSpec(
         node_key="inspection.vision_node",

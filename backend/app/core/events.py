@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.core.config import settings
 from app.core.logging import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ async def seed_paper_templates_on_startup() -> None:
     Pipeline: local assets -> MinIO (idempotent) -> MySQL + Qdrant (idempotent).
     Safe to call repeatedly — skips already-seeded data.
     """
+    if not settings.paper_review_enabled:
+        logger.info("paper template bootstrap skipped: paper review disabled")
+        return
+
     try:
         from agent.tools.paper_template_storage import ensure_paper_templates_ready
 
@@ -38,6 +43,10 @@ async def seed_paper_templates_on_startup() -> None:
 
 
 async def log_paper_review_runtime_status() -> None:
+    if not settings.paper_review_enabled:
+        logger.info("paper review runtime check skipped: paper review disabled")
+        return
+
     try:
         from app.services.paper_review_runtime_service import PaperReviewRuntimeService
 

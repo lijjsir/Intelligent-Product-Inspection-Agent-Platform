@@ -22,6 +22,17 @@ class PaperReviewRuntimeService:
 
     @classmethod
     async def diagnose(cls) -> dict[str, Any]:
+        if not settings.paper_review_enabled:
+            return {
+                "ok": True,
+                "status": "disabled",
+                "engines_used": [],
+                "engine_status": [
+                    {"name": "paper_review", "ok": True, "detail": "disabled by config"},
+                ],
+                "message": "paper review runtime disabled",
+            }
+
         checks = await asyncio.gather(
             cls._check_python_docx(),
             cls._check_lxml(),
@@ -102,7 +113,7 @@ class PaperReviewRuntimeService:
     async def _check_languagetool() -> dict[str, Any]:
         base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
         if not base_url:
-            return {"name": "languagetool", "ok": False, "detail": "paper_check_languagetool_url is empty"}
+            return {"name": "languagetool", "ok": True, "detail": "disabled by config"}
         try:
             timeout = httpx.Timeout(float(settings.paper_check_languagetool_timeout_sec or 20))
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:

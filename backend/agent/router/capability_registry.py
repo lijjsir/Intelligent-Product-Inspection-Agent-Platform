@@ -153,6 +153,12 @@ def surface_policy(surface: str) -> dict:
 
 
 def capability_allowed(capability: Capability, surface: str, allowed_modes: list[str]) -> bool:
+    if capability.key == "file.paper_format_check":
+        from app.core.config import settings
+
+        if not settings.paper_review_enabled:
+            return False
+
     policy = surface_policy(surface)
     if surface not in capability.surfaces:
         return False

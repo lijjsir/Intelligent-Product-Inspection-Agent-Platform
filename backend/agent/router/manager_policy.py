@@ -9,6 +9,7 @@ from agent.router.capability_registry import CAPABILITIES, SURFACE_MODE_POLICY, 
 from agent.router.contracts import AgentPlanStep, AgentRoutePlan
 from agent.router.manager_state import ManagerState
 from agent.router.node_registry import attachment_kind
+from app.core.config import settings
 
 
 TASK_PATTERNS = [
@@ -232,7 +233,7 @@ class ManagerPolicy:
         has_doc = any(kind == "document" for kind in attachment_kinds)
         paper_match = self._matches(query, PAPER_FORMAT_PATTERNS)
         _log.info("ManagerPolicy.understand paper_format_check has_doc=%s paper_match=%s", has_doc, paper_match)
-        if has_doc and paper_match:
+        if settings.paper_review_enabled and has_doc and paper_match:
             return Understanding(
                 goal="检查论文文档的格式、结构和文字规范问题",
                 intent="paper_format_check",
