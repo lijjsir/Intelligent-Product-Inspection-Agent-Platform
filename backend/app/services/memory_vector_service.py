@@ -90,7 +90,6 @@ class MemoryVectorService:
         memory_id: str,
         org_id: str,
         user_id: str,
-        workspace: str,
         memory_type: str,
         status: str,
         summary: str,
@@ -109,7 +108,6 @@ class MemoryVectorService:
         payload = {
             "org_id": org_id,
             "user_id": user_id,
-            "workspace": workspace,
             "memory_type": memory_type,
             "status": status,
             "trust_score": trust_score,
@@ -140,7 +138,6 @@ class MemoryVectorService:
         self,
         query: str,
         org_id: str,
-        workspace: str,
         top_k: int = 5,
         *,
         user_id: str | None = None,
@@ -154,7 +151,6 @@ class MemoryVectorService:
 
         must_clauses: list[dict] = [
             {"key": "org_id", "match": {"value": org_id}},
-            {"key": "workspace", "match": {"value": workspace}},
             {"key": "status", "match": {"value": "active"}},
         ]
 

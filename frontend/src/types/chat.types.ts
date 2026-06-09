@@ -292,7 +292,6 @@ export interface ChatMessage {
 export interface ChatMessageSendRequest {
   message: string;
   schema_version?: string;
-  workspace?: string;
   metadata?: Record<string, unknown>;
   ext?: Record<string, unknown>;
 }

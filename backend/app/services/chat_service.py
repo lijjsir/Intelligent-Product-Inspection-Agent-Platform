@@ -239,7 +239,6 @@ class ChatService:
                 message_type="text",
                 payload={
                     "schema_version": payload.schema_version,
-                    "workspace": payload.workspace,
                     "metadata": payload.metadata or {},
                     "ext": ext_payload,
                 },
@@ -466,14 +465,13 @@ class ChatService:
             # Load shared memory context for this query
             ext_payload["shared_memory_context"] = None
             try:
-                from app.schemas.memory import MemorySearchRequest, Workspace as MemWorkspace
+                from app.schemas.memory import MemorySearchRequest
                 from app.services.memory_service import MemoryService
                 from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
 
                 memory_search_req = MemorySearchRequest(
                     org_id=self._org_id,
                     user_id=self._user_id,
-                    workspace=MemWorkspace.APP,
                     query=request.message.strip(),
                     scope_filter=None,
                     top_k=5,
@@ -575,7 +573,6 @@ class ChatService:
                     "user_id": self._user_id,
                     "plan_tier": self._current.plan_tier,
                     "capabilities": self._current.capabilities,
-                    "workspace": request.workspace,
                     "query": request.message.strip(),
                     "metadata": dict(request.metadata or {}),
                     "ext": ext_payload,

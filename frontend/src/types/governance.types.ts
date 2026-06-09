@@ -435,7 +435,6 @@ export interface InfrastructureStatus {
 
 export interface MemorySearchQueryPayload {
   org_id: string;
-  workspace: "governance" | "ops" | "app";
   query: string;
   user_id?: string | null;
   top_k?: number;
@@ -497,7 +496,6 @@ export interface MemoryPropagationGraph {
 
 export interface MemoryRollbackPayload {
   org_id: string;
-  workspace: "governance" | "ops";
   operator_id: string;
   trace_id: string;
   root_memory_id: string;
@@ -521,7 +519,6 @@ export interface MemoryRollbackResult {
 
 export interface MemoryEvaluationPayload {
   org_id: string;
-  workspace?: "governance";
   rollback_id: string;
   task_id?: string | null;
   trace_id?: string | null;
@@ -540,7 +537,6 @@ export interface MemoryEvaluationResult {
 export interface MemoryPolicy {
   policy_key: string;
   policy_type: string;
-  workspace: string;
   config?: Record<string, unknown> | null;
   status: string;
   version: number;
@@ -548,7 +544,6 @@ export interface MemoryPolicy {
 }
 
 export interface MemoryPolicyUpsertPayload {
-  workspace: "governance" | "ops" | "app";
   policy_type: "write_gate" | "retrieval" | "rollback" | "audit";
   config: Record<string, unknown>;
   status?: string;

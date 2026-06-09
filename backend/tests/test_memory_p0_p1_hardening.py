@@ -11,7 +11,6 @@ from app.schemas.memory import (
     MemoryType,
     MemoryWriteRequest,
     RollbackAction,
-    Workspace,
 )
 from app.services.memory_governance_service import MemoryRollbackService
 from app.services.memory_service import MemoryService
@@ -107,7 +106,6 @@ def _write_request(*, confidence: float = 0.9) -> MemoryWriteRequest:
     return MemoryWriteRequest(
         org_id="org-1",
         user_id="user-1",
-        workspace=Workspace.APP,
         source=MemorySource(kind="agent_message", task_id="task-1", trace_id="trace-1"),
         memory_type=MemoryType.TASK_EPISODE,
         scope=MemoryScope(task_id="task-1"),
@@ -172,7 +170,6 @@ async def test_search_requires_vector_service_when_eligible_memories_exist():
             MemorySearchRequest(
                 org_id="org-1",
                 user_id="user-1",
-                workspace=Workspace.APP,
                 query="stable inspection",
                 top_k=5,
             )
@@ -188,7 +185,6 @@ async def test_rollback_branch_is_explicitly_unsupported():
             root_memory_id="mem-root",
             operator_id="user-1",
             operator_role="platform_operator",
-            workspace="governance",
             trace_id="trace-1",
             action=RollbackAction.BRANCH,
             target_memory_ids=["mem-root"],
@@ -205,7 +201,6 @@ async def test_patch_rollback_creates_new_memory_version_and_version_edge():
         memory_id="mem-old",
         org_id="org-1",
         user_id="user-1",
-        workspace="app",
         memory_type="task_episode",
         scope_json={"task_id": "task-1"},
         content_summary="old summary",
@@ -235,7 +230,6 @@ async def test_patch_rollback_creates_new_memory_version_and_version_edge():
         rollback_id="rb-1",
         root_memory_id="mem-old",
         operator_id="user-1",
-        workspace="app",
         trace_id="trace-2",
         action=RollbackAction.PATCH,
         target_memory_ids=["mem-old"],

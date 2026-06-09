@@ -30,7 +30,6 @@ from app.schemas.memory import (
     MemorySearchResponse,
     MemoryWriteRequest,
     MemoryWriteResponse,
-    Workspace,
 )
 from app.schemas.user import CurrentUser
 from app.services.memory_service import MemoryService
@@ -229,8 +228,6 @@ async def build_propagation_graph(
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
-    if body.workspace != "governance":
-        raise HTTPException(status_code=403, detail="requires governance workspace")
 
     svc = MemoryPropagationService(db, org_id)
     resp = await svc.build_propagation_graph(
@@ -256,8 +253,6 @@ async def execute_rollback(
     org_id = body.org_id or current.org_id
     if not org_id:
         raise HTTPException(status_code=400, detail="missing org_id")
-    if body.workspace not in (Workspace.OPS, Workspace.GOVERNANCE):
-        raise HTTPException(status_code=403, detail="requires ops or governance workspace")
 
     vector_svc = _build_vector_service(org_id, current.user_id, body.trace_id)
     svc = MemoryRollbackService(db, org_id, vector_svc)
@@ -266,7 +261,6 @@ async def execute_rollback(
             root_memory_id=body.root_memory_id,
             operator_id=body.operator_id,
             operator_role=current.role,
-            workspace=body.workspace.value,
             trace_id=body.trace_id,
             action=body.rollback_action,
             target_memory_ids=body.target_memory_ids,
@@ -333,7 +327,6 @@ async def upsert_policy(
         policy = MemoryPolicy(
             id=str(uuid7()),
             org_id=current.org_id,
-            workspace=body.workspace.value,
             policy_key=policy_key,
             policy_type=body.policy_type.value,
             config_json=body.config,
@@ -345,7 +338,6 @@ async def upsert_policy(
         policy = MemoryPolicy(
             id=str(uuid7()),
             org_id=current.org_id,
-            workspace=body.workspace.value,
             policy_key=policy_key,
             policy_type=body.policy_type.value,
             config_json=body.config,
@@ -357,7 +349,6 @@ async def upsert_policy(
     return ResponseEnvelope(data=MemoryPolicyResponse(
         policy_key=policy_key,
         policy_type=body.policy_type,
-        workspace=body.workspace,
         config=body.config,
         status=body.status,
         version=policy.version,
@@ -367,7 +358,6 @@ async def upsert_policy(
 
 @router.get("/policies")
 async def list_policies(
-    workspace: str | None = Query(default=None),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -376,12 +366,11 @@ async def list_policies(
     from app.repositories.memory_repo import MemoryPolicyRepository
 
     repo = MemoryPolicyRepository(db, current.org_id)
-    policies = await repo.list_by_workspace(workspace or "ops")
+    policies = await repo.list_all()
     return ResponseEnvelope(data=[
         {
             "policy_key": p.policy_key,
             "policy_type": p.policy_type,
-            "workspace": p.workspace,
             "status": p.status,
             "version": p.version,
         }

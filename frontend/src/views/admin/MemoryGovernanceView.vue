@@ -26,14 +26,12 @@ const evaluationResult = ref<MemoryEvaluationResult | null>(null);
 const policies = ref<MemoryPolicy[]>([]);
 const selectedPolicyKey = ref("");
 const policyForm = reactive({
-  workspace: "governance",
   policy_type: "rollback",
   status: "active",
   configText: "{}",
 });
 const searchForm = reactive({
   query: "",
-  workspace: "governance",
   top_k: 5,
 });
 const eventFilters = reactive({
@@ -72,7 +70,6 @@ async function searchMemory() {
   try {
     const { data } = await memoryGovernanceApi.search({
       org_id: orgId.value,
-      workspace: searchForm.workspace as "governance",
       query: searchForm.query,
       top_k: searchForm.top_k,
     });
@@ -107,7 +104,6 @@ async function buildGraph() {
   try {
     const { data } = await memoryGovernanceApi.buildPropagationGraph({
       org_id: orgId.value,
-      workspace: "governance",
       root_memory_id: graphForm.root_memory_id,
       max_depth: graphForm.max_depth,
     });
@@ -126,7 +122,6 @@ async function executeRollback() {
     const traceId = `mem-rb-${Date.now()}`;
     const { data } = await memoryGovernanceApi.executeRollback({
       org_id: orgId.value,
-      workspace: "governance",
       operator_id: userId.value,
       trace_id: traceId,
       root_memory_id: rollbackForm.root_memory_id,
@@ -166,7 +161,7 @@ async function evaluateRecovery() {
 
 async function fetchPolicies() {
   try {
-    const { data } = await memoryGovernanceApi.listPolicies({ workspace: "governance" });
+    const { data } = await memoryGovernanceApi.listPolicies();
     policies.value = data.data;
     if (!selectedPolicyKey.value && policies.value.length) {
       selectedPolicyKey.value = policies.value[0].policy_key;
@@ -178,7 +173,6 @@ async function fetchPolicies() {
 
 function loadPolicy(policy: MemoryPolicy) {
   selectedPolicyKey.value = policy.policy_key;
-  policyForm.workspace = policy.workspace;
   policyForm.policy_type = policy.policy_type;
   policyForm.status = policy.status;
   policyForm.configText = JSON.stringify(policy.config || {}, null, 2);
@@ -190,7 +184,6 @@ async function savePolicy() {
   try {
     const config = JSON.parse(policyForm.configText || "{}");
     await memoryGovernanceApi.upsertPolicy(selectedPolicyKey.value, {
-      workspace: policyForm.workspace as "governance",
       policy_type: policyForm.policy_type as "rollback",
       status: policyForm.status,
       config,
@@ -233,9 +226,6 @@ function graphStats() {
           <div class="flex flex-col gap-4">
             <div class="flex flex-wrap gap-3">
               <el-input v-model="searchForm.query" class="!w-[320px]" placeholder="输入关键词检索治理记忆" />
-              <el-select v-model="searchForm.workspace" class="!w-[180px]">
-                <el-option label="治理空间" value="governance" />
-              </el-select>
               <el-input-number v-model="searchForm.top_k" :min="1" :max="10" />
               <el-button type="primary" :loading="loading" @click="searchMemory">检索</el-button>
             </div>
@@ -398,9 +388,6 @@ function graphStats() {
               <el-form label-position="top">
                 <el-form-item label="策略 Key">
                   <el-input :model-value="selectedPolicyKey" readonly />
-                </el-form-item>
-                <el-form-item label="工作区">
-                  <el-input v-model="policyForm.workspace" :disabled="!canEditPolicy" />
                 </el-form-item>
                 <el-form-item label="策略类型">
                   <el-input v-model="policyForm.policy_type" :disabled="!canEditPolicy" />

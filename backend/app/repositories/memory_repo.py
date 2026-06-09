@@ -50,7 +50,6 @@ class MemoryItemRepository:
         self,
         status: str | None = None,
         memory_type: str | None = None,
-        workspace: str | None = None,
         user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -63,8 +62,6 @@ class MemoryItemRepository:
             stmt = stmt.where(MemoryItem.status == status)
         if memory_type:
             stmt = stmt.where(MemoryItem.memory_type == memory_type)
-        if workspace:
-            stmt = stmt.where(MemoryItem.workspace == workspace)
         if user_id:
             stmt = stmt.where(MemoryItem.user_id == user_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).offset(offset).limit(limit)
@@ -73,7 +70,6 @@ class MemoryItemRepository:
 
     async def list_active_by_scope(
         self,
-        workspace: str,
         memory_types: list[str] | None = None,
         user_id: str | None = None,
         task_id: str | None = None,
@@ -83,7 +79,6 @@ class MemoryItemRepository:
     ) -> list[MemoryItem]:
         stmt = select(MemoryItem).where(
             MemoryItem.org_id == self._org_id,
-            MemoryItem.workspace == workspace,
             MemoryItem.status == "active",
             MemoryItem.deleted_at.is_(None),
             MemoryItem.expires_at.is_(None)
@@ -340,11 +335,10 @@ class MemoryPolicyRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_by_workspace(self, workspace: str) -> list[MemoryPolicy]:
+    async def list_all(self) -> list[MemoryPolicy]:
         result = await self._session.execute(
             select(MemoryPolicy).where(
                 MemoryPolicy.org_id == self._org_id,
-                MemoryPolicy.workspace == workspace,
                 MemoryPolicy.deleted_at.is_(None),
             )
         )

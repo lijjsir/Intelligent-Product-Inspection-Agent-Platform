@@ -6,12 +6,6 @@ from enum import Enum
 from pydantic import BaseModel, Field, model_validator
 
 
-class Workspace(str, Enum):
-    APP = "app"
-    OPS = "ops"
-    GOVERNANCE = "governance"
-
-
 class MemoryType(str, Enum):
     USER_PREFERENCE = "user_preference"
     TASK_EPISODE = "task_episode"
@@ -116,7 +110,6 @@ class MemoryScope(BaseModel):
 class MemoryWriteRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     source: MemorySource
     memory_type: MemoryType
     scope: MemoryScope | None = None
@@ -144,10 +137,6 @@ class MemoryWriteRequest(BaseModel):
         if self.memory_type == MemoryType.RAG_USAGE_MEMORY:
             if not self.scope or not self.scope.rag_space_id:
                 raise ValueError("rag_usage_memory requires rag_space_id in scope")
-        if self.memory_type == MemoryType.AGENT_OPS_MEMORY and self.workspace != Workspace.OPS:
-            raise ValueError("agent_ops_memory must use ops workspace")
-        if self.memory_type == MemoryType.GOVERNANCE_MEMORY and self.workspace != Workspace.GOVERNANCE:
-            raise ValueError("governance_memory must use governance workspace")
         return self
 
 
@@ -173,7 +162,6 @@ class ScopeFilter(BaseModel):
 class MemorySearchRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     query: str = Field(..., min_length=1)
     scope_filter: ScopeFilter | None = None
     top_k: int = Field(default=5, ge=1, le=10)
@@ -263,7 +251,6 @@ class MemoryEventPayload(BaseModel):
     event_id: str = Field(..., min_length=1)
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     event_type: EventType
     source_kind: str | None = None
     agent_id: str | None = None
@@ -281,7 +268,6 @@ class MemoryEventPayload(BaseModel):
 
 class MemoryPropagationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = Field(default="governance")
     root_memory_id: str = Field(..., min_length=1)
     trace_id: str | None = None
     max_depth: int = Field(default=4, ge=1, le=10)
@@ -314,7 +300,6 @@ class MemoryPropagationResponse(BaseModel):
 
 class MemoryRollbackRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: Workspace
     operator_id: str = Field(..., min_length=1)
     trace_id: str = Field(..., min_length=1)
     root_memory_id: str = Field(..., min_length=1)
@@ -340,7 +325,6 @@ class MemoryRollbackResponse(BaseModel):
 
 class MemoryEvaluationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = Field(default="governance")
     rollback_id: str
     task_id: str | None = None
     trace_id: str | None = None
@@ -359,7 +343,6 @@ class MemoryEvaluationResponse(BaseModel):
 # ---- Policy ----
 
 class MemoryPolicyUpsert(BaseModel):
-    workspace: Workspace
     policy_type: PolicyType
     config: dict = Field(..., min_length=1)
     status: str = "active"
@@ -368,7 +351,6 @@ class MemoryPolicyUpsert(BaseModel):
 class MemoryPolicyResponse(BaseModel):
     policy_key: str
     policy_type: str
-    workspace: Workspace
     config: dict | None = None
     status: str
     version: int

@@ -13,7 +13,6 @@ from app.schemas.memory import (
     MemorySource,
     MemoryType,
     MemoryWriteRequest,
-    Workspace,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,7 +84,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="rag", trace_id=trace_id),
             memory_type=MemoryType.RAG_USAGE_MEMORY,
             scope=MemoryScope(rag_space_id=rag_space_id),
@@ -111,7 +110,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.GOVERNANCE,
+
             source=MemorySource(kind="human_review", trace_id=trace_id),
             memory_type=MemoryType.GOVERNANCE_MEMORY,
             scope=MemoryScope(),
@@ -140,7 +139,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="user", trace_id=trace_id),
             memory_type=MemoryType.USER_PREFERENCE,
             scope=MemoryScope(),
@@ -167,7 +166,7 @@ class MemoryCandidateService:
         return MemoryWriteRequest(
             org_id=self._org_id,
             user_id=self._user_id,
-            workspace=Workspace.APP,
+
             source=MemorySource(kind="agent_message", trace_id=trace_id, task_id=task_id),
             memory_type=MemoryType.TASK_EPISODE,
             scope=MemoryScope(task_id=task_id),

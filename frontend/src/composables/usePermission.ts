@@ -12,14 +12,6 @@ export function usePermission() {
     return currentRoles.includes(requiredRole);
   }
 
-  function hasWorkspace(workspace: string | string[]): boolean {
-    if (!auth.isAuthed) return false;
-    if (Array.isArray(workspace)) {
-      return workspace.some((item) => auth.workspaces.includes(item));
-    }
-    return auth.workspaces.includes(workspace);
-  }
-
   function hasCapability(capability: string | string[]): boolean {
     if (!auth.isAuthed) return false;
     if (Array.isArray(capability)) {
@@ -28,5 +20,5 @@ export function usePermission() {
     return auth.capabilities.includes(capability);
   }
 
-  return { hasRole, hasWorkspace, hasCapability };
+  return { hasRole, hasCapability };
 }

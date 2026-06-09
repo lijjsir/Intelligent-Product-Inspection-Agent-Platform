@@ -137,7 +137,6 @@ class MemoryService:
             memory_id=memory_id,
             org_id=request.org_id,
             user_id=request.user_id,
-            workspace=request.workspace.value,
             memory_type=request.memory_type.value,
             scope_json=request.scope.model_dump() if request.scope else None,
             content_summary=request.content.summary,
@@ -182,7 +181,6 @@ class MemoryService:
             memory_id=memory_id,
             trace_id=request.trace_id,
             user_id=request.user_id,
-            workspace=request.workspace,
             source_kind=request.source.kind,
         )
 
@@ -194,7 +192,6 @@ class MemoryService:
                     memory_id=memory_id,
                     org_id=request.org_id,
                     user_id=request.user_id or "",
-                    workspace=request.workspace.value,
                     memory_type=request.memory_type.value,
                     status=status.value,
                     summary=request.content.summary,
@@ -214,7 +211,6 @@ class MemoryService:
                     memory_id=memory_id,
                     trace_id=request.trace_id,
                     user_id=request.user_id,
-                    workspace=request.workspace,
                     source_kind=request.source.kind,
                     payload={"qdrant_sync_failed": error},
                 )
@@ -235,7 +231,6 @@ class MemoryService:
             event_type=EventType.MEMORY_WRITE_REJECTED,
             trace_id=request.trace_id,
             user_id=request.user_id,
-            workspace=request.workspace,
             source_kind=request.source.kind if request.source else None,
             payload={"reason": reason},
         )
@@ -255,7 +250,6 @@ class MemoryService:
             memory_id=memory_id,
             org_id=request.org_id,
             user_id=request.user_id,
-            workspace=request.workspace.value,
             memory_type=request.memory_type.value,
             scope_json=request.scope.model_dump() if request.scope else None,
             content_summary=request.content.summary,
@@ -285,7 +279,6 @@ class MemoryService:
             event_type=EventType.MEMORY_CANDIDATE_CREATED,
             memory_id=memory_id,
             trace_id=request.trace_id,
-            workspace=request.workspace,
         )
         return MemoryWriteResponse(
             memory_id=memory_id,
@@ -315,7 +308,6 @@ class MemoryService:
 
         # 2. MySQL: get eligible memories (tenant + scope + status + TTL)
         eligible = await self._item_repo.list_active_by_scope(
-            workspace=request.workspace.value,
             memory_types=memory_types,
             user_id=request.user_id,
             task_id=request.scope_filter.task_id if request.scope_filter else None,
@@ -341,7 +333,6 @@ class MemoryService:
             vector_results = await self._vector.search(
                 query=request.query,
                 org_id=request.org_id,
-                workspace=request.workspace.value,
                 top_k=semantic_top_k,
                 user_id=request.user_id,
                 memory_types=memory_types,
@@ -445,7 +436,6 @@ class MemoryService:
         await self._record_event(
             event_type=EventType.MEMORY_RETRIEVAL_COMPLETED,
             user_id=request.user_id,
-            workspace=request.workspace,
             payload={
                 "query": request.query,
                 "top_k": request.top_k,
@@ -495,7 +485,6 @@ class MemoryService:
             event_id=payload.event_id,
             org_id=payload.org_id,
             user_id=payload.user_id,
-            workspace=payload.workspace.value,
             event_type=payload.event_type.value,
             source_kind=payload.source_kind,
             agent_id=payload.agent_id,
@@ -549,7 +538,6 @@ class MemoryService:
         memory_id: str | None = None,
         trace_id: str | None = None,
         user_id: str | None = None,
-        workspace=None,
         source_kind: str | None = None,
         payload: dict | None = None,
     ) -> None:
@@ -558,7 +546,6 @@ class MemoryService:
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
             org_id=self._org_id,
             user_id=user_id,
-            workspace=workspace.value if hasattr(workspace, 'value') else (workspace or "app"),
             event_type=event_type.value,
             source_kind=source_kind,
             trace_id=trace_id,

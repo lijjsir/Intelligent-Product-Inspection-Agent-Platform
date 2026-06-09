@@ -28,7 +28,6 @@ class AgentManagerService:
             assistant_message_id=str(payload["assistant_message_id"]),
             org_id=str(payload["org_id"]),
             user_id=str(payload["user_id"]),
-            workspace=str(payload.get("workspace") or "app"),
             plan_tier=str(payload.get("plan_tier") or "basic"),
             capabilities=list(payload.get("capabilities") or []),
             query=str(payload.get("query") or ""),

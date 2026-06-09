@@ -57,7 +57,7 @@ async def memory_context_loader(state: MemoryAgentState) -> dict[str, Any]:
     events = list(state.get("memory_events", []))
 
     try:
-        from app.schemas.memory import MemorySearchRequest, Workspace as MemWorkspace
+        from app.schemas.memory import MemorySearchRequest
         from app.services.memory_service import MemoryService
         from app.services.memory_vector_service import MemoryVectorService
         from infra.database.session import get_session
@@ -72,7 +72,6 @@ async def memory_context_loader(state: MemoryAgentState) -> dict[str, Any]:
                 req = MemorySearchRequest(
                     org_id=org_id,
                     user_id=ctx.get("user_id"),
-                    workspace=MemWorkspace.APP,
                     query=query,
                     top_k=5,
                 )
@@ -324,7 +323,6 @@ async def governance_recovery_agent(state: MemoryAgentState) -> dict[str, Any]:
                         root_memory_id=mid or "",
                         operator_id=str(ctx.get("user_id") or "system"),
                         operator_role="admin",
-                        workspace=ctx.get("workspace", "app"),
                         trace_id=ctx.get("trace_id", ""),
                         action=rb_action,
                         target_memory_ids=[mid] if mid else [],

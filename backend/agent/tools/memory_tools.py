@@ -18,7 +18,6 @@ from typing import Any
 async def memory_search(
     query: str,
     org_id: str,
-    workspace: str = "app",
     user_id: str | None = None,
     top_k: int = 5,
     memory_types: list[str] | None = None,
@@ -30,7 +29,6 @@ async def memory_search(
     Args:
         query: Natural language query for semantic search.
         org_id: Tenant identifier.
-        workspace: workspace filter (app/ops/governance).
         user_id: Optional user scoping.
         top_k: Max results to return (capped at 10).
         memory_types: Optional list of memory types to filter.
@@ -42,9 +40,8 @@ async def memory_search(
     if not memory_service:
         return {"items": [], "error": "memory_service_unavailable"}
 
-    from agent.contracts.memory_contracts import MemoryType, ScopeFilter, Workspace, MemorySearchRequest
+    from agent.contracts.memory_contracts import MemoryType, ScopeFilter, MemorySearchRequest
 
-    ws = Workspace(workspace)
     scope = ScopeFilter(
         memory_type=[MemoryType(mt) for mt in memory_types] if memory_types else None,
         task_id=task_id,
@@ -52,7 +49,6 @@ async def memory_search(
     req = MemorySearchRequest(
         org_id=org_id,
         user_id=user_id,
-        workspace=ws,
         query=query,
         scope_filter=scope,
         top_k=min(top_k, 10),
@@ -67,7 +63,6 @@ async def memory_search(
 
 async def memory_write_candidate(
     org_id: str,
-    workspace: str,
     trace_id: str,
     summary: str,
     memory_type: str = "task_episode",
@@ -84,7 +79,6 @@ async def memory_write_candidate(
 
     Args:
         org_id: Tenant identifier.
-        workspace: workspace (app/ops/governance).
         trace_id: Full trace ID for provenance.
         summary: Structured summary text.
         memory_type: One of the frozen memory types.
@@ -108,13 +102,11 @@ async def memory_write_candidate(
         MemorySource,
         MemoryType,
         MemoryWriteRequest,
-        Workspace,
     )
 
     req = MemoryWriteRequest(
         org_id=org_id,
         user_id=user_id,
-        workspace=Workspace(workspace),
         source=MemorySource(kind="tool", task_id=task_id, trace_id=trace_id),
         memory_type=MemoryType(memory_type),
         scope=MemoryScope(task_id=task_id),
@@ -144,7 +136,6 @@ async def memory_report_conflict(
     conflict_description: str,
     org_id: str,
     trace_id: str,
-    workspace: str = "app",
     memory_service: Any = None,
 ) -> dict[str, Any]:
     """Report a conflict between a memory and RAG/standard evidence.
@@ -154,12 +145,11 @@ async def memory_report_conflict(
     if not memory_service:
         return {"status": "error", "warnings": ["memory_service_unavailable"]}
 
-    from agent.contracts.memory_contracts import EventType, MemoryEventPayload, Workspace
+    from agent.contracts.memory_contracts import EventType, MemoryEventPayload
 
     payload = MemoryEventPayload(
         event_id=f"evt_conflict_{trace_id}",
         org_id=org_id,
-        workspace=Workspace(workspace),
         event_type=EventType.MEMORY_CONFLICT_DETECTED,
         trace_id=trace_id,
         memory_id=memory_id,
@@ -172,7 +162,6 @@ async def memory_report_conflict(
 async def memory_build_propagation_graph(
     root_memory_id: str,
     org_id: str,
-    workspace: str = "governance",
     max_depth: int = 4,
     governance_service: Any = None,
 ) -> dict[str, Any]:
@@ -181,7 +170,6 @@ async def memory_build_propagation_graph(
     Args:
         root_memory_id: The contamination root node.
         org_id: Tenant identifier.
-        workspace: Must be governance.
         max_depth: BFS depth limit (1-10).
         governance_service: MemoryGovernanceService instance.
 
@@ -195,7 +183,6 @@ async def memory_build_propagation_graph(
 
     req = MemoryPropagationRequest(
         org_id=org_id,
-        workspace=workspace,
         root_memory_id=root_memory_id,
         max_depth=max_depth,
         include_edge_types=[
@@ -223,7 +210,6 @@ async def memory_apply_rollback(
     action: str = "isolate",
     reason: str = "",
     require_human_review: bool = False,
-    workspace: str = "ops",
     governance_service: Any = None,
 ) -> dict[str, Any]:
     """Execute a rollback action on contaminated memories.
@@ -237,7 +223,6 @@ async def memory_apply_rollback(
         action: delete / degrade / isolate / patch.
         reason: Justification for the rollback.
         require_human_review: If True, rollback enters pending review state.
-        workspace: Must be ops or governance.
         governance_service: MemoryGovernanceService instance.
 
     Returns:
@@ -246,19 +231,17 @@ async def memory_apply_rollback(
     if not governance_service:
         return {"error": "governance_service_unavailable"}
 
-    from app.schemas.memory import RollbackAction, Workspace
+    from app.schemas.memory import RollbackAction
 
     rollback_action = RollbackAction(action)
     if rollback_action == RollbackAction.BRANCH:
         return {"error": "unsupported_rollback_action", "message": "BRANCH rollback is not supported"}
 
-    workspace_value = Workspace(workspace).value
     rollback_svc = governance_service
     resp = await rollback_svc.plan_rollback(
         root_memory_id=root_memory_id,
         operator_id=operator_id,
         operator_role="agent",
-        workspace=workspace_value,
         trace_id=trace_id,
         action=rollback_action,
         target_memory_ids=target_memory_ids,
@@ -271,7 +254,6 @@ async def memory_apply_rollback(
 async def memory_replay_evaluation(
     rollback_id: str,
     org_id: str,
-    workspace: str = "governance",
     task_id: str | None = None,
     trace_id: str | None = None,
     scenario: str | None = None,
@@ -282,7 +264,6 @@ async def memory_replay_evaluation(
     Args:
         rollback_id: The rollback to evaluate.
         org_id: Tenant identifier.
-        workspace: Must be governance.
         task_id: Optional task to replay.
         trace_id: Audit trace ID.
         scenario: Contamination scenario label.
