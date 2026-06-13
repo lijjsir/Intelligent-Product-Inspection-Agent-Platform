@@ -91,6 +91,7 @@ class ModelConfigService(TenantAwareService):
 
     @classmethod
     def to_runtime_payload(cls, model) -> dict[str, Any]:
+        api_key = cls.decrypt_api_key(model.api_key_enc) if getattr(model, "api_key_enc", None) else None
         return {
             "id": model.id,
             "org_id": model.org_id,
@@ -117,5 +118,5 @@ class ModelConfigService(TenantAwareService):
             "is_active": getattr(model, "is_active", True),
             "health_status": getattr(model, "health_status", "unknown"),
             "health_message": getattr(model, "health_message", None),
-            "api_key": cls.decrypt_api_key(model.api_key_enc) if getattr(model, "api_key_enc", None) else None,
+            "api_key": api_key,
         }

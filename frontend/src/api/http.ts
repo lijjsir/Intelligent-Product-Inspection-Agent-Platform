@@ -5,15 +5,27 @@ const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 let handlingAuthFailure = false;
 
 export interface ApiEnvelope<T> {
+  success?: boolean;
   code: string | number;
   message: string;
   data: T;
+  trace_id?: string;
+  warnings?: Array<string | Record<string, unknown>>;
   meta?: {
     page?: number;
     page_size?: number;
     total?: number;
     request_id?: string;
   };
+}
+
+export interface ApiErrorDetail {
+  code: string;
+  message: string;
+  detail?: unknown;
+  module?: string;
+  trace_id?: string;
+  suggestion?: string;
 }
 
 export interface ApiRequestConfig extends AxiosRequestConfig {
@@ -27,6 +39,51 @@ const instance: AxiosInstance = axios.create({
 
 function isTimeoutError(error: unknown): boolean {
   return axios.isAxiosError(error) && (error.code === "ECONNABORTED" || /timeout/i.test(String(error.message || "")));
+}
+
+export function extractApiErrorMessage(error: unknown, fallback = "请求失败"): string {
+  return extractApiErrorDetail(error, fallback).message;
+}
+
+export function extractApiErrorDetail(error: unknown, fallback = "请求失败"): ApiErrorDetail {
+  if (!axios.isAxiosError(error)) return { code: "UNKNOWN_ERROR", message: fallback };
+  const data = error.response?.data as any;
+  const envelopeError = data?.error;
+  if (envelopeError && typeof envelopeError === "object") {
+    return {
+      code: String(envelopeError.code || data?.code || "UNKNOWN_ERROR"),
+      message: String(envelopeError.message || data?.message || fallback),
+      detail: envelopeError.detail,
+      module: envelopeError.module,
+      trace_id: envelopeError.trace_id || data?.trace_id,
+      suggestion: envelopeError.suggestion,
+    };
+  }
+  const detail = data?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return { code: "UNKNOWN_ERROR", message: detail };
+  }
+  if (detail && typeof detail === "object") {
+    return {
+      code: String(detail.code || detail.error_code || data?.code || "UNKNOWN_ERROR"),
+      message: String(detail.message || fallback),
+      detail: detail.detail,
+      module: detail.module,
+      trace_id: detail.trace_id || data?.trace_id,
+      suggestion: detail.suggestion,
+    };
+  }
+  if (typeof data?.message === "string" && data.message.trim()) {
+    return {
+      code: String(data?.code || "UNKNOWN_ERROR"),
+      message: data.message,
+      trace_id: data?.trace_id,
+    };
+  }
+  if (typeof error.message === "string" && error.message.trim()) {
+    return { code: String(error.code || "UNKNOWN_ERROR"), message: error.message };
+  }
+  return { code: "UNKNOWN_ERROR", message: fallback };
 }
 
 instance.interceptors.request.use((config: any) => {
@@ -86,7 +143,7 @@ instance.interceptors.response.use(
   (response: any) => response,
   (error: any) => {
     const response = error.response;
-    const serverMessage = response?.data?.message;
+    const serverMessage = extractApiErrorMessage(error);
     const requestUrl = String(error?.config?.url || "");
     const isLoginTokenRequest = requestUrl.includes("/v1/auth/token");
     const suppressToast = Boolean((error?.config as ApiRequestConfig | undefined)?.suppressErrorToast);

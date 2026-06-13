@@ -17,6 +17,7 @@ celery_app.conf.imports = (
     "worker.tasks.langfuse_sync_task",
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
+    "worker.tasks.memory_sync_outbox_task",
 )
 
 celery_app.conf.beat_schedule = {
@@ -43,6 +44,7 @@ from worker.tasks import (  # noqa: E402,F401
     health_check_task,
     inspection_task,
     langfuse_sync_task,
+    memory_sync_outbox_task,
     report_generate_task,
     stability_task,
 )

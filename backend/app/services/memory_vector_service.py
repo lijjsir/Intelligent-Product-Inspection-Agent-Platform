@@ -6,6 +6,7 @@ Qdrant stores only the semantic index + payload filters; MySQL is the fact sourc
 from __future__ import annotations
 
 import httpx
+import uuid
 from typing import Callable, Awaitable
 
 from agent.llm.base_url_resolver import resolve_runtime_service_url
@@ -64,6 +65,15 @@ class MemoryVectorService:
                 f"Embedding generation failed: {exc}"
             ) from exc
 
+    @staticmethod
+    def _point_id(memory_id: str) -> str:
+        """Qdrant point IDs must be UUIDs or unsigned integers."""
+        raw = str(memory_id or "").strip()
+        try:
+            return str(uuid.UUID(raw))
+        except ValueError:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"piap-memory:{raw}"))
+
     async def ensure_collection(self, vector_size: int = 1536) -> None:
         """Create the shared memory collection if it does not exist."""
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -73,6 +83,13 @@ class MemoryVectorService:
             )
             if resp.status_code == 200:
                 return
+            if resp.status_code != 404:
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise MemoryVectorServiceError(
+                        f"Qdrant collection check failed: {exc.response.text}"
+                    ) from exc
 
             create_resp = await client.put(
                 f"{self._qdrant_url}/collections/{self._collection}",
@@ -84,7 +101,12 @@ class MemoryVectorService:
                 },
                 headers=self._headers,
             )
-            create_resp.raise_for_status()
+            try:
+                create_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant collection create failed: {exc.response.text}"
+                ) from exc
 
     async def upsert_memory(
         self,
@@ -106,7 +128,10 @@ class MemoryVectorService:
         if vector is None:
             vector = await self._embed(summary)
 
+        await self.ensure_collection(vector_size=len(vector))
+
         payload = {
+            "memory_id": memory_id,
             "org_id": org_id,
             "user_id": user_id,
             "memory_type": memory_type,
@@ -125,7 +150,7 @@ class MemoryVectorService:
                 json={
                     "points": [
                         {
-                            "id": memory_id,
+                            "id": self._point_id(memory_id),
                             "vector": vector,
                             "payload": payload,
                         }
@@ -133,7 +158,12 @@ class MemoryVectorService:
                 },
                 headers=self._headers,
             )
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant memory upsert failed: {exc.response.text}"
+                ) from exc
 
     async def search(
         self,
@@ -156,14 +186,11 @@ class MemoryVectorService:
             {"key": "status", "match": {"value": status}},
         ]
 
-        if user_id:
-            must_clauses.append({"key": "user_id", "match": {"value": user_id}})
-
         if memory_types:
-            should_clauses = [
-                {"key": "memory_type", "match": {"value": mt}} for mt in memory_types
-            ]
-            must_clauses.append({"should": should_clauses})
+            if len(memory_types) == 1:
+                must_clauses.append({"key": "memory_type", "match": {"value": memory_types[0]}})
+            else:
+                must_clauses.append({"key": "memory_type", "match": {"any": memory_types}})
 
         if product_line:
             must_clauses.append({"key": "product_line", "match": {"value": product_line}})
@@ -174,7 +201,13 @@ class MemoryVectorService:
         if task_id:
             must_clauses.append({"key": "task_id", "match": {"value": task_id}})
 
-        qdrant_filter = {"must": must_clauses}
+        qdrant_filter: dict = {"must": must_clauses}
+        if user_id:
+            qdrant_filter["should"] = [
+                {"key": "user_id", "match": {"value": user_id}},
+                {"key": "user_id", "match": {"value": ""}},
+            ]
+            qdrant_filter["minimum_should_match"] = 1
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
@@ -187,15 +220,21 @@ class MemoryVectorService:
                 },
                 headers=self._headers,
             )
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant memory search failed: {exc.response.text}"
+                ) from exc
             data = resp.json()
 
         results: list[dict] = []
         for point in data.get("result", []):
+            payload = point.get("payload", {}) or {}
             results.append({
-                "memory_id": point.get("id"),
+                "memory_id": payload.get("memory_id") or point.get("id"),
                 "score": point.get("score", 0.0),
-                "payload": point.get("payload", {}),
+                "payload": payload,
             })
         return results
 
@@ -204,10 +243,17 @@ class MemoryVectorService:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.delete(
                 f"{self._qdrant_url}/collections/{self._collection}/points",
-                json={"points": [memory_id]},
+                json={"points": [self._point_id(memory_id)]},
                 headers=self._headers,
             )
-            resp.raise_for_status()
+            if resp.status_code == 404:
+                return
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant memory delete failed: {exc.response.text}"
+                ) from exc
 
     async def delete_by_org(self, org_id: str) -> None:
         """Delete all memory points for an org."""
@@ -223,4 +269,9 @@ class MemoryVectorService:
                 },
                 headers=self._headers,
             )
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant org memory delete failed: {exc.response.text}"
+                ) from exc

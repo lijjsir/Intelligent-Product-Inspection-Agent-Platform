@@ -618,55 +618,50 @@ class ChatService:
                     ],
                 }
             )
-            # After successful orchestration, attempt low-risk candidate memory extraction
-            try:
-                from app.services.memory_candidate_service import MemoryCandidateService
-                from app.services.memory_service import MemoryService
-                from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+            # After successful orchestration, extract and persist reusable candidate memories.
+            from app.services.memory_extraction_service import MemoryExtractionService
+            from app.services.memory_service import MemoryService
+            from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
 
-                agent_output = result.get("agent_output", {})
-                answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
-                task_id = str(
-                    ext_payload.get("selected_inspection_task_ids", [None])[0]
-                ) if ext_payload.get("selected_inspection_task_ids") else None
+            agent_output = result.get("agent_output", {})
+            answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
+            task_id = str(
+                ext_payload.get("selected_inspection_task_ids", [None])[0]
+            ) if ext_payload.get("selected_inspection_task_ids") else None
 
-                candidate_svc = MemoryCandidateService(
-                    org_id=self._org_id,
-                    user_id=self._user_id,
-                )
-                candidates = await candidate_svc.extract_from_chat_result(
-                    trace_id=workflow_run_id,
-                    user_message=request.message.strip(),
-                    assistant_answer=answer_text,
-                    task_id=task_id,
-                    short_term_memory=ext_payload.get("short_term_memory"),
-                )
-                if candidates:
-                    async with get_session() as mem_session:
-                        vector_svc = MemoryVectorService(
-                            embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
-                            org_id=self._org_id,
-                            user_id=self._user_id,
-                        )
-                        candidate_vector_svc = MemoryVectorService(
-                            collection=CANDIDATE_MEMORY_COLLECTION,
-                            embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
-                            org_id=self._org_id,
-                            user_id=self._user_id,
-                        )
-                        memory_svc = MemoryService(
-                            mem_session,
-                            self._org_id,
-                            vector_service=vector_svc,
-                            candidate_vector_service=candidate_vector_svc,
-                        )
-                        for candidate in candidates:
-                            try:
-                                await memory_svc.write_candidate(candidate)
-                            except Exception:
-                                logger.debug("Candidate memory write skipped", exc_info=True)
-            except Exception:
-                logger.debug("Memory candidate extraction skipped", exc_info=True)
+            extraction_svc = MemoryExtractionService(
+                org_id=self._org_id,
+                user_id=self._user_id,
+            )
+            candidates = await extraction_svc.extract_from_chat_result(
+                trace_id=workflow_run_id,
+                user_message=request.message.strip(),
+                assistant_answer=answer_text,
+                task_id=task_id,
+                short_term_memory=ext_payload.get("short_term_memory"),
+            )
+            if candidates:
+                async with get_session() as mem_session:
+                    vector_svc = MemoryVectorService(
+                        embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                        org_id=self._org_id,
+                        user_id=self._user_id,
+                    )
+                    candidate_vector_svc = MemoryVectorService(
+                        collection=CANDIDATE_MEMORY_COLLECTION,
+                        embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                        org_id=self._org_id,
+                        user_id=self._user_id,
+                    )
+                    memory_svc = MemoryService(
+                        mem_session,
+                        self._org_id,
+                        vector_service=vector_svc,
+                        candidate_vector_service=candidate_vector_svc,
+                    )
+                    for candidate in candidates:
+                        await memory_svc.write_candidate(candidate)
+                    await mem_session.commit()
 
             # Trigger session summarization
             try:

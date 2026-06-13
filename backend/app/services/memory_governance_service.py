@@ -263,6 +263,23 @@ class MemoryRollbackService:
                 approval_id=approval_id,
             )
 
+        rollback_record = MemoryRollback(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            rollback_id=rollback_id,
+            root_memory_id=root_memory_id,
+            operator_id=operator_id,
+            rollback_action=action.value,
+            target_memory_ids=target_memory_ids,
+            propagation_graph_json=propagation_graph,
+            reason=reason,
+            require_human_review=False,
+            review_status=ReviewStatus.NOT_REQUIRED.value,
+            trace_id=trace_id,
+            execution_status="planned",
+        )
+        await self._rollback_repo.create(rollback_record)
+
         # No review needed — execute immediately
         return await self._apply_rollback(
             rollback_id=rollback_id,
@@ -273,6 +290,7 @@ class MemoryRollbackService:
             target_memory_ids=target_memory_ids,
             reason=reason,
             propagation_graph=propagation_graph,
+            final_review_status=ReviewStatus.NOT_REQUIRED,
         )
 
     async def apply_rollback(self, rollback_id: str) -> MemoryRollbackResponse:
@@ -304,79 +322,77 @@ class MemoryRollbackService:
         target_memory_ids: list[str],
         reason: str,
         propagation_graph: dict | None = None,
+        final_review_status: ReviewStatus = ReviewStatus.APPROVED,
     ) -> MemoryRollbackResponse:
         """Internal: execute the actual rollback actions."""
         if action == RollbackAction.BRANCH:
             raise ValueError("BRANCH rollback is not supported")
 
-        before_snapshot = await self._snapshot(target_memory_ids)
+        try:
+            before_snapshot = await self._snapshot(target_memory_ids)
 
-        affected = 0
-        for mid in target_memory_ids:
-            memory = await self._item_repo.get_by_memory_id(mid)
-            if not memory:
-                continue
+            affected = 0
+            for mid in target_memory_ids:
+                memory = await self._item_repo.get_by_memory_id(mid)
+                if not memory:
+                    continue
 
-            if action == RollbackAction.DELETE:
-                await self._item_repo.update_status(mid, MemoryStatus.DELETED.value)
-                if self._vector:
-                    try:
+                if action == RollbackAction.DELETE:
+                    await self._item_repo.update_status(mid, MemoryStatus.DELETED.value)
+                    if self._vector:
                         await self._vector.delete_memory(mid)
-                    except Exception:
-                        pass
-                await self._dep_repo.soft_delete_by_memory(mid)
-                affected += 1
+                    await self._dep_repo.soft_delete_by_memory(mid)
+                    affected += 1
 
-            elif action == RollbackAction.DEGRADE:
-                new_score = (float(memory.trust_score) if memory.trust_score else 0.5) * 0.5
-                await self._item_repo.update_trust_score(mid, new_score)
-                affected += 1
+                elif action == RollbackAction.DEGRADE:
+                    new_score = (float(memory.trust_score) if memory.trust_score else 0.5) * 0.5
+                    await self._item_repo.update_trust_score(mid, new_score)
+                    affected += 1
 
-            elif action == RollbackAction.ISOLATE:
-                await self._item_repo.update_status(mid, MemoryStatus.ISOLATED.value)
-                if self._vector:
-                    try:
+                elif action == RollbackAction.ISOLATE:
+                    await self._item_repo.update_status(mid, MemoryStatus.ISOLATED.value)
+                    if self._vector:
                         await self._vector.delete_memory(mid)
-                    except Exception:
-                        pass
-                affected += 1
+                    affected += 1
 
-            elif action == RollbackAction.PATCH:
-                await self._apply_patch(mid, propagation_graph=propagation_graph, trace_id=trace_id)
-                affected += 1
+                elif action == RollbackAction.PATCH:
+                    await self._apply_patch(mid, propagation_graph=propagation_graph, trace_id=trace_id)
+                    affected += 1
 
-        after_snapshot = await self._snapshot(target_memory_ids)
+            after_snapshot = await self._snapshot(target_memory_ids)
 
-        # Update rollback record
-        await self._rollback_repo.update_review_status(rollback_id, ReviewStatus.APPROVED.value)
+            await self._rollback_repo.update_review_status(rollback_id, final_review_status.value)
+            await self._rollback_repo.update_execution_status(rollback_id, "applied")
 
-        # Record event
-        from app.models.memory import MemoryEvent
-        event = MemoryEvent(
-            id=str(uuid7()),
-            event_id=f"evt_{uuid.uuid4().hex[:12]}",
-            org_id=self._org_id,
-            event_type="memory.rollback_applied",
-            trace_id=trace_id,
-            memory_id=root_memory_id,
-            payload_json={
-                "rollback_id": rollback_id,
-                "action": action.value,
-                "targets": target_memory_ids,
-                "reason": reason,
-            },
-        )
-        await self._event_repo.create(event)
+            from app.models.memory import MemoryEvent
+            event = MemoryEvent(
+                id=str(uuid7()),
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                org_id=self._org_id,
+                event_type="memory.rollback_applied",
+                trace_id=trace_id,
+                memory_id=root_memory_id,
+                payload_json={
+                    "rollback_id": rollback_id,
+                    "action": action.value,
+                    "targets": target_memory_ids,
+                    "reason": reason,
+                },
+            )
+            await self._event_repo.create(event)
 
-        return MemoryRollbackResponse(
-            rollback_id=rollback_id,
-            root_memory_id=root_memory_id,
-            action=action,
-            affected_count=affected,
-            review_status=ReviewStatus.APPROVED,
-            before_snapshot=before_snapshot,
-            after_snapshot=after_snapshot,
-        )
+            return MemoryRollbackResponse(
+                rollback_id=rollback_id,
+                root_memory_id=root_memory_id,
+                action=action,
+                affected_count=affected,
+                review_status=final_review_status,
+                before_snapshot=before_snapshot,
+                after_snapshot=after_snapshot,
+            )
+        except Exception as exc:
+            await self._rollback_repo.update_execution_status(rollback_id, "failed", str(exc))
+            raise
 
     async def _apply_patch(
         self,
@@ -470,8 +486,8 @@ class MemoryRollbackService:
             if mem:
                 snapshot[mid] = {
                     "status": mem.status,
-                    "trust_score": float(mem.trust_score) if mem.trust_score else None,
-                    "confidence": float(mem.confidence) if mem.confidence else None,
+                    "trust_score": float(mem.trust_score) if getattr(mem, "trust_score", None) is not None else None,
+                    "confidence": float(mem.confidence) if getattr(mem, "confidence", None) is not None else None,
                 }
         return snapshot
 

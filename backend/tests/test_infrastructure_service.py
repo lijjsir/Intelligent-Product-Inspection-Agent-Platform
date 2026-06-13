@@ -81,3 +81,57 @@ async def test_infrastructure_service_reports_actionable_qdrant_connect_error(mo
     assert result.status == "unhealthy"
     assert "http://127.0.0.1:6333" in result.detail
     assert "127.0.0.1:63330" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_service_marks_missing_qdrant_collection_unhealthy(monkeypatch):
+    service = InfrastructureService(FakeSession())
+
+    class FakeResponse:
+        status_code = 404
+
+        def raise_for_status(self):
+            raise AssertionError("404 collection should be handled explicitly")
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.infrastructure_service.httpx.AsyncClient", FakeClient)
+
+    result = await service._check_qdrant()
+
+    assert result.status == "unhealthy"
+    assert "collection_missing" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_service_reports_missing_minio_bucket(monkeypatch):
+    service = InfrastructureService(FakeSession())
+
+    class FakeStorage:
+        def __init__(self):
+            self.ensured = False
+
+        def bucket_exists(self, bucket):
+            assert bucket == "piap"
+            return False
+
+    storage = FakeStorage()
+    monkeypatch.setattr("app.services.infrastructure_service.settings.object_storage_backend", "minio")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.s3_bucket", "piap")
+    monkeypatch.setattr("app.services.infrastructure_service.build_object_storage", lambda: storage)
+
+    result = await service._check_object_storage()
+
+    assert result.status == "unhealthy"
+    assert result.detail == "bucket=piap, exists=False, error=bucket_missing"

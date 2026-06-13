@@ -10,6 +10,7 @@ import logging
 import hashlib
 from datetime import datetime, timedelta, timezone
 
+from app.core.config import settings
 from app.core.ids import uuid7
 from app.models.memory import (
     MemoryCandidateSupport,
@@ -44,6 +45,8 @@ from app.schemas.memory import (
     EdgeType,
 )
 from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
+from app.services.memory_graph_factory import build_memory_graph_store
+from app.services.memory_graph_store import MemoryGraphEdge, MemoryGraphNode, MemoryGraphStore
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,14 @@ class MemoryService:
         self._policy_repo = MemoryPolicyRepository(session, org_id)
         self._vector = vector_service
         self._candidate_vector = candidate_vector_service
+        self._graph: MemoryGraphStore | None = None
+        if session is not None:
+            try:
+                self._graph = build_memory_graph_store(session, org_id)
+            except Exception as exc:
+                if settings.neo4j_enabled:
+                    raise RuntimeError(f"Memory graph store initialization failed: {exc}") from exc
+                logger.debug("Memory graph store initialization skipped", exc_info=True)
 
     # ------------------------------------------------------------------
     # Write Gate
@@ -96,6 +107,7 @@ class MemoryService:
         in the candidate state first.
         """
         warnings: list[str] = []
+        candidate_warnings: list[str] = []
 
         # 1. Reject missing required fields
         if not request.trace_id:
@@ -113,6 +125,16 @@ class MemoryService:
 
         if not request.scope:
             return await self._reject(request, "missing scope")
+
+        prewrite_conflict = self._prewrite_conflict_result(request.content.warnings)
+        if prewrite_conflict:
+            severity, reason = prewrite_conflict
+            if severity == "high":
+                return await self._reject(request, "prewrite_conflict_rejected")
+            if severity == "medium":
+                warnings.append(f"prewrite_conflict_contested:{reason}")
+            else:
+                candidate_warnings.append(f"prewrite_conflict_candidate:{reason}")
 
         # 3. Load policy for write gate metadata
         policy = await self._resolve_policy("write_gate")
@@ -138,7 +160,7 @@ class MemoryService:
                 status=MemoryStatus(existing.status),
                 trust_score=float(existing.trust_score) if existing.trust_score is not None else None,
                 confidence=float(existing.confidence) if existing.confidence is not None else None,
-                warnings=["idempotent_replay"],
+                warnings=["idempotent_replay", *candidate_warnings],
                 policy_key=existing.policy_key or "write_gate",
                 policy_version=existing.policy_version or str(policy.get("version", "default:v1")),
             )
@@ -159,7 +181,7 @@ class MemoryService:
                 status=status,
                 trust_score=float(getattr(matched, "trust_score", 0) or 0),
                 confidence=float(getattr(matched, "confidence", 0) or 0),
-                warnings=warnings,
+                warnings=[*warnings, *candidate_warnings],
                 policy_key=matched.policy_key or "write_gate",
                 policy_version=matched.policy_version or str(policy.get("version", "default:v1")),
             )
@@ -178,7 +200,7 @@ class MemoryService:
                     status=MemoryStatus.CONTESTED,
                     trust_score=float(getattr(matched, "trust_score", 0) or 0),
                     confidence=float(getattr(matched, "confidence", 0) or 0),
-                    warnings=[f"candidate_slot_conflict:{','.join(conflict_keys)}"],
+                    warnings=[f"candidate_slot_conflict:{','.join(conflict_keys)}", *candidate_warnings],
                     policy_key=matched.policy_key or "write_gate",
                     policy_version=matched.policy_version or str(policy.get("version", "default:v1")),
                 )
@@ -210,7 +232,7 @@ class MemoryService:
                 status=evaluation.status,
                 trust_score=float(getattr(current or matched, "trust_score", 0) or 0),
                 confidence=float(getattr(current or matched, "confidence", 0) or 0),
-                warnings=warnings,
+                warnings=[*warnings, *candidate_warnings],
                 policy_key=matched.policy_key or "write_gate",
                 policy_version=matched.policy_version or str(policy.get("version", "default:v1")),
             )
@@ -268,6 +290,7 @@ class MemoryService:
             access_count=0,
         )
         await self._item_repo.create(item)
+        await self._sync_graph_memory_node(item)
 
         # 8. Record event
         await self._record_event(
@@ -299,7 +322,7 @@ class MemoryService:
                 status=MemoryStatus.CONTESTED,
                 trust_score=trust_score,
                 confidence=request.confidence,
-                warnings=warnings,
+                warnings=[*warnings, *candidate_warnings],
                 policy_key="write_gate",
                 policy_version=str(policy.get("version", "default:v1")),
             )
@@ -307,18 +330,31 @@ class MemoryService:
         evaluation = await self.evaluate_candidate_promotion(memory_id)
         memory = await self._item_repo.get_by_memory_id(memory_id)
         warnings.extend(evaluation.blocked_reasons if evaluation.status == MemoryStatus.CONTESTED else [])
-        if memory and getattr(memory, "index_status", None) == "failed" and getattr(memory, "index_error", None):
-            warnings.append("qdrant_sync_failed")
 
         return MemoryWriteResponse(
             memory_id=memory_id,
             status=evaluation.status,
             trust_score=float(getattr(memory, "trust_score", trust_score) or trust_score),
             confidence=request.confidence,
-            warnings=warnings,
+            warnings=[*warnings, *candidate_warnings],
             policy_key="write_gate",
             policy_version=str(policy.get("version", "default:v1")),
         )
+
+    @staticmethod
+    def _prewrite_conflict_result(raw_warnings: list[str]) -> tuple[str, str] | None:
+        for warning in raw_warnings:
+            text = str(warning or "").strip()
+            marker = "prewrite_conflict:"
+            if not text.lower().startswith(marker):
+                continue
+            _, _, tail = text.partition(":")
+            severity, _, reason = tail.partition(":")
+            severity = severity.strip().lower()
+            if severity not in {"low", "medium", "high"}:
+                severity = "medium"
+            return severity, reason.strip() or "prewrite conflict detected"
+        return None
 
     @staticmethod
     def _make_idempotency_key(request: MemoryWriteRequest) -> str:
@@ -479,6 +515,7 @@ class MemoryService:
                 "rag_space_id": support.rag_space_id,
             },
         )
+        await self._sync_graph_support_relations(memory, support)
 
         if evaluate:
             return await self.evaluate_candidate_promotion(memory_id)
@@ -718,15 +755,19 @@ class MemoryService:
             trust_score=trust_score,
         )
         await self._item_repo.update_status(memory_id, MemoryStatus.ACTIVE.value)
+        await self._sync_graph_memory_node(
+            memory,
+            status=MemoryStatus.ACTIVE.value,
+            trust_score=trust_score,
+        )
 
-        warnings: list[str] = []
         try:
             await self._upsert_active_vector(memory, trust_score=trust_score)
             await self._item_repo.update_index_status(memory_id, "success")
         except Exception as exc:
             error = str(exc)
             await self._item_repo.update_index_status(memory_id, "failed", error)
-            warnings.append("qdrant_sync_failed")
+            raise MemoryVectorServiceError(f"Active memory vector sync failed: {error}") from exc
 
         await self._delete_candidate_vector(memory_id)
         await self._record_event(
@@ -740,7 +781,7 @@ class MemoryService:
                 "promotion_score": promotion_score,
             },
         )
-        return warnings
+        return []
 
     def _support_from_request(
         self,
@@ -809,18 +850,14 @@ class MemoryService:
         if not self._candidate_vector:
             return None
 
-        try:
-            vector_results = await self._candidate_vector.search(
-                query=request.content.summary,
-                org_id=request.org_id,
-                top_k=8,
-                status=MemoryStatus.CANDIDATE.value,
-                user_id=request.user_id,
-                memory_types=[request.memory_type.value],
-            )
-        except Exception:
-            logger.debug("Candidate semantic match skipped", exc_info=True)
-            return None
+        vector_results = await self._candidate_vector.search(
+            query=request.content.summary,
+            org_id=request.org_id,
+            top_k=8,
+            status=MemoryStatus.CANDIDATE.value,
+            user_id=request.user_id,
+            memory_types=[request.memory_type.value],
+        )
 
         incoming_scope = request.scope.model_dump(exclude_none=True) if request.scope else {}
         for result in vector_results:
@@ -875,23 +912,20 @@ class MemoryService:
         if not self._candidate_vector:
             return
         scope = MemoryScope.model_validate(memory.scope_json or {})
-        try:
-            await self._candidate_vector.upsert_memory(
-                memory_id=memory.memory_id,
-                org_id=self._org_id,
-                user_id=str(memory.user_id or ""),
-                memory_type=memory.memory_type,
-                status=MemoryStatus.CANDIDATE.value,
-                summary=memory.content_summary or "",
-                trust_score=float(memory.trust_score or 0),
-                confidence=float(memory.confidence or 0),
-                expires_at=memory.expires_at.isoformat() if memory.expires_at else "",
-                product_line=scope.product_line or "",
-                rag_space_id=scope.rag_space_id or "",
-                task_id=scope.task_id or "",
-            )
-        except Exception:
-            logger.debug("Candidate vector upsert skipped", exc_info=True)
+        await self._candidate_vector.upsert_memory(
+            memory_id=memory.memory_id,
+            org_id=self._org_id,
+            user_id=str(memory.user_id or ""),
+            memory_type=memory.memory_type,
+            status=MemoryStatus.CANDIDATE.value,
+            summary=memory.content_summary or "",
+            trust_score=float(memory.trust_score or 0),
+            confidence=float(memory.confidence or 0),
+            expires_at=memory.expires_at.isoformat() if memory.expires_at else "",
+            product_line=scope.product_line or "",
+            rag_space_id=scope.rag_space_id or "",
+            task_id=scope.task_id or "",
+        )
 
     async def _upsert_active_vector(self, memory: MemoryItem, *, trust_score: float) -> None:
         if not self._vector:
@@ -915,10 +949,7 @@ class MemoryService:
     async def _delete_candidate_vector(self, memory_id: str) -> None:
         if not self._candidate_vector:
             return
-        try:
-            await self._candidate_vector.delete_memory(memory_id)
-        except Exception:
-            logger.debug("Candidate vector delete skipped", exc_info=True)
+        await self._candidate_vector.delete_memory(memory_id)
 
     @staticmethod
     def _to_candidate_item(item: MemoryItem) -> CandidateListItem:
@@ -976,6 +1007,15 @@ class MemoryService:
                     "reason": "new memory version replaces parent memory",
                 },
             )
+            await self._sync_graph_memory_edge(
+                source_memory_id=memory_id,
+                target_memory_id=request.version_parent_id,
+                edge_type=EdgeType.VERSION_OF.value,
+                strength=1.0,
+                trace_id=request.trace_id,
+                reason="new memory version replaces parent memory",
+                metadata_json=base_metadata,
+            )
 
         # 2. evidence_pointers.memory_ids -> cited_as_evidence
         for target_id in self._extract_evidence_memory_ids(request.evidence_pointers):
@@ -988,6 +1028,15 @@ class MemoryService:
                     **base_metadata,
                     "reason": "target memory cited as evidence",
                 },
+            )
+            await self._sync_graph_memory_edge(
+                source_memory_id=memory_id,
+                target_memory_id=target_id,
+                edge_type=EdgeType.CITED_AS_EVIDENCE.value,
+                strength=0.9,
+                trace_id=request.trace_id,
+                reason="target memory cited as evidence",
+                metadata_json=base_metadata,
             )
 
         # 3. explicit dependency_edges from request
@@ -1005,6 +1054,15 @@ class MemoryService:
                     "reason": dep.reason,
                     "extra": dep.metadata,
                 },
+            )
+            await self._sync_graph_memory_edge(
+                source_memory_id=memory_id,
+                target_memory_id=dep.target_memory_id,
+                edge_type=dep.edge_type.value,
+                strength=dep.strength,
+                trace_id=request.trace_id,
+                reason=dep.reason,
+                metadata_json={**base_metadata, "extra": dep.metadata},
             )
 
     @staticmethod
@@ -1063,44 +1121,35 @@ class MemoryService:
             raise MemoryVectorServiceError("vector service is required for shared memory search")
 
         items: list[MemorySearchItem] = []
-        if self._vector:
-            semantic_top_k = min(effective_top_k * 10, 100)
-            try:
-                vector_results = await self._vector.search(
-                    query=request.query,
-                    org_id=request.org_id,
-                    top_k=semantic_top_k,
-                    user_id=request.user_id,
-                    memory_types=memory_types,
-                    product_line=request.scope_filter.product_line if request.scope_filter else None,
-                    rag_space_id=request.scope_filter.rag_space_id if request.scope_filter else None,
-                    task_id=request.scope_filter.task_id if request.scope_filter else None,
+        semantic_top_k = min(effective_top_k * 10, 100)
+        vector_results = await self._vector.search(
+            query=request.query,
+            org_id=request.org_id,
+            top_k=semantic_top_k,
+            user_id=request.user_id,
+            memory_types=memory_types,
+            product_line=request.scope_filter.product_line if request.scope_filter else None,
+            rag_space_id=request.scope_filter.rag_space_id if request.scope_filter else None,
+            task_id=request.scope_filter.task_id if request.scope_filter else None,
+        )
+        # Cross-reference with eligible memories from MySQL.
+        eligible_ids = {m.memory_id for m in eligible}
+        for vr in vector_results:
+            if vr.get("memory_id") in eligible_ids:
+                match = next(
+                    (m for m in eligible if m.memory_id == vr.get("memory_id")),
+                    None,
                 )
-                # Cross-reference with eligible memories from MySQL
-                eligible_ids = {m.memory_id for m in eligible}
-                for vr in vector_results:
-                    if vr.get("memory_id") in eligible_ids:
-                        match = next(
-                            (m for m in eligible if m.memory_id == vr.get("memory_id")),
-                            None,
-                        )
-                        if match:
-                            items.append(self._to_search_item(match, vr.get("score", 0.0)))
-                # Rerank: vector_score * 0.55 + trust_score * 0.30 + confidence * 0.15
-                items.sort(
-                    key=lambda x: (x.score or 0) * 0.55
-                    + (x.trust_score or 0) * 0.30
-                    + (x.confidence or 0) * 0.15,
-                    reverse=True,
-                )
-                items = items[:effective_top_k]
-            except MemoryVectorServiceError:
-                logger.debug("Memory vector search failed; falling back to MySQL text search", exc_info=True)
-                items = self._fallback_search(eligible, request.query, request.top_k)
-                for item in items:
-                    item.warnings.append("vector_search_failed_fallback")
-        else:
-            items = self._fallback_search(eligible, request.query, request.top_k)
+                if match:
+                    items.append(self._to_search_item(match, vr.get("score", 0.0)))
+        # Rerank: vector_score * 0.55 + trust_score * 0.30 + confidence * 0.15.
+        items.sort(
+            key=lambda x: (x.score or 0) * 0.55
+            + (x.trust_score or 0) * 0.30
+            + (x.confidence or 0) * 0.15,
+            reverse=True,
+        )
+        items = items[:effective_top_k]
 
         # 2a. Existing conflict edges let us avoid repeated LLM conflict checks.
         conflict_info: dict = {}
@@ -1206,8 +1255,8 @@ class MemoryService:
 
                 # Add warnings to items that have conflict edges
                 self._mark_conflicted_items(items, set(detection.contested_ids))
-            except Exception:
-                logger.debug("Conflict detection skipped", exc_info=True)
+            except Exception as exc:
+                raise RuntimeError(f"Memory conflict detection failed: {exc}") from exc
 
         # 3. Record retrieval event
         await self._record_event(
@@ -1262,6 +1311,153 @@ class MemoryService:
             if item.memory_id in conflicted_ids and "has_conflict_edges" not in item.warnings:
                 item.warnings.append("has_conflict_edges")
 
+    async def merge_conflicting_memories(
+        self,
+        *,
+        source_memory_id: str,
+        target_memory_id: str,
+        reviewer_id: str,
+        trace_id: str | None = None,
+        merged_summary: str | None = None,
+    ) -> dict:
+        source = await self._item_repo.get_by_memory_id(source_memory_id)
+        target = await self._item_repo.get_by_memory_id(target_memory_id)
+        if not source or not target:
+            raise ValueError("Both source and target memories are required for merge")
+
+        summary = (merged_summary or "").strip()
+        if not summary:
+            summaries = sorted([
+                str(getattr(source, "content_summary", "") or "").strip(),
+                str(getattr(target, "content_summary", "") or "").strip(),
+            ])
+            summary = " / ".join(s for s in summaries if s)
+        if not summary:
+            raise ValueError("merged_summary is required when source summaries are empty")
+
+        merged_memory_id = f"mem_{uuid.uuid4().hex[:12]}"
+        source_content = dict(getattr(source, "content_json", None) or {})
+        target_content = dict(getattr(target, "content_json", None) or {})
+        merged_content = {
+            **source_content,
+            **target_content,
+            "merged_from": [source_memory_id, target_memory_id],
+        }
+        merged_facts = []
+        for content in (source_content, target_content):
+            for fact in content.get("facts") or []:
+                if fact not in merged_facts:
+                    merged_facts.append(fact)
+        if merged_facts:
+            merged_content["facts"] = merged_facts
+
+        merged_item = MemoryItem(
+            id=str(uuid7()),
+            memory_id=merged_memory_id,
+            org_id=self._org_id,
+            user_id=getattr(source, "user_id", None) or getattr(target, "user_id", None),
+            memory_type=getattr(source, "memory_type", None) or getattr(target, "memory_type", None),
+            scope_json=getattr(source, "scope_json", None) or getattr(target, "scope_json", None),
+            content_summary=summary,
+            content_json=merged_content,
+            source_event_ids=[trace_id] if trace_id else None,
+            evidence_pointers=getattr(source, "evidence_pointers", None) or getattr(target, "evidence_pointers", None),
+            version_parent_id=None,
+            candidate_key=None,
+            canonical_claim=None,
+            support_count=0,
+            negative_count=0,
+            conflict_count=0,
+            rag_evidence_count=0,
+            agent_verifier_count=0,
+            human_approved=True,
+            promotion_score=1.0,
+            last_supported_at=datetime.now(timezone.utc),
+            trust_score=max(float(getattr(source, "trust_score", 0) or 0), float(getattr(target, "trust_score", 0) or 0)),
+            confidence=max(float(getattr(source, "confidence", 0) or 0), float(getattr(target, "confidence", 0) or 0)),
+            usage_policy=getattr(source, "usage_policy", None) or "context_only",
+            ttl_policy=getattr(source, "ttl_policy", None) or getattr(target, "ttl_policy", None) or "90d",
+            privacy_level=getattr(source, "privacy_level", None) or getattr(target, "privacy_level", None) or "tenant_private",
+            status=MemoryStatus.ACTIVE.value,
+            created_by=self._uuid_or_none(reviewer_id),
+            created_by_type="human_review",
+            trace_id=trace_id,
+            expires_at=getattr(source, "expires_at", None) or getattr(target, "expires_at", None),
+            idempotency_key=None,
+            source_trace_id=trace_id,
+            source_task_id=getattr(source, "source_task_id", None) or getattr(target, "source_task_id", None),
+            index_status="pending",
+            index_error=None,
+            policy_key=getattr(source, "policy_key", None) or "conflict_resolution",
+            policy_version=getattr(source, "policy_version", None) or "merge:v1",
+            last_accessed_at=datetime.now(timezone.utc),
+            access_count=0,
+        )
+
+        await self._item_repo.create(merged_item)
+        await self._item_repo.update_status(source_memory_id, MemoryStatus.ISOLATED.value)
+        await self._item_repo.update_status(target_memory_id, MemoryStatus.ISOLATED.value)
+
+        if hasattr(self._dep_repo, "soft_delete_edges_between"):
+            await self._dep_repo.soft_delete_edges_between(
+                source_memory_id,
+                target_memory_id,
+                EdgeType.CONFLICTS_WITH.value,
+            )
+
+        edge_metadata = {
+            "edge_group": "provenance",
+            "relation_source": "conflict_merge",
+            "reviewer_id": reviewer_id,
+            "trace_id": trace_id,
+            "observed_count": 1,
+            "last_observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        for old_memory_id in (source_memory_id, target_memory_id):
+            await self._dep_repo.upsert_edge(
+                source_memory_id=merged_memory_id,
+                target_memory_id=old_memory_id,
+                edge_type=EdgeType.MERGED_FROM.value,
+                strength=1.0,
+                metadata_json=edge_metadata,
+            )
+            await self._sync_graph_memory_edge(
+                source_memory_id=merged_memory_id,
+                target_memory_id=old_memory_id,
+                edge_type=EdgeType.MERGED_FROM.value,
+                strength=1.0,
+                trace_id=trace_id,
+                reason="conflict merge",
+                metadata_json=edge_metadata,
+            )
+
+        await self._sync_graph_memory_node(merged_item)
+        if self._vector:
+            await self._vector.delete_memory(source_memory_id)
+            await self._vector.delete_memory(target_memory_id)
+            await self._upsert_active_vector(
+                merged_item,
+                trust_score=float(merged_item.trust_score or 0),
+            )
+            await self._item_repo.update_index_status(merged_memory_id, "success")
+
+        await self._record_event(
+            event_type=EventType.MEMORY_CANDIDATE_MERGED,
+            memory_id=merged_memory_id,
+            trace_id=trace_id,
+            user_id=getattr(source, "user_id", None) or getattr(target, "user_id", None),
+            source_kind="human_review",
+            payload={
+                "merged_from": [source_memory_id, target_memory_id],
+                "reviewer_id": reviewer_id,
+            },
+        )
+        return {
+            "merged_memory_id": merged_memory_id,
+            "source_memory_status": MemoryStatus.ISOLATED.value,
+            "target_memory_status": MemoryStatus.ISOLATED.value,
+        }
+
     # ------------------------------------------------------------------
     # Dependency Edges
     # ------------------------------------------------------------------
@@ -1306,7 +1502,14 @@ class MemoryService:
             risk_tags=payload.risk_tags,
             parent_event_ids=payload.parent_event_ids,
         )
-        return await self._event_repo.create(event)
+        created = await self._event_repo.create(event)
+        await self._sync_graph_event_edge(
+            event_id=payload.event_id,
+            memory_id=payload.memory_id,
+            event_type=payload.event_type,
+            trace_id=payload.trace_id,
+        )
+        return created
 
     async def get_events(
         self,
@@ -1329,10 +1532,7 @@ class MemoryService:
     async def update_status(self, memory_id: str, status: MemoryStatus) -> None:
         await self._item_repo.update_status(memory_id, status.value)
         if self._vector and status in (MemoryStatus.DELETED, MemoryStatus.DISABLED):
-            try:
-                await self._vector.delete_memory(memory_id)
-            except Exception:
-                pass
+            await self._vector.delete_memory(memory_id)
 
     async def batch_update_status(self, memory_ids: list[str], status: MemoryStatus) -> int:
         return await self._item_repo.batch_update_status(memory_ids, status.value)
@@ -1362,6 +1562,154 @@ class MemoryService:
             payload_json=payload,
         )
         await self._event_repo.create(event)
+        await self._sync_graph_event_edge(
+            event_id=event.event_id,
+            memory_id=memory_id,
+            event_type=event_type,
+            trace_id=trace_id,
+        )
+
+    @staticmethod
+    def _scope_key(scope_json: dict | None) -> str:
+        scope = dict(scope_json or {})
+        for key in ("product_line", "rag_space_id", "task_id", "role"):
+            value = scope.get(key)
+            if value:
+                return f"{key}:{value}"
+        return ""
+
+    @staticmethod
+    def _handle_graph_sync_error(operation: str, exc: Exception) -> None:
+        if settings.neo4j_enabled:
+            raise RuntimeError(f"{operation} failed: {exc}") from exc
+        logger.debug("%s skipped", operation, exc_info=True)
+
+    async def _sync_graph_memory_node(
+        self,
+        memory: MemoryItem,
+        *,
+        status: str | None = None,
+        trust_score: float | None = None,
+    ) -> None:
+        if not self._graph:
+            return
+        try:
+            created_at = getattr(memory, "created_at", None)
+            updated_at = getattr(memory, "updated_at", None)
+            await self._graph.upsert_memory_node(
+                MemoryGraphNode(
+                    memory_id=memory.memory_id,
+                    org_id=self._org_id,
+                    memory_type=memory.memory_type,
+                    status=status or memory.status,
+                    trust_score=float(trust_score if trust_score is not None else (memory.trust_score or 0)),
+                    confidence=float(memory.confidence or 0),
+                    scope_key=self._scope_key(getattr(memory, "scope_json", None)),
+                    created_at=created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+                    updated_at=updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at or ""),
+                )
+            )
+        except Exception as exc:
+            self._handle_graph_sync_error("Memory graph node sync", exc)
+
+    async def _sync_graph_memory_edge(
+        self,
+        *,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+        strength: float = 1.0,
+        trace_id: str | None = None,
+        reason: str | None = None,
+        metadata_json: dict | None = None,
+    ) -> None:
+        if not self._graph:
+            return
+        try:
+            metadata = {"org_id": self._org_id, **(metadata_json or {})}
+            await self._graph.create_memory_edge(
+                MemoryGraphEdge(
+                    source_memory_id=source_memory_id,
+                    target_memory_id=target_memory_id,
+                    edge_type=edge_type,
+                    strength=strength,
+                    trace_id=trace_id,
+                    reason=reason,
+                    metadata_json=metadata,
+                )
+            )
+        except Exception as exc:
+            self._handle_graph_sync_error("Memory graph edge sync", exc)
+
+    async def _sync_graph_event_edge(
+        self,
+        *,
+        event_id: str,
+        memory_id: str | None,
+        event_type: EventType,
+        trace_id: str | None = None,
+    ) -> None:
+        if not self._graph or not memory_id:
+            return
+        edge_map = {
+            EventType.MEMORY_CANDIDATE_CREATED: "CREATED_MEMORY",
+            EventType.MEMORY_WRITE_CREATED: "CREATED_MEMORY",
+            EventType.MEMORY_CANDIDATE_SUPPORTED: "SUPPORTED_MEMORY",
+            EventType.MEMORY_CANDIDATE_MERGED: "MERGED_MEMORY",
+            EventType.MEMORY_CONFLICT_DETECTED: "DETECTED_CONFLICT",
+            EventType.MEMORY_PROMOTED_TO_ACTIVE: "PROMOTED_MEMORY",
+            EventType.MEMORY_ROLLBACK_APPLIED: "ROLLED_BACK_MEMORY",
+        }
+        edge_type = edge_map.get(event_type)
+        if not edge_type:
+            return
+        try:
+            await self._graph.create_event_memory_edge(
+                self._org_id,
+                event_id,
+                memory_id,
+                edge_type,
+                trace_id or "",
+            )
+        except Exception as exc:
+            self._handle_graph_sync_error("Memory graph event edge sync", exc)
+
+    async def _sync_graph_support_relations(
+        self,
+        memory: MemoryItem,
+        support: CandidateSupportCreate,
+    ) -> None:
+        if not self._graph:
+            return
+        if support.source_kind in {"agent_message", "tool"} and support.trace_id:
+            try:
+                await self._graph.create_agent_memory_edge(
+                    self._org_id,
+                    support.trace_id,
+                    memory.memory_id,
+                    "GENERATED_CANDIDATE" if memory.status == MemoryStatus.CANDIDATE.value else "WROTE_MEMORY",
+                    agent_id=support.source_agent or "",
+                    task_id=support.task_id or "",
+                )
+            except Exception as exc:
+                self._handle_graph_sync_error("Memory graph agent edge sync", exc)
+        if support.support_type == "rag_evidence" and support.chunk_id:
+            try:
+                await self._graph.upsert_rag_chunk_node(
+                    self._org_id,
+                    support.chunk_id,
+                    rag_space_id=support.rag_space_id or "",
+                    document_id=support.document_id or "",
+                )
+                await self._graph.create_memory_rag_edge(
+                    memory.memory_id,
+                    support.chunk_id,
+                    "SUPPORTED_BY",
+                    confidence=float(support.confidence or 0),
+                    org_id=self._org_id,
+                )
+            except Exception as exc:
+                self._handle_graph_sync_error("Memory graph RAG support edge sync", exc)
 
     @staticmethod
     def _check_sensitive(summary: str) -> str | None:

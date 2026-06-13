@@ -361,54 +361,51 @@ class QualityAgentOrchestratorService:
     ) -> None:
         if not query.strip() or not rag_space_id.strip():
             return
-        try:
-            from app.services.memory_candidate_service import MemoryCandidateService
-            from app.services.memory_service import MemoryService
-            from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+        from app.services.memory_extraction_service import MemoryExtractionService
+        from app.services.memory_service import MemoryService
+        from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
 
-            async def embedder_factory(text: str) -> list[float]:
-                from agent.rag.embedder import Embedder
+        async def embedder_factory(text: str) -> list[float]:
+            from agent.rag.embedder import Embedder
 
-                embedder = Embedder(
-                    org_id=request.org_id,
-                    user_id=str(request.user_id or "") or None,
-                    trace_id=trace_id,
-                    allow_pseudo_fallback=False,
-                )
-                return await embedder.embed(text)
-
-            candidate = await MemoryCandidateService(
-                org_id=request.org_id,
-                user_id=str(request.user_id or "") or None,
-            ).extract_from_rag_query(
-                trace_id=trace_id,
-                query=query,
-                rag_space_id=rag_space_id,
-                hit_count=hit_count,
-            )
-            if candidate is None:
-                return
-            shared_vector = MemoryVectorService(
-                embedder_factory=embedder_factory,
+            embedder = Embedder(
                 org_id=request.org_id,
                 user_id=str(request.user_id or "") or None,
                 trace_id=trace_id,
+                allow_pseudo_fallback=False,
             )
-            candidate_vector = MemoryVectorService(
-                collection=CANDIDATE_MEMORY_COLLECTION,
-                embedder_factory=embedder_factory,
-                org_id=request.org_id,
-                user_id=str(request.user_id or "") or None,
-                trace_id=trace_id,
-            )
-            await MemoryService(
-                session,
-                request.org_id,
-                vector_service=shared_vector,
-                candidate_vector_service=candidate_vector,
-            ).write_candidate(candidate)
-        except Exception:
-            logger.debug("RAG usage candidate write skipped", exc_info=True)
+            return await embedder.embed(text)
+
+        candidate = await MemoryExtractionService(
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+        ).extract_from_rag_query(
+            trace_id=trace_id,
+            query=query,
+            rag_space_id=rag_space_id,
+            hit_count=hit_count,
+        )
+        if candidate is None:
+            return
+        shared_vector = MemoryVectorService(
+            embedder_factory=embedder_factory,
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+            trace_id=trace_id,
+        )
+        candidate_vector = MemoryVectorService(
+            collection=CANDIDATE_MEMORY_COLLECTION,
+            embedder_factory=embedder_factory,
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+            trace_id=trace_id,
+        )
+        await MemoryService(
+            session,
+            request.org_id,
+            vector_service=shared_vector,
+            candidate_vector_service=candidate_vector,
+        ).write_candidate(candidate)
 
     async def _enqueue_paper_review_enrichment(
         self,

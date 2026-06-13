@@ -14,6 +14,7 @@ from app.models.memory import (
     MemoryItem,
     MemoryPolicy,
     MemoryRollback,
+    MemorySyncOutbox,
 )
 
 
@@ -545,6 +546,35 @@ class MemoryDependencyRepository:
         await self._session.flush()
         return result.rowcount
 
+    async def soft_delete_edges_between(
+        self,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+    ) -> int:
+        stmt = (
+            update(MemoryDependencyEdge)
+            .where(
+                MemoryDependencyEdge.org_id == self._org_id,
+                MemoryDependencyEdge.edge_type == edge_type,
+                MemoryDependencyEdge.deleted_at.is_(None),
+                (
+                    (
+                        (MemoryDependencyEdge.source_memory_id == source_memory_id)
+                        & (MemoryDependencyEdge.target_memory_id == target_memory_id)
+                    )
+                    | (
+                        (MemoryDependencyEdge.source_memory_id == target_memory_id)
+                        & (MemoryDependencyEdge.target_memory_id == source_memory_id)
+                    )
+                ),
+            )
+            .values(deleted_at=datetime.now(timezone.utc))
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.rowcount
+
 
 class MemoryPolicyRepository:
     def __init__(self, session: AsyncSession, org_id: str):
@@ -634,6 +664,88 @@ class MemoryRollbackRepository:
             .values(review_status=review_status)
         )
         await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_execution_status(
+        self,
+        rollback_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        stmt = (
+            update(MemoryRollback)
+            .where(
+                MemoryRollback.org_id == self._org_id,
+                MemoryRollback.rollback_id == rollback_id,
+            )
+            .values(execution_status=status, execution_error=error)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+
+class MemorySyncOutboxRepository:
+    def __init__(self, session: AsyncSession, org_id: str):
+        self._session = session
+        self._org_id = org_id
+
+    async def create_pending(
+        self,
+        *,
+        memory_id: str,
+        action: str,
+        target_backend: str,
+        payload: dict,
+        trace_id: str | None = None,
+    ) -> MemorySyncOutbox:
+        from app.core.ids import uuid7
+
+        outbox = MemorySyncOutbox(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            memory_id=memory_id,
+            action=action,
+            target_backend=target_backend,
+            payload_json=payload,
+            status="pending",
+            retry_count=0,
+            trace_id=trace_id,
+        )
+        self._session.add(outbox)
+        await self._session.flush()
+        return outbox
+
+    async def claim_pending(self, *, limit: int, max_retries: int) -> list[MemorySyncOutbox]:
+        result = await self._session.execute(
+            select(MemorySyncOutbox)
+            .where(
+                MemorySyncOutbox.org_id == self._org_id,
+                MemorySyncOutbox.status == "pending",
+                MemorySyncOutbox.retry_count < max_retries,
+            )
+            .order_by(MemorySyncOutbox.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def mark_success(self, outbox_id: str) -> None:
+        await self._session.execute(
+            update(MemorySyncOutbox)
+            .where(MemorySyncOutbox.org_id == self._org_id, MemorySyncOutbox.id == outbox_id)
+            .values(status="success", last_error=None)
+        )
+        await self._session.flush()
+
+    async def mark_failed(self, outbox_id: str, error: str) -> None:
+        await self._session.execute(
+            update(MemorySyncOutbox)
+            .where(MemorySyncOutbox.org_id == self._org_id, MemorySyncOutbox.id == outbox_id)
+            .values(
+                status="pending",
+                retry_count=MemorySyncOutbox.retry_count + 1,
+                last_error=error,
+            )
+        )
         await self._session.flush()
 
 

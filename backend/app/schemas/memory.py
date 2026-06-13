@@ -186,6 +186,7 @@ class MemoryWriteResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     policy_key: str | None = None
     policy_version: str | None = None
+    sync_status: dict[str, str] | None = None
 
 
 class ExtractedMemory(BaseModel):
@@ -340,6 +341,7 @@ class ConflictResolveRequest(BaseModel):
     action: str = Field(..., description="keep_A / keep_B / merge / dismiss")
     reviewer_id: str = Field(..., min_length=1)
     comment: str | None = None
+    merged_summary: str | None = None
 
 
 class ConflictResolveResponse(BaseModel):

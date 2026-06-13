@@ -509,6 +509,30 @@ async def test_embedder_reports_missing_model_config_page_embedding_model():
 
 
 @pytest.mark.asyncio
+async def test_embedder_reports_missing_key_for_configured_remote_embedding_model():
+    embedder = Embedder(
+        org_id="org-1",
+        runtime_models=[
+            {
+                "id": "embed-cfg",
+                "provider": "volcengine",
+                "model_key": "ep-embedding",
+                "endpoint": "https://ark.example.com/api/v3",
+                "api_key": None,
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            }
+        ],
+        allow_pseudo_fallback=False,
+    )
+
+    with pytest.raises(RuntimeError, match="api_key is missing.*ep-embedding"):
+        await embedder.embed("hello")
+
+
+@pytest.mark.asyncio
 async def test_embedder_falls_back_to_pseudo_vector_when_runtime_embedding_fails(monkeypatch):
     class FakeLLMClient:
         def __init__(self, **kwargs):

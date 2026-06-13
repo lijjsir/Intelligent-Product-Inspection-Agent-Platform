@@ -24,9 +24,15 @@ def init_schema():
         "CREATE CONSTRAINT memory_unique IF NOT EXISTS FOR (m:Memory) REQUIRE (m.org_id, m.memory_id) IS UNIQUE",
         "CREATE INDEX memory_status IF NOT EXISTS FOR (m:Memory) ON (m.org_id, m.status)",
         "CREATE INDEX memory_type IF NOT EXISTS FOR (m:Memory) ON (m.org_id, m.memory_type)",
+        "CREATE INDEX memory_scope IF NOT EXISTS FOR (m:Memory) ON (m.org_id, m.scope_key)",
         "CREATE CONSTRAINT rag_chunk_unique IF NOT EXISTS FOR (c:RagChunk) REQUIRE (c.org_id, c.chunk_id) IS UNIQUE",
         "CREATE CONSTRAINT agent_run_unique IF NOT EXISTS FOR (a:AgentRun) REQUIRE (a.org_id, a.trace_id) IS UNIQUE",
         "CREATE CONSTRAINT memory_event_unique IF NOT EXISTS FOR (e:MemoryEvent) REQUIRE (e.org_id, e.event_id) IS UNIQUE",
+        "CREATE INDEX memory_rel_version_of IF NOT EXISTS FOR ()-[r:VERSION_OF]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
+        "CREATE INDEX memory_rel_derived_from IF NOT EXISTS FOR ()-[r:DERIVED_FROM]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
+        "CREATE INDEX memory_rel_cited_as_evidence IF NOT EXISTS FOR ()-[r:CITED_AS_EVIDENCE]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
+        "CREATE INDEX memory_rel_merged_from IF NOT EXISTS FOR ()-[r:MERGED_FROM]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
+        "CREATE INDEX memory_rel_conflicts_with IF NOT EXISTS FOR ()-[r:CONFLICTS_WITH]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
     ]
 
     with driver.session(database=settings.neo4j_database) as session:

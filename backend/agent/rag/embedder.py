@@ -114,6 +114,22 @@ class Embedder:
             model_types=EMBEDDING_MODEL_TYPES,
         )
         if not runtime:
+            configured = [
+                item for item in (runtime_models or [])
+                if str(item.get("model_type") or "").strip().lower() in EMBEDDING_MODEL_TYPES
+                and item.get("is_active")
+            ]
+            missing_key = [
+                item for item in configured
+                if str(item.get("provider") or "").strip().lower() != "local_openai"
+                and not str(item.get("api_key") or "").strip()
+            ]
+            if missing_key:
+                model_keys = ", ".join(str(item.get("model_key") or item.get("display_name") or "") for item in missing_key)
+                raise EmbeddingModelNotConfigured(
+                    "active embedding model configured but provider api_key is missing: "
+                    f"{model_keys}. Set api_key in the model configuration page."
+                )
             raise EmbeddingModelNotConfigured("no active embedding model configured in model config page")
         return runtime
 

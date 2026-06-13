@@ -9,6 +9,7 @@ from app.repositories.memory_repo import MemoryItemRepository
 from app.schemas.memory import (
     CandidateSupportCreate,
     EdgeType,
+    EventType,
     MemoryContent,
     MemoryScope,
     MemorySearchRequest,
@@ -43,6 +44,7 @@ class FakeItemRepo:
         self.items = {}
         self.status_updates = []
         self.index_updates = []
+        self.trust_score_updates = []
 
     async def create(self, item):
         self.created.append(item)
@@ -72,6 +74,11 @@ class FakeItemRepo:
         self.status_updates.append((memory_id, status))
         if memory_id in self.items:
             self.items[memory_id].status = status
+
+    async def update_trust_score(self, memory_id: str, trust_score: float):
+        self.trust_score_updates.append((memory_id, trust_score))
+        if memory_id in self.items:
+            self.items[memory_id].trust_score = trust_score
 
     async def update_candidate_stats(self, memory_id: str, **values):
         item = self.items[memory_id]
@@ -141,6 +148,7 @@ class FakeSupportRepo:
 class FakeDependencyRepo:
     def __init__(self):
         self.edges = []
+        self.soft_deleted = []
 
     async def create(self, edge):
         self.edges.append(edge)
@@ -169,6 +177,7 @@ class FakeDependencyRepo:
         return edge
 
     async def soft_delete_by_memory(self, memory_id: str):
+        self.soft_deleted.append(memory_id)
         return 0
 
     async def list_by_edge_type(
@@ -187,10 +196,19 @@ class FakeDependencyRepo:
 
 class FakeRollbackRepo:
     def __init__(self):
+        self.created = []
         self.review_updates = []
+        self.execution_updates = []
+
+    async def create(self, rollback):
+        self.created.append(rollback)
+        return rollback
 
     async def update_review_status(self, rollback_id: str, review_status: str):
         self.review_updates.append((rollback_id, review_status))
+
+    async def update_execution_status(self, rollback_id: str, status: str, error: str | None = None):
+        self.execution_updates.append((rollback_id, status, error))
 
 
 class FakeVectorService:
@@ -205,7 +223,14 @@ class FakeVectorService:
         self.upserts.append(kwargs)
 
     async def delete_memory(self, memory_id: str):
+        if self.fail:
+            raise RuntimeError("qdrant unavailable")
         self.deletes.append(memory_id)
+
+    async def search(self, **kwargs):
+        if self.fail:
+            raise RuntimeError("qdrant unavailable")
+        return []
 
 
 class FakeSearchVectorService(FakeVectorService):
@@ -230,6 +255,39 @@ class FakeCandidateSearchVectorService(FakeVectorService):
     async def search(self, **kwargs):
         self.searches.append(kwargs)
         return self.results
+
+
+class FakeGraphStore:
+    def __init__(self):
+        self.memory_nodes = []
+        self.memory_edges = []
+        self.event_edges = []
+        self.agent_edges = []
+        self.rag_edges = []
+        self.rag_nodes = []
+
+    async def upsert_memory_node(self, node):
+        self.memory_nodes.append(node)
+
+    async def create_memory_edge(self, edge):
+        self.memory_edges.append(edge)
+
+    async def create_event_memory_edge(self, *args, **kwargs):
+        self.event_edges.append((args, kwargs))
+
+    async def create_agent_memory_edge(self, *args, **kwargs):
+        self.agent_edges.append((args, kwargs))
+
+    async def upsert_rag_chunk_node(self, *args, **kwargs):
+        self.rag_nodes.append((args, kwargs))
+
+    async def create_memory_rag_edge(self, *args, **kwargs):
+        self.rag_edges.append((args, kwargs))
+
+
+class FailingGraphStore(FakeGraphStore):
+    async def upsert_memory_node(self, node):
+        raise RuntimeError("neo4j unavailable")
 
 
 def _write_request(*, confidence: float = 0.9) -> MemoryWriteRequest:
@@ -320,6 +378,38 @@ async def test_write_candidate_ignores_non_uuid_agent_created_by():
     assert item.created_by is None
     assert item.created_by_type == "agent"
     assert support_repo.supports[0].source_agent == "agent"
+
+
+@pytest.mark.asyncio
+async def test_write_candidate_syncs_high_value_graph_relations():
+    service, item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    graph = FakeGraphStore()
+    service._graph = graph
+
+    response = await service.write_candidate(_write_request())
+
+    assert graph.memory_nodes[0].memory_id == response.memory_id
+    assert any(edge[0][3] == "CREATED_MEMORY" for edge in graph.event_edges)
+    assert any(edge[0][3] == "SUPPORTED_MEMORY" for edge in graph.event_edges)
+    assert any(edge[0][3] == "GENERATED_CANDIDATE" for edge in graph.agent_edges)
+
+
+@pytest.mark.asyncio
+async def test_graph_sync_failure_is_strict_when_neo4j_enabled(monkeypatch):
+    monkeypatch.setattr("app.services.memory_service.settings.neo4j_enabled", True)
+    service, _item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    service._graph = FailingGraphStore()
+
+    with pytest.raises(RuntimeError, match="Memory graph node sync failed"):
+        await service.write_candidate(_write_request())
+
+
+@pytest.mark.asyncio
+async def test_write_candidate_surfaces_candidate_vector_failure_without_fallback():
+    service, _item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService(fail=True))
+
+    with pytest.raises(RuntimeError, match="qdrant unavailable"):
+        await service.write_candidate(_write_request())
 
 
 @pytest.mark.asyncio
@@ -433,7 +523,7 @@ async def test_semantic_candidate_slot_conflict_marks_contested():
 
 
 @pytest.mark.asyncio
-async def test_rag_evidence_candidate_promotes_to_active_and_marks_index_failure():
+async def test_rag_evidence_candidate_promotion_fails_when_vector_sync_fails():
     service, item_repo, support_repo = _memory_service(FakeVectorService(fail=True))
     request = MemoryWriteRequest(
         org_id="org-1",
@@ -447,13 +537,11 @@ async def test_rag_evidence_candidate_promotes_to_active_and_marks_index_failure
         trace_id="trace-rag",
     )
 
-    response = await service.write_candidate(request)
+    with pytest.raises(MemoryVectorServiceError, match="Active memory vector sync failed"):
+        await service.write_candidate(request)
 
-    assert response.status == MemoryStatus.ACTIVE
-    assert "qdrant_sync_failed" in response.warnings
     assert item_repo.index_updates
     memory_id, status, error = item_repo.index_updates[-1]
-    assert memory_id == response.memory_id
     assert status == "failed"
     assert "qdrant unavailable" in error
     assert support_repo.supports[0].support_type == "rag_evidence"
@@ -508,7 +596,7 @@ async def test_search_requires_vector_service_when_eligible_memories_exist():
 
 
 @pytest.mark.asyncio
-async def test_search_falls_back_to_active_mysql_results_when_vector_runtime_fails():
+async def test_search_surfaces_vector_runtime_failure_without_fallback():
     service, item_repo, _support_repo = _memory_service(FakeFailingSearchVectorService())
     item_repo.items["mem-1"] = SimpleNamespace(
         memory_id="mem-1",
@@ -533,17 +621,15 @@ async def test_search_falls_back_to_active_mysql_results_when_vector_runtime_fai
         usage_policy="context_only",
     )
 
-    response = await service.search(
-        MemorySearchRequest(
-            org_id="org-1",
-            user_id="user-1",
-            query="codex memory verification",
-            top_k=5,
+    with pytest.raises(MemoryVectorServiceError, match="embedding unavailable"):
+        await service.search(
+            MemorySearchRequest(
+                org_id="org-1",
+                user_id="user-1",
+                query="codex memory verification",
+                top_k=5,
+            )
         )
-    )
-
-    assert [item.memory_id for item in response.items] == ["mem-1"]
-    assert response.items[0].warnings == ["vector_search_failed_fallback"]
 
 
 @pytest.mark.asyncio
@@ -743,3 +829,179 @@ async def test_memory_tool_uses_plan_rollback_and_rejects_branch():
 
     assert response == {"rollback_id": "rb-1"}
     assert rollback_service.calls[0]["action"] == RollbackAction.ISOLATE
+
+
+@pytest.mark.asyncio
+async def test_immediate_rollback_creates_record_before_apply_and_marks_applied():
+    service = MemoryRollbackService(None, "org-1", FakeVectorService())
+    memory = SimpleNamespace(
+        memory_id="mem-root",
+        status="active",
+        trust_score=0.9,
+        content_summary="root",
+        content_json={},
+    )
+    item_repo = FakeItemRepo()
+    item_repo.items["mem-root"] = memory
+    rollback_repo = FakeRollbackRepo()
+    service._item_repo = item_repo
+    service._dep_repo = FakeDependencyRepo()
+    service._event_repo = FakeEventRepo()
+    service._rollback_repo = rollback_repo
+
+    response = await service.plan_rollback(
+        root_memory_id="mem-root",
+        operator_id="user-1",
+        operator_role="memory_governance",
+        trace_id="trace-rb",
+        action=RollbackAction.ISOLATE,
+        target_memory_ids=["mem-root"],
+        reason="contain stale memory",
+        require_human_review=False,
+    )
+
+    assert response.affected_count == 1
+    assert rollback_repo.created
+    assert rollback_repo.created[0].review_status == "not_required"
+    assert rollback_repo.execution_updates[-1][1] == "applied"
+    assert item_repo.status_updates == [("mem-root", "isolated")]
+
+
+@pytest.mark.asyncio
+async def test_rollback_vector_delete_failure_marks_failed_and_surfaces_error():
+    service = MemoryRollbackService(None, "org-1", FakeVectorService(fail=True))
+    item_repo = FakeItemRepo()
+    item_repo.items["mem-root"] = SimpleNamespace(
+        memory_id="mem-root",
+        status="active",
+        trust_score=0.9,
+        content_summary="root",
+        content_json={},
+    )
+    rollback_repo = FakeRollbackRepo()
+    service._item_repo = item_repo
+    service._dep_repo = FakeDependencyRepo()
+    service._event_repo = FakeEventRepo()
+    service._rollback_repo = rollback_repo
+
+    with pytest.raises(RuntimeError, match="qdrant unavailable"):
+        await service.plan_rollback(
+            root_memory_id="mem-root",
+            operator_id="user-1",
+            operator_role="memory_governance",
+            trace_id="trace-rb",
+            action=RollbackAction.ISOLATE,
+            target_memory_ids=["mem-root"],
+            reason="contain stale memory",
+            require_human_review=False,
+        )
+
+    assert rollback_repo.created
+    assert rollback_repo.execution_updates[-1][1] == "failed"
+    assert "qdrant unavailable" in rollback_repo.execution_updates[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_write_candidate_rejects_high_confidence_prewrite_conflict():
+    service, item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    request = _write_request().model_copy(update={
+        "content": MemoryContent(
+            summary="stable inspection lesson",
+            facts=["one useful fact"],
+            warnings=["prewrite_conflict:high:active memory says the opposite"],
+        )
+    })
+
+    response = await service.write_candidate(request)
+
+    assert response.memory_id == ""
+    assert "prewrite_conflict_rejected" in response.warnings
+    assert item_repo.created == []
+
+
+@pytest.mark.asyncio
+async def test_retrieval_conflict_guard_persists_high_confidence_conflicts():
+    from app.services.retrieval_conflict_guard import RetrievalConflictGuard
+
+    service, _item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    guard = RetrievalConflictGuard(
+        org_id="org-1",
+        user_id="user-1",
+        trace_id="trace-conflict",
+        memory_service=service,
+    )
+
+    result = await guard.check(
+        query="camera threshold",
+        rag_hits=[],
+        memory_hits=[
+            {"memory_id": "mem-a", "summary": "threshold is 0.8", "score": 0.9, "memory_type": "task_episode"},
+            {"memory_id": "mem-b", "summary": "threshold is 0.2", "score": 0.9, "memory_type": "task_episode"},
+        ],
+        session_facts={"threshold": "0.2"},
+    )
+
+    assert result["conflicts"]
+    conflict_edges = [
+        edge for edge in service._dep_repo.edges
+        if edge.edge_type == EdgeType.CONFLICTS_WITH.value
+    ]
+    assert conflict_edges
+    assert any(event.event_type == EventType.MEMORY_CONFLICT_DETECTED.value for event in service._event_repo.events)
+
+
+@pytest.mark.asyncio
+async def test_conflict_merge_creates_merged_memory_and_merged_from_edges():
+    service, item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    source = SimpleNamespace(
+        memory_id="mem-a",
+        org_id="org-1",
+        user_id="user-1",
+        memory_type="task_episode",
+        status="contested",
+        content_summary="camera threshold should be 0.8",
+        content_json={"facts": ["0.8"]},
+        scope_json={"task_id": "task-1"},
+        confidence=0.8,
+        trust_score=0.7,
+        usage_policy="context_only",
+        ttl_policy="90d",
+        privacy_level="tenant_private",
+        evidence_pointers=None,
+        created_by=None,
+        created_by_type="agent",
+        trace_id="trace-a",
+        expires_at=None,
+    )
+    target = SimpleNamespace(
+        **{**source.__dict__, "memory_id": "mem-b", "content_summary": "camera threshold should be 0.75"}
+    )
+    item_repo.items["mem-a"] = source
+    item_repo.items["mem-b"] = target
+    await service._dep_repo.upsert_edge(
+        source_memory_id="mem-a",
+        target_memory_id="mem-b",
+        edge_type=EdgeType.CONFLICTS_WITH.value,
+        strength=0.9,
+    )
+
+    response = await service.merge_conflicting_memories(
+        source_memory_id="mem-a",
+        target_memory_id="mem-b",
+        reviewer_id="reviewer-1",
+        trace_id="trace-merge",
+        merged_summary="camera threshold should be 0.75-0.8 depending on spec",
+    )
+
+    assert response["merged_memory_id"]
+    merged = item_repo.items[response["merged_memory_id"]]
+    assert merged.status == "active"
+    assert merged.content_summary == "camera threshold should be 0.75-0.8 depending on spec"
+    assert ("mem-a", "isolated") in item_repo.status_updates
+    assert ("mem-b", "isolated") in item_repo.status_updates
+    merged_from_edges = [
+        edge for edge in service._dep_repo.edges
+        if edge.source_memory_id == response["merged_memory_id"]
+        and edge.edge_type == EdgeType.MERGED_FROM.value
+    ]
+    assert {edge.target_memory_id for edge in merged_from_edges} == {"mem-a", "mem-b"}

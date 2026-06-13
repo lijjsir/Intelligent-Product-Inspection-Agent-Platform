@@ -9,11 +9,14 @@ PUT  /api/v1/memory/policies/{key}     - policy configuration
 """
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.exceptions import (
+    MemoryError as AppMemoryError,
+    MemoryGraphServiceError,
+    MemoryVectorServiceError as AppMemoryVectorServiceError,
+)
 from app.core.permissions import require_role
 from app.schemas.common import ResponseEnvelope
 from app.schemas.memory import (
@@ -61,13 +64,22 @@ def _get_memory_service(
     org_id: str,
     vector_svc: MemoryVectorService | None = None,
     candidate_vector_svc: MemoryVectorService | None = None,
+    trace_id: str | None = None,
 ) -> MemoryService:
-    return MemoryService(
-        db,
-        org_id,
-        vector_service=vector_svc,
-        candidate_vector_service=candidate_vector_svc,
-    )
+    try:
+        return MemoryService(
+            db,
+            org_id,
+            vector_service=vector_svc,
+            candidate_vector_service=candidate_vector_svc,
+        )
+    except Exception as exc:
+        raise MemoryGraphServiceError(
+            message=f"Memory service initialization failed: {exc}",
+            code="SHARED_MEMORY_GRAPH_SYNC_FAILED",
+            detail={"operation": "memory_service_initialization"},
+            trace_id=trace_id,
+        ) from exc
 
 
 def _build_vector_service(
@@ -93,6 +105,32 @@ def _build_vector_service(
         embedder_factory=embedder_factory,
         org_id=org_id,
         user_id=user_id,
+        trace_id=trace_id,
+    )
+
+
+def _vector_error(exc: Exception, trace_id: str | None, operation: str) -> AppMemoryVectorServiceError:
+    return AppMemoryVectorServiceError(
+        message=f"{operation} failed: {exc}",
+        code="SHARED_MEMORY_VECTOR_OPERATION_FAILED",
+        detail={"operation": operation},
+        trace_id=trace_id,
+    )
+
+
+def _memory_operation_error(exc: Exception, trace_id: str | None, operation: str) -> AppMemoryError:
+    message = str(exc)
+    if "Memory graph" in message:
+        return MemoryGraphServiceError(
+            message=f"{operation} failed: {message}",
+            code="SHARED_MEMORY_GRAPH_SYNC_FAILED",
+            detail={"operation": operation},
+            trace_id=trace_id,
+        )
+    return AppMemoryError(
+        message=f"{operation} failed: {message}",
+        code="SHARED_MEMORY_OPERATION_FAILED",
+        detail={"operation": operation},
         trace_id=trace_id,
     )
 
@@ -140,15 +178,13 @@ async def write_candidate(
         body.trace_id,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, org_id, vector_svc, candidate_vector_svc)
+    service = _get_memory_service(db, org_id, vector_svc, candidate_vector_svc, trace_id=body.trace_id)
     try:
         resp = await service.write_candidate(body)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, body.trace_id, "Memory write")
     except Exception as exc:
-        raise HTTPException(status_code=500, detail={
-            "error_code": "SHARED_MEMORY_WRITE_FAILED",
-            "message": f"Memory write failed: {exc}",
-            "trace_id": body.trace_id,
-        })
+        raise _memory_operation_error(exc, body.trace_id, "Memory write")
 
     await db.commit()
     return ResponseEnvelope(data=resp)
@@ -193,8 +229,13 @@ async def support_candidate(
         body.trace_id,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
-    resp = await service.add_candidate_support(memory_id, body)
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc, trace_id=body.trace_id)
+    try:
+        resp = await service.add_candidate_support(memory_id, body)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, body.trace_id, "Candidate support")
+    except Exception as exc:
+        raise _memory_operation_error(exc, body.trace_id, "Candidate support")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -214,12 +255,18 @@ async def approve_candidate(
         None,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
-    resp = await service.approve_candidate(
-        memory_id,
-        reviewer_id=current.user_id,
-        trace_id=f"memory-approve-{memory_id}",
-    )
+    trace_id = f"memory-approve-{memory_id}"
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc, trace_id=trace_id)
+    try:
+        resp = await service.approve_candidate(
+            memory_id,
+            reviewer_id=current.user_id,
+            trace_id=trace_id,
+        )
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, trace_id, "Candidate approval")
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate approval")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -232,13 +279,17 @@ async def reject_candidate(
 ):
     """Reject a candidate and disable it."""
     require_role("memory_governance", current.role)
-    service = _get_memory_service(db, current.org_id)
-    resp = await service.reject_candidate(
-        memory_id,
-        reviewer_id=current.user_id,
-        trace_id=f"memory-reject-{memory_id}",
-        reason="manual_reject",
-    )
+    trace_id = f"memory-reject-{memory_id}"
+    service = _get_memory_service(db, current.org_id, trace_id=trace_id)
+    try:
+        resp = await service.reject_candidate(
+            memory_id,
+            reviewer_id=current.user_id,
+            trace_id=trace_id,
+            reason="manual_reject",
+        )
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate rejection")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -257,8 +308,14 @@ async def isolate_candidate(
         None,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, current.org_id, candidate_vector_svc=candidate_vector_svc)
-    resp = await service.isolate_candidate(memory_id, trace_id=f"memory-isolate-{memory_id}")
+    trace_id = f"memory-isolate-{memory_id}"
+    service = _get_memory_service(db, current.org_id, candidate_vector_svc=candidate_vector_svc, trace_id=trace_id)
+    try:
+        resp = await service.isolate_candidate(memory_id, trace_id=trace_id)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, trace_id, "Candidate isolation")
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate isolation")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -271,8 +328,12 @@ async def contest_candidate(
 ):
     """Mark a candidate as contested."""
     require_role("memory_governance", current.role)
-    service = _get_memory_service(db, current.org_id)
-    resp = await service.contest_candidate(memory_id, trace_id=f"memory-contest-{memory_id}")
+    trace_id = f"memory-contest-{memory_id}"
+    service = _get_memory_service(db, current.org_id, trace_id=trace_id)
+    try:
+        resp = await service.contest_candidate(memory_id, trace_id=trace_id)
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate contest")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -292,8 +353,14 @@ async def evaluate_candidate_promotion(
         None,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
-    resp = await service.evaluate_candidate_promotion(memory_id)
+    trace_id = f"memory-evaluate-{memory_id}"
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc, trace_id=trace_id)
+    try:
+        resp = await service.evaluate_candidate_promotion(memory_id)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, trace_id, "Candidate promotion evaluation")
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate promotion evaluation")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -313,8 +380,14 @@ async def evaluate_candidate_batch(
         None,
         collection=CANDIDATE_MEMORY_COLLECTION,
     )
-    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc)
-    resp = await service.evaluate_batch_candidates(limit=limit)
+    trace_id = "memory-evaluate-batch"
+    service = _get_memory_service(db, current.org_id, vector_svc, candidate_vector_svc, trace_id=trace_id)
+    try:
+        resp = await service.evaluate_batch_candidates(limit=limit)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, trace_id, "Candidate batch promotion evaluation")
+    except Exception as exc:
+        raise _memory_operation_error(exc, trace_id, "Candidate batch promotion evaluation")
     await db.commit()
     return ResponseEnvelope(data=resp)
 
@@ -356,7 +429,7 @@ async def search_memory(
             "trace_id": body.trace_id,
         })
 
-    service = _get_memory_service(db, org_id, vector_svc)
+    service = _get_memory_service(db, org_id, vector_svc, trace_id=body.trace_id)
     try:
         resp = await service.search(body)
     except MemoryVectorServiceError as exc:
@@ -732,10 +805,31 @@ async def resolve_conflict(
         if target:
             await item_repo.update_status(target_id, "isolated")
     elif body.action == "merge":
-        await dep_repo.soft_delete_by_memory(memory_id)
-        merged_id = f"mem_{uuid.uuid4().hex[:12]}"
+        vector_svc = _build_vector_service(
+            current.org_id,
+            user_id=current.user_id,
+            trace_id=None,
+        )
+        svc = _get_memory_service(db, current.org_id, vector_svc=vector_svc)
+        result = await svc.merge_conflicting_memories(
+            source_memory_id=memory_id,
+            target_memory_id=target_id,
+            reviewer_id=body.reviewer_id,
+            trace_id=None,
+            merged_summary=body.merged_summary,
+        )
+        return ResponseEnvelope(data={"resolution": body.action, **result})
+    else:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "SHARED_MEMORY_INVALID_REQUEST",
+            "message": f"Unsupported conflict resolution action: {body.action}",
+            "trace_id": None,
+        })
 
-    await dep_repo.soft_delete_by_memory(memory_id)
+    if hasattr(dep_repo, "soft_delete_edges_between"):
+        await dep_repo.soft_delete_edges_between(memory_id, target_id, "conflicts_with")
+    else:
+        await dep_repo.soft_delete_by_memory(memory_id)
 
     return ResponseEnvelope(data={
         "resolution": body.action,
@@ -779,7 +873,8 @@ async def search_with_conflict_guard(
         rag_hits = rag_result.get("hits", [])
 
     # 2. Memory retrieval
-    memory_svc = _get_memory_service(db, org_id)
+    vector_svc = _build_vector_service(org_id, current.user_id, body.trace_id)
+    memory_svc = _get_memory_service(db, org_id, vector_svc, trace_id=body.trace_id)
     memory_search = MemorySearchRequest(
         org_id=body.org_id or org_id,
         user_id=body.user_id,
@@ -788,7 +883,12 @@ async def search_with_conflict_guard(
         top_k=body.top_k_memory,
         trace_id=body.trace_id,
     )
-    memory_result = await memory_svc.search(memory_search)
+    try:
+        memory_result = await memory_svc.search(memory_search)
+    except MemoryVectorServiceError as exc:
+        raise _vector_error(exc, body.trace_id, "Conflict-guard memory search")
+    except Exception as exc:
+        raise _memory_operation_error(exc, body.trace_id, "Conflict-guard memory search")
     memory_hits = [
         {
             "memory_id": item.memory_id,

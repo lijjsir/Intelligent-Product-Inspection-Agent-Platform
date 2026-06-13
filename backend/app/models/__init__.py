@@ -67,6 +67,7 @@ from app.models.memory import (
     MemoryItem,
     MemoryPolicy,
     MemoryRollback,
+    MemorySyncOutbox,
 )
 
 __all__ = [
@@ -150,6 +151,7 @@ __all__ = [
     "MemoryDependencyEdge",
     "MemoryPolicy",
     "MemoryRollback",
+    "MemorySyncOutbox",
     "MemoryEvaluation",
     "PromptDefinition",
     "PromptSyncEvent",

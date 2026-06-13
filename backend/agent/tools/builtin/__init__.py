@@ -259,6 +259,288 @@ def register_all(registry: ToolRegistry) -> None:
         handler=_data_analysis,
     )
 
+    # ── Shared memory tools ──
+    from agent.tools.memory_tools import (
+        memory_apply_rollback,
+        memory_build_propagation_graph,
+        memory_replay_evaluation,
+        memory_report_conflict,
+        memory_search,
+        memory_write_candidate,
+    )
+
+    async def _build_memory_services(ctx):
+        from app.core.exceptions import MemoryToolContextError
+        from app.services.memory_governance_service import (
+            MemoryEvaluationService,
+            MemoryPropagationService,
+            MemoryRollbackService,
+        )
+        from app.services.memory_service import MemoryService
+        from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+        from agent.rag.embedder import Embedder
+
+        missing = []
+        if not getattr(ctx, "org_id", None):
+            missing.append("org_id")
+        if not getattr(ctx, "user_id", None):
+            missing.append("user_id")
+        if not getattr(ctx, "trace_id", None):
+            missing.append("trace_id")
+        session = ctx.metadata.get("__db_session__")
+        if session is None:
+            missing.append("db_session")
+        if missing:
+            raise MemoryToolContextError(
+                detail={"missing": missing},
+                trace_id=getattr(ctx, "trace_id", None),
+            )
+
+        async def embedder_factory(text: str) -> list[float]:
+            embedder = Embedder(
+                org_id=ctx.org_id,
+                user_id=ctx.user_id,
+                trace_id=ctx.trace_id,
+                allow_pseudo_fallback=False,
+            )
+            return await embedder.embed(text)
+
+        vector_svc = MemoryVectorService(
+            embedder_factory=embedder_factory,
+            org_id=ctx.org_id,
+            user_id=ctx.user_id,
+            trace_id=ctx.trace_id,
+        )
+        candidate_vector_svc = MemoryVectorService(
+            collection=CANDIDATE_MEMORY_COLLECTION,
+            embedder_factory=embedder_factory,
+            org_id=ctx.org_id,
+            user_id=ctx.user_id,
+            trace_id=ctx.trace_id,
+        )
+        memory_svc = MemoryService(
+            session,
+            ctx.org_id,
+            vector_service=vector_svc,
+            candidate_vector_service=candidate_vector_svc,
+        )
+        return {
+            "memory": memory_svc,
+            "propagation": MemoryPropagationService(session, ctx.org_id),
+            "rollback": MemoryRollbackService(session, ctx.org_id, vector_svc),
+            "evaluation": MemoryEvaluationService(session, ctx.org_id),
+        }
+
+    async def _memory_search_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_search(
+            query=args.get("query", ""),
+            org_id=ctx.org_id,
+            user_id=ctx.user_id,
+            top_k=args.get("top_k", 5),
+            memory_types=args.get("memory_types"),
+            task_id=args.get("task_id"),
+            memory_service=services["memory"],
+        )
+
+    async def _memory_write_candidate_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_write_candidate(
+            org_id=ctx.org_id,
+            user_id=ctx.user_id,
+            trace_id=ctx.trace_id,
+            summary=args.get("summary", ""),
+            memory_type=args.get("memory_type", "task_episode"),
+            task_id=args.get("task_id"),
+            confidence=args.get("confidence", 0.5),
+            facts=args.get("facts"),
+            warnings=args.get("warnings"),
+            evidence_pointers=args.get("evidence_pointers"),
+            ttl_policy=args.get("ttl_policy", "90d"),
+            memory_service=services["memory"],
+        )
+
+    async def _memory_report_conflict_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_report_conflict(
+            memory_id=args.get("memory_id", ""),
+            conflict_description=args.get("conflict_description", ""),
+            org_id=ctx.org_id,
+            trace_id=ctx.trace_id,
+            memory_service=services["memory"],
+        )
+
+    async def _memory_build_propagation_graph_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_build_propagation_graph(
+            root_memory_id=args.get("root_memory_id", ""),
+            org_id=ctx.org_id,
+            max_depth=args.get("max_depth", 4),
+            governance_service=services["propagation"],
+        )
+
+    async def _memory_apply_rollback_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_apply_rollback(
+            root_memory_id=args.get("root_memory_id", ""),
+            org_id=ctx.org_id,
+            operator_id=ctx.user_id or "",
+            trace_id=ctx.trace_id or "",
+            target_memory_ids=args.get("target_memory_ids", []),
+            action=args.get("action", "isolate"),
+            reason=args.get("reason", ""),
+            require_human_review=bool(args.get("require_human_review", False)),
+            governance_service=services["rollback"],
+        )
+
+    async def _memory_replay_evaluation_wrapper(args: dict, ctx) -> dict:
+        services = await _build_memory_services(ctx)
+        return await memory_replay_evaluation(
+            rollback_id=args.get("rollback_id", ""),
+            org_id=ctx.org_id,
+            task_id=args.get("task_id"),
+            trace_id=ctx.trace_id,
+            scenario=args.get("scenario"),
+            governance_service=services["evaluation"],
+        )
+
+    registry.register(
+        ToolSpec(
+            name="memory.search",
+            title="共享记忆检索",
+            description="检索当前组织、用户和任务范围内可用的共享记忆。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="read",
+            risk_level="low",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer", "default": 5},
+                    "task_id": {"type": "string"},
+                    "memory_types": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["query"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_search_wrapper,
+    )
+    registry.register(
+        ToolSpec(
+            name="memory.write_candidate",
+            title="写入候选记忆",
+            description="将稳定、有复用价值的信息写入候选记忆区，等待证据支持和晋升。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="write",
+            risk_level="medium",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "memory_type": {"type": "string", "default": "task_episode"},
+                    "facts": {"type": "array", "items": {"type": "string"}},
+                    "confidence": {"type": "number"},
+                    "task_id": {"type": "string"},
+                },
+                "required": ["summary"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_write_candidate_wrapper,
+    )
+    registry.register(
+        ToolSpec(
+            name="memory.report_conflict",
+            title="上报共享记忆冲突",
+            description="记录共享记忆与当前证据或运行结果之间的冲突。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="write",
+            risk_level="medium",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string"},
+                    "conflict_description": {"type": "string"},
+                },
+                "required": ["memory_id", "conflict_description"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_report_conflict_wrapper,
+    )
+    registry.register(
+        ToolSpec(
+            name="memory.build_propagation_graph",
+            title="构建记忆传播图",
+            description="从污染根记忆构建依赖传播图。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="read",
+            risk_level="medium",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "root_memory_id": {"type": "string"},
+                    "max_depth": {"type": "integer", "default": 4},
+                },
+                "required": ["root_memory_id"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_build_propagation_graph_wrapper,
+    )
+    registry.register(
+        ToolSpec(
+            name="memory.apply_rollback",
+            title="执行共享记忆回滚",
+            description="对污染记忆执行隔离、降权、删除或补丁回滚。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="action",
+            risk_level="high",
+            requires_confirmation=True,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "root_memory_id": {"type": "string"},
+                    "target_memory_ids": {"type": "array", "items": {"type": "string"}},
+                    "action": {"type": "string", "default": "isolate"},
+                    "reason": {"type": "string"},
+                    "require_human_review": {"type": "boolean", "default": False},
+                },
+                "required": ["root_memory_id", "target_memory_ids", "reason"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_apply_rollback_wrapper,
+    )
+    registry.register(
+        ToolSpec(
+            name="memory.replay_evaluation",
+            title="回滚效果复盘",
+            description="运行共享记忆回滚后的恢复验证。",
+            agent_scope=["chat", "inspection_task"],
+            surfaces=["chat", "quality_task"],
+            mode="read",
+            risk_level="medium",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "rollback_id": {"type": "string"},
+                    "task_id": {"type": "string"},
+                    "scenario": {"type": "string"},
+                },
+                "required": ["rollback_id"],
+            },
+            output_schema={"type": "object"},
+        ),
+        handler=_memory_replay_evaluation_wrapper,
+    )
+
 
 # ── Handler implementations for quality/data tools ──
 

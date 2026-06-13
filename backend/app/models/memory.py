@@ -181,11 +181,38 @@ class MemoryRollback(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     require_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_required")
+    execution_status: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    execution_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[Any] = mapped_column(
         DateTime(timezone=False),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class MemorySyncOutbox(Base):
+    __tablename__ = "memory_sync_outbox"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_backend: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
     )
 
 

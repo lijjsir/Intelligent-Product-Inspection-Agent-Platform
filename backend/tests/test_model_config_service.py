@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.model_config_service import ModelConfigService
+from app.services.model_config_service import ModelConfigService, _fernet
 from infra.cache.memory_cache import _model_config_cache
 
 
@@ -30,6 +30,27 @@ def model(model_key: str, model_type: str = "chat"):
         health_message=None,
         api_key_enc=None,
     )
+
+
+def test_runtime_payload_does_not_use_provider_env_api_key_when_model_has_no_key(monkeypatch):
+    monkeypatch.setattr("app.services.model_config_service.settings.volcengine_api_key", "env-key")
+    item = model("ep-embedding", "embedding")
+    item.provider = "volcengine"
+
+    payload = ModelConfigService.to_runtime_payload(item)
+
+    assert payload["api_key"] is None
+    assert payload["endpoint"] == "http://models"
+
+
+def test_runtime_payload_uses_database_encrypted_api_key():
+    item = model("ep-embedding", "embedding")
+    item.provider = "volcengine"
+    item.api_key_enc = _fernet().encrypt(b"db-key").decode("utf-8")
+
+    payload = ModelConfigService.to_runtime_payload(item)
+
+    assert payload["api_key"] == "db-key"
 
 
 @pytest.mark.asyncio
