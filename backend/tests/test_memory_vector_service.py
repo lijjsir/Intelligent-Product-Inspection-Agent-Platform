@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+import httpx
 import pytest
 
 from app.services.memory_vector_service import MemoryVectorService
@@ -17,6 +18,10 @@ class FakeResponse:
         return self._payload
 
     def raise_for_status(self):
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "http://qdrant.test")
+            response = httpx.Response(self.status_code, text=self.text, request=request)
+            raise httpx.HTTPStatusError("fake qdrant error", request=request, response=response)
         return None
 
 
@@ -126,9 +131,62 @@ async def test_search_filter_includes_user_and_org_shared_memory(monkeypatch):
     assert {"key": "org_id", "match": {"value": "org-1"}} in qdrant_filter["must"]
     assert {"key": "status", "match": {"value": "active"}} in qdrant_filter["must"]
     assert {"key": "user_id", "match": {"value": "user-1"}} not in qdrant_filter["must"]
-    assert qdrant_filter["should"] == [
+    expected_user_conditions = [
         {"key": "user_id", "match": {"value": "user-1"}},
         {"key": "user_id", "match": {"value": ""}},
     ]
-    assert qdrant_filter["minimum_should_match"] == 1
+    assert qdrant_filter["should"] == expected_user_conditions
+    assert qdrant_filter["min_should"] == {
+        "conditions": expected_user_conditions,
+        "min_count": 1,
+    }
+    assert "minimum_should_match" not in qdrant_filter
     assert results[0]["memory_id"] == "mem-shared"
+
+
+@pytest.mark.asyncio
+async def test_search_initializes_missing_collection_and_returns_empty_results(monkeypatch):
+    calls: list[tuple[str, str, dict | None]] = []
+
+    async def embedder(text: str):
+        assert text == "first candidate"
+        return [0.2, 0.1, 0.4]
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            calls.append(("GET", url, None))
+            return FakeResponse(status_code=404)
+
+        async def put(self, url, json=None, headers=None):
+            calls.append(("PUT", url, json))
+            return FakeResponse(status_code=200)
+
+        async def post(self, url, json=None, headers=None):
+            calls.append(("POST", url, json))
+            return FakeResponse(
+                status_code=404,
+                payload={"status": {"error": "Not found: Collection `piap_candidate_memory` doesn't exist!"}},
+            )
+
+    monkeypatch.setattr("app.services.memory_vector_service.httpx.AsyncClient", FakeClient)
+    service = MemoryVectorService(
+        collection="piap_candidate_memory",
+        embedder_factory=embedder,
+        org_id="org-1",
+        user_id="user-1",
+    )
+
+    results = await service.search("first candidate", org_id="org-1", user_id="user-1")
+
+    assert results == []
+    assert [call[0] for call in calls] == ["POST", "GET", "PUT"]
+    assert calls[2][2]["vectors"]["size"] == 3

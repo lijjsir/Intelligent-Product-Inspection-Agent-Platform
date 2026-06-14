@@ -38,6 +38,14 @@ class FakePolicyRepo:
         return None
 
 
+class FakeNodeCaptureGraphStore:
+    def __init__(self):
+        self.nodes = []
+
+    async def upsert_memory_node(self, node):
+        self.nodes.append(node)
+
+
 class FakeItemRepo:
     def __init__(self):
         self.created = []
@@ -1005,3 +1013,30 @@ async def test_conflict_merge_creates_merged_memory_and_merged_from_edges():
         and edge.edge_type == EdgeType.MERGED_FROM.value
     ]
     assert {edge.target_memory_id for edge in merged_from_edges} == {"mem-a", "mem-b"}
+
+
+@pytest.mark.asyncio
+async def test_graph_node_sync_does_not_lazy_load_server_default_timestamps():
+    class LazyTimestampMemory:
+        memory_id = "mem-lazy"
+        memory_type = "task_episode"
+        status = "candidate"
+        trust_score = 0.6
+        confidence = 0.7
+        scope_json = {"task_id": "task-1"}
+
+        def __getattribute__(self, name):
+            if name in {"created_at", "updated_at"}:
+                raise AssertionError(f"{name} should not be lazy-loaded during graph sync")
+            return super().__getattribute__(name)
+
+    service = MemoryService(None, "org-1")
+    graph = FakeNodeCaptureGraphStore()
+    service._graph = graph
+
+    await service._sync_graph_memory_node(LazyTimestampMemory())
+
+    assert len(graph.nodes) == 1
+    assert graph.nodes[0].memory_id == "mem-lazy"
+    assert graph.nodes[0].created_at == ""
+    assert graph.nodes[0].updated_at == ""

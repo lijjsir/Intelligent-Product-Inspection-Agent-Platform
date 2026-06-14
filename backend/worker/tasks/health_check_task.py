@@ -6,7 +6,7 @@ from worker.celery_app import celery_app
 from worker.asyncio_runner import run_celery_async
 
 
-@celery_app.task(name="worker.tasks.health_check_task")
+@celery_app.task(name="worker.tasks.health_check_task.run_model_health_check")
 def run_model_health_check():
     return run_celery_async(_run_model_health_check())
 

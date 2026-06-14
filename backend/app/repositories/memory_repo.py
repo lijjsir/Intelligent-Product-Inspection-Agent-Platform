@@ -689,6 +689,19 @@ class MemorySyncOutboxRepository:
         self._session = session
         self._org_id = org_id
 
+    @staticmethod
+    async def list_pending_org_ids(session: AsyncSession, *, max_retries: int) -> list[str]:
+        result = await session.execute(
+            select(MemorySyncOutbox.org_id)
+            .where(
+                MemorySyncOutbox.status == "pending",
+                MemorySyncOutbox.retry_count < max_retries,
+            )
+            .distinct()
+            .order_by(MemorySyncOutbox.org_id.asc())
+        )
+        return [str(org_id) for org_id in result.scalars().all()]
+
     async def create_pending(
         self,
         *,

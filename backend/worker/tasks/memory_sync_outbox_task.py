@@ -16,6 +16,26 @@ def process_memory_sync_outbox(org_id: str) -> dict:
     return run_celery_async(_process_memory_sync_outbox(org_id))
 
 
+@celery_app.task(name="worker.tasks.memory_sync_outbox_task.dispatch_memory_sync_outbox")
+def dispatch_memory_sync_outbox() -> dict:
+    return run_celery_async(_dispatch_memory_sync_outbox())
+
+
+async def _dispatch_memory_sync_outbox() -> dict:
+    if not settings.memory_sync_outbox_enabled:
+        return {"orgs": 0, "queued": [], "disabled": True}
+    async with get_session() as session:
+        org_ids = await MemorySyncOutboxRepository.list_pending_org_ids(
+            session,
+            max_retries=settings.memory_sync_outbox_max_retries,
+        )
+    queued: list[str] = []
+    for org_id in org_ids:
+        process_memory_sync_outbox.delay(org_id)
+        queued.append(org_id)
+    return {"orgs": len(queued), "queued": queued}
+
+
 async def _process_memory_sync_outbox(org_id: str) -> dict:
     processed = 0
     failed = 0

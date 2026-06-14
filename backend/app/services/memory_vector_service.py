@@ -203,11 +203,15 @@ class MemoryVectorService:
 
         qdrant_filter: dict = {"must": must_clauses}
         if user_id:
-            qdrant_filter["should"] = [
+            user_conditions = [
                 {"key": "user_id", "match": {"value": user_id}},
                 {"key": "user_id", "match": {"value": ""}},
             ]
-            qdrant_filter["minimum_should_match"] = 1
+            qdrant_filter["should"] = user_conditions
+            qdrant_filter["min_should"] = {
+                "conditions": user_conditions,
+                "min_count": 1,
+            }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
@@ -220,6 +224,9 @@ class MemoryVectorService:
                 },
                 headers=self._headers,
             )
+            if resp.status_code == 404:
+                await self.ensure_collection(vector_size=len(vector))
+                return []
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:

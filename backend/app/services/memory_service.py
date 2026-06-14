@@ -1594,8 +1594,9 @@ class MemoryService:
         if not self._graph:
             return
         try:
-            created_at = getattr(memory, "created_at", None)
-            updated_at = getattr(memory, "updated_at", None)
+            loaded_values = object.__getattribute__(memory, "__dict__")
+            created_at = loaded_values.get("created_at")
+            updated_at = loaded_values.get("updated_at")
             await self._graph.upsert_memory_node(
                 MemoryGraphNode(
                     memory_id=memory.memory_id,
