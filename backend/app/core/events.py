@@ -10,9 +10,20 @@ from app.core.logging import configure_logging
 logger = logging.getLogger(__name__)
 
 
+async def check_neo4j_on_startup() -> None:
+    try:
+        from app.services.graph_health_service import GraphHealthService
+        await GraphHealthService().assert_neo4j_ready()
+        logger.info("Neo4j connectivity check passed")
+    except Exception as exc:
+        logger.critical("Neo4j startup check failed: %s", exc)
+        raise
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    await check_neo4j_on_startup()
     await seed_paper_templates_on_startup()
     await log_paper_review_runtime_status()
     yield

@@ -205,6 +205,12 @@ export interface ChatRouteTrace {
   errors?: Array<Record<string, unknown>>;
 }
 
+export interface ChatErrorPayload {
+  error_code?: string;
+  error?: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface ChatMessagePayload {
   result_id?: string | null;
   result?: {
@@ -274,6 +280,8 @@ export interface ChatMessagePayload {
   status?: string;
   workflow_run_id?: string;
   error?: string;
+  error_code?: string;
+  detail?: Record<string, unknown>;
 }
 
 export interface ChatMessage {

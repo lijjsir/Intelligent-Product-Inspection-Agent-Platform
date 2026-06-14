@@ -997,16 +997,6 @@ class MemoryService:
 
         # 1. version_parent_id -> version_of
         if request.version_parent_id:
-            await self._dep_repo.upsert_edge(
-                source_memory_id=memory_id,
-                target_memory_id=request.version_parent_id,
-                edge_type=EdgeType.VERSION_OF.value,
-                strength=1.0,
-                metadata_json={
-                    **base_metadata,
-                    "reason": "new memory version replaces parent memory",
-                },
-            )
             await self._sync_graph_memory_edge(
                 source_memory_id=memory_id,
                 target_memory_id=request.version_parent_id,
@@ -1019,16 +1009,6 @@ class MemoryService:
 
         # 2. evidence_pointers.memory_ids -> cited_as_evidence
         for target_id in self._extract_evidence_memory_ids(request.evidence_pointers):
-            await self._dep_repo.upsert_edge(
-                source_memory_id=memory_id,
-                target_memory_id=target_id,
-                edge_type=EdgeType.CITED_AS_EVIDENCE.value,
-                strength=0.9,
-                metadata_json={
-                    **base_metadata,
-                    "reason": "target memory cited as evidence",
-                },
-            )
             await self._sync_graph_memory_edge(
                 source_memory_id=memory_id,
                 target_memory_id=target_id,
@@ -1044,17 +1024,6 @@ class MemoryService:
             if dep.target_memory_id == memory_id:
                 continue
 
-            await self._dep_repo.upsert_edge(
-                source_memory_id=memory_id,
-                target_memory_id=dep.target_memory_id,
-                edge_type=dep.edge_type.value,
-                strength=dep.strength,
-                metadata_json={
-                    **base_metadata,
-                    "reason": dep.reason,
-                    "extra": dep.metadata,
-                },
-            )
             await self._sync_graph_memory_edge(
                 source_memory_id=memory_id,
                 target_memory_id=dep.target_memory_id,

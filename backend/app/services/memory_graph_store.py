@@ -79,6 +79,36 @@ class MemoryGraphStore(ABC):
     async def health_check(self) -> bool:
         ...
 
+    @abstractmethod
+    async def list_downstream_memories(
+        self, *, org_id: str, root_memory_id: str,
+        edge_types: list[str], max_depth: int,
+    ) -> list[dict]: ...
+
+    @abstractmethod
+    async def list_upstream_memories(
+        self, *, org_id: str, memory_id: str,
+        edge_types: list[str] | None = None, max_depth: int = 4,
+    ) -> list[dict]: ...
+
+    @abstractmethod
+    async def list_conflict_edges(
+        self, *, org_id: str, memory_id: str | None = None,
+        include_resolved: bool = False,
+    ) -> list[dict]: ...
+
+    @abstractmethod
+    async def soft_delete_memory_edges(
+        self, *, org_id: str, memory_id: str,
+        edge_types: list[str] | None = None,
+    ) -> int: ...
+
+    @abstractmethod
+    async def mark_conflict_resolved(
+        self, *, org_id: str, source_memory_id: str,
+        target_memory_id: str, resolution: str, resolved_by: str,
+    ) -> None: ...
+
 
 class MySQLMemoryGraphStore(MemoryGraphStore):
     """MySQL-backed implementation using existing MemoryDependencyRepository."""
@@ -146,3 +176,18 @@ class MySQLMemoryGraphStore(MemoryGraphStore):
 
     async def health_check(self) -> bool:
         return True
+
+    async def list_downstream_memories(self, *, org_id, root_memory_id, edge_types, max_depth):
+        return []
+
+    async def list_upstream_memories(self, *, org_id, memory_id, edge_types=None, max_depth=4):
+        return []
+
+    async def list_conflict_edges(self, *, org_id, memory_id=None, include_resolved=False):
+        return []
+
+    async def soft_delete_memory_edges(self, *, org_id, memory_id, edge_types=None):
+        return 0
+
+    async def mark_conflict_resolved(self, *, org_id, source_memory_id, target_memory_id, resolution, resolved_by):
+        pass

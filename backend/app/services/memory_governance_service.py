@@ -42,6 +42,8 @@ class MemoryProvenanceService:
         self._org_id = org_id
         self._item_repo = MemoryItemRepository(session, org_id)
         self._event_repo = MemoryEventRepository(session, org_id)
+        from app.services.memory_graph_factory import build_memory_graph_store
+        self._graph_store = build_memory_graph_store(session, org_id)
         self._dep_repo = MemoryDependencyRepository(session, org_id)
 
     async def trace_provenance(self, memory_id: str, trace_id: str | None = None) -> dict:
@@ -56,7 +58,20 @@ class MemoryProvenanceService:
             limit=200,
         )
 
-        edges = await self._dep_repo.list_by_target(memory_id)
+        upstream = await self._graph_store.list_upstream_memories(
+            org_id=self._org_id,
+            memory_id=memory_id,
+            edge_types=[
+                "version_of",
+                "summarized_from",
+                "merged_from",
+                "derived_from",
+                "cited_as_evidence",
+                "planned_from",
+                "rollback_depends_on",
+            ],
+            max_depth=4,
+        )
 
         return {
             "memory_id": memory_id,
@@ -75,11 +90,11 @@ class MemoryProvenanceService:
             "trace_id": memory.trace_id,
             "upstream_edges": [
                 {
-                    "source_memory_id": e.source_memory_id,
-                    "edge_type": e.edge_type,
-                    "strength": float(e.strength) if e.strength else None,
+                    "source_memory_id": u["path_memory_ids"][-1],
+                    "edge_type": u["edge_types"][0] if u.get("edge_types") else "",
+                    "depth": u["depth"],
                 }
-                for e in edges
+                for u in upstream
             ],
         }
 
@@ -104,6 +119,8 @@ class MemoryPropagationService:
         self._org_id = org_id
         self._dep_repo = MemoryDependencyRepository(session, org_id)
         self._item_repo = MemoryItemRepository(session, org_id)
+        from app.services.memory_graph_factory import build_memory_graph_store
+        self._graph_store = build_memory_graph_store(session, org_id)
 
     async def build_propagation_graph(
         self,
@@ -162,11 +179,16 @@ class MemoryPropagationService:
                 continue
 
             # Find downstream memories that depend on the contaminated node
-            edges = await self._dep_repo.list_by_target(current)
-            for edge in edges:
-                if edge.edge_type not in edge_types:
-                    continue
-                downstream = edge.source_memory_id  # the memory that depends on current
+            downstream_edges = await self._graph_store.list_downstream_memories(
+                org_id=self._org_id,
+                root_memory_id=current,
+                edge_types=edge_types,
+                max_depth=1,
+            )
+            for edge in downstream_edges:
+                downstream = edge["memory_id"]  # the memory that depends on current
+                edge_type = edge["edge_types"][0] if edge.get("edge_types") else ""
+                strength = edge["strengths"][0] if edge.get("strengths") else 1.0
                 if downstream in visited:
                     if parent_id and parent_id not in visited[downstream].affected_by:
                         visited[downstream].affected_by.append(parent_id)
@@ -175,7 +197,7 @@ class MemoryPropagationService:
                 # Classify
                 if depth == 0:
                     classification = "indirect_contaminated"
-                elif edge.strength and float(edge.strength) < 0.3:
+                elif strength < 0.3:
                     classification = "suspected"
                 elif depth >= max_depth - 1:
                     classification = "clean_boundary"
@@ -186,11 +208,11 @@ class MemoryPropagationService:
                     memory_id=downstream,
                     classification=classification,
                     depth=depth + 1,
-                    edge_type=edge.edge_type,
+                    edge_type=edge_type,
                     affected_by=[current],
                 )
                 visited[downstream] = node
-                queue.append((downstream, depth + 1, edge.edge_type, current))
+                queue.append((downstream, depth + 1, edge_type, current))
 
 
 class MemoryRollbackService:

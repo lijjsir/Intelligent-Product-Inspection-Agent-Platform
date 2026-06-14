@@ -119,7 +119,8 @@ async def test_short_term_memory_requires_existing_session(monkeypatch):
     monkeypatch.setattr(chat_repo, "ChatSessionRepository", FakeSessionRepo)
     monkeypatch.setattr(chat_repo, "ChatMessageRepository", FakeMessageRepo)
 
-    with pytest.raises(ValueError, match="chat session not found"):
+    from app.errors.memory_errors import ShortTermMemoryError as STMError
+    with pytest.raises(STMError, match="聊天会话不存在"):
         await ShortTermMemoryService(FakeSession(), "org-1").build_context(
             user_id="user-1",
             session_id="missing-session",

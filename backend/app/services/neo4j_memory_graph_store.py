@@ -185,6 +185,123 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
         })
         return [dict(r) for r in records]
 
+    async def list_downstream_memories(
+        self, *, org_id: str, root_memory_id: str,
+        edge_types: list[str], max_depth: int,
+    ) -> list[dict]:
+        query = """
+        MATCH path = (root:Memory {org_id: $org_id, memory_id: $root_memory_id})
+                     <-[rels*1..$max_depth]-
+                     (downstream:Memory {org_id: $org_id})
+        WHERE ALL(r IN rels WHERE r.edge_type IN $edge_types AND coalesce(r.deleted_at, '') = '')
+        RETURN
+          downstream.memory_id AS memory_id,
+          length(path) AS depth,
+          [r IN rels | r.edge_type] AS edge_types,
+          [r IN rels | coalesce(r.strength, 1.0)] AS strengths,
+          [n IN nodes(path) | n.memory_id] AS path_memory_ids
+        ORDER BY depth ASC
+        LIMIT 500
+        """
+        records = await self._execute_read(query, {
+            "org_id": org_id,
+            "root_memory_id": root_memory_id,
+            "edge_types": edge_types,
+            "max_depth": max_depth,
+        })
+        return [dict(r) for r in records]
+
+    async def list_upstream_memories(
+        self, *, org_id: str, memory_id: str,
+        edge_types: list[str] | None = None, max_depth: int = 4,
+    ) -> list[dict]:
+        et = edge_types or list(MEMORY_RELATIONSHIP_TYPES.keys())
+        query = """
+        MATCH path = (m:Memory {org_id: $org_id, memory_id: $memory_id})
+                     -[rels*1..$max_depth]->
+                     (upstream:Memory {org_id: $org_id})
+        WHERE ALL(r IN rels WHERE r.edge_type IN $edge_types AND coalesce(r.deleted_at, '') = '')
+        RETURN
+          upstream.memory_id AS memory_id,
+          length(path) AS depth,
+          [r IN rels | r.edge_type] AS edge_types,
+          [n IN nodes(path) | n.memory_id] AS path_memory_ids
+        ORDER BY depth ASC
+        LIMIT 500
+        """
+        records = await self._execute_read(query, {
+            "org_id": org_id,
+            "memory_id": memory_id,
+            "edge_types": et,
+            "max_depth": max_depth,
+        })
+        return [dict(r) for r in records]
+
+    async def list_conflict_edges(
+        self, *, org_id: str, memory_id: str | None = None,
+        include_resolved: bool = False,
+    ) -> list[dict]:
+        resolved_filter = "" if include_resolved else "AND coalesce(r.resolved, false) = false"
+        mem_filter = ""
+        params: dict = {"org_id": org_id}
+        if memory_id:
+            mem_filter = "AND (a.memory_id = $memory_id OR b.memory_id = $memory_id)"
+            params["memory_id"] = memory_id
+        query = f"""
+        MATCH (a:Memory {{org_id: $org_id}})-[r:CONFLICTS_WITH]->(b:Memory {{org_id: $org_id}})
+        WHERE 1=1 {mem_filter} {resolved_filter}
+        RETURN
+          a.memory_id AS source_memory_id,
+          b.memory_id AS target_memory_id,
+          r.strength AS strength,
+          r.reason AS reason,
+          r.metadata_json AS metadata_json,
+          r.created_at AS created_at
+        ORDER BY r.created_at DESC
+        LIMIT 500
+        """
+        records = await self._execute_read(query, params)
+        return [dict(r) for r in records]
+
+    async def soft_delete_memory_edges(
+        self, *, org_id: str, memory_id: str,
+        edge_types: list[str] | None = None,
+    ) -> int:
+        et_filter = "AND r.edge_type IN $edge_types" if edge_types else ""
+        query = f"""
+        MATCH (m:Memory {{org_id: $org_id, memory_id: $memory_id}})-[r]-(:Memory)
+        WHERE 1=1 {et_filter}
+        SET r.deleted_at = datetime()
+        RETURN count(r) AS deleted_count
+        """
+        records = await self._execute_read(query, {
+            "org_id": org_id,
+            "memory_id": memory_id,
+            "edge_types": edge_types or [],
+        })
+        return records[0]["deleted_count"] if records else 0
+
+    async def mark_conflict_resolved(
+        self, *, org_id: str, source_memory_id: str,
+        target_memory_id: str, resolution: str, resolved_by: str,
+    ) -> None:
+        query = """
+        MATCH (a:Memory {org_id: $org_id, memory_id: $source_memory_id})
+              -[r:CONFLICTS_WITH]-
+              (b:Memory {org_id: $org_id, memory_id: $target_memory_id})
+        SET r.resolved = true,
+            r.resolution = $resolution,
+            r.resolved_by = $resolved_by,
+            r.resolved_at = datetime()
+        """
+        await self._execute(query, {
+            "org_id": org_id,
+            "source_memory_id": source_memory_id,
+            "target_memory_id": target_memory_id,
+            "resolution": resolution,
+            "resolved_by": resolved_by,
+        })
+
     async def create_event_memory_edge(self, org_id: str, event_id: str, memory_id: str,
                                         edge_type: str, trace_id: str = "") -> None:
         query = """
@@ -239,6 +356,33 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             return True
         except Exception:
             return False
+
+    async def verify_connectivity(self) -> None:
+        """Strict connectivity check. Raises if Neo4j is unreachable."""
+        async with self._driver.session(database=self._database) as session:
+            result = await session.run("RETURN 1 AS ok")
+            record = await result.single()
+            if not record or record["ok"] != 1:
+                raise RuntimeError("Neo4j returned invalid health check result")
+
+    async def ensure_schema(self) -> None:
+        """Create unique constraints and indexes for all node types."""
+        cyphers = [
+            "CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.memory_id IS UNIQUE",
+            "CREATE INDEX memory_org_id_idx IF NOT EXISTS FOR (m:Memory) ON (m.org_id)",
+            "CREATE INDEX memory_status_idx IF NOT EXISTS FOR (m:Memory) ON (m.status)",
+            "CREATE INDEX memory_type_idx IF NOT EXISTS FOR (m:Memory) ON (m.memory_type)",
+            "CREATE CONSTRAINT rag_chunk_id_unique IF NOT EXISTS FOR (c:RagChunk) REQUIRE c.chunk_id IS UNIQUE",
+            "CREATE CONSTRAINT agent_run_id_unique IF NOT EXISTS FOR (a:AgentRun) REQUIRE a.run_id IS UNIQUE",
+            "CREATE CONSTRAINT memory_event_id_unique IF NOT EXISTS FOR (e:MemoryEvent) REQUIRE e.event_id IS UNIQUE",
+            "CREATE CONSTRAINT task_id_unique IF NOT EXISTS FOR (t:Task) REQUIRE t.task_id IS UNIQUE",
+            "CREATE CONSTRAINT product_line_key_unique IF NOT EXISTS FOR (p:ProductLine) REQUIRE p.product_line_key IS UNIQUE",
+            "CREATE CONSTRAINT standard_version_key_unique IF NOT EXISTS FOR (s:StandardVersion) REQUIRE s.standard_version_key IS UNIQUE",
+        ]
+
+        async with self._driver.session(database=self._database) as session:
+            for cypher in cyphers:
+                await session.run(cypher)
 
     async def _execute(self, query: str, params: dict[str, Any]) -> None:
         async def _run(tx, q, p):

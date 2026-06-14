@@ -123,6 +123,7 @@ class MemoryVectorService:
         product_line: str = "",
         rag_space_id: str = "",
         task_id: str = "",
+        extra_payload: dict | None = None,
     ) -> None:
         """Upsert a memory point with payload for filtering."""
         if vector is None:
@@ -143,6 +144,8 @@ class MemoryVectorService:
             "rag_space_id": rag_space_id,
             "task_id": task_id,
         }
+        if extra_payload:
+            payload.update(extra_payload)
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.put(
@@ -167,8 +170,8 @@ class MemoryVectorService:
 
     async def search(
         self,
-        query: str,
-        org_id: str,
+        query: str = "",
+        org_id: str = "",
         top_k: int = 5,
         *,
         status: str = "active",
@@ -177,41 +180,52 @@ class MemoryVectorService:
         product_line: str | None = None,
         rag_space_id: str | None = None,
         task_id: str | None = None,
+        vector: list[float] | None = None,
+        filter_conditions: dict | None = None,
     ) -> list[dict]:
-        """Semantic search with payload pre-filtering. Raises on failure."""
-        vector = await self._embed(query)
+        """Semantic search with payload pre-filtering. Raises on failure.
 
-        must_clauses: list[dict] = [
-            {"key": "org_id", "match": {"value": org_id}},
-            {"key": "status", "match": {"value": status}},
-        ]
+        When *vector* is provided it is used directly (no embedding call).
+        When *filter_conditions* is provided it replaces the built filter
+        (org_id, status, user_id, memory_types, etc. are ignored).
+        """
+        if vector is None:
+            vector = await self._embed(query)
 
-        if memory_types:
-            if len(memory_types) == 1:
-                must_clauses.append({"key": "memory_type", "match": {"value": memory_types[0]}})
-            else:
-                must_clauses.append({"key": "memory_type", "match": {"any": memory_types}})
-
-        if product_line:
-            must_clauses.append({"key": "product_line", "match": {"value": product_line}})
-
-        if rag_space_id:
-            must_clauses.append({"key": "rag_space_id", "match": {"value": rag_space_id}})
-
-        if task_id:
-            must_clauses.append({"key": "task_id", "match": {"value": task_id}})
-
-        qdrant_filter: dict = {"must": must_clauses}
-        if user_id:
-            user_conditions = [
-                {"key": "user_id", "match": {"value": user_id}},
-                {"key": "user_id", "match": {"value": ""}},
+        if filter_conditions is not None:
+            qdrant_filter = filter_conditions
+        else:
+            must_clauses: list[dict] = [
+                {"key": "org_id", "match": {"value": org_id}},
+                {"key": "status", "match": {"value": status}},
             ]
-            qdrant_filter["should"] = user_conditions
-            qdrant_filter["min_should"] = {
-                "conditions": user_conditions,
-                "min_count": 1,
-            }
+
+            if memory_types:
+                if len(memory_types) == 1:
+                    must_clauses.append({"key": "memory_type", "match": {"value": memory_types[0]}})
+                else:
+                    must_clauses.append({"key": "memory_type", "match": {"any": memory_types}})
+
+            if product_line:
+                must_clauses.append({"key": "product_line", "match": {"value": product_line}})
+
+            if rag_space_id:
+                must_clauses.append({"key": "rag_space_id", "match": {"value": rag_space_id}})
+
+            if task_id:
+                must_clauses.append({"key": "task_id", "match": {"value": task_id}})
+
+            qdrant_filter = {"must": must_clauses}
+            if user_id:
+                user_conditions = [
+                    {"key": "user_id", "match": {"value": user_id}},
+                    {"key": "user_id", "match": {"value": ""}},
+                ]
+                qdrant_filter["should"] = user_conditions
+                qdrant_filter["min_should"] = {
+                    "conditions": user_conditions,
+                    "min_count": 1,
+                }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(

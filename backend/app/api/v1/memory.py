@@ -9,7 +9,7 @@ PUT  /api/v1/memory/policies/{key}     - policy configuration
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.deps import get_current_user, get_db
 from app.api.v1.memory_helpers import (
@@ -47,6 +47,7 @@ from app.schemas.memory import (
     MemorySearchResponse,
     MemoryStatus,
     MemoryWriteRequest,
+    RollbackAction,
     MemoryWriteResponse,
     PromotionEvaluationResponse,
     SearchWithConflictGuardRequest,
@@ -441,6 +442,15 @@ async def execute_rollback(
         raise missing_org_error(body.trace_id)
     require_uuid(body.operator_id, "operator_id", body.trace_id)
 
+    if body.rollback_action == RollbackAction.BRANCH:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "ROLLBACK_BRANCH_UNSUPPORTED",
+                "message": "branch rollback is reserved and not implemented",
+            },
+        )
+
     vector_svc = build_vector_service(org_id, current.user_id, body.trace_id)
     svc = MemoryRollbackService(db, org_id, vector_svc)
     try:
@@ -577,9 +587,10 @@ async def list_conflicts(
     """List contested memories and their conflict edges."""
     require_role("memory_governance", current.role)
 
-    from app.repositories.memory_repo import MemoryDependencyRepository, MemoryItemRepository
+    from app.repositories.memory_repo import MemoryItemRepository
+    from app.services.memory_graph_factory import build_memory_graph_store
     item_repo = MemoryItemRepository(db, current.org_id)
-    dep_repo = MemoryDependencyRepository(db, current.org_id)
+    graph_store = build_memory_graph_store(db, current.org_id)
 
     items = await item_repo.list_by_org(
         status=status or "contested",
@@ -589,16 +600,15 @@ async def list_conflicts(
 
     conflicts: list[dict] = []
     for item in items:
-        edges = await dep_repo.list_by_edge_type(
-            item.memory_id,
-            ["conflicts_with"],
-            direction="source",
+        graph_edges = await graph_store.list_conflict_edges(
+            org_id=current.org_id,
+            memory_id=item.memory_id,
+            include_resolved=False,
         )
-        for edge in edges:
-            target = await item_repo.get_by_memory_id(edge.target_memory_id)
+        for edge in graph_edges:
+            target = await item_repo.get_by_memory_id(edge["target_memory_id"])
             if target:
                 conflicts.append({
-                    "edge_id": edge.id,
                     "source_memory": {
                         "memory_id": item.memory_id,
                         "summary": item.content_summary or "",
@@ -613,7 +623,9 @@ async def list_conflicts(
                         "confidence": float(target.confidence) if target.confidence else None,
                         "trust_score": float(target.trust_score) if target.trust_score else None,
                     },
-                    "created_at": edge.created_at.isoformat() if edge.created_at else None,
+                    "strength": edge.get("strength"),
+                    "reason": edge.get("reason"),
+                    "created_at": edge.get("created_at"),
                 })
 
     return ResponseEnvelope(data={"conflicts": conflicts[:limit], "total": len(conflicts)})
@@ -628,21 +640,25 @@ async def get_conflict_detail(
     """Get all conflict relationships for a specific memory."""
     require_role("memory_governance", current.role)
 
-    from app.repositories.memory_repo import MemoryDependencyRepository, MemoryItemRepository
+    from app.repositories.memory_repo import MemoryItemRepository
+    from app.services.memory_graph_factory import build_memory_graph_store
     item_repo = MemoryItemRepository(db, current.org_id)
-    dep_repo = MemoryDependencyRepository(db, current.org_id)
+    graph_store = build_memory_graph_store(db, current.org_id)
 
     item = await item_repo.get_by_memory_id(memory_id)
     if not item:
         raise not_found_error(f"Memory {memory_id} not found")
 
-    edges = await dep_repo.list_by_edge_type(memory_id, ["conflicts_with"], direction="source")
+    graph_edges = await graph_store.list_conflict_edges(
+        org_id=current.org_id,
+        memory_id=memory_id,
+        include_resolved=False,
+    )
     conflicts = []
-    for edge in edges:
-        target = await item_repo.get_by_memory_id(edge.target_memory_id)
+    for edge in graph_edges:
+        target = await item_repo.get_by_memory_id(edge["target_memory_id"])
         if target:
             conflicts.append({
-                "edge_id": edge.id,
                 "target": {
                     "memory_id": target.memory_id,
                     "summary": target.content_summary or "",
@@ -651,7 +667,8 @@ async def get_conflict_detail(
                     "trust_score": float(target.trust_score) if target.trust_score else None,
                     "status": target.status,
                 },
-                "created_at": edge.created_at.isoformat() if edge.created_at else None,
+                "strength": edge.get("strength"),
+                "created_at": edge.get("created_at"),
             })
 
     return ResponseEnvelope(data={
@@ -678,19 +695,24 @@ async def resolve_conflict(
     require_role("memory_governance", current.role)
     require_uuid(body.reviewer_id, "reviewer_id", None)
 
-    from app.repositories.memory_repo import MemoryDependencyRepository, MemoryItemRepository
+    from app.repositories.memory_repo import MemoryItemRepository
+    from app.services.memory_graph_factory import build_memory_graph_store
     item_repo = MemoryItemRepository(db, current.org_id)
-    dep_repo = MemoryDependencyRepository(db, current.org_id)
+    graph_store = build_memory_graph_store(db, current.org_id)
 
     item = await item_repo.get_by_memory_id(memory_id)
     if not item:
         raise not_found_error(f"Memory {memory_id} not found")
 
-    edges = await dep_repo.list_by_edge_type(memory_id, ["conflicts_with"], direction="source")
-    if not edges:
+    graph_edges = await graph_store.list_conflict_edges(
+        org_id=current.org_id,
+        memory_id=memory_id,
+        include_resolved=False,
+    )
+    if not graph_edges:
         raise not_found_error("No active conflicts found")
 
-    target_id = edges[0].target_memory_id
+    target_id = graph_edges[0]["target_memory_id"]
     target = await item_repo.get_by_memory_id(target_id)
 
     merged_id = None
@@ -728,10 +750,13 @@ async def resolve_conflict(
             detail={"operation": "resolve_conflict", "action": body.action},
         )
 
-    if hasattr(dep_repo, "soft_delete_edges_between"):
-        await dep_repo.soft_delete_edges_between(memory_id, target_id, "conflicts_with")
-    else:
-        await dep_repo.soft_delete_by_memory(memory_id)
+    await graph_store.mark_conflict_resolved(
+        org_id=current.org_id,
+        source_memory_id=memory_id,
+        target_memory_id=target_id,
+        resolution=body.action,
+        resolved_by=body.reviewer_id,
+    )
 
     return ResponseEnvelope(data={
         "resolution": body.action,

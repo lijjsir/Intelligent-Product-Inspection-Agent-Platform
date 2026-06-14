@@ -550,6 +550,7 @@ class ChatService:
                         user_id=self._user_id,
                         session_id=session_id,
                         current_user_seq_no=current_user_seq_no,
+                        current_query=request.message.strip(),
                     )
                     ext_payload["history_messages"] = stm["recent_messages"]
                     ext_payload["conversation_summary"] = stm["conversation_summary"]
@@ -680,18 +681,9 @@ class ChatService:
                 assistant_message_id,
                 workflow_run_id,
             )
-            content = (
-                "这次聊天任务没有顺利完成。\n"
-                "请稍后重试，或补充更明确的检测标准、产品信息和问题细节。"
-            )
-            failure_payload = {"status": "failed", "error": str(exc)}
+            failure_payload = self._build_error_payload(exc)
             error_message = str(exc) or exc.__class__.__name__
             content = f"聊天任务执行失败：{error_message}"
-            failure_payload = {
-                "status": "failed",
-                "error_code": "CHAT_WORKFLOW_FAILED",
-                "error": error_message,
-            }
             async with get_session() as session:
                 repo = ChatMessageRepository(session)
                 await repo.update_assistant_message(
@@ -712,6 +704,20 @@ class ChatService:
                     "payload": failure_payload,
                 }
             )
+
+    @staticmethod
+    def _build_error_payload(exc: Exception) -> dict:
+        code = getattr(exc, "code", "CHAT_WORKFLOW_FAILED")
+        detail = getattr(exc, "detail", {})
+        return {
+            "status": "failed",
+            "message_type": "error",
+            "error_code": code,
+            "error": str(exc),
+            "detail": detail,
+            "ui_schema": "chat_error_v1",
+            "recoverable": False,
+        }
 
     @staticmethod
     def _empty_inspection_context(*, scope: str, error: str | None = None) -> dict[str, Any]:

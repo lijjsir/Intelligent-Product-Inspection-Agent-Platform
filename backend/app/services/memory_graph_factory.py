@@ -54,6 +54,23 @@ class DualWriteMemoryGraphStore(MemoryGraphStore):
     async def health_check(self) -> bool:
         return await self._neo4j.health_check()
 
+    async def list_downstream_memories(self, *args, **kwargs):
+        return await self._reader.list_downstream_memories(*args, **kwargs)
+
+    async def list_upstream_memories(self, *args, **kwargs):
+        return await self._reader.list_upstream_memories(*args, **kwargs)
+
+    async def list_conflict_edges(self, *args, **kwargs):
+        return await self._reader.list_conflict_edges(*args, **kwargs)
+
+    async def soft_delete_memory_edges(self, *args, **kwargs):
+        mysql_result = await self._mysql.soft_delete_memory_edges(*args, **kwargs)
+        neo4j_result = await self._neo4j.soft_delete_memory_edges(*args, **kwargs)
+        return neo4j_result
+
+    async def mark_conflict_resolved(self, *args, **kwargs):
+        await self._reader.mark_conflict_resolved(*args, **kwargs)
+
 
 def build_memory_graph_store(session, org_id: str) -> MemoryGraphStore:
     """Factory: returns the correct MemoryGraphStore based on settings."""

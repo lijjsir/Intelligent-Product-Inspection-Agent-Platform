@@ -8,6 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.core.ids import uuid7
+from app.errors.memory_errors import ShortTermMemoryError
+
 logger = logging.getLogger(__name__)
 
 MAX_PROMPT_CHARS = 6000
@@ -31,6 +34,7 @@ class ShortTermMemoryService:
         user_id: str,
         session_id: str,
         current_user_seq_no: int,
+        current_query: str = "",
         max_recent_messages: int = 20,
         max_prompt_chars: int = MAX_PROMPT_CHARS,
     ) -> dict[str, Any]:
@@ -50,16 +54,38 @@ class ShortTermMemoryService:
         session_repo = ChatSessionRepository(self._session)
 
         # Load session-level summary/facts
-        chat_session = await session_repo.get(self._org_id, user_id, session_id)
+        try:
+            chat_session = await session_repo.get(self._org_id, user_id, session_id)
+        except Exception as exc:
+            raise ShortTermMemoryError(
+                "读取聊天会话失败，无法构建短期记忆。",
+                code="SHORT_TERM_SESSION_READ_FAILED",
+                detail={"session_id": session_id, "user_id": user_id},
+            ) from exc
+
         if not chat_session:
-            raise ValueError("chat session not found for short-term memory")
+            raise ShortTermMemoryError(
+                "聊天会话不存在，无法构建短期记忆。",
+                code="SHORT_TERM_SESSION_NOT_FOUND",
+                detail={"session_id": session_id, "user_id": user_id},
+            )
         conversation_summary = chat_session.context_summary or ""
         session_facts: dict[str, Any] = dict(chat_session.context_facts_json or {})
 
         # Load recent messages (exclude current user message)
-        rows = await msg_repo.list_for_session(
-            org_id=self._org_id, session_id=session_id, after_seq=0, limit=60
-        )
+        try:
+            rows = await msg_repo.list_for_session(
+                org_id=self._org_id, session_id=session_id, after_seq=0, limit=60
+            )
+        except Exception as exc:
+            raise ShortTermMemoryError(
+                "读取聊天消息失败，无法构建短期记忆。",
+                code="SHORT_TERM_MESSAGES_READ_FAILED",
+                detail={
+                    "session_id": session_id,
+                    "current_user_seq_no": current_user_seq_no,
+                },
+            ) from exc
         filtered: list[dict[str, Any]] = []
         eligible_rows = [m for m in rows if int(m.seq_no or 0) < current_user_seq_no]
 
@@ -82,6 +108,37 @@ class ShortTermMemoryService:
 
         recent = filtered[-max_recent_messages:]
 
+        # Session-local semantic recall
+        semantic_recall: list[dict] = []
+        if current_query.strip():
+            try:
+                from app.services.session_memory_vector_service import SessionMemoryVectorService
+                from agent.rag.embedder import Embedder
+
+                embedder = Embedder(
+                    org_id=self._org_id,
+                    user_id=user_id,
+                    trace_id=None,
+                    allow_pseudo_fallback=False,
+                )
+
+                async def _embed_factory(text: str) -> list[float]:
+                    return await embedder.embed(text)
+
+                session_vector_svc = SessionMemoryVectorService(
+                    _embed_factory, self._org_id, user_id,
+                )
+                semantic_recall = await session_vector_svc.search_session(
+                    org_id=self._org_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    query=current_query,
+                    before_seq_no=current_user_seq_no,
+                    top_k=5,
+                )
+            except Exception:
+                logger.debug("Session semantic recall skipped", exc_info=True)
+
         # Token-aware truncation
         model_window = await self._resolve_model_context_window()
         system_overhead = self._estimate_tokens(
@@ -99,23 +156,65 @@ class ShortTermMemoryService:
         )
         estimated_used = sum(self._estimate_tokens(m["content"]) for m in recent_messages)
 
-        return {
-            "conversation_summary": conversation_summary,
-            "session_facts": session_facts,
-            "recent_messages": [{"role": m["role"], "content": m["content"]} for m in recent_messages],
+        # Build structured sub-objects
+        session_summary = {
+            "summary": conversation_summary,
+            "confirmed_facts": session_facts,
+            "open_questions": pending_state.get("open_questions") or [],
+            "decisions_made": pending_state.get("decisions_made") or [],
+            "warnings": pending_state.get("warnings") or [],
+        }
+
+        working_state = {
             "pending_action": pending_action,
             "awaiting_confirmation": pending_state.get("awaiting_confirmation"),
             "task_draft": pending_state.get("task_draft"),
             "task_form_defaults": pending_state.get("task_form_defaults"),
             "missing_slots": pending_state.get("missing_slots"),
             "paper_review_status": pending_state.get("paper_review_status"),
+        }
+
+        ui_state = {
             "selected_rag_space": selected_rag_space,
-            "token_budget": {
-                "model_window": model_window,
-                "reserved": reserved,
-                "available": available,
-                "estimated_used": estimated_used,
-                "truncated": truncated,
+            "selected_files": [],
+            "selected_images": [],
+            "selected_inspection_task_ids": [],
+        }
+
+        recent_dialogue = [
+            {"role": m["role"], "content": m["content"], "seq_no": m["seq_no"]}
+            for m in recent_messages
+        ]
+
+        token_budget = {
+            "model_window": model_window,
+            "reserved": reserved,
+            "available": available,
+            "estimated_used": estimated_used,
+            "truncated": truncated,
+        }
+
+        return {
+            # Backward-compatible flat fields
+            "conversation_summary": session_summary["summary"],
+            "session_facts": session_summary["confirmed_facts"],
+            "recent_messages": [{"role": m["role"], "content": m["content"]} for m in recent_messages],
+            "pending_action": working_state["pending_action"],
+            "awaiting_confirmation": working_state["awaiting_confirmation"],
+            "task_draft": working_state["task_draft"],
+            "task_form_defaults": working_state["task_form_defaults"],
+            "missing_slots": working_state["missing_slots"],
+            "paper_review_status": working_state["paper_review_status"],
+            "selected_rag_space": ui_state["selected_rag_space"],
+            "token_budget": token_budget,
+            "semantic_recall": semantic_recall,
+            # NEW: structured short_term_memory
+            "short_term_memory": {
+                "session_summary": session_summary,
+                "recent_dialogue": recent_dialogue,
+                "working_state": working_state,
+                "ui_state": ui_state,
+                "token_budget": token_budget,
             },
         }
 
@@ -151,15 +250,45 @@ class ShortTermMemoryService:
 
             pa = payload.get("pending_action")
             if pa:
-                state["pending_action"] = dict(pa) if isinstance(pa, dict) else {"type": str(pa)}
+                state["pending_action"] = {
+                    "id": pa.get("id", f"pa_{uuid7()}"),
+                    "type": pa.get("type", "fill_slots"),
+                    "status": pa.get("status", "pending"),
+                    "created_at": pa.get("created_at"),
+                    "updated_at": pa.get("updated_at"),
+                    "expires_at": pa.get("expires_at"),
+                    "source_message_id": pa.get("source_message_id"),
+                    "source_seq_no": pa.get("source_seq_no"),
+                    "last_user_response_seq_no": pa.get("last_user_response_seq_no"),
+                    "missing_slots": pa.get("missing_slots", []),
+                    "task_draft": pa.get("task_draft", {}),
+                    "confirmation_policy": pa.get("confirmation_policy", "explicit"),
+                }
+
+                # Check expiry
+                expires_at = state["pending_action"].get("expires_at")
+                if expires_at:
+                    from datetime import datetime, timezone
+                    try:
+                        exp_dt = datetime.fromisoformat(str(expires_at))
+                        if exp_dt < datetime.now(timezone.utc):
+                            state["pending_action"]["status"] = "expired"
+                    except (ValueError, TypeError):
+                        pass
             elif any(state.values()):
                 state["pending_action"] = {
+                    "id": f"pa_{uuid7()}",
                     "type": payload.get("pending_action_type") or "fill_slots",
-                    "task_draft": state["task_draft"],
-                    "task_form_defaults": state["task_form_defaults"],
-                    "missing_slots": state["missing_slots"],
-                    "awaiting_confirmation": state["awaiting_confirmation"],
-                    "paper_review_status": state["paper_review_status"],
+                    "status": "pending",
+                    "created_at": None,
+                    "updated_at": None,
+                    "expires_at": None,
+                    "source_message_id": None,
+                    "source_seq_no": None,
+                    "last_user_response_seq_no": None,
+                    "missing_slots": state["missing_slots"] or [],
+                    "task_draft": state["task_draft"] or {},
+                    "confirmation_policy": "explicit",
                 }
             else:
                 state["pending_action"] = None

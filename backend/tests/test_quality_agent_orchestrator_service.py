@@ -687,6 +687,12 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
         async def get(self, model, key):
             return None
 
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
+            return None
+
         async def commit(self):
             return None
 
@@ -814,6 +820,12 @@ async def test_persist_chat_result_writes_file_parse_tool_execution(monkeypatch)
         async def get(self, model, key):
             return None
 
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
+            return None
+
         async def commit(self):
             return None
 
@@ -921,6 +933,12 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
     rag_logs: dict[str, dict] = {}
 
     class FakeSession:
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
+            return None
+
         async def commit(self):
             return None
 
@@ -1013,6 +1031,9 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     task_store = {"task": None}
 
     class FakeSession:
+        def add(self, _instance):
+            return None
+
         async def flush(self):
             return None
 

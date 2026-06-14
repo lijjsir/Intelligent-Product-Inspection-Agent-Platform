@@ -97,13 +97,13 @@ class Settings(BaseSettings):
     report_export_bucket: str = "report-exports"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
-    neo4j_enabled: bool = False
+    neo4j_enabled: bool = True
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str = "neo4j_password"
     neo4j_database: str = "neo4j"
-    memory_graph_write_backend: str = "dual"  # mysql | neo4j | dual
-    memory_graph_read_backend: str = "mysql"   # mysql | neo4j
+    memory_graph_write_backend: str = "neo4j"  # mysql | neo4j | dual
+    memory_graph_read_backend: str = "neo4j"   # mysql | neo4j
     memory_strict_sync: bool = True
     memory_sync_outbox_enabled: bool = True
     memory_sync_outbox_batch_size: int = 50

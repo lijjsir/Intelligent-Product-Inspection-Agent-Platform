@@ -575,6 +575,15 @@ class MemoryDependencyRepository:
         await self._session.flush()
         return result.rowcount
 
+    async def list_all(self, *, org_id: str) -> list[MemoryDependencyEdge]:
+        stmt = (
+            select(MemoryDependencyEdge)
+            .where(MemoryDependencyEdge.org_id == org_id)
+            .where(MemoryDependencyEdge.deleted_at.is_(None))
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
 
 class MemoryPolicyRepository:
     def __init__(self, session: AsyncSession, org_id: str):

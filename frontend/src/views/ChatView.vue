@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleClose, CollectionTag, Paperclip, Promotion } from "@element-plus/icons-vue";
+import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -664,6 +664,29 @@ async function retryFromAssistantMessage(message: ChatMessage) {
   }
 }
 
+function formatErrorForCopy(message: ChatMessage): string {
+  const p = message.payload;
+  const lines: string[] = ["执行失败"];
+  if (p?.error_code) lines.push(`错误码: ${p.error_code}`);
+  if (p?.error) lines.push(`错误信息: ${p.error}`);
+  if (p?.detail && typeof p.detail === "object" && Object.keys(p.detail).length > 0) {
+    lines.push("详细信息:");
+    for (const [key, value] of Object.entries(p.detail)) {
+      lines.push(`  ${key}: ${value}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+async function copyErrorMessage(message: ChatMessage) {
+  const text = formatErrorForCopy(message);
+  await copyToClipboard(text, "错误信息已复制");
+}
+
+async function resendFromErrorMessage(message: ChatMessage) {
+  await retryFromAssistantMessage(message);
+}
+
 async function scrollToBottom() {
   await nextTick();
   const container = messageListRef.value;
@@ -966,6 +989,36 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <div class="task-card-actions">
                   <el-button size="small" @click="router.push(`/app/tasks/${message.payload.created_task.id}`)">查看任务详情</el-button>
                   <el-button v-if="taskResult(message)" size="small" type="primary" plain @click="router.push(`/app/results/${message.payload.created_task.id}`)">查看质检结果</el-button>
+                </div>
+              </div>
+
+              <!-- Error card -->
+              <div v-if="message.message_type === 'error'" class="error-card">
+                <div class="error-card-header">
+                  <el-icon color="#dc2626"><WarningFilled /></el-icon>
+                  <span class="error-card-title">执行失败</span>
+                </div>
+                <div class="error-card-body">
+                  <div v-if="message.payload?.error_code" class="error-item">
+                    <span class="error-label">错误码</span>
+                    <el-tag size="small" type="danger" effect="plain">{{ message.payload.error_code }}</el-tag>
+                  </div>
+                  <div v-if="message.payload?.error" class="error-item">
+                    <span class="error-label">错误信息</span>
+                    <span class="error-message-text">{{ message.payload.error }}</span>
+                  </div>
+                  <div v-if="message.payload?.detail && typeof message.payload.detail === 'object' && Object.keys(message.payload.detail).length > 0" class="error-item">
+                    <span class="error-label">详细信息</span>
+                    <div class="error-detail-list">
+                      <div v-for="(value, key) in message.payload.detail" :key="key" class="error-detail-row">
+                        <span class="error-detail-key">{{ key }}</span>: <span>{{ value }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="error-card-actions">
+                  <el-button size="small" @click="copyErrorMessage(message)">复制错误</el-button>
+                  <el-button size="small" type="primary" @click="resendFromErrorMessage(message)" :disabled="chatStore.loading">重新发送</el-button>
                 </div>
               </div>
 
@@ -1325,6 +1378,73 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-weight: 600;
 }
 .task-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* ── Error card ── */
+.error-card {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+.error-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.error-card-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: #991b1b;
+}
+.error-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.error-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.error-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b91c1c;
+  text-transform: uppercase;
+}
+.error-message-text {
+  font-size: 13px;
+  color: #7f1d1d;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.error-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fee2e2;
+}
+.error-detail-row {
+  font-size: 12px;
+  color: #991b1b;
+  line-height: 1.5;
+}
+.error-detail-key {
+  font-weight: 600;
+  color: #7f1d1d;
+}
+.error-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .task-actions { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .task-action-note {
   display: grid;

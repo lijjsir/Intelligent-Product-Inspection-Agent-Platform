@@ -701,29 +701,53 @@ class ChatExecutor:
 
     @staticmethod
     def _short_term_context_text(state: ManagerState) -> str:
-        """Build short-term memory prefix for prompts. Distinct from shared memory."""
-        parts: list[str] = []
+        stm = state.short_term_memory or {}
+        lines = []
+        lines.append("[Short-Term Memory — current session only]")
+        lines.append("Use this only for the current conversation. If it conflicts with the latest user message, follow the latest user message.")
 
-        summary = state.conversation_summary
-        if summary:
-            parts.append(f"[Conversation Summary]: {summary}")
+        # Session summary
+        session_summary = stm.get("session_summary") or {}
+        if session_summary:
+            summary_text = session_summary.get("summary", "")
+            if summary_text:
+                lines.append(f"Session summary: {summary_text}")
+            facts = session_summary.get("confirmed_facts", {})
+            if facts:
+                lines.append(f"Confirmed facts: {json.dumps(facts, ensure_ascii=False)}")
+            questions = session_summary.get("open_questions", [])
+            if questions:
+                lines.append(f"Open questions: {json.dumps(questions, ensure_ascii=False)}")
+            decisions = session_summary.get("decisions_made", [])
+            if decisions:
+                lines.append(f"Decisions made: {json.dumps(decisions, ensure_ascii=False)}")
 
-        facts = state.session_facts
-        if facts:
-            fact_lines = [f"  - {k}: {v}" for k, v in facts.items()]
-            parts.append("[Session Facts]:\n" + "\n".join(fact_lines))
+        # Working state
+        working_state = stm.get("working_state") or {}
+        if working_state:
+            lines.append("[Working State]")
+            lines.append(json.dumps(working_state, ensure_ascii=False, indent=2))
 
-        pending = state.pending_action
-        if pending:
-            parts.append(f"[Pending Action]: {pending}")
+        # UI state
+        ui_state = stm.get("ui_state") or {}
+        if ui_state:
+            lines.append("[UI State]")
+            lines.append(json.dumps(ui_state, ensure_ascii=False, indent=2))
 
-        if parts:
-            parts.insert(0, (
-                "[Short-Term Memory — current chat session context only.\n"
-                " If it conflicts with the current user message, follow the current user message.\n"
-                " Do not treat as inspection standard or external evidence.]"
-            ))
-        return "\n".join(parts)
+        # Session semantic recall
+        semantic_recall = stm.get("semantic_recall") or []
+        if semantic_recall:
+            lines.append("")
+            lines.append("[Session Semantic Recall]")
+            lines.append("These snippets from earlier in the current chat may be relevant to the current query:")
+            for sr in semantic_recall:
+                role = sr.get("role", "")
+                seq = sr.get("seq_no", 0)
+                score = sr.get("score", 0)
+                content = sr.get("content", "")[:300]
+                lines.append(f"  - [{role} seq={seq} score={score:.2f}] {content}")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _history_text(state: ManagerState) -> str:

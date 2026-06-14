@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.errors.memory_errors import ShortTermMemoryError
+
 logger = logging.getLogger(__name__)
 
 SUMMARY_TRIGGER_COUNT = 8
@@ -62,7 +64,16 @@ class ChatSessionSummaryService:
             f"[{m.role}]: {(m.content or '')[:500]}"
             for m in to_summarize[-20:]
         )
-        new_summary, new_facts = await self._llm_summarize(transcript)
+        try:
+            new_summary, new_facts = await self._llm_summarize(transcript)
+        except ShortTermMemoryError:
+            raise
+        except Exception as exc:
+            raise ShortTermMemoryError(
+                "短期记忆摘要失败。",
+                code="SHORT_TERM_SUMMARY_FAILED",
+                detail={"session_id": session_id},
+            ) from exc
 
         existing_summary = chat_session.context_summary or ""
         merged_summary = f"{existing_summary}\n{new_summary}".strip() if existing_summary else new_summary
@@ -95,7 +106,10 @@ class ChatSessionSummaryService:
             runtime_models = await ModelConfigService(s, self._org_id).list_runtime_models()
             runtime = await LLMGateway().select_runtime(runtime_models, model_types={"chat", "text_generation"})
             if not runtime:
-                return "", {}
+                raise ShortTermMemoryError(
+                    "没有可用的总结模型，短期记忆摘要失败。",
+                    code="SHORT_TERM_SUMMARY_MODEL_NOT_FOUND",
+                )
 
             client = LLMClient(
                 api_key=runtime.get("api_key"),
@@ -112,12 +126,20 @@ class ChatSessionSummaryService:
             )
 
         raw = str(response.get("content", "")).strip()
+        if "{" not in raw or "}" not in raw:
+            raise ShortTermMemoryError(
+                "短期记忆摘要模型返回格式错误，响应中未找到 JSON。",
+                code="SHORT_TERM_SUMMARY_JSON_INVALID",
+                detail={"raw_output": raw[:500]},
+            )
         try:
-            if "{" in raw and "}" in raw:
-                start = raw.index("{")
-                end = raw.rindex("}") + 1
-                data = json.loads(raw[start:end])
-                return str(data.get("summary", "")), dict(data.get("facts", {}))
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return raw[:200], {}
+            start = raw.index("{")
+            end = raw.rindex("}") + 1
+            data = json.loads(raw[start:end])
+            return str(data.get("summary", "")), dict(data.get("facts", {}))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ShortTermMemoryError(
+                "短期记忆摘要模型返回格式错误，无法解析 JSON。",
+                code="SHORT_TERM_SUMMARY_JSON_INVALID",
+                detail={"raw_output": raw[:500]},
+            ) from exc
