@@ -34,6 +34,10 @@ from app.services import chat_service as chat_service_mod
 from app.services.chat_service import ChatService, get_current_user_for_stream
 
 
+async def _noop_index_session_message(*args, **kwargs):
+    return None
+
+
 def test_fallback_answer_uses_first_doc_excerpt():
     data = _fallback_answer(
         "What is a burr defect?",
@@ -597,11 +601,33 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
     monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", _noop_index_session_message)
 
     async def fake_memory_search(self, request):
         return SimpleNamespace(items=[], policy_version="retrieval:v1")
 
     async def fake_short_term_context(self, **kwargs):
+        structured_stm = {
+            "session_summary": {
+                "summary": "short summary",
+                "confirmed_facts": {"preferred_language": "zh-CN"},
+                "open_questions": ["standard?"],
+                "decisions_made": [],
+                "warnings": [],
+            },
+            "recent_dialogue": [{"role": "user", "content": "old question", "seq_no": 1}],
+            "working_state": {
+                "pending_action": None,
+                "awaiting_confirmation": None,
+                "task_draft": None,
+                "task_form_defaults": None,
+                "missing_slots": None,
+                "paper_review_status": None,
+            },
+            "ui_state": {"selected_rag_space": None},
+            "token_budget": {"truncated": False},
+            "semantic_recall": [{"role": "user", "content": "early fact", "seq_no": 1, "score": 0.88}],
+        }
         return {
             "recent_messages": [
                 {"role": "user", "content": "old question"},
@@ -617,6 +643,8 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
             "paper_review_status": None,
             "selected_rag_space": None,
             "token_budget": {"truncated": False},
+            "semantic_recall": structured_stm["semantic_recall"],
+            "short_term_memory": structured_stm,
         }
 
     async def fake_summary(self, session_id):
@@ -655,6 +683,8 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     ]
     assert ext["conversation_summary"] == "short summary"
     assert ext["session_facts"] == {"preferred_language": "zh-CN"}
+    assert ext["short_term_memory"]["session_summary"]["open_questions"] == ["standard?"]
+    assert ext["short_term_memory"]["semantic_recall"][0]["content"] == "early fact"
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():
@@ -709,6 +739,7 @@ async def test_run_workflow_surfaces_memory_error_to_frontend(monkeypatch):
     monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
     monkeypatch.setattr(memory_service_mod.MemoryService, "search", failing_memory_search)
+    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", _noop_index_session_message)
 
     service = ChatService(
         org_id="org-1",
@@ -731,6 +762,78 @@ async def test_run_workflow_surfaces_memory_error_to_frontend(monkeypatch):
     assert "short-term memory database column missing" in updates[0]["content"]
     assert events[-1]["event"] == "run_failed"
     assert "short-term memory database column missing" in events[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_surfaces_session_recall_index_error(monkeypatch):
+    updates: list[dict] = []
+    events: list[dict] = []
+
+    class FakeRepo:
+        def __init__(self, _session):
+            pass
+
+        async def get(self, org_id, message_id):
+            return SimpleNamespace(id=message_id, content="current question", role="user", seq_no=3)
+
+        async def update_assistant_message(self, **kwargs):
+            updates.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeBroker:
+        async def publish(self, _session_id: str, event: dict):
+            events.append(event)
+
+    class FakeOrchestrator:
+        async def run_chat(self, payload: dict):
+            raise AssertionError("orchestrator should not run after session recall index failure")
+
+    async def fake_memory_search(self, request):
+        return SimpleNamespace(items=[], policy_version="retrieval:v1")
+
+    async def failing_index(*args, **kwargs):
+        raise RuntimeError("qdrant session collection unavailable")
+
+    import app.services.memory_service as memory_service_mod
+
+    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
+    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+    monkeypatch.setattr(memory_service_mod.MemoryService, "search", fake_memory_search)
+    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", failing_index)
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+    service._orchestrator = FakeOrchestrator()
+
+    await service._run_workflow(
+        session_id="session-1",
+        user_message_id="user-1-message",
+        assistant_message_id="assistant-1",
+        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
+        workflow_run_id="workflow-1",
+        current_user_seq_no=3,
+        assistant_message_seq_no=4,
+    )
+
+    assert updates[0]["message_type"] == "error"
+    assert updates[0]["payload"]["error_code"] == "SHORT_TERM_SESSION_RECALL_FAILED"
+    assert "qdrant session collection unavailable" in updates[0]["payload"]["detail"]["cause"]
+    assert events[-1]["event"] == "run_failed"
 
 
 def test_extract_named_user_from_history_reads_latest_name():

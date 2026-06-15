@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
-import { ElMessage, type FormInstance, type FormRules } from "element-plus";
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
@@ -687,6 +687,33 @@ async function resendFromErrorMessage(message: ChatMessage) {
   await retryFromAssistantMessage(message);
 }
 
+function errorCode(message: ChatMessage): string {
+  return String(message.payload?.error_code || "");
+}
+
+function errorCardTitle(message: ChatMessage): string {
+  const code = errorCode(message);
+  if (code.startsWith("SHORT_TERM_")) return "短期记忆构建失败";
+  if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "图数据库服务异常";
+  return "执行失败";
+}
+
+function errorCardHint(message: ChatMessage): string {
+  const code = errorCode(message);
+  if (code.startsWith("SHORT_TERM_")) return "当前会话上下文无法读取或摘要失败，本次回答已停止。";
+  if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "请检查 Neo4j 是否启动、账号密码是否正确、schema 是否初始化。";
+  return "";
+}
+
+function showErrorContextState(message: ChatMessage) {
+  const detail = message.payload?.detail;
+  const text = detail && typeof detail === "object" ? JSON.stringify(detail, null, 2) : "无上下文详情";
+  ElMessageBox.alert(text, "上下文状态", {
+    confirmButtonText: "关闭",
+    customClass: "chat-error-context-dialog",
+  });
+}
+
 async function scrollToBottom() {
   await nextTick();
   const container = messageListRef.value;
@@ -996,9 +1023,10 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <div v-if="message.message_type === 'error'" class="error-card">
                 <div class="error-card-header">
                   <el-icon color="#dc2626"><WarningFilled /></el-icon>
-                  <span class="error-card-title">执行失败</span>
+                  <span class="error-card-title">{{ errorCardTitle(message) }}</span>
                 </div>
                 <div class="error-card-body">
+                  <div v-if="errorCardHint(message)" class="error-hint">{{ errorCardHint(message) }}</div>
                   <div v-if="message.payload?.error_code" class="error-item">
                     <span class="error-label">错误码</span>
                     <el-tag size="small" type="danger" effect="plain">{{ message.payload.error_code }}</el-tag>
@@ -1019,6 +1047,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <div class="error-card-actions">
                   <el-button size="small" @click="copyErrorMessage(message)">复制错误</el-button>
                   <el-button size="small" type="primary" @click="resendFromErrorMessage(message)" :disabled="chatStore.loading">重新发送</el-button>
+                  <el-button size="small" @click="showErrorContextState(message)">查看上下文状态</el-button>
                 </div>
               </div>
 
@@ -1403,6 +1432,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+}
+.error-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #991b1b;
 }
 .error-item {
   display: flex;

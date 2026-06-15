@@ -136,8 +136,16 @@ class ShortTermMemoryService:
                     before_seq_no=current_user_seq_no,
                     top_k=5,
                 )
-            except Exception:
-                logger.debug("Session semantic recall skipped", exc_info=True)
+            except Exception as exc:
+                raise ShortTermMemoryError(
+                    "会话语义召回检索失败，无法构建短期记忆。",
+                    code="SHORT_TERM_SESSION_RECALL_FAILED",
+                    detail={
+                        "session_id": session_id,
+                        "current_user_seq_no": current_user_seq_no,
+                        "cause": str(exc),
+                    },
+                ) from exc
 
         # Token-aware truncation
         model_window = await self._resolve_model_context_window()

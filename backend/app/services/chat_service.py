@@ -261,6 +261,7 @@ class ChatService:
         workflow_task = asyncio.create_task(
             self._run_workflow(
                 session_id=session_id,
+                user_message_id=str(user_message.id),
                 assistant_message_id=str(assistant_message.id),
                 request=payload.model_copy(update={"ext": ext_payload}),
                 workflow_run_id=workflow_run_id,
@@ -440,6 +441,7 @@ class ChatService:
         workflow_run_id: str,
         current_user_seq_no: int,
         assistant_message_seq_no: int,
+        user_message_id: str | None = None,
     ) -> None:
         async def emit(event: dict[str, Any]) -> None:
             event.setdefault("ts", utcnow_iso())
@@ -462,12 +464,35 @@ class ChatService:
             ext_payload["idempotency_key"] = (
                 f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
             )
+            try:
+                await self._index_session_message(
+                    session_id=session_id,
+                    message_id=user_message_id or "",
+                    seq_no=current_user_seq_no,
+                    role="user",
+                    content=request.message.strip(),
+                    trace_id=workflow_run_id,
+                )
+            except Exception as exc:
+                from app.errors.memory_errors import ShortTermMemoryError
+                raise ShortTermMemoryError(
+                    "会话语义召回索引失败，本次聊天已停止。",
+                    code="SHORT_TERM_SESSION_RECALL_FAILED",
+                    detail={
+                        "session_id": session_id,
+                        "message_id": user_message_id,
+                        "seq_no": current_user_seq_no,
+                        "cause": str(exc),
+                    },
+                ) from exc
+
             # Load shared memory context for this query
             ext_payload["shared_memory_context"] = None
             try:
                 from app.schemas.memory import MemorySearchRequest
                 from app.services.memory_service import MemoryService
                 from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
+                from app.errors.memory_errors import SharedMemoryError
 
                 memory_search_req = MemorySearchRequest(
                     org_id=self._org_id,
@@ -530,8 +555,12 @@ class ChatService:
                                 "suppressed_memory_ids": guard_result["suppressed_memory_ids"],
                                 "downranked_memory_ids": guard_result["downranked_memory_ids"],
                             }
-            except MemoryVectorServiceError:
-                raise
+            except MemoryVectorServiceError as exc:
+                raise SharedMemoryError(
+                    "共享记忆检索失败，本次聊天已停止。",
+                    code="SHARED_MEMORY_SEARCH_FAILED",
+                    detail={"session_id": session_id, "cause": str(exc)},
+                ) from exc
             except Exception:
                 raise
 
@@ -556,18 +585,9 @@ class ChatService:
                     ext_payload["conversation_summary"] = stm["conversation_summary"]
                     ext_payload["session_facts"] = stm["session_facts"]
                     ext_payload["pending_action"] = stm["pending_action"]
-                    ext_payload["short_term_memory"] = {
-                        "conversation_summary": stm["conversation_summary"],
-                        "session_facts": stm["session_facts"],
-                        "pending_action": stm["pending_action"],
-                        "awaiting_confirmation": stm.get("awaiting_confirmation"),
-                        "task_draft": stm.get("task_draft"),
-                        "task_form_defaults": stm.get("task_form_defaults"),
-                        "missing_slots": stm.get("missing_slots"),
-                        "paper_review_status": stm.get("paper_review_status"),
-                        "selected_rag_space": stm["selected_rag_space"],
-                        "token_budget": stm["token_budget"],
-                    }
+                    structured_stm = dict(stm.get("short_term_memory") or {})
+                    structured_stm["semantic_recall"] = list(stm.get("semantic_recall") or [])
+                    ext_payload["short_term_memory"] = structured_stm
             except Exception:
                 raise
 
@@ -626,6 +646,28 @@ class ChatService:
 
             agent_output = result.get("agent_output", {})
             answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
+            if answer_text.strip():
+                try:
+                    await self._index_session_message(
+                        session_id=session_id,
+                        message_id=assistant_message_id,
+                        seq_no=assistant_message_seq_no,
+                        role="assistant",
+                        content=answer_text,
+                        trace_id=workflow_run_id,
+                    )
+                except Exception as exc:
+                    from app.errors.memory_errors import ShortTermMemoryError
+                    raise ShortTermMemoryError(
+                        "会话语义召回索引失败，本次聊天已停止。",
+                        code="SHORT_TERM_SESSION_RECALL_FAILED",
+                        detail={
+                            "session_id": session_id,
+                            "message_id": assistant_message_id,
+                            "seq_no": assistant_message_seq_no,
+                            "cause": str(exc),
+                        },
+                    ) from exc
             task_id = str(
                 ext_payload.get("selected_inspection_task_ids", [None])[0]
             ) if ext_payload.get("selected_inspection_task_ids") else None
@@ -667,10 +709,13 @@ class ChatService:
             # Trigger session summarization
             try:
                 from app.services.chat_session_summary_service import ChatSessionSummaryService
+                from app.errors.memory_errors import ShortTermMemoryError
                 async with get_session() as summary_session:
                     summary_svc = ChatSessionSummaryService(summary_session, self._org_id, self._user_id)
                     await summary_svc.maybe_summarize(session_id)
                     await summary_session.commit()
+            except ShortTermMemoryError:
+                raise
             except Exception as exc:
                 raise RuntimeError(f"short-term memory summary failed: {exc}") from exc
 
@@ -718,6 +763,36 @@ class ChatService:
             "ui_schema": "chat_error_v1",
             "recoverable": False,
         }
+
+    async def _index_session_message(
+        self,
+        *,
+        session_id: str,
+        message_id: str,
+        seq_no: int,
+        role: str,
+        content: str,
+        trace_id: str | None,
+    ) -> None:
+        text = str(content or "").strip()
+        if not text:
+            return
+        from app.services.session_memory_vector_service import SessionMemoryVectorService
+
+        session_vector_svc = SessionMemoryVectorService(
+            _make_embedder_factory(self._org_id, self._user_id, trace_id),
+            self._org_id,
+            self._user_id,
+        )
+        await session_vector_svc.upsert_message(
+            org_id=self._org_id,
+            user_id=self._user_id,
+            session_id=session_id,
+            message_id=message_id or f"{role}_{seq_no}",
+            seq_no=seq_no,
+            role=role,
+            content=text,
+        )
 
     @staticmethod
     def _empty_inspection_context(*, scope: str, error: str | None = None) -> dict[str, Any]:

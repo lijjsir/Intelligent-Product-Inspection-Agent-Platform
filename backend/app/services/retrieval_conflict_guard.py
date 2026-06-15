@@ -263,18 +263,22 @@ class RetrievalConflictGuard:
                     "reason": conflict.get("reason"),
                     "conflict_type": conflict.get("type"),
                 }
-                await self._memory_service._dep_repo.upsert_edge(
+                await self._memory_service._sync_graph_memory_edge(
                     source_memory_id=source_id,
                     target_memory_id=target_id,
                     edge_type=EdgeType.CONFLICTS_WITH.value,
                     strength=confidence,
+                    trace_id=self._trace_id,
+                    reason=conflict.get("reason"),
                     metadata_json=metadata,
                 )
-                await self._memory_service._dep_repo.upsert_edge(
+                await self._memory_service._sync_graph_memory_edge(
                     source_memory_id=target_id,
                     target_memory_id=source_id,
                     edge_type=EdgeType.CONFLICTS_WITH.value,
                     strength=confidence,
+                    trace_id=self._trace_id,
+                    reason=conflict.get("reason"),
                     metadata_json=metadata,
                 )
                 await self._memory_service._record_event(

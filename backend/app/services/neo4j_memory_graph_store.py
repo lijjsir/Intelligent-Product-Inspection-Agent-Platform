@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+from app.errors.memory_errors import GraphMemoryError
 from app.services.memory_graph_store import MemoryGraphEdge, MemoryGraphNode, MemoryGraphStore
 
 try:
@@ -17,9 +18,12 @@ logger = logging.getLogger(__name__)
 MEMORY_RELATIONSHIP_TYPES = {
     "version_of": "VERSION_OF",
     "derived_from": "DERIVED_FROM",
+    "summarized_from": "SUMMARIZED_FROM",
     "cited_as_evidence": "CITED_AS_EVIDENCE",
     "merged_from": "MERGED_FROM",
     "conflicts_with": "CONFLICTS_WITH",
+    "planned_from": "PLANNED_FROM",
+    "rollback_depends_on": "ROLLBACK_DEPENDS_ON",
 }
 
 
@@ -74,6 +78,17 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
         })
 
     async def create_memory_edge(self, edge: MemoryGraphEdge) -> None:
+        org_id = str(edge.org_id or "").strip()
+        if not org_id:
+            raise GraphMemoryError(
+                "org_id is required for memory graph edge writes.",
+                code="GRAPH_MEMORY_EDGE_ORG_REQUIRED",
+                detail={
+                    "source_memory_id": edge.source_memory_id,
+                    "target_memory_id": edge.target_memory_id,
+                    "edge_type": edge.edge_type,
+                },
+            )
         relationship_type = self._memory_relationship_type(edge.edge_type)
         query = f"""
         MERGE (src:Memory {{org_id: $org_id, memory_id: $source_memory_id}})
@@ -88,9 +103,9 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             r.trace_id = $trace_id,
             r.reason = $reason,
             r.metadata_json = $metadata_json,
+            r.created_at = coalesce(r.created_at, $created_at),
             r.updated_at = datetime()
         """
-        org_id = (edge.metadata_json or {}).get("org_id", "") or ""
         await self._execute(query, {
             "org_id": org_id,
             "source_memory_id": edge.source_memory_id,
@@ -100,6 +115,7 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             "trace_id": edge.trace_id or "",
             "reason": edge.reason or "",
             "metadata_json": self._json_dumps(edge.metadata_json or {}),
+            "created_at": edge.created_at or "",
         })
 
     async def create_memory_rag_edge(self, memory_id: str, chunk_id: str, edge_type: str,
@@ -368,16 +384,16 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
     async def ensure_schema(self) -> None:
         """Create unique constraints and indexes for all node types."""
         cyphers = [
-            "CREATE CONSTRAINT memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE m.memory_id IS UNIQUE",
+            "CREATE CONSTRAINT memory_org_memory_id_unique IF NOT EXISTS FOR (m:Memory) REQUIRE (m.org_id, m.memory_id) IS UNIQUE",
             "CREATE INDEX memory_org_id_idx IF NOT EXISTS FOR (m:Memory) ON (m.org_id)",
             "CREATE INDEX memory_status_idx IF NOT EXISTS FOR (m:Memory) ON (m.status)",
             "CREATE INDEX memory_type_idx IF NOT EXISTS FOR (m:Memory) ON (m.memory_type)",
-            "CREATE CONSTRAINT rag_chunk_id_unique IF NOT EXISTS FOR (c:RagChunk) REQUIRE c.chunk_id IS UNIQUE",
-            "CREATE CONSTRAINT agent_run_id_unique IF NOT EXISTS FOR (a:AgentRun) REQUIRE a.run_id IS UNIQUE",
-            "CREATE CONSTRAINT memory_event_id_unique IF NOT EXISTS FOR (e:MemoryEvent) REQUIRE e.event_id IS UNIQUE",
-            "CREATE CONSTRAINT task_id_unique IF NOT EXISTS FOR (t:Task) REQUIRE t.task_id IS UNIQUE",
-            "CREATE CONSTRAINT product_line_key_unique IF NOT EXISTS FOR (p:ProductLine) REQUIRE p.product_line_key IS UNIQUE",
-            "CREATE CONSTRAINT standard_version_key_unique IF NOT EXISTS FOR (s:StandardVersion) REQUIRE s.standard_version_key IS UNIQUE",
+            "CREATE CONSTRAINT rag_chunk_org_chunk_id_unique IF NOT EXISTS FOR (c:RagChunk) REQUIRE (c.org_id, c.chunk_id) IS UNIQUE",
+            "CREATE CONSTRAINT agent_run_org_trace_id_unique IF NOT EXISTS FOR (a:AgentRun) REQUIRE (a.org_id, a.trace_id) IS UNIQUE",
+            "CREATE CONSTRAINT memory_event_org_event_id_unique IF NOT EXISTS FOR (e:MemoryEvent) REQUIRE (e.org_id, e.event_id) IS UNIQUE",
+            "CREATE CONSTRAINT task_org_task_id_unique IF NOT EXISTS FOR (t:Task) REQUIRE (t.org_id, t.task_id) IS UNIQUE",
+            "CREATE CONSTRAINT product_line_org_key_unique IF NOT EXISTS FOR (p:ProductLine) REQUIRE (p.org_id, p.product_line_key) IS UNIQUE",
+            "CREATE CONSTRAINT standard_version_org_key_unique IF NOT EXISTS FOR (s:StandardVersion) REQUIRE (s.org_id, s.standard_version_key) IS UNIQUE",
         ]
 
         async with self._driver.session(database=self._database) as session:

@@ -41,9 +41,13 @@ class FakePolicyRepo:
 class FakeNodeCaptureGraphStore:
     def __init__(self):
         self.nodes = []
+        self.memory_edges = []
 
     async def upsert_memory_node(self, node):
         self.nodes.append(node)
+
+    async def create_memory_edge(self, edge):
+        self.memory_edges.append(edge)
 
 
 class FakeItemRepo:
@@ -273,6 +277,8 @@ class FakeGraphStore:
         self.agent_edges = []
         self.rag_edges = []
         self.rag_nodes = []
+        self.deleted_edges = []
+        self.resolved_conflicts = []
 
     async def upsert_memory_node(self, node):
         self.memory_nodes.append(node)
@@ -291,6 +297,27 @@ class FakeGraphStore:
 
     async def create_memory_rag_edge(self, *args, **kwargs):
         self.rag_edges.append((args, kwargs))
+
+    async def list_conflict_edges(self, *, org_id, memory_id=None, include_resolved=False):
+        return [
+            {
+                "source_memory_id": edge.source_memory_id,
+                "target_memory_id": edge.target_memory_id,
+                "strength": edge.strength,
+                "reason": edge.reason,
+                "metadata_json": edge.metadata_json,
+            }
+            for edge in self.memory_edges
+            if edge.edge_type == EdgeType.CONFLICTS_WITH.value
+            and (memory_id is None or edge.source_memory_id == memory_id or edge.target_memory_id == memory_id)
+        ]
+
+    async def soft_delete_memory_edges(self, **kwargs):
+        self.deleted_edges.append(kwargs)
+        return 1
+
+    async def mark_conflict_resolved(self, **kwargs):
+        self.resolved_conflicts.append(kwargs)
 
 
 class FailingGraphStore(FakeGraphStore):
@@ -643,18 +670,26 @@ async def test_search_surfaces_vector_runtime_failure_without_fallback():
 @pytest.mark.asyncio
 async def test_search_reuses_existing_conflict_edges_and_skips_llm_detection(monkeypatch):
     service, item_repo, _support_repo = _memory_service(FakeSearchVectorService())
-    service._dep_repo.edges.extend([
+    graph = FakeGraphStore()
+    service._graph = graph
+    graph.memory_edges.extend([
         SimpleNamespace(
+            org_id="org-1",
             source_memory_id="mem-a",
             target_memory_id="mem-b",
             edge_type=EdgeType.CONFLICTS_WITH.value,
             strength=0.91,
+            reason=None,
+            metadata_json=None,
         ),
         SimpleNamespace(
+            org_id="org-1",
             source_memory_id="mem-b",
             target_memory_id="mem-a",
             edge_type=EdgeType.CONFLICTS_WITH.value,
             strength=0.91,
+            reason=None,
+            metadata_json=None,
         ),
     ])
     item_repo.items["mem-a"] = SimpleNamespace(
@@ -767,8 +802,10 @@ async def test_patch_rollback_creates_new_memory_version_and_version_edge():
     item_repo = FakeItemRepo()
     item_repo.items["mem-old"] = old_memory
     dep_repo = FakeDependencyRepo()
+    graph = FakeGraphStore()
     service._item_repo = item_repo
     service._dep_repo = dep_repo
+    service._graph_store = graph
     service._event_repo = FakeEventRepo()
     service._rollback_repo = FakeRollbackRepo()
 
@@ -794,9 +831,10 @@ async def test_patch_rollback_creates_new_memory_version_and_version_edge():
     new_memory = item_repo.created[0]
     assert new_memory.content_summary == "new summary"
     assert new_memory.version_parent_id == "mem-old"
-    assert dep_repo.edges[0].source_memory_id == new_memory.memory_id
-    assert dep_repo.edges[0].target_memory_id == "mem-old"
-    assert dep_repo.edges[0].edge_type == "version_of"
+    assert dep_repo.edges == []
+    assert graph.memory_edges[0].source_memory_id == new_memory.memory_id
+    assert graph.memory_edges[0].target_memory_id == "mem-old"
+    assert graph.memory_edges[0].edge_type == "version_of"
 
 
 @pytest.mark.asyncio
@@ -932,6 +970,8 @@ async def test_retrieval_conflict_guard_persists_high_confidence_conflicts():
     from app.services.retrieval_conflict_guard import RetrievalConflictGuard
 
     service, _item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    graph = FakeGraphStore()
+    service._graph = graph
     guard = RetrievalConflictGuard(
         org_id="org-1",
         user_id="user-1",
@@ -951,7 +991,7 @@ async def test_retrieval_conflict_guard_persists_high_confidence_conflicts():
 
     assert result["conflicts"]
     conflict_edges = [
-        edge for edge in service._dep_repo.edges
+        edge for edge in graph.memory_edges
         if edge.edge_type == EdgeType.CONFLICTS_WITH.value
     ]
     assert conflict_edges
@@ -961,6 +1001,8 @@ async def test_retrieval_conflict_guard_persists_high_confidence_conflicts():
 @pytest.mark.asyncio
 async def test_conflict_merge_creates_merged_memory_and_merged_from_edges():
     service, item_repo, _support_repo = _memory_service(FakeVectorService(), FakeVectorService())
+    graph = FakeGraphStore()
+    service._graph = graph
     source = SimpleNamespace(
         memory_id="mem-a",
         org_id="org-1",
@@ -986,12 +1028,16 @@ async def test_conflict_merge_creates_merged_memory_and_merged_from_edges():
     )
     item_repo.items["mem-a"] = source
     item_repo.items["mem-b"] = target
-    await service._dep_repo.upsert_edge(
+    await graph.create_memory_edge(SimpleNamespace(
+        org_id="org-1",
         source_memory_id="mem-a",
         target_memory_id="mem-b",
         edge_type=EdgeType.CONFLICTS_WITH.value,
         strength=0.9,
-    )
+        trace_id=None,
+        reason=None,
+        metadata_json=None,
+    ))
 
     response = await service.merge_conflicting_memories(
         source_memory_id="mem-a",
@@ -1007,8 +1053,9 @@ async def test_conflict_merge_creates_merged_memory_and_merged_from_edges():
     assert merged.content_summary == "camera threshold should be 0.75-0.8 depending on spec"
     assert ("mem-a", "isolated") in item_repo.status_updates
     assert ("mem-b", "isolated") in item_repo.status_updates
+    assert service._dep_repo.edges == []
     merged_from_edges = [
-        edge for edge in service._dep_repo.edges
+        edge for edge in graph.memory_edges
         if edge.source_memory_id == response["merged_memory_id"]
         and edge.edge_type == EdgeType.MERGED_FROM.value
     ]

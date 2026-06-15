@@ -102,6 +102,7 @@ async def _replay_neo4j(session, org_id: str, action: str, payload: dict) -> Non
         await graph.upsert_memory_node(MemoryGraphNode(**payload))
         return
     if action == "create_memory_edge":
-        await graph.create_memory_edge(MemoryGraphEdge(**payload))
+        edge_payload = {**payload, "org_id": str(payload.get("org_id") or org_id)}
+        await graph.create_memory_edge(MemoryGraphEdge(**edge_payload))
         return
     raise ValueError(f"Unsupported neo4j outbox action: {action}")

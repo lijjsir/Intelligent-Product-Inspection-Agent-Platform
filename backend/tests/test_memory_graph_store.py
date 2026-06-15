@@ -9,6 +9,7 @@ from app.services.memory_graph_store import (
     MemoryGraphNode,
     MySQLMemoryGraphStore,
 )
+from app.errors.memory_errors import GraphMemoryError
 
 
 class FakeSession:
@@ -46,6 +47,7 @@ async def test_mysql_store_create_memory_edge(monkeypatch):
     )
     store = MySQLMemoryGraphStore(FakeSession(), "org-1")
     edge = MemoryGraphEdge(
+        org_id="org-1",
         source_memory_id="mem-a",
         target_memory_id="mem-b",
         edge_type="derived_from",
@@ -123,10 +125,10 @@ async def test_neo4j_store_uses_async_driver_and_merges_edge_nodes(monkeypatch):
     store = graph_mod.Neo4jMemoryGraphStore("bolt://neo4j:7687", "neo4j", "secret")
     await store.create_memory_edge(
         MemoryGraphEdge(
+            org_id="org-1",
             source_memory_id="mem-a",
             target_memory_id="mem-b",
             edge_type="derived_from",
-            metadata_json={"org_id": "org-1"},
         )
     )
 
@@ -134,7 +136,7 @@ async def test_neo4j_store_uses_async_driver_and_merges_edge_nodes(monkeypatch):
     assert "MERGE (src:Memory" in query
     assert "MERGE (dst:Memory" in query
     assert params["org_id"] == "org-1"
-    assert json.loads(params["metadata_json"]) == {"org_id": "org-1"}
+    assert json.loads(params["metadata_json"]) == {}
 
 
 @pytest.mark.asyncio
@@ -176,10 +178,10 @@ async def test_neo4j_store_writes_allowed_typed_memory_relationship(monkeypatch)
     store = graph_mod.Neo4jMemoryGraphStore("bolt://neo4j:7687", "neo4j", "secret")
     await store.create_memory_edge(
         MemoryGraphEdge(
+            org_id="org-1",
             source_memory_id="mem-a",
             target_memory_id="mem-b",
             edge_type="conflicts_with",
-            metadata_json={"org_id": "org-1"},
         )
     )
 
@@ -206,9 +208,74 @@ async def test_neo4j_store_rejects_unknown_relationship_type(monkeypatch):
     with pytest.raises(ValueError, match="Unsupported memory graph edge_type"):
         await store.create_memory_edge(
             MemoryGraphEdge(
+                org_id="org-1",
                 source_memory_id="mem-a",
                 target_memory_id="mem-b",
                 edge_type="not_allowed",
-                metadata_json={"org_id": "org-1"},
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_neo4j_store_requires_explicit_org_id():
+    from app.services import neo4j_memory_graph_store as graph_mod
+
+    store = object.__new__(graph_mod.Neo4jMemoryGraphStore)
+    store._database = "neo4j"
+    store._driver = None
+
+    with pytest.raises(GraphMemoryError, match="org_id is required"):
+        await store.create_memory_edge(
+            MemoryGraphEdge(
+                org_id="",
+                source_memory_id="mem-a",
+                target_memory_id="mem-b",
+                edge_type="derived_from",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_neo4j_schema_uses_org_scoped_unique_constraints(monkeypatch):
+    from app.services import neo4j_memory_graph_store as graph_mod
+
+    executed: list[str] = []
+
+    class FakeSessionCtx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def run(self, cypher):
+            executed.append(cypher)
+
+    class FakeDriver:
+        def session(self, database):
+            return FakeSessionCtx()
+
+    class FakeAsyncGraphDatabase:
+        @staticmethod
+        def driver(uri, auth):
+            return FakeDriver()
+
+    monkeypatch.setattr(graph_mod, "AsyncGraphDatabase", FakeAsyncGraphDatabase)
+
+    store = graph_mod.Neo4jMemoryGraphStore("bolt://neo4j:7687", "neo4j", "secret")
+    await store.ensure_schema()
+
+    assert any("REQUIRE (m.org_id, m.memory_id) IS UNIQUE" in cypher for cypher in executed)
+    assert any("REQUIRE (c.org_id, c.chunk_id) IS UNIQUE" in cypher for cypher in executed)
+
+
+def test_strict_graph_factory_rejects_mysql_backend(monkeypatch):
+    from app.services import memory_graph_factory as factory_mod
+
+    monkeypatch.setattr(factory_mod.settings, "memory_strict_sync", True)
+    monkeypatch.setattr(factory_mod.settings, "memory_graph_write_backend", "mysql")
+    monkeypatch.setattr(factory_mod.settings, "memory_graph_read_backend", "neo4j")
+    monkeypatch.setattr(factory_mod.settings, "neo4j_enabled", True)
+
+    with pytest.raises(GraphMemoryError, match="requires memory_graph_write_backend=neo4j"):
+        factory_mod.build_memory_graph_store(FakeSession(), "org-1")

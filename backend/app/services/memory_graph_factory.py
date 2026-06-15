@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 
 from app.core.config import settings
+from app.errors.memory_errors import GraphMemoryError
 from app.services.memory_graph_store import MemoryGraphStore, MySQLMemoryGraphStore
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,26 @@ def build_memory_graph_store(session, org_id: str) -> MemoryGraphStore:
     """Factory: returns the correct MemoryGraphStore based on settings."""
     write_backend = settings.memory_graph_write_backend
     read_backend = settings.memory_graph_read_backend
+
+    if settings.memory_strict_sync:
+        if write_backend != "neo4j":
+            raise GraphMemoryError(
+                "Strict memory graph mode requires memory_graph_write_backend=neo4j.",
+                code="GRAPH_MEMORY_BACKEND_INVALID",
+                detail={"write_backend": write_backend, "read_backend": read_backend},
+            )
+        if read_backend != "neo4j":
+            raise GraphMemoryError(
+                "Strict memory graph mode requires memory_graph_read_backend=neo4j.",
+                code="GRAPH_MEMORY_BACKEND_INVALID",
+                detail={"write_backend": write_backend, "read_backend": read_backend},
+            )
+        if not settings.neo4j_enabled:
+            raise GraphMemoryError(
+                "Strict memory graph mode requires neo4j_enabled=True.",
+                code="NEO4J_REQUIRED_DISABLED",
+                detail={"neo4j_enabled": settings.neo4j_enabled},
+            )
 
     mysql_store = MySQLMemoryGraphStore(session, org_id)
 

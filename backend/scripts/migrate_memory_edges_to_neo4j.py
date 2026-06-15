@@ -37,6 +37,7 @@ async def migrate(org_id: str, batch_size: int = 1000, verify: bool = False):
         for row in edges:
             try:
                 edge = MemoryGraphEdge(
+                    org_id=org_id,
                     source_memory_id=row.source_memory_id,
                     target_memory_id=row.target_memory_id,
                     edge_type=row.edge_type,
@@ -63,11 +64,11 @@ async def migrate(org_id: str, batch_size: int = 1000, verify: bool = False):
             for row in edges[:10]:
                 downstream = await graph.list_downstream_memories(
                     org_id=org_id,
-                    root_memory_id=row.source_memory_id,
+                    root_memory_id=row.target_memory_id,
                     edge_types=[row.edge_type],
                     max_depth=1,
                 )
-                found = any(e.get("memory_id") == row.target_memory_id for e in downstream)
+                found = any(e.get("memory_id") == row.source_memory_id for e in downstream)
                 status = "OK" if found else "MISSING"
                 logger.info("Verify %s-[%s]->%s: %s", row.source_memory_id, row.edge_type, row.target_memory_id, status)
 

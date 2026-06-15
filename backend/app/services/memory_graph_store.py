@@ -20,6 +20,7 @@ class MemoryGraphNode:
 
 @dataclass(slots=True)
 class MemoryGraphEdge:
+    org_id: str
     source_memory_id: str
     target_memory_id: str
     edge_type: str
@@ -125,7 +126,7 @@ class MySQLMemoryGraphStore(MemoryGraphStore):
 
     async def create_memory_edge(self, edge: MemoryGraphEdge) -> None:
         from app.repositories.memory_repo import MemoryDependencyRepository
-        dep_repo = MemoryDependencyRepository(self._session, self._org_id)
+        dep_repo = MemoryDependencyRepository(self._session, edge.org_id or self._org_id)
         await dep_repo.upsert_edge(
             source_memory_id=edge.source_memory_id,
             target_memory_id=edge.target_memory_id,

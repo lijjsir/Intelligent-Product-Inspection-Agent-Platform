@@ -11,10 +11,10 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
+from app.errors.memory_errors import GraphMemoryError
 from app.core.ids import uuid7
 from app.models.memory import (
     MemoryCandidateSupport,
-    MemoryDependencyEdge,
     MemoryEvent,
     MemoryItem,
 )
@@ -1181,18 +1181,22 @@ class MemoryService:
                             "last_observed_at": now_iso,
                         }
                         # Bidirectional upsert — conflicts_with is symmetric
-                        await self._dep_repo.upsert_edge(
+                        await self._sync_graph_memory_edge(
                             source_memory_id=pair.source_memory_id,
                             target_memory_id=pair.target_memory_id,
                             edge_type=EdgeType.CONFLICTS_WITH.value,
                             strength=strength,
+                            trace_id=request.trace_id,
+                            reason=pair.reason,
                             metadata_json=base_meta,
                         )
-                        await self._dep_repo.upsert_edge(
+                        await self._sync_graph_memory_edge(
                             source_memory_id=pair.target_memory_id,
                             target_memory_id=pair.source_memory_id,
                             edge_type=EdgeType.CONFLICTS_WITH.value,
                             strength=strength,
+                            trace_id=request.trace_id,
+                            reason=pair.reason,
                             metadata_json=base_meta,
                         )
                         await self._record_event(
@@ -1250,25 +1254,29 @@ class MemoryService:
         item_ids = {item.memory_id for item in items}
         relations: list[dict] = []
         seen: set[tuple[str, str]] = set()
+        if not self._graph:
+            return relations
 
         for item in items:
-            edges = await self._dep_repo.list_by_edge_type(
-                item.memory_id,
-                [EdgeType.CONFLICTS_WITH.value],
-                direction="source",
+            edges = await self._graph.list_conflict_edges(
+                org_id=self._org_id,
+                memory_id=item.memory_id,
+                include_resolved=False,
             )
             for edge in edges:
-                if edge.target_memory_id not in item_ids:
+                source_id = str(edge.get("source_memory_id") or "")
+                target_id = str(edge.get("target_memory_id") or "")
+                if source_id not in item_ids or target_id not in item_ids:
                     continue
-                key = (edge.source_memory_id, edge.target_memory_id)
+                key = (source_id, target_id)
                 if key in seen:
                     continue
                 seen.add(key)
                 relations.append({
-                    "source_memory_id": edge.source_memory_id,
-                    "target_memory_id": edge.target_memory_id,
+                    "source_memory_id": source_id,
+                    "target_memory_id": target_id,
                     "relation": EdgeType.CONFLICTS_WITH.value,
-                    "strength": float(edge.strength) if edge.strength is not None else None,
+                    "strength": float(edge.get("strength")) if edge.get("strength") is not None else None,
                     "source": "existing_edge",
                 })
 
@@ -1367,11 +1375,13 @@ class MemoryService:
         await self._item_repo.update_status(source_memory_id, MemoryStatus.ISOLATED.value)
         await self._item_repo.update_status(target_memory_id, MemoryStatus.ISOLATED.value)
 
-        if hasattr(self._dep_repo, "soft_delete_edges_between"):
-            await self._dep_repo.soft_delete_edges_between(
-                source_memory_id,
-                target_memory_id,
-                EdgeType.CONFLICTS_WITH.value,
+        if self._graph:
+            await self._graph.mark_conflict_resolved(
+                org_id=self._org_id,
+                source_memory_id=source_memory_id,
+                target_memory_id=target_memory_id,
+                resolution="merge",
+                resolved_by=reviewer_id,
             )
 
         edge_metadata = {
@@ -1383,13 +1393,6 @@ class MemoryService:
             "last_observed_at": datetime.now(timezone.utc).isoformat(),
         }
         for old_memory_id in (source_memory_id, target_memory_id):
-            await self._dep_repo.upsert_edge(
-                source_memory_id=merged_memory_id,
-                target_memory_id=old_memory_id,
-                edge_type=EdgeType.MERGED_FROM.value,
-                strength=1.0,
-                metadata_json=edge_metadata,
-            )
             await self._sync_graph_memory_edge(
                 source_memory_id=merged_memory_id,
                 target_memory_id=old_memory_id,
@@ -1439,15 +1442,25 @@ class MemoryService:
         strength: float = 0.5,
         source_event_id: str | None = None,
         target_event_id: str | None = None,
-    ) -> MemoryDependencyEdge:
-        return await self._dep_repo.upsert_edge(
+    ) -> dict[str, str]:
+        await self._sync_graph_memory_edge(
             source_memory_id=source_memory_id,
             target_memory_id=target_memory_id,
             edge_type=edge_type.value,
             strength=strength,
-            source_event_id=source_event_id,
-            target_event_id=target_event_id,
+            trace_id=source_event_id or target_event_id,
+            metadata_json={
+                "edge_group": "provenance",
+                "relation_source": "record_dependency",
+                "source_event_id": source_event_id,
+                "target_event_id": target_event_id,
+            },
         )
+        return {
+            "source_memory_id": source_memory_id,
+            "target_memory_id": target_memory_id,
+            "edge_type": edge_type.value,
+        }
 
     # ------------------------------------------------------------------
     # Events
@@ -1550,7 +1563,11 @@ class MemoryService:
     @staticmethod
     def _handle_graph_sync_error(operation: str, exc: Exception) -> None:
         if settings.neo4j_enabled:
-            raise RuntimeError(f"{operation} failed: {exc}") from exc
+            raise GraphMemoryError(
+                f"{operation} failed: {exc}",
+                code="GRAPH_MEMORY_SYNC_FAILED",
+                detail={"operation": operation, "cause": str(exc)},
+            ) from exc
         logger.debug("%s skipped", operation, exc_info=True)
 
     async def _sync_graph_memory_node(
@@ -1599,13 +1616,14 @@ class MemoryService:
             metadata = {"org_id": self._org_id, **(metadata_json or {})}
             await self._graph.create_memory_edge(
                 MemoryGraphEdge(
+                    org_id=self._org_id,
                     source_memory_id=source_memory_id,
                     target_memory_id=target_memory_id,
                     edge_type=edge_type,
                     strength=strength,
                     trace_id=trace_id,
                     reason=reason,
-                    metadata_json=metadata,
+                    metadata_json=metadata_json or {},
                 )
             )
         except Exception as exc:

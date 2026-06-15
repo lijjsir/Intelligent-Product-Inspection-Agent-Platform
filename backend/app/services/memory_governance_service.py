@@ -11,10 +11,9 @@ from typing import Any
 
 from app.core.ids import uuid7
 from app.models.approval import Approval
-from app.models.memory import MemoryDependencyEdge, MemoryEvaluation, MemoryItem, MemoryRollback
+from app.models.memory import MemoryEvaluation, MemoryItem, MemoryRollback
 from app.repositories.approval_repo import ApprovalRepository
 from app.repositories.memory_repo import (
-    MemoryDependencyRepository,
     MemoryEvaluationRepository,
     MemoryEventRepository,
     MemoryItemRepository,
@@ -31,6 +30,7 @@ from app.schemas.memory import (
     ReviewStatus,
     RollbackAction,
 )
+from app.services.memory_graph_store import MemoryGraphEdge
 from app.services.memory_vector_service import MemoryVectorService
 
 
@@ -44,7 +44,6 @@ class MemoryProvenanceService:
         self._event_repo = MemoryEventRepository(session, org_id)
         from app.services.memory_graph_factory import build_memory_graph_store
         self._graph_store = build_memory_graph_store(session, org_id)
-        self._dep_repo = MemoryDependencyRepository(session, org_id)
 
     async def trace_provenance(self, memory_id: str, trace_id: str | None = None) -> dict:
         """Reconstruct the source chain: events, evidence pointers, write subject, version parent."""
@@ -117,7 +116,6 @@ class MemoryPropagationService:
     def __init__(self, session, org_id: str):
         self._session = session
         self._org_id = org_id
-        self._dep_repo = MemoryDependencyRepository(session, org_id)
         self._item_repo = MemoryItemRepository(session, org_id)
         from app.services.memory_graph_factory import build_memory_graph_store
         self._graph_store = build_memory_graph_store(session, org_id)
@@ -224,9 +222,10 @@ class MemoryRollbackService:
         self._item_repo = MemoryItemRepository(session, org_id)
         self._event_repo = MemoryEventRepository(session, org_id)
         self._rollback_repo = MemoryRollbackRepository(session, org_id)
-        self._dep_repo = MemoryDependencyRepository(session, org_id)
         self._approval_repo = ApprovalRepository(session)
         self._vector = vector_service
+        from app.services.memory_graph_factory import build_memory_graph_store
+        self._graph_store = build_memory_graph_store(session, org_id) if session is not None else None
 
     async def plan_rollback(
         self,
@@ -363,7 +362,8 @@ class MemoryRollbackService:
                     await self._item_repo.update_status(mid, MemoryStatus.DELETED.value)
                     if self._vector:
                         await self._vector.delete_memory(mid)
-                    await self._dep_repo.soft_delete_by_memory(mid)
+                    if self._graph_store:
+                        await self._graph_store.soft_delete_memory_edges(org_id=self._org_id, memory_id=mid)
                     affected += 1
 
                 elif action == RollbackAction.DEGRADE:
@@ -474,19 +474,25 @@ class MemoryRollbackService:
             access_count=0,
         )
         await self._item_repo.create(replacement)
-        await self._dep_repo.upsert_edge(
-            source_memory_id=new_memory_id,
-            target_memory_id=memory_id,
-            edge_type=EdgeType.VERSION_OF.value,
-            strength=1.0,
-            metadata_json={
-                "edge_group": "provenance",
-                "relation_source": "rollback_patch",
-                "reason": "patch replacement version",
-                "observed_count": 1,
-                "last_observed_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        if self._graph_store:
+            await self._graph_store.create_memory_edge(
+                MemoryGraphEdge(
+                    org_id=self._org_id,
+                    source_memory_id=new_memory_id,
+                    target_memory_id=memory_id,
+                    edge_type=EdgeType.VERSION_OF.value,
+                    strength=1.0,
+                    trace_id=trace_id,
+                    reason="patch replacement version",
+                    metadata_json={
+                        "edge_group": "provenance",
+                        "relation_source": "rollback_patch",
+                        "reason": "patch replacement version",
+                        "observed_count": 1,
+                        "last_observed_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            )
 
         if self._vector:
             await self._vector.upsert_memory(

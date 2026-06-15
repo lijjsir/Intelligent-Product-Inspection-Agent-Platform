@@ -198,7 +198,7 @@ class MemoryCandidateService:
         if not isinstance(short_term_memory, dict):
             return ""
 
-        for message in reversed(list(short_term_memory.get("recent_messages") or [])[-8:]):
+        for message in reversed(MemoryCandidateService._short_term_recent_messages(short_term_memory)[-8:]):
             if not isinstance(message, dict):
                 continue
             if message.get("role") != "user":
@@ -221,15 +221,15 @@ class MemoryCandidateService:
             return {}
 
         evidence: dict = {}
-        summary = str(short_term_memory.get("conversation_summary") or "").strip()
+        summary = MemoryCandidateService._short_term_summary(short_term_memory)
         if summary:
             evidence["short_term_summary"] = summary[:500]
 
-        session_facts = short_term_memory.get("session_facts")
+        session_facts = MemoryCandidateService._short_term_session_facts(short_term_memory)
         if isinstance(session_facts, dict) and session_facts:
             evidence["short_term_fact_keys"] = sorted(str(key) for key in session_facts.keys())[:20]
 
-        recent_messages = short_term_memory.get("recent_messages")
+        recent_messages = MemoryCandidateService._short_term_recent_messages(short_term_memory)
         if isinstance(recent_messages, list):
             evidence["short_term_recent_count"] = len(recent_messages)
 
@@ -241,12 +241,42 @@ class MemoryCandidateService:
             return []
 
         facts: list[str] = []
-        summary = str(short_term_memory.get("conversation_summary") or "").strip()
+        summary = MemoryCandidateService._short_term_summary(short_term_memory)
         if summary:
             facts.append(f"short_term_summary: {summary[:200]}")
 
-        session_facts = short_term_memory.get("session_facts")
+        session_facts = MemoryCandidateService._short_term_session_facts(short_term_memory)
         if isinstance(session_facts, dict):
             for key, value in list(session_facts.items())[:5]:
                 facts.append(f"session_fact.{key}: {str(value)[:120]}")
         return facts
+
+    @staticmethod
+    def _short_term_summary(short_term_memory: dict) -> str:
+        summary = str(short_term_memory.get("conversation_summary") or "").strip()
+        if summary:
+            return summary
+        session_summary = short_term_memory.get("session_summary")
+        if isinstance(session_summary, dict):
+            return str(session_summary.get("summary") or "").strip()
+        return ""
+
+    @staticmethod
+    def _short_term_session_facts(short_term_memory: dict) -> dict:
+        session_facts = short_term_memory.get("session_facts")
+        if isinstance(session_facts, dict):
+            return session_facts
+        session_summary = short_term_memory.get("session_summary")
+        if isinstance(session_summary, dict) and isinstance(session_summary.get("confirmed_facts"), dict):
+            return dict(session_summary["confirmed_facts"])
+        return {}
+
+    @staticmethod
+    def _short_term_recent_messages(short_term_memory: dict) -> list[dict]:
+        recent_messages = short_term_memory.get("recent_messages")
+        if isinstance(recent_messages, list):
+            return [m for m in recent_messages if isinstance(m, dict)]
+        recent_dialogue = short_term_memory.get("recent_dialogue")
+        if isinstance(recent_dialogue, list):
+            return [m for m in recent_dialogue if isinstance(m, dict)]
+        return []
