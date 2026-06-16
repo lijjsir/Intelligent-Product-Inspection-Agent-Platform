@@ -108,44 +108,9 @@ class ShortTermMemoryService:
 
         recent = filtered[-max_recent_messages:]
 
-        # Session-local semantic recall
+        # Session-local semantic recall was removed by the shared memory refactor.
+        # Short-term memory is now summary/facts/recent-dialogue only.
         semantic_recall: list[dict] = []
-        if current_query.strip():
-            try:
-                from app.services.session_memory_vector_service import SessionMemoryVectorService
-                from agent.rag.embedder import Embedder
-
-                embedder = Embedder(
-                    org_id=self._org_id,
-                    user_id=user_id,
-                    trace_id=None,
-                    allow_pseudo_fallback=False,
-                )
-
-                async def _embed_factory(text: str) -> list[float]:
-                    return await embedder.embed(text)
-
-                session_vector_svc = SessionMemoryVectorService(
-                    _embed_factory, self._org_id, user_id,
-                )
-                semantic_recall = await session_vector_svc.search_session(
-                    org_id=self._org_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    query=current_query,
-                    before_seq_no=current_user_seq_no,
-                    top_k=5,
-                )
-            except Exception as exc:
-                raise ShortTermMemoryError(
-                    "会话语义召回检索失败，无法构建短期记忆。",
-                    code="SHORT_TERM_SESSION_RECALL_FAILED",
-                    detail={
-                        "session_id": session_id,
-                        "current_user_seq_no": current_user_seq_no,
-                        "cause": str(exc),
-                    },
-                ) from exc
 
         # Token-aware truncation
         model_window = await self._resolve_model_context_window()

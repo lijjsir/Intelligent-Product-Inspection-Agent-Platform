@@ -186,9 +186,11 @@ async def test_neo4j_store_writes_allowed_typed_memory_relationship(monkeypatch)
     )
 
     query, params = executed[0]
-    assert "MERGE (src)-[r:CONFLICTS_WITH" in query
-    assert "MEMORY_EDGE" not in query
-    assert params["edge_type"] == "conflicts_with"
+    assert "ConflictCase" in query
+    assert "PARTICIPATES_IN" in query
+    assert "CONFLICTS_WITH" not in query
+    assert params["source_memory_id"] == "mem-a"
+    assert params["target_memory_id"] == "mem-b"
 
 
 @pytest.mark.asyncio

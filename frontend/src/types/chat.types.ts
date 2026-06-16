@@ -38,7 +38,8 @@ export type ChatUiSchema =
   | "task_action_v1"
   | "task_result_v1"
   | "paper_review_report_v1"
-  | "error_v1";
+  | "error_v1"
+  | "chat_error_v1";
 
 export interface PaperReviewReportFile {
   format: "md" | "docx" | "pdf";
@@ -209,6 +210,8 @@ export interface ChatErrorPayload {
   error_code?: string;
   error?: string;
   detail?: Record<string, unknown>;
+  module?: string | null;
+  suggestion?: string | null;
 }
 
 export interface ChatMessagePayload {
@@ -282,6 +285,8 @@ export interface ChatMessagePayload {
   error?: string;
   error_code?: string;
   detail?: Record<string, unknown>;
+  module?: string | null;
+  suggestion?: string | null;
 }
 
 export interface ChatMessage {

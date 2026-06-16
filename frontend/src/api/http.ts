@@ -46,9 +46,25 @@ export function extractApiErrorMessage(error: unknown, fallback = "请求失败"
 }
 
 export function extractApiErrorDetail(error: unknown, fallback = "请求失败"): ApiErrorDetail {
-  if (!axios.isAxiosError(error)) return { code: "UNKNOWN_ERROR", message: fallback };
-  const data = error.response?.data as any;
+  const maybeResponseData =
+    error && typeof error === "object"
+      ? (error as { response?: { data?: unknown } }).response?.data
+      : undefined;
+  if (!axios.isAxiosError(error) && maybeResponseData === undefined) {
+    return { code: "UNKNOWN_ERROR", message: fallback };
+  }
+  const data = (axios.isAxiosError(error) ? error.response?.data : maybeResponseData) as any;
   const envelopeError = data?.error;
+  if (typeof data?.error_code === "string" && data.error_code.trim()) {
+    return {
+      code: data.error_code,
+      message: String(data?.message || fallback),
+      detail: data?.detail,
+      module: data?.module,
+      trace_id: data?.trace_id,
+      suggestion: data?.suggestion,
+    };
+  }
   if (envelopeError && typeof envelopeError === "object") {
     return {
       code: String(envelopeError.code || data?.code || "UNKNOWN_ERROR"),
@@ -80,8 +96,9 @@ export function extractApiErrorDetail(error: unknown, fallback = "请求失败")
       trace_id: data?.trace_id,
     };
   }
-  if (typeof error.message === "string" && error.message.trim()) {
-    return { code: String(error.code || "UNKNOWN_ERROR"), message: error.message };
+  const errorLike = error as { code?: string; message?: unknown };
+  if (typeof errorLike.message === "string" && errorLike.message.trim()) {
+    return { code: String(errorLike.code || "UNKNOWN_ERROR"), message: errorLike.message };
   }
   return { code: "UNKNOWN_ERROR", message: fallback };
 }

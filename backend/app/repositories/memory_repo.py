@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -106,6 +108,7 @@ class MemoryItemRepository:
         stmt = select(MemoryItem).where(
             MemoryItem.org_id == self._org_id,
             MemoryItem.status == "active",
+            MemoryItem.vector_status == "success",
             MemoryItem.deleted_at.is_(None),
             MemoryItem.expires_at.is_(None)
             | (MemoryItem.expires_at > datetime.now(timezone.utc)),
@@ -119,11 +122,11 @@ class MemoryItemRepository:
         else:
             stmt = stmt.where(MemoryItem.user_id.is_(None))
         if task_id:
-            stmt = stmt.where(self._scope_equals("task_id", task_id))
+            stmt = stmt.where(MemoryItem.task_id == task_id)
         if product_line:
-            stmt = stmt.where(self._scope_equals("product_line", product_line))
+            stmt = stmt.where(MemoryItem.product_line == product_line)
         if rag_space_id:
-            stmt = stmt.where(self._scope_equals("rag_space_id", rag_space_id))
+            stmt = stmt.where(MemoryItem.rag_space_id == rag_space_id)
         # Exclude memories that are old versions (target of a version_of edge)
         from app.models.memory import MemoryDependencyEdge as MDE
         versioned_out = (
@@ -255,7 +258,10 @@ class MemoryItemRepository:
         values: dict[str, Any] = {
             "index_status": status,
             "index_error": error,
+            "vector_status": status,
+            "vector_error": error,
             "last_indexed_at": datetime.now(timezone.utc),
+            "last_vector_sync_at": datetime.now(timezone.utc),
         }
         stmt = (
             update(MemoryItem)
@@ -265,6 +271,26 @@ class MemoryItemRepository:
                 MemoryItem.deleted_at.is_(None),
             )
             .values(**values)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_vector_status(self, memory_id: str, status: str, error: str | None = None) -> None:
+        await self.update_index_status(memory_id, status, error)
+
+    async def update_graph_status(self, memory_id: str, status: str, error: str | None = None) -> None:
+        stmt = (
+            update(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.memory_id == memory_id,
+                MemoryItem.deleted_at.is_(None),
+            )
+            .values(
+                graph_status=status,
+                graph_error=error,
+                last_graph_sync_at=datetime.now(timezone.utc),
+            )
         )
         await self._session.execute(stmt)
         await self._session.flush()
@@ -694,9 +720,49 @@ class MemoryRollbackRepository:
 
 
 class MemorySyncOutboxRepository:
+    _SUPPORTED_BACKENDS = {"qdrant", "neo4j"}
+    _ACTION_ALIASES = {
+        ("qdrant", "upsert_memory"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "upsert_active_vector"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "UPSERT_ACTIVE_VECTOR"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "delete_memory"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "delete_active_vector"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "DELETE_ACTIVE_VECTOR"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "upsert_candidate_memory"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "upsert_candidate_vector"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "UPSERT_CANDIDATE_VECTOR"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "delete_candidate_memory"): "DELETE_CANDIDATE_VECTOR",
+        ("qdrant", "delete_candidate_vector"): "DELETE_CANDIDATE_VECTOR",
+        ("qdrant", "DELETE_CANDIDATE_VECTOR"): "DELETE_CANDIDATE_VECTOR",
+        ("neo4j", "upsert_memory_node"): "UPSERT_MEMORY_NODE",
+        ("neo4j", "UPSERT_MEMORY_NODE"): "UPSERT_MEMORY_NODE",
+        ("neo4j", "upsert_memory_edge"): "UPSERT_MEMORY_EDGE",
+        ("neo4j", "UPSERT_MEMORY_EDGE"): "UPSERT_MEMORY_EDGE",
+        ("neo4j", "soft_delete_memory_edges"): "SOFT_DELETE_MEMORY_EDGES",
+        ("neo4j", "SOFT_DELETE_MEMORY_EDGES"): "SOFT_DELETE_MEMORY_EDGES",
+        ("neo4j", "update_memory_node_status"): "UPDATE_MEMORY_NODE_STATUS",
+        ("neo4j", "UPDATE_MEMORY_NODE_STATUS"): "UPDATE_MEMORY_NODE_STATUS",
+    }
+
     def __init__(self, session: AsyncSession, org_id: str):
         self._session = session
         self._org_id = org_id
+
+    @classmethod
+    def _canonical_action(cls, *, target_backend: str, action: str) -> str:
+        backend = str(target_backend or "").lower()
+        if backend not in cls._SUPPORTED_BACKENDS:
+            raise ValueError(f"Unsupported memory sync backend: {target_backend}")
+        canonical = cls._ACTION_ALIASES.get((backend, action))
+        if not canonical:
+            raise ValueError(f"Unsupported {backend} memory sync action: {action}")
+        return canonical
+
+    def _idempotency_key(self, *, memory_id: str, target_backend: str, action: str, payload: dict) -> str:
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        return f"{self._org_id}:{target_backend}:{action}:{memory_id}:{payload_hash}"
 
     @staticmethod
     async def list_pending_org_ids(session: AsyncSession, *, max_retries: int) -> list[str]:
@@ -722,13 +788,23 @@ class MemorySyncOutboxRepository:
     ) -> MemorySyncOutbox:
         from app.core.ids import uuid7
 
+        if not isinstance(payload, dict):
+            raise ValueError("memory sync outbox payload must be a dict")
+        backend = str(target_backend or "").lower()
+        canonical_action = self._canonical_action(target_backend=backend, action=action)
         outbox = MemorySyncOutbox(
             id=str(uuid7()),
             org_id=self._org_id,
             memory_id=memory_id,
-            action=action,
-            target_backend=target_backend,
+            action=canonical_action,
+            target_backend=backend,
             payload_json=payload,
+            idempotency_key=self._idempotency_key(
+                memory_id=memory_id,
+                target_backend=backend,
+                action=canonical_action,
+                payload=payload,
+            ),
             status="pending",
             retry_count=0,
             trace_id=trace_id,

@@ -464,28 +464,6 @@ class ChatService:
             ext_payload["idempotency_key"] = (
                 f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
             )
-            try:
-                await self._index_session_message(
-                    session_id=session_id,
-                    message_id=user_message_id or "",
-                    seq_no=current_user_seq_no,
-                    role="user",
-                    content=request.message.strip(),
-                    trace_id=workflow_run_id,
-                )
-            except Exception as exc:
-                from app.errors.memory_errors import ShortTermMemoryError
-                raise ShortTermMemoryError(
-                    "会话语义召回索引失败，本次聊天已停止。",
-                    code="SHORT_TERM_SESSION_RECALL_FAILED",
-                    detail={
-                        "session_id": session_id,
-                        "message_id": user_message_id,
-                        "seq_no": current_user_seq_no,
-                        "cause": str(exc),
-                    },
-                ) from exc
-
             # Load shared memory context for this query
             ext_payload["shared_memory_context"] = None
             try:
@@ -609,9 +587,8 @@ class ChatService:
                         ext_payload["inspection_context"] = await context_service.build_inspection_context(
                             selected_task_ids=selected_task_ids
                         )
-                except Exception:
-                    logger.debug("chat inspection context build skipped", exc_info=True)
-                    ext_payload["inspection_context"] = self._empty_inspection_context(scope="unavailable")
+                except Exception as exc:
+                    raise RuntimeError(f"inspection context build failed: {exc}") from exc
             else:
                 ext_payload.pop("inspection_context", None)
                 ext_payload.pop("selected_inspection_task_ids", None)
@@ -646,28 +623,6 @@ class ChatService:
 
             agent_output = result.get("agent_output", {})
             answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
-            if answer_text.strip():
-                try:
-                    await self._index_session_message(
-                        session_id=session_id,
-                        message_id=assistant_message_id,
-                        seq_no=assistant_message_seq_no,
-                        role="assistant",
-                        content=answer_text,
-                        trace_id=workflow_run_id,
-                    )
-                except Exception as exc:
-                    from app.errors.memory_errors import ShortTermMemoryError
-                    raise ShortTermMemoryError(
-                        "会话语义召回索引失败，本次聊天已停止。",
-                        code="SHORT_TERM_SESSION_RECALL_FAILED",
-                        detail={
-                            "session_id": session_id,
-                            "message_id": assistant_message_id,
-                            "seq_no": assistant_message_seq_no,
-                            "cause": str(exc),
-                        },
-                    ) from exc
             task_id = str(
                 ext_payload.get("selected_inspection_task_ids", [None])[0]
             ) if ext_payload.get("selected_inspection_task_ids") else None
@@ -754,45 +709,21 @@ class ChatService:
     def _build_error_payload(exc: Exception) -> dict:
         code = getattr(exc, "code", "CHAT_WORKFLOW_FAILED")
         detail = getattr(exc, "detail", {})
+        module = getattr(exc, "module", None)
+        trace_id = getattr(exc, "trace_id", None)
+        suggestion = getattr(exc, "suggestion", None)
         return {
             "status": "failed",
             "message_type": "error",
             "error_code": code,
             "error": str(exc),
             "detail": detail,
+            "module": module,
+            "trace_id": trace_id,
+            "suggestion": suggestion,
             "ui_schema": "chat_error_v1",
             "recoverable": False,
         }
-
-    async def _index_session_message(
-        self,
-        *,
-        session_id: str,
-        message_id: str,
-        seq_no: int,
-        role: str,
-        content: str,
-        trace_id: str | None,
-    ) -> None:
-        text = str(content or "").strip()
-        if not text:
-            return
-        from app.services.session_memory_vector_service import SessionMemoryVectorService
-
-        session_vector_svc = SessionMemoryVectorService(
-            _make_embedder_factory(self._org_id, self._user_id, trace_id),
-            self._org_id,
-            self._user_id,
-        )
-        await session_vector_svc.upsert_message(
-            org_id=self._org_id,
-            user_id=self._user_id,
-            session_id=session_id,
-            message_id=message_id or f"{role}_{seq_no}",
-            seq_no=seq_no,
-            role=role,
-            content=text,
-        )
 
     @staticmethod
     def _empty_inspection_context(*, scope: str, error: str | None = None) -> dict[str, Any]:

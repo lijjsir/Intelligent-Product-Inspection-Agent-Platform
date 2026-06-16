@@ -85,12 +85,13 @@ async def _replay_qdrant(org_id: str, action: str, payload: dict) -> None:
         user_id=str(payload.get("user_id") or "") or None,
         trace_id=str(payload.get("trace_id") or "") or None,
     )
-    if action == "upsert_memory":
+    normalized = str(action or "").upper()
+    if normalized in {"UPSERT_ACTIVE_VECTOR", "UPSERT_CANDIDATE_VECTOR"} or action == "upsert_memory":
         kwargs = dict(payload)
         kwargs.pop("collection", None)
         await vector.upsert_memory(**kwargs)
         return
-    if action == "delete_memory":
+    if normalized in {"DELETE_ACTIVE_VECTOR", "DELETE_CANDIDATE_VECTOR"} or action == "delete_memory":
         await vector.delete_memory(str(payload["memory_id"]))
         return
     raise ValueError(f"Unsupported qdrant outbox action: {action}")
@@ -98,11 +99,19 @@ async def _replay_qdrant(org_id: str, action: str, payload: dict) -> None:
 
 async def _replay_neo4j(session, org_id: str, action: str, payload: dict) -> None:
     graph = build_memory_graph_store(session, org_id)
-    if action == "upsert_memory_node":
+    normalized = str(action or "").upper()
+    if normalized in {"UPSERT_MEMORY_NODE", "UPDATE_MEMORY_NODE_STATUS"} or action == "upsert_memory_node":
         await graph.upsert_memory_node(MemoryGraphNode(**payload))
         return
-    if action == "create_memory_edge":
+    if normalized == "UPSERT_MEMORY_EDGE" or action == "create_memory_edge":
         edge_payload = {**payload, "org_id": str(payload.get("org_id") or org_id)}
         await graph.create_memory_edge(MemoryGraphEdge(**edge_payload))
+        return
+    if normalized == "SOFT_DELETE_MEMORY_EDGES":
+        await graph.soft_delete_memory_edges(
+            org_id=org_id,
+            memory_id=str(payload["memory_id"]),
+            edge_types=payload.get("edge_types"),
+        )
         return
     raise ValueError(f"Unsupported neo4j outbox action: {action}")

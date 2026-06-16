@@ -21,6 +21,8 @@ class GraphCheckpoint(Base):
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     checkpoint: Mapped[str] = mapped_column(LONGTEXT, nullable=False)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), nullable=False,
     )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)

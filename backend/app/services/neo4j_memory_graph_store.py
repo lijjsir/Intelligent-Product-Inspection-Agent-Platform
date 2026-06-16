@@ -78,6 +78,19 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
         })
 
     async def create_memory_edge(self, edge: MemoryGraphEdge) -> None:
+        if str(edge.edge_type or "").lower() == "conflicts_with":
+            conflict_id = str((edge.metadata_json or {}).get("conflict_id") or f"{edge.source_memory_id}:{edge.target_memory_id}")
+            await self.create_conflict_case(
+                org_id=edge.org_id,
+                conflict_id=conflict_id,
+                source_memory_id=edge.source_memory_id,
+                target_memory_id=edge.target_memory_id,
+                conflict_type=str((edge.metadata_json or {}).get("conflict_type") or "memory_contradiction"),
+                severity=str((edge.metadata_json or {}).get("severity") or "medium"),
+                reason=edge.reason or "",
+                metadata_json=edge.metadata_json or {},
+            )
+            return
         org_id = str(edge.org_id or "").strip()
         if not org_id:
             raise GraphMemoryError(
@@ -116,6 +129,93 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             "reason": edge.reason or "",
             "metadata_json": self._json_dumps(edge.metadata_json or {}),
             "created_at": edge.created_at or "",
+        })
+
+    async def create_conflict_case(
+        self,
+        *,
+        org_id: str,
+        conflict_id: str,
+        source_memory_id: str,
+        target_memory_id: str,
+        conflict_type: str,
+        severity: str = "medium",
+        reason: str = "",
+        metadata_json: dict | None = None,
+    ) -> None:
+        query = """
+        MERGE (case:ConflictCase {org_id: $org_id, conflict_id: $conflict_id})
+        SET case.conflict_type = $conflict_type,
+            case.severity = $severity,
+            case.status = coalesce(case.status, 'open'),
+            case.reason = $reason,
+            case.metadata_json = $metadata_json,
+            case.updated_at = datetime(),
+            case.created_at = coalesce(case.created_at, datetime())
+        WITH case
+        MERGE (a:Memory {org_id: $org_id, memory_id: $source_memory_id})
+        MERGE (b:Memory {org_id: $org_id, memory_id: $target_memory_id})
+        MERGE (a)-[:PARTICIPATES_IN {org_id: $org_id, conflict_id: $conflict_id}]->(case)
+        MERGE (b)-[:PARTICIPATES_IN {org_id: $org_id, conflict_id: $conflict_id}]->(case)
+        """
+        await self._execute(query, {
+            "org_id": org_id,
+            "conflict_id": conflict_id,
+            "source_memory_id": source_memory_id,
+            "target_memory_id": target_memory_id,
+            "conflict_type": conflict_type,
+            "severity": severity,
+            "reason": reason,
+            "metadata_json": self._json_dumps(metadata_json or {}),
+        })
+
+    async def upsert_domain_context(self, *, org_id: str, memory_id: str, scope: dict[str, Any]) -> None:
+        query = """
+        MATCH (m:Memory {org_id: $org_id, memory_id: $memory_id})
+        FOREACH (_ IN CASE WHEN $product_line <> '' THEN [1] ELSE [] END |
+          MERGE (p:ProductLine {org_id: $org_id, product_line_key: $product_line})
+          MERGE (m)-[:APPLIES_TO {org_id: $org_id}]->(p)
+        )
+        FOREACH (_ IN CASE WHEN $standard_version_key <> '' THEN [1] ELSE [] END |
+          MERGE (s:StandardVersion {org_id: $org_id, standard_version_key: $standard_version_key})
+          SET s.standard_code = $standard_code, s.standard_version = $standard_version
+          MERGE (m)-[:BASED_ON {org_id: $org_id}]->(s)
+        )
+        FOREACH (_ IN CASE WHEN $task_id <> '' THEN [1] ELSE [] END |
+          MERGE (t:InspectionTask {org_id: $org_id, task_id: $task_id})
+          MERGE (m)-[:OBSERVED_IN {org_id: $org_id}]->(t)
+        )
+        FOREACH (_ IN CASE WHEN $target_market <> '' THEN [1] ELSE [] END |
+          MERGE (market:Market {org_id: $org_id, market_key: $target_market})
+          MERGE (m)-[:TARGET_MARKET {org_id: $org_id}]->(market)
+        )
+        FOREACH (_ IN CASE WHEN $product_category <> '' THEN [1] ELSE [] END |
+          MERGE (product:Product {org_id: $org_id, product_key: $product_category})
+          MERGE (m)-[:FOR_PRODUCT {org_id: $org_id}]->(product)
+        )
+        FOREACH (_ IN CASE WHEN $defect_type <> '' THEN [1] ELSE [] END |
+          MERGE (defect:DefectType {org_id: $org_id, defect_type_key: $defect_type})
+          MERGE (m)-[:MENTIONS_DEFECT {org_id: $org_id}]->(defect)
+        )
+        FOREACH (_ IN CASE WHEN $inspection_batch_id <> '' THEN [1] ELSE [] END |
+          MERGE (batch:InspectionBatch {org_id: $org_id, inspection_batch_id: $inspection_batch_id})
+          MERGE (m)-[:OBSERVED_IN_BATCH {org_id: $org_id}]->(batch)
+        )
+        """
+        standard_code = str(scope.get("standard_code") or "")
+        standard_version = str(scope.get("standard_version") or "")
+        await self._execute(query, {
+            "org_id": org_id,
+            "memory_id": memory_id,
+            "product_line": str(scope.get("product_line") or ""),
+            "standard_code": standard_code,
+            "standard_version": standard_version,
+            "standard_version_key": f"{standard_code}:{standard_version}" if (standard_code or standard_version) else "",
+            "task_id": str(scope.get("task_id") or ""),
+            "target_market": str(scope.get("target_market") or ""),
+            "product_category": str(scope.get("product_category") or ""),
+            "defect_type": str(scope.get("defect_type") or ""),
+            "inspection_batch_id": str(scope.get("inspection_batch_id") or ""),
         })
 
     async def create_memory_rag_edge(self, memory_id: str, chunk_id: str, edge_type: str,
@@ -394,6 +494,13 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             "CREATE CONSTRAINT task_org_task_id_unique IF NOT EXISTS FOR (t:Task) REQUIRE (t.org_id, t.task_id) IS UNIQUE",
             "CREATE CONSTRAINT product_line_org_key_unique IF NOT EXISTS FOR (p:ProductLine) REQUIRE (p.org_id, p.product_line_key) IS UNIQUE",
             "CREATE CONSTRAINT standard_version_org_key_unique IF NOT EXISTS FOR (s:StandardVersion) REQUIRE (s.org_id, s.standard_version_key) IS UNIQUE",
+            "CREATE CONSTRAINT inspection_task_org_key_unique IF NOT EXISTS FOR (t:InspectionTask) REQUIRE (t.org_id, t.task_id) IS UNIQUE",
+            "CREATE CONSTRAINT inspection_batch_org_key_unique IF NOT EXISTS FOR (b:InspectionBatch) REQUIRE (b.org_id, b.inspection_batch_id) IS UNIQUE",
+            "CREATE CONSTRAINT product_org_key_unique IF NOT EXISTS FOR (p:Product) REQUIRE (p.org_id, p.product_key) IS UNIQUE",
+            "CREATE CONSTRAINT market_org_key_unique IF NOT EXISTS FOR (m:Market) REQUIRE (m.org_id, m.market_key) IS UNIQUE",
+            "CREATE CONSTRAINT defect_type_org_key_unique IF NOT EXISTS FOR (d:DefectType) REQUIRE (d.org_id, d.defect_type_key) IS UNIQUE",
+            "CREATE CONSTRAINT conflict_case_org_key_unique IF NOT EXISTS FOR (c:ConflictCase) REQUIRE (c.org_id, c.conflict_id) IS UNIQUE",
+            "CREATE INDEX conflict_case_status_idx IF NOT EXISTS FOR (c:ConflictCase) ON (c.org_id, c.status)",
         ]
 
         async with self._driver.session(database=self._database) as session:

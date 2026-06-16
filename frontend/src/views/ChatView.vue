@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -1035,7 +1035,18 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                     <span class="error-label">错误信息</span>
                     <span class="error-message-text">{{ message.payload.error }}</span>
                   </div>
-                  <div v-if="message.payload?.detail && typeof message.payload.detail === 'object' && Object.keys(message.payload.detail).length > 0" class="error-item">
+                  <div v-if="message.payload?.module" class="error-item">
+                    <span class="error-label">Module</span>
+                    <span class="error-message-text">{{ message.payload.module }}</span>
+                  </div>
+                  <div v-if="message.payload?.trace_id" class="error-item">
+                    <span class="error-label">Trace ID</span>
+                    <span class="error-message-text">{{ message.payload.trace_id }}</span>
+                  </div>
+                  <div v-if="message.payload?.suggestion" class="error-item">
+                    <span class="error-label">Suggestion</span>
+                    <span class="error-message-text">{{ message.payload.suggestion }}</span>
+                  </div>                  <div v-if="message.payload?.detail && typeof message.payload.detail === 'object' && Object.keys(message.payload.detail).length > 0" class="error-item">
                     <span class="error-label">详细信息</span>
                     <div class="error-detail-list">
                       <div v-for="(value, key) in message.payload.detail" :key="key" class="error-detail-row">

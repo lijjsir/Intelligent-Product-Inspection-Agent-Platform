@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DECIMAL, DateTime, Integer, String, Text, text
+from sqlalchemy import Boolean, DECIMAL, Date, DateTime, Integer, String, Text, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -28,8 +28,22 @@ class MemoryItem(Base):
     source_trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    product_line: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rag_space_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    standard_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    standard_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    production_date: Mapped[Any | None] = mapped_column(Date, nullable=True)
+    target_market: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    product_category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     index_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vector_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    graph_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    last_vector_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_graph_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    vector_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graph_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     policy_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     policy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     candidate_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -200,10 +214,39 @@ class MemorySyncOutbox(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_backend: Mapped[str] = mapped_column(String(32), nullable=False)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+    updated_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class MemoryConflictCase(Base):
+    __tablename__ = "memory_conflict_cases"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    conflict_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conflict_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="medium")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applicability_context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[Any] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

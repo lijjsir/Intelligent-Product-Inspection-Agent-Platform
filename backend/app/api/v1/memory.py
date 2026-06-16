@@ -63,6 +63,7 @@ from app.services.memory_governance_service import (
     MemoryRollbackService,
     MemoryEvaluationService,
 )
+from app.services.memory_state_transition_service import MemoryStateTransitionService
 from app.services.retrieval_conflict_guard import RetrievalConflictGuard
 
 router = APIRouter()
@@ -714,20 +715,63 @@ async def resolve_conflict(
 
     target_id = graph_edges[0]["target_memory_id"]
     target = await item_repo.get_by_memory_id(target_id)
+    transition_service = MemoryStateTransitionService(db, current.org_id)
 
     merged_id = None
     if body.action == "keep_A":
-        await item_repo.update_status(memory_id, "active")
+        await transition_service.transition(
+            memory_id,
+            action="activate",
+            target_status="active",
+            actor_id=body.reviewer_id,
+            trace_id=None,
+            reason="conflict resolution keep_A",
+        )
         if target:
-            await item_repo.update_status(target_id, "isolated")
+            await transition_service.transition(
+                target_id,
+                action="isolate",
+                target_status="isolated",
+                actor_id=body.reviewer_id,
+                trace_id=None,
+                reason="conflict resolution keep_A",
+            )
     elif body.action == "keep_B":
         if target:
-            await item_repo.update_status(target_id, "active")
-        await item_repo.update_status(memory_id, "isolated")
+            await transition_service.transition(
+                target_id,
+                action="activate",
+                target_status="active",
+                actor_id=body.reviewer_id,
+                trace_id=None,
+                reason="conflict resolution keep_B",
+            )
+        await transition_service.transition(
+            memory_id,
+            action="isolate",
+            target_status="isolated",
+            actor_id=body.reviewer_id,
+            trace_id=None,
+            reason="conflict resolution keep_B",
+        )
     elif body.action == "dismiss":
-        await item_repo.update_status(memory_id, "isolated")
+        await transition_service.transition(
+            memory_id,
+            action="isolate",
+            target_status="isolated",
+            actor_id=body.reviewer_id,
+            trace_id=None,
+            reason="conflict resolution dismiss",
+        )
         if target:
-            await item_repo.update_status(target_id, "isolated")
+            await transition_service.transition(
+                target_id,
+                action="isolate",
+                target_status="isolated",
+                actor_id=body.reviewer_id,
+                trace_id=None,
+                reason="conflict resolution dismiss",
+            )
     elif body.action == "merge":
         vector_svc = build_vector_service(
             current.org_id,

@@ -1,4 +1,4 @@
-"""MemoryService - write gate, retrieval, status management, event recording.
+﻿"""MemoryService - write gate, retrieval, status management, event recording.
 
 Orchestrates MySQL persistence via repositories and Qdrant indexing via MemoryVectorService.
 Never bypassed by LangGraph nodes or tools.
@@ -47,6 +47,7 @@ from app.schemas.memory import (
 from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
 from app.services.memory_graph_factory import build_memory_graph_store
 from app.services.memory_graph_store import MemoryGraphEdge, MemoryGraphNode, MemoryGraphStore
+from app.services.memory_state_transition_service import MemoryStateTransitionService
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +73,7 @@ class MemoryService:
         self._candidate_vector = candidate_vector_service
         self._graph: MemoryGraphStore | None = None
         if session is not None:
-            try:
-                self._graph = build_memory_graph_store(session, org_id)
-            except Exception as exc:
-                if settings.neo4j_enabled:
-                    raise RuntimeError(f"Memory graph store initialization failed: {exc}") from exc
-                logger.debug("Memory graph store initialization skipped", exc_info=True)
+            self._graph = build_memory_graph_store(session, org_id)
 
     # ------------------------------------------------------------------
     # Write Gate
@@ -282,8 +278,19 @@ class MemoryService:
             idempotency_key=idempotency_key,
             source_trace_id=request.source.trace_id or request.trace_id,
             source_task_id=request.source.task_id,
+            task_id=self._scope_value(request.scope, "task_id") or request.source.task_id,
+            product_line=self._scope_value(request.scope, "product_line"),
+            rag_space_id=self._scope_value(request.scope, "rag_space_id"),
+            standard_code=self._scope_value(request.scope, "standard_code"),
+            standard_version=self._scope_value(request.scope, "standard_version"),
+            target_market=self._scope_value(request.scope, "target_market"),
+            product_category=self._scope_value(request.scope, "product_category"),
             index_status="pending",
             index_error=None,
+            vector_status="pending",
+            graph_status="pending",
+            vector_error=None,
+            graph_error=None,
             policy_key="write_gate",
             policy_version=str(policy.get("version", "default:v1")),
             last_accessed_at=datetime.now(timezone.utc),
@@ -316,7 +323,14 @@ class MemoryService:
         await self._sync_candidate_vector(item)
 
         if warnings:
-            await self._item_repo.update_status(memory_id, MemoryStatus.CONTESTED.value)
+            await self._transition_status(
+                memory_id,
+                MemoryStatus.CONTESTED,
+                action="degrade",
+                trace_id=request.trace_id,
+                reason="write gate warnings",
+                payload={"warnings": warnings},
+            )
             return MemoryWriteResponse(
                 memory_id=memory_id,
                 status=MemoryStatus.CONTESTED,
@@ -419,7 +433,18 @@ class MemoryService:
             idempotency_key=idempotency_key,
             source_trace_id=request.source.trace_id or request.trace_id if request.source else request.trace_id,
             source_task_id=request.source.task_id if request.source else None,
+            task_id=self._scope_value(request.scope, "task_id") or (request.source.task_id if request.source else None),
+            product_line=self._scope_value(request.scope, "product_line"),
+            rag_space_id=self._scope_value(request.scope, "rag_space_id"),
+            standard_code=self._scope_value(request.scope, "standard_code"),
+            standard_version=self._scope_value(request.scope, "standard_version"),
+            target_market=self._scope_value(request.scope, "target_market"),
+            product_category=self._scope_value(request.scope, "product_category"),
             index_status="pending",
+            vector_status="pending",
+            graph_status="pending",
+            vector_error=None,
+            graph_error=None,
             last_accessed_at=datetime.now(timezone.utc),
             access_count=0,
         )
@@ -562,7 +587,14 @@ class MemoryService:
             ),
             evaluate=False,
         )
-        await self._item_repo.update_status(memory_id, MemoryStatus.DISABLED.value)
+        await self._transition_status(
+            memory_id,
+            MemoryStatus.DISABLED,
+            action="degrade",
+            actor_id=reviewer_id,
+            trace_id=trace_id,
+            reason=reason or "rejected",
+        )
         await self._record_event(
             event_type=EventType.MEMORY_CANDIDATE_REJECTED,
             memory_id=memory_id,
@@ -585,7 +617,13 @@ class MemoryService:
         trace_id: str | None = None,
         reason: str | None = None,
     ) -> PromotionEvaluationResponse:
-        await self._item_repo.update_status(memory_id, MemoryStatus.ISOLATED.value)
+        await self._transition_status(
+            memory_id,
+            MemoryStatus.ISOLATED,
+            action="isolate",
+            trace_id=trace_id,
+            reason=reason or "isolated",
+        )
         await self._delete_candidate_vector(memory_id)
         return PromotionEvaluationResponse(
             memory_id=memory_id,
@@ -614,7 +652,13 @@ class MemoryService:
             ),
             evaluate=False,
         )
-        await self._item_repo.update_status(memory_id, MemoryStatus.CONTESTED.value)
+        await self._transition_status(
+            memory_id,
+            MemoryStatus.CONTESTED,
+            action="degrade",
+            trace_id=trace_id,
+            reason=reason or "contested",
+        )
         return PromotionEvaluationResponse(
             memory_id=memory_id,
             status=MemoryStatus.CONTESTED,
@@ -754,7 +798,17 @@ class MemoryService:
             promotion_score=promotion_score,
             trust_score=trust_score,
         )
-        await self._item_repo.update_status(memory_id, MemoryStatus.ACTIVE.value)
+        await self._transition_status(
+            memory_id,
+            MemoryStatus.ACTIVE,
+            action="activate",
+            trace_id=getattr(memory, "trace_id", None),
+            reason=reason,
+            payload={
+                "trust_score": trust_score,
+                "promotion_score": promotion_score,
+            },
+        )
         await self._sync_graph_memory_node(
             memory,
             status=MemoryStatus.ACTIVE.value,
@@ -1363,8 +1417,19 @@ class MemoryService:
             idempotency_key=None,
             source_trace_id=trace_id,
             source_task_id=getattr(source, "source_task_id", None) or getattr(target, "source_task_id", None),
+            task_id=getattr(source, "task_id", None) or getattr(target, "task_id", None),
+            product_line=getattr(source, "product_line", None) or getattr(target, "product_line", None),
+            rag_space_id=getattr(source, "rag_space_id", None) or getattr(target, "rag_space_id", None),
+            standard_code=getattr(source, "standard_code", None) or getattr(target, "standard_code", None),
+            standard_version=getattr(source, "standard_version", None) or getattr(target, "standard_version", None),
+            target_market=getattr(source, "target_market", None) or getattr(target, "target_market", None),
+            product_category=getattr(source, "product_category", None) or getattr(target, "product_category", None),
             index_status="pending",
             index_error=None,
+            vector_status="pending",
+            graph_status="pending",
+            vector_error=None,
+            graph_error=None,
             policy_key=getattr(source, "policy_key", None) or "conflict_resolution",
             policy_version=getattr(source, "policy_version", None) or "merge:v1",
             last_accessed_at=datetime.now(timezone.utc),
@@ -1372,8 +1437,22 @@ class MemoryService:
         )
 
         await self._item_repo.create(merged_item)
-        await self._item_repo.update_status(source_memory_id, MemoryStatus.ISOLATED.value)
-        await self._item_repo.update_status(target_memory_id, MemoryStatus.ISOLATED.value)
+        await self._transition_status(
+            source_memory_id,
+            MemoryStatus.ISOLATED,
+            action="isolate",
+            actor_id=reviewer_id,
+            trace_id=trace_id,
+            reason="conflict merge source isolated",
+        )
+        await self._transition_status(
+            target_memory_id,
+            MemoryStatus.ISOLATED,
+            action="isolate",
+            actor_id=reviewer_id,
+            trace_id=trace_id,
+            reason="conflict merge target isolated",
+        )
 
         if self._graph:
             await self._graph.mark_conflict_resolved(
@@ -1512,7 +1591,7 @@ class MemoryService:
     # ------------------------------------------------------------------
 
     async def update_status(self, memory_id: str, status: MemoryStatus) -> None:
-        await self._item_repo.update_status(memory_id, status.value)
+        await self._transition_status(memory_id, status, action=self._transition_action_for_status(status))
         if self._vector and status in (MemoryStatus.DELETED, MemoryStatus.DISABLED):
             await self._vector.delete_memory(memory_id)
 
@@ -1522,6 +1601,42 @@ class MemoryService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _transition_action_for_status(status: MemoryStatus) -> str:
+        return {
+            MemoryStatus.ACTIVE: "activate",
+            MemoryStatus.ISOLATED: "isolate",
+            MemoryStatus.DELETED: "delete",
+            MemoryStatus.DISABLED: "degrade",
+            MemoryStatus.CONTESTED: "degrade",
+            MemoryStatus.EXPIRED: "expire",
+        }.get(status, "patch")
+
+    async def _transition_status(
+        self,
+        memory_id: str,
+        status: MemoryStatus,
+        *,
+        action: str,
+        actor_id: str | None = None,
+        trace_id: str | None = None,
+        reason: str | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        if self._session is None:
+            await self._item_repo.update_status(memory_id, status.value)
+            return
+
+        await MemoryStateTransitionService(self._session, self._org_id).transition(
+            memory_id,
+            action=action,
+            target_status=status.value,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            reason=reason,
+            payload=payload,
+        )
 
     async def _record_event(
         self,
@@ -1559,6 +1674,19 @@ class MemoryService:
             if value:
                 return f"{key}:{value}"
         return ""
+
+    @staticmethod
+    def _scope_value(scope: Any, key: str) -> str | None:
+        if scope is None:
+            return None
+        if isinstance(scope, dict):
+            value = scope.get(key)
+        else:
+            value = getattr(scope, key, None)
+            if value is None and hasattr(scope, "model_dump"):
+                value = scope.model_dump().get(key)
+        text = str(value or "").strip()
+        return text or None
 
     @staticmethod
     def _handle_graph_sync_error(operation: str, exc: Exception) -> None:
@@ -1731,22 +1859,3 @@ class MemoryService:
             },
             usage_policy=item.usage_policy,
         )
-
-    def _fallback_search(
-        self, eligible: list[MemoryItem], query: str, top_k: int
-    ) -> list[MemorySearchItem]:
-        query_tokens = set(query.lower().split())
-        scored = []
-        for mem in eligible:
-            summary = (mem.content_summary or "").lower()
-            if not summary:
-                continue
-            mem_tokens = set(summary.split())
-            if not query_tokens:
-                continue
-            jaccard = len(query_tokens & mem_tokens) / len(query_tokens | mem_tokens)
-            confidence = float(mem.confidence) if mem.confidence else 0.5
-            score = jaccard * 0.5 + confidence * 0.5
-            scored.append((score, mem))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [self._to_search_item(mem, score) for score, mem in scored[:top_k]]

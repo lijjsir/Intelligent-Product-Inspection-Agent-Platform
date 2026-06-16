@@ -260,47 +260,13 @@ def _smalltalk_answer(query: str, history: list[dict[str, Any]] | None = None) -
     return "你好！我是 PIAP 智能助手，可以陪你聊天、解答问题。如果你需要使用质量检测或任务管理功能，也可以随时告诉我。"
 
 
-def _general_answer_fallback(query: str) -> dict[str, Any]:
-    return {
-        "answer": f"抱歉，我暂时无法处理你的问题「{query}」。请换个方式描述一下，或者告诉我你需要什么帮助？",
-        "summary": "普通问答（兜底）",
-        "citations": [],
-    }
+class ChatReasoningError(RuntimeError):
+    code = "CHAT_REASONING_FAILED"
+    module = "quality_chat"
 
-
-def _fallback_answer(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
-    if not docs:
-        return {"answer": "当前没有检索到足够的质量检测依据，这次回答只能作为保守参考。", "summary": "证据不足，给出保守回答", "citations": citations}
-    top = docs[0]
-    excerpt = str(top.get("text") or "").strip()
-    if len(excerpt) > 220:
-        excerpt = f"{excerpt[:220]}..."
-    return {
-        "answer": f"基于当前检索到的资料，与你的问题“{query}”最相关的依据来自“{top.get('title') or '标准文档'}”。参考内容：{excerpt}",
-        "summary": "基于检索结果生成的保守答案",
-        "citations": citations,
-    }
-
-
-def _rag_answer_fallback(query: str, docs: list[dict[str, Any]], citations: list[dict[str, Any]]) -> dict[str, Any]:
-    if not docs:
-        return {
-            "answer": (
-                "当前知识库没有检索到可引用依据；同时模型本次未生成有效回复，"
-                f"因此暂时无法可靠回答“{query}”。请稍后重试或补充知识库资料。"
-            ),
-            "summary": "RAG 未命中且模型回复兜底失败",
-            "citations": citations,
-        }
-    top = docs[0]
-    excerpt = str(top.get("text") or "").strip()
-    if len(excerpt) > 220:
-        excerpt = f"{excerpt[:220]}..."
-    return {
-        "answer": excerpt,
-        "summary": "基于知识库回答",
-        "citations": citations,
-    }
+    def __init__(self, message: str, *, detail: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.detail = detail or {}
 
 
 def _selected_rag_space(ext: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -395,6 +361,22 @@ async def input_adapter(state: ChatState) -> ChatState:
 
 
 async def history_loader(state: ChatState) -> ChatState:
+    ext = state.get("ext") or {}
+    short_term_memory = ext.get("short_term_memory") if isinstance(ext.get("short_term_memory"), dict) else {}
+    ext_history = list(short_term_memory.get("recent_dialogue") or ext.get("history_messages") or [])
+    if ext_history:
+        state["history"] = [
+            {
+                "role": item.get("role", "user"),
+                "content": item.get("content", ""),
+                "message_type": item.get("message_type", "text"),
+                "payload": item.get("payload") or {},
+            }
+            for item in ext_history
+            if isinstance(item, dict) and (item.get("content") or item.get("payload"))
+        ]
+        return state
+
     async with get_session() as session:
         repo = ChatMessageRepository(session)
         rows = await repo.list_for_session(org_id=str(state["org_id"]), session_id=str(state["session_id"]), after_seq=0, limit=20)
@@ -550,6 +532,14 @@ async def reasoning(state: ChatState) -> ChatState:
 
     agent_name = state.get("agent", "chat")
     sub_route = state.get("sub_route", intent or "general_chat")
+    ext = dict(state.get("ext") or {})
+    short_term_memory = ext.get("short_term_memory") if isinstance(ext.get("short_term_memory"), dict) else None
+    short_term_context = {
+        "conversation_summary": ext.get("conversation_summary"),
+        "session_facts": ext.get("session_facts") or {},
+        "short_term_memory": short_term_memory,
+        "recent_messages": ext.get("history_messages") or [],
+    }
 
     # Map old intents to new sub_routes for backward compat
     if not state.get("sub_route"):
@@ -581,6 +571,8 @@ async def reasoning(state: ChatState) -> ChatState:
                 "quality_judgement.response_writer",
             ],
         ),
+        shared_memory_context=ext.get("shared_memory_context"),
+        short_term_context=short_term_context,
     )
 
     state["prompt_version"] = prompt_meta["prompt_version"]
@@ -638,29 +630,32 @@ async def reasoning(state: ChatState) -> ChatState:
                 answer = raw_text
                 summary = summary or "普通问答"
         if not answer:
-            if intent == "quality_qa":
-                fallback = _fallback_answer(query, docs, citations)
-            elif intent == "rag_qa":
-                fallback = _rag_answer_fallback(query, docs, citations)
-            else:
-                fallback = _general_answer_fallback(query)
-            answer, summary = fallback["answer"], fallback["summary"]
+            raise ChatReasoningError(
+                "LLM returned an empty answer.",
+                detail={
+                    "intent": intent,
+                    "sub_route": sub_route,
+                    "prompt_version": state.get("prompt_version"),
+                },
+            )
         state["reasoning"] = {
             "answer": answer,
             "summary": summary or "对话回复",
             "citations": citations,
             "llm_meta": dict(response.get("__meta__") or {}),
         }
+    except ChatReasoningError:
+        raise
     except Exception as exc:
-        if intent == "quality_qa":
-            fallback = _fallback_answer(query, docs, citations)
-        elif intent == "rag_qa":
-            fallback = _rag_answer_fallback(query, docs, citations)
-        else:
-            fallback = _general_answer_fallback(query)
-        answer = str(fallback.get("answer") or "")
-        summary = str(fallback.get("summary") or "")
-        state["reasoning"] = {**fallback, "llm_error": str(exc), "llm_meta": {}}
+        raise ChatReasoningError(
+            f"LLM reasoning failed: {exc}",
+            detail={
+                "intent": intent,
+                "sub_route": sub_route,
+                "prompt_version": state.get("prompt_version"),
+                "cause": str(exc),
+            },
+        ) from exc
     state["action_state"] = "answered"
     _t_end = perf_counter()
     logger.info(

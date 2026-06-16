@@ -52,6 +52,23 @@ describe("http error detail extraction", () => {
     expect(detail.trace_id).toBe("trace-2");
   });
 
+  it("extracts top-level memory fail-fast errors", () => {
+    const detail = extractApiErrorDetail(
+      axiosError({
+        error_code: "NEO4J_REQUIRED_DISABLED",
+        message: "Research memory graph requires neo4j_enabled=True.",
+        detail: { neo4j_enabled: false },
+        recoverable: false,
+      }),
+    );
+
+    expect(detail).toEqual({
+      code: "NEO4J_REQUIRED_DISABLED",
+      message: "Research memory graph requires neo4j_enabled=True.",
+      detail: { neo4j_enabled: false },
+    });
+  });
+
   it("falls back to axios message", () => {
     expect(extractApiErrorDetail(axiosError({}, "Network Error"))).toEqual({
       code: "UNKNOWN_ERROR",

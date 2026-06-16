@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
@@ -16,9 +16,9 @@ from agent.subgraphs.quality_chat.graph import (
     _chat_usage_from_state,
     _enqueue_trust_scoring,
     _extract_named_user_from_history,
-    _fallback_answer,
     _persist_rag_query_log,
     _smalltalk_answer,
+    ChatReasoningError,
     finalizer,
     knowledge,
     planner,
@@ -32,26 +32,6 @@ from app.core.security import create_stream_token
 from app.schemas.user import CurrentUser
 from app.services import chat_service as chat_service_mod
 from app.services.chat_service import ChatService, get_current_user_for_stream
-
-
-async def _noop_index_session_message(*args, **kwargs):
-    return None
-
-
-def test_fallback_answer_uses_first_doc_excerpt():
-    data = _fallback_answer(
-        "What is a burr defect?",
-        [
-            {
-                "title": "Surface Defect Standard",
-                "text": "Burr defects usually appear around metal edges or molding split lines and should be judged with size and sharp-edge risk.",
-                "source": "QS-009",
-            }
-        ],
-        [{"id": "doc-1"}],
-    )
-    assert "Surface Defect Standard" in data["answer"]
-    assert data["citations"] == [{"id": "doc-1"}]
 
 
 def test_chat_general_prompt_supports_normal_model_chat():
@@ -225,7 +205,7 @@ def test_chat_usage_from_state_uses_runtime_pricing_when_available():
 
 
 @pytest.mark.asyncio
-async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
+async def test_reasoning_raises_when_llm_call_fails(monkeypatch):
     class FakeSessionContext:
         async def __aenter__(self):
             return object()
@@ -290,11 +270,8 @@ async def test_reasoning_preserves_fallback_when_llm_call_fails(monkeypatch):
         "trace": {"trace_id": "trace-1"},
     }
 
-    updated = await reasoning(state)
-
-    assert updated["action_state"] == "answered"
-    assert updated["reasoning"]["answer"]
-    assert updated["reasoning"]["llm_error"] == "upstream unavailable"
+    with pytest.raises(ChatReasoningError, match="upstream unavailable"):
+        await reasoning(state)
 
 
 @pytest.mark.asyncio
@@ -601,8 +578,6 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
     monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
-    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", _noop_index_session_message)
-
     async def fake_memory_search(self, request):
         return SimpleNamespace(items=[], policy_version="retrieval:v1")
 
@@ -626,7 +601,7 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
             },
             "ui_state": {"selected_rag_space": None},
             "token_budget": {"truncated": False},
-            "semantic_recall": [{"role": "user", "content": "early fact", "seq_no": 1, "score": 0.88}],
+            "semantic_recall": [],
         }
         return {
             "recent_messages": [
@@ -684,7 +659,7 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     assert ext["conversation_summary"] == "short summary"
     assert ext["session_facts"] == {"preferred_language": "zh-CN"}
     assert ext["short_term_memory"]["session_summary"]["open_questions"] == ["standard?"]
-    assert ext["short_term_memory"]["semantic_recall"][0]["content"] == "early fact"
+    assert ext["short_term_memory"]["semantic_recall"] == []
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():
@@ -739,8 +714,6 @@ async def test_run_workflow_surfaces_memory_error_to_frontend(monkeypatch):
     monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
     monkeypatch.setattr(memory_service_mod.MemoryService, "search", failing_memory_search)
-    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", _noop_index_session_message)
-
     service = ChatService(
         org_id="org-1",
         user_id="user-1",
@@ -762,78 +735,6 @@ async def test_run_workflow_surfaces_memory_error_to_frontend(monkeypatch):
     assert "short-term memory database column missing" in updates[0]["content"]
     assert events[-1]["event"] == "run_failed"
     assert "short-term memory database column missing" in events[-1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_run_workflow_surfaces_session_recall_index_error(monkeypatch):
-    updates: list[dict] = []
-    events: list[dict] = []
-
-    class FakeRepo:
-        def __init__(self, _session):
-            pass
-
-        async def get(self, org_id, message_id):
-            return SimpleNamespace(id=message_id, content="current question", role="user", seq_no=3)
-
-        async def update_assistant_message(self, **kwargs):
-            updates.append(kwargs)
-            return SimpleNamespace(**kwargs)
-
-    class FakeSession:
-        async def commit(self):
-            return None
-
-    class FakeSessionContext:
-        async def __aenter__(self):
-            return FakeSession()
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    class FakeBroker:
-        async def publish(self, _session_id: str, event: dict):
-            events.append(event)
-
-    class FakeOrchestrator:
-        async def run_chat(self, payload: dict):
-            raise AssertionError("orchestrator should not run after session recall index failure")
-
-    async def fake_memory_search(self, request):
-        return SimpleNamespace(items=[], policy_version="retrieval:v1")
-
-    async def failing_index(*args, **kwargs):
-        raise RuntimeError("qdrant session collection unavailable")
-
-    import app.services.memory_service as memory_service_mod
-
-    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
-    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
-    monkeypatch.setattr(memory_service_mod.MemoryService, "search", fake_memory_search)
-    monkeypatch.setattr(chat_service_mod.ChatService, "_index_session_message", failing_index)
-
-    service = ChatService(
-        org_id="org-1",
-        user_id="user-1",
-        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
-    )
-    service._orchestrator = FakeOrchestrator()
-
-    await service._run_workflow(
-        session_id="session-1",
-        user_message_id="user-1-message",
-        assistant_message_id="assistant-1",
-        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
-        workflow_run_id="workflow-1",
-        current_user_seq_no=3,
-        assistant_message_seq_no=4,
-    )
-
-    assert updates[0]["message_type"] == "error"
-    assert updates[0]["payload"]["error_code"] == "SHORT_TERM_SESSION_RECALL_FAILED"
-    assert "qdrant session collection unavailable" in updates[0]["payload"]["detail"]["cause"]
-    assert events[-1]["event"] == "run_failed"
 
 
 def test_extract_named_user_from_history_reads_latest_name():

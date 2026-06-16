@@ -74,51 +74,34 @@ class DualWriteMemoryGraphStore(MemoryGraphStore):
 
 
 def build_memory_graph_store(session, org_id: str) -> MemoryGraphStore:
-    """Factory: returns the correct MemoryGraphStore based on settings."""
+    """Factory: research memory graph requires Neo4j only."""
     write_backend = settings.memory_graph_write_backend
     read_backend = settings.memory_graph_read_backend
 
-    if settings.memory_strict_sync:
-        if write_backend != "neo4j":
-            raise GraphMemoryError(
-                "Strict memory graph mode requires memory_graph_write_backend=neo4j.",
-                code="GRAPH_MEMORY_BACKEND_INVALID",
-                detail={"write_backend": write_backend, "read_backend": read_backend},
-            )
-        if read_backend != "neo4j":
-            raise GraphMemoryError(
-                "Strict memory graph mode requires memory_graph_read_backend=neo4j.",
-                code="GRAPH_MEMORY_BACKEND_INVALID",
-                detail={"write_backend": write_backend, "read_backend": read_backend},
-            )
-        if not settings.neo4j_enabled:
-            raise GraphMemoryError(
-                "Strict memory graph mode requires neo4j_enabled=True.",
-                code="NEO4J_REQUIRED_DISABLED",
-                detail={"neo4j_enabled": settings.neo4j_enabled},
-            )
-
-    mysql_store = MySQLMemoryGraphStore(session, org_id)
-
-    if write_backend == "mysql":
-        return mysql_store
-
     if not settings.neo4j_enabled:
-        logger.info("Neo4j disabled, using MySQLMemoryGraphStore")
-        return mysql_store
+        raise GraphMemoryError(
+            "Research memory graph requires neo4j_enabled=True.",
+            code="NEO4J_REQUIRED_DISABLED",
+            detail={"neo4j_enabled": settings.neo4j_enabled},
+        )
+    if write_backend != "neo4j":
+        raise GraphMemoryError(
+            "Research memory graph requires memory_graph_write_backend=neo4j.",
+            code="GRAPH_MEMORY_BACKEND_INVALID",
+            detail={"write_backend": write_backend, "read_backend": read_backend},
+        )
+    if read_backend != "neo4j":
+        raise GraphMemoryError(
+            "Research memory graph requires memory_graph_read_backend=neo4j.",
+            code="GRAPH_MEMORY_BACKEND_INVALID",
+            detail={"write_backend": write_backend, "read_backend": read_backend},
+        )
 
     from app.services.neo4j_memory_graph_store import Neo4jMemoryGraphStore
 
-    neo4j_store = Neo4jMemoryGraphStore(
+    return Neo4jMemoryGraphStore(
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
         password=settings.neo4j_password,
         database=settings.neo4j_database,
     )
-
-    if write_backend == "neo4j":
-        if read_backend == "neo4j":
-            return neo4j_store
-        return DualWriteMemoryGraphStore(mysql_store, neo4j_store, read_backend="mysql")
-
-    return DualWriteMemoryGraphStore(mysql_store, neo4j_store, read_backend=read_backend)

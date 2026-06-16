@@ -1,6 +1,7 @@
 ﻿import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { chatApi } from "@/api/chat.api";
+import { extractApiErrorMessage } from "@/api/http";
 import { ragSpaceApi } from "@/api/rag-space.api";
 import type {
   ChatAttachment,
@@ -40,18 +41,7 @@ function safeRandomId() {
 }
 
 function resolveErrorMessage(error: unknown, fallback: string) {
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as {
-      response?: {
-        data?: {
-          message?: string;
-        };
-      };
-      message?: string;
-    };
-    return candidate.response?.data?.message || candidate.message || fallback;
-  }
-  return fallback;
+  return extractApiErrorMessage(error, fallback);
 }
 
 function orderNo(message: ChatMessage) {

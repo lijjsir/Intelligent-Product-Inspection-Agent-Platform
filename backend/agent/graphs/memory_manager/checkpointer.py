@@ -119,7 +119,10 @@ class MySQLCheckpointer(BaseCheckpointSaver):
         task_id: str,
         task_path: str = "",
     ) -> None:
-        pass
+        raise NotImplementedError(
+            "MySQLCheckpointer.aput_writes is intentionally unsupported; "
+            "memory graph workflows must not silently drop intermediate writes."
+        )
 
     async def alist(
         self,

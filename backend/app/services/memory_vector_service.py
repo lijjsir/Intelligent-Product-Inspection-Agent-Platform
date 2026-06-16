@@ -66,13 +66,11 @@ class MemoryVectorService:
             ) from exc
 
     @staticmethod
-    def _point_id(memory_id: str) -> str:
+    def _point_id(org_id: str, memory_id: str) -> str:
         """Qdrant point IDs must be UUIDs or unsigned integers."""
         raw = str(memory_id or "").strip()
-        try:
-            return str(uuid.UUID(raw))
-        except ValueError:
-            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"piap-memory:{raw}"))
+        org = str(org_id or "").strip()
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"piap-memory:{org}:{raw}"))
 
     async def ensure_collection(self, vector_size: int = 1536) -> None:
         """Create the shared memory collection if it does not exist."""
@@ -129,8 +127,6 @@ class MemoryVectorService:
         if vector is None:
             vector = await self._embed(summary)
 
-        await self.ensure_collection(vector_size=len(vector))
-
         payload = {
             "memory_id": memory_id,
             "org_id": org_id,
@@ -153,7 +149,7 @@ class MemoryVectorService:
                 json={
                     "points": [
                         {
-                            "id": self._point_id(memory_id),
+                            "id": self._point_id(org_id, memory_id),
                             "vector": vector,
                             "payload": payload,
                         }
@@ -239,8 +235,9 @@ class MemoryVectorService:
                 headers=self._headers,
             )
             if resp.status_code == 404:
-                await self.ensure_collection(vector_size=len(vector))
-                return []
+                raise MemoryVectorServiceError(
+                    f"Qdrant collection {self._collection} is missing; run backend/scripts/init_memory_qdrant.py before using shared memory."
+                )
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -264,7 +261,7 @@ class MemoryVectorService:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.delete(
                 f"{self._qdrant_url}/collections/{self._collection}/points",
-                json={"points": [self._point_id(memory_id)]},
+                json={"points": [self._point_id(self._org_id, memory_id)]},
                 headers=self._headers,
             )
             if resp.status_code == 404:

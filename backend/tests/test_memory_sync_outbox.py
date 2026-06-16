@@ -60,7 +60,23 @@ async def test_memory_sync_outbox_repository_creates_pending_record():
     assert outbox.status == "pending"
     assert outbox.retry_count == 0
     assert outbox.payload_json == {"summary": "stable lesson"}
+    assert outbox.action == "UPSERT_ACTIVE_VECTOR"
+    assert outbox.idempotency_key
     assert session.added == [outbox]
+
+
+@pytest.mark.asyncio
+async def test_memory_sync_outbox_repository_rejects_unknown_backend():
+    session = FakeSession()
+    repo = MemorySyncOutboxRepository(session, "org-1")
+
+    with pytest.raises(ValueError, match="Unsupported memory sync backend"):
+        await repo.create_pending(
+            memory_id="mem-1",
+            action="UPSERT_ACTIVE_VECTOR",
+            target_backend="mysql",
+            payload={},
+        )
 
 
 @pytest.mark.asyncio

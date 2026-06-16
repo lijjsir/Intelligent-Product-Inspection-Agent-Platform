@@ -157,6 +157,8 @@ class PromptBuilder:
         task_draft: dict[str, Any] | None = None,
         action_state: str = "",
         runtime_prompt_section: str = "",
+        shared_memory_context: dict[str, Any] | None = None,
+        short_term_context: dict[str, Any] | None = None,
     ) -> tuple[str, str, float, dict[str, Any]]:
         prompt_content, prompt_version = await _resolve_runtime_prompt(sub_route, org_id)
         return PromptBuilder.build(
@@ -168,6 +170,8 @@ class PromptBuilder:
             task_draft=task_draft,
             action_state=action_state,
             runtime_prompt_section=runtime_prompt_section,
+            shared_memory_context=shared_memory_context,
+            short_term_context=short_term_context,
             prompt_override=prompt_content,
             prompt_version_override=prompt_version,
         )
@@ -183,6 +187,8 @@ class PromptBuilder:
         task_draft: dict[str, Any] | None = None,
         action_state: str = "",
         runtime_prompt_section: str = "",
+        shared_memory_context: dict[str, Any] | None = None,
+        short_term_context: dict[str, Any] | None = None,
         prompt_override: str | None = None,
         prompt_version_override: str | None = None,
     ) -> tuple[str, str, float, dict[str, Any]]:
@@ -237,12 +243,22 @@ class PromptBuilder:
             )
             user_message += task_context
 
+        from app.services.memory_context_injector import MemoryContextInjector
+
+        shared_text, shared_meta = MemoryContextInjector.format_shared_memory(shared_memory_context)
+        short_term_text, short_term_meta = MemoryContextInjector.format_short_term_context(short_term_context)
+        injected_sections = [section for section in (short_term_text, shared_text) if section]
+        if injected_sections:
+            user_message = f"{user_message}\n\n" + "\n\n".join(injected_sections)
+
         metadata = {
             "prompt_version": prompt_version,
             "prompt_key": prompt_config["prompt_key"],
             "agent": agent,
             "sub_route": sub_route,
             "temperature": temperature,
+            **shared_meta,
+            **short_term_meta,
         }
 
         return system_prompt, user_message, temperature, metadata

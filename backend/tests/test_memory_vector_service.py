@@ -5,7 +5,7 @@ import uuid
 import httpx
 import pytest
 
-from app.services.memory_vector_service import MemoryVectorService
+from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
 
 
 class FakeResponse:
@@ -26,15 +26,15 @@ class FakeResponse:
 
 
 def test_memory_vector_point_id_is_stable_uuid():
-    first = MemoryVectorService._point_id("mem_abc")
-    second = MemoryVectorService._point_id("mem_abc")
+    first = MemoryVectorService._point_id("org-1", "mem_abc")
+    second = MemoryVectorService._point_id("org-1", "mem_abc")
 
     assert first == second
     assert str(uuid.UUID(first)) == first
 
 
 @pytest.mark.asyncio
-async def test_upsert_memory_ensures_collection_and_preserves_memory_id(monkeypatch):
+async def test_upsert_memory_preserves_memory_id_without_lazy_collection_create(monkeypatch):
     calls: list[tuple[str, str, dict | None]] = []
 
     async def embedder(text: str):
@@ -75,10 +75,8 @@ async def test_upsert_memory_ensures_collection_and_preserves_memory_id(monkeypa
         summary="stable lesson",
     )
 
-    collection_put = calls[1]
-    point_put = calls[2]
-    assert collection_put[0] == "PUT"
-    assert collection_put[2]["vectors"]["size"] == 3
+    assert [call[0] for call in calls] == ["PUT"]
+    point_put = calls[0]
     point = point_put[2]["points"][0]
     assert str(uuid.UUID(point["id"])) == point["id"]
     assert point["payload"]["memory_id"] == "mem_abc"
@@ -145,7 +143,7 @@ async def test_search_filter_includes_user_and_org_shared_memory(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_initializes_missing_collection_and_returns_empty_results(monkeypatch):
+async def test_search_missing_collection_raises_without_lazy_create(monkeypatch):
     calls: list[tuple[str, str, dict | None]] = []
 
     async def embedder(text: str):
@@ -185,8 +183,7 @@ async def test_search_initializes_missing_collection_and_returns_empty_results(m
         user_id="user-1",
     )
 
-    results = await service.search("first candidate", org_id="org-1", user_id="user-1")
+    with pytest.raises(MemoryVectorServiceError, match="init_memory_qdrant"):
+        await service.search("first candidate", org_id="org-1", user_id="user-1")
 
-    assert results == []
-    assert [call[0] for call in calls] == ["POST", "GET", "PUT"]
-    assert calls[2][2]["vectors"]["size"] == 3
+    assert [call[0] for call in calls] == ["POST"]

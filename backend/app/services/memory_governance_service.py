@@ -31,6 +31,7 @@ from app.schemas.memory import (
     RollbackAction,
 )
 from app.services.memory_graph_store import MemoryGraphEdge
+from app.services.memory_state_transition_service import MemoryStateTransitionService
 from app.services.memory_vector_service import MemoryVectorService
 
 
@@ -227,6 +228,31 @@ class MemoryRollbackService:
         from app.services.memory_graph_factory import build_memory_graph_store
         self._graph_store = build_memory_graph_store(session, org_id) if session is not None else None
 
+    async def _transition_status(
+        self,
+        memory_id: str,
+        status: MemoryStatus | str,
+        *,
+        action: str,
+        actor_id: str | None = None,
+        trace_id: str | None = None,
+        reason: str | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        target_status = status.value if isinstance(status, MemoryStatus) else str(status)
+        if self._session is None:
+            await self._item_repo.update_status(memory_id, target_status)
+            return
+        await MemoryStateTransitionService(self._session, self._org_id).transition(
+            memory_id,
+            action=action,
+            target_status=target_status,
+            actor_id=actor_id,
+            trace_id=trace_id,
+            reason=reason,
+            payload=payload,
+        )
+
     async def plan_rollback(
         self,
         root_memory_id: str,
@@ -359,7 +385,14 @@ class MemoryRollbackService:
                     continue
 
                 if action == RollbackAction.DELETE:
-                    await self._item_repo.update_status(mid, MemoryStatus.DELETED.value)
+                    await self._transition_status(
+                        mid,
+                        action="delete",
+                        status=MemoryStatus.DELETED,
+                        actor_id=operator_id,
+                        trace_id=trace_id,
+                        reason=reason,
+                    )
                     if self._vector:
                         await self._vector.delete_memory(mid)
                     if self._graph_store:
@@ -369,10 +402,26 @@ class MemoryRollbackService:
                 elif action == RollbackAction.DEGRADE:
                     new_score = (float(memory.trust_score) if memory.trust_score else 0.5) * 0.5
                     await self._item_repo.update_trust_score(mid, new_score)
+                    await self._transition_status(
+                        mid,
+                        action="degrade",
+                        status=str(memory.status),
+                        actor_id=operator_id,
+                        trace_id=trace_id,
+                        reason=reason,
+                        payload={"trust_score": new_score},
+                    )
                     affected += 1
 
                 elif action == RollbackAction.ISOLATE:
-                    await self._item_repo.update_status(mid, MemoryStatus.ISOLATED.value)
+                    await self._transition_status(
+                        mid,
+                        action="isolate",
+                        status=MemoryStatus.ISOLATED,
+                        actor_id=operator_id,
+                        trace_id=trace_id,
+                        reason=reason,
+                    )
                     if self._vector:
                         await self._vector.delete_memory(mid)
                     affected += 1
@@ -436,7 +485,13 @@ class MemoryRollbackService:
         if content_json is None:
             content_json = dict(old_item.content_json or {})
 
-        await self._item_repo.update_status(memory_id, MemoryStatus.ISOLATED.value)
+        await self._transition_status(
+            memory_id,
+            action="patch",
+            status=MemoryStatus.ISOLATED,
+            trace_id=trace_id,
+            reason="patched by rollback",
+        )
         if self._vector:
             await self._vector.delete_memory(memory_id)
 
