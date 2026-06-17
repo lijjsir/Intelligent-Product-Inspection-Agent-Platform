@@ -310,12 +310,12 @@ onUnmounted(() => {
           {{ taskStore.current.status.toUpperCase() }}
         </el-tag>
         <el-button
-          v-if="['pending', 'failed'].includes(taskStore.current.status)"
+          v-if="taskStore.current.status === 'failed'"
           type="primary"
           :loading="running"
           @click="startPipeline"
         >
-          启动 AI 推演
+          重新启动检测
         </el-button>
         <el-button
           v-if="taskStore.current.has_result"

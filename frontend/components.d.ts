@@ -81,6 +81,7 @@ declare module 'vue' {
     EvidenceTraceTab: typeof import('./src/components/business/evidence/EvidenceTraceTab.vue')['default']
     FeedbackWidget: typeof import('./src/components/business/result/FeedbackWidget.vue')['default']
     HallucinationChart: typeof import('./src/components/business/analytics/HallucinationChart.vue')['default']
+    ImagePreviewDialog: typeof import('./src/components/common/ImagePreviewDialog.vue')['default']
     MessageActionBar: typeof import('./src/components/common/MessageActionBar.vue')['default']
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']

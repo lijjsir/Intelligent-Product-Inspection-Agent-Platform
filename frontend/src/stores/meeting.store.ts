@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
+import axios from "axios";
 import { meetingApi } from "@/api/meeting.api";
 import type {
   MeetingActionItem,
@@ -9,10 +10,15 @@ import type {
   MeetingAgentRunResponse,
   MeetingAgentRunRequest,
   MeetingAgentSubgraph,
+  MeetingAttachment,
+  MeetingBusinessContext,
   MeetingContextPreview,
   MeetingDataDomain,
   MeetingMemory,
+  MeetingMemoryConfirmPayload,
+  MeetingMemoryDisputePayload,
   MeetingMessage,
+  MeetingQuoteSnapshot,
   MeetingRoom,
   MeetingRoomCreate,
   MeetingRoomAgent,
@@ -31,6 +37,7 @@ export const useMeetingStore = defineStore("meeting", () => {
   const members = ref<MeetingRoomMember[]>([]);
   const memories = ref<MeetingMemory[]>([]);
   const actionItems = ref<MeetingActionItem[]>([]);
+  const pendingAttachments = ref<MeetingAttachment[]>([]);
   const contextPreview = ref<MeetingContextPreview | null>(null);
   const agentQueryAudits = ref<MeetingAgentQueryAudit[]>([]);
   const activeRoomId = ref("");
@@ -43,9 +50,16 @@ export const useMeetingStore = defineStore("meeting", () => {
   const aiThinking = ref(false);
   const summarizing = ref(false);
   const generalAgentRunning = ref(false);
+  const generalAgentWorkflowRunId = ref("");
+  const generalAgentRunningQuery = ref("");
+  const generalAgentRunningAttachments = ref<MeetingAttachment[]>([]);
+  const cancelledGeneralAgentWorkflowIds = ref<Set<string>>(new Set());
   const memoryExtracting = ref(false);
+  let memoryExtractionController: AbortController | null = null;
+  let generalAgentController: AbortController | null = null;
   const loadingContext = ref(false);
   const actionItemSaving = ref(false);
+  const attachmentUploading = ref(false);
   const availableAgentDefs = ref<Array<{
     id: string;
     name: string;
@@ -98,12 +112,74 @@ export const useMeetingStore = defineStore("meeting", () => {
     });
   }
 
+  function removePendingAgentMessageByWorkflow(workflowRunId?: string | null) {
+    const cleanId = String(workflowRunId || "").trim();
+    if (!cleanId) return;
+    messages.value = messages.value.filter((message) => {
+      if (message.message_type !== "agent_streaming") return true;
+      return String(message.metadata_json?.workflow_run_id || "") !== cleanId;
+    });
+  }
+
+  function findLocalPendingAgentMessage(agentId?: string | null) {
+    return messages.value.find((message) =>
+      message.message_type === "agent_streaming"
+      && message.agent_id === agentId
+      && Boolean(message.metadata_json?.local_pending)
+    );
+  }
+
+  function replaceMessageId(fromId: string, toId: string) {
+    if (fromId === toId) return;
+    messages.value = messages.value.map((message) => (
+      message.id === fromId ? { ...message, id: toId } : message
+    ));
+  }
+
+  function isAgentReplyMessage(message: MeetingMessage) {
+    return ["agent", "agent_streaming"].includes(message.message_type);
+  }
+
+  function hasAgentMention(message: MeetingMessage) {
+    return Array.isArray(message.mentions)
+      && message.mentions.some((mention) => Boolean(mention?.agent_id || mention?.agent_name));
+  }
+
+  function isAgentSideQuestion(message: MeetingMessage) {
+    const recipientId = privateRecipientUserId(message);
+    return message.message_type === "user"
+      && hasAgentMention(message)
+      && (!recipientId || recipientId === message.user_id);
+  }
+
+  function privateRecipientUserId(message: MeetingMessage) {
+    const directValue = message.private_recipient_user_id;
+    if (typeof directValue === "string" && directValue.trim()) {
+      return directValue.trim();
+    }
+    const metadataValue = message.metadata_json?.private_recipient_user_id;
+    return typeof metadataValue === "string" && metadataValue.trim() ? metadataValue.trim() : "";
+  }
+
+  function isPublicConversationMessage(message: MeetingMessage) {
+    return message.message_type === "user"
+      && !isAgentSideQuestion(message)
+      && !privateRecipientUserId(message);
+  }
+
+  function isSystemPanelMessage(message: MeetingMessage) {
+    return ["system", "summary", "action_item"].includes(message.message_type);
+  }
+
   // ── Computed ───────────────────────────────────────────────────
 
   const activeRoom = computed(() => rooms.value.find((r) => r.id === activeRoomId.value) || null);
-  const canSend = computed(() => Boolean(activeRoom.value && activeRoom.value.status === "active" && !sending.value));
+  const canSend = computed(() => Boolean(activeRoom.value && activeRoom.value.status === "active" && !sending.value && !attachmentUploading.value));
+  const conversationMessages = computed(() => messages.value.filter(isPublicConversationMessage));
+  const agentPanelMessages = computed(() => messages.value.filter((message) => isAgentReplyMessage(message) || isAgentSideQuestion(message)));
+  const systemPanelMessages = computed(() => messages.value.filter(isSystemPanelMessage));
   const candidateMemories = computed(() => memories.value.filter((item) => item.status === "candidate"));
-  const confirmedMemories = computed(() => memories.value.filter((item) => item.status === "active"));
+  const confirmedMemories = computed(() => memories.value.filter((item) => ["active", "disputed", "superseded"].includes(item.status)));
   const openActionItems = computed(() => actionItems.value.filter((item) => item.status !== "done" && item.status !== "cancelled"));
 
   // ── Room Actions ───────────────────────────────────────────────
@@ -130,7 +206,6 @@ export const useMeetingStore = defineStore("meeting", () => {
     const { data } = await meetingApi.createRoom({
       title,
       password: password || null,
-      room_type: options?.room_type || "quality_business",
       visibility: options?.visibility || "private",
       allowed_data_domains: options?.allowed_data_domains || null,
     });
@@ -163,6 +238,20 @@ export const useMeetingStore = defineStore("meeting", () => {
     rooms.value = rooms.value.map((item) => (item.id === room.id ? { ...item, ...room } : item));
     await loadContextPreview();
     return room;
+  }
+
+  async function updateBusinessContext(payload: Partial<MeetingBusinessContext>) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.updateBusinessContext(activeRoom.value.id, payload);
+    const context = unwrap<MeetingBusinessContext>(data);
+    rooms.value = rooms.value.map((room) => (
+      room.id === activeRoom.value?.id ? { ...room, business_context: context } : room
+    ));
+    if (contextPreview.value && contextPreview.value.room_id === activeRoom.value.id) {
+      contextPreview.value = { ...contextPreview.value, business_context: context };
+    }
+    await loadContextPreview();
+    return context;
   }
 
   async function closeRoom() {
@@ -206,17 +295,74 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function sendMessage(content: string, quoteMessageId?: string | null, options?: { skipAgentTrigger?: boolean }) {
+  watch(activeRoomId, () => {
+    pendingAttachments.value = [];
+  });
+
+  async function uploadAttachments(files: File[]) {
+    if (!activeRoom.value || files.length === 0) return [];
+    attachmentUploading.value = true;
+    try {
+      const { data } = await meetingApi.uploadAttachments(activeRoom.value.id, files);
+      const items = unwrap<{ items: MeetingAttachment[] }>(data).items || [];
+      return items;
+    } finally {
+      attachmentUploading.value = false;
+    }
+  }
+
+  async function uploadPendingAttachments(files: File[]) {
+    const items = await uploadAttachments(files);
+    pendingAttachments.value = [...pendingAttachments.value, ...items];
+    return items;
+  }
+
+  function removePendingAttachment(id: string) {
+    pendingAttachments.value = pendingAttachments.value.filter((item) => item.id !== id);
+  }
+
+  function clearPendingAttachments() {
+    pendingAttachments.value = [];
+  }
+
+  async function sendMessage(
+    content: string,
+    quoteMessageId?: string | null,
+    options?: { skipAgentTrigger?: boolean; attachments?: MeetingAttachment[]; privateRecipientUserId?: string | null; quoteSnapshot?: MeetingQuoteSnapshot | null },
+  ) {
     if (!canSend.value || !activeRoom.value) return null;
     sending.value = true;
     try {
-      const { data } = await meetingApi.sendMessage(activeRoom.value.id, content, quoteMessageId, options);
+      const attachments = options?.attachments ?? pendingAttachments.value;
+      const { data } = await meetingApi.sendMessage(activeRoom.value.id, content, quoteMessageId, {
+        ...options,
+        attachments,
+      });
       const msg = unwrap<MeetingMessage>(data);
       upsertMessage(msg);
+      if (attachments.length && !options?.privateRecipientUserId && !options?.skipAgentTrigger) {
+        clearPendingAttachments();
+      }
       return msg;
     } finally {
       sending.value = false;
     }
+  }
+
+  async function updateMessage(messageId: string, content: string) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.updateMessage(activeRoom.value.id, messageId, content);
+    const msg = unwrap<MeetingMessage>(data);
+    upsertMessage(msg);
+    return msg;
+  }
+
+  async function recallMessage(messageId: string) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.recallMessage(activeRoom.value.id, messageId);
+    const msg = unwrap<MeetingMessage>(data);
+    upsertMessage(msg);
+    return msg;
   }
 
   async function requestAiReply() {
@@ -245,36 +391,115 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function runGeneralAgent(mode: "auto" | MeetingAgentSubgraph = "auto", query = "") {
-    if (!activeRoom.value || generalAgentRunning.value) return null;
+  async function runGeneralAgent(mode: "auto" | MeetingAgentSubgraph = "auto", query = "", options?: { attachments?: MeetingAttachment[] }) {
+    const room = activeRoom.value;
+    if (!room || generalAgentRunning.value) return null;
+    const roomId = room.id;
+    const workflowRunId = `general-agent-${roomId}-${Date.now()}`;
+    const pendingMessageId = `pending-${workflowRunId}`;
+    const attachments = options?.attachments || [];
+    const controller = new AbortController();
+    generalAgentController = controller;
+    generalAgentWorkflowRunId.value = workflowRunId;
+    generalAgentRunningQuery.value = query || generalAgentQuery(mode);
+    generalAgentRunningAttachments.value = attachments;
     generalAgentRunning.value = true;
     try {
       const payload: MeetingAgentRunRequest = {
-        query: query || generalAgentQuery(mode),
+        query: generalAgentRunningQuery.value,
         mode,
         memory_scope: {
           include_meeting: true,
-          include_project_shared: true,
+          include_confirmed: true,
           include_personal_authorized: false,
         },
+        attachments,
+        workflow_run_id: workflowRunId,
       };
-      const { data } = await meetingApi.runGeneralAgent(activeRoom.value.id, payload);
+      upsertMessage({
+        id: pendingMessageId,
+        room_id: roomId,
+        user_id: "general_agent",
+        username: "会议Agent",
+        seq_no: messages.value.length + 1,
+        content: "",
+        message_type: "agent_streaming",
+        agent_id: "general_agent",
+        metadata_json: {
+          local_pending: true,
+          query: payload.query,
+          workflow_run_id: workflowRunId,
+          ...(attachments.length ? { attachment_echo: attachments } : {}),
+        },
+        created_at: new Date().toISOString(),
+      } as MeetingMessage);
+      const { data } = await meetingApi.runGeneralAgent(roomId, payload, { signal: controller.signal });
       const result = unwrap<MeetingAgentRunResponse>(data);
-      upsertMessage(result.message);
-      await loadMeetingContext();
+      if (cancelledGeneralAgentWorkflowIds.value.has(workflowRunId)) {
+        if (activeRoomId.value === roomId) removePendingAgentMessage("general_agent", pendingMessageId);
+        return null;
+      }
+      if (result.message?.metadata_json?.cancelled) {
+        if (activeRoomId.value === roomId) removePendingAgentMessage("general_agent", pendingMessageId);
+        return result;
+      }
+      if (activeRoomId.value === roomId) {
+        removePendingAgentMessage("general_agent", pendingMessageId);
+        upsertMessage(result.message);
+        await loadMeetingContext();
+      }
       return result;
+    } catch (error) {
+      if (activeRoomId.value === roomId) {
+        removePendingAgentMessage("general_agent", pendingMessageId);
+      }
+      if (axios.isCancel(error) || (error as { name?: string })?.name === "CanceledError") {
+        return null;
+      }
+      throw error;
     } finally {
-      generalAgentRunning.value = false;
+      if (generalAgentWorkflowRunId.value === workflowRunId) {
+        generalAgentRunning.value = false;
+        generalAgentWorkflowRunId.value = "";
+        generalAgentController = null;
+        generalAgentRunningQuery.value = "";
+        generalAgentRunningAttachments.value = [];
+      }
     }
+  }
+
+  async function cancelGeneralAgentRun() {
+    const room = activeRoom.value;
+    const workflowRunId = generalAgentWorkflowRunId.value;
+    if (!room || !workflowRunId) return false;
+    const restore = {
+      question: generalAgentRunningQuery.value,
+      attachments: [...generalAgentRunningAttachments.value],
+    };
+    cancelledGeneralAgentWorkflowIds.value = new Set([...cancelledGeneralAgentWorkflowIds.value, workflowRunId]);
+    removePendingAgentMessage("general_agent");
+    removePendingAgentMessageByWorkflow(workflowRunId);
+    generalAgentRunning.value = false;
+    generalAgentWorkflowRunId.value = "";
+    generalAgentRunningQuery.value = "";
+    generalAgentRunningAttachments.value = [];
+    try {
+      await meetingApi.cancelGeneralAgent(room.id, workflowRunId);
+    } catch {
+      // The request may already be gone locally; the server cancel is best-effort.
+    }
+    generalAgentController?.abort();
+    generalAgentController = null;
+    return restore;
   }
 
   function generalAgentQuery(mode: "auto" | MeetingAgentSubgraph) {
     const map: Record<string, string> = {
       auto: "请根据当前会议上下文判断需要调用的能力，并给出可追溯回答。",
       meeting_summary: "请总结本次会议，提取关键结论和可沉淀记忆。",
-      memory_transfer: "请从本次会议中提取候选记忆，等待人工确认后再共享。",
+      memory_transfer: "请从本次会议中提取候选记忆，等待人工确认后进入本会议的已确认记忆。",
       action_items: "请从本次会议中提取会议待办线索。",
-      risk_forecast: "请基于会议上下文和已确认共享记忆，预测后续检测风险。",
+      risk_forecast: "请基于会议上下文和已确认记忆，预测后续检测风险。",
       evidence_query: "请基于会议上下文查询或整理检测证据线索。",
       standard_explain: "请基于会议上下文解释相关标准和判定依据。",
     };
@@ -337,31 +562,67 @@ export const useMeetingStore = defineStore("meeting", () => {
 
   async function extractMemories(topic = "") {
     if (!activeRoom.value || memoryExtracting.value) return [];
+    memoryExtractionController = new AbortController();
     memoryExtracting.value = true;
     try {
-      const { data } = await meetingApi.extractMemories(activeRoom.value.id, { topic, max_items: 3 });
+      const { data } = await meetingApi.extractMemories(
+        activeRoom.value.id,
+        { topic, max_items: 3 },
+        { signal: memoryExtractionController.signal },
+      );
       const list = unwrap<MeetingMemory[]>(data);
       await loadMeetingContext();
       return list;
+    } catch (error) {
+      if (axios.isCancel(error) || (error instanceof Error && error.name === "CanceledError")) {
+        return [];
+      }
+      throw error;
     } finally {
+      memoryExtractionController = null;
       memoryExtracting.value = false;
     }
   }
 
-  async function confirmMemory(memoryId: string, payload?: { title?: string | null; content?: string | null }) {
-    const { data } = await meetingApi.confirmMemory(memoryId, { ...(payload || {}), scope: "project_shared" });
+  function cancelMemoryExtraction() {
+    memoryExtractionController?.abort();
+    memoryExtractionController = null;
+    memoryExtracting.value = false;
+  }
+
+  async function confirmMemory(memoryId: string, payload?: MeetingMemoryConfirmPayload) {
+    const { data } = await meetingApi.confirmMemory(memoryId, payload || {});
     const memory = unwrap<MeetingMemory>(data);
     memories.value = memories.value.map((item) => (item.memory_id === memory.memory_id ? memory : item));
     if (!memories.value.some((item) => item.memory_id === memory.memory_id)) {
       memories.value = [memory, ...memories.value];
     }
+    if (activeRoom.value) {
+      await Promise.all([loadMeetingContext(), loadMessages(0)]);
+    }
     return memory;
   }
 
-  async function rejectMemory(memoryId: string) {
-    const { data } = await meetingApi.rejectMemory(memoryId);
+  async function rejectMemory(memoryId: string, reason = "") {
+    const { data } = await meetingApi.rejectMemory(memoryId, { content: reason || null });
     const memory = unwrap<MeetingMemory>(data);
     memories.value = memories.value.map((item) => (item.memory_id === memory.memory_id ? memory : item));
+    if (activeRoom.value) {
+      await Promise.all([loadMeetingContext(), loadMessages(0)]);
+    }
+    return memory;
+  }
+
+  async function disputeMemory(memoryId: string, payload: MeetingMemoryDisputePayload) {
+    const { data } = await meetingApi.disputeMemory(memoryId, payload);
+    const memory = unwrap<MeetingMemory>(data);
+    memories.value = memories.value.map((item) => (item.memory_id === memory.memory_id ? memory : item));
+    if (!memories.value.some((item) => item.memory_id === memory.memory_id)) {
+      memories.value = [memory, ...memories.value];
+    }
+    if (activeRoom.value) {
+      await Promise.all([loadMeetingContext(), loadMessages(0)]);
+    }
     return memory;
   }
 
@@ -372,6 +633,7 @@ export const useMeetingStore = defineStore("meeting", () => {
       const { data } = await meetingApi.createActionItem(activeRoom.value.id, payload);
       const item = unwrap<MeetingActionItem>(data);
       actionItems.value = [item, ...actionItems.value.filter((row) => row.id !== item.id)];
+      await loadMessages(0);
       return item;
     } finally {
       actionItemSaving.value = false;
@@ -389,6 +651,9 @@ export const useMeetingStore = defineStore("meeting", () => {
     const { data } = await meetingApi.completeActionItem(actionItemId);
     const item = unwrap<MeetingActionItem>(data);
     actionItems.value = actionItems.value.map((row) => (row.id === item.id ? item : row));
+    if (activeRoom.value) {
+      await loadMessages(0);
+    }
     return item;
   }
 
@@ -432,8 +697,19 @@ export const useMeetingStore = defineStore("meeting", () => {
     if (!roomId) return;
     const deletedActiveRoom = roomId === activeRoomId.value;
     await meetingApi.deleteRoom(roomId);
+    removeRoomLocally(roomId, deletedActiveRoom);
+  }
+
+  async function leaveRoom(roomId = activeRoom.value?.id || "") {
+    if (!roomId) return;
+    const leftActiveRoom = roomId === activeRoomId.value;
+    await meetingApi.leaveRoom(roomId);
+    removeRoomLocally(roomId, leftActiveRoom);
+  }
+
+  function removeRoomLocally(roomId: string, clearActiveRoom: boolean) {
     rooms.value = rooms.value.filter((r) => r.id !== roomId);
-    if (deletedActiveRoom) {
+    if (clearActiveRoom) {
       activeRoomId.value = rooms.value[0]?.id || "";
       messages.value = [];
       agents.value = [];
@@ -487,13 +763,16 @@ export const useMeetingStore = defineStore("meeting", () => {
     if (!activeRoom.value) return;
     const requestId = ++streamRequestId;
 
-    meetingApi.stream(activeRoom.value.id, handleStreamEvent).then((source) => {
+    meetingApi.stream(activeRoom.value.id, handleStreamEvent, (status) => {
+      if (requestId !== streamRequestId) return;
+      streamConnected.value = status === "open";
+      void loadMessages(lastMessageSeq.value);
+    }).then((source) => {
       if (requestId !== streamRequestId) {
         source.close();
         return;
       }
       eventSource.value = source;
-      streamConnected.value = true;
     }).catch(() => {
       if (requestId !== streamRequestId) return;
       streamConnected.value = false;
@@ -513,6 +792,8 @@ export const useMeetingStore = defineStore("meeting", () => {
   function handleStreamEvent(evt: MeetingStreamEvent) {
     switch (evt.event) {
       case "message_created": {
+        const workflowRunId = String(evt.message.metadata_json?.workflow_run_id || "");
+        if (workflowRunId && cancelledGeneralAgentWorkflowIds.value.has(workflowRunId)) break;
         if (evt.message.message_type === "agent" && evt.message.agent_id) {
           removePendingAgentMessage(evt.message.agent_id);
         }
@@ -524,7 +805,12 @@ export const useMeetingStore = defineStore("meeting", () => {
         break;
       }
       case "agent_run_started": {
+        if (cancelledGeneralAgentWorkflowIds.value.has(evt.workflow_run_id)) break;
         streamingContent.value = { ...streamingContent.value, [evt.message_id]: "" };
+        const localPending = findLocalPendingAgentMessage(evt.agent_id);
+        if (localPending) {
+          replaceMessageId(localPending.id, evt.message_id);
+        }
         upsertMessage({
           id: evt.message_id,
           room_id: activeRoomId.value,
@@ -534,20 +820,34 @@ export const useMeetingStore = defineStore("meeting", () => {
           content: "",
           message_type: "agent_streaming",
           agent_id: evt.agent_id,
-          metadata_json: { workflow_run_id: evt.workflow_run_id },
+          metadata_json: {
+            ...(localPending?.metadata_json || {}),
+            local_pending: false,
+            workflow_run_id: evt.workflow_run_id,
+            query: evt.query || localPending?.metadata_json?.query,
+          },
           created_at: new Date().toISOString(),
         } as MeetingMessage);
         break;
       }
       case "message_delta": {
+        if (cancelledGeneralAgentWorkflowIds.value.has(evt.workflow_run_id)) break;
         const current = streamingContent.value[evt.message_id] || "";
         streamingContent.value = { ...streamingContent.value, [evt.message_id]: current + evt.delta };
         break;
       }
       case "message_final": {
+        if (cancelledGeneralAgentWorkflowIds.value.has(evt.workflow_run_id)) {
+          removePendingAgentMessage(null, evt.message_id);
+          removePendingAgentMessageByWorkflow(evt.workflow_run_id);
+          break;
+        }
         const normalized = normalizeAiResponseText(evt.content);
         const content = normalized.content;
-        const existing = messages.value.find((m) => m.message_type === "agent_streaming" && m.agent_id === evt.agent_id && m.content === "");
+        const existing = messages.value.find((m) =>
+          m.id === evt.message_id
+          || (m.message_type === "agent_streaming" && m.agent_id === evt.agent_id && m.content === "")
+        );
         if (existing) {
           existing.content = content;
           existing.metadata_json = {
@@ -580,6 +880,15 @@ export const useMeetingStore = defineStore("meeting", () => {
         delete next[evt.message_id];
         streamingContent.value = next;
         removePendingAgentMessage(null, evt.message_id);
+        removePendingAgentMessageByWorkflow(evt.workflow_run_id);
+        if (evt.error === "会议Agent回复已停止") {
+          if (generalAgentWorkflowRunId.value === evt.workflow_run_id) {
+            generalAgentRunning.value = false;
+            generalAgentWorkflowRunId.value = "";
+            generalAgentController = null;
+          }
+          break;
+        }
         const errMsg = `[${evt.agent_name}] 响应失败: ${evt.error}`;
         upsertMessage({
           id: evt.message_id,
@@ -618,17 +927,19 @@ export const useMeetingStore = defineStore("meeting", () => {
     // state
     rooms, messages, agents, members, activeRoomId, eventSource, streamConnected,
     streamingContent, loadingRooms, loadingMessages, sending, messageReactions, aiThinking, summarizing,
-    generalAgentRunning, memoryExtracting, loadingContext, actionItemSaving,
-    memories, actionItems, contextPreview, agentQueryAudits,
+    generalAgentRunning, generalAgentWorkflowRunId, memoryExtracting, loadingContext, actionItemSaving, attachmentUploading,
+    memories, actionItems, pendingAttachments, contextPreview, agentQueryAudits,
     // computed
-    activeRoom, canSend, lastMessageSeq, candidateMemories, confirmedMemories, openActionItems,
+    activeRoom, canSend, conversationMessages, agentPanelMessages, systemPanelMessages, lastMessageSeq, candidateMemories, confirmedMemories, openActionItems,
     // actions
-    loadRooms, createRoom, joinRoom, updateRoomTitle, updateRoomSettings, closeRoom, archiveRoom,
-    loadMessages, sendMessage,
+    loadRooms, createRoom, joinRoom, updateRoomTitle, updateRoomSettings, updateBusinessContext, closeRoom, archiveRoom,
+    loadMessages, sendMessage, updateMessage, recallMessage, uploadAttachments, uploadPendingAttachments, removePendingAttachment, clearPendingAttachments,
     requestAiReply, summarizeMeeting, runGeneralAgent, loadMeetingContext, loadContextPreview, loadAgentQueryAudits, extractMemories,
-    confirmMemory, rejectMemory,
+    cancelMemoryExtraction, cancelGeneralAgentRun,
+    confirmMemory, rejectMemory, disputeMemory,
     createActionItem, updateActionItem, completeActionItem,
     loadAgents, loadMembers, updateMemberRole, deleteRoom,
+    leaveRoom,
     availableAgentDefs, loadAvailableAgentDefs, addAgentToRoom, removeAgentFromRoom,
     connectStream, disconnectStream, handleStreamEvent,
     setReaction,

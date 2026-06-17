@@ -681,6 +681,20 @@ def test_feedback_service_replaces_actor_score_event():
     ]
 
 
+def test_feedback_submit_schema_allows_info_severity():
+    from app.schemas.governance import FeedbackSubmit
+
+    payload = FeedbackSubmit(
+        feedback_type="up",
+        severity="info",
+        category="reliable",
+        comment="looks correct",
+    )
+
+    assert payload.severity.value == "info"
+    assert payload.category.value == "reliable"
+
+
 @pytest.mark.asyncio
 async def test_feedback_service_saves_message_feedback_for_visible_target(monkeypatch):
     saved_payloads = []

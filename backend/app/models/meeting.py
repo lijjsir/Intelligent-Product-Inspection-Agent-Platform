@@ -24,7 +24,6 @@ class MeetingRoom(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(UUIDBinary, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    room_type: Mapped[str] = mapped_column(String(32), nullable=False, default="quality_business")
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="private")
     allowed_data_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
     memory_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)

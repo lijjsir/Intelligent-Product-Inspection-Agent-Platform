@@ -338,7 +338,7 @@ async function handleSubmitCreate() {
       metadata.selected_rag_scope_node_ids = [];
     }
 
-    await taskStore.createTask({
+    const createdTask = await taskStore.createTask({
       product_id: createForm.value.product_id.trim(),
       spec_code: createForm.value.spec_code.trim(),
       image_urls: imageUrls,
@@ -346,9 +346,9 @@ async function handleSubmitCreate() {
       priority: createForm.value.priority,
       metadata,
     }, { suppressErrorToast: true });
-    ElMessage.success("任务创建成功");
     showCreateDialog.value = false;
-    await fetchData();
+    ElMessage.success("任务已创建并开始检测");
+    await router.push(`${listBasePath.value}/${createdTask.id}`);
   } catch (error) {
     console.error(error);
     ElMessage.error(extractTaskCreateErrorMessage(error));

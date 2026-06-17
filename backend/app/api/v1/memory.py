@@ -27,9 +27,12 @@ from app.schemas.memory import (
     MemorySearchResponse,
     MemoryWriteRequest,
     MemoryWriteResponse,
+    RetrievalGatewayRequest,
+    RetrievalGatewayResponse,
     Workspace,
 )
 from app.schemas.user import CurrentUser
+from app.services.retrieval_gateway_service import RetrievalGatewayService
 from app.services.memory_service import MemoryService
 from app.services.memory_vector_service import MemoryVectorService
 from app.services.memory_governance_service import (
@@ -87,6 +90,80 @@ async def search_memory(
     service = _get_memory_service(db, org_id, vector_svc)
     resp = await service.search(body)
     return ResponseEnvelope(data=resp)
+
+
+@router.post("/retrieval", response_model=ResponseEnvelope[RetrievalGatewayResponse])
+async def retrieval_gateway(
+    body: RetrievalGatewayRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Unified retrieval gateway: document RAG and memory RAG stay separate, but return together."""
+    require_role("memory_governance", current.role)
+    org_id = body.org_id or current.org_id
+    if not org_id:
+        raise HTTPException(status_code=400, detail="missing org_id")
+
+    request = body.model_copy(update={
+        "org_id": org_id,
+        "user_id": body.user_id or current.user_id,
+    })
+    service = RetrievalGatewayService(db, org_id=org_id, user_id=current.user_id)
+    resp = await service.search(request)
+    return ResponseEnvelope(data=resp)
+
+
+@router.get("/export")
+async def export_memory_training_data(
+    status: str | None = Query(default="active"),
+    workspace: str | None = Query(default=None),
+    memory_type: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Export governed memory rows from MySQL for offline agent evaluation/training datasets."""
+    require_role("memory_governance", current.role)
+    from app.repositories.memory_repo import MemoryItemRepository
+
+    repo = MemoryItemRepository(db, current.org_id)
+    rows = await repo.list_by_org(
+        status=status,
+        workspace=workspace,
+        memory_type=memory_type,
+        limit=limit,
+        offset=offset,
+    )
+    return ResponseEnvelope(data={
+        "source": "memory_items",
+        "org_id": current.org_id,
+        "count": len(rows),
+        "items": [
+            {
+                "memory_id": row.memory_id,
+                "workspace": row.workspace,
+                "memory_type": row.memory_type,
+                "status": row.status,
+                "scope": row.scope_json or {},
+                "summary": row.content_summary or "",
+                "content": row.content_json or {},
+                "evidence_pointers": row.evidence_pointers or {},
+                "source_event_ids": row.source_event_ids or [],
+                "trust_score": float(row.trust_score) if row.trust_score is not None else None,
+                "confidence": float(row.confidence) if row.confidence is not None else None,
+                "usage_policy": row.usage_policy,
+                "ttl_policy": row.ttl_policy,
+                "privacy_level": row.privacy_level,
+                "trace_id": row.trace_id,
+                "created_by_type": row.created_by_type,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            }
+            for row in rows
+        ],
+    })
 
 
 # ---------------------------------------------------------------

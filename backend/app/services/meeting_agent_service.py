@@ -26,11 +26,17 @@ def _is_valid_uuid(value: str) -> bool:
         return False
 
 
-async def _list_recent_messages(repo: Any, *, org_id: str, room_id: str, limit: int):
+async def _list_recent_messages(repo: Any, *, org_id: str, room_id: str, limit: int, visible_user_id: str | None = None):
     list_recent = getattr(repo, "list_recent_messages", None)
     if list_recent:
-        return await list_recent(org_id=org_id, room_id=room_id, limit=limit)
-    messages = await repo.list_messages(org_id=org_id, room_id=room_id, after_seq=0, limit=limit)
+        try:
+            return await list_recent(org_id=org_id, room_id=room_id, limit=limit, visible_user_id=visible_user_id)
+        except TypeError:
+            return await list_recent(org_id=org_id, room_id=room_id, limit=limit)
+    try:
+        messages = await repo.list_messages(org_id=org_id, room_id=room_id, after_seq=0, limit=limit, visible_user_id=visible_user_id)
+    except TypeError:
+        messages = await repo.list_messages(org_id=org_id, room_id=room_id, after_seq=0, limit=limit)
     return messages[-limit:]
 
 
@@ -95,6 +101,7 @@ class MeetingAgentService:
                     "agent_id": agent_def_id,
                     "agent_name": agent_name,
                     "workflow_run_id": workflow_run_id,
+                    "query": query,
                 }
             )
             full_content = await adapter.invoke(
@@ -117,7 +124,10 @@ class MeetingAgentService:
                     content=display_content,
                     message_type="agent",
                     agent_id=agent_def_id,
-                    metadata_json=response_metadata or None,
+                    metadata_json={
+                        "query": query,
+                        **(response_metadata or {}),
+                    },
                 )
                 await session.commit()
 
@@ -289,6 +299,7 @@ class MeetingAgentService:
                 workflow_run_id = str(uuid7())
                 agent_message_id = str(uuid7())
                 agent_name = str(agent_def.name)
+                autonomous_query = "基于最近会议上下文主动提醒"
 
                 async def emit(event: dict[str, Any]) -> None:
                     event.setdefault("ts", datetime.utcnow().isoformat())
@@ -303,6 +314,7 @@ class MeetingAgentService:
                             "agent_id": str(room_agent.agent_id),
                             "agent_name": agent_name,
                             "workflow_run_id": workflow_run_id,
+                            "query": autonomous_query,
                         }
                     )
                     content = await adapter.generate_autonomous_reply(
@@ -324,7 +336,10 @@ class MeetingAgentService:
                         content=display_content,
                         message_type="agent",
                         agent_id=str(room_agent.agent_id),
-                        metadata_json=response_metadata or None,
+                        metadata_json={
+                            "query": autonomous_query,
+                            **(response_metadata or {}),
+                        },
                     )
                     await session.commit()
 

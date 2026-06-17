@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
@@ -19,14 +19,18 @@ from app.schemas.meeting import (
     MeetingAgentQueryAuditResponse,
     MeetingAgentRunRequest,
     MeetingAgentRunResponse,
+    MeetingBusinessContext,
+    MeetingBusinessContextUpdateRequest,
     MeetingContextPreviewResponse,
     MeetingMemoryExtractRequest,
+    MeetingMemoryDisputeRequest,
     MeetingMemoryResponse,
     MeetingMemoryTransferRequest,
     MeetingMemoryUpdateRequest,
     MeetingMemberRoleUpdateRequest,
     MeetingMessageCreateRequest,
     MeetingMessageResponse,
+    MeetingMessageUpdateRequest,
     MeetingRoomAgentResponse,
     MeetingRoomCreateRequest,
     MeetingRoomDetailResponse,
@@ -35,6 +39,7 @@ from app.schemas.meeting import (
     MeetingRoomResponse,
     MeetingRoomUpdateRequest,
 )
+from app.schemas.rag_space import AttachmentUploadResponse
 from app.schemas.user import CurrentUser
 from app.services.meeting_service import MeetingService
 from app.services.stream_service import meeting_stream_broker
@@ -68,6 +73,24 @@ def _get_user_for_stream(token: str = Query(default="")) -> CurrentUser:
     )
 
 
+def _can_see_meeting_stream_event(event: dict, user_id: str) -> bool:
+    current_user_id = str(user_id or "")
+    private_user_ids = event.get("private_user_ids")
+    if isinstance(private_user_ids, list):
+        return current_user_id in {str(item) for item in private_user_ids}
+    message = event.get("message")
+    if isinstance(message, dict):
+        metadata = message.get("metadata_json") or {}
+        recipient_id = ""
+        if isinstance(message.get("private_recipient_user_id"), str):
+            recipient_id = str(message.get("private_recipient_user_id") or "")
+        elif isinstance(metadata, dict):
+            recipient_id = str(metadata.get("private_recipient_user_id") or "")
+        if recipient_id:
+            return current_user_id in {str(message.get("user_id") or ""), recipient_id}
+    return True
+
+
 # ── Rooms ─────────────────────────────────────────────────────────
 
 @router.get("/rooms", response_model=ResponseEnvelope[list[MeetingRoomResponse]])
@@ -91,9 +114,9 @@ async def create_room(
         data=await service.create_room(
             body.title,
             body.password,
-            room_type=body.room_type,
             visibility=body.visibility,
             allowed_data_domains=body.allowed_data_domains,
+            business_context=body.business_context,
         )
     )
 
@@ -130,11 +153,22 @@ async def update_room(
         data=await service.update_room_settings(
             room_id,
             title=body.title,
-            room_type=body.room_type,
             visibility=body.visibility,
             allowed_data_domains=body.allowed_data_domains,
+            business_context=body.business_context,
         )
     )
+
+
+@router.put("/rooms/{room_id}/business-context", response_model=ResponseEnvelope[MeetingBusinessContext])
+async def update_business_context(
+    room_id: str,
+    body: MeetingBusinessContextUpdateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.update_business_context(room_id, body))
 
 
 @router.post("/rooms/{room_id}/close", response_model=ResponseEnvelope[MeetingRoomResponse])
@@ -170,6 +204,17 @@ async def delete_room(
     return ResponseEnvelope(data={"ok": True})
 
 
+@router.post("/rooms/{room_id}/leave", response_model=ResponseEnvelope[dict])
+async def leave_room(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    await service.leave_room(room_id)
+    return ResponseEnvelope(data={"ok": True})
+
+
 @router.get("/rooms/{room_id}/messages", response_model=ResponseEnvelope[list[MeetingMessageResponse]])
 async def list_messages(
     room_id: str,
@@ -195,9 +240,47 @@ async def send_message(
             room_id,
             body.content,
             quote_message_id=body.quote_message_id,
+            private_recipient_user_id=body.private_recipient_user_id,
             skip_agent_trigger=body.skip_agent_trigger,
+            attachments=body.attachments,
+            quote_snapshot=body.quote_snapshot,
         )
     )
+
+
+@router.put("/rooms/{room_id}/messages/{message_id}", response_model=ResponseEnvelope[MeetingMessageResponse])
+async def update_message(
+    room_id: str,
+    message_id: str,
+    body: MeetingMessageUpdateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.update_message(room_id, message_id, body.content))
+
+
+@router.post("/rooms/{room_id}/messages/{message_id}/recall", response_model=ResponseEnvelope[MeetingMessageResponse])
+async def recall_message(
+    room_id: str,
+    message_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.recall_message(room_id, message_id))
+
+
+@router.post("/rooms/{room_id}/uploads", response_model=ResponseEnvelope[AttachmentUploadResponse])
+async def upload_room_attachments(
+    room_id: str,
+    files: list[UploadFile] = File(...),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    items = await service.upload_attachments(room_id, files)
+    return ResponseEnvelope(data=AttachmentUploadResponse(items=items))
 
 
 @router.post("/rooms/{room_id}/messages/{message_id}/quote", response_model=ResponseEnvelope[MeetingMessageResponse])
@@ -209,7 +292,7 @@ async def quote_message(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.quote_message(room_id, message_id, body.content))
+    return ResponseEnvelope(data=await service.quote_message(room_id, message_id, body.content, attachments=body.attachments))
 
 
 # ── General Agent ─────────────────────────────────────────────────────
@@ -223,6 +306,17 @@ async def run_general_agent(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.run_general_agent(room_id, body))
+
+
+@router.post("/rooms/{room_id}/agent/runs/{workflow_run_id}/cancel", response_model=ResponseEnvelope[dict])
+async def cancel_general_agent_run(
+    room_id: str,
+    workflow_run_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.cancel_general_agent_run(room_id, workflow_run_id))
 
 
 @router.get("/rooms/{room_id}/context-preview", response_model=ResponseEnvelope[MeetingContextPreviewResponse])
@@ -276,6 +370,19 @@ async def extract_room_memories(
             memory_type=item.memory_type,
             status=item.status,
             scope="meeting",
+            memory_category=item.memory_category,
+            recommended_scope=item.recommended_scope,
+            recommended_scope_id=item.recommended_scope_id,
+            source_refs=item.source_refs,
+            business_context=item.business_context,
+            shareability=item.shareability,
+            warnings=item.warnings,
+            affected_objects=item.affected_objects,
+            evidence_refs=item.evidence_refs,
+            forecast_window=item.forecast_window,
+            risk_level=item.risk_level,
+            recommended_actions=item.recommended_actions,
+            source_room_id=item.source_room_id,
             confidence=item.confidence,
             source_message_id=item.source_message_id,
             created_at=item.created_at,
@@ -299,11 +406,23 @@ async def confirm_memory(
 @router.post("/memories/{memory_id}/reject", response_model=ResponseEnvelope[MeetingMemoryResponse])
 async def reject_memory(
     memory_id: str,
+    body: MeetingMemoryUpdateRequest | None = None,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.reject_memory(memory_id))
+    return ResponseEnvelope(data=await service.reject_memory(memory_id, body))
+
+
+@router.post("/memories/{memory_id}/dispute", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def dispute_memory(
+    memory_id: str,
+    body: MeetingMemoryDisputeRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.dispute_memory(memory_id, body))
 
 
 @router.post("/memories/{memory_id}/transfer", response_model=ResponseEnvelope[MeetingMemoryResponse])
@@ -515,6 +634,10 @@ async def stream_meeting_events(
     db=Depends(get_db),
 ):
     current = _get_user_for_stream(token)
+    if current.stream_resource and (
+        current.stream_resource != "meeting" or current.stream_resource_id != room_id
+    ):
+        raise ForbiddenError("invalid stream token")
     repo = MeetingRepository(db)
     member = await repo.get_member(current.org_id, room_id, current.user_id)
     if not member:
@@ -522,6 +645,8 @@ async def stream_meeting_events(
 
     async def event_generator():
         async for event in meeting_stream_broker.subscribe(room_id):
+            if not _can_see_meeting_stream_event(event, current.user_id):
+                continue
             yield f"data: {json.dumps(event, default=str)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

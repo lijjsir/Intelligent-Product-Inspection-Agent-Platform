@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import (
@@ -67,6 +67,18 @@ class MemoryItemRepository:
         memory_types: list[str] | None = None,
         user_id: str | None = None,
         task_id: str | None = None,
+        room_id: str | None = None,
+        product_id: str | None = None,
+        product_line: str | None = None,
+        spec_code: str | None = None,
+        standard_id: str | None = None,
+        rag_space_id: str | None = None,
+        scope_user_id: str | None = None,
+        scope_workspace: str | None = None,
+        organization_id: str | None = None,
+        role: str | None = None,
+        batch_no: str | None = None,
+        scope_types: list[str] | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         stmt = select(MemoryItem).where(
@@ -83,8 +95,91 @@ class MemoryItemRepository:
             stmt = stmt.where(
                 (MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None))
             )
+        scope_conditions = []
+        if room_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"room_id": room_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "meeting_room", "scope_id": room_id}
+                )
+            )
         if task_id:
-            stmt = stmt.where(MemoryItem.scope_json.contains({"task_id": task_id}))
+            scope_conditions.append(MemoryItem.scope_json.contains({"task_id": task_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "inspection_task", "scope_id": task_id}
+                )
+            )
+        if product_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"product_id": product_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains({"scope_type": "product", "scope_id": product_id})
+            )
+        if product_line:
+            scope_conditions.append(MemoryItem.scope_json.contains({"product_line": product_line}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "product", "scope_id": product_line}
+                )
+            )
+        if spec_code:
+            scope_conditions.append(MemoryItem.scope_json.contains({"spec_code": spec_code}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains({"scope_type": "standard", "scope_id": spec_code})
+            )
+        if standard_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"standard_id": standard_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "standard", "scope_id": standard_id}
+                )
+            )
+        if rag_space_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"rag_space_id": rag_space_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "rag_space", "scope_id": rag_space_id}
+                )
+            )
+        if scope_user_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"user_id": scope_user_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "user", "scope_id": scope_user_id}
+                )
+            )
+        if role:
+            scope_conditions.append(MemoryItem.scope_json.contains({"role": role}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains({"scope_type": "role", "scope_id": role})
+            )
+        if scope_workspace:
+            scope_conditions.append(MemoryItem.scope_json.contains({"workspace": scope_workspace}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "workspace", "scope_id": scope_workspace}
+                )
+            )
+        if organization_id:
+            scope_conditions.append(MemoryItem.scope_json.contains({"organization_id": organization_id}))
+            scope_conditions.append(MemoryItem.scope_json.contains({"org_id": organization_id}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains(
+                    {"scope_type": "organization", "scope_id": organization_id}
+                )
+            )
+        if batch_no:
+            scope_conditions.append(MemoryItem.scope_json.contains({"batch_no": batch_no}))
+            scope_conditions.append(
+                MemoryItem.scope_json.contains({"scope_type": "batch", "scope_id": batch_no})
+            )
+        if scope_types:
+            scope_conditions.extend(
+                MemoryItem.scope_json.contains({"scope_type": scope_type})
+                for scope_type in scope_types
+            )
+        if scope_conditions:
+            stmt = stmt.where(or_(*scope_conditions))
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())

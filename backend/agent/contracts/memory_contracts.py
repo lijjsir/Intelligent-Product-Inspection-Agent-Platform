@@ -31,10 +31,26 @@ class MemoryType(str, Enum):
 class MemoryStatus(str, Enum):
     CANDIDATE = "candidate"
     ACTIVE = "active"
+    REJECTED = "rejected"
+    DISPUTED = "disputed"
+    SUPERSEDED = "superseded"
     ISOLATED = "isolated"
     DISABLED = "disabled"
     DELETED = "deleted"
     EXPIRED = "expired"
+
+
+class MemoryScopeType(str, Enum):
+    MEETING_ROOM = "meeting_room"
+    INSPECTION_TASK = "inspection_task"
+    PRODUCT = "product"
+    STANDARD = "standard"
+    RAG_SPACE = "rag_space"
+    USER = "user"
+    ROLE = "role"
+    WORKSPACE = "workspace"
+    ORGANIZATION = "organization"
+    BATCH = "batch"
 
 
 class EventType(str, Enum):
@@ -99,10 +115,68 @@ class MemoryContent(BaseModel):
 
 
 class MemoryScope(BaseModel):
+    scope_type: MemoryScopeType | None = None
+    scope_id: str | None = None
+    room_id: str | None = None
     task_id: str | None = None
+    product_id: str | None = None
     product_line: str | None = None
+    spec_code: str | None = None
+    standard_id: str | None = None
     rag_space_id: str | None = None
+    user_id: str | None = None
     role: str | None = None
+    workspace: str | None = None
+    organization_id: str | None = None
+    batch_no: str | None = None
+
+    def has_business_scope(self) -> bool:
+        return any(
+            [
+                self.scope_type and self.scope_id,
+                self.room_id,
+                self.task_id,
+                self.product_id,
+                self.product_line,
+                self.spec_code,
+                self.standard_id,
+                self.rag_space_id,
+                self.user_id,
+                self.role,
+                self.workspace,
+                self.organization_id,
+                self.batch_no,
+            ]
+        )
+
+    def primary_pair(self) -> tuple[str, str] | None:
+        if self.scope_type and self.scope_id:
+            return self.scope_type.value, self.scope_id
+        if self.room_id:
+            return MemoryScopeType.MEETING_ROOM.value, self.room_id
+        if self.task_id:
+            return MemoryScopeType.INSPECTION_TASK.value, self.task_id
+        if self.product_id:
+            return MemoryScopeType.PRODUCT.value, self.product_id
+        if self.product_line:
+            return MemoryScopeType.PRODUCT.value, self.product_line
+        if self.spec_code:
+            return MemoryScopeType.STANDARD.value, self.spec_code
+        if self.standard_id:
+            return MemoryScopeType.STANDARD.value, self.standard_id
+        if self.rag_space_id:
+            return MemoryScopeType.RAG_SPACE.value, self.rag_space_id
+        if self.user_id:
+            return MemoryScopeType.USER.value, self.user_id
+        if self.role:
+            return MemoryScopeType.ROLE.value, self.role
+        if self.workspace:
+            return MemoryScopeType.WORKSPACE.value, self.workspace
+        if self.organization_id:
+            return MemoryScopeType.ORGANIZATION.value, self.organization_id
+        if self.batch_no:
+            return MemoryScopeType.BATCH.value, self.batch_no
+        return None
 
 
 class MemoryWriteRequest(BaseModel):
@@ -127,14 +201,44 @@ class MemoryWriteRequest(BaseModel):
         if self.memory_type == MemoryType.USER_PREFERENCE and not self.user_id:
             raise ValueError("user_preference requires user_id")
         if self.memory_type == MemoryType.TASK_EPISODE:
-            has_task = (self.scope and self.scope.task_id) or (self.source and self.source.task_id)
+            has_task = (
+                self.scope
+                and (
+                    self.scope.task_id
+                    or (
+                        self.scope.scope_type == MemoryScopeType.INSPECTION_TASK
+                        and self.scope.scope_id
+                    )
+                )
+            ) or (self.source and self.source.task_id)
             if not has_task:
                 raise ValueError("task_episode requires task_id in scope or source")
         if self.memory_type == MemoryType.INSPECTION_PATTERN:
-            if not self.scope or not self.scope.product_line:
-                raise ValueError("inspection_pattern requires product_line in scope")
+            has_product_scope = (
+                self.scope
+                and (
+                    self.scope.product_line
+                    or self.scope.product_id
+                    or (
+                        self.scope.scope_type == MemoryScopeType.PRODUCT
+                        and self.scope.scope_id
+                    )
+                )
+            )
+            if not has_product_scope:
+                raise ValueError("inspection_pattern requires product_id/product_line in scope")
         if self.memory_type == MemoryType.RAG_USAGE_MEMORY:
-            if not self.scope or not self.scope.rag_space_id:
+            has_rag_scope = (
+                self.scope
+                and (
+                    self.scope.rag_space_id
+                    or (
+                        self.scope.scope_type == MemoryScopeType.RAG_SPACE
+                        and self.scope.scope_id
+                    )
+                )
+            )
+            if not has_rag_scope:
                 raise ValueError("rag_usage_memory requires rag_space_id in scope")
         if self.memory_type == MemoryType.AGENT_OPS_MEMORY and self.workspace != Workspace.OPS:
             raise ValueError("agent_ops_memory must use ops workspace")
@@ -155,9 +259,19 @@ class MemoryWriteResponse(BaseModel):
 
 class ScopeFilter(BaseModel):
     memory_type: list[MemoryType] | None = None
+    scope_type: list[MemoryScopeType] | None = None
+    room_id: str | None = None
+    product_id: str | None = None
     product_line: str | None = None
+    spec_code: str | None = None
+    standard_id: str | None = None
     rag_space_id: str | None = None
+    user_id: str | None = None
     task_id: str | None = None
+    role: str | None = None
+    workspace: str | None = None
+    organization_id: str | None = None
+    batch_no: str | None = None
 
 
 class MemorySearchRequest(BaseModel):

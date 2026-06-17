@@ -8,12 +8,9 @@ from pydantic import BaseModel, Field
 class MeetingRoomCreateRequest(BaseModel):
     title: str = Field(default="会议室", min_length=1, max_length=120)
     password: str | None = Field(default=None, max_length=64)
-    room_type: str = Field(
-        default="quality_business",
-        pattern="^(quality_business|platform_ops|org_admin|data_ops|memory_governance|general)$",
-    )
     visibility: str = Field(default="private", pattern="^(private|team|org|restricted)$")
     allowed_data_domains: list[str] | None = None
+    business_context: dict | None = None
 
 
 class MeetingRoomJoinRequest(BaseModel):
@@ -22,19 +19,43 @@ class MeetingRoomJoinRequest(BaseModel):
 
 
 class MeetingMessageCreateRequest(BaseModel):
-    content: str = Field(..., min_length=1, max_length=4000)
+    content: str = Field(default="", max_length=4000)
     quote_message_id: str | None = None
+    private_recipient_user_id: str | None = None
     skip_agent_trigger: bool = False
+    attachments: list[dict] = Field(default_factory=list)
+    quote_snapshot: dict | None = None
+
+
+class MeetingMessageUpdateRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=4000)
 
 
 class MeetingRoomUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
-    room_type: str | None = Field(
-        default=None,
-        pattern="^(quality_business|platform_ops|org_admin|data_ops|memory_governance|general)$",
-    )
     visibility: str | None = Field(default=None, pattern="^(private|team|org|restricted)$")
     allowed_data_domains: list[str] | None = None
+    business_context: dict | None = None
+
+
+class MeetingBusinessContextTask(BaseModel):
+    id: str
+    product_id: str = ""
+    spec_code: str = ""
+    status: str = ""
+    priority: int | None = None
+    has_result: bool = False
+    has_stability: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MeetingBusinessContext(BaseModel):
+    task_ids: list[str] = []
+    product_ids: list[str] = []
+    batch_nos: list[str] = []
+    standard_ids: list[str] = []
+    tasks: list[MeetingBusinessContextTask] = []
 
 
 class MeetingRoomResponse(BaseModel):
@@ -44,11 +65,11 @@ class MeetingRoomResponse(BaseModel):
     access_code: str
     created_by: str
     status: str
-    room_type: str = "quality_business"
     visibility: str = "private"
     allowed_data_domains: list[str] = []
     memory_policy: dict | None = None
     audit_policy: dict | None = None
+    business_context: MeetingBusinessContext = Field(default_factory=MeetingBusinessContext)
     member_count: int = 0
     agent_count: int = 0
     last_message_at: datetime | None = None
@@ -70,6 +91,7 @@ class MeetingMessageResponse(BaseModel):
     mentions: list[dict] | None = None
     quote_message_id: str | None = None
     metadata_json: dict | None = None
+    private_recipient_user_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -124,8 +146,6 @@ class MeetingRoomDetailResponse(MeetingRoomResponse):
 
 class MeetingContextPreviewResponse(BaseModel):
     room_id: str
-    room_type: str
-    room_type_label: str
     user_role: str
     room_role: str
     allowed_domains: list[str] = []
@@ -133,6 +153,14 @@ class MeetingContextPreviewResponse(BaseModel):
     agent_permissions: list[dict] = []
     query_examples: list[str] = []
     guardrails: list[str] = []
+    business_context: MeetingBusinessContext = Field(default_factory=MeetingBusinessContext)
+
+
+class MeetingBusinessContextUpdateRequest(BaseModel):
+    task_ids: list[str] = Field(default_factory=list, max_length=20)
+    product_ids: list[str] = Field(default_factory=list, max_length=20)
+    batch_nos: list[str] = Field(default_factory=list, max_length=20)
+    standard_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class MeetingAgentQueryAuditResponse(BaseModel):
@@ -147,6 +175,7 @@ class MeetingAgentQueryAuditResponse(BaseModel):
     denied_domains: list[str] = []
     tool_calls: list[dict] = []
     source_refs: list[dict] = []
+    memory_reads: list[dict] = []
     redacted_fields: list[str] = []
     decision: str = "allowed"
     created_at: datetime | None = None
@@ -156,7 +185,7 @@ class MeetingAgentQueryAuditResponse(BaseModel):
 
 class MeetingMemoryScopeRequest(BaseModel):
     include_meeting: bool = True
-    include_project_shared: bool = True
+    include_confirmed: bool = True
     include_personal_authorized: bool = False
 
 
@@ -164,11 +193,13 @@ class MeetingAgentRunRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4000)
     mode: str = Field(default="auto", pattern="^(auto|risk_forecast|evidence_query|standard_explain|meeting_summary|memory_transfer|action_items)$")
     memory_scope: MeetingMemoryScopeRequest = Field(default_factory=MeetingMemoryScopeRequest)
+    attachments: list[dict] = Field(default_factory=list)
+    workflow_run_id: str | None = None
 
 
 class MeetingMemorySourceResponse(BaseModel):
     memory_id: str
-    scope: str = "project_shared"
+    scope: str = "meeting"
     title: str = ""
     summary: str = ""
 
@@ -180,7 +211,19 @@ class MeetingCandidateMemoryResponse(BaseModel):
     summary: str = ""
     memory_type: str = "decision"
     status: str = "candidate"
-    recommended_scope: str = "project_shared"
+    memory_category: str = "meeting_memory"
+    recommended_scope: str = "meeting"
+    recommended_scope_id: str | None = None
+    source_refs: list[dict] = []
+    business_context: dict | None = None
+    shareability: dict | None = None
+    warnings: list[str] = []
+    affected_objects: dict | None = None
+    evidence_refs: list[dict] = []
+    forecast_window: dict | None = None
+    risk_level: str | None = None
+    recommended_actions: list[str] = []
+    source_room_id: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
     created_at: datetime | None = None
@@ -207,6 +250,23 @@ class MeetingMemoryResponse(BaseModel):
     memory_type: str
     status: str
     scope: str = "meeting"
+    scope_type: str | None = None
+    scope_id: str | None = None
+    memory_category: str = "meeting_memory"
+    recommended_scope: str | None = None
+    recommended_scope_id: str | None = None
+    source_refs: list[dict] = []
+    business_context: dict | None = None
+    shareability: dict | None = None
+    warnings: list[str] = []
+    affected_objects: dict | None = None
+    evidence_refs: list[dict] = []
+    forecast_window: dict | None = None
+    risk_level: str | None = None
+    recommended_actions: list[str] = []
+    source_room_id: str | None = None
+    publish_reason: str | None = None
+    version_parent_id: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
     created_by: str | None = None
@@ -219,12 +279,20 @@ class MeetingMemoryResponse(BaseModel):
 class MeetingMemoryUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     content: str | None = Field(default=None, min_length=1, max_length=4000)
-    scope: str = Field(default="project_shared", pattern="^(meeting|project_shared)$")
+    scope: str = Field(default="meeting", pattern="^(meeting|inspection_task|product|standard|workspace|batch)$")
+    scope_id: str | None = Field(default=None, min_length=1, max_length=128)
+    publish_reason: str | None = Field(default=None, max_length=1000)
+    is_business_memory: bool | None = None
+
+
+class MeetingMemoryDisputeRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
+    conflicting_memory_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class MeetingMemoryTransferRequest(BaseModel):
-    to_scope_type: str = Field(default="project", pattern="^(user|meeting_room|project|org)$")
-    to_scope_id: str = Field(default="default", min_length=1, max_length=128)
+    to_scope_type: str = Field(default="meeting_room", pattern="^(meeting_room|inspection_task|product|standard|workspace|batch)$")
+    to_scope_id: str = Field(default="current", min_length=1, max_length=128)
     transfer_reason: str | None = Field(default=None, max_length=1000)
 
 

@@ -33,7 +33,6 @@ class MeetingRepository:
         title: str,
         access_code: str,
         password_hash: str | None,
-        room_type: str = "quality_business",
         visibility: str = "private",
         allowed_data_domains: list[str] | None = None,
         memory_policy: dict | None = None,
@@ -46,7 +45,6 @@ class MeetingRepository:
             password_hash=password_hash,
             created_by=user_id,
             status="active",
-            room_type=room_type,
             visibility=visibility,
             allowed_data_domains=allowed_data_domains,
             memory_policy=memory_policy,
@@ -85,9 +83,10 @@ class MeetingRepository:
         *,
         title: str | None = None,
         status: str | None = None,
-        room_type: str | None = None,
         visibility: str | None = None,
         allowed_data_domains: list[str] | None = None,
+        memory_policy: dict | None = None,
+        audit_policy: dict | None = None,
     ) -> MeetingRoom | None:
         room = await self.get_room(org_id, room_id)
         if room is None:
@@ -96,12 +95,14 @@ class MeetingRepository:
             room.title = title
         if status is not None:
             room.status = status
-        if room_type is not None:
-            room.room_type = room_type
         if visibility is not None:
             room.visibility = visibility
         if allowed_data_domains is not None:
             room.allowed_data_domains = allowed_data_domains
+        if memory_policy is not None:
+            room.memory_policy = memory_policy
+        if audit_policy is not None:
+            room.audit_policy = audit_policy
         await self._session.flush()
         await self._session.refresh(room, attribute_names=["created_at", "updated_at"])
         return room
@@ -184,6 +185,14 @@ class MeetingRepository:
         await self._session.refresh(member, attribute_names=["created_at", "updated_at"])
         return member
 
+    async def remove_member(self, org_id: str, room_id: str, user_id: str) -> bool:
+        member = await self.get_member(org_id, room_id, user_id)
+        if member is None:
+            return False
+        member.deleted_at = utcnow()
+        await self._session.flush()
+        return True
+
     async def _lock_room_for_message_seq(self, *, org_id: str, room_id: str) -> None:
         await self._session.execute(
             select(MeetingRoom.id)
@@ -215,7 +224,11 @@ class MeetingRepository:
         mentions: dict | None = None,
         quote_message_id: str | None = None,
         metadata_json: dict | None = None,
+        private_recipient_user_id: str | None = None,
     ) -> MeetingMessage:
+        next_metadata = dict(metadata_json or {})
+        if private_recipient_user_id:
+            next_metadata["private_recipient_user_id"] = private_recipient_user_id
         message = MeetingMessage(
             org_id=org_id,
             room_id=room_id,
@@ -227,12 +240,22 @@ class MeetingRepository:
             agent_id=agent_id,
             mentions=mentions,
             quote_message_id=quote_message_id,
-            metadata_json=metadata_json,
+            metadata_json=next_metadata or None,
         )
         self._session.add(message)
         await self._session.flush()
         await self._session.refresh(message, attribute_names=["created_at", "updated_at"])
         await self.touch_room(org_id, room_id)
+        return self.expose_private_recipient(message)
+
+    @staticmethod
+    def expose_private_recipient(message: MeetingMessage) -> MeetingMessage:
+        metadata = message.metadata_json or {}
+        recipient = metadata.get("private_recipient_user_id")
+        if isinstance(recipient, str) and recipient.strip():
+            setattr(message, "private_recipient_user_id", recipient.strip())
+        else:
+            setattr(message, "private_recipient_user_id", None)
         return message
 
     async def get_message(self, org_id: str, room_id: str, message_id: str) -> MeetingMessage | None:
@@ -244,7 +267,27 @@ class MeetingRepository:
                 MeetingMessage.deleted_at.is_(None),
             )
         )
-        return result.scalar_one_or_none()
+        message = result.scalar_one_or_none()
+        return self.expose_private_recipient(message) if message else None
+
+    async def update_message_content(
+        self,
+        *,
+        org_id: str,
+        room_id: str,
+        message_id: str,
+        content: str,
+        metadata_json: dict | None = None,
+    ) -> MeetingMessage | None:
+        message = await self.get_message(org_id, room_id, message_id)
+        if not message:
+            return None
+        message.content = content
+        message.metadata_json = metadata_json
+        await self._session.flush()
+        await self._session.refresh(message, attribute_names=["updated_at"])
+        await self.touch_room(org_id, room_id)
+        return self.expose_private_recipient(message)
 
     async def list_messages(
         self,
@@ -253,7 +296,13 @@ class MeetingRepository:
         room_id: str,
         after_seq: int = 0,
         limit: int = 200,
+        visible_user_id: str | None = None,
     ) -> list[MeetingMessage]:
+        private_recipient_expr = self._private_recipient_expr()
+        visibility_clause = [private_recipient_expr.is_(None)]
+        if visible_user_id:
+            visibility_clause.append(MeetingMessage.user_id == visible_user_id)
+            visibility_clause.append(private_recipient_expr == visible_user_id)
         result = await self._session.execute(
             select(MeetingMessage)
             .where(
@@ -261,11 +310,12 @@ class MeetingRepository:
                 MeetingMessage.room_id == room_id,
                 MeetingMessage.seq_no > after_seq,
                 MeetingMessage.deleted_at.is_(None),
+                or_(*visibility_clause),
             )
             .order_by(MeetingMessage.seq_no.asc())
             .limit(limit)
         )
-        return list(result.scalars().all())
+        return [self.expose_private_recipient(message) for message in result.scalars().all()]
 
     async def list_recent_messages(
         self,
@@ -273,18 +323,29 @@ class MeetingRepository:
         org_id: str,
         room_id: str,
         limit: int = 50,
+        visible_user_id: str | None = None,
     ) -> list[MeetingMessage]:
+        private_recipient_expr = self._private_recipient_expr()
+        visibility_clause = [private_recipient_expr.is_(None)]
+        if visible_user_id:
+            visibility_clause.append(MeetingMessage.user_id == visible_user_id)
+            visibility_clause.append(private_recipient_expr == visible_user_id)
         result = await self._session.execute(
             select(MeetingMessage)
             .where(
                 MeetingMessage.org_id == org_id,
                 MeetingMessage.room_id == room_id,
                 MeetingMessage.deleted_at.is_(None),
+                or_(*visibility_clause),
             )
             .order_by(MeetingMessage.seq_no.desc())
             .limit(limit)
         )
-        return list(reversed(list(result.scalars().all())))
+        return [self.expose_private_recipient(message) for message in reversed(list(result.scalars().all()))]
+
+    @staticmethod
+    def _private_recipient_expr():
+        return func.json_unquote(func.json_extract(MeetingMessage.metadata_json, "$.private_recipient_user_id"))
 
     async def touch_room(self, org_id: str, room_id: str) -> None:
         await self._session.execute(
@@ -651,17 +712,30 @@ class MeetingRepository:
         *,
         org_id: str,
         room_id: str,
-        project_id: str = "default",
-        include_project_shared: bool = True,
+        business_context: dict | None = None,
+        include_confirmed: bool = True,
         statuses: Sequence[str] | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         scope_filters = [
             (MemoryScopeBinding.scope_type == "meeting_room") & (MemoryScopeBinding.scope_id == room_id)
         ]
-        if include_project_shared:
+        context = business_context or {}
+        for task_id in context.get("task_ids") or []:
             scope_filters.append(
-                (MemoryScopeBinding.scope_type == "project") & (MemoryScopeBinding.scope_id == project_id)
+                (MemoryScopeBinding.scope_type == "inspection_task") & (MemoryScopeBinding.scope_id == str(task_id))
+            )
+        for product_id in context.get("product_ids") or []:
+            scope_filters.append(
+                (MemoryScopeBinding.scope_type == "product") & (MemoryScopeBinding.scope_id == str(product_id))
+            )
+        for batch_no in context.get("batch_nos") or []:
+            scope_filters.append(
+                (MemoryScopeBinding.scope_type == "batch") & (MemoryScopeBinding.scope_id == str(batch_no))
+            )
+        for standard_id in context.get("standard_ids") or []:
+            scope_filters.append(
+                (MemoryScopeBinding.scope_type == "standard") & (MemoryScopeBinding.scope_id == str(standard_id))
             )
         stmt = (
             select(MemoryItem)
@@ -682,6 +756,8 @@ class MeetingRepository:
         )
         if statuses:
             stmt = stmt.where(MemoryItem.status.in_(list(statuses)))
+        if not include_confirmed:
+            stmt = stmt.where(MemoryItem.status != "active")
         result = await self._session.execute(stmt)
         seen: set[str] = set()
         items: list[MemoryItem] = []
@@ -701,6 +777,7 @@ class MeetingRepository:
         status: str | None = None,
         content_summary: str | None = None,
         content_json: dict | None = None,
+        scope_json: dict | None = None,
     ) -> MemoryItem | None:
         item = await self.get_memory_item(org_id, memory_id)
         if item is None:
@@ -711,6 +788,8 @@ class MeetingRepository:
             item.content_summary = content_summary
         if content_json is not None:
             item.content_json = content_json
+        if scope_json is not None:
+            item.scope_json = scope_json
         await self._session.flush()
         await self._session.refresh(item, attribute_names=["created_at", "updated_at"])
         return item

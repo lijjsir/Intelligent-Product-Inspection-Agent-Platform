@@ -17,6 +17,7 @@ from app.schemas.task import (
 )
 from app.schemas.user import CurrentUser
 from app.services.task_result_ingest_service import TaskResultIngestService
+from app.services.task_execution_service import launch_task_execution
 from app.services.task_service import TaskService
 
 
@@ -73,6 +74,8 @@ async def create_task(
         priority=payload.priority,
         metadata=payload.metadata,
     )
+    await launch_task_execution(task_id=str(task.id), org_id=current.org_id)
+    task = await service.get_task(str(task.id)) or task
 
     return ResponseEnvelope(data=TaskResponse.model_validate(task))
 

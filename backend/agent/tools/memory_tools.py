@@ -22,7 +22,19 @@ async def memory_search(
     user_id: str | None = None,
     top_k: int = 5,
     memory_types: list[str] | None = None,
+    scope_types: list[str] | None = None,
+    room_id: str | None = None,
     task_id: str | None = None,
+    product_id: str | None = None,
+    product_line: str | None = None,
+    spec_code: str | None = None,
+    standard_id: str | None = None,
+    rag_space_id: str | None = None,
+    scope_user_id: str | None = None,
+    role: str | None = None,
+    scope_workspace: str | None = None,
+    organization_id: str | None = None,
+    batch_no: str | None = None,
     memory_service: Any = None,
 ) -> dict[str, Any]:
     """Search shared memory with controlled retrieval pipeline.
@@ -34,7 +46,11 @@ async def memory_search(
         user_id: Optional user scoping.
         top_k: Max results to return (capped at 10).
         memory_types: Optional list of memory types to filter.
-        task_id: Optional task to scope by.
+        scope_types: Optional list of scope types to filter.
+        room_id/task_id/product_id/product_line/spec_code/standard_id/rag_space_id:
+            Optional business scopes to bind retrieval.
+        scope_user_id/role/scope_workspace/organization_id/batch_no:
+            Optional user, role, workspace, organization, or batch scopes.
 
     Returns:
         A memory_context dict with items, warnings, and degraded flag.
@@ -42,12 +58,30 @@ async def memory_search(
     if not memory_service:
         return {"items": [], "warnings": ["memory_service_unavailable"], "degraded": True}
 
-    from agent.contracts.memory_contracts import MemoryType, ScopeFilter, Workspace, MemorySearchRequest
+    from agent.contracts.memory_contracts import (
+        MemoryScopeType,
+        MemoryType,
+        ScopeFilter,
+        Workspace,
+        MemorySearchRequest,
+    )
 
     ws = Workspace(workspace)
     scope = ScopeFilter(
         memory_type=[MemoryType(mt) for mt in memory_types] if memory_types else None,
+        scope_type=[MemoryScopeType(st) for st in scope_types] if scope_types else None,
+        room_id=room_id,
         task_id=task_id,
+        product_id=product_id,
+        product_line=product_line,
+        spec_code=spec_code,
+        standard_id=standard_id,
+        rag_space_id=rag_space_id,
+        user_id=scope_user_id,
+        role=role,
+        workspace=scope_workspace,
+        organization_id=organization_id,
+        batch_no=batch_no,
     )
     req = MemorySearchRequest(
         org_id=org_id,
@@ -72,7 +106,20 @@ async def memory_write_candidate(
     summary: str,
     memory_type: str = "task_episode",
     user_id: str | None = None,
+    room_id: str | None = None,
     task_id: str | None = None,
+    product_id: str | None = None,
+    product_line: str | None = None,
+    spec_code: str | None = None,
+    standard_id: str | None = None,
+    rag_space_id: str | None = None,
+    scope_user_id: str | None = None,
+    role: str | None = None,
+    scope_workspace: str | None = None,
+    organization_id: str | None = None,
+    batch_no: str | None = None,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
     confidence: float = 0.5,
     facts: list[str] | None = None,
     warnings: list[str] | None = None,
@@ -89,7 +136,11 @@ async def memory_write_candidate(
         summary: Structured summary text.
         memory_type: One of the frozen memory types.
         user_id: User ID for user-scoped memories.
-        task_id: Task ID for task-scoped memories.
+        room_id/task_id/product_id/product_line/spec_code/standard_id/rag_space_id:
+            Optional business scopes to bind the memory.
+        scope_user_id/role/scope_workspace/organization_id/batch_no:
+            Optional user, role, workspace, organization, or batch scopes.
+        scope_type/scope_id: Optional normalized primary scope pair.
         confidence: Write confidence [0, 1].
         facts: List of factual statements.
         warnings: List of known conflict/risk warnings.
@@ -105,10 +156,29 @@ async def memory_write_candidate(
     from agent.contracts.memory_contracts import (
         MemoryContent,
         MemoryScope,
+        MemoryScopeType,
         MemorySource,
         MemoryType,
         MemoryWriteRequest,
         Workspace,
+    )
+
+    normalized_scope_type = MemoryScopeType(scope_type) if scope_type else None
+    scope = MemoryScope(
+        scope_type=normalized_scope_type,
+        scope_id=scope_id,
+        room_id=room_id,
+        task_id=task_id,
+        product_id=product_id,
+        product_line=product_line,
+        spec_code=spec_code,
+        standard_id=standard_id,
+        rag_space_id=rag_space_id,
+        user_id=scope_user_id or (user_id if memory_type == "user_preference" else None),
+        role=role,
+        workspace=scope_workspace,
+        organization_id=organization_id,
+        batch_no=batch_no,
     )
 
     req = MemoryWriteRequest(
@@ -117,7 +187,7 @@ async def memory_write_candidate(
         workspace=Workspace(workspace),
         source=MemorySource(kind="tool", task_id=task_id, trace_id=trace_id),
         memory_type=MemoryType(memory_type),
-        scope=MemoryScope(task_id=task_id),
+        scope=scope,
         content=MemoryContent(
             summary=summary,
             facts=facts or [],

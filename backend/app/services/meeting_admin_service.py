@@ -6,25 +6,11 @@ from app.repositories.meeting_repo import MeetingRepository
 from app.repositories.user_repo import UserRepository
 from app.schemas.meeting import (
     AdminMeetingRoomResponse,
+    MeetingBusinessContext,
     MeetingRoomAgentResponse,
     MeetingRoomDetailResponse,
     MeetingRoomMemberResponse,
 )
-
-
-_ROOM_TYPE_DOMAIN_DEFAULTS = {
-    "quality_business": ["quality", "standard", "meeting", "memory"],
-    "platform_ops": ["platform_ops", "model_billing", "data_access", "meeting", "memory"],
-    "org_admin": ["org_admin", "security_audit", "meeting"],
-    "data_ops": ["data_access", "platform_ops", "meeting", "memory"],
-    "memory_governance": ["memory", "meeting", "security_audit"],
-    "general": ["meeting", "memory"],
-}
-
-
-def _normalize_room_type(value: str | None) -> str:
-    room_type = str(value or "quality_business").strip()
-    return room_type if room_type in _ROOM_TYPE_DOMAIN_DEFAULTS else "quality_business"
 
 
 def _normalize_list(values) -> list:
@@ -32,9 +18,18 @@ def _normalize_list(values) -> list:
 
 
 def _room_domains(room) -> list[str]:
-    room_type = _normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business"))
     stored = _normalize_list(getattr(room, "allowed_data_domains", None))
-    return stored or list(_ROOM_TYPE_DOMAIN_DEFAULTS[room_type])
+    return stored or ["meeting", "memory"]
+
+
+def _business_context(room) -> MeetingBusinessContext:
+    policy = getattr(room, "memory_policy", None) or {}
+    if not isinstance(policy, dict):
+        return MeetingBusinessContext()
+    context = policy.get("business_context") or {}
+    if not isinstance(context, dict):
+        return MeetingBusinessContext()
+    return MeetingBusinessContext.model_validate(context)
 
 
 class MeetingAdminService:
@@ -69,11 +64,11 @@ class MeetingAdminService:
                 access_code=str(room.access_code),
                 created_by=str(room.created_by),
                 status=str(room.status),
-                room_type=_normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business")),
                 visibility=str(getattr(room, "visibility", "private") or "private"),
                 allowed_data_domains=_room_domains(room),
                 memory_policy=getattr(room, "memory_policy", None) or {},
                 audit_policy=getattr(room, "audit_policy", None) or {},
+                business_context=_business_context(room),
                 member_count=member_counts.get(str(room.id), 0),
                 agent_count=agent_counts.get(str(room.id), 0),
                 message_count=message_counts.get(str(room.id), 0),
@@ -134,11 +129,11 @@ class MeetingAdminService:
             access_code=str(room.access_code),
             created_by=str(room.created_by),
             status=str(room.status),
-            room_type=_normalize_room_type(str(getattr(room, "room_type", "quality_business") or "quality_business")),
             visibility=str(getattr(room, "visibility", "private") or "private"),
             allowed_data_domains=_room_domains(room),
             memory_policy=getattr(room, "memory_policy", None) or {},
             audit_policy=getattr(room, "audit_policy", None) or {},
+            business_context=_business_context(room),
             member_count=counts.get(room_id, 0),
             agent_count=agent_counts.get(room_id, 0),
             agents=agent_responses,

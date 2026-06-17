@@ -8,10 +8,15 @@ import type {
   MeetingAgentQueryAudit,
   MeetingAgentRunRequest,
   MeetingAgentRunResponse,
+  MeetingAttachment,
+  MeetingBusinessContext,
   MeetingContextPreview,
   MeetingMemory,
+  MeetingMemoryConfirmPayload,
+  MeetingMemoryDisputePayload,
   MeetingMemberRoleUpdate,
   MeetingMessage,
+  MeetingQuoteSnapshot,
   MeetingRoom,
   MeetingRoomAgent,
   MeetingRoomCreate,
@@ -22,7 +27,7 @@ import type {
   MeetingStreamEvent,
 } from "@/types/meeting.types";
 
-const VITE_API_BASE = import.meta.env.VITE_API_BASE || "";
+const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const meetingApi = {
   listRooms(limit = 100) {
@@ -45,6 +50,10 @@ export const meetingApi = {
     return http.put<MeetingRoom>(`/v1/meetings/rooms/${roomId}`, payload);
   },
 
+  updateBusinessContext(roomId: string, payload: Partial<MeetingBusinessContext>) {
+    return http.put<MeetingBusinessContext>(`/v1/meetings/rooms/${roomId}/business-context`, payload);
+  },
+
   closeRoom(roomId: string) {
     return http.post<MeetingRoom>(`/v1/meetings/rooms/${roomId}/close`);
   },
@@ -59,11 +68,40 @@ export const meetingApi = {
     });
   },
 
-  sendMessage(roomId: string, content: string, quoteMessageId?: string | null, options?: { skipAgentTrigger?: boolean }) {
+  sendMessage(
+    roomId: string,
+    content: string,
+    quoteMessageId?: string | null,
+    options?: { skipAgentTrigger?: boolean; attachments?: MeetingAttachment[]; privateRecipientUserId?: string | null; quoteSnapshot?: MeetingQuoteSnapshot | null },
+  ) {
     return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/messages`, {
       content,
       quote_message_id: quoteMessageId || null,
+      private_recipient_user_id: options?.privateRecipientUserId || null,
       skip_agent_trigger: Boolean(options?.skipAgentTrigger),
+      attachments: options?.attachments || [],
+      quote_snapshot: options?.quoteSnapshot || null,
+    });
+  },
+
+  updateMessage(roomId: string, messageId: string, content: string) {
+    return http.put<MeetingMessage>(`/v1/meetings/rooms/${roomId}/messages/${messageId}`, { content });
+  },
+
+  recallMessage(roomId: string, messageId: string) {
+    return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/messages/${messageId}/recall`, undefined, {
+      suppressErrorToast: true,
+    });
+  },
+
+  async uploadAttachments(roomId: string, files: File[]) {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    return http.post<{ items: MeetingAttachment[] }>(`/v1/meetings/rooms/${roomId}/uploads`, form, {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 180000,
     });
   },
 
@@ -73,6 +111,10 @@ export const meetingApi = {
 
   deleteRoom(roomId: string) {
     return http.delete(`/v1/meetings/rooms/${roomId}`);
+  },
+
+  leaveRoom(roomId: string) {
+    return http.post<{ ok: boolean }>(`/v1/meetings/rooms/${roomId}/leave`);
   },
 
   // ── AI Assistant ────────────────────────────────────────────────
@@ -85,8 +127,19 @@ export const meetingApi = {
     return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/summary`);
   },
 
-  runGeneralAgent(roomId: string, payload: MeetingAgentRunRequest) {
-    return http.post<MeetingAgentRunResponse>(`/v1/meetings/rooms/${roomId}/agent/run`, payload);
+  runGeneralAgent(roomId: string, payload: MeetingAgentRunRequest, config?: { signal?: AbortSignal }) {
+    return http.post<MeetingAgentRunResponse>(`/v1/meetings/rooms/${roomId}/agent/run`, payload, {
+      ...config,
+      suppressErrorToast: true,
+    });
+  },
+
+  cancelGeneralAgent(roomId: string, workflowRunId: string) {
+    return http.post<{ cancelled: boolean; workflow_run_id: string }>(
+      `/v1/meetings/rooms/${roomId}/agent/runs/${workflowRunId}/cancel`,
+      {},
+      { suppressErrorToast: true }
+    );
   },
 
   getContextPreview(roomId: string) {
@@ -96,6 +149,7 @@ export const meetingApi = {
   listAgentQueryAudits(roomId: string, limit = 50) {
     return http.get<MeetingAgentQueryAudit[]>(`/v1/meetings/rooms/${roomId}/agent-query-audits`, {
       params: { limit },
+      suppressErrorToast: true,
     });
   },
 
@@ -103,16 +157,20 @@ export const meetingApi = {
     return http.get<MeetingMemory[]>(`/v1/meetings/rooms/${roomId}/memories`);
   },
 
-  extractMemories(roomId: string, payload: { topic?: string | null; max_items?: number }) {
-    return http.post<MeetingMemory[]>(`/v1/meetings/rooms/${roomId}/memories/extract`, payload);
+  extractMemories(roomId: string, payload: { topic?: string | null; max_items?: number }, config?: { signal?: AbortSignal }) {
+    return http.post<MeetingMemory[]>(`/v1/meetings/rooms/${roomId}/memories/extract`, payload, config);
   },
 
-  confirmMemory(memoryId: string, payload?: { title?: string | null; content?: string | null; scope?: string }) {
+  confirmMemory(memoryId: string, payload?: MeetingMemoryConfirmPayload) {
     return http.post<MeetingMemory>(`/v1/meetings/memories/${memoryId}/confirm`, payload || {});
   },
 
-  rejectMemory(memoryId: string) {
-    return http.post<MeetingMemory>(`/v1/meetings/memories/${memoryId}/reject`);
+  rejectMemory(memoryId: string, payload?: { content?: string | null }) {
+    return http.post<MeetingMemory>(`/v1/meetings/memories/${memoryId}/reject`, payload || {});
+  },
+
+  disputeMemory(memoryId: string, payload: MeetingMemoryDisputePayload) {
+    return http.post<MeetingMemory>(`/v1/meetings/memories/${memoryId}/dispute`, payload);
   },
 
   listActionItems(roomId: string) {
@@ -169,12 +227,16 @@ export const meetingApi = {
 
   // ── SSE Stream ─────────────────────────────────────────────────
 
-  async stream(roomId: string, onEvent: (event: MeetingStreamEvent) => void): Promise<EventSource> {
+  async stream(
+    roomId: string,
+    onEvent: (event: MeetingStreamEvent) => void,
+    onStatus?: (status: "open" | "error") => void,
+  ): Promise<EventSource> {
     const { data } = await streamApi.create("meeting", roomId);
     const resp = data as { data?: { stream_token?: string } };
     const token = resp?.data?.stream_token || "";
-    const sep = VITE_API_BASE.endsWith("/") ? "" : "/";
-    const url = `${VITE_API_BASE}${sep}v1/meetings/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
+    const sep = apiBase.endsWith("/") ? "" : "/";
+    const url = `${apiBase}${sep}v1/meetings/rooms/${roomId}/stream?token=${encodeURIComponent(token)}`;
     const source = new EventSource(url);
     source.onmessage = (evt: MessageEvent<string>) => {
       try {
@@ -184,8 +246,11 @@ export const meetingApi = {
         // ignore parse errors
       }
     };
+    source.onopen = () => {
+      onStatus?.("open");
+    };
     source.onerror = () => {
-      // EventSource will auto-reconnect; no action needed
+      onStatus?.("error");
     };
     return source;
   },

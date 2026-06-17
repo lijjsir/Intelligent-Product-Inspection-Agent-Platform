@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
@@ -54,6 +55,59 @@ class FakeTaskResultIngestService:
             created_sample_count=2,
             skipped_count=0,
             warnings=[],
+        )
+
+
+class FakeTaskService:
+    def __init__(self, db, org_id, actor_user_id=None, actor_role=None):
+        self._db = db
+        self._org_id = org_id
+        self._actor_user_id = actor_user_id
+        self._actor_role = actor_role
+
+    async def create_task(
+        self,
+        *,
+        created_by: str,
+        product_id: str,
+        spec_code: str,
+        image_urls: list[str],
+        image_items=None,
+        priority: int,
+        metadata=None,
+    ):
+        return SimpleNamespace(
+            id="task-1",
+            org_id=self._org_id,
+            product_id=product_id,
+            spec_code=spec_code,
+            status="pending",
+            priority=priority,
+            image_urls=image_urls,
+            image_items=image_items,
+            meta_data=metadata,
+        )
+
+    async def get_task(self, task_id: str):
+        return SimpleNamespace(
+            id=task_id,
+            org_id=self._org_id,
+            product_id="P-1",
+            spec_code="STD-1",
+            status="queued",
+            priority=5,
+            image_urls=["https://example.com/a.png"],
+            image_items=None,
+            execution={"mode": "local_background"},
+            has_result=False,
+            has_stability=False,
+            result_id=None,
+            stability_id=None,
+            source_kind=None,
+            source_graph=None,
+            org_slug=None,
+            created_at=None,
+            updated_at=None,
         )
 
 
@@ -120,3 +174,30 @@ def test_ingest_request_accepts_dataset_name_without_uuid():
 
 def test_task_permission_allows_algorithm_engineer_read_access():
     require_role("task", "algorithm_engineer")
+
+
+@pytest.mark.asyncio
+async def test_create_task_triggers_launch_and_returns_refreshed_task(monkeypatch):
+    launched: list[dict] = []
+
+    async def fake_launch(*, task_id: str, org_id: str):
+        launched.append({"task_id": task_id, "org_id": org_id})
+        return {"mode": "local_background", "job_id": None, "status": "queued"}
+
+    monkeypatch.setattr(task_api, "TaskService", FakeTaskService)
+    monkeypatch.setattr(task_api, "launch_task_execution", fake_launch)
+
+    payload = task_api.TaskCreate(
+        product_id="P-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png"],
+        priority=5,
+        metadata={"source": "task_list"},
+    )
+
+    result = await task_api.create_task(payload, current=build_current_user(), db=object())
+
+    assert launched == [{"task_id": "task-1", "org_id": "org-1"}]
+    assert result.data.id == "task-1"
+    assert result.data.status == "queued"
+    assert result.data.execution == {"mode": "local_background"}

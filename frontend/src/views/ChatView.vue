@@ -6,6 +6,7 @@ import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
 import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
 import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
+import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
@@ -17,6 +18,7 @@ import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
 import { formatServerDateTime } from "@/utils/date-time";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
+import { isImageAttachment } from "./chat-rendering";
 
 const router = useRouter();
 const billingStore = useBillingStore();
@@ -91,6 +93,8 @@ const syncedUsageMessageId = ref("");
 const messageReactions = ref<Record<string, "up" | "down">>({});
 const editingMessageId = ref("");
 const editingContent = ref("");
+const imagePreviewVisible = ref(false);
+const imagePreview = ref({ url: "", name: "" });
 
 function formatTime(value?: string | null) {
   return formatServerDateTime(value, { compactDate: true, includeSeconds: true });
@@ -391,6 +395,11 @@ function shareChatMessage(message: ChatMessage) {
 
 function messageAttachments(message: ChatMessage): ChatAttachment[] {
   return [...(message.payload?.attachment_echo || [])];
+}
+
+function openImagePreview(attachment: ChatAttachment) {
+  imagePreview.value = { url: attachment.url, name: attachment.name };
+  imagePreviewVisible.value = true;
 }
 
 // Typewriter effect
@@ -849,7 +858,20 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
               <!-- Attachments -->
               <div v-if="message.payload?.attachment_echo?.length" class="bubble-attachments">
-                <a v-for="att in message.payload.attachment_echo" :key="att.id" :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                <template v-for="att in message.payload.attachment_echo" :key="att.id">
+                  <button
+                    v-if="isImageAttachment(att)"
+                    type="button"
+                    class="att-image-button"
+                    :aria-label="`预览图片 ${att.name}`"
+                    :title="att.name"
+                    @click="openImagePreview(att)"
+                  >
+                    <img :src="att.url" :alt="att.name" loading="lazy" />
+                    <span class="att-image-name">{{ att.name }}</span>
+                  </button>
+                  <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                </template>
               </div>
 
               <!-- Result card -->
@@ -1108,6 +1130,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">{{ taskSourceMessage ? "前往任务页确认提交" : "发送给 Agent 整理草稿" }}</el-button>
       </template>
     </el-dialog>
+    <ImagePreviewDialog v-model="imagePreviewVisible" :src="imagePreview.url" :title="imagePreview.name" />
   </div>
 </template>
 
@@ -1265,7 +1288,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-.bubble-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.bubble-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: flex-start; }
 .att-link {
   display: inline-flex;
   align-items: center;
@@ -1279,6 +1302,58 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 .att-link:hover { background: #d1d5db; }
 .bubble.user .att-link { background: rgba(255,255,255,0.15); color: #e5e7eb; }
+.att-image-button {
+  position: relative;
+  display: block;
+  width: min(180px, 62vw);
+  aspect-ratio: 4 / 3;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 8px;
+  background: #111827;
+  color: inherit;
+  cursor: zoom-in;
+  font-family: inherit;
+  line-height: 0;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
+}
+.att-image-button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #f3f4f6;
+  transition: transform 0.18s ease;
+}
+.att-image-button:hover img,
+.att-image-button:focus-visible img {
+  transform: scale(1.03);
+}
+.att-image-button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+.bubble.user .att-image-button {
+  border-color: rgba(255,255,255,0.22);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+}
+.att-image-name {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 20px 8px 7px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0));
+}
 
 /* Result card */
 .result-card {

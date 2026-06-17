@@ -25,7 +25,7 @@ function langfuseLegacyRedirect(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backendTarget = env.VITE_PROXY_TARGET || "http://localhost:8000";
+  const backendTarget = env.VITE_PROXY_TARGET || "http://127.0.0.1:8000";
   const langfuseTarget = env.VITE_LANGFUSE_PROXY_TARGET || "http://127.0.0.1:3000";
   const langfuseProxy = {
     target: langfuseTarget,
