@@ -247,6 +247,17 @@ async def _persist_rag_query_log(
     )
 
 
+async def _ingest_quality_kg_from_completed_result(*, org_id: str, result) -> int:
+    from app.services.quality_kg_service import (
+        QualityKnowledgeGraphService,
+        extract_quality_kg_chains,
+    )
+
+    if not extract_quality_kg_chains(result):
+        return 0
+    return await QualityKnowledgeGraphService(org_id=org_id).ingest_completed_result(result)
+
+
 async def _append_chat_result_summary(
     *,
     org_id: str,
@@ -590,6 +601,15 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
             }
             result = await result_repo.upsert_by_task(result_payload)
             await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
+            try:
+                quality_kg_count = await _ingest_quality_kg_from_completed_result(
+                    org_id=org_id,
+                    result=result,
+                )
+                if quality_kg_count:
+                    await emit({"type": "quality_kg_ingested", "count": quality_kg_count})
+            except Exception:
+                logger.exception("failed to ingest quality knowledge graph chains task_id=%s", task.id)
             try:
                 await _persist_rag_query_log(
                     session,

@@ -31,6 +31,7 @@ from app.api.v1 import (
     model_configs,
     prompt_admin,
     quality,
+    quality_kg,
     rag_spaces,
     roles,
     results,
@@ -76,6 +77,7 @@ router.include_router(feedbacks.router, prefix="/feedbacks", tags=["feedbacks"])
 router.include_router(exports.router, prefix="/exports", tags=["exports"])
 router.include_router(gpu_nodes.router, tags=["gpu-nodes"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
+router.include_router(quality_kg.router, prefix="/quality-kg", tags=["quality-kg"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])
 router.include_router(memory.router, prefix="/memory", tags=["memory"])
 router.include_router(paper_templates.router)
