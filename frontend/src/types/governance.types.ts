@@ -632,10 +632,25 @@ export interface InspectionStandardLibraryItem {
   org_id: string | null;
   name: string;
   product_family: string;
+  domain?: string | null;
+  product_category?: string | null;
   description?: string | null;
   rag_space_ids: string[];
   rag_spaces: InspectionStandardRagSpace[];
   total_document_count: number;
+  qdrant_collection?: string | null;
+  pdf_root_dir?: string | null;
+  file_glob: string;
+  chunk_strategy: string;
+  standard_status: string;
+  auto_reindex: boolean;
+  pdf_count: number;
+  document_count: number;
+  chunk_count: number;
+  import_status: string;
+  last_scanned_at?: string | null;
+  last_indexed_at?: string | null;
+  error_message?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -643,10 +658,111 @@ export interface InspectionStandardLibraryItem {
 
 export interface InspectionStandardPayload {
   name: string;
-  product_family: string;
+  product_family?: string | null;
+  domain?: string | null;
+  product_category?: string | null;
   description?: string | null;
   rag_space_ids: string[];
+  qdrant_collection?: string | null;
+  pdf_root_dir?: string | null;
+  file_glob?: string;
+  chunk_strategy?: string;
+  standard_status?: string;
+  auto_reindex?: boolean;
   is_active?: boolean;
+}
+
+export interface InspectionStandardQuery {
+  domain?: string;
+  product_category?: string;
+  import_status?: string;
+  keyword?: string;
+}
+
+export interface StandardDocumentItem {
+  id: string;
+  library_id: string;
+  standard_no: string;
+  standard_name: string;
+  domain: string;
+  product_category?: string | null;
+  standard_level: string;
+  standard_status: string;
+  file_name: string;
+  file_path: string;
+  file_hash?: string | null;
+  file_size?: number | null;
+  page_count?: number | null;
+  chunk_count: number;
+  qdrant_collection?: string | null;
+  import_status: string;
+  last_indexed_at?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface StandardDocumentChunkItem {
+  id: string;
+  document_id: string;
+  library_id: string;
+  chunk_index: number;
+  page_from?: number | null;
+  page_to?: number | null;
+  section_title?: string | null;
+  chunk_text: string;
+  payload_json?: Record<string, unknown> | null;
+  qdrant_point_id: string;
+  token_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface StandardLibraryScanResult {
+  library_id: string;
+  scanned_count: number;
+  created_count: number;
+  updated_count: number;
+  documents: StandardDocumentItem[];
+}
+
+export interface StandardLibraryIndexResult {
+  library_id: string;
+  document_count: number;
+  indexed_document_count: number;
+  chunk_count: number;
+  failed_count: number;
+}
+
+export interface StandardRetrievePayload {
+  query: string;
+  domain?: string | null;
+  product_category?: string | null;
+  defect_keywords?: string[];
+  top_k?: number;
+  only_active?: boolean;
+}
+
+export interface StandardRetrieveHit {
+  id: string;
+  title: string;
+  source: string;
+  quote: string;
+  score: number;
+  standard_no?: string | null;
+  standard_name?: string | null;
+  domain?: string | null;
+  product_category?: string | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  payload: Record<string, unknown>;
+}
+
+export interface StandardRetrieveResult {
+  hits: StandardRetrieveHit[];
+  hit_count: number;
+  candidate_count: number;
+  latency_ms: number;
 }
 
 export interface InspectionSpecItem {

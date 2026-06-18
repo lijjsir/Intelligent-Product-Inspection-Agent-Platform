@@ -7,11 +7,19 @@ from app.schemas.inspection_standard_library import (
     InspectionStandardCreate,
     InspectionStandardResponse,
     InspectionStandardUpdate,
+    StandardDocumentChunkResponse,
+    StandardDocumentResponse,
+    StandardLibraryIndexResult,
+    StandardLibraryScanResult,
+    StandardRetrieveRequest,
+    StandardRetrieveResponse,
 )
 from app.schemas.user import CurrentUser
 from app.services.inspection_standard_library_service import InspectionStandardLibraryService
 
 router = APIRouter()
+standards_router = APIRouter()
+standard_documents_router = APIRouter()
 
 
 @router.get("", response_model=ResponseEnvelope[list[InspectionStandardResponse]])
@@ -68,3 +76,102 @@ async def delete_inspection_standard(
     service = InspectionStandardLibraryService(db, current.org_id)
     await service.delete_item(library_id)
     return ResponseEnvelope(data={"success": True})
+
+
+@router.post("/{library_id}/scan", response_model=ResponseEnvelope[StandardLibraryScanResult])
+async def scan_inspection_standard(
+    library_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.scan_library(library_id))
+
+
+@router.post("/{library_id}/index", response_model=ResponseEnvelope[StandardLibraryIndexResult])
+async def index_inspection_standard(
+    library_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.index_library(library_id, reindex=False))
+
+
+@router.post("/{library_id}/reindex", response_model=ResponseEnvelope[StandardLibraryIndexResult])
+async def reindex_inspection_standard(
+    library_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.index_library(library_id, reindex=True))
+
+
+@router.get("/{library_id}/documents", response_model=ResponseEnvelope[list[StandardDocumentResponse]])
+async def list_inspection_standard_documents(
+    library_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.list_documents(library_id))
+
+
+@standard_documents_router.get("/{document_id}", response_model=ResponseEnvelope[StandardDocumentResponse])
+async def get_standard_document(
+    document_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.get_document(document_id))
+
+
+@standard_documents_router.post("/{document_id}/index", response_model=ResponseEnvelope[StandardLibraryIndexResult])
+async def index_standard_document(
+    document_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.index_document(document_id, reindex=False))
+
+
+@standard_documents_router.post("/{document_id}/reindex", response_model=ResponseEnvelope[StandardLibraryIndexResult])
+async def reindex_standard_document(
+    document_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.index_document(document_id, reindex=True))
+
+
+@standard_documents_router.get("/{document_id}/chunks", response_model=ResponseEnvelope[list[StandardDocumentChunkResponse]])
+async def list_standard_document_chunks(
+    document_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.list_chunks(document_id))
+
+
+@standards_router.post("/retrieve", response_model=ResponseEnvelope[StandardRetrieveResponse])
+async def retrieve_standards(
+    payload: StandardRetrieveRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    return ResponseEnvelope(data=await service.retrieve(payload.model_dump()))
