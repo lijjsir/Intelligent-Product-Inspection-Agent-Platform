@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.quality_kg_schema import NODE_TYPES, RELATION_TYPES, QualityKgNode, QualityKgRelationship
+from app.services.quality_kg_schema import (
+    NODE_TYPES,
+    QKG_NODE_LABELS,
+    RELATION_TYPES,
+    QualityKgNode,
+    QualityKgRelationship,
+)
 
 try:
     from neo4j import AsyncGraphDatabase
@@ -20,14 +26,14 @@ class Neo4jQualityKgRepository:
     async def ensure_schema(self) -> None:
         cyphers = [
             *[
-                f"CREATE CONSTRAINT {to_snake(node_type)}_id IF NOT EXISTS "
-                f"FOR (n:{node_type}) REQUIRE n.id IS UNIQUE"
+                f"CREATE CONSTRAINT {to_snake(node_label(node_type))}_id IF NOT EXISTS "
+                f"FOR (n:{node_label(node_type)}) REQUIRE n.id IS UNIQUE"
                 for node_type in NODE_TYPES
             ],
-            "CREATE INDEX product_category_name IF NOT EXISTS FOR (n:ProductCategory) ON (n.name)",
-            "CREATE INDEX metric_name IF NOT EXISTS FOR (n:Metric) ON (n.name)",
-            "CREATE INDEX defect_type_name IF NOT EXISTS FOR (n:DefectType) ON (n.name)",
-            "CREATE INDEX action_name IF NOT EXISTS FOR (n:Action) ON (n.name)",
+            "CREATE INDEX qkg_product_category_name IF NOT EXISTS FOR (n:QkgProductCategory) ON (n.name)",
+            "CREATE INDEX qkg_metric_name IF NOT EXISTS FOR (n:QkgMetric) ON (n.name)",
+            "CREATE INDEX qkg_defect_type_name IF NOT EXISTS FOR (n:QkgDefectType) ON (n.name)",
+            "CREATE INDEX qkg_action_name IF NOT EXISTS FOR (n:QkgAction) ON (n.name)",
         ]
         async with self._driver.session(database=self._database) as session:
             for cypher in cyphers:
@@ -54,17 +60,17 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (m:Metric {org_id: $org_id, normalized_name: $metric, domain: $domain})
+            MATCH (m:QkgMetric {org_id: $org_id, normalized_name: $metric, domain: $domain})
             WITH
-              [(m)-[mr:METRIC_ABNORMAL_ACTION]->(a:Action)
+              [(m)-[mr:METRIC_ABNORMAL_ACTION]->(a:QkgAction)
                 WHERE $product_category = '' OR mr.product_category = $product_category | a.name] AS direct_actions,
-              [(m)-[idr:INDICATES_DEFECT]->(:DefectType)-[ds:DEFECT_SUGGESTS_ACTION]->(a:Action)
+              [(m)-[idr:INDICATES_DEFECT]->(:QkgDefectType)-[ds:DEFECT_SUGGESTS_ACTION]->(a:QkgAction)
                 WHERE $product_category = ''
                    OR (idr.product_category = $product_category AND ds.product_category = $product_category) | a.name] AS defect_actions,
-              [(m)-[idr:INDICATES_DEFECT]->(:DefectType)-[lr:LEADS_TO_RISK]->(:RiskType)-[rr:RISK_REQUIRES_ACTION]->(a:Action)
+              [(m)-[idr:INDICATES_DEFECT]->(:QkgDefectType)-[lr:LEADS_TO_RISK]->(:QkgRiskType)-[rr:RISK_REQUIRES_ACTION]->(a:QkgAction)
                 WHERE $product_category = ''
                    OR (idr.product_category = $product_category AND lr.product_category = $product_category AND rr.product_category = $product_category) | a.name] AS risk_actions,
-              [(m)-[idr:INDICATES_DEFECT]->(:DefectType)-[dc:MAY_BE_CAUSED_BY]->(:Cause)-[ch:CAUSE_HANDLED_BY]->(a:Action)
+              [(m)-[idr:INDICATES_DEFECT]->(:QkgDefectType)-[dc:MAY_BE_CAUSED_BY]->(:QkgCause)-[ch:CAUSE_HANDLED_BY]->(a:QkgAction)
                 WHERE $product_category = ''
                    OR (idr.product_category = $product_category AND dc.product_category = $product_category AND ch.product_category = $product_category) | a.name] AS cause_actions
             UNWIND direct_actions + defect_actions + risk_actions + cause_actions AS action
@@ -89,8 +95,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (d:DefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
-            MATCH (d)-[:LEADS_TO_RISK]->(r:RiskType {org_id: $org_id, domain: $domain})
+            MATCH (d:QkgDefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
+            MATCH (d)-[:LEADS_TO_RISK]->(r:QkgRiskType {org_id: $org_id, domain: $domain})
             RETURN DISTINCT r.name AS risk
             ORDER BY risk
             """,
@@ -107,10 +113,10 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (d:DefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
-            OPTIONAL MATCH (d)-[:DEFECT_SUGGESTS_ACTION]->(da:Action)
-            OPTIONAL MATCH (d)-[:LEADS_TO_RISK]->(:RiskType)-[:RISK_REQUIRES_ACTION]->(ra:Action)
-            OPTIONAL MATCH (d)-[:MAY_BE_CAUSED_BY]->(:Cause)-[:CAUSE_HANDLED_BY]->(ca:Action)
+            MATCH (d:QkgDefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
+            OPTIONAL MATCH (d)-[:DEFECT_SUGGESTS_ACTION]->(da:QkgAction)
+            OPTIONAL MATCH (d)-[:LEADS_TO_RISK]->(:QkgRiskType)-[:RISK_REQUIRES_ACTION]->(ra:QkgAction)
+            OPTIONAL MATCH (d)-[:MAY_BE_CAUSED_BY]->(:QkgCause)-[:CAUSE_HANDLED_BY]->(ca:QkgAction)
             WITH [action IN [da, ra, ca] WHERE action IS NOT NULL] AS actions
             UNWIND actions AS action
             RETURN DISTINCT action.name AS action
@@ -129,8 +135,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (p:ProductCategory {org_id: $org_id, normalized_name: $product_category, domain: $domain})
-            MATCH (p)-[:APPLIES_STANDARD]->(s:Standard {org_id: $org_id, domain: $domain})
+            MATCH (p:QkgProductCategory {org_id: $org_id, normalized_name: $product_category, domain: $domain})
+            MATCH (p)-[:APPLIES_STANDARD]->(s:QkgStandard {org_id: $org_id, domain: $domain})
             RETURN DISTINCT s.name AS standard
             ORDER BY standard
             """,
@@ -147,8 +153,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (s:Standard {org_id: $org_id, normalized_name: $standard, domain: $domain})
-            MATCH (s)-[:HAS_CLAUSE]->(c:StandardClause {org_id: $org_id, domain: $domain})
+            MATCH (s:QkgStandard {org_id: $org_id, normalized_name: $standard, domain: $domain})
+            MATCH (s)-[:HAS_CLAUSE]->(c:QkgStandardClause {org_id: $org_id, domain: $domain})
             RETURN DISTINCT c.name AS clause
             ORDER BY clause
             """,
@@ -165,8 +171,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (c:StandardClause {org_id: $org_id, normalized_name: $standard_clause, domain: $domain})
-            MATCH (c)-[:REQUIRES_ITEM]->(i:InspectionItem {org_id: $org_id, domain: $domain})
+            MATCH (c:QkgStandardClause {org_id: $org_id, normalized_name: $standard_clause, domain: $domain})
+            MATCH (c)-[:REQUIRES_ITEM]->(i:QkgInspectionItem {org_id: $org_id, domain: $domain})
             RETURN DISTINCT i.name AS item
             ORDER BY item
             """,
@@ -183,8 +189,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (i:InspectionItem {org_id: $org_id, normalized_name: $inspection_item, domain: $domain})
-            MATCH (i)-[:HAS_METRIC]->(m:Metric {org_id: $org_id, domain: $domain})
+            MATCH (i:QkgInspectionItem {org_id: $org_id, normalized_name: $inspection_item, domain: $domain})
+            MATCH (i)-[:HAS_METRIC]->(m:QkgMetric {org_id: $org_id, domain: $domain})
             RETURN DISTINCT m.name AS metric
             ORDER BY metric
             """,
@@ -201,8 +207,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (m:Metric {org_id: $org_id, normalized_name: $metric, domain: $domain})
-            MATCH (m)-[:INDICATES_DEFECT]->(d:DefectType {org_id: $org_id, domain: $domain})
+            MATCH (m:QkgMetric {org_id: $org_id, normalized_name: $metric, domain: $domain})
+            MATCH (m)-[:INDICATES_DEFECT]->(d:QkgDefectType {org_id: $org_id, domain: $domain})
             RETURN DISTINCT d.name AS defect
             ORDER BY defect
             """,
@@ -219,8 +225,8 @@ class Neo4jQualityKgRepository:
     ) -> list[str]:
         records = await self._execute_read(
             """
-            MATCH (d:DefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
-            MATCH (d)-[:MAY_BE_CAUSED_BY]->(c:Cause {org_id: $org_id, domain: $domain})
+            MATCH (d:QkgDefectType {org_id: $org_id, normalized_name: $defect_type, domain: $domain})
+            MATCH (d)-[:MAY_BE_CAUSED_BY]->(c:QkgCause {org_id: $org_id, domain: $domain})
             RETURN DISTINCT c.name AS cause
             ORDER BY cause
             """,
@@ -237,15 +243,15 @@ class Neo4jQualityKgRepository:
     ) -> list[dict]:
         records = await self._execute_read(
             """
-            MATCH (p:ProductCategory {org_id: $org_id, normalized_name: $product_category, domain: $domain})
-            MATCH (p)-[:APPLIES_STANDARD]->(s:Standard {org_id: $org_id, domain: $domain})
-                  -[:HAS_CLAUSE]->(c:StandardClause {org_id: $org_id, domain: $domain})
-                  -[:REQUIRES_ITEM]->(i:InspectionItem {org_id: $org_id, domain: $domain})
-                  -[:HAS_METRIC]->(m:Metric {org_id: $org_id, domain: $domain})
-            OPTIONAL MATCH (m)-[:INDICATES_DEFECT]->(d:DefectType {org_id: $org_id, domain: $domain})
-            OPTIONAL MATCH (d)-[:LEADS_TO_RISK]->(r:RiskType {org_id: $org_id, domain: $domain})
-            OPTIONAL MATCH (d)-[:MAY_BE_CAUSED_BY]->(cause:Cause {org_id: $org_id, domain: $domain})
-            OPTIONAL MATCH (d)-[:DEFECT_SUGGESTS_ACTION]->(action:Action {org_id: $org_id, domain: $domain})
+            MATCH (p:QkgProductCategory {org_id: $org_id, normalized_name: $product_category, domain: $domain})
+            MATCH (p)-[:APPLIES_STANDARD]->(s:QkgStandard {org_id: $org_id, domain: $domain})
+                  -[:HAS_CLAUSE]->(c:QkgStandardClause {org_id: $org_id, domain: $domain})
+                  -[:REQUIRES_ITEM]->(i:QkgInspectionItem {org_id: $org_id, domain: $domain})
+                  -[:HAS_METRIC]->(m:QkgMetric {org_id: $org_id, domain: $domain})
+            OPTIONAL MATCH (m)-[:INDICATES_DEFECT]->(d:QkgDefectType {org_id: $org_id, domain: $domain})
+            OPTIONAL MATCH (d)-[:LEADS_TO_RISK]->(r:QkgRiskType {org_id: $org_id, domain: $domain})
+            OPTIONAL MATCH (d)-[:MAY_BE_CAUSED_BY]->(cause:QkgCause {org_id: $org_id, domain: $domain})
+            OPTIONAL MATCH (d)-[:DEFECT_SUGGESTS_ACTION]->(action:QkgAction {org_id: $org_id, domain: $domain})
             RETURN
               s.name AS standard,
               c.name AS standard_clause,
@@ -309,7 +315,7 @@ class Neo4jQualityKgRepository:
         return int(records[0]["deleted"]) if records else 0
 
     async def _merge_node(self, node: QualityKgNode) -> None:
-        label = validate_node_type(node.type)
+        label = node_label(node.type)
         await self._execute(
             f"""
             MERGE (n:{label} {{id: $id}})
@@ -385,6 +391,10 @@ def validate_node_type(node_type: str) -> str:
     if node_type not in NODE_TYPES:
         raise ValueError(f"Unsupported quality KG node type: {node_type}")
     return node_type
+
+
+def node_label(node_type: str) -> str:
+    return QKG_NODE_LABELS[validate_node_type(node_type)]
 
 
 def validate_relationship_type(relationship_type: str) -> str:

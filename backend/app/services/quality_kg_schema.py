@@ -19,6 +19,19 @@ NODE_TYPES = (
     "Action",
 )
 
+QKG_NODE_LABELS = {
+    "DetectionDomain": "QkgDetectionDomain",
+    "ProductCategory": "QkgProductCategory",
+    "Standard": "QkgStandard",
+    "StandardClause": "QkgStandardClause",
+    "InspectionItem": "QkgInspectionItem",
+    "Metric": "QkgMetric",
+    "DefectType": "QkgDefectType",
+    "RiskType": "QkgRiskType",
+    "Cause": "QkgCause",
+    "Action": "QkgAction",
+}
+
 RELATION_TYPES = (
     "HAS_CATEGORY",
     "APPLIES_STANDARD",

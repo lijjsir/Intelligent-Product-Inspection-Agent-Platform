@@ -10,6 +10,16 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.core.config import settings
+from app.services.quality_kg_schema import NODE_TYPES, QKG_NODE_LABELS
+
+
+def to_snake(value: str) -> str:
+    chars: list[str] = []
+    for index, char in enumerate(value):
+        if char.isupper() and index > 0:
+            chars.append("_")
+        chars.append(char.lower())
+    return "".join(chars)
 
 
 def init_schema():
@@ -44,6 +54,15 @@ def init_schema():
         "CREATE INDEX memory_rel_merged_from IF NOT EXISTS FOR ()-[r:MERGED_FROM]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
         "CREATE INDEX memory_rel_conflicts_with IF NOT EXISTS FOR ()-[r:CONFLICTS_WITH]-() ON (r.org_id, r.source_memory_id, r.target_memory_id)",
         "CREATE INDEX memory_rel_participates_in IF NOT EXISTS FOR ()-[r:PARTICIPATES_IN]-() ON (r.org_id, r.conflict_id, r.memory_id)",
+        *[
+            f"CREATE CONSTRAINT {to_snake(QKG_NODE_LABELS[node_type])}_id IF NOT EXISTS "
+            f"FOR (n:{QKG_NODE_LABELS[node_type]}) REQUIRE n.id IS UNIQUE"
+            for node_type in NODE_TYPES
+        ],
+        "CREATE INDEX qkg_product_category_name IF NOT EXISTS FOR (n:QkgProductCategory) ON (n.name)",
+        "CREATE INDEX qkg_metric_name IF NOT EXISTS FOR (n:QkgMetric) ON (n.name)",
+        "CREATE INDEX qkg_defect_type_name IF NOT EXISTS FOR (n:QkgDefectType) ON (n.name)",
+        "CREATE INDEX qkg_action_name IF NOT EXISTS FOR (n:QkgAction) ON (n.name)",
     ]
 
     with driver.session(database=settings.neo4j_database) as session:

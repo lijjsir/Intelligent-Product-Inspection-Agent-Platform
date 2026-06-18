@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from app.core.config import settings
 from app.core.exceptions import ValidationError
@@ -16,6 +17,24 @@ from app.services.quality_kg_schema import (
 
 _CORE_OPTIONAL_FIELDS = ("standard", "inspection_item", "metric", "defect_type")
 _SENTENCE_MARKERS = ("，", "。", "；", ";", " therefore ", " because ")
+_DOMAIN_BY_PRODUCT_FAMILY = {
+    "food": "食品接触材料",
+    "foods": "食品接触材料",
+    "electronics": "电子产品",
+    "electronic": "电子产品",
+    "elec": "电子产品",
+    "screw": "紧固件",
+    "fastener": "紧固件",
+    "fasteners": "紧固件",
+    "textile": "纺织品",
+    "textiles": "纺织品",
+}
+_ACTION_BY_DISPOSITION = {
+    "fail": "禁止放行",
+    "manual_required": "人工复核",
+    "uncertain": "人工复核",
+    "pass": "放行",
+}
 
 
 class QualityKnowledgeGraphService:
@@ -297,7 +316,83 @@ def extract_quality_kg_chains(result: object) -> list[dict]:
     for candidate in candidates:
         if isinstance(candidate, list):
             return [dict(item) for item in candidate if isinstance(item, dict)]
-    return []
+    return derive_quality_kg_chains(payload, reasoning_chain)
+
+
+def derive_quality_kg_chains(payload: dict, reasoning_chain: dict | None = None) -> list[dict]:
+    reasoning = _object_to_mapping(reasoning_chain if reasoning_chain is not None else payload.get("reasoning_chain"))
+    standard_evaluation = _object_to_mapping(reasoning.get("standard_evaluation"))
+    structured_record = _object_to_mapping(reasoning.get("structured_record"))
+    spec = _object_to_mapping(standard_evaluation.get("spec"))
+    if not standard_evaluation:
+        return []
+
+    product_family = _first_text(
+        structured_record.get("product_family"),
+        structured_record.get("category"),
+        spec.get("product_family"),
+        payload.get("product_family"),
+    )
+    domain = _first_text(
+        structured_record.get("domain"),
+        structured_record.get("detection_domain"),
+        spec.get("domain"),
+        _DOMAIN_BY_PRODUCT_FAMILY.get(product_family.casefold()),
+        product_family,
+        "通用质量检测",
+    )
+    product_category = _first_text(
+        structured_record.get("product_category"),
+        structured_record.get("category"),
+        product_family,
+        spec.get("product_id"),
+        payload.get("product_id"),
+        "通用产品",
+    )
+    standard = _first_text(
+        spec.get("spec_code"),
+        payload.get("spec_code"),
+        spec.get("name"),
+        structured_record.get("spec_code"),
+    )
+
+    chains: list[dict] = []
+    for rule in list(standard_evaluation.get("matched_rules") or []):
+        rule_map = _object_to_mapping(rule)
+        defect_type = _first_text(rule_map.get("defect_type"))
+        if not defect_type:
+            continue
+        chains.append(
+            _build_derived_chain(
+                domain=domain,
+                product_category=product_category,
+                standard=standard,
+                defect_type=defect_type,
+                zone_name=_first_text(rule_map.get("zone_name")),
+                severity=_first_text(rule_map.get("severity"), "major"),
+                disposition=_first_text(rule_map.get("disposition"), "manual_required"),
+                confidence=_float_or_default(rule_map.get("confidence"), 1.0),
+            )
+        )
+
+    for defect_type in list(standard_evaluation.get("unmatched_defects") or []):
+        defect = _first_text(defect_type)
+        if not defect:
+            continue
+        chains.append(
+            _build_derived_chain(
+                domain=domain,
+                product_category=product_category,
+                standard=standard,
+                defect_type=defect,
+                zone_name="",
+                severity="unknown",
+                disposition="manual_required",
+                confidence=1.0,
+            )
+        )
+
+    return list(_dedupe_chains(chains))
 
 
 def _object_to_mapping(value: object) -> dict:
@@ -310,3 +405,66 @@ def _object_to_mapping(value: object) -> dict:
         for key in ("reasoning_chain", "quality_kg_chains", "quality_knowledge_chains")
         if hasattr(value, key)
     }
+
+
+def _build_derived_chain(
+    *,
+    domain: str,
+    product_category: str,
+    standard: str,
+    defect_type: str,
+    zone_name: str,
+    severity: str,
+    disposition: str,
+    confidence: float,
+) -> dict[str, Any]:
+    segments = [segment for segment in defect_type.split(".") if segment]
+    inspection_item = zone_name or (segments[-2] if len(segments) >= 2 else defect_type)
+    metric = segments[-1] if segments else defect_type
+    action = _ACTION_BY_DISPOSITION.get(disposition.casefold(), "人工复核")
+    return {
+        "domain": domain,
+        "product_category": product_category,
+        "standard": standard or None,
+        "inspection_item": inspection_item,
+        "metric": metric,
+        "defect_type": defect_type,
+        "risk_type": f"{severity.casefold()}_quality_risk",
+        "actions": [action],
+        "confidence": max(0.0, min(1.0, confidence)),
+        "source": "standard_evaluation",
+    }
+
+
+def _dedupe_chains(chains: list[dict]):
+    seen: set[tuple] = set()
+    for chain in chains:
+        key = (
+            chain.get("domain"),
+            chain.get("product_category"),
+            chain.get("standard"),
+            chain.get("inspection_item"),
+            chain.get("metric"),
+            chain.get("defect_type"),
+            chain.get("risk_type"),
+            tuple(chain.get("actions") or []),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        yield chain
+
+
+def _first_text(*values: object) -> str:
+    for value in values:
+        text = compact_name(value)
+        if text:
+            return text
+    return ""
+
+
+def _float_or_default(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

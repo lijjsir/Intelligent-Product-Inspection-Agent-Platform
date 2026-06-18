@@ -11,6 +11,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.services.quality_kg_schema import QualityKnowledgeChain
+from app.services.quality_kg_schema import QKG_NODE_LABELS
 from app.services.quality_kg_service import QualityKnowledgeGraphService
 
 
@@ -37,6 +38,7 @@ async def main() -> None:
     chain = _sample_chain()
 
     await service.ingest_chain(chain)
+    label_counts = await _qkg_label_counts(service, org_id)
     standards = await service.search_standards_by_product("食品接触材料", "陶瓷杯")
     clauses = await service.search_clauses_by_standard("食品接触材料", "GB 4806.4-2016")
     items = await service.search_items_by_clause("食品接触材料", "第 4.2 条")
@@ -57,11 +59,26 @@ async def main() -> None:
         "causes": "釉料重金属含量异常" in causes,
         "actions": {"复检", "禁止放行"}.issubset(set(actions)),
         "paths": bool(paths),
+        "qkg_labels": all(label_counts.get(label, 0) > 0 for label in QKG_NODE_LABELS.values()),
     }
     failed = [name for name, ok in expected.items() if not ok]
     if failed:
         raise SystemExit(f"Quality KG Neo4j verification failed: {', '.join(failed)}")
     print(f"Quality KG Neo4j verification passed for org_id={org_id}")
+
+
+async def _qkg_label_counts(service: QualityKnowledgeGraphService, org_id: str) -> dict[str, int]:
+    repo = service._repo
+    counts: dict[str, int] = {}
+    async with repo._driver.session(database=repo._database) as session:
+        for label in QKG_NODE_LABELS.values():
+            result = await session.run(
+                f"MATCH (n:{label} {{org_id: $org_id}}) RETURN count(n) AS count",
+                {"org_id": org_id},
+            )
+            record = await result.single()
+            counts[label] = int(record["count"] if record else 0)
+    return counts
 
 
 if __name__ == "__main__":

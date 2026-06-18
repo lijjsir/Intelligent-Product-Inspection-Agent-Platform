@@ -34,8 +34,8 @@ async def test_quality_kg_repo_ensures_schema_for_documented_labels_and_indexes(
     repo = repo_mod.Neo4jQualityKgRepository("bolt://neo4j:7687", "neo4j", "secret")
     await repo.ensure_schema()
 
-    assert any("FOR (n:DetectionDomain)" in cypher for cypher in executed)
-    assert any("FOR (n:Action)" in cypher for cypher in executed)
+    assert any("FOR (n:QkgDetectionDomain)" in cypher for cypher in executed)
+    assert any("FOR (n:QkgAction)" in cypher for cypher in executed)
     assert any("product_category_name" in cypher for cypher in executed)
     assert any("metric_name" in cypher for cypher in executed)
 
@@ -113,7 +113,7 @@ async def test_quality_kg_repo_merges_nodes_and_relationships(monkeypatch):
 
     node_query, node_params = executed[0]
     rel_query, rel_params = executed[-1]
-    assert "MERGE (n:DetectionDomain {id: $id})" in node_query
+    assert "MERGE (n:QkgDetectionDomain {id: $id})" in node_query
     assert node_params["normalized_name"] == "食品接触材料"
     assert "MERGE (src)-[r:HAS_CATEGORY" in rel_query
     assert "count = coalesce(r.count, 0) + 1" in rel_query
@@ -162,6 +162,12 @@ async def test_quality_kg_repo_supports_all_documented_read_queries():
         }
     ]
 
+    assert "(s:QkgStandard" in calls[0][0]
+    assert "(s:Standard" not in calls[0][0]
+    assert "(m:QkgMetric" in calls[3][0]
+    assert "(m:Metric" not in calls[3][0]
+    assert "(d:QkgDefectType" in calls[4][0]
+    assert "(d:DefectType" not in calls[4][0]
     assert "HAS_CLAUSE" in calls[0][0]
     assert "REQUIRES_ITEM" in calls[1][0]
     assert "HAS_METRIC" in calls[2][0]
@@ -198,3 +204,39 @@ async def test_quality_kg_repo_deletes_relationships_and_nodes():
     assert deleted_nodes == 2
     assert "MATCH (src {id: $start_node_id})-[r:HAS_METRIC" in calls[0][0]
     assert "DETACH DELETE n" in calls[1][0]
+
+
+def test_init_neo4j_schema_includes_quality_kg_labels(monkeypatch):
+    from scripts import init_neo4j_schema
+
+    executed: list[str] = []
+
+    class FakeSessionCtx:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def run(self, statement):
+            executed.append(statement)
+
+    class FakeDriver:
+        def session(self, database):
+            return FakeSessionCtx()
+
+        def close(self):
+            return None
+
+    class FakeGraphDatabase:
+        @staticmethod
+        def driver(uri, auth):
+            return FakeDriver()
+
+    monkeypatch.setitem(__import__("sys").modules, "neo4j", type("FakeNeo4j", (), {"GraphDatabase": FakeGraphDatabase}))
+
+    init_neo4j_schema.init_schema()
+
+    assert any("FOR (n:QkgDetectionDomain)" in statement for statement in executed)
+    assert any("FOR (n:QkgDefectType)" in statement for statement in executed)
+    assert any("qkg_metric_name" in statement for statement in executed)

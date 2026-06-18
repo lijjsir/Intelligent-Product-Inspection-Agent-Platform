@@ -267,3 +267,77 @@ async def test_service_ingests_completed_result_quality_kg_chains_only_when_expl
     assert ingested_count == 1
     assert repo.schema_ensured is True
     assert len(repo.ingested) == 1
+
+
+@pytest.mark.asyncio
+async def test_service_derives_quality_kg_chains_from_completed_standard_evaluation():
+    from app.services.quality_kg_service import QualityKnowledgeGraphService
+
+    repo = FakeQualityKgRepository()
+    service = QualityKnowledgeGraphService(repo=repo, org_id="org-1")
+
+    ingested_count = await service.ingest_completed_result(
+        {
+            "reasoning_chain": {
+                "structured_record": {
+                    "product_family": "food",
+                    "product_category": "陶瓷杯",
+                },
+                "standard_evaluation": {
+                    "spec": {
+                        "spec_code": "FOOD-RAG-BASE-V1",
+                        "name": "食品接触材料基线",
+                        "product_family": "food",
+                    },
+                    "matched_rules": [
+                        {
+                            "defect_type": "food.packaging.leakage",
+                            "severity": "critical",
+                            "disposition": "fail",
+                            "zone_name": "packaging",
+                            "description": "Packaging leakage directly fails the inspection.",
+                        }
+                    ],
+                    "unmatched_defects": [],
+                },
+            }
+        }
+    )
+
+    assert ingested_count == 1
+    ingested = repo.ingested[0]
+    nodes_by_type = {node.type: node for node in ingested["nodes"] if node.type != "Action"}
+    assert nodes_by_type["DetectionDomain"].name == "食品接触材料"
+    assert nodes_by_type["ProductCategory"].name == "陶瓷杯"
+    assert nodes_by_type["Standard"].name == "FOOD-RAG-BASE-V1"
+    assert nodes_by_type["InspectionItem"].name == "packaging"
+    assert nodes_by_type["Metric"].name == "leakage"
+    assert nodes_by_type["DefectType"].name == "food.packaging.leakage"
+    assert nodes_by_type["RiskType"].name == "critical_quality_risk"
+    assert {node.name for node in ingested["nodes"] if node.type == "Action"} == {"禁止放行"}
+
+
+@pytest.mark.asyncio
+async def test_service_prefers_explicit_quality_kg_chains_over_derived_chains():
+    from app.services.quality_kg_service import QualityKnowledgeGraphService
+
+    repo = FakeQualityKgRepository()
+    service = QualityKnowledgeGraphService(repo=repo, org_id="org-1")
+
+    ingested_count = await service.ingest_completed_result(
+        {
+            "quality_kg_chains": [ceramic_chain_payload()],
+            "reasoning_chain": {
+                "structured_record": {"product_family": "food", "product_category": "塑料餐盒"},
+                "standard_evaluation": {
+                    "spec": {"spec_code": "DERIVED-SHOULD-NOT-WRITE", "product_family": "food"},
+                    "matched_rules": [{"defect_type": "food.packaging.leakage", "severity": "critical", "disposition": "fail"}],
+                },
+            },
+        }
+    )
+
+    assert ingested_count == 1
+    ingested = repo.ingested[0]
+    standards = {node.name for node in ingested["nodes"] if node.type == "Standard"}
+    assert standards == {"GB 4806.4-2016"}
