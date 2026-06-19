@@ -67,6 +67,28 @@ async def test_delete_item_bulk_deletes_qdrant_points_documents_and_chunks():
 
 
 @pytest.mark.asyncio
+async def test_normalize_payload_ignores_import_mode_action_field():
+    service = InspectionStandardLibraryService(session=object(), org_id="org-1")
+
+    async def fake_ensure_rag_spaces_exist(rag_space_ids):
+        return None
+
+    service._ensure_rag_spaces_exist = fake_ensure_rag_spaces_exist
+
+    payload = await service._normalize_payload(
+        {
+            "name": "日用陶瓷标准库",
+            "product_family": "ceramic",
+            "domain": "日用陶瓷",
+            "rag_space_ids": ["space-1"],
+            "import_mode": "scan_and_index",
+        }
+    )
+
+    assert "import_mode" not in payload
+
+
+@pytest.mark.asyncio
 async def test_index_document_clears_existing_chunks_when_extracted_pdf_text_is_unreadable():
     calls = []
     service = InspectionStandardLibraryService(session=object(), org_id="org-1")

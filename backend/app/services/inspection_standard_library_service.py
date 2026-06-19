@@ -358,10 +358,6 @@ class InspectionStandardLibraryService:
             normalized["auto_reindex"] = bool(payload.get("auto_reindex"))
         elif not partial:
             normalized["auto_reindex"] = False
-        if "import_mode" in payload:
-            normalized["import_mode"] = str(payload.get("import_mode") or "").strip() or "scan_and_index"
-        elif not partial:
-            normalized["import_mode"] = "scan_and_index"
         return normalized
 
     async def _ensure_rag_spaces_exist(self, rag_space_ids: list[str]) -> None:

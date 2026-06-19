@@ -40,7 +40,10 @@ export const inspectionStandardApi = {
     return http.post<StandardLibraryIndexResult>(`/v1/standard-libraries/${id}/reindex`);
   },
   listDocuments(id: string, params?: { page?: number; size?: number }) {
-    return http.get<PaginatedDocuments>(`/v1/standard-libraries/${id}/documents`, { params });
+    if (params) {
+      return http.get<PaginatedDocuments>(`/v1/standard-libraries/${id}/documents`, { params });
+    }
+    return http.get<PaginatedDocuments>(`/v1/standard-libraries/${id}/documents`);
   },
   updateDocument(documentId: string, payload: StandardDocumentPayload) {
     return http.patch<StandardDocumentItem>(`/v1/standard-documents/${documentId}`, payload);

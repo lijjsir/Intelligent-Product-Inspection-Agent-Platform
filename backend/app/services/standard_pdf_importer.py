@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -16,6 +19,8 @@ from app.services.standard_meta_registry import STANDARD_META_REGISTRY
 STANDARD_NO_PATTERN = re.compile(r"(?P<number>\d+(?:\.\d+)?)[-_ ](?P<year>\d{4})", re.I)
 PDF_GLYPH_CODE_PATTERN = re.compile(r"/G[0-9A-Fa-f]{2,4}")
 PDF_REPLACEMENT_CHAR_PATTERN = re.compile(r"[\ufffd□]")
+PDF_SYMBOLIC_FONT_CHAR_PATTERN = re.compile(r"[\u7280-\u72ff]")
+PDF_CONTROL_CHAR_PATTERN = re.compile(r"[\x80-\x9f]")
 
 
 def normalize_standard_no(file_name: str) -> str:
@@ -80,6 +85,7 @@ def extract_pdf_pages(file_path: str | Path) -> tuple[list[dict[str, Any]], int]
         text = str(parsed.get("text") or "").strip()
         if text:
             pages.append({"page_number": 1, "text": text})
+    pages = repair_unreadable_pdf_pages_with_ocr(pages, file_path=path)
     return pages, int(parsed.get("page_count") or len(raw_pages) or len(pages))
 
 
@@ -87,6 +93,9 @@ def is_unreadable_pdf_text(text: str) -> bool:
     compact = re.sub(r"\s+", "", str(text or ""))
     if not compact:
         return False
+    symbolic_chars = PDF_SYMBOLIC_FONT_CHAR_PATTERN.findall(compact)
+    normal_cjk_count = max(0, len(re.findall(r"[\u4e00-\u9fff]", compact)) - len(symbolic_chars))
+    normal_cjk_ratio = normal_cjk_count / max(len(compact), 1)
 
     glyph_codes = PDF_GLYPH_CODE_PATTERN.findall(compact)
     if len(glyph_codes) >= 8:
@@ -98,7 +107,63 @@ def is_unreadable_pdf_text(text: str) -> bool:
     if len(replacement_chars) >= 8 and len(replacement_chars) / max(len(compact), 1) >= 0.08:
         return True
 
+    control_chars = PDF_CONTROL_CHAR_PATTERN.findall(compact)
+    if len(control_chars) >= 4 and normal_cjk_ratio < 0.2:
+        return True
+
+    if len(symbolic_chars) >= 8 and len(symbolic_chars) / max(len(compact), 1) >= 0.03 and normal_cjk_ratio < 0.2:
+        return True
+
     return False
+
+
+def ocr_pdf_page_text(file_path: str | Path, *, page_number: int) -> str:
+    if shutil.which("tesseract") is None:
+        raise ValidationError("OCR fallback requires tesseract with chi_sim language data")
+    try:
+        import fitz
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        raise ValidationError(f"OCR fallback requires PyMuPDF: {exc}") from exc
+
+    path = Path(file_path)
+    with fitz.open(str(path)) as document:
+        page_index = max(0, int(page_number) - 1)
+        if page_index >= len(document):
+            raise ValidationError(f"page {page_number} is out of range for OCR: {path.name}")
+        page = document[page_index]
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+            pixmap.save(image_file.name)
+            result = subprocess.run(
+                ["tesseract", image_file.name, "stdout", "-l", "chi_sim+eng", "--psm", "6"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+    if result.returncode != 0:
+        raise ValidationError(f"OCR fallback failed for {path.name} page {page_number}: {result.stderr.strip()}")
+    return str(result.stdout or "").strip()
+
+
+def repair_unreadable_pdf_pages_with_ocr(pages: list[dict[str, Any]], *, file_path: str | Path) -> list[dict[str, Any]]:
+    repaired_pages: list[dict[str, Any]] = []
+    for index, page in enumerate(pages, start=1):
+        text = str(page.get("text") or "")
+        if not is_unreadable_pdf_text(text):
+            repaired_pages.append(page)
+            continue
+        page_number = int(page.get("page_number") or index)
+        ocr_text = ocr_pdf_page_text(file_path, page_number=page_number)
+        if not ocr_text or is_unreadable_pdf_text(ocr_text):
+            raise ValidationError(
+                f"OCR fallback did not produce readable text from {Path(file_path).name} page {page_number}"
+            )
+        repaired = dict(page)
+        repaired["text"] = ocr_text
+        repaired_pages.append(repaired)
+    return repaired_pages
 
 
 def validate_indexable_pdf_pages(pages: list[dict[str, Any]], *, file_path: str | Path) -> None:
@@ -244,6 +309,7 @@ def build_index_docs(
     chunk_strategy: str = "heading_then_size",
 ) -> list[dict[str, Any]]:
     path = Path(file_path)
+    pages = repair_unreadable_pdf_pages_with_ocr(pages, file_path=path)
     validate_indexable_pdf_pages(pages, file_path=path)
     docs: list[dict[str, Any]] = []
     for page in pages:

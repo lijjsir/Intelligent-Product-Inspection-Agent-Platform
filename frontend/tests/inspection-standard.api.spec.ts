@@ -21,6 +21,8 @@ describe("inspectionStandardApi", () => {
     inspectionStandardApi.scan("lib-1");
     inspectionStandardApi.index("lib-1");
     inspectionStandardApi.reindex("lib-1");
+    inspectionStandardApi.update("lib-1", { name: "日用陶瓷标准库" });
+    inspectionStandardApi.remove("lib-1");
     inspectionStandardApi.listDocuments("lib-1");
     inspectionStandardApi.listChunks("doc-1");
     inspectionStandardApi.retrieve({ query: "陶瓷杯口沿裂纹是否合格", top_k: 8 });
@@ -29,6 +31,8 @@ describe("inspectionStandardApi", () => {
     expect(httpMock.post).toHaveBeenCalledWith("/v1/standard-libraries/lib-1/scan");
     expect(httpMock.post).toHaveBeenCalledWith("/v1/standard-libraries/lib-1/index");
     expect(httpMock.post).toHaveBeenCalledWith("/v1/standard-libraries/lib-1/reindex");
+    expect(httpMock.patch).toHaveBeenCalledWith("/v1/standard-libraries/lib-1", { name: "日用陶瓷标准库" });
+    expect(httpMock.delete).toHaveBeenCalledWith("/v1/standard-libraries/lib-1");
     expect(httpMock.get).toHaveBeenCalledWith("/v1/standard-libraries/lib-1/documents");
     expect(httpMock.get).toHaveBeenCalledWith("/v1/standard-documents/doc-1/chunks");
     expect(httpMock.post).toHaveBeenCalledWith("/v1/standards/retrieve", {

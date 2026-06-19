@@ -18,7 +18,6 @@ celery_app.conf.imports = (
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
     "worker.tasks.memory_sync_outbox_task",
-    "worker.tasks.standard_auto_reindex_task",
 )
 
 celery_app.conf.beat_schedule = {
@@ -38,10 +37,6 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.memory_sync_outbox_task.dispatch_memory_sync_outbox",
         "schedule": 60.0,
     },
-    "standard-auto-reindex": {
-        "task": "worker.tasks.standard_auto_reindex_task.run_standard_auto_reindex",
-        "schedule": 43200.0,  # every 12 hours
-    },
 }
 
 # Import task modules eagerly so the worker always registers named tasks.
@@ -56,5 +51,4 @@ from worker.tasks import (  # noqa: E402,F401
     memory_sync_outbox_task,
     report_generate_task,
     stability_task,
-    standard_auto_reindex_task,
 )

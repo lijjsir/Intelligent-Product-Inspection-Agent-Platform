@@ -19,7 +19,10 @@ RUN apt-get update && \
         cmake \
         curl \
         fonts-wqy-microhei \
-        g++ && \
+        g++ \
+        tesseract-ocr \
+        tesseract-ocr-chi-sim \
+        tesseract-ocr-eng && \
     rm -rf /var/lib/apt/lists/* && \
     python -m pip install --upgrade pip && \
     python -m pip install -r requirements/base.txt && \

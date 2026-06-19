@@ -40,7 +40,6 @@ const docForm = reactive({
 
 const filters = reactive({
   domain: "",
-  productCategory: "",
   importStatus: "",
   standardStatus: "",
   keyword: "",
@@ -50,7 +49,6 @@ const form = reactive<InspectionStandardPayload>({
   name: "",
   product_family: "",
   domain: "",
-  product_category: "",
   standard_status: "现行",
   rag_space_ids: [],
   qdrant_collection: "",
@@ -58,7 +56,6 @@ const form = reactive<InspectionStandardPayload>({
   file_glob: "*.pdf",
   chunk_strategy: "heading_then_size",
   import_mode: "scan_and_index",
-  auto_reindex: false,
   description: "",
   is_active: true,
 });
@@ -75,13 +72,12 @@ const filteredItems = computed(() =>
     const keyword = filters.keyword.trim().toLowerCase();
     const keywordMatched =
       !keyword ||
-      [item.name, item.domain, item.product_category, item.pdf_root_dir, item.description]
+      [item.name, item.domain, item.pdf_root_dir, item.description]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(keyword));
     return (
       keywordMatched &&
       (!filters.domain || item.domain === filters.domain) &&
-      (!filters.productCategory || item.product_category === filters.productCategory) &&
       (!filters.importStatus || item.import_status === filters.importStatus) &&
       (!filters.standardStatus || item.standard_status === filters.standardStatus)
     );
@@ -89,9 +85,6 @@ const filteredItems = computed(() =>
 );
 
 const domains = computed(() => Array.from(new Set(store.items.map((item) => item.domain).filter(Boolean))).sort());
-const productCategories = computed(() =>
-  Array.from(new Set(store.items.map((item) => item.product_category).filter(Boolean))).sort(),
-);
 
 function resetForm() {
   editingId.value = "";
@@ -99,7 +92,6 @@ function resetForm() {
     name: "",
     product_family: "",
     domain: "",
-    product_category: "",
     standard_status: "现行",
     rag_space_ids: [],
     qdrant_collection: "",
@@ -107,7 +99,6 @@ function resetForm() {
     file_glob: "*.pdf",
     chunk_strategy: "heading_then_size",
     import_mode: "scan_and_index",
-    auto_reindex: false,
     description: "",
     is_active: true,
   });
@@ -154,7 +145,6 @@ function openEdit(item: InspectionStandardLibraryItem) {
     name: item.name,
     product_family: item.product_family,
     domain: item.domain || "",
-    product_category: item.product_category || "",
     standard_status: item.standard_status || "现行",
     rag_space_ids: [...item.rag_space_ids],
     qdrant_collection: item.qdrant_collection || "",
@@ -162,7 +152,6 @@ function openEdit(item: InspectionStandardLibraryItem) {
     file_glob: item.file_glob || "*.pdf",
     chunk_strategy: item.chunk_strategy || "heading_then_size",
     import_mode: "scan_and_index",
-    auto_reindex: item.auto_reindex,
     description: item.description || "",
     is_active: item.is_active,
   });
@@ -174,7 +163,7 @@ async function submit({ scanAfterSave = false } = {}) {
   try {
     const payload = {
       ...form,
-      product_family: form.product_family || form.product_category || form.domain || form.name,
+      product_family: form.product_family || form.domain || form.name,
     };
     const saved = editingId.value ? await store.updateOne(editingId.value, payload) : await store.createOne(payload);
     if (scanAfterSave) {
@@ -215,7 +204,7 @@ async function indexLibrary(item: InspectionStandardLibraryItem, reindex = false
 async function openDocuments(item: InspectionStandardLibraryItem) {
   currentLibrary.value = item;
   retrieveForm.domain = item.domain || "";
-  retrieveForm.productCategory = item.product_category || "";
+  retrieveForm.productCategory = "";
   detailOpen.value = true;
   retrieveHits.value = [];
   store.docPage = 1;
@@ -332,9 +321,6 @@ onMounted(loadAll);
       <el-select v-model="filters.domain" clearable placeholder="领域" class="filter-select">
         <el-option v-for="domain in domains" :key="domain" :label="domain" :value="domain" />
       </el-select>
-      <el-select v-model="filters.productCategory" clearable placeholder="产品类别" class="filter-select">
-        <el-option v-for="category in productCategories" :key="category" :label="category" :value="category" />
-      </el-select>
       <el-select v-model="filters.importStatus" clearable placeholder="导入状态" class="filter-select">
         <el-option label="未扫描" value="not_scanned" />
         <el-option label="已扫描" value="scanned" />
@@ -363,7 +349,6 @@ onMounted(loadAll);
           </template>
         </el-table-column>
         <el-table-column prop="domain" label="领域" width="120" />
-        <el-table-column prop="product_category" label="产品类别" width="140" />
         <el-table-column label="RAG 空间" min-width="190">
           <template #default="{ row }">
             <div class="tag-line">
@@ -427,9 +412,6 @@ onMounted(loadAll);
               <el-option label="通用质检" value="通用质检" />
             </el-select>
           </el-form-item>
-          <el-form-item label="产品类别">
-            <el-input v-model="form.product_category" placeholder="如：日用瓷器、针织T恤衫" />
-          </el-form-item>
         </div>
         <div class="form-grid">
           <el-form-item label="标准状态">
@@ -451,9 +433,6 @@ onMounted(loadAll);
               <el-option label="扫描目录" value="scan_only" />
               <el-option label="扫描并索引" value="scan_and_index" />
             </el-select>
-          </el-form-item>
-          <el-form-item label="自动重建索引">
-            <el-switch v-model="form.auto_reindex" active-text="开启" inactive-text="关闭" />
           </el-form-item>
         </div>
         <el-form-item label="关联 RAG 空间">

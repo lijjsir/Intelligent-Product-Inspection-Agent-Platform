@@ -643,7 +643,6 @@ export interface InspectionStandardLibraryItem {
   file_glob: string;
   chunk_strategy: string;
   standard_status: string;
-  auto_reindex: boolean;
   pdf_count: number;
   document_count: number;
   chunk_count: number;
@@ -669,7 +668,6 @@ export interface InspectionStandardPayload {
   chunk_strategy?: string;
   standard_status?: string;
   import_mode?: string;
-  auto_reindex?: boolean;
   is_active?: boolean;
 }
 
