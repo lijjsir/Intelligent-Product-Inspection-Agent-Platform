@@ -8,12 +8,14 @@ from typing import Any
 
 from agent.rag.knowledge_indexer import KnowledgeIndexer
 from agent.rag.retriever import Retriever
-from agent.tools.file_parsers import parse_file_content
+from agent.tools.file_parsers import _extract_pdf_headings, parse_file_content
 from app.core.exceptions import ValidationError
 from app.services.standard_meta_registry import STANDARD_META_REGISTRY
 
 
 STANDARD_NO_PATTERN = re.compile(r"(?P<number>\d+(?:\.\d+)?)[-_ ](?P<year>\d{4})", re.I)
+PDF_GLYPH_CODE_PATTERN = re.compile(r"/G[0-9A-Fa-f]{2,4}")
+PDF_REPLACEMENT_CHAR_PATTERN = re.compile(r"[\ufffd□]")
 
 
 def normalize_standard_no(file_name: str) -> str:
@@ -81,6 +83,39 @@ def extract_pdf_pages(file_path: str | Path) -> tuple[list[dict[str, Any]], int]
     return pages, int(parsed.get("page_count") or len(raw_pages) or len(pages))
 
 
+def is_unreadable_pdf_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    if not compact:
+        return False
+
+    glyph_codes = PDF_GLYPH_CODE_PATTERN.findall(compact)
+    if len(glyph_codes) >= 8:
+        glyph_chars = sum(len(item) for item in glyph_codes)
+        if glyph_chars / max(len(compact), 1) >= 0.18:
+            return True
+
+    replacement_chars = PDF_REPLACEMENT_CHAR_PATTERN.findall(compact)
+    if len(replacement_chars) >= 8 and len(replacement_chars) / max(len(compact), 1) >= 0.08:
+        return True
+
+    return False
+
+
+def validate_indexable_pdf_pages(pages: list[dict[str, Any]], *, file_path: str | Path) -> None:
+    bad_pages = [
+        int(page.get("page_number") or index)
+        for index, page in enumerate(pages, start=1)
+        if is_unreadable_pdf_text(str(page.get("text") or ""))
+    ]
+    if bad_pages:
+        page_list = ", ".join(str(page) for page in bad_pages[:5])
+        suffix = "..." if len(bad_pages) > 5 else ""
+        raise ValidationError(
+            f"unreadable PDF text extracted from {Path(file_path).name} on page(s): {page_list}{suffix}. "
+            "Please provide a PDF with a valid text layer or run OCR before indexing."
+        )
+
+
 def split_text_to_chunks(text: str, *, chunk_size: int = 1000, overlap: int = 120) -> list[str]:
     clean = "\n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
     if not clean:
@@ -98,6 +133,92 @@ def split_text_to_chunks(text: str, *, chunk_size: int = 1000, overlap: int = 12
             break
         start = max(0, end - safe_overlap)
     return chunks
+
+
+def split_text_by_headings(text: str, *, chunk_size: int = 1000, overlap: int = 120) -> list[tuple[str, str | None]]:
+    """Split text into (chunk_text, heading_title) pairs using heading boundaries.
+
+    Extracts headings from the text and splits at heading positions. Each heading
+    creates a new section titled by that heading. Sections larger than chunk_size
+    are further split with overlap.
+    """
+    headings = _extract_pdf_headings(text)
+    clean = "\n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
+    if not clean:
+        return []
+
+    if not headings:
+        # Fall back to size-based only
+        return [(c, None) for c in split_text_to_chunks(clean, chunk_size=chunk_size, overlap=overlap)]
+
+    # Build section boundaries from heading paragraph indices
+    lines = clean.splitlines()
+    heading_positions: list[tuple[int, str]] = []  # (line_index, heading_text)
+    for h in headings:
+        idx = h.get("paragraph_index", 0)
+        if 0 <= idx < len(lines):
+            heading_positions.append((idx, h.get("text", "")))
+
+    heading_positions.sort(key=lambda x: x[0])
+
+    # Split lines into sections at heading boundaries
+    sections: list[tuple[str, str | None]] = []
+    current_heading: str | None = None
+    section_start = 0
+
+    for boundary_idx, heading_text in heading_positions:
+        if boundary_idx > section_start:
+            section_text = "\n".join(lines[section_start:boundary_idx]).strip()
+            if section_text:
+                sections.append((section_text, current_heading))
+        section_start = boundary_idx
+        current_heading = heading_text
+
+    # Last section after the final heading
+    if section_start < len(lines):
+        section_text = "\n".join(lines[section_start:]).strip()
+        if section_text:
+            sections.append((section_text, current_heading))
+
+    # Further split large sections by size
+    result: list[tuple[str, str | None]] = []
+    for section_text, heading_title in sections:
+        if len(section_text) <= chunk_size:
+            result.append((section_text, heading_title))
+        else:
+            for sub_chunk in split_text_to_chunks(section_text, chunk_size=chunk_size, overlap=overlap):
+                result.append((sub_chunk, heading_title))
+
+    return result
+
+
+def split_text_by_page(text: str) -> list[str]:
+    """Return the full page text as a single chunk (one-chunk-per-page strategy)."""
+    clean = "\n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
+    return [clean] if clean else []
+
+
+def chunk_page_text(
+    text: str,
+    *,
+    chunk_strategy: str = "heading_then_size",
+    chunk_size: int = 1000,
+    overlap: int = 120,
+) -> list[dict[str, Any]]:
+    """Split page text into chunks with strategy selection.
+
+    Returns list of {"text": str, "section_title": str | None} dicts.
+    """
+    strategy = str(chunk_strategy or "heading_then_size").strip().lower()
+    if strategy in ("page", "per_page"):
+        chunks = split_text_by_page(text)
+        return [{"text": c, "section_title": None} for c in chunks]
+    if strategy in ("fixed_size", "fixed-size"):
+        chunks = split_text_to_chunks(text, chunk_size=chunk_size, overlap=overlap)
+        return [{"text": c, "section_title": None} for c in chunks]
+    # Default: heading_then_size
+    pairs = split_text_by_headings(text, chunk_size=chunk_size, overlap=overlap)
+    return [{"text": c[0], "section_title": c[1]} for c in pairs]
 
 
 def build_point_id(standard_no: str, *, page_number: int, chunk_index: int) -> str:
@@ -120,16 +241,28 @@ def build_index_docs(
     rag_space_id: str | None = None,
     chunk_size: int = 1000,
     overlap: int = 120,
+    chunk_strategy: str = "heading_then_size",
 ) -> list[dict[str, Any]]:
     path = Path(file_path)
+    validate_indexable_pdf_pages(pages, file_path=path)
     docs: list[dict[str, Any]] = []
     for page in pages:
         page_number = int(page.get("page_number") or 1)
-        for chunk_index, chunk_text in enumerate(
-            split_text_to_chunks(str(page.get("text") or ""), chunk_size=chunk_size, overlap=overlap),
-            start=1,
-        ):
+        page_chunks = chunk_page_text(
+            str(page.get("text") or ""),
+            chunk_strategy=chunk_strategy,
+            chunk_size=chunk_size,
+            overlap=overlap,
+        )
+        for chunk_index, chunk_info in enumerate(page_chunks, start=1):
+            chunk_text = chunk_info["text"]
+            section_title = chunk_info.get("section_title")
             point_id = build_point_id(str(meta["standard_no"]), page_number=page_number, chunk_index=chunk_index)
+            title = (
+                f"{meta['standard_no']} {meta['standard_name']} {section_title} 第{page_number}页 第{chunk_index}段"
+                if section_title
+                else build_title(meta, page_number=page_number, chunk_index=chunk_index)
+            )
             payload = {
                 **meta,
                 "org_id": org_id,
@@ -141,10 +274,12 @@ def build_index_docs(
                 "page_number": page_number,
                 "chunk_index": chunk_index,
             }
+            if section_title:
+                payload["section_title"] = section_title
             docs.append(
                 {
                     "id": point_id,
-                    "title": build_title(meta, page_number=page_number, chunk_index=chunk_index),
+                    "title": title,
                     "text": chunk_text,
                     "source": str(meta["standard_no"]),
                     "payload": payload,
@@ -197,6 +332,7 @@ class StandardPdfImporter:
         rag_space_id: str | None = None,
         chunk_size: int = 1000,
         overlap: int = 120,
+        chunk_strategy: str = "heading_then_size",
     ) -> dict[str, Any]:
         pages, page_count = extract_pdf_pages(file_path)
         if not pages:
@@ -211,6 +347,7 @@ class StandardPdfImporter:
             rag_space_id=rag_space_id,
             chunk_size=chunk_size,
             overlap=overlap,
+            chunk_strategy=chunk_strategy,
         )
         result = await self._indexer.index(docs)
         return {"docs": docs, "page_count": page_count, **result}
@@ -230,6 +367,14 @@ class StandardPdfImporter:
             {
                 "org_id": self._org_id,
                 "document_id": document_id,
+                "library_id": library_id,
+            }
+        )
+
+    async def delete_library_points(self, *, library_id: str) -> None:
+        await self._indexer.delete_by_filter(
+            {
+                "org_id": self._org_id,
                 "library_id": library_id,
             }
         )

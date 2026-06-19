@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
 
 
 revision = "0081"
@@ -71,9 +72,9 @@ def upgrade() -> None:
             sa.Column("import_status", sa.String(length=32), nullable=False, server_default="pending"),
             sa.Column("last_indexed_at", sa.DateTime(), nullable=True),
             sa.Column("error_message", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3)")),
-            sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
-            sa.Column("deleted_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3)")),
+            sa.Column("updated_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
+            sa.Column("deleted_at", mysql.DATETIME(fsp=3), nullable=True),
             sa.ForeignKeyConstraint(["library_id"], ["inspection_standard_libraries.id"]),
             sa.PrimaryKeyConstraint("id"),
         )
@@ -96,9 +97,9 @@ def upgrade() -> None:
             sa.Column("payload_json", sa.JSON(), nullable=True),
             sa.Column("qdrant_point_id", sa.String(length=128), nullable=False),
             sa.Column("token_count", sa.Integer(), nullable=True),
-            sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3)")),
-            sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
-            sa.Column("deleted_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3)")),
+            sa.Column("updated_at", mysql.DATETIME(fsp=3), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)")),
+            sa.Column("deleted_at", mysql.DATETIME(fsp=3), nullable=True),
             sa.ForeignKeyConstraint(["document_id"], ["standard_documents.id"]),
             sa.ForeignKeyConstraint(["library_id"], ["inspection_standard_libraries.id"]),
             sa.PrimaryKeyConstraint("id"),

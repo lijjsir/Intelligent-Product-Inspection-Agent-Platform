@@ -72,15 +72,20 @@ async def _run(args: argparse.Namespace) -> None:
     print(
         "scan={scanned_count} created={created_count} updated={updated_count} "
         "documents={document_count} indexed={indexed_document_count} chunks={chunk_count} failed={failed_count}".format(
-            **scan_result,
-            **index_result,
+            scanned_count=scan_result["scanned_count"],
+            created_count=scan_result["created_count"],
+            updated_count=scan_result["updated_count"],
+            document_count=index_result["document_count"],
+            indexed_document_count=index_result["indexed_document_count"],
+            chunk_count=index_result["chunk_count"],
+            failed_count=index_result["failed_count"],
         )
     )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import local national-standard PDFs into PIAP standard RAG.")
-    parser.add_argument("--root", required=True, help="PDF root directory, for example ../standard/current")
+    parser.add_argument("--root", required=True, help="PDF root directory, for example standard/current")
     parser.add_argument("--library-name", required=True, help="Standard library display name")
     parser.add_argument("--rag-space", required=True, help="RAG space id or name")
     parser.add_argument("--org-id", default="00000000-0000-0000-0000-000000000001")

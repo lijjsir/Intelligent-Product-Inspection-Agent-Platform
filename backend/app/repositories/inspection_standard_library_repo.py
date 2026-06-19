@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
@@ -24,6 +24,24 @@ class InspectionStandardLibraryRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def list_all_paginated(self, org_id: str, *, page: int = 1, size: int = 50) -> tuple[list[InspectionStandardLibrary], int]:
+        base = select(InspectionStandardLibrary).where(
+            InspectionStandardLibrary.deleted_at.is_(None),
+            InspectionStandardLibrary.org_id == org_id,
+        )
+        count = await self._session.scalar(
+            select(func.count(InspectionStandardLibrary.id)).where(
+                InspectionStandardLibrary.deleted_at.is_(None),
+                InspectionStandardLibrary.org_id == org_id,
+            )
+        )
+        result = await self._session.execute(
+            base.order_by(InspectionStandardLibrary.product_family.asc(), InspectionStandardLibrary.created_at.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return list(result.scalars().all()), int(count or 0)
 
     async def get(self, org_id: str, library_id: str) -> InspectionStandardLibrary | None:
         result = await self._session.execute(
@@ -150,6 +168,45 @@ class StandardDocumentRepository:
         )
         return int(count or 0)
 
+    async def list_by_library_paginated(self, org_id: str, library_id: str, *, page: int = 1, size: int = 50) -> tuple[
+        list[StandardDocument], int
+    ]:
+        base = select(StandardDocument).where(
+            StandardDocument.org_id == org_id,
+            StandardDocument.library_id == library_id,
+            StandardDocument.deleted_at.is_(None),
+        )
+        count = await self._session.scalar(
+            select(func.count(StandardDocument.id)).where(
+                StandardDocument.org_id == org_id,
+                StandardDocument.library_id == library_id,
+                StandardDocument.deleted_at.is_(None),
+            )
+        )
+        result = await self._session.execute(
+            base.order_by(StandardDocument.domain.asc(), StandardDocument.standard_no.asc(), StandardDocument.file_name.asc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return list(result.scalars().all()), int(count or 0)
+
+    async def soft_delete(self, document: StandardDocument) -> None:
+        document.deleted_at = utcnow()
+        await self._session.flush()
+
+    async def soft_delete_by_library(self, org_id: str, library_id: str) -> int:
+        result = await self._session.execute(
+            update(StandardDocument)
+            .where(
+                StandardDocument.org_id == org_id,
+                StandardDocument.library_id == library_id,
+                StandardDocument.deleted_at.is_(None),
+            )
+            .values(deleted_at=utcnow())
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
     async def count_completed_by_library(self, org_id: str, library_id: str) -> int:
         count = await self._session.scalar(
             select(func.count(StandardDocument.id)).where(
@@ -190,6 +247,30 @@ class StandardDocumentChunkRepository:
         for row in rows:
             self._session.add(StandardDocumentChunk(document_id=document_id, library_id=library_id, **row))
         await self._session.flush()
+
+    async def soft_delete_by_document(self, document_id: str) -> int:
+        result = await self._session.execute(
+            update(StandardDocumentChunk)
+            .where(
+                StandardDocumentChunk.document_id == document_id,
+                StandardDocumentChunk.deleted_at.is_(None),
+            )
+            .values(deleted_at=utcnow())
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def soft_delete_by_library(self, library_id: str) -> int:
+        result = await self._session.execute(
+            update(StandardDocumentChunk)
+            .where(
+                StandardDocumentChunk.library_id == library_id,
+                StandardDocumentChunk.deleted_at.is_(None),
+            )
+            .values(deleted_at=utcnow())
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
 
     async def count_by_library(self, library_id: str) -> int:
         count = await self._session.scalar(

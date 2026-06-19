@@ -3,8 +3,11 @@ import type {
   InspectionStandardLibraryItem,
   InspectionStandardPayload,
   InspectionStandardQuery,
+  PaginatedDocuments,
+  PaginatedInspectionStandards,
   StandardDocumentChunkItem,
   StandardDocumentItem,
+  StandardDocumentPayload,
   StandardLibraryIndexResult,
   StandardLibraryScanResult,
   StandardRetrievePayload,
@@ -13,7 +16,7 @@ import type {
 
 export const inspectionStandardApi = {
   list(params?: InspectionStandardQuery) {
-    return http.get<InspectionStandardLibraryItem[]>("/v1/standard-libraries", { params });
+    return http.get<PaginatedInspectionStandards>("/v1/standard-libraries", { params });
   },
   get(id: string) {
     return http.get<InspectionStandardLibraryItem>(`/v1/standard-libraries/${id}`);
@@ -36,8 +39,14 @@ export const inspectionStandardApi = {
   reindex(id: string) {
     return http.post<StandardLibraryIndexResult>(`/v1/standard-libraries/${id}/reindex`);
   },
-  listDocuments(id: string) {
-    return http.get<StandardDocumentItem[]>(`/v1/standard-libraries/${id}/documents`);
+  listDocuments(id: string, params?: { page?: number; size?: number }) {
+    return http.get<PaginatedDocuments>(`/v1/standard-libraries/${id}/documents`, { params });
+  },
+  updateDocument(documentId: string, payload: StandardDocumentPayload) {
+    return http.patch<StandardDocumentItem>(`/v1/standard-documents/${documentId}`, payload);
+  },
+  deleteDocument(documentId: string) {
+    return http.delete<{ success: boolean }>(`/v1/standard-documents/${documentId}`);
   },
   listChunks(documentId: string) {
     return http.get<StandardDocumentChunkItem[]>(`/v1/standard-documents/${documentId}/chunks`);

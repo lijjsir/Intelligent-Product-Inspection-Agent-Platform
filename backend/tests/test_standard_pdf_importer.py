@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from app.core.exceptions import ValidationError
 from app.services.standard_pdf_importer import (
     build_index_docs,
     build_point_id,
@@ -65,3 +68,17 @@ def test_build_index_docs_adds_required_standard_payload_fields():
     assert first["payload"]["file_name"] == "GB-T-3532-2022.pdf"
     assert first["payload"]["page_number"] == 3
     assert first["payload"]["chunk_index"] == 1
+
+
+def test_build_index_docs_rejects_unreadable_pdf_glyph_codes():
+    meta = resolve_standard_meta(Path("standard/current/ceramic/GB-T-3532-2022.pdf"))
+    glyph_code_text = " /G21/G22/G23/G24/G25/G26/G27/G28/G29/G2A 2009 /G57/G58/G30 " * 8
+
+    with pytest.raises(ValidationError, match="unreadable PDF text"):
+        build_index_docs(
+            library_id="lib-1",
+            document_id="doc-1",
+            file_path=Path("standard/current/ceramic/GB-T-3532-2022.pdf"),
+            meta=meta,
+            pages=[{"page_number": 1, "text": glyph_code_text}],
+        )

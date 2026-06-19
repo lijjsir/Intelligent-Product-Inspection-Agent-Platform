@@ -7,6 +7,7 @@ import { useInspectionStandardStore } from "@/stores/inspection_standard.store";
 import type {
   InspectionStandardLibraryItem,
   InspectionStandardPayload,
+  StandardDocumentChunkItem,
   StandardDocumentItem,
   StandardRetrieveHit,
 } from "@/types/governance.types";
@@ -22,10 +23,26 @@ const editingId = ref("");
 const currentLibrary = ref<InspectionStandardLibraryItem | null>(null);
 const retrieveHits = ref<StandardRetrieveHit[]>([]);
 
+// Chunk drill-down state
+const chunkDrawerOpen = ref(false);
+const currentDocumentForChunks = ref<StandardDocumentItem | null>(null);
+
+// Document editing state
+const editingDocumentId = ref("");
+const docForm = reactive({
+  standard_no: "",
+  standard_name: "",
+  domain: "",
+  product_category: "",
+  standard_level: "",
+  standard_status: "",
+});
+
 const filters = reactive({
   domain: "",
   productCategory: "",
   importStatus: "",
+  standardStatus: "",
   keyword: "",
 });
 
@@ -40,6 +57,7 @@ const form = reactive<InspectionStandardPayload>({
   pdf_root_dir: "standard/current",
   file_glob: "*.pdf",
   chunk_strategy: "heading_then_size",
+  import_mode: "scan_and_index",
   auto_reindex: false,
   description: "",
   is_active: true,
@@ -64,7 +82,8 @@ const filteredItems = computed(() =>
       keywordMatched &&
       (!filters.domain || item.domain === filters.domain) &&
       (!filters.productCategory || item.product_category === filters.productCategory) &&
-      (!filters.importStatus || item.import_status === filters.importStatus)
+      (!filters.importStatus || item.import_status === filters.importStatus) &&
+      (!filters.standardStatus || item.standard_status === filters.standardStatus)
     );
   }),
 );
@@ -87,6 +106,7 @@ function resetForm() {
     pdf_root_dir: "standard/current",
     file_glob: "*.pdf",
     chunk_strategy: "heading_then_size",
+    import_mode: "scan_and_index",
     auto_reindex: false,
     description: "",
     is_active: true,
@@ -141,6 +161,7 @@ function openEdit(item: InspectionStandardLibraryItem) {
     pdf_root_dir: item.pdf_root_dir || "standard/current",
     file_glob: item.file_glob || "*.pdf",
     chunk_strategy: item.chunk_strategy || "heading_then_size",
+    import_mode: "scan_and_index",
     auto_reindex: item.auto_reindex,
     description: item.description || "",
     is_active: item.is_active,
@@ -169,7 +190,7 @@ async function submit({ scanAfterSave = false } = {}) {
 }
 
 async function removeItem(item: InspectionStandardLibraryItem) {
-  await ElMessageBox.confirm(`将删除“${item.name}”，标准文档记录也将不再出现在列表中。`, "删除标准库", {
+  await ElMessageBox.confirm(`将删除"${item.name}"，标准文档记录也将不再出现在列表中。`, "删除标准库", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
     type: "warning",
@@ -197,6 +218,7 @@ async function openDocuments(item: InspectionStandardLibraryItem) {
   retrieveForm.productCategory = item.product_category || "";
   detailOpen.value = true;
   retrieveHits.value = [];
+  store.docPage = 1;
   await store.fetchDocuments(item.id);
 }
 
@@ -217,8 +239,56 @@ async function retrieveStandards() {
   }
 }
 
+// Chunk drill-down
+async function openChunks(doc: StandardDocumentItem) {
+  currentDocumentForChunks.value = doc;
+  chunkDrawerOpen.value = true;
+  await store.fetchChunks(doc.id);
+}
+
+// Document editing
+function startEditDocument(doc: StandardDocumentItem) {
+  editingDocumentId.value = doc.id;
+  Object.assign(docForm, {
+    standard_no: doc.standard_no,
+    standard_name: doc.standard_name,
+    domain: doc.domain,
+    product_category: doc.product_category || "",
+    standard_level: doc.standard_level,
+    standard_status: doc.standard_status,
+  });
+}
+
+function cancelEditDocument() {
+  editingDocumentId.value = "";
+}
+
+async function saveDocument(doc: StandardDocumentItem) {
+  await store.updateDocument(doc.id, { ...docForm });
+  editingDocumentId.value = "";
+  ElMessage.success("文档已更新");
+}
+
+async function removeDocument(doc: StandardDocumentItem) {
+  await ElMessageBox.confirm(`将删除标准文档"${doc.standard_no}"及其所有 chunk 记录。`, "删除文档", {
+    confirmButtonText: "删除",
+    cancelButtonText: "取消",
+    type: "warning",
+  });
+  await store.removeDocument(doc.id);
+  ElMessage.success("文档已删除");
+}
+
 function documentStatusType(row: StandardDocumentItem) {
   return statusType(row.import_status);
+}
+
+function onPageChange(newPage: number) {
+  store.setPage(newPage);
+}
+
+function onDocPageChange(newPage: number) {
+  if (currentLibrary.value) store.setDocPage(newPage, currentLibrary.value.id);
 }
 
 onMounted(loadAll);
@@ -258,7 +328,7 @@ onMounted(loadAll);
     </section>
 
     <section class="toolbar">
-      <el-input v-model="filters.keyword" :prefix-icon="Search" clearable placeholder="搜索标准库、目录、说明" class="keyword" />
+      <el-input v-model="filters.keyword" :prefix-icon="Search" clearable placeholder="搜索名称、目录、说明" class="keyword" />
       <el-select v-model="filters.domain" clearable placeholder="领域" class="filter-select">
         <el-option v-for="domain in domains" :key="domain" :label="domain" :value="domain" />
       </el-select>
@@ -273,6 +343,12 @@ onMounted(loadAll);
         <el-option label="已完成" value="completed" />
         <el-option label="部分失败" value="partial_failed" />
         <el-option label="失败" value="failed" />
+      </el-select>
+      <el-select v-model="filters.standardStatus" clearable placeholder="标准状态" class="filter-select">
+        <el-option label="现行" value="现行" />
+        <el-option label="即将实施" value="即将实施" />
+        <el-option label="被代替" value="被代替" />
+        <el-option label="废止" value="废止" />
       </el-select>
     </section>
 
@@ -322,6 +398,17 @@ onMounted(loadAll);
           </template>
         </el-table-column>
       </el-table>
+      <div class="pagination-row">
+        <el-pagination
+          v-model:current-page="store.page"
+          v-model:page-size="store.size"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="store.total"
+          layout="total, sizes, prev, pager, next"
+          @size-change="store.setSize($event)"
+          @current-change="onPageChange"
+        />
+      </div>
     </section>
 
     <el-drawer v-model="drawerOpen" :title="editingId ? '编辑标准库' : '新增标准库'" size="680px">
@@ -357,6 +444,18 @@ onMounted(loadAll);
             <el-switch v-model="form.is_active" active-text="启用" inactive-text="停用" />
           </el-form-item>
         </div>
+        <div class="form-grid">
+          <el-form-item label="导入模式">
+            <el-select v-model="form.import_mode">
+              <el-option label="仅绑定空间" value="bind_only" />
+              <el-option label="扫描目录" value="scan_only" />
+              <el-option label="扫描并索引" value="scan_and_index" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="自动重建索引">
+            <el-switch v-model="form.auto_reindex" active-text="开启" inactive-text="关闭" />
+          </el-form-item>
+        </div>
         <el-form-item label="关联 RAG 空间">
           <el-select v-model="form.rag_space_ids" multiple filterable placeholder="选择一个或多个知识库空间" class="full-width">
             <el-option v-for="space in ragSpaces" :key="space.id" :label="space.name" :value="space.id" />
@@ -377,9 +476,6 @@ onMounted(loadAll);
               <el-option label="按页码" value="page" />
               <el-option label="固定长度" value="fixed_size" />
             </el-select>
-          </el-form-item>
-          <el-form-item label="自动重建索引">
-            <el-switch v-model="form.auto_reindex" active-text="开启" inactive-text="关闭" />
           </el-form-item>
         </div>
         <el-form-item label="Qdrant collection">
@@ -422,7 +518,62 @@ onMounted(loadAll);
               <el-tag :type="documentStatusType(row)">{{ statusLabel(row.import_status) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="操作" width="180" fixed="right">
+            <template #default="{ row }">
+              <el-button link @click="openChunks(row)">Chunks</el-button>
+              <el-button link @click="startEditDocument(row)">编辑</el-button>
+              <el-button link type="danger" @click="removeDocument(row)">删除</el-button>
+            </template>
+          </el-table-column>
         </el-table>
+
+        <!-- Inline document edit row -->
+        <div v-if="editingDocumentId" class="inline-edit-card">
+          <el-form label-position="top" class="form-grid-3">
+            <el-form-item label="标准号">
+              <el-input v-model="docForm.standard_no" />
+            </el-form-item>
+            <el-form-item label="标准名称">
+              <el-input v-model="docForm.standard_name" />
+            </el-form-item>
+            <el-form-item label="领域">
+              <el-input v-model="docForm.domain" />
+            </el-form-item>
+            <el-form-item label="产品类别">
+              <el-input v-model="docForm.product_category" />
+            </el-form-item>
+            <el-form-item label="标准级别">
+              <el-select v-model="docForm.standard_level">
+                <el-option label="GB" value="GB" />
+                <el-option label="GB/T" value="GB/T" />
+                <el-option label="GB/Z" value="GB/Z" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="标准状态">
+              <el-select v-model="docForm.standard_status">
+                <el-option label="现行" value="现行" />
+                <el-option label="即将实施" value="即将实施" />
+                <el-option label="被代替" value="被代替" />
+                <el-option label="废止" value="废止" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+          <div class="inline-edit-actions">
+            <el-button @click="cancelEditDocument">取消</el-button>
+            <el-button type="primary" @click="saveDocument(currentDocumentForChunks!)">保存</el-button>
+          </div>
+        </div>
+
+        <div class="pagination-row">
+          <el-pagination
+            v-model:current-page="store.docPage"
+            :page-size="store.docSize"
+            :total="store.docTotal"
+            layout="total, prev, pager, next"
+            small
+            @current-change="onDocPageChange"
+          />
+        </div>
 
         <section class="retrieve-panel">
           <div class="retrieve-grid">
@@ -443,6 +594,31 @@ onMounted(loadAll);
             </article>
           </div>
         </section>
+      </div>
+    </el-drawer>
+
+    <!-- Chunk drill-down drawer -->
+    <el-drawer v-model="chunkDrawerOpen" :title="currentDocumentForChunks?.standard_no + ' Chunks'" size="800px">
+      <div class="detail-stack">
+        <div v-if="currentDocumentForChunks" class="primary-cell" style="margin-bottom: 12px">
+          <strong>{{ currentDocumentForChunks.standard_no }}</strong>
+          <span>{{ currentDocumentForChunks.standard_name }} · {{ currentDocumentForChunks.file_name }}</span>
+        </div>
+        <el-table :data="store.chunks" v-loading="store.chunkLoading" row-key="id" max-height="520">
+          <el-table-column label="#" width="60">
+            <template #default="{ row }">{{ row.chunk_index }}</template>
+          </el-table-column>
+          <el-table-column prop="section_title" label="章节" width="200" />
+          <el-table-column label="页码" width="80">
+            <template #default="{ row }">{{ row.page_from || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="文本预览" min-width="300">
+            <template #default="{ row }">{{ (row.chunk_text || "").slice(0, 200) }}{{ (row.chunk_text || "").length > 200 ? "…" : "" }}</template>
+          </el-table-column>
+          <el-table-column label="Token" width="80">
+            <template #default="{ row }">{{ row.token_count || 0 }}</template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-drawer>
   </div>
@@ -549,6 +725,12 @@ onMounted(loadAll);
   padding: 8px 12px 12px;
 }
 
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 0 4px;
+}
+
 .primary-cell {
   display: flex;
   flex-direction: column;
@@ -577,6 +759,26 @@ onMounted(loadAll);
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.inline-edit-card {
+  border: 1px solid oklch(90% 0.01 250);
+  border-radius: 8px;
+  padding: 14px;
+  background: oklch(100% 0.003 250);
+}
+
+.inline-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .full-width {
@@ -638,6 +840,7 @@ onMounted(loadAll);
 
   .metric-strip,
   .form-grid,
+  .form-grid-3,
   .retrieve-grid {
     grid-template-columns: 1fr;
   }

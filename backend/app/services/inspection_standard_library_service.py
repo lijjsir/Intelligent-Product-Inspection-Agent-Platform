@@ -39,10 +39,13 @@ class InspectionStandardLibraryService:
         self._rag_repo = RagSpaceRepository(session)
         self._importer = StandardPdfImporter(org_id=org_id)
 
-    async def list_items(self) -> list[dict[str, Any]]:
+    async def list_items(self, *, page: int = 1, size: int = 50) -> dict[str, Any]:
         try:
-            rows = await self._repo.list_all(self._org_id)
-            return [await self._serialize(item) for item in rows]
+            safe_page = max(1, int(page or 1))
+            safe_size = min(max(1, int(size or 50)), 200)
+            rows, total = await self._repo.list_all_paginated(self._org_id, page=safe_page, size=safe_size)
+            items = [await self._serialize(item) for item in rows]
+            return {"items": items, "total": total, "page": safe_page, "size": safe_size}
         except Exception as exc:
             self._raise_if_table_missing(exc)
             raise
@@ -88,6 +91,9 @@ class InspectionStandardLibraryService:
             item = await self._repo.get(self._org_id, library_id)
             if not item:
                 raise NotFoundError("inspection standard library not found")
+            await self._importer.delete_library_points(library_id=library_id)
+            await self._chunk_repo.soft_delete_by_library(library_id)
+            await self._document_repo.soft_delete_by_library(self._org_id, library_id)
             await self._repo.soft_delete(item)
         except Exception as exc:
             self._raise_if_table_missing(exc)
@@ -213,10 +219,33 @@ class InspectionStandardLibraryService:
             "failed_count": 0 if document.import_status == "completed" else 1,
         }
 
-    async def list_documents(self, library_id: str) -> list[dict[str, Any]]:
+    async def list_documents(self, library_id: str, *, page: int = 1, size: int = 50) -> dict[str, Any]:
         await self._get_library(library_id)
-        rows = await self._document_repo.list_by_library(self._org_id, library_id)
-        return [self._serialize_document(row) for row in rows]
+        safe_page = max(1, int(page or 1))
+        safe_size = min(max(1, int(size or 50)), 200)
+        rows, total = await self._document_repo.list_by_library_paginated(self._org_id, library_id, page=safe_page, size=safe_size)
+        items = [self._serialize_document(row) for row in rows]
+        return {"items": items, "total": total, "page": safe_page, "size": safe_size}
+
+    async def update_document(self, document_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        document = await self._document_repo.get(self._org_id, document_id)
+        if not document:
+            raise NotFoundError("standard document not found")
+        allowed = {"standard_no", "standard_name", "domain", "product_category", "standard_level", "standard_status", "error_message"}
+        normalized = {k: v for k, v in payload.items() if k in allowed and v is not None}
+        if normalized:
+            await self._document_repo.update(document, normalized)
+        return self._serialize_document(document)
+
+    async def delete_document(self, document_id: str) -> None:
+        document = await self._document_repo.get(self._org_id, document_id)
+        if not document:
+            raise NotFoundError("standard document not found")
+        try:
+            await self._importer.delete_document_points(document_id=document_id, library_id=str(document.library_id))
+        except Exception:
+            pass  # Best-effort Qdrant cleanup
+        await self._document_repo.soft_delete(document)
 
     async def get_document(self, document_id: str) -> dict[str, Any]:
         document = await self._document_repo.get(self._org_id, document_id)
@@ -236,6 +265,11 @@ class InspectionStandardLibraryService:
         if not query:
             raise ValidationError("query is required")
         top_k = int(payload.get("top_k") or 8)
+        # Expand query with defect keywords for better recall
+        defect_keywords: list[str] = [str(k).strip() for k in list(payload.get("defect_keywords") or []) if str(k).strip()]
+        if defect_keywords:
+            expanded_terms = " ".join(defect_keywords)
+            query = f"{query} {expanded_terms}"
         filters: list[dict[str, Any]] = []
         base = {"org_id": self._org_id}
         domain = str(payload.get("domain") or "").strip()
@@ -324,6 +358,10 @@ class InspectionStandardLibraryService:
             normalized["auto_reindex"] = bool(payload.get("auto_reindex"))
         elif not partial:
             normalized["auto_reindex"] = False
+        if "import_mode" in payload:
+            normalized["import_mode"] = str(payload.get("import_mode") or "").strip() or "scan_and_index"
+        elif not partial:
+            normalized["import_mode"] = "scan_and_index"
         return normalized
 
     async def _ensure_rag_spaces_exist(self, rag_space_ids: list[str]) -> None:
@@ -410,6 +448,7 @@ class InspectionStandardLibraryService:
                 file_path=document.file_path,
                 meta=meta,
                 rag_space_id=(library.rag_space_ids or [None])[0],
+                chunk_strategy=library.chunk_strategy or "heading_then_size",
             )
             accepted = int(result.get("accepted") or 0)
             if accepted <= 0:
@@ -443,6 +482,8 @@ class InspectionStandardLibraryService:
         except Exception as exc:
             document.import_status = "failed"
             document.error_message = str(exc)
+            document.chunk_count = 0
+            await self._chunk_repo.soft_delete_by_document(str(document.id))
         await self._session.flush()
 
     def _serialize_document(self, row: StandardDocument) -> dict[str, Any]:

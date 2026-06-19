@@ -34,6 +34,9 @@ htmlcov/
 .worktrees/
 *.log
 
+# Standard PDFs (runtime data, not source)
+backend/standard/
+
 # Runtime/generated local data
 runtime/
 runtime_*/

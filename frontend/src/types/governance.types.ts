@@ -668,6 +668,7 @@ export interface InspectionStandardPayload {
   file_glob?: string;
   chunk_strategy?: string;
   standard_status?: string;
+  import_mode?: string;
   auto_reindex?: boolean;
   is_active?: boolean;
 }
@@ -676,7 +677,34 @@ export interface InspectionStandardQuery {
   domain?: string;
   product_category?: string;
   import_status?: string;
+  standard_status?: string;
   keyword?: string;
+  page?: number;
+  size?: number;
+}
+
+export interface PaginatedInspectionStandards {
+  items: InspectionStandardLibraryItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface PaginatedDocuments {
+  items: StandardDocumentItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface StandardDocumentPayload {
+  standard_no?: string | null;
+  standard_name?: string | null;
+  domain?: string | null;
+  product_category?: string | null;
+  standard_level?: string | null;
+  standard_status?: string | null;
+  error_message?: string | null;
 }
 
 export interface StandardDocumentItem {

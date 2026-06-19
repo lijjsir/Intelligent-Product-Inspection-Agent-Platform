@@ -17,6 +17,7 @@ class InspectionStandardCreate(BaseModel):
     file_glob: str = Field(default="*.pdf", max_length=64)
     chunk_strategy: str = Field(default="heading_then_size", max_length=32)
     standard_status: str = Field(default="现行", max_length=32)
+    import_mode: str = Field(default="scan_and_index", max_length=32)
     auto_reindex: bool = False
     is_active: bool = True
 
@@ -33,6 +34,7 @@ class InspectionStandardUpdate(BaseModel):
     file_glob: str | None = Field(default=None, max_length=64)
     chunk_strategy: str | None = Field(default=None, max_length=32)
     standard_status: str | None = Field(default=None, max_length=32)
+    import_mode: str | None = Field(default=None, max_length=32)
     auto_reindex: bool | None = None
     is_active: bool | None = None
 
@@ -157,3 +159,27 @@ class StandardRetrieveResponse(BaseModel):
     hit_count: int
     candidate_count: int
     latency_ms: float
+
+
+class PaginatedInspectionStandards(BaseModel):
+    items: list[InspectionStandardResponse]
+    total: int
+    page: int
+    size: int
+
+
+class PaginatedDocuments(BaseModel):
+    items: list[StandardDocumentResponse]
+    total: int
+    page: int
+    size: int
+
+
+class StandardDocumentUpdate(BaseModel):
+    standard_no: str | None = Field(default=None, max_length=100)
+    standard_name: str | None = Field(default=None, max_length=255)
+    domain: str | None = Field(default=None, max_length=100)
+    product_category: str | None = Field(default=None, max_length=100)
+    standard_level: str | None = Field(default=None, max_length=32)
+    standard_status: str | None = Field(default=None, max_length=32)
+    error_message: str | None = Field(default=None, max_length=2000)
