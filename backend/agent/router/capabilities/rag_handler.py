@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
-from agent.router.executors.base import artifact, observation
-from agent.router.manager_state import ManagerState
+from agent.router.contracts import CapabilityContext, AgentCapabilityError
 
 
 def _is_rag_overview_query(query: str) -> bool:
@@ -27,15 +24,18 @@ def _is_rag_overview_query(query: str) -> bool:
     )
 
 
-class RagExecutor:
-    async def execute(
-        self,
-        step: AgentPlanStep,
-        state: ManagerState,
-        request: NormalizedRequest,
-        *,
-        db_session=None,
-    ) -> tuple[AgentObservation, list[AgentArtifact]]:
+class RagRetrieveHandler:
+    """RAG retrieval capability -- standalone handler with proper error boundaries."""
+
+    async def run(self, context: CapabilityContext):
+        from agent.router.executors.base import artifact, observation
+
+        step = context.step
+        state = context.state
+        request = context.request
+        db_session = context.db_session
+
+        # Handle rag.ingest
         if step.capability == "rag.ingest":
             art = artifact(
                 step,
@@ -48,6 +48,7 @@ class RagExecutor:
             )
             return observation(step, status="blocked", summary="RAG 入库需要确认", artifact_ids=[art.artifact_id]), [art]
 
+        # RAG retrieve logic
         rag_space_id = str((state.selected_rag_space or {}).get("id") or "").strip() or None
         hits: list[dict[str, Any]] = []
         rag_space_name = str((state.selected_rag_space or {}).get("name") or "").strip()
@@ -73,7 +74,6 @@ class RagExecutor:
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
                 latency_ms = int(result.get("latency_ms") or 0)
             except Exception as exc:
-                from agent.router.contracts import AgentCapabilityError
                 raise AgentCapabilityError(
                     code="RAG_RETRIEVE_FAILED",
                     message="知识库检索失败，无法完成当前 RAG 问答。",
@@ -82,6 +82,7 @@ class RagExecutor:
                 ) from exc
         else:
             latency_ms = 0
+
         citations = [
             {
                 "id": str(item.get("chunk_id") or item.get("id") or index),
@@ -121,7 +122,7 @@ class RagExecutor:
         return (
             observation(
                 step,
-                status="success",  # observation is still success for zero hits (normal operation)
+                status="success",
                 summary=f"RAG 检索完成，命中 {len(hits)} 条" if hits else "RAG 检索成功，但没有命中相关内容。",
                 artifact_ids=[art.artifact_id],
                 metrics={"hit_count": len(hits), "top_score": top_score},

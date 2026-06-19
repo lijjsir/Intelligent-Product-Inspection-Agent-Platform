@@ -15,6 +15,7 @@ class ToolSpec:
     description: str
 
     agent_scope: list[str] = field(default_factory=list)
+    capability: str = ""  # capability key this tool belongs to (empty = unrestricted)
     surfaces: list[str] = field(default_factory=list)
 
     mode: Literal["read", "write", "action"] = "read"

@@ -34,6 +34,7 @@ class ToolRegistry:
         self,
         *,
         agent: str = "",
+        capability: str = "",
         surface: str = "",
         allowed_modes: list[str] | None = None,
     ) -> list[ToolSpec]:
@@ -43,6 +44,8 @@ class ToolRegistry:
             if not spec.enabled:
                 continue
             if spec.agent_scope and agent and agent not in spec.agent_scope:
+                continue
+            if capability and spec.capability and spec.capability != capability:
                 continue
             if spec.surfaces and surface and surface not in spec.surfaces:
                 continue

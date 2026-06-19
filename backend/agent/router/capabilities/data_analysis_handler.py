@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
-from agent.router.executors.base import artifact, observation
-from agent.router.manager_state import ManagerState
+from agent.router.contracts import CapabilityContext
 
 
-class DataAnalysisExecutor:
-    async def execute(
-        self,
-        step: AgentPlanStep,
-        state: ManagerState,
-        request: NormalizedRequest,
-        *,
-        db_session=None,
-    ) -> tuple[AgentObservation, list[AgentArtifact]]:
+class DataAnalysisHandler:
+    """Data analysis capability handler -- standalone handler with proper error boundaries."""
+
+    async def run(self, context: CapabilityContext):
+        from agent.router.executors.base import artifact, observation
+
+        step = context.step
+        state = context.state
+        request = context.request
+        db_session = context.db_session
+
         content = {
             "implemented": True,
             "readonly": True,
@@ -50,6 +49,7 @@ class DataAnalysisExecutor:
                     detail={"raw_error": str(exc)},
                     frontend_visible=True,
                 ) from exc
+
         stats = content.get("inspection_task_stats", {})
         art = artifact(
             step,

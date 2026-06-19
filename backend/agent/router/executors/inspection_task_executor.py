@@ -37,7 +37,7 @@ class InspectionTaskExecutor:
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
         from agent.router.contracts import AgentCapabilityError
 
-        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+        cap = step.capability
 
         if cap not in self.SUPPORTED_CAPABILITIES:
             raise AgentCapabilityError(

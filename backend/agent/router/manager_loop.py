@@ -178,7 +178,7 @@ class ManagerLoop:
         if len(plan.steps) > max(0, state.max_tool_calls - state.used_tool_calls):
             return ValidationResult(False, "route_plan 超出工具调用预算")
         for step in plan.steps:
-            capability_key = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+            capability_key = step.capability
             capability = CAPABILITIES.get(capability_key)
             if capability is None:
                 return ValidationResult(False, f"未知 capability：{capability_key}")
@@ -400,7 +400,7 @@ class ManagerLoop:
             for item in state.observations
             if item.status in {"success", "skipped"} and item.capability_key != "chat.response.compose"
         ]
-        if state.route_plan and any((getattr(step, 'capability', None) or getattr(step, 'capability_key', '')) == "chat.response.compose" for step in state.route_plan.steps):
+        if state.route_plan and any(step.capability == "chat.response.compose" for step in state.route_plan.steps):
             capabilities_used.append("chat.response.compose")
         route_trace = {
             "iterations": state.iteration,
@@ -437,15 +437,13 @@ class ManagerLoop:
         if state.route_plan and state.route_plan.steps:
             action_steps = [
                 step for step in state.route_plan.steps
-                if getattr(step, 'owner_agent', None) == "inspection_task"
-                or getattr(step, 'agent', None) == "inspection_task"
+                if step.owner_agent == "inspection_task"
             ]
             if action_steps:
                 return "inspection_task"
             file_steps = [
                 step for step in state.route_plan.steps
-                if getattr(step, 'owner_agent', None) == "file"
-                or getattr(step, 'agent', None) == "file"
+                if step.owner_agent == "file"
             ]
             if file_steps and not action_steps:
                 return "file"

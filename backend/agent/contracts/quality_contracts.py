@@ -57,7 +57,7 @@ class RouteSignals(BaseModel):
 
 class RouteDecision(BaseModel):
     mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "router_enabled"
-    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    selected_agent: Literal["chat", "file", "inspection_task"] = "chat"
     sub_route: Literal[
         "general_chat",
         "rag_qa",

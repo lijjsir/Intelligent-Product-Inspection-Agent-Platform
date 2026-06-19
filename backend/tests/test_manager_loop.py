@@ -7,7 +7,7 @@ import pytest
 from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
 from agent.router.contracts import AgentPlanStep
 from agent.router.executors.chat_executor import ChatExecutor
-from agent.router.executors.vision_executor import VisionExecutor
+from agent.router.capabilities.vision_handler import VisionUnderstandingHandler
 from agent.router.manager_state import ManagerState
 from agent.router.manager_loop import ManagerLoop
 from agent.tools.contracts import ToolResult, ToolSpec
@@ -92,7 +92,7 @@ async def test_vision_understanding_does_not_select_text_only_chat_runtime(monke
             return None
 
     monkeypatch.setattr("app.services.model_config_service.ModelConfigService", FakeModelConfigService)
-    monkeypatch.setattr("agent.router.executors.vision_executor.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.router.capabilities.vision_handler.LLMGateway", lambda: FakeGateway())
 
     state = ManagerState(
         request_id="req-1",
@@ -105,7 +105,7 @@ async def test_vision_understanding_does_not_select_text_only_chat_runtime(monke
     )
     routed = [{"attachment": {"url": "https://example.test/apple.jpg"}, "node": {}}]
 
-    result = await VisionExecutor()._try_multimodal_understanding(
+    result = await VisionUnderstandingHandler()._try_multimodal_understanding(
         routed,
         state,
         _request(query="这个图片的内容是什么"),
@@ -448,8 +448,7 @@ async def test_rag_compose_lets_model_skip_web_tool_when_not_forced(monkeypatch)
     observation, artifacts = await ChatExecutor().execute(
         AgentPlanStep(
             step_id="compose-1",
-            capability_key="chat.response.compose",
-            agent="chat",
+            capability="chat.response.compose",
             operation="compose",
             mode="answer",
         ),
@@ -538,8 +537,7 @@ async def test_rag_compose_forced_web_search_invokes_web_tool(monkeypatch):
     observation, artifacts = await ChatExecutor().execute(
         AgentPlanStep(
             step_id="compose-1",
-            capability_key="chat.response.compose",
-            agent="chat",
+            capability="chat.response.compose",
             operation="compose",
             mode="answer",
         ),
@@ -975,7 +973,7 @@ async def test_chat_rag_ingest_request_is_blocked_by_surface_boundary(mock_chat_
     assert output.status == "blocked"
     assert output.route_decision.sub_route == "action_blocked"
     assert output.agent_output["created_task"] is None
-    assert output.agent_output["route_trace"]["steps"][0]["capability_key"] == "rag.ingest"
+    assert output.agent_output["route_trace"]["steps"][0]["capability"] == "rag.ingest"
 
 
 @pytest.mark.asyncio

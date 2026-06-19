@@ -118,46 +118,45 @@ class ManagerEvaluator:
                 missing_inputs=[a.summary for a in blocked if a.summary],
             )
 
-        artifact_types = {item.type for item in all_artifacts}
-        if any((getattr(step, 'capability', None) or getattr(step, 'capability_key', '')) == "chat.general" for step in plan.steps):
+        # --- Rule-driven evaluation per plan step (Section 9.2 of spec) ---
+        # Check each plan step against its SUCCESS_RULE
+        all_steps_satisfied = True
+        any_rule_matched = False
+        for step in plan.steps:
+            cap = step.capability
+            rule = self.SUCCESS_RULES.get(cap)
+            if rule is None:
+                continue
+            any_rule_matched = True
+            matching = [a for a in all_artifacts if rule(a)]
+            if not matching:
+                all_steps_satisfied = False
+                break
+
+        # chat.general is a special case: no artifact needed if model replied
+        if any(s.capability == "chat.general" for s in plan.steps):
             return EvaluationResult(True, 1.0, "finish", "普通聊天已生成回复")
-        composed_artifacts = [
-            item for item in all_artifacts if item.type == "composed_response"
-        ]
-        if any(str((item.content or {}).get("status") or "completed") != "blocked" for item in composed_artifacts):
+
+        # composed_response signals completion
+        composed_artifacts = [item for item in all_artifacts if item.type == "composed_response"]
+        if composed_artifacts and any(
+            str((item.content or {}).get("status") or "completed") != "blocked"
+            for item in composed_artifacts
+        ):
             return EvaluationResult(True, 1.0, "finish", "聊天回复已生成")
-        if "quality_report" in artifact_types:
-            quality_reports = [a for a in all_artifacts if a.type == "quality_report"]
-            if any(a.status == "success" for a in quality_reports):
-                return EvaluationResult(True, 0.86, "finish", "已经找到报告信息")
-        if "task_status" in artifact_types:
-            task_statuses = [a for a in all_artifacts if a.type == "task_status"]
-            if any(a.status == "success" for a in task_statuses):
-                return EvaluationResult(True, 0.8, "finish", "已经找到任务状态")
-        if "rag_hits" in artifact_types:
-            rag_artifacts = [a for a in all_artifacts if a.type == "rag_hits"]
-            if any(a.status in {"success", "empty"} for a in rag_artifacts):
-                return EvaluationResult(True, 0.76, "finish", "已经完成知识检索")
-        if "paper_format_report" in artifact_types:
-            paper_reports = [a for a in all_artifacts if a.type == "paper_format_report"]
-            if any(a.status == "success" for a in paper_reports):
-                return EvaluationResult(True, 0.82, "finish", "已经完成论文查非分析")
-        if "file_summary" in artifact_types or "file_answer" in artifact_types:
-            file_artifacts = [a for a in all_artifacts if a.type in {"file_summary", "file_answer"}]
-            if any(a.status == "success" for a in file_artifacts):
-                return EvaluationResult(True, 0.78, "finish", "已经完成文件辅助分析")
-        if "image_understanding" in artifact_types:
-            img_artifacts = [a for a in all_artifacts if a.type == "image_understanding"]
-            if any(a.status == "success" for a in img_artifacts):
-                return EvaluationResult(True, 0.75, "finish", "已经完成图片辅助分析")
-        if "inspection_result" in artifact_types or "inspection_task" in artifact_types:
-            inspection_artifacts = [a for a in all_artifacts if a.type in {"inspection_result", "inspection_task"}]
-            if any(a.status == "success" for a in inspection_artifacts):
-                return EvaluationResult(True, 0.9, "finish", "正式质检任务已处理")
-        if "data_analysis" in artifact_types:
-            da_artifacts = [a for a in all_artifacts if a.type == "data_analysis"]
-            if any(a.status == "success" for a in da_artifacts):
-                return EvaluationResult(True, 0.7, "finish", "数据分析能力已返回只读统计结果")
+        # If all composed_responses are blocked, the action was blocked
+        if composed_artifacts:
+            return EvaluationResult(False, 0.2, "continue", "回复已被阻止，等待用户处理")
+
+        # If rules were checked and all satisfied
+        if any_rule_matched and all_steps_satisfied:
+            return EvaluationResult(True, 0.85, "finish", "所有能力步骤已按规则完成")
+
+        # If rules were checked but some not satisfied
+        if any_rule_matched and not all_steps_satisfied:
+            return EvaluationResult(False, 0.3, "continue", "能力步骤尚未全部满足成功条件")
+
+        # Fallback: model evaluator or continue
         model_result = await self._model_evaluate_if_available(state, plan, observations, artifacts)
         if model_result is not None:
             return model_result

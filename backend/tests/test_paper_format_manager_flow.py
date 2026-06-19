@@ -193,8 +193,7 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
 
     step = AgentPlanStep(
         step_id="paper-1",
-        capability_key="file.paper_format_check",
-        agent="chat",
+        capability="file.paper_format_check",
         operation="paper_format_check",
         mode="report",
         input={"attachments": []},

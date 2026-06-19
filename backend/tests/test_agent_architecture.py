@@ -74,30 +74,34 @@ class TestAgentPlanStep:
         assert step.owner_agent == "chat"
         assert step.capability == "chat.general"
 
-    def test_backward_compat_capability_key(self):
-        """capability_key should sync with capability via model validator."""
+    def test_backward_compat_capability_key_removed(self):
+        """capability_key field has been removed -- only capability is used."""
         step = AgentPlanStep(
             step_id="s1",
             owner_agent="chat",
             capability="test.cap",
         )
-        assert step.capability_key == "test.cap"
+        assert step.capability == "test.cap"
+        with pytest.raises(AttributeError):
+            _ = step.capability_key
 
-    def test_backward_compat_agent_field(self):
-        """agent should sync with owner_agent via model validator."""
+    def test_backward_compat_agent_field_removed(self):
+        """agent field has been removed -- only owner_agent is used."""
         step = AgentPlanStep(
             step_id="s1",
             owner_agent="chat",
             capability="test.cap",
         )
-        assert step.agent == "chat"
+        assert step.owner_agent == "chat"
+        with pytest.raises(AttributeError):
+            _ = step.agent
 
-    def test_construct_with_old_fields(self):
-        """Old field names should still work for construction."""
+    def test_construct_with_new_fields_only(self):
+        """Only new field names are accepted for construction."""
         step = AgentPlanStep(
             step_id="s1",
-            agent="file",
-            capability_key="file.summary",
+            owner_agent="file",
+            capability="file.summary",
         )
         assert step.owner_agent == "file"
         assert step.capability == "file.summary"
@@ -296,6 +300,6 @@ class TestAgentObservation:
             status="success",
         )
         assert obs.owner_agent == "chat"
-        # AgentObservation does NOT have a model_validator to sync agent <- owner_agent.
-        # The agent field remains at its default "" unless set explicitly.
-        assert obs.agent == ""
+        # AgentObservation agent field has been removed -- only owner_agent remains.
+        with pytest.raises(AttributeError):
+            _ = obs.agent

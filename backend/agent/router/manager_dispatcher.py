@@ -36,7 +36,7 @@ class ManagerDispatcher:
         registry = get_registry()
         invoker = ToolInvoker(registry, db_session=db_session)
 
-        # Expose tools + invoker to executors via state
+        # Setup shared infrastructure (unchanged per step)
         surface = str(getattr(state, "surface", "") or plan.surface or "chat")
         allowed_modes = list(getattr(state, "allowed_modes", []) or [])
 
@@ -45,16 +45,6 @@ class ManagerDispatcher:
         if request_ext.get("force_web_search"):
             forced_tool_names.append("web.search")
 
-        # Use owner_agent for tool filtering (backward compat with selected_agent)
-        filter_agent = state.selected_agent or ""
-        available_tools = registry.list_for(
-            agent=filter_agent, surface=surface, allowed_modes=allowed_modes
-        ) if filter_agent else []
-        if "web.search" in forced_tool_names and "web.search" in registry:
-            # User explicitly selected web search; put it first so the tool loop can force it.
-            web_spec = registry.get("web.search")
-            available_tools = [web_spec] + [t for t in available_tools if t.name != "web.search"]
-        state.available_tools = available_tools
         state.forced_tool_names = forced_tool_names
         state.tool_invoker = invoker
 
@@ -79,8 +69,8 @@ class ManagerDispatcher:
 
                 state.executed_step_hashes.add(step_hash)
 
-                # Resolve owner_agent with backward compat
-                owner = getattr(step, 'owner_agent', None) or getattr(step, 'agent', None) or ''
+                # Resolve owner_agent
+                owner = step.owner_agent
                 if not owner:
                     raise AgentDispatchError(
                         code="MISSING_OWNER_AGENT",
@@ -95,6 +85,16 @@ class ManagerDispatcher:
                         message=f"未知业务 Agent：{owner}。rag/vision/quality_report/data_analysis 不是业务 Agent。",
                         frontend_visible=True,
                     )
+
+                # Per-step tool filtering by owner_agent + capability (Section 10.3 of spec)
+                step_cap = step.capability
+                available_tools = registry.list_for(
+                    agent=owner, capability=step_cap, surface=surface, allowed_modes=allowed_modes,
+                ) if owner else []
+                if "web.search" in forced_tool_names and "web.search" in registry:
+                    web_spec = registry.get("web.search")
+                    available_tools = [web_spec] + [t for t in available_tools if t.name != "web.search"]
+                state.available_tools = available_tools
 
                 try:
                     step_observation, step_artifacts = await executor.execute(
@@ -125,7 +125,7 @@ class ManagerDispatcher:
 
     @staticmethod
     def _step_hash(step: AgentPlanStep) -> str:
-        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', '') or ''
+        cap = step.capability
         payload = json.dumps(
             {"capability": cap, "operation": step.operation, "input": step.input},
             sort_keys=True,

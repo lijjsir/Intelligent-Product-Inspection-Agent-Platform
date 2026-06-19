@@ -3,23 +3,23 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
-from agent.router.executors.base import artifact, observation
-from agent.router.manager_state import ManagerState
+from agent.router.contracts import CapabilityContext
 
 
-class QualityReportExecutor:
-    async def execute(
-        self,
-        step: AgentPlanStep,
-        state: ManagerState,
-        request: NormalizedRequest,
-        *,
-        db_session=None,
-    ) -> tuple[AgentObservation, list[AgentArtifact]]:
+class QualityReportHandler:
+    """Quality report/status query capability handler -- standalone handler with proper error boundaries."""
+
+    async def run(self, context: CapabilityContext):
+        from agent.router.executors.base import artifact, observation
+
+        step = context.step
+        state = context.state
+        request = context.request
+        db_session = context.db_session
+
         if db_session is None:
             return self._empty(step, state, "未提供数据库会话")
+
         from app.repositories.result_repo import ResultRepository
         from app.repositories.task_repo import TaskRepository
 
@@ -64,7 +64,9 @@ class QualityReportExecutor:
             [art],
         )
 
-    def _empty(self, step: AgentPlanStep, state: ManagerState, reason: str) -> tuple[AgentObservation, list[AgentArtifact]]:
+    def _empty(self, step, state, reason: str):
+        from agent.router.executors.base import artifact, observation
+
         art_type = "task_status" if step.capability == "quality.task.status" else "quality_report"
         art = artifact(
             step,

@@ -37,7 +37,7 @@ def artifact(
     error: dict[str, Any] | None = None,
 ) -> AgentArtifact:
     import hashlib, uuid
-    source = getattr(step, 'owner_agent', None) or getattr(step, 'agent', '') or 'unknown'
+    source = step.owner_agent
     raw = f"{step.step_id}:{artifact_type}:{source}:{uuid.uuid4()}"
     artifact_id = hashlib.sha1(raw.encode()).hexdigest()[:12]
     return AgentArtifact(
@@ -72,14 +72,13 @@ def observation(
     elif isinstance(error, str) and error:
         error_dict = {"message": error}
 
-    cap = getattr(step, "capability", None) or getattr(step, "capability_key", "") or ""
-    owner = getattr(step, "owner_agent", None) or getattr(step, "agent", "") or ""
+    cap = step.capability
+    owner = step.owner_agent
 
     return AgentObservation(
         step_id=step.step_id,
         capability_key=cap,
         owner_agent=owner,
-        agent=owner,
         status=status,  # type: ignore[arg-type]
         summary=summary,
         metrics=dict(metrics or {}),

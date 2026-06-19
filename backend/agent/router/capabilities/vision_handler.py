@@ -1,27 +1,29 @@
 from __future__ import annotations
 
-from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep
-from agent.router.executors.base import artifact, observation
-from agent.router.manager_state import ManagerState
-from agent.router.node_registry import route_attachment_to_node
+import json as _json
+
 from agent.llm.gateway import LLMGateway
+from agent.router.contracts import CapabilityContext, AgentCapabilityError
 
 
-class VisionExecutor:
-    async def execute(
-        self,
-        step: AgentPlanStep,
-        state: ManagerState,
-        request: NormalizedRequest,
-        *,
-        db_session=None,
-    ) -> tuple[AgentObservation, list[AgentArtifact]]:
+class VisionUnderstandingHandler:
+    """Image understanding capability handler -- standalone handler with proper error boundaries."""
+
+    async def run(self, context: CapabilityContext):
+        from agent.router.executors.base import artifact, observation
+        from agent.router.node_registry import route_attachment_to_node
+
+        step = context.step
+        state = context.state
+        request = context.request
+        db_session = context.db_session
+
         routed = []
         for attachment in state.attachments:
             node = route_attachment_to_node("chat", attachment)
             if node:
                 routed.append({"attachment": attachment, "node": node.model_dump()})
+
         if not routed:
             art = artifact(
                 step,
@@ -82,7 +84,7 @@ class VisionExecutor:
             [art],
         )
 
-    async def _try_multimodal_understanding(self, routed: list[dict], state: ManagerState, request: NormalizedRequest, *, db_session=None):
+    async def _try_multimodal_understanding(self, routed: list[dict], state, request, *, db_session=None):
         if not routed:
             return None
         if db_session is None:
@@ -119,7 +121,6 @@ class VisionExecutor:
             parsed["model_id"] = runtime.get("model_id")
             return parsed
         except Exception as exc:
-            from agent.router.contracts import AgentCapabilityError
             raise AgentCapabilityError(
                 code="IMAGE_UNDERSTANDING_FAILED",
                 message="图片理解失败，无法完成当前图片分析。",
@@ -129,7 +130,6 @@ class VisionExecutor:
 
     @staticmethod
     def _parse_vision_response(response: dict) -> dict:
-        import json as _json
         content = response.get("content") if isinstance(response, dict) else None
         if isinstance(content, dict):
             return content

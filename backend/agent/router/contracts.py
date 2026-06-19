@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class AgentRouteDecision(BaseModel):
@@ -68,8 +68,8 @@ class Capability(BaseModel):
 
 class AgentPlanStep(BaseModel):
     step_id: str
-    owner_agent: str = ""  # was Literal["chat", "file", "inspection_task"]; relaxed for backward compat
-    capability: str = ""  # relaxed for backward compat with capability_key
+    owner_agent: Literal["chat", "file", "inspection_task"] = "chat"
+    capability: str = ""
     operation: str = ""
     mode: Literal["answer", "report", "action"] = "answer"
     input: dict[str, Any] = Field(default_factory=dict)
@@ -78,29 +78,6 @@ class AgentPlanStep(BaseModel):
     parallel_group: str | None = None
     required: bool = True
     expected_artifact: str | None = None
-
-    # Backward compat aliases (will be removed in Phase 2)
-    capability_key: str = ""  # deprecated, use capability
-    agent: str = ""  # deprecated, use owner_agent
-
-    @model_validator(mode="after")
-    def _sync_backward_compat_fields(self):
-        """Sync old/new field names bidirectionally so both consumers work."""
-        # Sync capability <-> capability_key
-        if self.capability and not self.capability_key:
-            self.capability_key = self.capability
-        if self.capability_key and not self.capability:
-            self.capability = self.capability_key
-
-        # Sync owner_agent <-> agent
-        _VALID_AGENTS = {"chat", "file", "inspection_task"}
-        if self.owner_agent and not self.agent:
-            self.agent = self.owner_agent
-        if self.agent and not self.owner_agent:
-            if self.agent in _VALID_AGENTS:
-                self.owner_agent = self.agent
-
-        return self
 
 
 class AgentRoutePlan(BaseModel):
@@ -118,7 +95,6 @@ class AgentObservation(BaseModel):
     step_id: str
     capability_key: str
     owner_agent: str = ""
-    agent: str = ""  # deprecated, kept for backward compat
     status: Literal["success", "failed", "blocked", "skipped"]
     summary: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)
@@ -148,6 +124,15 @@ class NodeSpec(BaseModel):
     required_model_types: list[str] = Field(default_factory=list)
     mode: Literal["answer", "report", "action"]
     output_artifact_types: list[str] = Field(default_factory=list)
+
+
+class CapabilityContext(BaseModel):
+    """Context passed to capability handlers — everything they need to execute."""
+    step: Any = Field(default=None)  # AgentPlanStep
+    state: Any = Field(default=None)  # ManagerState
+    request: Any = Field(default=None)  # NormalizedRequest
+    db_session: Any = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentRuntimeError(Exception):

@@ -33,7 +33,16 @@ class FileExecutor:
         from agent.tools.paper_format_templates import DEFAULT_STRICT_PAPER_TEMPLATE_ID
         from app.services.object_storage.resolver import read_attachment_bytes
 
-        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+        cap = step.capability
+
+        # Delegate RAG retrieval through CapabilityRouter (same pattern as ChatExecutor)
+        if cap == "rag.retrieve":
+            from agent.router.capability_router import get_capability_router
+            from agent.router.contracts import CapabilityContext
+            router = get_capability_router()
+            return await router.call("rag.retrieve", CapabilityContext(
+                step=step, state=state, request=request, db_session=db_session,
+            ))
 
         if cap not in self.SUPPORTED_CAPABILITIES:
             raise AgentCapabilityError(

@@ -94,7 +94,7 @@ class ChatExecutor:
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
         from agent.router.contracts import AgentCapabilityError
 
-        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+        cap = step.capability
 
         if cap not in self.SUPPORTED_CAPABILITIES:
             raise AgentCapabilityError(
@@ -1165,85 +1165,45 @@ class ChatExecutor:
 
     async def _rag_retrieve(self, step, state, request, db_session=None):
         """Delegate RAG retrieval — capability, not independent agent."""
-        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
-        try:
-            from agent.router.executors.rag_executor import RagExecutor
-            rag = RagExecutor()
-            return await rag.execute(step, state, request, db_session=db_session)
-        except AgentRuntimeError:
-            raise
-        except Exception as exc:
-            raise AgentCapabilityError(
-                code="RAG_RETRIEVE_FAILED",
-                message="知识库检索失败，无法完成当前 RAG 问答。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
-            ) from exc
+        from agent.router.capability_router import get_capability_router
+        from agent.router.contracts import CapabilityContext
+        router = get_capability_router()
+        return await router.call("rag.retrieve", CapabilityContext(
+            step=step, state=state, request=request, db_session=db_session,
+        ))
 
     async def _quality_report_query(self, step, state, request, db_session=None):
         """Delegate quality report query — capability, not independent agent."""
-        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
-        try:
-            from agent.router.executors.quality_report_executor import QualityReportExecutor
-            qr = QualityReportExecutor()
-            return await qr.execute(step, state, request, db_session=db_session)
-        except AgentRuntimeError:
-            raise
-        except Exception as exc:
-            raise AgentCapabilityError(
-                code="QUALITY_REPORT_QUERY_FAILED",
-                message="质检报告查询失败。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
-            ) from exc
+        from agent.router.capability_router import get_capability_router
+        from agent.router.contracts import CapabilityContext
+        router = get_capability_router()
+        return await router.call("quality.report.query", CapabilityContext(
+            step=step, state=state, request=request, db_session=db_session,
+        ))
 
     async def _quality_task_status(self, step, state, request, db_session=None):
         """Delegate quality task status — capability, not independent agent."""
-        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
-        try:
-            from agent.router.executors.quality_report_executor import QualityReportExecutor
-            qr = QualityReportExecutor()
-            return await qr.execute(step, state, request, db_session=db_session)
-        except AgentRuntimeError:
-            raise
-        except Exception as exc:
-            raise AgentCapabilityError(
-                code="QUALITY_TASK_STATUS_FAILED",
-                message="质检任务状态查询失败。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
-            ) from exc
+        from agent.router.capability_router import get_capability_router
+        from agent.router.contracts import CapabilityContext
+        router = get_capability_router()
+        return await router.call("quality.task.status", CapabilityContext(
+            step=step, state=state, request=request, db_session=db_session,
+        ))
 
     async def _image_understanding(self, step, state, request):
         """Delegate image understanding — capability, not independent agent."""
-        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
-        try:
-            from agent.router.executors.vision_executor import VisionExecutor
-            vision = VisionExecutor()
-            return await vision.execute(step, state, request)
-        except AgentRuntimeError:
-            raise
-        except Exception as exc:
-            raise AgentCapabilityError(
-                code="IMAGE_UNDERSTANDING_FAILED",
-                message="图片理解失败，无法完成当前图片分析。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
-            ) from exc
+        from agent.router.capability_router import get_capability_router
+        from agent.router.contracts import CapabilityContext
+        router = get_capability_router()
+        return await router.call("image.understanding", CapabilityContext(
+            step=step, state=state, request=request, db_session=None,
+        ))
 
     async def _data_analysis(self, step, state, request, db_session=None):
         """Delegate data analysis — capability, not independent agent."""
-        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
-        try:
-            from agent.router.executors.data_analysis_executor import DataAnalysisExecutor
-            da = DataAnalysisExecutor()
-            return await da.execute(step, state, request, db_session=db_session)
-        except AgentRuntimeError:
-            raise
-        except Exception as exc:
-            raise AgentCapabilityError(
-                code="DATA_ANALYSIS_FAILED",
-                message="数据分析失败。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
-            ) from exc
+        from agent.router.capability_router import get_capability_router
+        from agent.router.contracts import CapabilityContext
+        router = get_capability_router()
+        return await router.call("data.analysis", CapabilityContext(
+            step=step, state=state, request=request, db_session=db_session,
+        ))
