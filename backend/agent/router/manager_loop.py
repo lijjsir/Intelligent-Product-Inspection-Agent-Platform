@@ -9,7 +9,7 @@ from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.capability_registry import CAPABILITIES, capability_allowed
-from agent.router.contracts import AgentRouteDecision, AgentRoutePlan, AgentRouterOutput
+from agent.router.contracts import AgentRouteDecision, AgentRoutePlan, AgentRouterOutput, AgentRuntimeError
 from agent.router.manager_dispatcher import ManagerDispatcher
 from agent.router.manager_evaluator import EvaluationResult, ManagerEvaluator
 from agent.router.manager_policy import ManagerPolicy
@@ -48,54 +48,98 @@ class ManagerLoop:
         blocked_by_missing_inputs = False
         started_at = perf_counter()
 
-        while self._can_continue(state):
-            remaining_timeout = (state.timeout_ms / 1000) - (perf_counter() - started_at)
-            if remaining_timeout <= 0:
-                state.errors.append({"message": "Manager Agent 执行超时", "need_user_input": False, "missing_inputs": []})
-                state.final_action = "fail"
-                break
-            understanding = await self._policy.understand(state)
-            plan = await self._policy.plan(state, understanding)
-            state.route_plan = plan
-            state.route_plan_hashes.append(self._plan_hash(plan))
+        try:
+            while self._can_continue(state):
+                remaining_timeout = (state.timeout_ms / 1000) - (perf_counter() - started_at)
+                if remaining_timeout <= 0:
+                    state.errors.append({"message": "Manager Agent 执行超时", "need_user_input": False, "missing_inputs": []})
+                    state.final_action = "fail"
+                    break
+                understanding = await self._policy.understand(state)
+                plan = await self._policy.plan(state, understanding)
+                state.route_plan = plan
+                state.selected_agent = self._selected_agent(state)
+                state.route_plan_hashes.append(self._plan_hash(plan))
 
-            validation = self._validate_plan(state, plan)
-            if not validation.allowed:
-                state.errors.append(validation.to_error())
-                state.final_action = "ask_user" if validation.need_user_input else "fail"
-                state.missing_inputs = list(validation.missing_inputs or [])
-                blocked_by_missing_inputs = validation.need_user_input
-                break
+                validation = self._validate_plan(state, plan)
+                if not validation.allowed:
+                    state.errors.append(validation.to_error())
+                    state.final_action = "ask_user" if validation.need_user_input else "fail"
+                    state.missing_inputs = list(validation.missing_inputs or [])
+                    blocked_by_missing_inputs = validation.need_user_input
+                    break
 
-            state.iteration += 1
-            try:
-                observations, artifacts = await asyncio.wait_for(
-                    self._dispatcher.dispatch(
-                        plan,
-                        state,
-                        request,
-                        db_session=db_session,
-                    ),
-                    timeout=max(0.1, remaining_timeout),
-                )
-            except asyncio.TimeoutError:
-                state.errors.append({"message": "Manager Agent dispatch 超时", "need_user_input": False, "missing_inputs": []})
-                state.final_action = "fail"
-                break
-            state.last_artifact_counts.append(len(state.artifacts))
+                state.iteration += 1
+                try:
+                    observations, artifacts = await asyncio.wait_for(
+                        self._dispatcher.dispatch(
+                            plan,
+                            state,
+                            request,
+                            db_session=db_session,
+                        ),
+                        timeout=max(0.1, remaining_timeout),
+                    )
+                except asyncio.TimeoutError:
+                    state.errors.append({"message": "Manager Agent dispatch 超时", "need_user_input": False, "missing_inputs": []})
+                    state.final_action = "fail"
+                    break
+                state.last_artifact_counts.append(len(state.artifacts))
 
-            evaluation = await self._evaluator.evaluate(state, plan, observations, artifacts)
-            state.satisfied = evaluation.satisfied
-            state.satisfaction_score = evaluation.score
-            state.final_action = evaluation.next_action
+                evaluation = await self._evaluator.evaluate(state, plan, observations, artifacts)
+                state.satisfied = evaluation.satisfied
+                state.satisfaction_score = evaluation.score
+                state.final_action = evaluation.next_action
 
-            if evaluation.satisfied or evaluation.next_action in {"ask_user", "fail"}:
-                break
-            if self._no_progress(state, evaluation):
-                break
-            state = self._refine_for_next_round(state, evaluation)
+                if evaluation.satisfied or evaluation.next_action in {"ask_user", "fail"}:
+                    break
+                if self._no_progress(state, evaluation):
+                    break
+                state = self._refine_for_next_round(state, evaluation)
 
-        return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+            return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+
+        except AgentRuntimeError as exc:
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="chat",
+                    sub_route="error",
+                    intent="error",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "message_type": "error",
+                    "answer": exc.message,
+                    "summary": exc.message,
+                },
+                status="failed",
+                error={
+                    "code": exc.code,
+                    "message": exc.message,
+                    "frontend_visible": exc.frontend_visible,
+                    "detail": exc.detail,
+                },
+            )
+        except Exception as exc:
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="chat",
+                    sub_route="error",
+                    intent="error",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "message_type": "error",
+                    "answer": "系统执行失败，请查看错误信息或联系管理员。",
+                    "summary": str(exc),
+                },
+                status="failed",
+                error={
+                    "code": "INTERNAL_AGENT_ERROR",
+                    "message": str(exc),
+                    "frontend_visible": True,
+                },
+            )
 
     @staticmethod
     def _start_chat_trace(state: ManagerState) -> None:
@@ -134,15 +178,16 @@ class ManagerLoop:
         if len(plan.steps) > max(0, state.max_tool_calls - state.used_tool_calls):
             return ValidationResult(False, "route_plan 超出工具调用预算")
         for step in plan.steps:
-            capability = CAPABILITIES.get(step.capability_key)
+            capability_key = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+            capability = CAPABILITIES.get(capability_key)
             if capability is None:
-                return ValidationResult(False, f"未知 capability：{step.capability_key}")
+                return ValidationResult(False, f"未知 capability：{capability_key}")
             if step.mode in state.forbidden_modes:
                 return ValidationResult(False, f"当前页面已禁止模式：{step.mode}")
             if state.surface == "chat" and step.mode == "action":
                 return ValidationResult(False, "聊天页面不允许执行正式业务动作")
             if not capability_allowed(capability, state.surface, state.allowed_modes):
-                return ValidationResult(False, f"当前页面不允许调用 capability：{step.capability_key}")
+                return ValidationResult(False, f"当前页面不允许调用 capability：{capability_key}")
             if capability.key == "quality.inspection.execute" and state.action_intent != "quality_inspection_execute":
                 return ValidationResult(
                     allowed=False,
@@ -159,6 +204,8 @@ class ManagerLoop:
         if state.iteration >= state.max_iterations:
             return False
         if state.used_tool_calls >= state.max_tool_calls:
+            return False
+        if state.used_plan_steps >= state.max_tool_calls:
             return False
         if state.used_llm_calls >= state.max_llm_calls:
             return False
@@ -353,7 +400,7 @@ class ManagerLoop:
             for item in state.observations
             if item.status in {"success", "skipped"} and item.capability_key != "chat.response.compose"
         ]
-        if state.route_plan and any(step.capability_key == "chat.response.compose" for step in state.route_plan.steps):
+        if state.route_plan and any((getattr(step, 'capability', None) or getattr(step, 'capability_key', '')) == "chat.response.compose" for step in state.route_plan.steps):
             capabilities_used.append("chat.response.compose")
         route_trace = {
             "iterations": state.iteration,
@@ -388,9 +435,20 @@ class ManagerLoop:
     @staticmethod
     def _selected_agent(state: ManagerState) -> str:
         if state.route_plan and state.route_plan.steps:
-            action_steps = [step for step in state.route_plan.steps if step.agent == "inspection_task"]
+            action_steps = [
+                step for step in state.route_plan.steps
+                if getattr(step, 'owner_agent', None) == "inspection_task"
+                or getattr(step, 'agent', None) == "inspection_task"
+            ]
             if action_steps:
                 return "inspection_task"
+            file_steps = [
+                step for step in state.route_plan.steps
+                if getattr(step, 'owner_agent', None) == "file"
+                or getattr(step, 'agent', None) == "file"
+            ]
+            if file_steps and not action_steps:
+                return "file"
         return "chat"
 
     @staticmethod

@@ -93,7 +93,7 @@ class ManagerPolicy:
                 "name": "图片理解",
                 "condition": "附件包含 image 类型",
                 "intent": "image_understanding",
-                "target_agent": "inspection_task",
+                "target_agent": "chat",
                 "needs": ["image.understanding", "chat.response.compose"],
                 "risk": "low",
                 "stop_on_match": True,
@@ -137,7 +137,7 @@ class ManagerPolicy:
                 "name": "报告/任务状态查询",
                 "condition": "命中 REPORT_PATTERNS（报告/上次检测/检测结果/任务状态等）",
                 "intent": "quality_report_query",
-                "target_agent": "inspection_task",
+                "target_agent": "chat",
                 "needs": ["quality.report.query", "chat.response.compose"],
                 "risk": "low",
                 "stop_on_match": True,
@@ -361,16 +361,19 @@ class ManagerPolicy:
             if capability is None:
                 continue
             step_id = f"s{index}"
-            depends_on = [previous_step_id] if previous_step_id and capability.agent == "chat" else []
+            owner = capability.owner_agents[0] if capability.owner_agents else "chat"
+            depends_on = [previous_step_id] if previous_step_id and owner == "chat" else []
             steps.append(
                 AgentPlanStep(
                     step_id=step_id,
-                    capability_key=key,
-                    agent=capability.agent,
+                    owner_agent=owner,
+                    capability=key,
                     operation=capability.operation,
                     mode=capability.mode,
                     input=self._step_input(key, state),
+                    dependencies=[item for item in depends_on if item],
                     depends_on=[item for item in depends_on if item],
+                    expected_artifact=None,
                 )
             )
             previous_step_id = step_id

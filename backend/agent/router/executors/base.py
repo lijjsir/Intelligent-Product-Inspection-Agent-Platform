@@ -23,24 +23,36 @@ class CapabilityExecutor(Protocol):
 
 
 def artifact(
+    step: AgentPlanStep,
     artifact_type: str,
-    source_agent: str,
-    content: dict[str, Any],
     *,
-    confidence: float | None = None,
+    content: dict[str, Any] | None = None,
     citations: list[dict[str, Any]] | None = None,
+    confidence: float | None = None,
+    status: str = "success",
+    summary: str = "",
+    metrics: dict[str, Any] | None = None,
+    empty_result: bool = False,
+    needs_user_input: bool = False,
+    error: dict[str, Any] | None = None,
 ) -> AgentArtifact:
-    digest = hashlib.sha1(
-        json.dumps(content, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-    ).hexdigest()[:12]
+    import hashlib, uuid
+    source = getattr(step, 'owner_agent', None) or getattr(step, 'agent', '') or 'unknown'
+    raw = f"{step.step_id}:{artifact_type}:{source}:{uuid.uuid4()}"
+    artifact_id = hashlib.sha1(raw.encode()).hexdigest()[:12]
     return AgentArtifact(
-        artifact_id=f"art_{artifact_type}_{digest}",
+        artifact_id=artifact_id,
         type=artifact_type,
-        source_agent=source_agent,
-        content=content,
-        citations=list(citations or []),
+        source_agent=source,
+        status=status,
+        content=content or {},
+        summary=summary,
+        citations=citations or [],
         confidence=confidence,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        metrics=metrics or {},
+        empty_result=empty_result,
+        needs_user_input=needs_user_input,
+        error=error,
     )
 
 
@@ -51,15 +63,26 @@ def observation(
     summary: str,
     artifact_ids: list[str] | None = None,
     metrics: dict[str, Any] | None = None,
-    error: str | None = None,
+    error: str | dict[str, Any] | None = None,
 ) -> AgentObservation:
+    # Normalize error to dict format expected by AgentObservation
+    error_dict: dict[str, Any] | None = None
+    if isinstance(error, dict):
+        error_dict = error
+    elif isinstance(error, str) and error:
+        error_dict = {"message": error}
+
+    cap = getattr(step, "capability", None) or getattr(step, "capability_key", "") or ""
+    owner = getattr(step, "owner_agent", None) or getattr(step, "agent", "") or ""
+
     return AgentObservation(
         step_id=step.step_id,
-        capability_key=step.capability_key,
-        agent=step.agent,
+        capability_key=cap,
+        owner_agent=owner,
+        agent=owner,
         status=status,  # type: ignore[arg-type]
         summary=summary,
         metrics=dict(metrics or {}),
-        error=error,
+        error=error_dict,
         artifact_ids=list(artifact_ids or []),
     )

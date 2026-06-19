@@ -18,6 +18,57 @@ class EvaluationResult:
 
 
 class ManagerEvaluator:
+
+    SUCCESS_RULES = {
+        "rag.retrieve": lambda a: (
+            a.type == "rag_hits"
+            and a.status in {"success", "empty"}
+            and "hit_count" in a.metrics
+        ),
+        "image.understanding": lambda a: (
+            a.type == "image_understanding"
+            and a.status == "success"
+            and (a.confidence or 0) >= 0.5
+        ),
+        "file.paper_format_check": lambda a: (
+            a.type == "paper_format_report"
+            and a.status == "success"
+        ),
+        "quality.inspection.execute": lambda a: (
+            a.type in {"inspection_result", "inspection_task"}
+            and a.status == "success"
+            and not a.needs_user_input
+        ),
+        "file.summary": lambda a: (
+            a.type in {"file_summary", "file_answer"}
+            and a.status == "success"
+        ),
+        "file.qa": lambda a: (
+            a.type in {"file_summary", "file_answer"}
+            and a.status == "success"
+        ),
+        "quality.report.query": lambda a: (
+            a.type == "quality_report"
+            and a.status == "success"
+        ),
+        "quality.task.status": lambda a: (
+            a.type == "task_status"
+            and a.status == "success"
+        ),
+        "data.analysis": lambda a: (
+            a.type == "data_analysis"
+            and a.status == "success"
+        ),
+        "chat.general": lambda a: (
+            a.type in {"composed_response", "chat_response"}
+            and a.status == "success"
+        ),
+        "chat.response.compose": lambda a: (
+            a.type == "composed_response"
+            and a.status == "success"
+        ),
+    }
+
     async def evaluate(
         self,
         state: ManagerState,
@@ -43,30 +94,70 @@ class ManagerEvaluator:
         if any(item.status == "failed" for item in observations):
             failed_items = [item.capability_key for item in observations if item.status == "failed"]
             return EvaluationResult(False, 0.2, "fail", f"能力执行失败：{', '.join(failed_items)}")
-        artifact_types = {item.type for item in [*state.artifacts, *artifacts]}
-        if any(step.capability_key == "chat.general" for step in plan.steps):
+
+        # FAILED ARTIFACTS FIRST — Section 9.3 of spec
+        all_artifacts = [*state.artifacts, *artifacts]
+        if any(a.status == "failed" for a in all_artifacts):
+            failed_artifacts = [a for a in all_artifacts if a.status == "failed"]
+            reasons = [f"{a.type}: {a.summary}" for a in failed_artifacts if a.summary]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="fail",
+                reason=f"能力执行失败：{'; '.join(reasons)}" if reasons else "Artifact 状态为 failed",
+            )
+
+        # BLOCKED artifacts that need user input — ask_user
+        if any(a.status == "blocked" for a in all_artifacts) and any(a.needs_user_input for a in all_artifacts):
+            blocked = [a for a in all_artifacts if a.status == "blocked"]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="ask_user",
+                reason="缺少用户输入",
+                missing_inputs=[a.summary for a in blocked if a.summary],
+            )
+
+        artifact_types = {item.type for item in all_artifacts}
+        if any((getattr(step, 'capability', None) or getattr(step, 'capability_key', '')) == "chat.general" for step in plan.steps):
             return EvaluationResult(True, 1.0, "finish", "普通聊天已生成回复")
         composed_artifacts = [
-            item for item in [*state.artifacts, *artifacts] if item.type == "composed_response"
+            item for item in all_artifacts if item.type == "composed_response"
         ]
         if any(str((item.content or {}).get("status") or "completed") != "blocked" for item in composed_artifacts):
             return EvaluationResult(True, 1.0, "finish", "聊天回复已生成")
         if "quality_report" in artifact_types:
-            return EvaluationResult(True, 0.86, "finish", "已经找到报告信息")
+            quality_reports = [a for a in all_artifacts if a.type == "quality_report"]
+            if any(a.status == "success" for a in quality_reports):
+                return EvaluationResult(True, 0.86, "finish", "已经找到报告信息")
         if "task_status" in artifact_types:
-            return EvaluationResult(True, 0.8, "finish", "已经找到任务状态")
+            task_statuses = [a for a in all_artifacts if a.type == "task_status"]
+            if any(a.status == "success" for a in task_statuses):
+                return EvaluationResult(True, 0.8, "finish", "已经找到任务状态")
         if "rag_hits" in artifact_types:
-            return EvaluationResult(True, 0.76, "finish", "已经完成知识检索")
+            rag_artifacts = [a for a in all_artifacts if a.type == "rag_hits"]
+            if any(a.status in {"success", "empty"} for a in rag_artifacts):
+                return EvaluationResult(True, 0.76, "finish", "已经完成知识检索")
         if "paper_format_report" in artifact_types:
-            return EvaluationResult(True, 0.82, "finish", "已经完成论文查非分析")
+            paper_reports = [a for a in all_artifacts if a.type == "paper_format_report"]
+            if any(a.status == "success" for a in paper_reports):
+                return EvaluationResult(True, 0.82, "finish", "已经完成论文查非分析")
         if "file_summary" in artifact_types or "file_answer" in artifact_types:
-            return EvaluationResult(True, 0.78, "finish", "已经完成文件辅助分析")
+            file_artifacts = [a for a in all_artifacts if a.type in {"file_summary", "file_answer"}]
+            if any(a.status == "success" for a in file_artifacts):
+                return EvaluationResult(True, 0.78, "finish", "已经完成文件辅助分析")
         if "image_understanding" in artifact_types:
-            return EvaluationResult(True, 0.75, "finish", "已经完成图片辅助分析")
+            img_artifacts = [a for a in all_artifacts if a.type == "image_understanding"]
+            if any(a.status == "success" for a in img_artifacts):
+                return EvaluationResult(True, 0.75, "finish", "已经完成图片辅助分析")
         if "inspection_result" in artifact_types or "inspection_task" in artifact_types:
-            return EvaluationResult(True, 0.9, "finish", "正式质检任务已处理")
+            inspection_artifacts = [a for a in all_artifacts if a.type in {"inspection_result", "inspection_task"}]
+            if any(a.status == "success" for a in inspection_artifacts):
+                return EvaluationResult(True, 0.9, "finish", "正式质检任务已处理")
         if "data_analysis" in artifact_types:
-            return EvaluationResult(True, 0.7, "finish", "数据分析能力已返回只读统计结果")
+            da_artifacts = [a for a in all_artifacts if a.type == "data_analysis"]
+            if any(a.status == "success" for a in da_artifacts):
+                return EvaluationResult(True, 0.7, "finish", "数据分析能力已返回只读统计结果")
         model_result = await self._model_evaluate_if_available(state, plan, observations, artifacts)
         if model_result is not None:
             return model_result
@@ -150,7 +241,10 @@ class ManagerEvaluator:
                 missing_inputs=list(data.get("missing_inputs") or []),
                 recommended_next_capabilities=list(data.get("recommended_next_capabilities") or []),
             )
-        except Exception:
+        except Exception as exc:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning("ManagerEvaluator model evaluation failed: %s", exc)
             return None
 
     @staticmethod

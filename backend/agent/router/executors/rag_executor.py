@@ -36,11 +36,11 @@ class RagExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        if step.capability_key == "rag.ingest":
+        if (getattr(step, 'capability', None) or getattr(step, 'capability_key', '')) == "rag.ingest":
             art = artifact(
+                step,
                 "rag_ingest_request",
-                "rag",
-                {
+                content={
                     "requires_confirmation": True,
                     "readonly": False,
                     "message": "RAG 入库需要用户在知识库页面或确认流程中显式提交。",
@@ -90,9 +90,9 @@ class RagExecutor:
             for index, item in enumerate(hits, start=1)
         ]
         art = artifact(
+            step,
             "rag_hits",
-            "rag",
-            {
+            content={
                 "hit_count": len(hits),
                 "top_score": top_score,
                 "top_k": 5,

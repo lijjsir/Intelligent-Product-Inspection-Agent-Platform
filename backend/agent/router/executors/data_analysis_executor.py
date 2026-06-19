@@ -44,5 +44,5 @@ class DataAnalysisExecutor:
                     }
             except Exception as exc:
                 content["warning"] = str(exc)
-        art = artifact("data_analysis", "data_analysis", content, confidence=0.72)
+        art = artifact(step, "data_analysis", content=content, confidence=0.72)
         return observation(step, status="success", summary="数据分析只读统计完成", artifact_ids=[art.artifact_id]), [art]

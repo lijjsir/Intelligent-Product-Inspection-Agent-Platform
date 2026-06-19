@@ -7,6 +7,15 @@ from agent.router.manager_state import ManagerState
 
 
 class InspectionTaskExecutor:
+    SUPPORTED_CAPABILITIES = {
+        "quality.inspection.execute",
+        "vision.understand",
+        "rag.retrieve",
+        "rule.evaluate",
+        "quality.report.write",
+        "inspection.persist",
+    }
+
     def __init__(self) -> None:
         self._graph = None
 
@@ -26,6 +35,17 @@ class InspectionTaskExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
+        from agent.router.contracts import AgentCapabilityError
+
+        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+
+        if cap not in self.SUPPORTED_CAPABILITIES:
+            raise AgentCapabilityError(
+                code="UNSUPPORTED_CAPABILITY",
+                message=f"InspectionTaskExecutor 不支持能力：{cap}",
+                frontend_visible=True,
+            )
+
         output = await self.graph.run(
             request,
             AgentRouteDecision(
@@ -38,9 +58,9 @@ class InspectionTaskExecutor:
         raw = output.model_dump() if hasattr(output, "model_dump") else dict(output or {})
         persistable = raw.get("persistable_output") or {}
         art = artifact(
+            step,
             "inspection_task",
-            "inspection_task",
-            {
+            content={
                 "answer": raw.get("answer"),
                 "summary": raw.get("summary"),
                 "action_state": raw.get("action_state"),

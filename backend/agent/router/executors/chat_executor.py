@@ -73,6 +73,17 @@ FORCE_WEB_TOOL_LOOP_INSTRUCTIONS = (
 
 
 class ChatExecutor:
+    SUPPORTED_CAPABILITIES = {
+        "chat.general",
+        "chat.response.compose",
+        "rag.retrieve",
+        "web.search",
+        "quality.report.query",
+        "quality.task.status",
+        "image.understanding",
+        "data.analysis",
+    }
+
     async def execute(
         self,
         step: AgentPlanStep,
@@ -81,10 +92,21 @@ class ChatExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        if step.capability_key == "web.search":
+        from agent.router.contracts import AgentCapabilityError
+
+        cap = getattr(step, 'capability', None) or getattr(step, 'capability_key', None) or ''
+
+        if cap not in self.SUPPORTED_CAPABILITIES:
+            raise AgentCapabilityError(
+                code="UNSUPPORTED_CAPABILITY",
+                message=f"ChatExecutor 不支持能力：{cap}",
+                frontend_visible=True,
+            )
+
+        if cap == "web.search":
             return await self._execute_web_search(step, state)
 
-        if step.capability_key == "chat.general":
+        if cap == "chat.general":
             answer = await self._call_model(
                 state,
                 request,
@@ -95,10 +117,10 @@ class ChatExecutor:
                 return observation(step, status="failed", summary="聊天模型不可用，请检查后台模型配置"), []
             return observation(step, status="success", summary=answer), []
 
-        if step.capability_key == "chat.response.compose":
+        if cap == "chat.response.compose":
             if self._should_short_circuit_paper_reply(state):
                 composed = self._compose_paper_reply(state)
-                art = artifact("composed_response", "chat", composed)
+                art = artifact(step, "composed_response", content=composed)
                 return observation(step, status="success", summary=composed.get("summary", ""), artifact_ids=[art.artifact_id]), [art]
             answer = await self._call_model(
                 state,
@@ -108,13 +130,32 @@ class ChatExecutor:
             )
             if answer is None:
                 fallback = self._build_fallback(state)
-                art = artifact("composed_response", "chat", {"answer": fallback, "summary": fallback, "message_type": "assistant_text", "status": "degraded", "surface": state.surface, "blocked": False})
+                art = artifact(step, "composed_response", content={"answer": fallback, "summary": fallback, "message_type": "assistant_text", "status": "degraded", "surface": state.surface, "blocked": False})
                 return observation(step, status="success", summary=fallback, artifact_ids=[art.artifact_id]), [art]
             composed = self._compose_from_model(state, answer)
-            art = artifact("composed_response", "chat", composed)
+            art = artifact(step, "composed_response", content=composed)
             return observation(step, status="success", summary=composed.get("summary", answer), artifact_ids=[art.artifact_id]), [art]
 
-        return observation(step, status="failed", summary=f"未知 capability: {step.capability_key}"), []
+        if cap == "rag.retrieve":
+            return await self._rag_retrieve(step, state, request, db_session)
+
+        if cap == "quality.report.query":
+            return await self._quality_report_query(step, state, request, db_session)
+
+        if cap == "quality.task.status":
+            return await self._quality_task_status(step, state, request, db_session)
+
+        if cap == "image.understanding":
+            return await self._image_understanding(step, state, request)
+
+        if cap == "data.analysis":
+            return await self._data_analysis(step, state, request, db_session)
+
+        raise AgentCapabilityError(
+            code="UNSUPPORTED_CAPABILITY",
+            message=f"ChatExecutor 不支持能力：{cap}",
+            frontend_visible=True,
+        )
 
     # ── model helpers ──
 
@@ -155,7 +196,7 @@ class ChatExecutor:
             "status": result.status,
             "error": result.error or data.get("error"),
         }
-        art = artifact("web_search_results", "chat", content)
+        art = artifact(step, "web_search_results", content=content)
         status = "success" if result.status == "success" else result.status
         summary = f"联网搜索完成，命中 {len(results)} 条结果"
         if status != "success":
@@ -1119,3 +1160,90 @@ class ChatExecutor:
                 if obs.summary and obs.capability_key != "chat.response.compose":
                     return obs.summary[:500]
         return "模型暂不可用，请稍后重试或检查后台配置。"
+
+    # ── capability delegation methods ──
+
+    async def _rag_retrieve(self, step, state, request, db_session=None):
+        """Delegate RAG retrieval — capability, not independent agent."""
+        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
+        try:
+            from agent.router.executors.rag_executor import RagExecutor
+            rag = RagExecutor()
+            return await rag.execute(step, state, request, db_session=db_session)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentCapabilityError(
+                code="RAG_RETRIEVE_FAILED",
+                message="知识库检索失败，无法完成当前 RAG 问答。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc
+
+    async def _quality_report_query(self, step, state, request, db_session=None):
+        """Delegate quality report query — capability, not independent agent."""
+        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
+        try:
+            from agent.router.executors.quality_report_executor import QualityReportExecutor
+            qr = QualityReportExecutor()
+            return await qr.execute(step, state, request, db_session=db_session)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentCapabilityError(
+                code="QUALITY_REPORT_QUERY_FAILED",
+                message="质检报告查询失败。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc
+
+    async def _quality_task_status(self, step, state, request, db_session=None):
+        """Delegate quality task status — capability, not independent agent."""
+        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
+        try:
+            from agent.router.executors.quality_report_executor import QualityReportExecutor
+            qr = QualityReportExecutor()
+            return await qr.execute(step, state, request, db_session=db_session)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentCapabilityError(
+                code="QUALITY_TASK_STATUS_FAILED",
+                message="质检任务状态查询失败。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc
+
+    async def _image_understanding(self, step, state, request):
+        """Delegate image understanding — capability, not independent agent."""
+        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
+        try:
+            from agent.router.executors.vision_executor import VisionExecutor
+            vision = VisionExecutor()
+            return await vision.execute(step, state, request)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentCapabilityError(
+                code="IMAGE_UNDERSTANDING_FAILED",
+                message="图片理解失败，无法完成当前图片分析。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc
+
+    async def _data_analysis(self, step, state, request, db_session=None):
+        """Delegate data analysis — capability, not independent agent."""
+        from agent.router.contracts import AgentCapabilityError, AgentRuntimeError
+        try:
+            from agent.router.executors.data_analysis_executor import DataAnalysisExecutor
+            da = DataAnalysisExecutor()
+            return await da.execute(step, state, request, db_session=db_session)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise AgentCapabilityError(
+                code="DATA_ANALYSIS_FAILED",
+                message="数据分析失败。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc

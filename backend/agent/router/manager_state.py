@@ -61,6 +61,7 @@ class ManagerState(BaseModel):
 
     used_tool_calls: int = 0
     used_llm_calls: int = 0
+    used_plan_steps: int = 0
 
     satisfied: bool = False
     satisfaction_score: float = 0.0

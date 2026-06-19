@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AgentRouteDecision(BaseModel):
     """AgentManager 路由决策结果"""
-    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    selected_agent: Literal["chat", "file", "inspection_task"] = "chat"
     sub_route: Literal[
         "general_chat",
         "rag_qa",
@@ -23,6 +23,7 @@ class AgentRouteDecision(BaseModel):
         "action_blocked",
         "data_analysis",
         "rag_ingest",
+        "error",  # Added for architecture refactor error propagation
     ] = "general_chat"
     intent: str = "general_chat"
     confidence: float = 1.0
@@ -48,11 +49,13 @@ class AgentRouterOutput(BaseModel):
     agent_output: dict[str, Any] = Field(default_factory=dict)
     status: Literal["completed", "failed", "degraded", "blocked"] = "completed"
     degrade_reason: str | None = None
+    error: dict[str, Any] | None = None
 
 
 class Capability(BaseModel):
     key: str
-    agent: str
+    owner_agents: list[str] = Field(default_factory=list)
+    handler: str = ""
     operation: str
     mode: Literal["answer", "report", "action"]
     surfaces: list[str] = Field(default_factory=list)
@@ -65,14 +68,39 @@ class Capability(BaseModel):
 
 class AgentPlanStep(BaseModel):
     step_id: str
-    capability_key: str
-    agent: str
-    operation: str
-    mode: Literal["answer", "report", "action"]
+    owner_agent: str = ""  # was Literal["chat", "file", "inspection_task"]; relaxed for backward compat
+    capability: str = ""  # relaxed for backward compat with capability_key
+    operation: str = ""
+    mode: Literal["answer", "report", "action"] = "answer"
     input: dict[str, Any] = Field(default_factory=dict)
-    depends_on: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)  # kept for backward compat
     parallel_group: str | None = None
     required: bool = True
+    expected_artifact: str | None = None
+
+    # Backward compat aliases (will be removed in Phase 2)
+    capability_key: str = ""  # deprecated, use capability
+    agent: str = ""  # deprecated, use owner_agent
+
+    @model_validator(mode="after")
+    def _sync_backward_compat_fields(self):
+        """Sync old/new field names bidirectionally so both consumers work."""
+        # Sync capability <-> capability_key
+        if self.capability and not self.capability_key:
+            self.capability_key = self.capability
+        if self.capability_key and not self.capability:
+            self.capability = self.capability_key
+
+        # Sync owner_agent <-> agent
+        _VALID_AGENTS = {"chat", "file", "inspection_task"}
+        if self.owner_agent and not self.agent:
+            self.agent = self.owner_agent
+        if self.agent and not self.owner_agent:
+            if self.agent in _VALID_AGENTS:
+                self.owner_agent = self.agent
+
+        return self
 
 
 class AgentRoutePlan(BaseModel):
@@ -89,11 +117,12 @@ class AgentRoutePlan(BaseModel):
 class AgentObservation(BaseModel):
     step_id: str
     capability_key: str
-    agent: str
+    owner_agent: str = ""
+    agent: str = ""  # deprecated, kept for backward compat
     status: Literal["success", "failed", "blocked", "skipped"]
     summary: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)
-    error: str | None = None
+    error: dict[str, Any] | None = None
     artifact_ids: list[str] = Field(default_factory=list)
 
 
@@ -101,9 +130,15 @@ class AgentArtifact(BaseModel):
     artifact_id: str
     type: str
     source_agent: str
+    status: Literal["success", "empty", "failed", "blocked"] = "success"
     content: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)
     confidence: float | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    needs_user_input: bool = False
+    empty_result: bool = False
+    error: dict[str, Any] | None = None
     created_at: str | None = None
 
 
@@ -113,3 +148,41 @@ class NodeSpec(BaseModel):
     required_model_types: list[str] = Field(default_factory=list)
     mode: Literal["answer", "report", "action"]
     output_artifact_types: list[str] = Field(default_factory=list)
+
+
+class AgentRuntimeError(Exception):
+    """Base exception for all agent runtime errors. Always visible to frontend by default."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        frontend_visible: bool = True,
+        detail: dict | None = None,
+    ):
+        self.code = code
+        self.message = message
+        self.frontend_visible = frontend_visible
+        self.detail = detail or {}
+        super().__init__(message)
+
+
+class AgentDispatchError(AgentRuntimeError):
+    """Raised when dispatcher cannot route to a business agent."""
+    pass
+
+
+class AgentCapabilityError(AgentRuntimeError):
+    """Raised when a capability is unsupported or fails."""
+    pass
+
+
+class AgentExecutionError(AgentRuntimeError):
+    """Raised when a business agent fails to execute."""
+    pass
+
+
+class AgentValidationError(AgentRuntimeError):
+    """Raised when plan validation fails."""
+    pass

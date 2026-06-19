@@ -48,9 +48,9 @@ class VisionExecutor:
             )
 
         art = artifact(
+            step,
             "image_understanding",
-            "vision",
-            {
+            content={
                 "objects": model_result.get("objects", []),
                 "possible_defects": model_result.get("possible_defects", []),
                 "risk": model_result.get("risk", "medium"),
