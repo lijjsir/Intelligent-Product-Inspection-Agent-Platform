@@ -67,7 +67,7 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
     },
     {
         "name": "Quality Judgement",
-        "description": "统一质量判定（合并 Legacy + LLM-native），支持 chat / file / task 多策略。",
+        "description": "统一质量判定引擎，由正式质检或文件/聊天流程内部调用。",
         "workflow_binding": "quality_judgement_v2",
         "subgraph_key": "quality_judgement",
         "entry_graph": "QualityJudgementGraph",
@@ -76,10 +76,10 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "is_active": True,
         "lifecycle_status": "active",
         "group": "core",
-        "route_enabled": True,
-        "supports_route_toggle": True,
-        "type": "agent",
-        "customer_visible_description": "统一质量判定引擎，支持文本问答、文件解析、图片检测等多模式质检，自动合成判定证据。",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "type": "engine",
+        "customer_visible_description": "质量判定引擎，由正式质检或文件/聊天流程内部调用，不作为 Manager 直接调度的业务 Agent。",
     },
     {
         "name": "Market Monitor",
@@ -204,7 +204,7 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "route_enabled": False,
         "supports_route_toggle": False,
         "type": "capability",
-        "parent": "quality_judgement",
+        "parent": "chat",
         "customer_visible_description": "质量报告查询引擎，支持按任务ID或产品ID查询检测结果、判定报告和质量统计。",
     },
     {
@@ -375,5 +375,4 @@ def get_agent_overview_root() -> dict[str, Any]:
         "nodes": [dict(item) for item in AGENT_OVERVIEW_ROOT_NODES],
         "edges": [dict(item) for item in AGENT_OVERVIEW_ROOT_EDGES],
     }
-
 

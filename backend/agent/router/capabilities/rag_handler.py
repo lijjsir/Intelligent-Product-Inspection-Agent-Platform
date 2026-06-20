@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.router.contracts import CapabilityContext, AgentCapabilityError
+from agent.router.contracts import CapabilityContext
+from agent.router.errors import make_agent_error
 
 
 def _is_rag_overview_query(query: str) -> bool:
@@ -74,11 +75,13 @@ class RagRetrieveHandler:
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
                 latency_ms = int(result.get("latency_ms") or 0)
             except Exception as exc:
-                raise AgentCapabilityError(
-                    code="RAG_RETRIEVE_FAILED",
+                raise make_agent_error(
+                    "RAG_RETRIEVE_FAILED",
                     message="知识库检索失败，无法完成当前 RAG 问答。",
-                    detail={"raw_error": str(exc), "rag_space_id": rag_space_id},
-                    frontend_visible=True,
+                    detail={"rag_space_id": rag_space_id},
+                    debug={"raw_error": str(exc)},
+                    source="rag.retrieve",
+                    cause=exc,
                 ) from exc
         else:
             latency_ms = 0

@@ -49,11 +49,13 @@ class ManagerEvaluator:
         ),
         "quality.report.query": lambda a: (
             a.type == "quality_report"
-            and a.status == "success"
+            and a.status in {"success", "empty"}
+            and "report_count" in a.metrics
         ),
         "quality.task.status": lambda a: (
             a.type == "task_status"
-            and a.status == "success"
+            and a.status in {"success", "empty"}
+            and "found" in a.metrics
         ),
         "data.analysis": lambda a: (
             a.type == "data_analysis"
@@ -96,7 +98,7 @@ class ManagerEvaluator:
             return EvaluationResult(False, 0.2, "fail", f"能力执行失败：{', '.join(failed_items)}")
 
         # FAILED ARTIFACTS FIRST — Section 9.3 of spec
-        all_artifacts = [*state.artifacts, *artifacts]
+        all_artifacts = self._dedupe_artifacts([*state.artifacts, *artifacts])
         if any(a.status == "failed" for a in all_artifacts):
             failed_artifacts = [a for a in all_artifacts if a.status == "failed"]
             reasons = [f"{a.type}: {a.summary}" for a in failed_artifacts if a.summary]
@@ -262,3 +264,14 @@ class ManagerEvaluator:
                 except Exception:
                     return None
         return None
+
+    @staticmethod
+    def _dedupe_artifacts(artifacts: list[AgentArtifact]) -> list[AgentArtifact]:
+        seen: set[str] = set()
+        result: list[AgentArtifact] = []
+        for item in artifacts:
+            if item.artifact_id in seen:
+                continue
+            seen.add(item.artifact_id)
+            result.append(item)
+        return result

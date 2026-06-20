@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AgentErrorAlert: typeof import('./src/components/chat/AgentErrorAlert.vue')['default']
     AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
     AlertRuleManagerPanel: typeof import('./src/components/ops/AlertRuleManagerPanel.vue')['default']
     AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']

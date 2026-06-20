@@ -54,7 +54,11 @@ class ManagerDispatcher:
         remaining = list(plan.steps)
 
         while remaining:
-            ready = [step for step in remaining if all(dep in completed for dep in step.depends_on)]
+            ready = [
+                step
+                for step in remaining
+                if all(dep in completed for dep in self._step_dependencies(step))
+            ]
             if not ready:
                 break
             for step in ready:
@@ -122,6 +126,10 @@ class ManagerDispatcher:
                 remaining.remove(step)
                 state.used_plan_steps += 1
         return observations, artifacts
+
+    @staticmethod
+    def _step_dependencies(step: AgentPlanStep) -> list[str]:
+        return list(dict.fromkeys([*step.depends_on, *step.dependencies]))
 
     @staticmethod
     def _step_hash(step: AgentPlanStep) -> str:

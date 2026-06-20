@@ -22,14 +22,24 @@ export interface ChatAttachment {
   kind: "image" | "file" | string;
 }
 
-export type ChatAgentName = "chat" | "inspection_task";
+export type ChatAgentName = "chat" | "inspection_task" | "file";
 
 export type ChatSubRoute =
   | "general_chat"
   | "rag_qa"
+  | "rag_ingest"
   | "quality_qa"
   | "task_create"
-  | "inspection_execute";
+  | "inspection_execute"
+  | "quality_report_query"
+  | "quality_task_status"
+  | "image_understanding"
+  | "file_summary"
+  | "file_qa"
+  | "paper_format_check"
+  | "action_blocked"
+  | "data_analysis"
+  | "error";
 
 export type ChatUiSchema =
   | "chat_text_v1"
@@ -39,7 +49,45 @@ export type ChatUiSchema =
   | "task_result_v1"
   | "paper_review_report_v1"
   | "error_v1"
-  | "chat_error_v1";
+  | "chat_error_v1"
+  | "agent_error_v1";
+
+export type AgentErrorCategory =
+  | "validation"
+  | "routing"
+  | "dispatch"
+  | "capability"
+  | "tool"
+  | "model"
+  | "data"
+  | "timeout"
+  | "permission"
+  | "external_service"
+  | "blocked"
+  | "internal";
+
+export type AgentErrorSeverity = "info" | "warning" | "error" | "critical";
+
+export interface AgentErrorPayload {
+  code: string;
+  title: string;
+  message: string;
+  category: AgentErrorCategory | string;
+  severity: AgentErrorSeverity | string;
+  status: "failed" | "blocked" | string;
+  frontend_visible: boolean;
+  retryable: boolean;
+  user_action?: string | null;
+  source?: string | null;
+  detail?: Record<string, unknown> | null;
+  request_id?: string | null;
+  workflow_run_id?: string | null;
+  trace_id?: string | null;
+  session_id?: string | null;
+  owner_agent?: ChatAgentName | string | null;
+  capability?: string | null;
+  step_id?: string | null;
+}
 
 export interface PaperReviewReportFile {
   format: "md" | "docx" | "pdf";
@@ -208,7 +256,7 @@ export interface ChatRouteTrace {
 
 export interface ChatErrorPayload {
   error_code?: string;
-  error?: string;
+  error?: string | AgentErrorPayload;
   detail?: Record<string, unknown>;
   module?: string | null;
   suggestion?: string | null;
@@ -282,7 +330,7 @@ export interface ChatMessagePayload {
   message_type?: string;
   status?: string;
   workflow_run_id?: string;
-  error?: string;
+  error?: string | AgentErrorPayload;
   error_code?: string;
   detail?: Record<string, unknown>;
   module?: string | null;

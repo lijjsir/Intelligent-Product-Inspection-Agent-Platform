@@ -46,12 +46,15 @@ class QualityReportHandler:
         else:
             content = self._report_content(task, result)
             art_type = "quality_report"
+        found = bool(content.get("found"))
         art = artifact(
             step,
             art_type,
+            status="success" if found else "empty",
+            empty_result=not found,
             content=content,
-            confidence=0.86 if content.get("found") else 0.35,
-            metrics={"report_count": 1 if content.get("found") else 0},
+            confidence=0.86 if found else 0.35,
+            metrics={"report_count": 1 if found else 0, "found": found},
         )
         return (
             observation(
@@ -71,9 +74,11 @@ class QualityReportHandler:
         art = artifact(
             step,
             art_type,
+            status="empty",
+            empty_result=True,
             content={"found": False, "query": state.original_query, "readonly": True, "summary": reason},
             confidence=0.2,
-            metrics={"report_count": 0},
+            metrics={"report_count": 0, "found": False},
         )
         return observation(step, status="skipped", summary=reason, artifact_ids=[art.artifact_id]), [art]
 

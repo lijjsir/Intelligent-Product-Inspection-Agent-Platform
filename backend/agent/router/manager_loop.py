@@ -9,13 +9,15 @@ from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.capability_registry import CAPABILITIES, capability_allowed
-from agent.router.contracts import AgentRouteDecision, AgentRoutePlan, AgentRouterOutput, AgentRuntimeError
+from agent.router.contracts import AgentRouteDecision, AgentRoutePlan, AgentRouterOutput
+from agent.router.errors import AgentInternalError, AgentRuntimeError, make_agent_error
 from agent.router.manager_dispatcher import ManagerDispatcher
 from agent.router.manager_evaluator import EvaluationResult, ManagerEvaluator
 from agent.router.manager_policy import ManagerPolicy
 from agent.router.manager_state import ManagerState
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
+from app.core.config import settings
 from app.services.model_config_service import ModelConfigService
 
 
@@ -23,11 +25,13 @@ from app.services.model_config_service import ModelConfigService
 class ValidationResult:
     allowed: bool
     message: str = ""
+    code: str = "VALIDATION_FAILED"
     need_user_input: bool = False
     missing_inputs: list[str] | None = None
 
     def to_error(self) -> dict[str, Any]:
         return {
+            "code": self.code,
             "message": self.message,
             "need_user_input": self.need_user_input,
             "missing_inputs": list(self.missing_inputs or []),
@@ -100,30 +104,38 @@ class ManagerLoop:
             return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
 
         except AgentRuntimeError as exc:
+            include_debug = bool(getattr(settings, "debug", False))
+            error_payload = exc.to_dict(state=state, include_debug=include_debug)
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
-                    selected_agent="chat",
+                    selected_agent=self._safe_selected_agent(state),
                     sub_route="error",
                     intent="error",
                     route_source="manager",
                 ),
                 agent_output={
                     "message_type": "error",
-                    "answer": exc.message,
-                    "summary": exc.message,
+                    "answer": error_payload["message"],
+                    "summary": error_payload["message"],
+                    "error": error_payload,
+                    "ui_schema": "agent_error_v1",
                 },
-                status="failed",
-                error={
-                    "code": exc.code,
-                    "message": exc.message,
-                    "frontend_visible": exc.frontend_visible,
-                    "detail": exc.detail,
-                },
+                status=error_payload.get("status", "failed"),
+                error=error_payload,
             )
         except Exception as exc:
+            include_debug = bool(getattr(settings, "debug", False))
+            wrapped = AgentInternalError(
+                code="INTERNAL_AGENT_ERROR",
+                title="系统内部错误",
+                message="系统执行失败，请查看错误信息或联系管理员。",
+                debug={"raw_error": str(exc), "type": exc.__class__.__name__},
+                cause=exc,
+            )
+            error_payload = wrapped.to_dict(state=state, include_debug=include_debug)
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
-                    selected_agent="chat",
+                    selected_agent=self._safe_selected_agent(state),
                     sub_route="error",
                     intent="error",
                     route_source="manager",
@@ -131,14 +143,12 @@ class ManagerLoop:
                 agent_output={
                     "message_type": "error",
                     "answer": "系统执行失败，请查看错误信息或联系管理员。",
-                    "summary": str(exc),
+                    "summary": error_payload["message"],
+                    "error": error_payload,
+                    "ui_schema": "agent_error_v1",
                 },
                 status="failed",
-                error={
-                    "code": "INTERNAL_AGENT_ERROR",
-                    "message": str(exc),
-                    "frontend_visible": True,
-                },
+                error=error_payload,
             )
 
     @staticmethod
@@ -172,6 +182,7 @@ class ManagerLoop:
             return ValidationResult(
                 allowed=False,
                 message=f"缺少必要输入：{', '.join(state.missing_inputs)}",
+                code="ACTION_INTENT_REQUIRED" if "action_intent" in state.missing_inputs else "MISSING_REQUIRED_INPUT",
                 need_user_input=True,
                 missing_inputs=list(state.missing_inputs),
             )
@@ -182,10 +193,26 @@ class ManagerLoop:
             capability = CAPABILITIES.get(capability_key)
             if capability is None:
                 return ValidationResult(False, f"未知 capability：{capability_key}")
+            if capability is not None and step.owner_agent not in capability.owner_agents:
+                return ValidationResult(
+                    False,
+                    f"能力 {capability_key} 不允许由 {step.owner_agent} 执行",
+                    code="PLAN_OWNER_CAPABILITY_MISMATCH",
+                )
             if step.mode in state.forbidden_modes:
-                return ValidationResult(False, f"当前页面已禁止模式：{step.mode}")
+                return ValidationResult(
+                    False,
+                    f"当前页面已禁止模式：{step.mode}",
+                    code="ACTION_MODE_FORBIDDEN",
+                    need_user_input=True,
+                )
             if state.surface == "chat" and step.mode == "action":
-                return ValidationResult(False, "聊天页面不允许执行正式业务动作")
+                return ValidationResult(
+                    False,
+                    "聊天页面不允许执行正式业务动作",
+                    code="ACTION_BLOCKED_BY_SURFACE",
+                    need_user_input=True,
+                )
             if not capability_allowed(capability, state.surface, state.allowed_modes):
                 return ValidationResult(False, f"当前页面不允许调用 capability：{capability_key}")
             if capability.key == "quality.inspection.execute" and state.action_intent != "quality_inspection_execute":
@@ -194,6 +221,7 @@ class ManagerLoop:
                     message="正式质量检测缺少 action_intent=quality_inspection_execute",
                     need_user_input=True,
                     missing_inputs=["action_intent"],
+                    code="ACTION_INTENT_REQUIRED",
                 )
         return ValidationResult(True)
 
@@ -330,11 +358,17 @@ class ManagerLoop:
                 }
             )
 
+        error_payload = self._error_payload_from_state(state)
+        if error_payload:
+            agent_output["error"] = error_payload
+            agent_output["ui_schema"] = "agent_error_v1"
+
         return AgentRouterOutput(
             route_decision=decision,
             agent_output=agent_output,
             status=status,
-            degrade_reason=state.errors[-1]["message"] if state.errors else None,
+            degrade_reason=None,
+            error=error_payload,
         )
 
     @staticmethod
@@ -451,7 +485,22 @@ class ManagerLoop:
 
     @staticmethod
     def _sub_route(state: ManagerState) -> str:
-        if state.errors and state.surface == "chat":
+        if state.final_action == "fail":
+            return "error"
+        if state.errors and state.errors[-1].get("code") == "ACTION_BLOCKED_BY_SURFACE":
+            return "action_blocked"
+        if (
+            state.surface == "chat"
+            and state.route_plan
+            and state.route_plan.reason == "rag_ingest"
+            and state.final_action == "ask_user"
+        ):
+            return "action_blocked"
+        if (
+            state.errors
+            and state.route_plan
+            and state.route_plan.reason == "action_blocked"
+        ):
             return "action_blocked"
         if state.route_plan:
             reason = state.route_plan.reason
@@ -474,11 +523,13 @@ class ManagerLoop:
 
     @staticmethod
     def _status(state: ManagerState, *, blocked_by_missing_inputs: bool) -> str:
-        if state.errors or blocked_by_missing_inputs:
+        if state.final_action == "fail":
+            return "failed"
+        if blocked_by_missing_inputs or state.missing_inputs:
             return "blocked"
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "blocked"
-        if state.final_action == "fail":
+        if state.errors:
             return "failed"
         return "completed"
 
@@ -517,10 +568,15 @@ class ManagerLoop:
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if status == "blocked":
             error_message = state.errors[-1]["message"] if state.errors else ""
+            error_code = state.errors[-1].get("code") if state.errors else ""
             if "超时" in error_message:
                 return "处理超时，请稍后重试。论文查非涉及文档解析和AI审阅，可能需要较长时间。"
             if "action_intent" in error_message:
                 return "正式质量检测需要由质量检测任务页面显式提交，并携带 action_intent=quality_inspection_execute。"
+            if error_code == "ACTION_BLOCKED_BY_SURFACE":
+                return "聊天页面不能创建、执行正式质量检测任务或写入知识库。请前往对应业务页面显式确认后提交。"
+            if error_code == "ACTION_MODE_FORBIDDEN":
+                return error_message
             if "能力执行失败" in error_message:
                 return f"论文查非处理出错：{error_message}。请稍后重试或联系管理员。"
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
@@ -572,6 +628,41 @@ class ManagerLoop:
         if state.errors:
             return str(state.errors[-1].get("message") or "").strip()
         return ""
+
+    def _error_payload_from_state(self, state: ManagerState) -> dict[str, Any] | None:
+        if state.final_action != "fail":
+            return None
+        error = make_agent_error(
+            self._latest_failure_code(state),
+            message=self._latest_failure_message(state) or "Agent 执行失败。",
+            detail={
+                "final_action": state.final_action,
+                "satisfaction_score": state.satisfaction_score,
+            },
+            source="manager.evaluate",
+        )
+        return error.to_dict(state=state, include_debug=bool(getattr(settings, "debug", False)))
+
+    @staticmethod
+    def _latest_failure_code(state: ManagerState) -> str:
+        for observation_item in reversed(state.observations):
+            if observation_item.status == "failed":
+                err = observation_item.error or {}
+                if isinstance(err, dict):
+                    return str(err.get("code") or "AGENT_STEP_FAILED")
+                return "AGENT_STEP_FAILED"
+        if state.errors:
+            return str(state.errors[-1].get("code") or "AGENT_FAILED")
+        return "AGENT_FAILED"
+
+    @staticmethod
+    def _safe_selected_agent(state: ManagerState) -> str:
+        if state.route_plan and state.route_plan.steps:
+            if any(step.owner_agent == "inspection_task" for step in state.route_plan.steps):
+                return "inspection_task"
+            if any(step.owner_agent == "file" for step in state.route_plan.steps):
+                return "file"
+        return "chat"
 
     @staticmethod
     def _paper_review_error_code(message: str) -> str:

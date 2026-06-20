@@ -135,39 +135,22 @@ class CapabilityContext(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgentRuntimeError(Exception):
-    """Base exception for all agent runtime errors. Always visible to frontend by default."""
-
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        frontend_visible: bool = True,
-        detail: dict | None = None,
-    ):
-        self.code = code
-        self.message = message
-        self.frontend_visible = frontend_visible
-        self.detail = detail or {}
-        super().__init__(message)
-
-
-class AgentDispatchError(AgentRuntimeError):
-    """Raised when dispatcher cannot route to a business agent."""
-    pass
-
-
-class AgentCapabilityError(AgentRuntimeError):
-    """Raised when a capability is unsupported or fails."""
-    pass
-
-
-class AgentExecutionError(AgentRuntimeError):
-    """Raised when a business agent fails to execute."""
-    pass
-
-
-class AgentValidationError(AgentRuntimeError):
-    """Raised when plan validation fails."""
-    pass
+from agent.router.errors import (
+    AgentBlockedError,
+    AgentCapabilityError,
+    AgentDataError,
+    AgentDispatchError,
+    AgentErrorCategory,
+    AgentErrorStatus,
+    AgentExecutionError,
+    AgentExternalServiceError,
+    AgentInternalError,
+    AgentModelError,
+    AgentPermissionError,
+    AgentRoutingError,
+    AgentRuntimeError,
+    AgentTimeoutError,
+    AgentToolError,
+    AgentValidationError,
+    make_agent_error,
+)

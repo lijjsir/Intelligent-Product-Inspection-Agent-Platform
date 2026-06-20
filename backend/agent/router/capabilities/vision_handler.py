@@ -4,6 +4,7 @@ import json as _json
 
 from agent.llm.gateway import LLMGateway
 from agent.router.contracts import CapabilityContext, AgentCapabilityError
+from agent.router.errors import make_agent_error
 
 
 class VisionUnderstandingHandler:
@@ -38,6 +39,10 @@ class VisionUnderstandingHandler:
 
         model_result = await self._try_multimodal_understanding(routed, state, request, db_session=db_session)
         if model_result is None:
+            raise make_agent_error(
+                "IMAGE_MODEL_UNAVAILABLE",
+                source="image.understanding",
+            )
             return (
                 observation(
                     step,
@@ -48,6 +53,11 @@ class VisionUnderstandingHandler:
                 [],
             )
         if isinstance(model_result, dict) and model_result.get("error"):
+            raise make_agent_error(
+                "IMAGE_MODEL_UNAVAILABLE",
+                detail={"error": str(model_result.get("error"))},
+                source="image.understanding",
+            )
             return (
                 observation(
                     step,
@@ -121,11 +131,12 @@ class VisionUnderstandingHandler:
             parsed["model_id"] = runtime.get("model_id")
             return parsed
         except Exception as exc:
-            raise AgentCapabilityError(
-                code="IMAGE_UNDERSTANDING_FAILED",
+            raise make_agent_error(
+                "IMAGE_UNDERSTANDING_FAILED",
                 message="图片理解失败，无法完成当前图片分析。",
-                detail={"raw_error": str(exc)},
-                frontend_visible=True,
+                debug={"raw_error": str(exc)},
+                source="image.understanding",
+                cause=exc,
             ) from exc
 
     @staticmethod

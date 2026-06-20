@@ -15,6 +15,7 @@ class AgentManager:
     """统一入口路由，通过 ManagerLoop 调度 capability-level route plan。"""
 
     def __init__(self) -> None:
+        # Legacy/introspection only. Runtime routing is handled by ManagerLoop + ManagerPolicy.
         self._route_policy = AgentRoutePolicy()
         self._loop = ManagerLoop()
         self._chat_agent = None

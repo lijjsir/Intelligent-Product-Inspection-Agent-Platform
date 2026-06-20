@@ -17,6 +17,7 @@ class FileExecutor:
         "file.paper_format_check",
         "file.parse",
         "rag.retrieve",
+        "rag.ingest",
     }
 
     async def execute(
@@ -36,11 +37,11 @@ class FileExecutor:
         cap = step.capability
 
         # Delegate RAG retrieval through CapabilityRouter (same pattern as ChatExecutor)
-        if cap == "rag.retrieve":
+        if cap in {"rag.retrieve", "rag.ingest"}:
             from agent.router.capability_router import get_capability_router
             from agent.router.contracts import CapabilityContext
             router = get_capability_router()
-            return await router.call("rag.retrieve", CapabilityContext(
+            return await router.call(cap, CapabilityContext(
                 step=step, state=state, request=request, db_session=db_session,
             ))
 
@@ -105,11 +106,12 @@ class FileExecutor:
             model_summary = await self._try_chat_summary(parsed_files, state, request, db_session=db_session)
         if not parsed_files:
             if state.attachments:
-                from agent.router.contracts import AgentExecutionError
-                raise AgentExecutionError(
+                from agent.router.errors import make_agent_error
+                raise make_agent_error(
                     code="FILE_PARSE_FAILED",
                     message="文件解析失败，无法继续执行文件总结/问答/论文查非。",
-                    frontend_visible=True,
+                    detail={"attachment_count": len(state.attachments), "unsupported": unsupported},
+                    source=cap,
                 )
             art = artifact(step, artifact_type, content={"unsupported": unsupported, "parsed_files": []}, confidence=0.2)
             return (

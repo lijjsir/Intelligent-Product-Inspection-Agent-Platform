@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "elem
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
+import AgentErrorAlert from "@/components/chat/AgentErrorAlert.vue";
 import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
 import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
@@ -11,9 +12,10 @@ import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
-import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
+import type { AgentErrorPayload, ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
+import { agentErrorPayload } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -665,13 +667,16 @@ async function retryFromAssistantMessage(message: ChatMessage) {
 }
 
 function formatErrorForCopy(message: ChatMessage): string {
-  const p = message.payload;
-  const lines: string[] = ["执行失败"];
-  if (p?.error_code) lines.push(`错误码: ${p.error_code}`);
-  if (p?.error) lines.push(`错误信息: ${p.error}`);
-  if (p?.detail && typeof p.detail === "object" && Object.keys(p.detail).length > 0) {
+  const error = messageAgentError(message);
+  const detail = error?.detail;
+  const lines: string[] = [error?.title || "执行失败"];
+  if (error?.code) lines.push(`错误码: ${error.code}`);
+  if (error?.message) lines.push(`错误信息: ${error.message}`);
+  if (error?.user_action) lines.push(`建议: ${error.user_action}`);
+  if (error?.trace_id) lines.push(`Trace ID: ${error.trace_id}`);
+  if (detail && typeof detail === "object" && Object.keys(detail).length > 0) {
     lines.push("详细信息:");
-    for (const [key, value] of Object.entries(p.detail)) {
+    for (const [key, value] of Object.entries(detail)) {
       lines.push(`  ${key}: ${value}`);
     }
   }
@@ -687,26 +692,37 @@ async function resendFromErrorMessage(message: ChatMessage) {
   await retryFromAssistantMessage(message);
 }
 
-function errorCode(message: ChatMessage): string {
-  return String(message.payload?.error_code || "");
+function messageAgentError(message: ChatMessage) {
+  return agentErrorPayload(message.payload);
+}
+
+function fallbackAgentError(message: ChatMessage): AgentErrorPayload {
+  return {
+    code: "AGENT_FAILED",
+    title: "执行失败",
+    message: message.content || "Agent 执行失败。",
+    category: "internal",
+    severity: "error",
+    status: "failed",
+    frontend_visible: true,
+    retryable: false,
+    detail: message.payload?.detail || null,
+    workflow_run_id: message.payload?.workflow_run_id || null,
+    trace_id: message.payload?.trace_id || null,
+  };
 }
 
 function errorCardTitle(message: ChatMessage): string {
-  const code = errorCode(message);
+  const error = messageAgentError(message);
+  if (error?.title) return error.title;
+  const code = error?.code || "";
   if (code.startsWith("SHORT_TERM_")) return "短期记忆构建失败";
   if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "图数据库服务异常";
   return "执行失败";
 }
 
-function errorCardHint(message: ChatMessage): string {
-  const code = errorCode(message);
-  if (code.startsWith("SHORT_TERM_")) return "当前会话上下文无法读取或摘要失败，本次回答已停止。";
-  if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "请检查 Neo4j 是否启动、账号密码是否正确、schema 是否初始化。";
-  return "";
-}
-
 function showErrorContextState(message: ChatMessage) {
-  const detail = message.payload?.detail;
+  const detail = messageAgentError(message)?.detail || message.payload?.detail;
   const text = detail && typeof detail === "object" ? JSON.stringify(detail, null, 2) : "无上下文详情";
   ElMessageBox.alert(text, "上下文状态", {
     confirmButtonText: "关闭",
@@ -1026,34 +1042,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   <span class="error-card-title">{{ errorCardTitle(message) }}</span>
                 </div>
                 <div class="error-card-body">
-                  <div v-if="errorCardHint(message)" class="error-hint">{{ errorCardHint(message) }}</div>
-                  <div v-if="message.payload?.error_code" class="error-item">
-                    <span class="error-label">错误码</span>
-                    <el-tag size="small" type="danger" effect="plain">{{ message.payload.error_code }}</el-tag>
-                  </div>
-                  <div v-if="message.payload?.error" class="error-item">
-                    <span class="error-label">错误信息</span>
-                    <span class="error-message-text">{{ message.payload.error }}</span>
-                  </div>
-                  <div v-if="message.payload?.module" class="error-item">
-                    <span class="error-label">Module</span>
-                    <span class="error-message-text">{{ message.payload.module }}</span>
-                  </div>
-                  <div v-if="message.payload?.trace_id" class="error-item">
-                    <span class="error-label">Trace ID</span>
-                    <span class="error-message-text">{{ message.payload.trace_id }}</span>
-                  </div>
-                  <div v-if="message.payload?.suggestion" class="error-item">
-                    <span class="error-label">Suggestion</span>
-                    <span class="error-message-text">{{ message.payload.suggestion }}</span>
-                  </div>                  <div v-if="message.payload?.detail && typeof message.payload.detail === 'object' && Object.keys(message.payload.detail).length > 0" class="error-item">
-                    <span class="error-label">详细信息</span>
-                    <div class="error-detail-list">
-                      <div v-for="(value, key) in message.payload.detail" :key="key" class="error-detail-row">
-                        <span class="error-detail-key">{{ key }}</span>: <span>{{ value }}</span>
-                      </div>
-                    </div>
-                  </div>
+                  <AgentErrorAlert :error="messageAgentError(message) || fallbackAgentError(message)" />
                 </div>
                 <div class="error-card-actions">
                   <el-button size="small" @click="copyErrorMessage(message)">复制错误</el-button>

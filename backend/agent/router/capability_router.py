@@ -6,6 +6,7 @@ from agent.router.contracts import (
     AgentArtifact,
     AgentCapabilityError,
     AgentObservation,
+    AgentRuntimeError,
     CapabilityContext,
 )
 
@@ -38,7 +39,7 @@ class CapabilityRouter:
             )
         try:
             return await handler.run(context)
-        except AgentCapabilityError:
+        except AgentRuntimeError:
             raise
         except Exception as exc:
             raise AgentCapabilityError(

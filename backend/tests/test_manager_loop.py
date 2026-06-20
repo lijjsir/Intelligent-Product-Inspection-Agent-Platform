@@ -70,8 +70,11 @@ async def test_chat_image_understanding_is_informal_and_does_not_create_task(moc
     payload = output.agent_output
 
     assert output.route_decision.selected_agent == "chat"
-    assert output.route_decision.sub_route == "image_understanding"
-    assert payload["message_type"] == "image_analysis"
+    assert output.route_decision.sub_route == "error"
+    assert output.status == "failed"
+    assert output.error["code"] == "IMAGE_MODEL_UNAVAILABLE"
+    assert payload["message_type"] == "error"
+    assert payload["ui_schema"] == "agent_error_v1"
     assert "created_task" not in payload or payload["created_task"] is None
 
 

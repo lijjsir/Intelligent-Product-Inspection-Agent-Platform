@@ -361,7 +361,7 @@ class ManagerPolicy:
             if capability is None:
                 continue
             step_id = f"s{index}"
-            owner = capability.owner_agents[0] if capability.owner_agents else "chat"
+            owner = self._choose_owner_agent(key, capability, understanding, state)
             depends_on = [previous_step_id] if previous_step_id and owner == "chat" else []
             steps.append(
                 AgentPlanStep(
@@ -396,6 +396,40 @@ class ManagerPolicy:
             if specific:
                 criteria.extend(specific)
         return criteria or [goal]
+
+    def _choose_owner_agent(
+        self,
+        key: str,
+        capability,
+        understanding: Understanding,
+        state: ManagerState,
+    ) -> str:
+        intent = understanding.intent
+
+        if intent in {"file_summary", "file_qa", "paper_format_check"}:
+            if "file" in capability.owner_agents:
+                return "file"
+
+        if intent == "inspection_execute":
+            if "inspection_task" in capability.owner_agents:
+                return "inspection_task"
+
+        if key == "rag.ingest":
+            if "file" in capability.owner_agents:
+                return "file"
+
+        if "chat" in capability.owner_agents:
+            return "chat"
+
+        if capability.owner_agents:
+            return capability.owner_agents[0]
+
+        from agent.router.errors import make_agent_error
+        raise make_agent_error(
+            "CAPABILITY_HAS_NO_OWNER",
+            message=f"能力 {key} 没有配置 owner_agents。",
+            source="manager.policy",
+        )
 
     def _surface(self, request: NormalizedRequest) -> str:
         ext = dict(request.ext or {})

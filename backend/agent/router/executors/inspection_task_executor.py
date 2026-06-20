@@ -9,11 +9,6 @@ from agent.router.manager_state import ManagerState
 class InspectionTaskExecutor:
     SUPPORTED_CAPABILITIES = {
         "quality.inspection.execute",
-        "vision.understand",
-        "rag.retrieve",
-        "rule.evaluate",
-        "quality.report.write",
-        "inspection.persist",
     }
 
     def __init__(self) -> None:
@@ -56,10 +51,45 @@ class InspectionTaskExecutor:
             ),
         )
         raw = output.model_dump() if hasattr(output, "model_dump") else dict(output or {})
+        action_state = str(raw.get("action_state") or "").lower()
+        status = str(raw.get("status") or "").lower()
+        answer = str(raw.get("answer") or "")
+        summary = str(raw.get("summary") or answer or "")
+
+        if action_state in {"awaiting_clarification", "blocked", "need_user_input"}:
+            art = artifact(
+                step,
+                "inspection_task",
+                status="blocked",
+                needs_user_input=True,
+                content=raw,
+                summary=summary or "正式质检缺少必要输入。",
+                confidence=0.0,
+            )
+            return (
+                observation(
+                    step,
+                    status="blocked",
+                    summary=summary or "正式质检缺少必要输入。",
+                    artifact_ids=[art.artifact_id],
+                ),
+                [art],
+            )
+
+        if action_state in {"failed", "error"} or status == "failed":
+            from agent.router.errors import make_agent_error
+            raise make_agent_error(
+                "INSPECTION_TASK_FAILED",
+                message=summary or "正式质检任务执行失败。",
+                detail={"raw_output": raw},
+                source="quality.inspection.execute",
+            )
+
         persistable = raw.get("persistable_output") or {}
         art = artifact(
             step,
             "inspection_task",
+            status="success",
             content={
                 "answer": raw.get("answer"),
                 "summary": raw.get("summary"),

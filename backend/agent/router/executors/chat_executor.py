@@ -129,9 +129,15 @@ class ChatExecutor:
                 use_tools=not state.force_web_search,
             )
             if answer is None:
-                fallback = self._build_fallback(state)
-                art = artifact(step, "composed_response", content={"answer": fallback, "summary": fallback, "message_type": "assistant_text", "status": "degraded", "surface": state.surface, "blocked": False})
-                return observation(step, status="success", summary=fallback, artifact_ids=[art.artifact_id]), [art]
+                from agent.router.errors import make_agent_error
+                raise make_agent_error(
+                    "CHAT_COMPOSE_MODEL_UNAVAILABLE",
+                    detail={
+                        "capability": cap,
+                        "route_reason": state.route_plan.reason if state.route_plan else None,
+                    },
+                    source="chat.response.compose",
+                )
             composed = self._compose_from_model(state, answer)
             art = artifact(step, "composed_response", content=composed)
             return observation(step, status="success", summary=composed.get("summary", answer), artifact_ids=[art.artifact_id]), [art]
@@ -1067,11 +1073,13 @@ class ChatExecutor:
             state.route_plan.reason if state.route_plan else "no-plan",
             is_action_blocked, state.final_action,
         )
-        if state.errors or state.missing_inputs:
+        if state.final_action == "fail":
+            return "failed", False
+        if state.missing_inputs:
             return "blocked", True
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "blocked", True
-        if state.final_action == "fail":
+        if state.errors:
             return "failed", False
         return "completed", False
 
