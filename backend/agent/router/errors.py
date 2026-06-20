@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 
-class AgentErrorCategory(StrEnum):
+class AgentErrorCategory(str, Enum):
     VALIDATION = "validation"
     ROUTING = "routing"
     DISPATCH = "dispatch"
@@ -18,7 +18,7 @@ class AgentErrorCategory(StrEnum):
     INTERNAL = "internal"
 
 
-class AgentErrorStatus(StrEnum):
+class AgentErrorStatus(str, Enum):
     FAILED = "failed"
     BLOCKED = "blocked"
 
@@ -282,6 +282,13 @@ ERROR_CATALOG: dict[str, dict[str, Any]] = {
         "category": AgentErrorCategory.TIMEOUT,
         "user_action": "请稍后重试，或减少单次上传文件数量。",
         "retryable": True,
+    },
+    "PLAN_DEPENDENCY_DEADLOCK": {
+        "title": "计划依赖无法满足",
+        "message": "Agent 路由计划中的步骤依赖无法满足。",
+        "category": AgentErrorCategory.ROUTING,
+        "user_action": "请联系管理员检查 Agent 计划生成逻辑。",
+        "retryable": False,
     },
     "INTERNAL_AGENT_ERROR": {
         "title": "系统内部错误",

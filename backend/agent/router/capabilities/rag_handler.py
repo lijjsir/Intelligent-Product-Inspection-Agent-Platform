@@ -41,13 +41,23 @@ class RagRetrieveHandler:
             art = artifact(
                 step,
                 "rag_ingest_request",
+                status="blocked",
+                needs_user_input=True,
                 content={
                     "requires_confirmation": True,
                     "readonly": False,
                     "message": "RAG 入库需要用户在知识库页面或确认流程中显式提交。",
                 },
             )
-            return observation(step, status="blocked", summary="RAG 入库需要确认", artifact_ids=[art.artifact_id]), [art]
+            return (
+                observation(
+                    step,
+                    status="blocked",
+                    summary="RAG 入库需要确认",
+                    artifact_ids=[art.artifact_id],
+                ),
+                [art],
+            )
 
         # RAG retrieve logic
         rag_space_id = str((state.selected_rag_space or {}).get("id") or "").strip() or None

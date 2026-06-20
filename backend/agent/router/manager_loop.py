@@ -622,26 +622,52 @@ class ManagerLoop:
     def _latest_failure_message(state: ManagerState) -> str:
         for observation in reversed(state.observations):
             if observation.status == "failed":
-                detail = str(observation.error or observation.summary or "").strip()
+                err = observation.error or {}
+                if isinstance(err, dict):
+                    message = (
+                        err.get("message")
+                        or err.get("detail")
+                        or err.get("raw_error")
+                        or observation.summary
+                        or ""
+                    )
+                    return str(message).strip()
+                detail = str(err or observation.summary or "").strip()
                 if detail:
                     return detail
+
         if state.errors:
             return str(state.errors[-1].get("message") or "").strip()
+
         return ""
 
     def _error_payload_from_state(self, state: ManagerState) -> dict[str, Any] | None:
-        if state.final_action != "fail":
+        if state.final_action not in {"fail", "ask_user"} and not state.errors:
             return None
+
+        code = self._latest_failure_code(state)
+
+        if state.final_action == "ask_user" and code == "AGENT_FAILED":
+            if state.missing_inputs:
+                code = "ACTION_INTENT_REQUIRED"
+            else:
+                code = "ACTION_BLOCKED_BY_SURFACE"
+
         error = make_agent_error(
-            self._latest_failure_code(state),
-            message=self._latest_failure_message(state) or "Agent 执行失败。",
+            code,
+            message=self._latest_failure_message(state) or "请求需要补充信息或被当前页面阻止。",
             detail={
                 "final_action": state.final_action,
+                "missing_inputs": list(state.missing_inputs or []),
                 "satisfaction_score": state.satisfaction_score,
             },
             source="manager.evaluate",
         )
-        return error.to_dict(state=state, include_debug=bool(getattr(settings, "debug", False)))
+
+        return error.to_dict(
+            state=state,
+            include_debug=bool(getattr(settings, "debug", False)),
+        )
 
     @staticmethod
     def _latest_failure_code(state: ManagerState) -> str:

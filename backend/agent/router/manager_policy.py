@@ -359,7 +359,18 @@ class ManagerPolicy:
         for index, key in enumerate(understanding.needs, start=1):
             capability = available.get(key) or CAPABILITIES.get(key)
             if capability is None:
-                continue
+                from agent.router.errors import make_agent_error
+
+                raise make_agent_error(
+                    "UNKNOWN_CAPABILITY",
+                    message=f"计划需要的能力不存在：{key}",
+                    detail={
+                        "capability": key,
+                        "intent": understanding.intent,
+                        "needs": list(understanding.needs),
+                    },
+                    source="manager.policy",
+                )
             step_id = f"s{index}"
             owner = self._choose_owner_agent(key, capability, understanding, state)
             depends_on = [previous_step_id] if previous_step_id and owner == "chat" else []

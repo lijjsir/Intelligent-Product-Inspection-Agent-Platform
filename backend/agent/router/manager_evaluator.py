@@ -97,6 +97,17 @@ class ManagerEvaluator:
             failed_items = [item.capability_key for item in observations if item.status == "failed"]
             return EvaluationResult(False, 0.2, "fail", f"能力执行失败：{', '.join(failed_items)}")
 
+        # Blocked observations that require user confirmation / input
+        if any(item.status == "blocked" for item in observations):
+            blocked_items = [item for item in observations if item.status == "blocked"]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="ask_user",
+                reason="能力执行被阻止或需要用户确认",
+                missing_inputs=[item.summary for item in blocked_items if item.summary],
+            )
+
         # FAILED ARTIFACTS FIRST — Section 9.3 of spec
         all_artifacts = self._dedupe_artifacts([*state.artifacts, *artifacts])
         if any(a.status == "failed" for a in all_artifacts):

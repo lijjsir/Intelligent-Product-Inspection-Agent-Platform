@@ -92,15 +92,16 @@ class ChatExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        from agent.router.contracts import AgentCapabilityError
-
         cap = step.capability
 
         if cap not in self.SUPPORTED_CAPABILITIES:
-            raise AgentCapabilityError(
-                code="UNSUPPORTED_CAPABILITY",
+            from agent.router.errors import make_agent_error
+
+            raise make_agent_error(
+                "UNSUPPORTED_CAPABILITY",
                 message=f"ChatExecutor 不支持能力：{cap}",
-                frontend_visible=True,
+                detail={"capability": cap, "executor": "chat"},
+                source="chat.executor",
             )
 
         if cap == "web.search":
@@ -157,10 +158,13 @@ class ChatExecutor:
         if cap == "data.analysis":
             return await self._data_analysis(step, state, request, db_session)
 
-        raise AgentCapabilityError(
-            code="UNSUPPORTED_CAPABILITY",
+        from agent.router.errors import make_agent_error
+
+        raise make_agent_error(
+            "UNSUPPORTED_CAPABILITY",
             message=f"ChatExecutor 不支持能力：{cap}",
-            frontend_visible=True,
+            detail={"capability": cap, "executor": "chat"},
+            source="chat.executor",
         )
 
     # ── model helpers ──

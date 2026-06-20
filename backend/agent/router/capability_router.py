@@ -4,7 +4,6 @@ from typing import Any
 
 from agent.router.contracts import (
     AgentArtifact,
-    AgentCapabilityError,
     AgentObservation,
     AgentRuntimeError,
     CapabilityContext,
@@ -32,21 +31,25 @@ class CapabilityRouter:
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
         handler = self._handlers.get(capability)
         if handler is None:
-            raise AgentCapabilityError(
-                code="UNKNOWN_CAPABILITY",
-                message=f"未知能力：{capability}",
-                frontend_visible=True,
+            from agent.router.errors import make_agent_error
+
+            raise make_agent_error(
+                "UNKNOWN_CAPABILITY",
+                detail={"capability": capability},
+                source="capability_router",
             )
         try:
             return await handler.run(context)
         except AgentRuntimeError:
             raise
         except Exception as exc:
-            raise AgentCapabilityError(
-                code="CAPABILITY_EXECUTION_FAILED",
+            from agent.router.errors import make_agent_error
+
+            raise make_agent_error(
+                "CAPABILITY_EXECUTION_FAILED",
                 message=f"能力 {capability} 执行失败：{exc}",
                 detail={"raw_error": str(exc)},
-                frontend_visible=True,
+                source="capability_router",
             ) from exc
 
 

@@ -31,7 +31,7 @@ class ManagerDispatcher:
         request: NormalizedRequest,
         db_session=None,
     ) -> tuple[list[AgentObservation], list[AgentArtifact]]:
-        from agent.router.contracts import AgentDispatchError, AgentExecutionError, AgentRuntimeError
+        from agent.router.contracts import AgentRuntimeError
 
         registry = get_registry()
         invoker = ToolInvoker(registry, db_session=db_session)
@@ -60,7 +60,17 @@ class ManagerDispatcher:
                 if all(dep in completed for dep in self._step_dependencies(step))
             ]
             if not ready:
-                break
+                from agent.router.errors import make_agent_error
+
+                raise make_agent_error(
+                    "PLAN_DEPENDENCY_DEADLOCK",
+                    message="计划步骤依赖无法满足，无法继续调度。",
+                    detail={
+                        "remaining_steps": [step.model_dump() for step in remaining],
+                        "completed": list(completed),
+                    },
+                    source="manager.dispatcher",
+                )
             for step in ready:
                 step_hash = self._step_hash(step)
                 if step_hash in state.executed_step_hashes:
@@ -76,18 +86,23 @@ class ManagerDispatcher:
                 # Resolve owner_agent
                 owner = step.owner_agent
                 if not owner:
-                    raise AgentDispatchError(
-                        code="MISSING_OWNER_AGENT",
+                    from agent.router.errors import make_agent_error
+
+                    raise make_agent_error(
+                        "MISSING_OWNER_AGENT",
                         message=f"计划步骤 {step.step_id} 缺少 owner_agent。",
-                        frontend_visible=True,
+                        source="manager.dispatcher",
                     )
 
                 executor = self._executors.get(owner)
                 if executor is None:
-                    raise AgentDispatchError(
-                        code="UNKNOWN_OWNER_AGENT",
+                    from agent.router.errors import make_agent_error
+
+                    raise make_agent_error(
+                        "UNKNOWN_OWNER_AGENT",
                         message=f"未知业务 Agent：{owner}。rag/vision/quality_report/data_analysis 不是业务 Agent。",
-                        frontend_visible=True,
+                        detail={"owner_agent": owner},
+                        source="manager.dispatcher",
                     )
 
                 # Per-step tool filtering by owner_agent + capability (Section 10.3 of spec)
@@ -111,11 +126,13 @@ class ManagerDispatcher:
                     # Re-raise AgentRuntimeError so ManagerLoop can catch and convert to output
                     raise
                 except Exception as exc:
-                    raise AgentExecutionError(
-                        code="STEP_EXECUTION_FAILED",
+                    from agent.router.errors import make_agent_error
+
+                    raise make_agent_error(
+                        "STEP_EXECUTION_FAILED",
                         message=f"步骤 {step.step_id} 执行失败：{exc}",
-                        frontend_visible=True,
                         detail={"raw_error": str(exc)},
+                        source="manager.dispatcher",
                     ) from exc
 
                 observations.append(step_observation)

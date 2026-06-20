@@ -3,7 +3,7 @@ from __future__ import annotations
 import json as _json
 
 from agent.llm.gateway import LLMGateway
-from agent.router.contracts import CapabilityContext, AgentCapabilityError
+from agent.router.contracts import CapabilityContext
 from agent.router.errors import make_agent_error
 
 
@@ -43,29 +43,11 @@ class VisionUnderstandingHandler:
                 "IMAGE_MODEL_UNAVAILABLE",
                 source="image.understanding",
             )
-            return (
-                observation(
-                    step,
-                    status="failed",
-                    summary="视觉模型不可用，请检查后台视觉模型配置",
-                    error="no multimodal/vision model configured",
-                ),
-                [],
-            )
         if isinstance(model_result, dict) and model_result.get("error"):
             raise make_agent_error(
                 "IMAGE_MODEL_UNAVAILABLE",
                 detail={"error": str(model_result.get("error"))},
                 source="image.understanding",
-            )
-            return (
-                observation(
-                    step,
-                    status="failed",
-                    summary=f"视觉模型调用失败：{model_result['error']}",
-                    error=model_result["error"],
-                ),
-                [],
             )
 
         art = artifact(

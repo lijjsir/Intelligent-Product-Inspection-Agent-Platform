@@ -28,7 +28,6 @@ class FileExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        from agent.router.contracts import AgentCapabilityError
         from agent.tools.file_parsers import parse_file_content
         from agent.tools.paper_format_checker import check_paper_format
         from agent.tools.paper_format_templates import DEFAULT_STRICT_PAPER_TEMPLATE_ID
@@ -46,10 +45,13 @@ class FileExecutor:
             ))
 
         if cap not in self.SUPPORTED_CAPABILITIES:
-            raise AgentCapabilityError(
-                code="UNSUPPORTED_CAPABILITY",
+            from agent.router.errors import make_agent_error
+
+            raise make_agent_error(
+                "UNSUPPORTED_CAPABILITY",
                 message=f"FileExecutor 不支持能力：{cap}",
-                frontend_visible=True,
+                detail={"capability": cap, "executor": "file"},
+                source="file.executor",
             )
 
         parsed_files: list[dict] = []
