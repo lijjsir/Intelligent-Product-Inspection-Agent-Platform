@@ -4,6 +4,19 @@ from enum import Enum
 from typing import Any
 
 
+def _enum_value(value: Any) -> str:
+    """Extract the string value from an Enum member, or coerce to str.
+
+    Using ``str(SomeEnum.field)`` on a ``str, Enum`` subclass can produce
+    ``"SomeEnum.field"`` in certain Python versions / contexts, which would
+    break frontend checks like ``category === "routing"``.  ``.value`` is the
+    canonical path to the underlying string.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    return str(value)
+
+
 class AgentErrorCategory(str, Enum):
     VALIDATION = "validation"
     ROUTING = "routing"
@@ -46,9 +59,9 @@ class AgentRuntimeError(Exception):
         self.code = code
         self.title = title or code
         self.message = message or "Agent 执行失败。"
-        self.category = str(category)
+        self.category = _enum_value(category)
         self.severity = severity
-        self.status = str(status)
+        self.status = _enum_value(status)
         self.frontend_visible = frontend_visible
         self.retryable = retryable
         self.user_action = user_action
@@ -188,6 +201,13 @@ ERROR_CATALOG: dict[str, dict[str, Any]] = {
         "category": AgentErrorCategory.ROUTING,
         "user_action": "请联系管理员检查能力注册表。",
         "retryable": False,
+    },
+    "CAPABILITY_EXECUTION_FAILED": {
+        "title": "能力执行失败",
+        "message": "能力执行过程中发生异常。",
+        "category": AgentErrorCategory.CAPABILITY,
+        "user_action": "请稍后重试；如果持续失败，请联系管理员。",
+        "retryable": True,
     },
     "AGENT_FAILED": {
         "title": "Agent 执行失败",
