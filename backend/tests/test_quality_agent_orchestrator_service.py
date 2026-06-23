@@ -91,7 +91,7 @@ def test_chat_answer_is_not_materialized_as_task():
     output = AgentOutput(
         message_type="quality_answer",
         route_decision=RouteDecision(
-            selected_agent="chat",
+            selected_agent="quality_analysis",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="ordinary RAG answer",
@@ -105,7 +105,7 @@ def test_inspection_task_result_with_structured_output_is_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="inspection_execute",
             intent="inspection_execute",
             reason="inspection task completed",
@@ -124,7 +124,7 @@ def test_inspection_task_without_full_structured_output_is_not_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="task_create",
             intent="task_create",
             reason="task accepted but no result yet",
@@ -152,7 +152,7 @@ def test_response_payload_prefers_router_subroute_over_legacy_subgraph_intent():
         summary="RAG answer",
         raw_state={"response_payload": {"intent": "rag_qa", "message_type": "assistant_text"}},
         route_decision=RouteDecision(
-            selected_agent="chat",
+            selected_agent="quality_analysis",
             sub_route="general_chat",
             intent="general_qa",
             reason="default chat route",
@@ -183,7 +183,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
             assert db_session is not None
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
-                    selected_agent="chat",
+                        selected_agent="quality_analysis",
                     intent="general_chat",
                     reason="test",
                 ),
@@ -212,7 +212,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
                 answer="hi",
                 route_decision=RouteDecision(
                     mode="router_enabled",
-                    selected_agent="inspection_task",
+                    selected_agent="quality_analysis",
                     sub_route="inspection_execute",
                 ),
             )
@@ -250,7 +250,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
 
     assert persisted[0][1].answer == "hi"
     assert result["agent_output"]["answer"] == "hi"
-    assert metrics[0]["agent_key"] == "chat"
+    assert metrics[0]["agent_key"] == "quality_analysis"
 
 
 @pytest.mark.asyncio
@@ -323,7 +323,7 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
         quality={"passed": False, "risk_level": "critical", "risk_score": 0.92},
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="inspection_execute",
             reason="file attachment detected",
             signals=RouteSignals(has_file_attachments=True, attachment_types=["txt"]),
@@ -459,7 +459,7 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
         answer="hello",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="quality_analysis",
             sub_route="general_chat",
             intent="general_qa",
             reason="test",
@@ -533,7 +533,7 @@ async def test_persist_chat_result_adds_pending_trust_scoring_and_enqueues(monke
         citations=[{"id": "RAG-1", "source": "profile.md"}],
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="quality_analysis",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="test",
@@ -759,7 +759,7 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
         summary="inspection done",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="inspection_task",
+                selected_agent="quality_analysis",
             sub_route="inspection_execute",
             intent="inspection_execute",
             reason="inspection flow",
@@ -774,8 +774,8 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
                     hit_rate=0.5,
                     citation_coverage=0.67,
                     latency_ms=188,
-                    source_graph="inspection_task",
-                    agent_name="inspection_task",
+                    source_graph="manager",
+                    agent_name="evidence",
                     sub_route="inspection_execute",
                     trace_id="trace-rag-detail",
                     top_score=0.92,
@@ -888,7 +888,7 @@ async def test_persist_chat_result_writes_file_parse_tool_execution(monkeypatch)
         summary="file parsed",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="file",
             sub_route="file_qa",
             intent="file_qa",
             reason="file attachment detected",
@@ -994,7 +994,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
         answer="done",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="evidence",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="test",
@@ -1006,7 +1006,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
                     rag_space_id="space-1",
                     top_k=3,
                     hit_count=1,
-                    source_graph="chat",
+                    source_graph="manager",
                 )
             ]
         ),
@@ -1164,14 +1164,14 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     first = await service._materialize_structured_output(
         request,
         persistable,
-        source_graph="inspection_task",
+        source_graph="quality_analysis",
         source_kind="structured",
         persist_usage=True,
     )
     second = await service._materialize_structured_output(
         request,
         persistable,
-        source_graph="inspection_task",
+        source_graph="quality_analysis",
         source_kind="structured",
         persist_usage=True,
     )

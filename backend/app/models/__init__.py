@@ -27,6 +27,7 @@ from app.models.inspection_spec import (
 )
 from app.models.inspection_standard_library import InspectionStandardLibrary, StandardDocument, StandardDocumentChunk
 from app.models.agent_ops import (
+    AgentArtifactRecord,
     AgentDefinition,
     AgentRouteLog,
     AgentRuntimeEvent,
@@ -108,6 +109,7 @@ __all__ = [
     "SpecChangeLog",
     "InspectionResultEvidence",
     "AgentDefinition",
+    "AgentArtifactRecord",
     "PromptVersion",
     "IntentRoute",
     "AgentRuntimeInstance",

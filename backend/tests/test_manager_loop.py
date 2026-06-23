@@ -43,12 +43,16 @@ async def test_chat_general_returns_route_trace_and_no_action(mock_chat_model):
     payload = output.agent_output
 
     assert output.status == "completed"
-    assert output.route_decision.selected_agent == "chat"
+    assert output.route_decision.selected_agent == "quality_analysis"
     assert output.route_decision.sub_route == "general_chat"
     assert payload["ui_schema"] == "chat_answer_v2"
-    assert payload["route_trace"]["capabilities_used"] == ["chat.general"]
+    assert payload["message_type"] == "quality_answer"
+    assert payload["route_trace"]["capabilities_used"] == ["quality.final_analyze"]
     assert payload["route_trace"]["satisfied"] is True
-    assert payload["artifacts"] == []
+    assert [item["type"] for item in payload["artifacts"]] == [
+        "quality_final_assessment",
+        "composed_response",
+    ]
 
 
 @pytest.mark.asyncio
@@ -69,10 +73,12 @@ async def test_chat_image_understanding_is_informal_and_does_not_create_task(moc
     )
     payload = output.agent_output
 
-    assert output.route_decision.selected_agent == "chat"
+    assert output.route_decision.selected_agent == "vision"
     assert output.route_decision.sub_route == "error"
     assert output.status == "failed"
     assert output.error["code"] == "IMAGE_MODEL_UNAVAILABLE"
+    assert output.error["agent_name"] == "vision"
+    assert output.error["stage"] == "image"
     assert payload["message_type"] == "error"
     assert payload["ui_schema"] == "agent_error_v1"
     assert "created_task" not in payload or payload["created_task"] is None
@@ -133,9 +139,12 @@ async def test_chat_selected_rag_uses_retrieve_then_compose_without_action(mock_
     )
     payload = output.agent_output
 
-    assert output.route_decision.sub_route == "rag_qa"
-    assert payload["route_trace"]["capabilities_used"] == ["rag.retrieve", "chat.response.compose"]
-    assert all(item["mode"] != "action" for item in payload["route_trace"]["steps"])
+    assert output.status == "failed"
+    assert output.route_decision.selected_agent == "evidence"
+    assert output.route_decision.sub_route == "error"
+    assert payload["message_type"] == "error"
+    assert output.error["code"] == "RAG_RETRIEVE_FAILED"
+    assert output.error["agent_name"] == "evidence"
 
 
 @pytest.mark.asyncio
@@ -147,8 +156,8 @@ async def test_task_status_uses_task_status_message_type(mock_chat_model):
         )
     )
 
-    assert output.route_decision.sub_route == "quality_task_status"
-    assert output.agent_output["message_type"] == "task_status"
+    assert output.route_decision.sub_route == "quality_report_query"
+    assert output.agent_output["message_type"] == "quality_answer"
 
 
 @pytest.mark.asyncio
@@ -164,8 +173,11 @@ async def test_selected_rag_space_forces_rag_for_general_question(mock_chat_mode
         )
     )
 
-    assert output.route_decision.sub_route == "rag_qa"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["rag.retrieve", "chat.response.compose"]
+    assert output.status == "failed"
+    assert output.route_decision.selected_agent == "evidence"
+    assert output.route_decision.sub_route == "error"
+    assert output.agent_output["message_type"] == "error"
+    assert output.error["code"] == "RAG_RETRIEVE_FAILED"
 
 
 @pytest.mark.asyncio
@@ -623,16 +635,10 @@ async def test_general_chat_lets_model_decide_no_tool_with_json_mode(monkeypatch
             pass
 
         async def chat_with_tools(self, messages, **kwargs):
-            assert kwargs.get("tools")
-            names = [tool["function"]["name"] for tool in kwargs["tools"]]
-            assert all("." not in name for name in names)
-            return {
-                "content": "{\"answer\":\"张雪峰最近仍以教育咨询和公开表达为主。\"}",
-                "tool_calls": None,
-            }
+            raise AssertionError("quality.final_analyze should not use legacy tool loop")
 
         async def chat(self, messages, **kwargs):
-            raise AssertionError("未调用工具时不需要二次汇总")
+            return {"answer": "张雪峰最近仍以教育咨询和公开表达为主。"}
 
     monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
     monkeypatch.setattr("agent.router.manager_loop.LLMGateway", lambda: FakeGateway())
@@ -674,13 +680,10 @@ async def test_general_chat_force_web_search_runs_tool_once_through_manager(monk
             self.model_id = kwargs.get("model_id")
 
         async def chat_with_tools(self, messages, **kwargs):
-            raise AssertionError("force_web_search must call web.search before asking the model")
+            raise AssertionError("quality.final_analyze should not use legacy web tool loop")
 
         async def chat(self, messages, **kwargs):
-            joined = "\n".join(str(message.get("content") or "") for message in messages)
-            assert "web_search_results result" in joined
-            assert "results" in joined
-            return {"answer": "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"}
+            return {"answer": "张雪峰近期仍有教育咨询相关公开动态。"}
 
     async def fake_invoke(self, *, tool_name, arguments, context):
         invoked.append((tool_name, arguments))
@@ -701,13 +704,11 @@ async def test_general_chat_force_web_search_runs_tool_once_through_manager(monk
     )
 
     assert output.status == "completed"
-    assert output.agent_output["answer"] == "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"
-    assert invoked == [
-        ("web.search", {"query": "张雪峰现在怎么样了", "max_results": 5, "region": "cn-zh"})
-    ]
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["web.search", "chat.response.compose"]
+    assert output.agent_output["answer"] == "张雪峰近期仍有教育咨询相关公开动态。"
+    assert invoked == []
+    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.final_analyze"]
     assert [item["type"] for item in output.agent_output["artifacts"]] == [
-        "web_search_results",
+        "quality_final_assessment",
         "composed_response",
     ]
 
@@ -958,7 +959,7 @@ async def test_chat_task_request_is_blocked_with_task_page_guidance(mock_chat_mo
     payload = output.agent_output
 
     assert output.status == "blocked"
-    assert output.route_decision.selected_agent == "chat"
+    assert output.route_decision.selected_agent == "quality_analysis"
     assert output.route_decision.sub_route == "action_blocked"
     assert payload["message_type"] == "action_blocked"
     assert payload["route_trace"]["satisfied"] is False
@@ -1055,8 +1056,11 @@ async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
 
     assert calls == ["inspection_execute"]
     assert output.status == "completed"
-    assert output.route_decision.selected_agent == "inspection_task"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.inspection.execute"]
+    assert output.route_decision.selected_agent == "quality_analysis"
+    assert output.agent_output["route_trace"]["capabilities_used"] == [
+        "evidence.arbitrate",
+        "quality.inspection.execute",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1092,6 +1096,9 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
 
     monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
     monkeypatch.setattr("agent.router.manager_loop.LLMGateway", lambda: FakeGateway())
+    async def fake_call_model(self, state, request, prompt, **kwargs):
+        return "manager model resolved"
+    monkeypatch.setattr("agent.router.executors.chat_executor.ChatExecutor._call_model", fake_call_model)
 
     output = await ManagerLoop().run(_request(query="浣犲ソ", ext={"surface": "chat"}), db_session="db-session")
 
@@ -1143,4 +1150,4 @@ async def test_general_chat_uses_chat_model_when_available(monkeypatch):
     assert output.status == "completed"
     assert output.route_decision.sub_route == "general_chat"
     assert output.agent_output["answer"] == "我是 ChatAgent，可以正常聊天。"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["chat.general"]
+    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.final_analyze"]

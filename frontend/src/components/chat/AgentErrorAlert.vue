@@ -30,13 +30,21 @@ defineProps<{
         <span>Source</span>
         <strong>{{ error.source }}</strong>
       </div>
-      <div v-if="error.owner_agent" class="agent-error-meta-item">
+      <div v-if="error.agent_name || error.owner_agent" class="agent-error-meta-item">
         <span>Agent</span>
-        <strong>{{ error.owner_agent }}</strong>
+        <strong>{{ error.agent_name || error.owner_agent }}</strong>
+      </div>
+      <div v-if="error.stage" class="agent-error-meta-item">
+        <span>Stage</span>
+        <strong>{{ error.stage }}</strong>
       </div>
       <div v-if="error.capability" class="agent-error-meta-item">
         <span>Capability</span>
         <strong>{{ error.capability }}</strong>
+      </div>
+      <div v-if="error.request_id" class="agent-error-meta-item agent-error-meta-wide">
+        <span>Request</span>
+        <strong>{{ error.request_id }}</strong>
       </div>
       <div v-if="error.trace_id" class="agent-error-meta-item agent-error-meta-wide">
         <span>Trace ID</span>

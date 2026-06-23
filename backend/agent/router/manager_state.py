@@ -23,6 +23,8 @@ class ManagerState(BaseModel):
     trace_url: str | None = None
 
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    request_ext: dict[str, Any] = Field(default_factory=dict)
+    request_metadata: dict[str, Any] = Field(default_factory=dict)
     history_messages: list[dict[str, Any]] = Field(default_factory=list)
     inspection_context: dict[str, Any] | None = None
     selected_rag_space: dict[str, Any] | None = None
@@ -68,6 +70,9 @@ class ManagerState(BaseModel):
     final_action: str = "continue"
 
     selected_agent: str = ""
+    current_step_id: str | None = None
+    current_capability: str | None = None
+    current_owner_agent: str | None = None
     executed_step_hashes: set[str] = Field(default_factory=set)
     route_plan_hashes: list[str] = Field(default_factory=list)
     last_artifact_counts: list[int] = Field(default_factory=list)

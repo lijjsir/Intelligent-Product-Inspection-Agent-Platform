@@ -269,6 +269,12 @@ class QualityAgentOrchestratorService:
                 return False
 
             if output.route_decision:
+                await self._persist_agent_artifacts(
+                    session,
+                    request=request,
+                    output=output,
+                    task_id=None if not materialized else str(materialized["task_id"]),
+                )
                 rag_repo = RagAnalysisRepository(session, request.org_id)
                 for index, item in enumerate(list(output.persistable_output.rag_queries or [])):
                     metadata = dict(item.metadata or {})
@@ -348,6 +354,53 @@ class QualityAgentOrchestratorService:
             emit=emit,
         )
         return materialization_error is None
+
+    async def _persist_agent_artifacts(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        task_id: str | None = None,
+    ) -> None:
+        from app.repositories.agent_artifact_repo import AgentArtifactRepository
+
+        repo = AgentArtifactRepository(session)
+        artifacts = self._response_artifacts(output)
+        response_payload = dict((output.raw_state or {}).get("response_payload") or {})
+        route_trace = dict(response_payload.get("route_trace") or {})
+        capability_by_artifact: dict[str, str] = {}
+        for obs in list(route_trace.get("observations") or []):
+            if not isinstance(obs, dict):
+                continue
+            for artifact_id in list(obs.get("artifact_ids") or []):
+                capability_by_artifact[str(artifact_id)] = str(obs.get("capability_key") or "")
+        for item in artifacts:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+            await repo.create_once(
+                {
+                    "org_id": request.org_id,
+                    "session_id": request.session_id,
+                    "task_id": task_id,
+                    "workflow_run_id": request.workflow_run_id,
+                    "request_id": request.request_id,
+                    "artifact_id": artifact_id,
+                    "agent_name": str(
+                        item.get("source_agent")
+                        or (output.route_decision.selected_agent if output.route_decision else "unknown")
+                    ),
+                    "capability": capability_by_artifact.get(artifact_id) or None,
+                    "artifact_type": str(item.get("type") or "unknown"),
+                    "status": str(item.get("status") or "success"),
+                    "content_json": dict(item.get("content") or {}),
+                    "metrics_json": dict(item.get("metrics") or {}),
+                    "citations_json": list(item.get("citations") or []),
+                    "error_json": item.get("error") if isinstance(item.get("error"), dict) else None,
+                    "confidence": item.get("confidence"),
+                }
+            )
 
     async def _write_rag_usage_candidate(
         self,
@@ -780,7 +833,7 @@ class QualityAgentOrchestratorService:
             and persistable.stability
         )
 
-        return route == "inspection_task" and sub_route == "inspection_execute" and has_structured_output
+        return route == "quality_analysis" and sub_route == "inspection_execute" and has_structured_output
 
     def _build_response_payload(
         self,
@@ -863,7 +916,7 @@ class QualityAgentOrchestratorService:
                 source_graph=(
                     output.route_decision.selected_agent
                     if output.route_decision
-                    else "inspection_task"
+                    else "quality_analysis"
                 ),
                 source_kind="chat_quality_answer",
                 persist_usage=True,

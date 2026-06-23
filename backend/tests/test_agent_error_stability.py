@@ -5,9 +5,9 @@ import pytest
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentPlanStep, AgentRoutePlan
 from agent.router.executors.base import observation
-from agent.router.executors.chat_executor import ChatExecutor
 from agent.router.executors.file_executor import FileExecutor
 from agent.router.executors.inspection_task_executor import InspectionTaskExecutor
+from agent.router.executors.quality_analysis_executor import QualityAnalysisExecutor
 from agent.router.manager_dispatcher import ManagerDispatcher
 from agent.router.manager_evaluator import ManagerEvaluator
 from agent.router.manager_loop import ManagerLoop
@@ -69,6 +69,23 @@ def test_make_agent_error_payload_contains_frontend_contract_fields():
     assert payload["detail"] == {"rag_space_id": "rag-1"}
 
 
+def test_error_payload_exposes_frontend_stage_agent_and_request_id():
+    from agent.router.errors import make_agent_error
+
+    state = _state(trace_id="trace-1", request_id="req-visible-1", selected_agent="evidence")
+    error = make_agent_error(
+        "RAG_RETRIEVE_FAILED",
+        detail={"rag_space_id": "rag-1"},
+        source="evidence.arbitrate",
+    )
+
+    payload = error.to_dict(state=state, stage="evidence_arbitration", agent_name="evidence")
+
+    assert payload["request_id"] == "req-visible-1"
+    assert payload["stage"] == "evidence_arbitration"
+    assert payload["agent_name"] == "evidence"
+
+
 @pytest.mark.asyncio
 async def test_manager_loop_converts_runtime_error_to_agent_error_payload(monkeypatch):
     from agent.router.errors import make_agent_error
@@ -93,7 +110,7 @@ async def test_manager_loop_converts_runtime_error_to_agent_error_payload(monkey
 
 
 @pytest.mark.asyncio
-async def test_chat_response_compose_raises_instead_of_degraded_fallback(monkeypatch):
+async def test_quality_final_analyze_raises_instead_of_degraded_fallback(monkeypatch):
     from agent.router.errors import AgentRuntimeError
 
     async def fake_call_model(self, state, request, prompt, **kwargs):
@@ -108,16 +125,12 @@ async def test_chat_response_compose_raises_instead_of_degraded_fallback(monkeyp
         goal="compose",
         reason="general_chat",
         steps=[
-            AgentPlanStep(
-                step_id="s1",
-                owner_agent="chat",
-                capability="chat.response.compose",
-            )
-        ],
-    )
+                AgentPlanStep(step_id="s1", owner_agent="quality_analysis", capability="quality.final_analyze")
+            ],
+        )
 
     with pytest.raises(AgentRuntimeError) as exc_info:
-        await ChatExecutor().execute(
+        await QualityAnalysisExecutor().execute(
             state.route_plan.steps[0],
             state,
             _request(),
@@ -128,7 +141,12 @@ async def test_chat_response_compose_raises_instead_of_degraded_fallback(monkeyp
 
 def test_file_executor_supports_rag_ingest_and_inspection_exposes_only_public_entry():
     assert "rag.ingest" in FileExecutor.SUPPORTED_CAPABILITIES
-    assert InspectionTaskExecutor.SUPPORTED_CAPABILITIES == {"quality.inspection.execute"}
+    from agent.router.executors.quality_analysis_executor import QualityAnalysisExecutor
+
+    assert QualityAnalysisExecutor.SUPPORTED_CAPABILITIES == {
+        "quality.final_analyze",
+        "quality.inspection.execute",
+    }
 
 
 @pytest.mark.asyncio
@@ -141,15 +159,20 @@ async def test_inspection_task_executor_returns_blocked_when_graph_needs_user_in
                 "answer": "缺少产品编号",
             }
 
-    executor = InspectionTaskExecutor()
-    executor._graph = FakeGraph()
+    executor = QualityAnalysisExecutor()
     step = AgentPlanStep(
         step_id="s1",
-        owner_agent="inspection_task",
+        owner_agent="quality_analysis",
         capability="quality.inspection.execute",
     )
+    import agent.subgraphs.inspection_task as inspection_task_module
 
-    obs, artifacts = await executor.execute(step, _state(selected_agent="inspection_task"), _request())
+    original = inspection_task_module.InspectionTaskGraph
+    inspection_task_module.InspectionTaskGraph = lambda: FakeGraph()
+    try:
+        obs, artifacts = await executor.execute(step, _state(selected_agent="quality_analysis"), _request())
+    finally:
+        inspection_task_module.InspectionTaskGraph = original
 
     assert obs.status == "blocked"
     assert artifacts[0].status == "blocked"
@@ -168,16 +191,22 @@ async def test_inspection_task_executor_raises_when_graph_fails():
                 "summary": "规则执行失败",
             }
 
-    executor = InspectionTaskExecutor()
-    executor._graph = FakeGraph()
+    executor = QualityAnalysisExecutor()
     step = AgentPlanStep(
         step_id="s1",
-        owner_agent="inspection_task",
+        owner_agent="quality_analysis",
         capability="quality.inspection.execute",
     )
+    import agent.subgraphs.inspection_task as inspection_task_module
 
-    with pytest.raises(AgentRuntimeError) as exc_info:
-        await executor.execute(step, _state(selected_agent="inspection_task"), _request())
+    original = inspection_task_module.InspectionTaskGraph
+    inspection_task_module.InspectionTaskGraph = lambda: FakeGraph()
+
+    try:
+        with pytest.raises(AgentRuntimeError) as exc_info:
+            await executor.execute(step, _state(selected_agent="quality_analysis"), _request())
+    finally:
+        inspection_task_module.InspectionTaskGraph = original
 
     assert exc_info.value.code == "INSPECTION_TASK_FAILED"
 
@@ -192,14 +221,14 @@ async def test_dispatcher_respects_dependencies_alias_when_depends_on_is_empty()
             return observation(step, status="success", summary=step.step_id), []
 
     dispatcher = ManagerDispatcher()
-    dispatcher._executors = {"chat": FakeExecutor()}
+    dispatcher._executors = {"quality_analysis": FakeExecutor()}
     plan = AgentRoutePlan(
         plan_id="plan-deps",
         surface="chat",
         goal="dependency order",
         steps=[
-            AgentPlanStep(step_id="s2", owner_agent="chat", capability="chat.general", input={"order": 2}, dependencies=["s1"]),
-            AgentPlanStep(step_id="s1", owner_agent="chat", capability="chat.general", input={"order": 1}),
+            AgentPlanStep(step_id="s2", owner_agent="quality_analysis", capability="quality.final_analyze", input={"order": 2}, dependencies=["s1"]),
+            AgentPlanStep(step_id="s1", owner_agent="quality_analysis", capability="quality.final_analyze", input={"order": 1}),
         ],
     )
 
@@ -209,23 +238,23 @@ async def test_dispatcher_respects_dependencies_alias_when_depends_on_is_empty()
 
 
 @pytest.mark.asyncio
-async def test_evaluator_accepts_empty_quality_report_and_dedupes_artifacts():
+async def test_evaluator_accepts_empty_evidence_packet_and_dedupes_artifacts():
     evaluator = ManagerEvaluator()
     state = _state()
     artifact = AgentArtifact(
         artifact_id="a-quality-empty",
-        type="quality_report",
-        source_agent="chat",
+        type="evidence_packet",
+        source_agent="evidence",
         status="empty",
         empty_result=True,
-        metrics={"report_count": 0, "found": False},
+        metrics={"source_count": 0},
     )
     state.artifacts.append(artifact)
     plan = AgentRoutePlan(
         plan_id="plan-report",
         surface="chat",
-        goal="query report",
-        steps=[AgentPlanStep(step_id="s1", owner_agent="chat", capability="quality.report.query")],
+        goal="query evidence",
+        steps=[AgentPlanStep(step_id="s1", owner_agent="evidence", capability="evidence.arbitrate")],
     )
 
     result = await evaluator.evaluate(state, plan, [], [artifact])
@@ -262,7 +291,7 @@ def test_validate_plan_rejects_owner_capability_mismatch():
         plan_id="plan-invalid",
         surface="chat",
         goal="invalid",
-        steps=[AgentPlanStep(step_id="s1", owner_agent="file", capability="chat.general")],
+        steps=[AgentPlanStep(step_id="s1", owner_agent="file", capability="quality.final_analyze")],
     )
 
     result = ManagerLoop()._validate_plan(state, plan)
@@ -281,7 +310,7 @@ def test_topology_marks_quality_judgement_as_internal_engine_and_report_under_ch
     assert quality_judgement["route_enabled"] is False
     assert quality_judgement["supports_route_toggle"] is False
 
-    quality_report = by_key["quality_report"]
-    assert quality_report["type"] == "capability"
-    assert quality_report["route_enabled"] is False
-    assert quality_report["parent"] == "chat"
+    assert by_key["evidence_arbitration"]["route_enabled"] is True
+    assert by_key["vision_inspection"]["route_enabled"] is True
+    assert by_key["lab_detection"]["route_enabled"] is True
+    assert by_key["quality_analysis"]["route_enabled"] is True

@@ -6,7 +6,9 @@ from time import perf_counter
 import traceback
 from typing import Any
 
-from agent.subgraphs.inspection_task import InspectionGraph, InspectionState
+from agent.contracts import AgentOutput
+from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
+from agent.router.manager_provider import get_agent_manager
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
@@ -33,6 +35,8 @@ from infra.database.session import get_session
 
 
 logger = logging.getLogger(__name__)
+
+InspectionState = dict[str, Any]
 
 
 def _normalize_image_urls_for_runtime(image_urls: list[str] | None) -> list[str]:
@@ -237,8 +241,8 @@ async def _persist_rag_query_log(
             "hit_rate": hit_rate,
             "citation_coverage": hit_rate if citations else 0.0,
             "latency_ms": int(_float_or_zero(summary.get("latency_ms"))),
-            "source_graph": "inspection_task",
-            "agent_name": "inspection_task",
+            "source_graph": "manager",
+            "agent_name": "evidence",
             "sub_route": "task_execution",
             "trace_id": str(state.get("trace_id") or "") or None,
             "top_score": top_score,
@@ -256,6 +260,220 @@ async def _ingest_quality_kg_from_completed_result(*, org_id: str, result) -> in
     if not extract_quality_kg_chains(result):
         return 0
     return await QualityKnowledgeGraphService(org_id=org_id).ingest_completed_result(result)
+
+
+def _build_manager_task_request(task: InspectionTask) -> NormalizedRequest:
+    metadata = dict(task.meta_data or {})
+    workflow_run_id = str(
+        (metadata.get("execution") or {}).get("workflow_run_id")
+        or metadata.get("workflow_run_id")
+        or uuid7()
+    )
+    image_urls = _normalize_image_urls_for_runtime(task.image_urls or [])
+    attachments = [
+        NormalizedAttachment(
+            id=str((item or {}).get("id") or (item or {}).get("hash") or index),
+            name=str((item or {}).get("name") or f"task-image-{index + 1}"),
+            url=image_urls[index] if index < len(image_urls) else str((item or {}).get("url") or ""),
+            kind="image",
+            content_type="image/*",
+        )
+        for index, item in enumerate(list(task.image_items or []))
+    ]
+    if not attachments:
+        attachments = [
+            NormalizedAttachment(id=f"image-{index}", name=f"task-image-{index + 1}", url=url, kind="image", content_type="image/*")
+            for index, url in enumerate(image_urls)
+        ]
+    ext = {
+        **metadata,
+        "surface": "quality_task",
+        "allowed_modes": ["action", "report", "answer"],
+        "action_intent": "quality_inspection_execute",
+        "image_urls": image_urls,
+        "manager_skip_rag_evidence": True,
+    }
+    if metadata.get("selected_rag_space_id") or metadata.get("selected_rag_space"):
+        ext["rag_scope"] = {
+            "enabled": True,
+            "rag_space_id": metadata.get("selected_rag_space_id") or (metadata.get("selected_rag_space") or {}).get("id"),
+            "scope_node_ids": list(metadata.get("selected_rag_scope_node_ids") or []),
+        }
+    return NormalizedRequest(
+        request_kind="task",
+        request_id=f"task-run-{task.id}",
+        workflow_run_id=workflow_run_id,
+        org_id=task.org_id,
+        user_id=task.created_by,
+        workspace="quality_task",
+        query=f"执行质量检测 task_id={task.id} product_id={task.product_id} spec_code={task.spec_code}",
+        metadata={
+            **metadata,
+            "task_id": task.id,
+            "product_id": task.product_id,
+            "spec_code": task.spec_code,
+            "priority": task.priority,
+        },
+        ext=ext,
+        attachments=attachments,
+        image_urls=image_urls,
+        product_id=task.product_id,
+        spec_code=task.spec_code,
+    )
+
+
+async def _persist_task_agent_artifacts(session, *, task: InspectionTask, output: AgentOutput) -> None:
+    from app.repositories.agent_artifact_repo import AgentArtifactRepository
+
+    repo = AgentArtifactRepository(session)
+    payload = dict((output.raw_state or {}).get("response_payload") or {})
+    route_trace = dict(payload.get("route_trace") or {})
+    capability_by_artifact: dict[str, str] = {}
+    for obs in list(route_trace.get("observations") or []):
+        if isinstance(obs, dict):
+            for artifact_id in list(obs.get("artifact_ids") or []):
+                capability_by_artifact[str(artifact_id)] = str(obs.get("capability_key") or "")
+    for item in list(payload.get("artifacts") or []):
+        if not isinstance(item, dict):
+            continue
+        artifact_id = str(item.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        await repo.create_once(
+            {
+                "org_id": task.org_id,
+                "session_id": _linked_chat_session_id(task) or None,
+                "task_id": task.id,
+                "workflow_run_id": str((output.persistable_output.quality_trace.trace_id if output.persistable_output.quality_trace else "") or ""),
+                "request_id": str((output.raw_state or {}).get("request_id") or f"task-run-{task.id}"),
+                "artifact_id": artifact_id,
+                "agent_name": str(item.get("source_agent") or (output.route_decision.selected_agent if output.route_decision else "unknown")),
+                "capability": capability_by_artifact.get(artifact_id) or None,
+                "artifact_type": str(item.get("type") or "unknown"),
+                "status": str(item.get("status") or "success"),
+                "content_json": dict(item.get("content") or {}),
+                "metrics_json": dict(item.get("metrics") or {}),
+                "citations_json": list(item.get("citations") or []),
+                "error_json": item.get("error") if isinstance(item.get("error"), dict) else None,
+                "confidence": item.get("confidence"),
+            }
+        )
+
+
+async def _materialize_manager_task_output(
+    *,
+    session,
+    task: InspectionTask,
+    output: AgentOutput,
+    result_repo: ResultRepository,
+    stability_repo: StabilityRepository,
+    alert_repo: AlertRepository,
+    token_ledger_repo: TokenLedgerRepository,
+    user_token_usage_repo: UserTokenUsageSummaryRepository,
+) -> tuple[Any, Any]:
+    persistable = output.persistable_output
+    if not (persistable and persistable.result and persistable.stability):
+        raise RuntimeError("quality_analysis did not return persistable task result")
+    result_data = persistable.result
+    stability_data = persistable.stability
+    quality_trace = persistable.quality_trace
+    reasoning_chain = dict(result_data.reasoning_chain or {})
+    if quality_trace:
+        reasoning_chain.setdefault("trace", quality_trace.model_dump(exclude_none=True))
+    latency_ms = int(max(1, sum(float(item.latency_ms or 0.0) for item in persistable.rag_queries) if persistable.rag_queries else 1))
+    result = await result_repo.upsert_by_task(
+        {
+            "id": result_data.id or str(uuid7()),
+            "task_id": task.id,
+            "org_id": task.org_id,
+            "verdict": result_data.verdict or "manual_required",
+            "overall_score": float(result_data.overall_score or 0.0),
+            "defects": reasoning_chain.get("defects") or [],
+            "citations": result_data.citations or {"items": output.citations},
+            "reasoning_chain": reasoning_chain,
+            "llm_model": result_data.llm_model or "quality_analysis",
+            "prompt_version": quality_trace.prompt_version if quality_trace else None,
+            "tokens_used": sum(int(item.total_tokens or 0) for item in persistable.token_usage),
+            "latency_ms": latency_ms,
+        }
+    )
+    stability = await stability_repo.upsert_by_task(
+        {
+            "id": str(uuid7()),
+            "result_id": result.id,
+            "task_id": task.id,
+            "org_id": task.org_id,
+            "evidence_score": float(stability_data.evidence_score or 0.0),
+            "consistency_score": float(stability_data.faithfulness_score or 0.0),
+            "confidence_score": float(stability_data.confidence_score or 0.0),
+            "traceability_score": float(stability_data.traceability_score or 0.0),
+            "anomaly_score": float(stability_data.physical_hallucination_score or 0.0),
+            "risk_score": float(stability_data.risk_score or 0.0),
+            "risk_level": stability_data.risk_level or "medium",
+            "dimension_detail": {},
+            "sampling_results": {"route_trace": (output.raw_state or {}).get("response_payload", {}).get("route_trace")},
+            "root_cause": None,
+            "hallucination_risk": stability_data.physical_hallucination_score,
+            "overconfidence": None,
+            "created_at": utcnow(),
+        }
+    )
+    for alert in list(persistable.alerts or []):
+        await alert_repo.create(
+            {
+                "id": str(uuid7()),
+                "org_id": task.org_id,
+                "rule_id": None,
+                "stability_id": stability.id,
+                "alert_type": "quality_analysis",
+                "severity": alert.severity,
+                "title": alert.title,
+                "detail": {"message": alert.message},
+                "status": "open",
+                "channels": {"in_app": True},
+                "created_at": utcnow(),
+            }
+        )
+    await _record_token_usage(
+        token_ledger_repo=token_ledger_repo,
+        user_token_usage_repo=user_token_usage_repo,
+        task=task,
+        result_id=result.id,
+        state={
+            "model_id": result_data.llm_model or "quality_analysis",
+            "model_config_id": None,
+            "trace_id": quality_trace.trace_id if quality_trace else None,
+        },
+        usage_events=[item.model_dump() for item in list(persistable.token_usage or [])],
+    )
+    rag_repo = RagAnalysisRepository(session, str(task.org_id))
+    for index, item in enumerate(list(persistable.rag_queries or [])):
+        create_log = getattr(rag_repo, "create_log_once", None)
+        if create_log is None:
+            create_log = rag_repo.create_log
+        await create_log(
+            {
+                "idempotency_key": f"agent_manager_task:{task.id}:{index}",
+                "task_id": task.id,
+                "session_id": _linked_chat_session_id(task) or None,
+                "user_id": task.created_by,
+                "query": item.query,
+                "rag_space_id": item.rag_space_id,
+                "top_k": int(item.top_k or 0),
+                "hit_count": item.hit_count,
+                "hit_rate": item.hit_rate,
+                "citation_coverage": item.citation_coverage,
+                "latency_ms": int(item.latency_ms or 0),
+                "source_graph": item.source_graph,
+                "agent_name": item.agent_name or "evidence",
+                "sub_route": item.sub_route or "task_execution",
+                "trace_id": item.trace_id,
+                "top_score": float(item.top_score or 0.0),
+                "metadata_json": dict(item.metadata or {}),
+            }
+        )
+    await _persist_task_agent_artifacts(session, task=task, output=output)
+    return result, stability
 
 
 async def _append_chat_result_summary(
@@ -463,6 +681,93 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         pipeline_started_at = perf_counter()
 
         try:
+            manager_request = _build_manager_task_request(task)
+            await emit({"type": "agent_stage", "stage": "manager", "status": "running", "message": "AgentManager 开始调度"})
+            router_output = await get_agent_manager().run(manager_request, db_session=session)
+            if router_output.status != "completed":
+                error_payload = dict(router_output.error or {})
+                message = (
+                    error_payload.get("message")
+                    or router_output.agent_output.get("answer")
+                    or "AgentManager task execution failed"
+                )
+                raw_error = dict(error_payload.get("detail") or {}).get("raw_error")
+                if raw_error:
+                    message = f"{message}: {raw_error}"
+                await emit(
+                    {
+                        "type": "agent_stage",
+                        "stage": "manager",
+                        "status": "failed",
+                        "message": message,
+                        "error": router_output.error,
+                    }
+                )
+                raise RuntimeError(str(message))
+            agent_output = AgentOutput.model_validate(router_output.agent_output)
+            from agent.contracts.quality_contracts import RouteDecision, RouteSignals
+
+            rd = router_output.route_decision
+            agent_output.route_decision = RouteDecision(
+                mode="router_enabled",
+                selected_agent=rd.selected_agent,
+                sub_route=rd.sub_route,
+                reason=rd.reason,
+                intent=rd.intent,
+                confidence=rd.confidence,
+                requires_confirmation=rd.requires_confirmation,
+                route_source=rd.route_source,
+                fallback_agent=rd.fallback_agent,
+                signals=RouteSignals(),
+            )
+            route_trace = dict((agent_output.raw_state or {}).get("response_payload", {}).get("route_trace") or {})
+            for obs in list(route_trace.get("observations") or []):
+                if isinstance(obs, dict):
+                    await emit(
+                        {
+                            "type": "agent_stage",
+                            "stage": obs.get("capability_key") or obs.get("owner_agent") or "agent",
+                            "status": obs.get("status") or "completed",
+                            "message": obs.get("summary") or "",
+                            "agent_name": obs.get("owner_agent"),
+                            "payload": obs,
+                        }
+                    )
+            result, stability_obj = await _materialize_manager_task_output(
+                session=session,
+                task=task,
+                output=agent_output,
+                result_repo=result_repo,
+                stability_repo=stability_repo,
+                alert_repo=alert_repo,
+                token_ledger_repo=token_ledger_repo,
+                user_token_usage_repo=user_token_usage_repo,
+            )
+            await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
+            await emit({"type": "stability", "risk_level": stability_obj.risk_level, "risk_score": float(stability_obj.risk_score)})
+            await task_repo.update_status(org_id, task_id, "done")
+            done_metadata = dict(task.meta_data or {})
+            done_metadata["execution"] = {
+                **dict(done_metadata.get("execution") or {}),
+                "finished_at": utcnow_iso(),
+                "latency_ms": max(1, int(round((perf_counter() - pipeline_started_at) * 1000))),
+                "source_graph": "agent_manager",
+                "selected_agent": router_output.route_decision.selected_agent,
+            }
+            await task_repo.patch_metadata(org_id, task_id, done_metadata)
+            await session.commit()
+            await emit({"type": "status", "status": "done"})
+            if linked_chat_session_id:
+                await _append_chat_result_summary(
+                    org_id=org_id,
+                    user_id=str(task.created_by),
+                    session_id=linked_chat_session_id,
+                    task=task,
+                    result=result,
+                    stability_obj=stability_obj,
+                )
+            return {"task_id": task_id, "status": "done"}
+
             runtime_models = await model_config_service.list_runtime_models()
             gateway = LLMGateway()
             graph = InspectionGraph()

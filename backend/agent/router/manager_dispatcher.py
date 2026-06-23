@@ -6,9 +6,12 @@ import json
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep, AgentRoutePlan
 from agent.router.executors import (
-    ChatExecutor,
+    EvidenceArbitrationExecutor,
     FileExecutor,
-    InspectionTaskExecutor,
+    LabDetectionExecutor,
+    MemoryGovernanceExecutor,
+    QualityAnalysisExecutor,
+    VisionInspectionExecutor,
 )
 from agent.router.executors.base import observation
 from agent.router.manager_state import ManagerState
@@ -19,9 +22,12 @@ from agent.tools.invoker import ToolInvoker
 class ManagerDispatcher:
     def __init__(self) -> None:
         self._executors = {
-            "chat": ChatExecutor(),
+            "evidence": EvidenceArbitrationExecutor(),
+            "vision": VisionInspectionExecutor(),
+            "lab_detection": LabDetectionExecutor(),
+            "quality_analysis": QualityAnalysisExecutor(),
+            "memory_governance": MemoryGovernanceExecutor(),
             "file": FileExecutor(),
-            "inspection_task": InspectionTaskExecutor(),
         }
 
     async def dispatch(
@@ -100,7 +106,7 @@ class ManagerDispatcher:
 
                     raise make_agent_error(
                         "UNKNOWN_OWNER_AGENT",
-                        message=f"未知业务 Agent：{owner}。rag/vision/quality_report/data_analysis 不是业务 Agent。",
+                        message=f"未知业务 Agent：{owner}。可用 Agent 为 evidence/vision/lab_detection/quality_analysis/memory_governance/file。",
                         detail={"owner_agent": owner},
                         source="manager.dispatcher",
                     )
@@ -114,6 +120,10 @@ class ManagerDispatcher:
                     web_spec = registry.get("web.search")
                     available_tools = [web_spec] + [t for t in available_tools if t.name != "web.search"]
                 state.available_tools = available_tools
+                state.selected_agent = owner
+                state.current_step_id = step.step_id
+                state.current_capability = step.capability
+                state.current_owner_agent = owner
 
                 try:
                     step_observation, step_artifacts = await executor.execute(

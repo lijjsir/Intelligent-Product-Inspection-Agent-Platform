@@ -28,14 +28,14 @@ class TestCapabilityModel:
             assert len(cap.owner_agents) > 0, f"{key}: owner_agents must not be empty"
             assert all(isinstance(a, str) for a in cap.owner_agents), f"{key}: all owner_agents must be strings"
 
-    def test_no_capability_lists_rag_vision_report_as_owner_agent(self):
-        forbidden = {"rag", "vision", "quality_report", "data_analysis"}
+    def test_no_capability_lists_legacy_or_tool_agent_as_owner_agent(self):
+        forbidden = {"rag", "chat", "inspection_task", "quality_report", "data_analysis"}
         for key, cap in CAPABILITIES.items():
             overlap = set(cap.owner_agents) & forbidden
             assert not overlap, f"{key}: owner_agents contains forbidden values: {overlap}"
 
     def test_owner_agents_only_business_agents(self):
-        allowed = {"chat", "file", "inspection_task"}
+        allowed = {"evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"}
         for key, cap in CAPABILITIES.items():
             invalid = set(cap.owner_agents) - allowed
             assert not invalid, f"{key}: owner_agents contains non-business agents: {invalid}"
@@ -44,22 +44,18 @@ class TestCapabilityModel:
         for key, cap in CAPABILITIES.items():
             assert cap.handler, f"{key}: must have handler field set"
 
-    def test_rag_retrieve_callable_by_chat_file_inspection(self):
-        cap = CAPABILITIES["rag.retrieve"]
-        assert "chat" in cap.owner_agents
-        assert "file" in cap.owner_agents
-        assert "inspection_task" in cap.owner_agents
+    def test_evidence_arbitrate_owned_by_evidence(self):
+        cap = CAPABILITIES["evidence.arbitrate"]
+        assert cap.owner_agents == ["evidence"]
         assert "rag" not in cap.owner_agents
 
-    def test_image_understanding_callable_by_chat_inspection(self):
-        cap = CAPABILITIES["image.understanding"]
-        assert "chat" in cap.owner_agents
-        assert "inspection_task" in cap.owner_agents
-        assert "vision" not in cap.owner_agents
+    def test_vision_inspect_owned_by_vision(self):
+        cap = CAPABILITIES["vision.inspect"]
+        assert cap.owner_agents == ["vision"]
 
-    def test_inspection_execute_only_inspection_task(self):
+    def test_inspection_execute_only_quality_analysis(self):
         cap = CAPABILITIES["quality.inspection.execute"]
-        assert cap.owner_agents == ["inspection_task"]
+        assert cap.owner_agents == ["quality_analysis"]
 
 
 class TestAgentPlanStep:
@@ -68,17 +64,17 @@ class TestAgentPlanStep:
     def test_owner_agent_field_exists(self):
         step = AgentPlanStep(
             step_id="s1",
-            owner_agent="chat",
-            capability="chat.general",
+            owner_agent="quality_analysis",
+            capability="quality.final_analyze",
         )
-        assert step.owner_agent == "chat"
-        assert step.capability == "chat.general"
+        assert step.owner_agent == "quality_analysis"
+        assert step.capability == "quality.final_analyze"
 
     def test_backward_compat_capability_key_removed(self):
         """capability_key field has been removed -- only capability is used."""
         step = AgentPlanStep(
             step_id="s1",
-            owner_agent="chat",
+            owner_agent="quality_analysis",
             capability="test.cap",
         )
         assert step.capability == "test.cap"
@@ -89,10 +85,10 @@ class TestAgentPlanStep:
         """agent field has been removed -- only owner_agent is used."""
         step = AgentPlanStep(
             step_id="s1",
-            owner_agent="chat",
+            owner_agent="quality_analysis",
             capability="test.cap",
         )
-        assert step.owner_agent == "chat"
+        assert step.owner_agent == "quality_analysis"
         with pytest.raises(AttributeError):
             _ = step.agent
 
@@ -113,7 +109,7 @@ class TestCapabilityRegistry:
     def test_chat_surface_excludes_action_capabilities(self):
         allowed_modes = ["answer", "report"]
         assert not capability_allowed(CAPABILITIES["quality.inspection.execute"], "chat", allowed_modes)
-        assert capability_allowed(CAPABILITIES["chat.general"], "chat", allowed_modes)
+        assert capability_allowed(CAPABILITIES["quality.final_analyze"], "chat", allowed_modes)
 
     def test_quality_task_allows_inspection(self):
         allowed_modes = ["action", "report", "answer"]
@@ -121,19 +117,26 @@ class TestCapabilityRegistry:
 
 
 class TestManagerDispatcher:
-    """Verify only business agents are registered."""
+    """Verify professional graph executors are registered."""
 
-    def test_only_business_executors_registered(self):
+    def test_professional_executors_registered(self):
         dispatcher = ManagerDispatcher()
-        assert set(dispatcher._executors.keys()) == {"chat", "file", "inspection_task"}
+        assert set(dispatcher._executors.keys()) == {
+            "evidence",
+            "vision",
+            "lab_detection",
+            "quality_analysis",
+            "memory_governance",
+            "file",
+        }
 
     def test_rag_not_registered_as_executor(self):
         dispatcher = ManagerDispatcher()
         assert "rag" not in dispatcher._executors
 
-    def test_vision_not_registered_as_executor(self):
+    def test_legacy_chat_not_registered_as_executor(self):
         dispatcher = ManagerDispatcher()
-        assert "vision" not in dispatcher._executors
+        assert "chat" not in dispatcher._executors
 
     def test_quality_report_not_registered_as_executor(self):
         dispatcher = ManagerDispatcher()
@@ -181,12 +184,12 @@ class TestAgentArtifact:
     """Verify artifact has new lifecycle fields."""
 
     def test_artifact_has_status_field(self):
-        a = AgentArtifact(artifact_id="test", type="rag_hits", source_agent="chat", status="success")
+        a = AgentArtifact(artifact_id="test", type="rag_hits", source_agent="evidence", status="success")
         assert a.status == "success"
 
     def test_artifact_has_confidence_metrics(self):
         a = AgentArtifact(
-            artifact_id="test", type="rag_hits", source_agent="chat",
+            artifact_id="test", type="rag_hits", source_agent="evidence",
             status="success", confidence=0.85, metrics={"hit_count": 5}
         )
         assert a.confidence == 0.85
@@ -195,7 +198,7 @@ class TestAgentArtifact:
     def test_artifact_empty_result(self):
         """Per Section 19.4: RAG zero hits = status empty, metrics.hit_count=0."""
         a = AgentArtifact(
-            artifact_id="test", type="rag_hits", source_agent="chat",
+            artifact_id="test", type="rag_hits", source_agent="evidence",
             status="empty", empty_result=True, metrics={"hit_count": 0}
         )
         assert a.empty_result is True
@@ -212,7 +215,7 @@ class TestAgentArtifact:
 
     def test_artifact_blocked_status(self):
         a = AgentArtifact(
-            artifact_id="test", type="inspection_task", source_agent="inspection_task",
+            artifact_id="test", type="inspection_task", source_agent="quality_analysis",
             status="blocked", needs_user_input=True, summary="缺少产品型号"
         )
         assert a.status == "blocked"
@@ -240,13 +243,13 @@ class TestRouterOutputError:
 class TestSection19Scenarios:
     """Tests matching the 10 scenarios from the architecture spec."""
 
-    def test_19_1_general_chat_owned_by_chat(self):
-        cap = CAPABILITIES["chat.general"]
-        assert cap.owner_agents == ["chat"]
+    def test_19_1_general_chat_owned_by_quality_analysis(self):
+        cap = CAPABILITIES["quality.final_analyze"]
+        assert cap.owner_agents == ["quality_analysis"]
 
-    def test_19_2_rag_qa_owned_by_chat(self):
-        cap = CAPABILITIES["rag.retrieve"]
-        assert "chat" in cap.owner_agents
+    def test_19_2_rag_qa_owned_by_evidence(self):
+        cap = CAPABILITIES["evidence.arbitrate"]
+        assert cap.owner_agents == ["evidence"]
         assert "rag" not in cap.owner_agents
 
     def test_19_3_rag_failure_error_code(self):
@@ -256,7 +259,7 @@ class TestSection19Scenarios:
 
     def test_19_4_rag_zero_hits_empty_status(self):
         a = AgentArtifact(
-            artifact_id="test", type="rag_hits", source_agent="chat",
+            artifact_id="test", type="rag_hits", source_agent="evidence",
             status="empty", empty_result=True, metrics={"hit_count": 0}
         )
         assert a.status == "empty"
@@ -270,14 +273,13 @@ class TestSection19Scenarios:
         exc = AgentExecutionError(code="FILE_PARSE_FAILED", message="文件解析失败")
         assert exc.code == "FILE_PARSE_FAILED"
 
-    def test_19_7_image_understanding_not_vision(self):
-        cap = CAPABILITIES["image.understanding"]
-        assert "chat" in cap.owner_agents
-        assert "vision" not in cap.owner_agents
+    def test_19_7_image_understanding_owned_by_vision(self):
+        cap = CAPABILITIES["vision.inspect"]
+        assert cap.owner_agents == ["vision"]
 
-    def test_19_8_inspection_owned_by_inspection_task(self):
+    def test_19_8_inspection_owned_by_quality_analysis(self):
         cap = CAPABILITIES["quality.inspection.execute"]
-        assert cap.owner_agents == ["inspection_task"]
+        assert cap.owner_agents == ["quality_analysis"]
 
     def test_19_9_unknown_capability_raises(self):
         exc = AgentCapabilityError(code="UNKNOWN_CAPABILITY", message="未知能力")
@@ -295,11 +297,11 @@ class TestAgentObservation:
     def test_observation_has_owner_agent(self):
         obs = AgentObservation(
             step_id="s1",
-            capability_key="chat.general",
-            owner_agent="chat",
+            capability_key="quality.final_analyze",
+            owner_agent="quality_analysis",
             status="success",
         )
-        assert obs.owner_agent == "chat"
+        assert obs.owner_agent == "quality_analysis"
         # AgentObservation agent field has been removed -- only owner_agent remains.
         with pytest.raises(AttributeError):
             _ = obs.agent

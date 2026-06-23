@@ -71,7 +71,14 @@ class AgentRuntimeError(Exception):
         self.cause = cause
         super().__init__(self.message)
 
-    def to_dict(self, *, state: Any | None = None, include_debug: bool = False) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        state: Any | None = None,
+        include_debug: bool = False,
+        stage: str | None = None,
+        agent_name: str | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "code": self.code,
             "title": self.title,
@@ -86,22 +93,40 @@ class AgentRuntimeError(Exception):
             "detail": dict(self.detail or {}),
         }
         if state is not None:
+            selected_agent = agent_name or getattr(state, "selected_agent", None) or None
             payload.update(
                 {
                     "request_id": getattr(state, "request_id", None),
                     "workflow_run_id": getattr(state, "workflow_run_id", None),
                     "trace_id": getattr(state, "trace_id", None) or getattr(state, "workflow_run_id", None) or getattr(state, "request_id", None),
                     "session_id": getattr(state, "session_id", None),
-                    "owner_agent": getattr(state, "selected_agent", None) or None,
+                    "owner_agent": selected_agent,
+                    "agent_name": selected_agent,
                 }
             )
-            route_plan = getattr(state, "route_plan", None)
-            steps = list(getattr(route_plan, "steps", []) or [])
-            if steps:
-                step = steps[-1]
-                payload.setdefault("owner_agent", getattr(step, "owner_agent", None))
-                payload["capability"] = getattr(step, "capability", None)
-                payload["step_id"] = getattr(step, "step_id", None)
+            current_capability = getattr(state, "current_capability", None)
+            current_step_id = getattr(state, "current_step_id", None)
+            current_owner_agent = getattr(state, "current_owner_agent", None)
+            if current_capability or current_step_id or current_owner_agent:
+                payload["owner_agent"] = current_owner_agent or payload.get("owner_agent")
+                payload["agent_name"] = current_owner_agent or payload.get("agent_name")
+                payload["capability"] = current_capability
+                payload["step_id"] = current_step_id
+            else:
+                route_plan = getattr(state, "route_plan", None)
+                steps = list(getattr(route_plan, "steps", []) or [])
+                if steps:
+                    step = steps[-1]
+                    payload.setdefault("owner_agent", getattr(step, "owner_agent", None))
+                    payload["capability"] = getattr(step, "capability", None)
+                    payload["step_id"] = getattr(step, "step_id", None)
+        if stage:
+            payload["stage"] = stage
+        elif self.source:
+            payload["stage"] = str(self.source).split(".", 1)[0]
+        if agent_name:
+            payload["agent_name"] = agent_name
+            payload["owner_agent"] = agent_name
         if include_debug and self.debug:
             payload["debug"] = dict(self.debug)
         return {key: value for key, value in payload.items() if value is not None}
@@ -256,6 +281,34 @@ ERROR_CATALOG: dict[str, dict[str, Any]] = {
         "message": "图片理解失败，无法完成当前图片分析。",
         "category": AgentErrorCategory.MODEL,
         "user_action": "请稍后重试，或检查视觉模型配置。",
+        "retryable": True,
+    },
+    "EVIDENCE_ARBITRATION_FAILED": {
+        "title": "证据仲裁失败",
+        "message": "证据仲裁执行失败。",
+        "category": AgentErrorCategory.CAPABILITY,
+        "user_action": "请检查知识库、记忆或质量知识图谱服务配置后重试。",
+        "retryable": True,
+    },
+    "VISION_INSPECTION_FAILED": {
+        "title": "视觉检验失败",
+        "message": "视觉检验执行失败。",
+        "category": AgentErrorCategory.MODEL,
+        "user_action": "请检查图片输入与视觉模型配置后重试。",
+        "retryable": True,
+    },
+    "LAB_DETECTION_FAILED": {
+        "title": "实验室检测研判失败",
+        "message": "实验室检测早期风险研判失败。",
+        "category": AgentErrorCategory.CAPABILITY,
+        "user_action": "请检查实验室输入数据格式和模型配置后重试。",
+        "retryable": True,
+    },
+    "MEMORY_GOVERNANCE_FAILED": {
+        "title": "记忆治理失败",
+        "message": "记忆治理图执行失败。",
+        "category": AgentErrorCategory.CAPABILITY,
+        "user_action": "请检查记忆服务和治理配置后重试。",
         "retryable": True,
     },
     "CHAT_COMPOSE_MODEL_UNAVAILABLE": {

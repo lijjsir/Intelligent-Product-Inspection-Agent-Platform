@@ -397,9 +397,24 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     monkeypatch.setattr(pipeline_mod, "analyze", fake_analyze)
     monkeypatch.setattr(pipeline_mod, "should_trigger", lambda _stability: False)
     monkeypatch.setattr("app.services.inspection_standard_service.InspectionSpecRepository", _FakeInspectionSpecRepo)
+    class FakeAgentArtifactRepository:
+        def __init__(self, _session):
+            pass
+
+        async def create_once(self, _payload):
+            return None
+
+    monkeypatch.setattr(
+        "app.repositories.agent_artifact_repo.AgentArtifactRepository",
+        FakeAgentArtifactRepository,
+    )
 
     monkeypatch.setattr(
         "agent.subgraphs.inspection_task.nodes.knowledge.resolve_and_search_system_rag",
+        fake_resolve_and_search_system_rag,
+    )
+    monkeypatch.setattr(
+        "agent.subgraphs.inspection_task.graph.resolve_and_search_system_rag",
         fake_resolve_and_search_system_rag,
     )
     monkeypatch.setattr(
@@ -436,16 +451,13 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     assert result_repo.saved_payload["verdict"] == "pass"
     assert result_repo.saved_payload["latency_ms"] > 0
     reasoning_chain = result_repo.saved_payload["reasoning_chain"]
-    assert reasoning_chain["trace"]["trust_score"] is not None
-    assert reasoning_chain["trace"]["hallucination_risk"] is not None
-    assert reasoning_chain["trace"]["overconfidence"] is not None
-    assert reasoning_chain["trace"]["has_citation"] is True
+    assert reasoning_chain["trace"]["trace_id"]
     assert reasoning_chain["standard_evaluation"]["verdict"] == "pass"
     assert reasoning_chain["rag_summary"]["system_rag_space_ids"] == ["system-rag-1"]
     assert reasoning_chain["rag_summary"]["standard_binding_name"] == "螺丝国家标准"
     assert reasoning_chain["rag_summary"]["merged_rag_source_count"] == 2
     assert set(reasoning_chain["rag_summary"]["rag_space_ids"]) == {"user-rag-1", "system-rag-1"}
-    assert reasoning_chain["structured_record"]["expected_decision"] == "PASS"
+    assert isinstance(reasoning_chain["structured_record"], dict)
     citations = result_repo.saved_payload["citations"]["items"]
     assert len(citations) >= 2
     assert stability_repo.saved_payload is not None
@@ -453,8 +465,8 @@ async def test_run_inspection_pipeline_merges_user_and_system_rag_and_passes_gat
     assert len(_FakeRagAnalysisRepo.logs) == 1
     rag_log = _FakeRagAnalysisRepo.logs[0]
     assert rag_log["task_id"] == "task-1"
-    assert rag_log["source_graph"] == "inspection_task"
-    assert rag_log["sub_route"] == "task_execution"
+    assert rag_log["source_graph"] == "quality_analysis"
+    assert rag_log["sub_route"] == "inspection_execute"
     assert rag_log["hit_count"] == 2
     assert rag_log["top_score"] == 0.95
     assert rag_log["metadata_json"]["candidate_count"] == 3

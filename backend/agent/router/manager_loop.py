@@ -178,6 +178,13 @@ class ManagerLoop:
         state.trace_url = trace.get("trace_url")
 
     def _validate_plan(self, state: ManagerState, plan: AgentRoutePlan) -> ValidationResult:
+        if state.surface == "chat" and plan.reason in {"action_blocked", "rag_ingest"}:
+            return ValidationResult(
+                allowed=False,
+                message="聊天页面不能创建、执行正式质量检测任务或写入知识库。请前往对应业务页面显式确认后提交。",
+                code="ACTION_BLOCKED_BY_SURFACE",
+                need_user_input=True,
+            )
         if state.missing_inputs:
             return ValidationResult(
                 allowed=False,
@@ -285,6 +292,8 @@ class ManagerLoop:
         composed = self._find_composed(state)
         if composed is None:
             composed = self._recover_file_artifact_response(state)
+        if composed is None:
+            composed = self._recover_inspection_artifact_response(state)
         plan = state.route_plan
         sub_route = self._sub_route(state)
         selected_agent = self._selected_agent(state)
@@ -294,9 +303,11 @@ class ManagerLoop:
             if has_failed_observation
             else composed.get("status", "completed") if composed else self._status(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
         )
+        if status == "success":
+            status = "completed"
         composed_status = "blocked" if status == "blocked" else "failed" if status == "failed" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
-        message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
+        message_type = composed.get("message_type", "quality_answer") if composed else self._message_type(state, sub_route, composed_status)
         _log.info(
             "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
             "message_type=%s errors=%d obs_failures=%d",
@@ -312,7 +323,12 @@ class ManagerLoop:
         citations = self._citations(state, answer=answer)
         rag_summary = self._rag_summary(state, answer=answer)
         raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
-        persistable_output = self._persistable_output(state, answer=answer, sub_route=sub_route)
+        composed_persistable = composed.get("persistable_output") if isinstance(composed, dict) else None
+        persistable_output = (
+            composed_persistable
+            if sub_route == "inspection_execute" and isinstance(composed_persistable, dict)
+            else self._persistable_output(state, answer=answer, sub_route=sub_route)
+        )
         agent_output = {
             "message_type": message_type,
             "answer": answer,
@@ -418,6 +434,24 @@ class ManagerLoop:
             }
         return None
 
+    @staticmethod
+    def _recover_inspection_artifact_response(state: ManagerState) -> dict[str, Any] | None:
+        artifact = ManagerLoop._latest_artifact(state, {"inspection_result"})
+        if not artifact or not isinstance(artifact.content, dict):
+            return None
+        content = dict(artifact.content or {})
+        answer = str(content.get("answer") or content.get("summary") or artifact.summary or "").strip()
+        if not answer:
+            answer = "正式质量检测任务已完成。"
+        return {
+            **content,
+            "answer": answer,
+            "summary": str(content.get("summary") or artifact.summary or answer[:200]),
+            "message_type": "task_result",
+            "status": artifact.status,
+            "ui_schema": "task_result_v1",
+        }
+
     def _payload(
         self,
         state: ManagerState,
@@ -432,10 +466,8 @@ class ManagerLoop:
         capabilities_used = [
             item.capability_key
             for item in state.observations
-            if item.status in {"success", "skipped"} and item.capability_key != "chat.response.compose"
+            if item.status in {"success", "skipped"}
         ]
-        if state.route_plan and any(step.capability == "chat.response.compose" for step in state.route_plan.steps):
-            capabilities_used.append("chat.response.compose")
         route_trace = {
             "iterations": state.iteration,
             "capabilities_used": capabilities_used,
@@ -469,19 +501,11 @@ class ManagerLoop:
     @staticmethod
     def _selected_agent(state: ManagerState) -> str:
         if state.route_plan and state.route_plan.steps:
-            action_steps = [
-                step for step in state.route_plan.steps
-                if step.owner_agent == "inspection_task"
-            ]
-            if action_steps:
-                return "inspection_task"
-            file_steps = [
-                step for step in state.route_plan.steps
-                if step.owner_agent == "file"
-            ]
-            if file_steps and not action_steps:
-                return "file"
-        return "chat"
+            owners = [step.owner_agent for step in state.route_plan.steps]
+            for owner in ("quality_analysis", "file", "vision", "lab_detection", "evidence", "memory_governance"):
+                if owner in owners:
+                    return owner
+        return "quality_analysis"
 
     @staticmethod
     def _sub_route(state: ManagerState) -> str:
@@ -508,7 +532,9 @@ class ManagerLoop:
                 "general_chat": "general_chat",
                 "rag_qa": "rag_qa",
                 "rag_ingest": "rag_ingest",
-                "image_understanding": "image_understanding",
+                "image_understanding": "vision_inspection",
+                "vision_inspection": "vision_inspection",
+                "lab_detection": "lab_detection",
                 "file_summary": "file_summary",
                 "file_qa": "file_qa",
                 "paper_format_check": "paper_format_check",
@@ -541,6 +567,10 @@ class ManagerLoop:
             return "action_blocked"
         if sub_route == "image_understanding":
             return "image_analysis"
+        if sub_route == "vision_inspection":
+            return "visual_answer"
+        if sub_route == "lab_detection":
+            return "lab_answer"
         if sub_route in {"file_summary", "file_qa", "paper_format_check"}:
             return "file_answer"
         if sub_route == "quality_task_status":
@@ -549,7 +579,7 @@ class ManagerLoop:
             return "report_answer"
         if sub_route == "inspection_execute":
             return "task_result"
-        return "assistant_text"
+        return "quality_answer"
 
     @staticmethod
     def _summary(state: ManagerState, status: str) -> str:
@@ -683,12 +713,11 @@ class ManagerLoop:
 
     @staticmethod
     def _safe_selected_agent(state: ManagerState) -> str:
+        if getattr(state, "selected_agent", None):
+            return str(state.selected_agent)
         if state.route_plan and state.route_plan.steps:
-            if any(step.owner_agent == "inspection_task" for step in state.route_plan.steps):
-                return "inspection_task"
-            if any(step.owner_agent == "file" for step in state.route_plan.steps):
-                return "file"
-        return "chat"
+            return ManagerLoop._selected_agent(state)
+        return "quality_analysis"
 
     @staticmethod
     def _paper_review_error_code(message: str) -> str:
@@ -710,7 +739,7 @@ class ManagerLoop:
     def _citations(cls, state: ManagerState, *, answer: str = "") -> list[dict[str, Any]]:
         citations: list[dict[str, Any]] = []
         for artifact in state.artifacts:
-            if artifact.type == "rag_hits":
+            if artifact.type in {"rag_hits", "evidence_packet"}:
                 citations.extend(cls._used_citations_from_answer(answer, artifact.citations))
             else:
                 citations.extend(artifact.citations)
@@ -789,7 +818,7 @@ class ManagerLoop:
                     "citation_coverage": round(coverage, 4),
                     "latency_ms": int(content.get("latency_ms") or 0),
                     "source_graph": "manager",
-                    "agent_name": "chat",
+                    "agent_name": "evidence",
                     "sub_route": sub_route,
                     "trace_id": trace_id,
                     "top_score": float(content.get("top_score") or 0.0),

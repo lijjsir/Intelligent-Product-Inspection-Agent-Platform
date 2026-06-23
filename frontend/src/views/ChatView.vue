@@ -5,8 +5,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
 import AgentErrorAlert from "@/components/chat/AgentErrorAlert.vue";
+import AgentTraceTimeline from "@/components/chat/AgentTraceTimeline.vue";
 import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
+import EvidencePacketCard from "@/components/chat/EvidencePacketCard.vue";
+import LabDetectionCard from "@/components/chat/LabDetectionCard.vue";
 import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
+import QualityAssessmentCard from "@/components/chat/QualityAssessmentCard.vue";
+import VisualInspectionCard from "@/components/chat/VisualInspectionCard.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
@@ -15,7 +20,7 @@ import { useTaskStore } from "@/stores/task.store";
 import type { AgentErrorPayload, ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
-import { agentErrorPayload } from "./chat-rendering";
+import { agentErrorPayload, messageCardType } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
 const router = useRouter();
@@ -72,7 +77,20 @@ const streamStatusText = computed(() => {
   if (chatStore.streamPhase === "closing") return "正在整理回复...";
   return "智能体处理中...";
 });
-const FINAL_ASSISTANT_MESSAGE_TYPES = new Set(["assistant_text", "quality_answer", "file_answer", "report_answer", "task_status", "task_result", "image_analysis", "error", "interrupted"]);
+const FINAL_ASSISTANT_MESSAGE_TYPES = new Set([
+  "assistant_text",
+  "quality_answer",
+  "evidence_answer",
+  "visual_answer",
+  "lab_answer",
+  "file_answer",
+  "report_answer",
+  "task_status",
+  "task_result",
+  "image_analysis",
+  "error",
+  "interrupted",
+]);
 const specOptions = computed(() => inspectionSpecStore.items);
 const filteredSpecOptions = computed(() =>
   specOptions.value.filter((item) => item.is_active),
@@ -1051,6 +1069,67 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
 
+              <!-- Evidence packet card -->
+              <div v-if="message.payload?.evidence_packet" class="agent-card-wrapper">
+                <EvidencePacketCard
+                  :rag-hit-count="(message.payload.evidence_packet.sources as any)?.rag?.hit_count"
+                  :memory-count="(message.payload.evidence_packet.sources as any)?.memory?.items?.length"
+                  :kg-path-count="(message.payload.evidence_packet.sources as any)?.quality_kg?.paths?.length"
+                  :source-count="message.payload.evidence_packet.source_count"
+                />
+              </div>
+
+              <!-- Visual inspection card -->
+              <div v-if="message.payload?.visual_inspection_result" class="agent-card-wrapper">
+                <VisualInspectionCard
+                  :image-count="message.payload.visual_inspection_result.image_count"
+                  :defects="message.payload.visual_inspection_result.defects"
+                  :image-quality="message.payload.visual_inspection_result.image_quality"
+                  :requires-recheck="message.payload.visual_inspection_result.requires_recheck"
+                  :confidence="message.payload.visual_inspection_result.confidence"
+                />
+              </div>
+
+              <!-- Lab detection card -->
+              <div v-if="message.payload?.lab_detection_result" class="agent-card-wrapper">
+                <LabDetectionCard
+                  :sample-id="message.payload.lab_detection_result.sample_id"
+                  :assessment-state="message.payload.lab_detection_result.assessment_state"
+                  :abnormal-probability="message.payload.lab_detection_result.abnormal_probability"
+                  :risk-level="message.payload.lab_detection_result.risk_level"
+                  :data-completeness="message.payload.lab_detection_result.data_completeness"
+                  :early-warning="message.payload.lab_detection_result.early_warning"
+                  :can-make-final-verdict="message.payload.lab_detection_result.can_make_final_verdict"
+                  :abnormal-indicators="message.payload.lab_detection_result.abnormal_indicators"
+                  :next-test-priority="message.payload.lab_detection_result.next_test_priority"
+                  :suggested-action="message.payload.lab_detection_result.suggested_action"
+                  :confidence="message.payload.lab_detection_result.confidence"
+                />
+              </div>
+
+              <!-- Quality assessment card -->
+              <div v-if="message.payload?.quality_final_assessment" class="agent-card-wrapper">
+                <QualityAssessmentCard
+                  :final-verdict="message.payload.quality_final_assessment.final_verdict"
+                  :overall-score="message.payload.quality_final_assessment.overall_score"
+                  :risk-level="message.payload.quality_final_assessment.risk_level"
+                  :evidence-used="message.payload.quality_final_assessment.evidence_used"
+                  :conflicts="message.payload.quality_final_assessment.conflicts"
+                  :limitations="message.payload.quality_final_assessment.limitations"
+                  :recommended-action="message.payload.quality_final_assessment.recommended_action"
+                  :answer="message.payload.quality_final_assessment.answer"
+                  :confidence="message.payload.quality_final_assessment.confidence"
+                />
+              </div>
+
+              <!-- Agent trace timeline -->
+              <div v-if="message.payload?.route_trace || message.payload?.capabilities_used?.length" class="agent-card-wrapper">
+                <AgentTraceTimeline
+                  :trace="message.payload.route_trace"
+                  :capabilities-used="message.payload.capabilities_used"
+                />
+              </div>
+
               <!-- Task actions -->
               <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
                 <div class="task-action-note">
@@ -1172,6 +1251,10 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   flex-direction: column;
   height: 100%;
   gap: 0;
+}
+
+.agent-card-wrapper {
+  margin-top: 8px;
 }
 
 /* ── Toolbar ── */

@@ -22,7 +22,15 @@ export interface ChatAttachment {
   kind: "image" | "file" | string;
 }
 
-export type ChatAgentName = "chat" | "inspection_task" | "file";
+export type ChatAgentName =
+  | "evidence"
+  | "vision"
+  | "lab_detection"
+  | "quality_analysis"
+  | "memory_governance"
+  | "file"
+  | "chat"
+  | "inspection_task";
 
 export type ChatSubRoute =
   | "general_chat"
@@ -34,6 +42,11 @@ export type ChatSubRoute =
   | "quality_report_query"
   | "quality_task_status"
   | "image_understanding"
+  | "evidence_arbitration"
+  | "vision_inspection"
+  | "lab_detection"
+  | "quality_analysis"
+  | "memory_governance"
   | "file_summary"
   | "file_qa"
   | "paper_format_check"
@@ -85,6 +98,8 @@ export interface AgentErrorPayload {
   trace_id?: string | null;
   session_id?: string | null;
   owner_agent?: ChatAgentName | string | null;
+  agent_name?: ChatAgentName | string | null;
+  stage?: string | null;
   capability?: string | null;
   step_id?: string | null;
 }
@@ -327,6 +342,59 @@ export interface ChatMessagePayload {
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
   paper_format_report?: PaperReviewReport | null;
+  evidence_packet?: {
+    query?: string;
+    sources?: Record<string, unknown>;
+    source_count?: number;
+    conflicts?: Array<Record<string, unknown>>;
+    normalized_evidence?: Array<Record<string, unknown>>;
+  } | null;
+  visual_inspection_result?: {
+    image_count?: number;
+    defects?: Array<{
+      defect_type: string;
+      location: string;
+      bbox?: unknown;
+      severity: string;
+      confidence: number;
+      evidence: string;
+    }>;
+    image_quality?: string;
+    requires_recheck?: boolean;
+    confidence?: number;
+  } | null;
+  lab_detection_result?: {
+    sample_id?: string;
+    assessment_state?: string;
+    abnormal_probability?: number;
+    risk_level?: string;
+    data_completeness?: number;
+    early_warning?: boolean;
+    can_make_final_verdict?: boolean;
+    abnormal_indicators?: Array<{
+      item: string;
+      value: number;
+      normal_range: string;
+      deviation_type: string;
+    }>;
+    next_test_priority?: Array<{
+      item: string;
+      reason: string;
+    }>;
+    suggested_action?: string;
+    confidence?: number;
+  } | null;
+  quality_final_assessment?: {
+    final_verdict?: string;
+    overall_score?: number;
+    risk_level?: string;
+    evidence_used?: string[];
+    conflicts?: Array<Record<string, unknown>>;
+    limitations?: string[];
+    recommended_action?: string[];
+    answer?: string;
+    confidence?: number;
+  } | null;
   message_type?: string;
   status?: string;
   workflow_run_id?: string;

@@ -35,6 +35,7 @@ PAPER_FORMAT_PATTERNS = [
 RAG_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"知识库|RAG|根据.{0,8}(资料|文档|知识库|标准)|AQL|标准"]]
 DATA_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"数据分析|统计|趋势|分析数据|报表分析"]]
 RAG_INGEST_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"(加入|写入|导入|入库).{0,8}(知识库|RAG)|rag ingest|ingest"]]
+LAB_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"实验室|检验数据|检测数据|设备数据|环境数据|lab|equipment|environment"]]
 
 TASK_ID_PATTERN = re.compile(r"(?:任务|task)\s*(?:id|编号|号)?\s*[:：]?\s*([A-Za-z0-9\-_]{4,36})", re.I)
 PRODUCT_ID_PATTERN = re.compile(r"(?:产品|product)\s*(?:id|编号|号)?\s*[:：]?\s*([A-Za-z0-9\-_]{2,36})", re.I)
@@ -71,7 +72,7 @@ class ManagerPolicy:
                 "name": "RAG 入库请求",
                 "condition": "命中 RAG_INGEST_PATTERNS（加入/写入/导入知识库）",
                 "intent": "rag_ingest",
-                "target_agent": "chat",
+                "target_agent": "file",
                 "needs": ["rag.ingest"],
                 "risk": "high",
                 "stop_on_match": True,
@@ -82,8 +83,8 @@ class ManagerPolicy:
                 "name": "论文查非/格式检查",
                 "condition": "附件包含 document 且命中 PAPER_FORMAT_PATTERNS",
                 "intent": "paper_format_check",
-                "target_agent": "chat",
-                "needs": ["file.paper_format_check", "chat.response.compose"],
+                "target_agent": "file",
+                "needs": ["file.paper_format_check", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "对论文文档执行结构、格式、文字规范检查（优先于纯文本任务拦截）",
@@ -93,8 +94,8 @@ class ManagerPolicy:
                 "name": "图片理解",
                 "condition": "附件包含 image 类型",
                 "intent": "image_understanding",
-                "target_agent": "chat",
-                "needs": ["image.understanding", "chat.response.compose"],
+                "target_agent": "vision",
+                "needs": ["vision.inspect", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "对图片进行非正式理解和初步判断（优先于纯文本任务拦截）",
@@ -104,8 +105,8 @@ class ManagerPolicy:
                 "name": "聊天页任务意图拦截",
                 "condition": "surface=chat 且命中 TASK_PATTERNS（创建/发起任务等）",
                 "intent": "action_blocked",
-                "target_agent": "chat",
-                "needs": ["chat.response.compose"],
+                "target_agent": "quality_analysis",
+                "needs": ["quality.final_analyze"],
                 "risk": "medium",
                 "stop_on_match": True,
                 "description": "阻止聊天页正式业务动作，提示用户前往质量检测任务页面",
@@ -115,8 +116,8 @@ class ManagerPolicy:
                 "name": "检测页任务执行",
                 "condition": "surface=quality_task 且命中 TASK_PATTERNS",
                 "intent": "inspection_execute",
-                "target_agent": "inspection_task",
-                "needs": ["quality.inspection.execute"],
+                "target_agent": "quality_analysis",
+                "needs": ["evidence.arbitrate", "quality.inspection.execute"],
                 "risk": "high",
                 "stop_on_match": True,
                 "description": "正式执行质量检测任务（需确认 action_intent）",
@@ -126,8 +127,8 @@ class ManagerPolicy:
                 "name": "文档/文件处理",
                 "condition": "附件包含 document 或 structured_file 类型",
                 "intent": "file_summary / file_qa",
-                "target_agent": "chat",
-                "needs": ["file.summary", "chat.response.compose"],
+                "target_agent": "file",
+                "needs": ["file.summary", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "处理聊天上传文件：命中 SUMMARY_PATTERNS 则总结，否则文件问答",
@@ -137,8 +138,8 @@ class ManagerPolicy:
                 "name": "报告/任务状态查询",
                 "condition": "命中 REPORT_PATTERNS（报告/上次检测/检测结果/任务状态等）",
                 "intent": "quality_report_query",
-                "target_agent": "chat",
-                "needs": ["quality.report.query", "chat.response.compose"],
+                "target_agent": "quality_analysis",
+                "needs": ["evidence.arbitrate", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "只读查询质量检测报告或任务状态",
@@ -148,8 +149,8 @@ class ManagerPolicy:
                 "name": "RAG 知识库问答",
                 "condition": "已选择 RAG 空间，或命中 RAG_PATTERNS（知识库/RAG/根据资料/AQL/标准等）",
                 "intent": "rag_qa",
-                "target_agent": "chat",
-                "needs": ["rag.retrieve", "chat.response.compose"],
+                "target_agent": "evidence",
+                "needs": ["evidence.arbitrate", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "基于可用知识源检索证据并回答",
@@ -159,8 +160,8 @@ class ManagerPolicy:
                 "name": "数据分析",
                 "condition": "命中 DATA_PATTERNS（数据分析/统计/趋势等）",
                 "intent": "data_analysis",
-                "target_agent": "chat",
-                "needs": ["data.analysis", "chat.response.compose"],
+                "target_agent": "quality_analysis",
+                "needs": ["quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "预留数据分析 Agent 只读分析能力",
@@ -170,8 +171,8 @@ class ManagerPolicy:
                 "name": "默认普通聊天",
                 "condition": "未命中以上所有规则",
                 "intent": "general_chat",
-                "target_agent": "chat",
-                "needs": ["chat.general"],
+                "target_agent": "quality_analysis",
+                "needs": ["quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,
                 "description": "回答普通聊天问题，无特殊能力需求",
@@ -196,6 +197,8 @@ class ManagerPolicy:
             session_id=request.session_id,
             assistant_message_id=request.assistant_message_id,
             attachments=[item.model_dump() for item in request.attachments],
+            request_ext=ext,
+            request_metadata=dict(request.metadata or {}),
             history_messages=list(ext.get("history_messages") or []),
             inspection_context=dict(ext.get("inspection_context") or {}) or None,
             selected_rag_space=self._selected_rag_space(ext),
@@ -242,15 +245,15 @@ class ManagerPolicy:
             return Understanding(
                 goal="检查论文文档的格式、结构和文字规范问题",
                 intent="paper_format_check",
-                needs=self._with_forced_web_search(["file.paper_format_check", "chat.response.compose"], state),
+                needs=["file.paper_format_check", "quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
-        if "image" in attachment_kinds:
+        if state.surface != "quality_task" and "image" in attachment_kinds:
             return Understanding(
                 goal="对图片进行非正式理解和初步判断",
-                intent="image_understanding",
-                needs=self._with_forced_web_search(["image.understanding", "chat.response.compose"], state),
+                intent="vision_inspection",
+                needs=["vision.inspect", "quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -260,19 +263,22 @@ class ManagerPolicy:
             return Understanding(
                 goal="阻止聊天页正式业务动作，并提示用户前往质量检测任务页面",
                 intent="action_blocked",
-                needs=["chat.response.compose"],
+                needs=["quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
                 risk="medium",
             )
-        if state.surface == "quality_task" and has_task:
+        if (
+            state.surface == "quality_task"
+            and (has_task or state.action_intent == "quality_inspection_execute")
+        ):
             missing = []
             if not state.action_intent:
                 missing.append("action_intent")
             return Understanding(
                 goal="正式执行质量检测任务",
                 intent="inspection_execute",
-                needs=["quality.inspection.execute"],
+                needs=self._quality_task_needs(state),
                 missing_inputs=missing,
                 entities=self._extract_entities(query, state.attachments),
                 risk="high",
@@ -282,16 +288,23 @@ class ManagerPolicy:
             return Understanding(
                 goal="处理聊天上传文件并返回辅助分析",
                 intent=capability.replace(".", "_"),
-                needs=self._with_forced_web_search([capability, "chat.response.compose"], state),
+                needs=[capability, "quality.final_analyze"],
+                missing_inputs=[],
+                entities=self._extract_entities(query, state.attachments),
+            )
+        if self._has_lab_signal(state) or self._matches(query, LAB_PATTERNS):
+            return Understanding(
+                goal="基于实验室/设备/环境数据进行早期风险研判并回答",
+                intent="lab_detection",
+                needs=["lab.early_risk.assess", "quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
         if self._matches(query, REPORT_PATTERNS):
-            capability = "quality.task.status" if "状态" in query or "status" in query.lower() else "quality.report.query"
             return Understanding(
                 goal="只读查询质量检测报告或任务状态",
-                intent=capability.replace(".", "_"),
-                needs=self._with_forced_web_search([capability, "chat.response.compose"], state),
+                intent="quality_report_query",
+                needs=["evidence.arbitrate", "quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -299,7 +312,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="基于可用知识源检索证据并回答",
                 intent="rag_qa",
-                needs=self._with_forced_web_search(["rag.retrieve", "chat.response.compose"], state),
+                needs=["evidence.arbitrate", "quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -307,14 +320,14 @@ class ManagerPolicy:
             return Understanding(
                 goal="预留数据分析 Agent 只读分析能力",
                 intent="data_analysis",
-                needs=self._with_forced_web_search(["data.analysis", "chat.response.compose"], state),
+                needs=["quality.final_analyze"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
         return Understanding(
             goal="回答普通聊天问题",
             intent="general_chat",
-            needs=self._with_forced_web_search(["chat.general"], state),
+            needs=["quality.final_analyze"],
             missing_inputs=[],
             entities={},
         )
@@ -323,31 +336,19 @@ class ManagerPolicy:
     def _with_forced_web_search(needs: list[str], state: ManagerState) -> list[str]:
         if not state.force_web_search:
             return needs
-        if "web.search" in needs:
-            return needs
-        # Paper format check never needs web search
-        if "file.paper_format_check" in needs:
-            return needs
-        if "chat.response.compose" in needs:
-            compose_index = needs.index("chat.response.compose")
-            return [*needs[:compose_index], "web.search", *needs[compose_index:]]
-        if needs == ["chat.general"]:
-            return ["web.search", "chat.response.compose"]
-        return [*needs, "web.search", "chat.response.compose"]
+        return needs
 
     _SUCCESS_CRITERIA: dict[str, list[str]] = {
-        "rag.retrieve": ["hit_count > 0", "top_score meets threshold"],
+        "evidence.arbitrate": ["evidence_packet is present"],
         "rag.ingest": ["confirmed by user", "documents indexed"],
         "file.summary": ["parsed_text is not empty", "summary is not empty"],
         "file.qa": ["parsed_text is not empty", "answer references file content"],
         "file.paper_format_check": ["paper issues are structured", "summary explains key findings"],
-        "image.understanding": ["vision_result is not empty", "informal disclaimer present"],
-        "quality.report.query": ["found related report", "verdict is not empty", "can explain conclusion"],
-        "quality.task.status": ["task_id resolved", "status returned"],
+        "vision.inspect": ["visual_inspection_result is present"],
+        "lab.early_risk.assess": ["lab_detection_result is present"],
+        "quality.final_analyze": ["generate non-empty answer"],
         "quality.inspection.execute": ["task_id is not empty", "status in queued/running/done"],
-        "chat.general": ["generate non-empty answer"],
-        "chat.response.compose": ["answer includes citations where applicable", "ui_schema is set"],
-        "data.analysis": ["analysis_result is not empty"],
+        "memory.governance": ["memory governance result is present"],
     }
 
     async def plan(self, state: ManagerState, understanding: Understanding) -> AgentRoutePlan:
@@ -373,7 +374,7 @@ class ManagerPolicy:
                 )
             step_id = f"s{index}"
             owner = self._choose_owner_agent(key, capability, understanding, state)
-            depends_on = [previous_step_id] if previous_step_id and owner == "chat" else []
+            depends_on = [previous_step_id] if previous_step_id else []
             steps.append(
                 AgentPlanStep(
                     step_id=step_id,
@@ -422,15 +423,12 @@ class ManagerPolicy:
                 return "file"
 
         if intent == "inspection_execute":
-            if "inspection_task" in capability.owner_agents:
-                return "inspection_task"
+            if "quality_analysis" in capability.owner_agents:
+                return "quality_analysis"
 
         if key == "rag.ingest":
             if "file" in capability.owner_agents:
                 return "file"
-
-        if "chat" in capability.owner_agents:
-            return "chat"
 
         if capability.owner_agents:
             return capability.owner_agents[0]
@@ -515,8 +513,46 @@ class ManagerPolicy:
                 "query": state.original_query,
                 "template_id": state.template_id or str((state.inspection_context or {}).get("template_id") or "") or None,
             }
-        if key == "image.understanding":
+        if key == "evidence.arbitrate":
+            return {
+                "query": state.original_query,
+                "selected_rag_space": state.selected_rag_space,
+                "rag_scope": state.rag_scope,
+                "memory_scope": (state.request_ext or {}).get("memory_scope"),
+                "quality_kg": (state.request_ext or {}).get("quality_kg"),
+            }
+        if key == "vision.inspect":
             return {"attachments": state.attachments, "query": state.original_query}
+        if key == "lab.early_risk.assess":
+            return {
+                "lab_context": (state.request_ext or {}).get("lab_context") or (state.request_metadata or {}).get("lab_context"),
+                "equipment_data": (state.request_ext or {}).get("equipment_data") or (state.request_metadata or {}).get("equipment_data"),
+                "environment": (state.request_ext or {}).get("environment") or (state.request_metadata or {}).get("environment"),
+            }
         if key == "quality.inspection.execute":
             return {"query": state.original_query, "attachments": state.attachments}
         return {"query": state.original_query}
+
+    @staticmethod
+    def _has_lab_signal(state: ManagerState) -> bool:
+        ext = dict(state.request_ext or {})
+        metadata = dict(state.request_metadata or {})
+        return any(
+            key in ext or key in metadata
+            for key in ("lab_context", "equipment_data", "environment")
+        )
+
+    def _quality_task_needs(self, state: ManagerState) -> list[str]:
+        needs = ["evidence.arbitrate"]
+        ext = dict(state.request_ext or {})
+        vision_requested = bool(
+            ext.get("enable_vision_graph")
+            or ext.get("vision_required")
+            or ext.get("vision_context")
+        )
+        if vision_requested and any(attachment_kind(item) == "image" for item in state.attachments):
+            needs.append("vision.inspect")
+        if self._has_lab_signal(state):
+            needs.append("lab.early_risk.assess")
+        needs.append("quality.inspection.execute")
+        return needs

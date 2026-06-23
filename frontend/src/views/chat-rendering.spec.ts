@@ -3,8 +3,11 @@ import { agentErrorPayload, agentLabel } from "./chat-rendering";
 
 describe("chat rendering helpers", () => {
   it("uses new route agent names without quality_chat fallback labels", () => {
-    expect(agentLabel({ agent: "chat" })).toBe("ChatAgent");
-    expect(agentLabel({ agent: "inspection_task" })).toBe("InspectionTaskAgent");
+    expect(agentLabel({ agent: "evidence" })).toBe("EvidenceArbitrationAgent");
+    expect(agentLabel({ agent: "vision" })).toBe("VisionInspectionAgent");
+    expect(agentLabel({ agent: "lab_detection" })).toBe("LabDetectionAgent");
+    expect(agentLabel({ agent: "quality_analysis" })).toBe("QualityAnalysisAgent");
+    expect(agentLabel({ agent: "memory_governance" })).toBe("MemoryGovernanceAgent");
     expect(agentLabel({ agent: "quality_chat" })).toBe("");
   });
 
@@ -22,6 +25,9 @@ describe("chat rendering helpers", () => {
         retryable: true,
         user_action: "请检查后台聊天模型配置。",
         trace_id: "trace-1",
+        request_id: "req-1",
+        stage: "quality_analysis",
+        agent_name: "quality_analysis",
       },
     });
 
@@ -30,6 +36,9 @@ describe("chat rendering helpers", () => {
     expect(error?.message).toBe("模型不可用，无法组织最终回复。");
     expect(error?.user_action).toBe("请检查后台聊天模型配置。");
     expect(error?.trace_id).toBe("trace-1");
+    expect(error?.request_id).toBe("req-1");
+    expect(error?.stage).toBe("quality_analysis");
+    expect(error?.agent_name).toBe("quality_analysis");
   });
 
   it("normalizes legacy error fields for old messages", () => {

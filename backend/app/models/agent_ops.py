@@ -156,6 +156,29 @@ class AgentRouteLog(Base, TimestampMixin):
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="阻止原因")
 
 
+class AgentArtifactRecord(Base, TimestampMixin):
+    """Persisted Agent artifact for chat/task traceability."""
+
+    __tablename__ = "agent_artifacts"
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    session_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    capability: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    artifact_type: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="success")
+    content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metrics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    citations_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    error_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
+
+
 class AgentRuntimeEvent(Base, TimestampMixin):
     """Agent 运行态操作事件日志 — pause_route/resume_route/start/stop/maintenance"""
     __tablename__ = "agent_runtime_events"

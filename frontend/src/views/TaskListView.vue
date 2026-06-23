@@ -38,6 +38,9 @@ const createForm = ref({
   spec_code: "",
   rag_space_id: "",
   image_urls_input: "",
+  lab_context_json: "",
+  equipment_data_json: "",
+  environment_json: "",
   priority: 5,
 });
 
@@ -153,7 +156,16 @@ function handleReset() {
 
 function handleOpenCreate() {
   if (!canCreateTask.value) return;
-  createForm.value = { product_id: "", spec_code: "", rag_space_id: "", image_urls_input: "", priority: 5 };
+  createForm.value = {
+    product_id: "",
+    spec_code: "",
+    rag_space_id: "",
+    image_urls_input: "",
+    lab_context_json: "",
+    equipment_data_json: "",
+    environment_json: "",
+    priority: 5,
+  };
   uploadFiles.value = [];
   showCreateDialog.value = true;
 }
@@ -185,6 +197,9 @@ function handleOpenCreateFromDraft() {
       spec_code: String(draft.spec_code || ""),
       rag_space_id: "",
       image_urls_input: Array.isArray(draft.image_urls) ? draft.image_urls.filter(Boolean).join("\n") : "",
+      lab_context_json: "",
+      equipment_data_json: "",
+      environment_json: "",
       priority: Number(draft.priority || 5),
     };
     uploadFiles.value = [];
@@ -230,6 +245,16 @@ function extractTaskCreateErrorMessage(error: any) {
   }
   if (error instanceof Error && error.message.trim()) return error.message;
   return "任务创建失败，请稍后重试。";
+}
+
+function parseOptionalJsonField(value: string, label: string) {
+  const text = value.trim();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label} 不是合法 JSON`);
+  }
 }
 
 async function buildImageSubmissionPayload() {
@@ -319,6 +344,12 @@ async function handleSubmitCreate() {
     const { imageUrls, imageItems } = await buildImageSubmissionPayload();
 
     const metadata: Record<string, unknown> = { source: "task_list" };
+    const labContext = parseOptionalJsonField(createForm.value.lab_context_json, "实验室上下文");
+    const equipmentData = parseOptionalJsonField(createForm.value.equipment_data_json, "设备数据");
+    const environment = parseOptionalJsonField(createForm.value.environment_json, "环境数据");
+    if (labContext !== undefined) metadata.lab_context = labContext;
+    if (equipmentData !== undefined) metadata.equipment_data = equipmentData;
+    if (environment !== undefined) metadata.environment = environment;
     const selectedSpace = createForm.value.rag_space_id
       ? chatStore.ragSpaces.find((s) => s.id === createForm.value.rag_space_id)
       : null;
@@ -564,6 +595,33 @@ watch(
             <strong>{{ selectedTaskSpec?.required_image_count || 1 }}</strong>
             <span>张</span>
           </div>
+        </el-form-item>
+        <el-form-item label="实验室上下文">
+          <el-input
+            v-model="createForm.lab_context_json"
+            type="textarea"
+            :rows="3"
+            resize="none"
+            placeholder='可选 JSON，例如 {"sample_id":"S1","partial_measurements":[]}'
+          />
+        </el-form-item>
+        <el-form-item label="设备数据">
+          <el-input
+            v-model="createForm.equipment_data_json"
+            type="textarea"
+            :rows="3"
+            resize="none"
+            placeholder='可选 JSON，例如 {"instrument_id":"I1","status":"normal"}'
+          />
+        </el-form-item>
+        <el-form-item label="环境数据">
+          <el-input
+            v-model="createForm.environment_json"
+            type="textarea"
+            :rows="3"
+            resize="none"
+            placeholder='可选 JSON，例如 {"temperature":25,"humidity":55}'
+          />
         </el-form-item>
         <el-form-item label="优先级">
           <el-input-number v-model="createForm.priority" :min="1" :max="10" size="small" />

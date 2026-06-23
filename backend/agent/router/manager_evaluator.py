@@ -20,22 +20,24 @@ class EvaluationResult:
 class ManagerEvaluator:
 
     SUCCESS_RULES = {
-        "rag.retrieve": lambda a: (
-            a.type == "rag_hits"
+        "evidence.arbitrate": lambda a: (
+            a.type == "evidence_packet"
             and a.status in {"success", "empty"}
-            and "hit_count" in a.metrics
         ),
-        "image.understanding": lambda a: (
-            a.type == "image_understanding"
+        "vision.inspect": lambda a: (
+            a.type == "visual_inspection_result"
             and a.status == "success"
-            and (a.confidence or 0) >= 0.5
+        ),
+        "lab.early_risk.assess": lambda a: (
+            a.type == "lab_detection_result"
+            and a.status == "success"
         ),
         "file.paper_format_check": lambda a: (
             a.type == "paper_format_report"
             and a.status == "success"
         ),
         "quality.inspection.execute": lambda a: (
-            a.type in {"inspection_result", "inspection_task"}
+            a.type in {"inspection_result", "quality_final_assessment"}
             and a.status == "success"
             and not a.needs_user_input
         ),
@@ -47,26 +49,12 @@ class ManagerEvaluator:
             a.type in {"file_summary", "file_answer"}
             and a.status == "success"
         ),
-        "quality.report.query": lambda a: (
-            a.type == "quality_report"
-            and a.status in {"success", "empty"}
-            and "report_count" in a.metrics
-        ),
-        "quality.task.status": lambda a: (
-            a.type == "task_status"
-            and a.status in {"success", "empty"}
-            and "found" in a.metrics
-        ),
-        "data.analysis": lambda a: (
-            a.type == "data_analysis"
+        "quality.final_analyze": lambda a: (
+            a.type in {"quality_final_assessment", "composed_response"}
             and a.status == "success"
         ),
-        "chat.general": lambda a: (
-            a.type in {"composed_response", "chat_response"}
-            and a.status == "success"
-        ),
-        "chat.response.compose": lambda a: (
-            a.type == "composed_response"
+        "memory.governance": lambda a: (
+            a.type == "memory_governance_result"
             and a.status == "success"
         ),
     }
@@ -145,10 +133,6 @@ class ManagerEvaluator:
             if not matching:
                 all_steps_satisfied = False
                 break
-
-        # chat.general is a special case: no artifact needed if model replied
-        if any(s.capability == "chat.general" for s in plan.steps):
-            return EvaluationResult(True, 1.0, "finish", "普通聊天已生成回复")
 
         # composed_response signals completion
         composed_artifacts = [item for item in all_artifacts if item.type == "composed_response"]

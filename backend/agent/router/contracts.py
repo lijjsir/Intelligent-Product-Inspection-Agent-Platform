@@ -5,9 +5,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+AgentName = Literal[
+    "evidence",
+    "vision",
+    "lab_detection",
+    "quality_analysis",
+    "memory_governance",
+    "file",
+]
+
+
 class AgentRouteDecision(BaseModel):
     """AgentManager 路由决策结果"""
-    selected_agent: Literal["chat", "file", "inspection_task"] = "chat"
+    selected_agent: AgentName = "quality_analysis"
     sub_route: Literal[
         "general_chat",
         "rag_qa",
@@ -20,6 +30,11 @@ class AgentRouteDecision(BaseModel):
         "paper_format_check",
         "quality_report_query",
         "quality_task_status",
+        "evidence_arbitration",
+        "vision_inspection",
+        "lab_detection",
+        "quality_analysis",
+        "memory_governance",
         "action_blocked",
         "data_analysis",
         "rag_ingest",
@@ -68,7 +83,7 @@ class Capability(BaseModel):
 
 class AgentPlanStep(BaseModel):
     step_id: str
-    owner_agent: Literal["chat", "file", "inspection_task"] = "chat"
+    owner_agent: AgentName = "quality_analysis"
     capability: str = ""
     operation: str = ""
     mode: Literal["answer", "report", "action"] = "answer"
