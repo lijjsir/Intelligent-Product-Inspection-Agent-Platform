@@ -2,6 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.contracts.quality_contracts import (
+    PersistableOutput,
+    QualityTraceEvent,
+    RagQueryLog,
+    ResultAggregate,
+    StabilityAggregate,
+    TaskAggregate,
+)
+
 
 class QualityResultMaterializationService:
     """质量检测结果落库服务 — 从 QualityAnalysisGraph 调用。
@@ -20,25 +29,69 @@ class QualityResultMaterializationService:
         workflow_run_id: str,
         final_state: dict[str, Any],
         standard_evaluation: dict[str, Any],
-    ) -> dict[str, Any]:
-        """构建可用于持久化的结构化输出。"""
+    ) -> PersistableOutput:
+        """构建标准 PersistableOutput，含 result / stability / quality_trace / rag_queries。"""
         assessment = final_state.get("final_assessment") or {}
         answer = final_state.get("answer") or ""
         report = final_state.get("report") or ""
+        evidence_packet = final_state.get("evidence_packet") or {}
+        llm_prompt = final_state.get("llm_prompt", "")
 
-        return {
-            "org_id": org_id,
-            "workflow_run_id": workflow_run_id,
-            "verdict": assessment.get("final_verdict", "uncertain"),
-            "overall_score": assessment.get("overall_score", 0.0),
-            "risk_level": assessment.get("risk_level", "low"),
-            "report": report,
-            "answer": answer,
-            "standard_evaluation": standard_evaluation,
-            "defects": assessment.get("defects") or [],
-            "citations": final_state.get("citations") or [],
-            "stability": final_state.get("standard_evaluation") or {},
-        }
+        result = ResultAggregate(
+            task_id=final_state.get("task_id"),
+            verdict=assessment.get("final_verdict", "uncertain"),
+            overall_score=assessment.get("overall_score"),
+            llm_model=final_state.get("metadata", {}).get("model_key"),
+            citations=final_state.get("citations") or {},
+            reasoning_chain={
+                "standard_evaluation": standard_evaluation,
+                "report": report,
+                "llm_prompt": llm_prompt,
+            },
+        )
+
+        stability = StabilityAggregate(
+            risk_score=assessment.get("risk_score"),
+            risk_level=assessment.get("risk_level", "low"),
+            evidence_score=float(len(evidence_packet.get("sources", {})) if evidence_packet else 0),
+            confidence_score=assessment.get("confidence"),
+            traceability_score=assessment.get("traceability_score"),
+            faithfulness_score=assessment.get("faithfulness_score"),
+            physical_hallucination_score=assessment.get("physical_hallucination_score"),
+        )
+
+        quality_trace = QualityTraceEvent(
+            trace_id=final_state.get("workflow_run_id"),
+            workflow_version="quality_analysis_graph_v1",
+            route_subgraph="quality_analysis",
+            has_citation=bool(final_state.get("citations")),
+        )
+
+        rag_queries = []
+        if evidence_packet:
+            rag_query = evidence_packet.get("query", "")
+            rag_queries.append(
+                RagQueryLog(
+                    query=rag_query,
+                    rag_space_id=evidence_packet.get("rag_space_id"),
+                    top_k=evidence_packet.get("top_k") or 0,
+                    hit_count=len(evidence_packet.get("rag_hits") or []),
+                    source_graph="evidence_arbitration",
+                    agent_name="evidence",
+                    sub_route="evidence_arbitration",
+                    metadata={
+                        "memory_hit_count": len(evidence_packet.get("memory_hits") or []),
+                        "kg_hit_count": len(evidence_packet.get("kg_hits") or []),
+                    },
+                )
+            )
+
+        return PersistableOutput(
+            result=result,
+            stability=stability,
+            quality_trace=quality_trace,
+            rag_queries=rag_queries,
+        )
 
     async def persist_success(
         self,
@@ -63,7 +116,7 @@ class QualityResultMaterializationService:
             await ResultRepository(self.db).upsert_by_task(
                 org_id=org_id,
                 task_id=task_id,
-                result_data=persistable,
+                result_data=persistable.model_dump(),
             )
 
             await TaskRepository(self.db).update_status(

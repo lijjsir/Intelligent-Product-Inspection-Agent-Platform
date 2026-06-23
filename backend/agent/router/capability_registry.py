@@ -123,10 +123,10 @@ CAPABILITIES: dict[str, Capability] = {
         owner_agents=["memory_governance"],
         handler="memory.governance",
         operation="govern",
-        mode="report",
-        surfaces=["chat", "quality_task"],
+        mode="action",
+        surfaces=["admin", "batch"],
         cost_level="medium",
-        description="记忆候选、污染传播和回滚治理。",
+        description="记忆候选、污染传播和回滚治理 —— 仅限后台与管理页面。",
     ),
 }
 

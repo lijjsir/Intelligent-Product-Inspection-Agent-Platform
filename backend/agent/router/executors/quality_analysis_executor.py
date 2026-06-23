@@ -103,7 +103,7 @@ class QualityAnalysisExecutor(GraphExecutor):
         try:
             from agent.subgraphs.quality_analysis import QualityAnalysisGraph
 
-            graph_state = self.base_graph_state(step, state, request)
+            graph_state = self.base_graph_state(state, request, step)
             graph_state["db_session"] = db_session
             graph_state["org_id"] = request.org_id
             graph_state["user_id"] = request.user_id
@@ -190,54 +190,62 @@ class QualityAnalysisExecutor(GraphExecutor):
         state: ManagerState,
         request: NormalizedRequest,
     ):
-        try:
-            from agent.subgraphs.inspection_task import InspectionTaskGraph
+        """Execute formal inspection through QualityAnalysisGraph.
 
-            output = await InspectionTaskGraph().run(
-                request,
-                AgentRouteDecision(
-                    selected_agent="quality_analysis",
-                    sub_route="inspection_execute",
-                    intent="inspection_execute",
-                    reason="inspection_execute",
-                    route_source="manager",
-                ),
+        Short-term (P1): routes through QualityAnalysisGraph which internally
+        handles the inspection_execute response mode. The legacy
+        InspectionTaskGraph is preserved as an internal compat path.
+        """
+        try:
+            from agent.subgraphs.quality_analysis import QualityAnalysisGraph
+
+            graph_state = self.base_graph_state(state, request, step)
+            graph_state["capability"] = "quality.inspection.execute"
+            graph_state["surface"] = getattr(state, "surface", "quality_task")
+            graph_state["db_session"] = None  # inspection_execute runs via _materialize path
+
+            result = await QualityAnalysisGraph().run(graph_state)
+
+            status = result.get("status", "success")
+            summary = result.get("summary") or result.get("answer") or "正式质检执行完成"
+            answer = result.get("answer") or ""
+
+            art = self._artifact(
+                step,
+                "inspection_result",
+                status="blocked" if status == "blocked" else status,
+                needs_user_input=status == "blocked",
+                content={
+                    "answer": answer,
+                    "summary": summary,
+                    "final_verdict": result.get("final_assessment", {}).get("final_verdict"),
+                    "overall_score": result.get("final_assessment", {}).get("overall_score"),
+                    "risk_level": result.get("final_assessment", {}).get("risk_level"),
+                    "persistable_output": result.get("persistable_output"),
+                },
+                summary=summary,
             )
+            return self._observation(
+                step,
+                status="blocked" if status == "blocked" else status,
+                summary=summary,
+                artifacts=[art],
+            ), [art]
+
         except AgentRuntimeError:
             raise
         except Exception as exc:
             raise make_agent_error(
                 "INSPECTION_TASK_FAILED",
-                message="正式质检任务执行失败。",
-                debug={"raw_error": str(exc)},
+                message=f"正式质检任务执行失败：{exc}",
+                detail={
+                    "step_id": step.step_id,
+                    "capability": step.capability,
+                },
+                debug={
+                    "raw_error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                },
                 source="quality.inspection.execute",
                 cause=exc,
             ) from exc
-
-        if not isinstance(output, AgentOutput):
-            output = AgentOutput.model_validate(output)
-        action_state = str(output.action_state or "").strip()
-        structured_result = bool(output.persistable_output and output.persistable_output.result)
-        if action_state == "failed" and not structured_result:
-            raise make_agent_error(
-                "INSPECTION_TASK_FAILED",
-                message=output.summary or output.answer or "正式质检任务执行失败。",
-                source="quality.inspection.execute",
-            )
-        content = output.model_dump()
-        status = "blocked" if action_state.startswith("awaiting_") else "success"
-        art = self._artifact(
-            step,
-            "inspection_result",
-            status=status,
-            needs_user_input=status == "blocked",
-            content=content,
-            summary=output.summary or output.answer,
-            citations=list(output.citations or []),
-        )
-        return self._observation(
-            step,
-            status=status,
-            summary=art.summary,
-            artifacts=[art],
-        ), [art]

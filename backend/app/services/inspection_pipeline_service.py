@@ -291,8 +291,11 @@ def _build_manager_task_request(task: InspectionTask) -> NormalizedRequest:
         "allowed_modes": ["action", "report", "answer"],
         "action_intent": "quality_inspection_execute",
         "image_urls": image_urls,
-        "manager_skip_rag_evidence": True,
+        "evidence_packet_required": True,
     }
+    # Only skip RAG evidence if explicitly requested in metadata
+    if bool(metadata.get("manager_skip_rag_evidence") is True):
+        ext["manager_skip_rag_evidence"] = True
     if metadata.get("selected_rag_space_id") or metadata.get("selected_rag_space"):
         ext["rag_scope"] = {
             "enabled": True,

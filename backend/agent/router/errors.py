@@ -382,6 +382,11 @@ def make_agent_error(
     debug: dict[str, Any] | None = None,
     source: str | None = None,
     cause: Exception | None = None,
+    status: AgentErrorStatus | str | None = None,
+    retryable: bool | None = None,
+    frontend_visible: bool | None = None,
+    user_action: str | None = None,
+    severity: str | None = None,
 ) -> AgentRuntimeError:
     config = ERROR_CATALOG.get(code, {})
     category = config.get("category", AgentErrorCategory.INTERNAL)
@@ -415,9 +420,11 @@ def make_agent_error(
         title=title or config.get("title"),
         message=message or config.get("message") or "Agent 执行失败。",
         category=category,
-        status=config.get("status", AgentErrorStatus.FAILED),
-        retryable=bool(config.get("retryable", False)),
-        user_action=config.get("user_action"),
+        status=status or config.get("status", AgentErrorStatus.FAILED),
+        severity=severity or "error",
+        frontend_visible=True if frontend_visible is None else frontend_visible,
+        retryable=bool(config.get("retryable", False) if retryable is None else retryable),
+        user_action=user_action or config.get("user_action"),
         detail=detail,
         debug=debug,
         source=source,

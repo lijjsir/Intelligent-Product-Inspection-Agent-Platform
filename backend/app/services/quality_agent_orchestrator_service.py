@@ -8,7 +8,9 @@ from typing import Any
 import uuid
 
 from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
+from agent.contracts.quality_contracts import RouteDecision, RouteSignals
 from agent.llm.pricing import ModelPricing
+from agent.router.errors import AgentRuntimeError, make_agent_error
 from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
@@ -47,6 +49,40 @@ class QualityAgentOrchestratorService:
         self._graph = QualityJudgementSubgraph()
         from app.services.agent_manager_service import AgentManagerService
         self._agent_manager = AgentManagerService()
+
+    @staticmethod
+    def _build_agent_error_output(request: NormalizedRequest, exc: Exception) -> AgentOutput:
+        """Build a structured AgentOutput carrying agent_error_v1 when AgentManager fails."""
+        error = exc if isinstance(exc, AgentRuntimeError) else make_agent_error(
+            "INTERNAL_AGENT_ERROR",
+            message="AgentManager 执行失败，请查看错误信息或联系管理员。",
+            detail={"stage": "quality_agent_orchestrator.run_chat"},
+            debug={
+                "raw_error": str(exc),
+                "error_type": exc.__class__.__name__,
+            },
+            source="quality_agent_orchestrator",
+            cause=exc,
+        )
+
+        error_payload = error.to_dict(include_debug=bool(getattr(settings, "debug", False)))
+
+        return AgentOutput(
+            message_type="error",
+            ui_schema="agent_error_v1",
+            answer=error_payload.get("message") or "系统执行失败。",
+            summary=error_payload.get("message") or "系统执行失败。",
+            error=error_payload,
+            route_decision=RouteDecision(
+                selected_agent="quality_analysis",
+                sub_route="error",
+                intent="error",
+                reason=error_payload.get("code", "INTERNAL_AGENT_ERROR"),
+                confidence=0.0,
+                route_source="manager",
+                signals=RouteSignals(),
+            ),
+        )
 
     @staticmethod
     def _json_safe(value: Any) -> Any:
@@ -140,9 +176,8 @@ class QualityAgentOrchestratorService:
                 router_output = await self._agent_manager.run_chat(payload, db_session=session)
             agent_output = AgentOutput.model_validate(router_output.agent_output)
             # Inject route_decision from router output
-            from agent.contracts.quality_contracts import RouteDecision as RD, RouteSignals
             rd = router_output.route_decision
-            agent_output.route_decision = RD(
+            agent_output.route_decision = RouteDecision(
                 mode="router_enabled",
                 selected_agent=rd.selected_agent,
                 sub_route=rd.sub_route,
@@ -156,16 +191,19 @@ class QualityAgentOrchestratorService:
             )
             result_payload = {"agent_output": agent_output.model_dump()}
         except Exception as exc:
-            if not settings.enable_legacy_agent_fallback:
-                raise RuntimeError(f"AgentManager failed: {exc}") from exc
-            logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
-            result = await self._graph.run(request)
-            if isinstance(result, AgentOutput):
-                agent_output = result
-                result_payload = {"agent_output": agent_output.model_dump()}
+            if settings.enable_legacy_agent_fallback:
+                logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
+                result = await self._graph.run(request)
+                if isinstance(result, AgentOutput):
+                    agent_output = result
+                    result_payload = {"agent_output": agent_output.model_dump()}
+                else:
+                    result_payload = dict(result)
+                    agent_output = AgentOutput.model_validate(result_payload["agent_output"])
             else:
-                result_payload = dict(result)
-                agent_output = AgentOutput.model_validate(result_payload["agent_output"])
+                logger.exception("AgentManager failed, returning structured agent_error_v1")
+                agent_output = self._build_agent_error_output(request, exc)
+                result_payload = {"agent_output": agent_output.model_dump()}
         route_decision = agent_output.route_decision
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(

@@ -68,17 +68,46 @@ class GraphExecutor:
         request: NormalizedRequest,
         step: AgentPlanStep,
     ) -> dict[str, Any]:
+        artifacts = [
+            item.model_dump(mode="json")
+            for item in list(getattr(state, "artifacts", []) or [])
+        ]
+
+        request_ext = dict(getattr(request, "ext", {}) or {})
+        request_metadata = dict(getattr(request, "metadata", {}) or {})
+
+        manager_state = {
+            "request_id": getattr(state, "request_id", None),
+            "workflow_run_id": getattr(state, "workflow_run_id", None),
+            "session_id": getattr(state, "session_id", None),
+            "assistant_message_id": getattr(state, "assistant_message_id", None),
+            "org_id": getattr(state, "org_id", None),
+            "user_id": getattr(state, "user_id", None),
+            "surface": getattr(state, "surface", None),
+            "original_query": getattr(state, "original_query", None),
+            "selected_agent": getattr(state, "selected_agent", None),
+            "selected_rag_space": getattr(state, "selected_rag_space", None),
+            "rag_scope": getattr(state, "rag_scope", None),
+            "attachments": list(getattr(state, "attachments", []) or []),
+            "request_ext": dict(getattr(state, "request_ext", {}) or {}),
+            "request_metadata": dict(getattr(state, "request_metadata", {}) or {}),
+            "artifacts": artifacts,
+        }
+
         return {
-            "request_id": state.request_id,
-            "workflow_run_id": state.workflow_run_id,
-            "session_id": state.session_id,
-            "assistant_message_id": state.assistant_message_id,
-            "org_id": state.org_id,
-            "user_id": state.user_id,
-            "surface": state.surface,
-            "query": state.original_query,
-            "attachments": list(state.attachments),
-            "metadata": dict(request.metadata or {}),
-            "ext": dict(request.ext or {}),
-            "step": step.model_dump(),
+            "request_id": getattr(state, "request_id", None),
+            "workflow_run_id": getattr(state, "workflow_run_id", None),
+            "session_id": getattr(state, "session_id", None),
+            "assistant_message_id": getattr(state, "assistant_message_id", None),
+            "org_id": getattr(state, "org_id", None),
+            "user_id": getattr(state, "user_id", None),
+            "surface": getattr(state, "surface", None) or "chat",
+            "query": getattr(state, "original_query", "") or getattr(request, "query", ""),
+            "attachments": list(getattr(state, "attachments", []) or []),
+            "metadata": request_metadata,
+            "ext": request_ext,
+            "step": step.model_dump(mode="json"),
+            "request": request.model_dump(mode="json"),
+            "manager_state": manager_state,
+            "artifacts": artifacts,
         }

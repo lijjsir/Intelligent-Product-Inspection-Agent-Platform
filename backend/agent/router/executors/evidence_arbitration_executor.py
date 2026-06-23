@@ -4,7 +4,7 @@ from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentPlanStep, CapabilityContext
-from agent.router.errors import make_agent_error
+from agent.router.errors import AgentRuntimeError, make_agent_error
 from agent.router.executors.graph_executor import GraphExecutor
 from agent.router.manager_state import ManagerState
 
@@ -27,16 +27,33 @@ class EvidenceArbitrationExecutor(GraphExecutor):
                 source="evidence.executor",
             )
 
-        # Try the LangGraph subgraph first; fall back to direct approach if unavailable.
+        # Execute via LangGraph subgraph — no silent fallback.
+        # Graph failures must raise structured AgentRuntimeError.
         try:
             return await self._execute_via_graph(step, state, request, db_session)
-        except Exception:
-            return await self._execute_direct(step, state, request, db_session)
+        except AgentRuntimeError:
+            raise
+        except Exception as exc:
+            raise make_agent_error(
+                "EVIDENCE_ARBITRATION_FAILED",
+                message=f"证据仲裁图执行失败：{exc}",
+                detail={
+                    "step_id": step.step_id,
+                    "owner_agent": step.owner_agent,
+                    "capability": step.capability,
+                },
+                debug={
+                    "raw_error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                },
+                source="evidence.graph",
+                cause=exc,
+            ) from exc
 
     async def _execute_via_graph(self, step, state, request, db_session):
         from agent.subgraphs.evidence_arbitration import EvidenceArbitrationGraph
 
-        graph_state = self.base_graph_state(step, state, request)
+        graph_state = self.base_graph_state(state, request, step)
         graph_state["db_session"] = db_session
         graph_state["org_id"] = request.org_id
         graph_state["user_id"] = request.user_id

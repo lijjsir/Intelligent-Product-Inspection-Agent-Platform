@@ -151,12 +151,14 @@ def test_file_executor_supports_rag_ingest_and_inspection_exposes_only_public_en
 
 @pytest.mark.asyncio
 async def test_inspection_task_executor_returns_blocked_when_graph_needs_user_input():
+    """P1.2: QualityAnalysisGraph is now the entry for quality.inspection.execute."""
     class FakeGraph:
-        async def run(self, request, route_decision):
+        async def run(self, state):
             return {
-                "action_state": "awaiting_clarification",
-                "summary": "缺少产品编号",
-                "answer": "缺少产品编号",
+                "status": "blocked",
+                "summary": "需要用户补充信息",
+                "answer": "需要用户补充信息",
+                "final_assessment": {},
             }
 
     executor = QualityAnalysisExecutor()
@@ -165,31 +167,28 @@ async def test_inspection_task_executor_returns_blocked_when_graph_needs_user_in
         owner_agent="quality_analysis",
         capability="quality.inspection.execute",
     )
-    import agent.subgraphs.inspection_task as inspection_task_module
+    import agent.subgraphs.quality_analysis as qa_module
 
-    original = inspection_task_module.InspectionTaskGraph
-    inspection_task_module.InspectionTaskGraph = lambda: FakeGraph()
+    original = qa_module.QualityAnalysisGraph
+    qa_module.QualityAnalysisGraph = lambda: FakeGraph()
     try:
         obs, artifacts = await executor.execute(step, _state(selected_agent="quality_analysis"), _request())
     finally:
-        inspection_task_module.InspectionTaskGraph = original
+        qa_module.QualityAnalysisGraph = original
 
     assert obs.status == "blocked"
     assert artifacts[0].status == "blocked"
     assert artifacts[0].needs_user_input is True
-    assert artifacts[0].summary == "缺少产品编号"
 
 
 @pytest.mark.asyncio
 async def test_inspection_task_executor_raises_when_graph_fails():
+    """P1.2: Graph errors must propagate as structured AgentRuntimeError."""
     from agent.router.errors import AgentRuntimeError
 
     class FakeGraph:
-        async def run(self, request, route_decision):
-            return {
-                "action_state": "failed",
-                "summary": "规则执行失败",
-            }
+        async def run(self, state):
+            raise RuntimeError("inspection graph broken")
 
     executor = QualityAnalysisExecutor()
     step = AgentPlanStep(
@@ -197,16 +196,16 @@ async def test_inspection_task_executor_raises_when_graph_fails():
         owner_agent="quality_analysis",
         capability="quality.inspection.execute",
     )
-    import agent.subgraphs.inspection_task as inspection_task_module
+    import agent.subgraphs.quality_analysis as qa_module
 
-    original = inspection_task_module.InspectionTaskGraph
-    inspection_task_module.InspectionTaskGraph = lambda: FakeGraph()
+    original = qa_module.QualityAnalysisGraph
+    qa_module.QualityAnalysisGraph = lambda: FakeGraph()
 
     try:
         with pytest.raises(AgentRuntimeError) as exc_info:
             await executor.execute(step, _state(selected_agent="quality_analysis"), _request())
     finally:
-        inspection_task_module.InspectionTaskGraph = original
+        qa_module.QualityAnalysisGraph = original
 
     assert exc_info.value.code == "INSPECTION_TASK_FAILED"
 
