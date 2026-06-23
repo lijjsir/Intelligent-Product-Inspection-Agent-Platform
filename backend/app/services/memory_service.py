@@ -20,7 +20,6 @@ from app.models.memory import (
 )
 from app.repositories.memory_repo import (
     MemoryCandidateSupportRepository,
-    MemoryDependencyRepository,
     MemoryEventRepository,
     MemoryItemRepository,
     MemoryPolicyRepository,
@@ -67,7 +66,6 @@ class MemoryService:
         self._item_repo = MemoryItemRepository(session, org_id)
         self._support_repo = MemoryCandidateSupportRepository(session, org_id)
         self._event_repo = MemoryEventRepository(session, org_id)
-        self._dep_repo = MemoryDependencyRepository(session, org_id)
         self._policy_repo = MemoryPolicyRepository(session, org_id)
         self._vector = vector_service
         self._candidate_vector = candidate_vector_service

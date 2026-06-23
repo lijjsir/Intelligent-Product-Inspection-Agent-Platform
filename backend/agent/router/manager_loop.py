@@ -268,7 +268,7 @@ class ManagerLoop:
             models = await ModelConfigService(db_session, state.org_id).list_runtime_models()
             runtime = await self._gateway.select_runtime(
                 models=models,
-                model_types={"chat"},
+                model_types={"chat", "llm", "text_generation"},
                 reserve=False,
             )
         except Exception:
@@ -310,7 +310,7 @@ class ManagerLoop:
         message_type = composed.get("message_type", "quality_answer") if composed else self._message_type(state, sub_route, composed_status)
         _log.info(
             "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
-            "message_type=%s errors=%d obs_failures=%d",
+            "message_type=%s errors=%d obs_failures=%d final_action=%s",
             plan.reason if plan else "no-plan",
             sub_route,
             composed is not None,
@@ -318,6 +318,7 @@ class ManagerLoop:
             message_type,
             len(state.errors),
             sum(1 for o in state.observations if o.status == "failed"),
+            state.final_action,
         )
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
         citations = self._citations(state, answer=answer)
@@ -684,7 +685,10 @@ class ManagerLoop:
         return ""
 
     def _error_payload_from_state(self, state: ManagerState) -> dict[str, Any] | None:
-        if state.final_action not in {"fail", "ask_user"} and not state.errors:
+        # Only emit error when there are actual errors OR final_action is fail/ask_user with errors
+        if not state.errors:
+            return None
+        if state.final_action not in {"fail", "ask_user"}:
             return None
 
         code = self._latest_failure_code(state)

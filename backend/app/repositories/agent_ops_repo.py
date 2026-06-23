@@ -35,7 +35,10 @@ class AgentOpsRepository:
 
 class AgentDefinitionRepository(AgentOpsRepository):
     async def create(self, data: dict) -> AgentDefinition:
-        obj = AgentDefinition(**data, org_id=self._org_id)
+        # Only pass fields that exist on the AgentDefinition model
+        valid_fields = {c.key for c in AgentDefinition.__table__.columns}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        obj = AgentDefinition(**filtered, org_id=self._org_id)
         self._session.add(obj)
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])

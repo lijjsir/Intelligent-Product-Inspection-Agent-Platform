@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import (
     MemoryCandidateSupport,
-    MemoryDependencyEdge,
     MemoryEvaluation,
     MemoryEvent,
     MemoryItem,
@@ -18,6 +17,33 @@ from app.models.memory import (
     MemoryRollback,
     MemorySyncOutbox,
 )
+
+
+async def _get_versioned_out_memory_ids(org_id: str) -> set[str]:
+    """Query Neo4j for memory IDs that are targets of VERSION_OF edges.
+
+    These represent old versions that should be excluded from
+    retrievable-memory queries.  Returns an empty set when Neo4j is
+    unavailable so that queries degrade gracefully (no filtering).
+    """
+    try:
+        from app.services.neo4j_memory_graph_store import Neo4jMemoryGraphStore, MEMORY_RELATIONSHIP_TYPES
+
+        store = Neo4jMemoryGraphStore()
+        version_of = MEMORY_RELATIONSHIP_TYPES.get("version_of", "VERSION_OF")
+        query = """
+        MATCH (s:Memory {org_id: $org_id})-[r]->(t:Memory {org_id: $org_id})
+        WHERE r.edge_type = $edge_type AND coalesce(r.deleted_at, '') = ''
+        RETURN DISTINCT t.memory_id AS memory_id
+        LIMIT 10000
+        """
+        records = await store._execute_read(query, {
+            "org_id": org_id,
+            "edge_type": version_of,
+        })
+        return {r["memory_id"] for r in records}
+    except Exception:
+        return set()
 
 
 class MemoryItemRepository:
@@ -127,20 +153,16 @@ class MemoryItemRepository:
             stmt = stmt.where(MemoryItem.product_line == product_line)
         if rag_space_id:
             stmt = stmt.where(MemoryItem.rag_space_id == rag_space_id)
-        # Exclude memories that are old versions (target of a version_of edge)
-        from app.models.memory import MemoryDependencyEdge as MDE
-        versioned_out = (
-            select(MDE.target_memory_id)
-            .where(
-                MDE.org_id == self._org_id,
-                MDE.edge_type == "version_of",
-                MDE.deleted_at.is_(None),
-            )
-        )
-        stmt = stmt.where(MemoryItem.memory_id.not_in(versioned_out))
+        # Exclude memories that are old versions (target of a version_of edge).
+        # This data now lives in Neo4j; we fetch the set of versioned-out IDs
+        # from the graph store and filter in Python.
+        versioned_out = await _get_versioned_out_memory_ids(self._org_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        if versioned_out:
+            items = [item for item in items if item.memory_id not in versioned_out]
+        return items
 
     async def list_retrievable_by_scope(
         self,
@@ -173,20 +195,14 @@ class MemoryItemRepository:
             stmt = stmt.where(self._scope_equals("product_line", product_line))
         if rag_space_id:
             stmt = stmt.where(self._scope_equals("rag_space_id", rag_space_id))
-        # Exclude old versions
-        from app.models.memory import MemoryDependencyEdge as MDE
-        versioned_out = (
-            select(MDE.target_memory_id)
-            .where(
-                MDE.org_id == self._org_id,
-                MDE.edge_type == "version_of",
-                MDE.deleted_at.is_(None),
-            )
-        )
-        stmt = stmt.where(MemoryItem.memory_id.not_in(versioned_out))
+        # Exclude old versions — fetched from Neo4j, filtered in Python
+        versioned_out = await _get_versioned_out_memory_ids(self._org_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        if versioned_out:
+            items = [item for item in items if item.memory_id not in versioned_out]
+        return items
 
     async def list_promotion_candidates(
         self,

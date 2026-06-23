@@ -104,18 +104,39 @@ class QualityResultMaterializationService:
         rag_queries = []
         if evidence_packet:
             rag_query = evidence_packet.get("query", "")
+            sources = evidence_packet.get("sources") or {}
+            rag_source = sources.get("rag") or {}
+            memory_source = sources.get("memory") or {}
+            kg_source = sources.get("quality_kg") or {}
+            rag_items = list(rag_source.get("items") or [])
+            memory_items = list(memory_source.get("items") or [])
+            kg_paths = list(kg_source.get("paths") or [])
+
+            # Resolve rag_space_id from nested sources or top-level metadata
+            rag_space_id = (
+                evidence_packet.get("rag_space_id")
+                or rag_source.get("rag_space_id")
+                or rag_items[0].get("rag_space_id") if rag_items else None
+            )
+            top_k = (
+                evidence_packet.get("top_k")
+                or rag_source.get("top_k")
+                or rag_items[0].get("top_k") if rag_items else 0
+            )
+
             rag_queries.append(
                 RagQueryLog(
                     query=rag_query,
-                    rag_space_id=evidence_packet.get("rag_space_id"),
-                    top_k=evidence_packet.get("top_k") or 0,
-                    hit_count=len(evidence_packet.get("rag_hits") or []),
+                    rag_space_id=rag_space_id,
+                    top_k=top_k or 0,
+                    hit_count=len(rag_items),
                     source_graph="evidence_arbitration",
                     agent_name="evidence",
                     sub_route="evidence_arbitration",
                     metadata={
-                        "memory_hit_count": len(evidence_packet.get("memory_hits") or []),
-                        "kg_hit_count": len(evidence_packet.get("kg_hits") or []),
+                        "memory_hit_count": len(memory_items),
+                        "kg_hit_count": len(kg_paths),
+                        "source_count": int(evidence_packet.get("source_count") or 0),
                     },
                 )
             )

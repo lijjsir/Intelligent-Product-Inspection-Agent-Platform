@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus";
+import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
@@ -684,28 +684,6 @@ async function retryFromAssistantMessage(message: ChatMessage) {
   }
 }
 
-function formatErrorForCopy(message: ChatMessage): string {
-  const error = messageAgentError(message);
-  const detail = error?.detail;
-  const lines: string[] = [error?.title || "执行失败"];
-  if (error?.code) lines.push(`错误码: ${error.code}`);
-  if (error?.message) lines.push(`错误信息: ${error.message}`);
-  if (error?.user_action) lines.push(`建议: ${error.user_action}`);
-  if (error?.trace_id) lines.push(`Trace ID: ${error.trace_id}`);
-  if (detail && typeof detail === "object" && Object.keys(detail).length > 0) {
-    lines.push("详细信息:");
-    for (const [key, value] of Object.entries(detail)) {
-      lines.push(`  ${key}: ${value}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-async function copyErrorMessage(message: ChatMessage) {
-  const text = formatErrorForCopy(message);
-  await copyToClipboard(text, "错误信息已复制");
-}
-
 async function resendFromErrorMessage(message: ChatMessage) {
   await retryFromAssistantMessage(message);
 }
@@ -737,15 +715,6 @@ function errorCardTitle(message: ChatMessage): string {
   if (code.startsWith("SHORT_TERM_")) return "短期记忆构建失败";
   if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "图数据库服务异常";
   return "执行失败";
-}
-
-function showErrorContextState(message: ChatMessage) {
-  const detail = messageAgentError(message)?.detail || message.payload?.detail;
-  const text = detail && typeof detail === "object" ? JSON.stringify(detail, null, 2) : "无上下文详情";
-  ElMessageBox.alert(text, "上下文状态", {
-    confirmButtonText: "关闭",
-    customClass: "chat-error-context-dialog",
-  });
 }
 
 async function scrollToBottom() {
@@ -1063,9 +1032,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   <AgentErrorAlert :error="messageAgentError(message) || fallbackAgentError(message)" />
                 </div>
                 <div class="error-card-actions">
-                  <el-button size="small" @click="copyErrorMessage(message)">复制错误</el-button>
                   <el-button size="small" type="primary" @click="resendFromErrorMessage(message)" :disabled="chatStore.loading">重新发送</el-button>
-                  <el-button size="small" @click="showErrorContextState(message)">查看上下文状态</el-button>
                 </div>
               </div>
 

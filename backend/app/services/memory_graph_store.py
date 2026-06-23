@@ -125,15 +125,9 @@ class MySQLMemoryGraphStore(MemoryGraphStore):
         return None
 
     async def create_memory_edge(self, edge: MemoryGraphEdge) -> None:
-        from app.repositories.memory_repo import MemoryDependencyRepository
-        dep_repo = MemoryDependencyRepository(self._session, edge.org_id or self._org_id)
-        await dep_repo.upsert_edge(
-            source_memory_id=edge.source_memory_id,
-            target_memory_id=edge.target_memory_id,
-            edge_type=edge.edge_type,
-            strength=edge.strength,
-            metadata_json=edge.metadata_json,
-        )
+        # MySQL memory_dependency_edges table was dropped (migrated to Neo4j).
+        # The DualWriteMemoryGraphStore still calls this for dual-write; skip safely.
+        return None
 
     async def create_memory_rag_edge(self, memory_id: str, chunk_id: str, edge_type: str,
                                       confidence: float = 1.0, org_id: str = "") -> None:
@@ -154,18 +148,9 @@ class MySQLMemoryGraphStore(MemoryGraphStore):
         return [result]
 
     async def find_conflict_chain(self, org_id: str, memory_id: str) -> list[dict]:
-        from app.repositories.memory_repo import MemoryDependencyRepository
-        dep_repo = MemoryDependencyRepository(self._session, org_id)
-        edges = await dep_repo.list_by_edge_type(memory_id, ["conflicts_with"], direction="source")
-        return [
-            {
-                "source_memory_id": e.source_memory_id,
-                "target_memory_id": e.target_memory_id,
-                "edge_type": e.edge_type,
-                "strength": float(e.strength) if e.strength else None,
-            }
-            for e in edges
-        ]
+        # memory_dependency_edges table was dropped (migrated to Neo4j).
+        # Conflict chains are resolved in Neo4jMemoryGraphStore.
+        return []
 
     async def create_event_memory_edge(self, org_id: str, event_id: str, memory_id: str,
                                         edge_type: str, trace_id: str = "") -> None:

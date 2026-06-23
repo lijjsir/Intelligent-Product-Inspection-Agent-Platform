@@ -92,6 +92,7 @@ class GraphExecutor:
             "request_ext": dict(getattr(state, "request_ext", {}) or {}),
             "request_metadata": dict(getattr(state, "request_metadata", {}) or {}),
             "artifacts": artifacts,
+            "manager_model_runtime": getattr(state, "manager_model_runtime", None),
         }
 
         return {
@@ -109,5 +110,6 @@ class GraphExecutor:
             "step": step.model_dump(mode="json"),
             "request": request.model_dump(mode="json"),
             "manager_state": manager_state,
+            "manager_model_runtime": getattr(state, "manager_model_runtime", None),
             "artifacts": artifacts,
         }

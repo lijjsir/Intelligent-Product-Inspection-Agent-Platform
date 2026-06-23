@@ -58,3 +58,18 @@ export function agentErrorPayload(payload: ChatMessagePayload | null | undefined
     agent_name: payload.agent || null,
   };
 }
+
+export function agentErrorBrief(error: AgentErrorPayload | null | undefined): { title: string; message: string } {
+  if (!error) {
+    return {
+      title: "处理失败",
+      message: "系统执行失败，请稍后重试。",
+    };
+  }
+  const title = String(error.title || (error.status === "blocked" ? "需要补充信息" : "处理失败")).trim();
+  const message = String(error.message || error.user_action || "系统执行失败，请稍后重试。").trim();
+  return {
+    title: title || "处理失败",
+    message: message || "系统执行失败，请稍后重试。",
+  };
+}

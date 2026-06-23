@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentErrorPayload, agentLabel } from "./chat-rendering";
+import { agentErrorBrief, agentErrorPayload, agentLabel } from "./chat-rendering";
 
 describe("chat rendering helpers", () => {
   it("uses new route agent names without quality_chat fallback labels", () => {
@@ -56,5 +56,28 @@ describe("chat rendering helpers", () => {
       user_action: "请重新上传文件。",
       trace_id: "trace-legacy",
     });
+  });
+
+  it("keeps the visible agent error message brief and non-technical", () => {
+    const brief = agentErrorBrief({
+      code: "INTERNAL_AGENT_ERROR",
+      title: "系统内部错误",
+      message: "系统执行失败，请稍后重试。",
+      category: "internal",
+      severity: "error",
+      status: "failed",
+      frontend_visible: true,
+      retryable: false,
+      source: "quality.final_analyze",
+      trace_id: "trace-1",
+      request_id: "req-1",
+      detail: { raw_error: "stack trace" },
+    });
+
+    expect(brief.title).toBe("系统内部错误");
+    expect(brief.message).toBe("系统执行失败，请稍后重试。");
+    expect(`${brief.title}${brief.message}`).not.toContain("INTERNAL_AGENT_ERROR");
+    expect(`${brief.title}${brief.message}`).not.toContain("trace-1");
+    expect(`${brief.title}${brief.message}`).not.toContain("quality.final_analyze");
   });
 });

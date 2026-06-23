@@ -303,19 +303,33 @@ async def llm_conflict_arbitration(state: dict[str, Any]) -> dict[str, Any]:
 
 async def build_evidence_packet(state: dict[str, Any]) -> dict[str, Any]:
     evidence_sources: dict[str, Any] = {}
-    if state.get("rag_hits"):
+    rag_hits = state.get("rag_hits") or []
+    memory_hits = state.get("shared_memory_hits") or []
+    kg_hits = state.get("kg_hits") or []
+
+    if rag_hits:
         evidence_sources["rag"] = {
-            "hit_count": len(state["rag_hits"]),
-            "items": state["rag_hits"],
+            "hit_count": len(rag_hits),
+            "items": rag_hits,
         }
-    if state.get("shared_memory_hits"):
+    if memory_hits:
         evidence_sources["memory"] = {
-            "items": state["shared_memory_hits"],
+            "items": memory_hits,
         }
-    if state.get("kg_hits"):
+    if kg_hits:
         evidence_sources["quality_kg"] = {
-            "paths": state["kg_hits"],
+            "paths": kg_hits,
         }
+
+    # Extract rag_space_id and top_k from the first rag hit for top-level access
+    rag_space_id = None
+    top_k = 0
+    rag_space_name = None
+    if rag_hits:
+        first_rag = rag_hits[0] or {}
+        rag_space_id = first_rag.get("rag_space_id")
+        top_k = int(first_rag.get("top_k") or 0)
+        rag_space_name = first_rag.get("rag_space_name")
 
     source_count = len(evidence_sources)
     packet = {
@@ -324,6 +338,9 @@ async def build_evidence_packet(state: dict[str, Any]) -> dict[str, Any]:
         "source_count": source_count,
         "conflicts": state.get("conflicts", []),
         "normalized_evidence": state.get("normalized_evidence", []),
+        "rag_space_id": rag_space_id,
+        "top_k": top_k,
+        "rag_space_name": rag_space_name,
     }
 
     return {

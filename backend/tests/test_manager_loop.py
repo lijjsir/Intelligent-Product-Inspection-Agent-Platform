@@ -718,6 +718,68 @@ async def test_general_chat_force_web_search_runs_tool_once_through_manager(monk
 
 
 @pytest.mark.asyncio
+async def test_general_chat_uses_deepseek_llm_config_without_internal_error(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            assert session == "db-session"
+            assert org_id == "org-1"
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "llm",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    class FakeLLMClient:
+        instances: list[dict] = []
+
+        def __init__(self, **kwargs):
+            self.instances.append(kwargs)
+
+        @staticmethod
+        def _normalize_usage(usage):
+            return dict(usage or {})
+
+        async def chat(self, messages, **kwargs):
+            return {
+                "text": "你好，DeepSeek 聊天链路正常。",
+                "__meta__": {
+                    "model": "deepseek-v4-flash",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+                },
+            }
+
+    monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.router.executors.chat_executor.LLMClient", FakeLLMClient)
+
+    output = await ManagerLoop().run(
+        _request(query="你好", ext={"surface": "chat"}),
+        db_session="db-session",
+    )
+
+    assert output.status == "completed"
+    assert output.error is None
+    assert output.agent_output.get("error") is None
+    assert output.agent_output["answer"] == "你好，DeepSeek 聊天链路正常。"
+    manager_model = output.agent_output["route_trace"]["manager_model"]
+    assert manager_model["model_config_id"] == "deepseek-cfg"
+    assert manager_model["model_id"] == "deepseek-v4-flash"
+    assert FakeLLMClient.instances
+    assert FakeLLMClient.instances[0]["provider"] == "deepseek"
+    assert FakeLLMClient.instances[0]["base_url"] == "https://api.deepseek.com"
+    assert FakeLLMClient.instances[0]["api_key"] == "sk-db"
+
+
+@pytest.mark.asyncio
 async def test_tool_loop_final_answer_receives_tool_context():
     final_call: dict[str, object] = {}
 
@@ -1083,7 +1145,7 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
     class FakeGateway:
         async def select_runtime(self, *, models, model_types, reserve):
             assert models[0]["model_type"] == "chat"
-            assert model_types == {"chat"}
+            assert model_types == {"chat", "llm", "text_generation"}
             assert reserve is False
             return {
                 "runtime_key": "openai:chat-fast-json",
@@ -1106,6 +1168,63 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
     assert manager_model["model_type"] == "chat"
     assert manager_model["model_config_id"] == "model-config-1"
     assert manager_model["model_id"] == "chat-fast-json"
+
+
+@pytest.mark.asyncio
+async def test_manager_model_resolves_from_llm_deepseek_configs(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            assert session == "db-session"
+            assert org_id == "org-1"
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "llm",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    seen = {}
+
+    class FakeGateway:
+        async def select_runtime(self, *, models, model_types, reserve):
+            seen["model_types"] = set(model_types)
+            assert models[0]["model_type"] == "llm"
+            assert reserve is False
+            return {
+                "model_config_id": "deepseek-cfg",
+                "model_id": "deepseek-v4-flash",
+                "provider": "deepseek",
+                "runtime_key": "deepseek-cfg",
+                "failover_depth": 0,
+            }
+
+    monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
+    loop = ManagerLoop()
+    loop._gateway = FakeGateway()
+
+    manager_model = await loop._resolve_manager_model(
+        ManagerState(
+            request_id="req-llm",
+            workflow_run_id="wf-llm",
+            original_query="你好",
+            org_id="org-1",
+        ),
+        db_session="db-session",
+    )
+
+    assert seen["model_types"] == {"chat", "llm", "text_generation"}
+    assert manager_model is not None
+    assert manager_model["model_id"] == "deepseek-v4-flash"
+    assert manager_model["model_config_id"] == "deepseek-cfg"
 
 
 @pytest.mark.asyncio

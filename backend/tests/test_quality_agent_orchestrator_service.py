@@ -1,6 +1,7 @@
 ﻿from contextlib import asynccontextmanager
 
 import pytest
+import logging
 from types import SimpleNamespace
 
 from agent.contracts import (
@@ -169,6 +170,103 @@ def test_response_payload_prefers_router_subroute_over_legacy_subgraph_intent():
     )
 
     assert payload["intent"] == "general_chat"
+
+
+def test_response_payload_drops_stale_error_fields_for_completed_answer(caplog):
+    request = NormalizedRequest(
+        request_id="req-stale-error",
+        workflow_run_id="wf-stale-error",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="quality_answer",
+        answer="你好，聊天链路正常。",
+        summary="聊天链路正常",
+        raw_state={
+            "response_payload": {
+                "message_type": "error",
+                "status": "failed",
+                "ui_schema": "agent_error_v1",
+                "trace_id": "trace-stale",
+                "error": {
+                    "code": "INTERNAL_AGENT_ERROR",
+                    "message": "旧的失败 payload 不应污染成功回答",
+                },
+            }
+        },
+        route_decision=RouteDecision(
+            selected_agent="quality_analysis",
+            sub_route="general_chat",
+            intent="general_chat",
+            reason="test",
+            signals=RouteSignals(),
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.services.quality_agent_orchestrator_service"):
+        payload = QualityAgentOrchestratorService()._build_response_payload(
+            request=request,
+            output=output,
+            task_form_defaults={},
+            materialized_task=None,
+            materialization_error=None,
+        )
+
+    assert payload["message_type"] == "quality_answer"
+    assert payload["status"] == "completed"
+    assert payload.get("error") is None
+    assert payload["ui_schema"] != "agent_error_v1"
+    assert "dropped stale agent error from completed chat response" in caplog.text
+
+
+def test_run_chat_agent_error_log_contains_diagnostic_fields(caplog):
+    request = NormalizedRequest(
+        request_id="req-error-log",
+        workflow_run_id="wf-error-log",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="error",
+        answer="系统执行失败，请稍后重试。",
+        summary="系统执行失败，请稍后重试。",
+        error={
+            "code": "CHAT_COMPOSE_MODEL_UNAVAILABLE",
+            "message": "模型不可用，无法组织最终回复。",
+            "category": "model",
+            "agent_name": "quality_analysis",
+            "stage": "quality.final_analyze",
+            "capability": "quality.final_analyze",
+            "trace_id": "trace-error-log",
+            "detail": {"provider": "deepseek"},
+        },
+        route_decision=RouteDecision(
+            selected_agent="quality_analysis",
+            sub_route="error",
+            intent="error",
+            reason="model unavailable",
+            signals=RouteSignals(),
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="app.services.quality_agent_orchestrator_service"):
+        QualityAgentOrchestratorService._log_agent_output(
+            request=request,
+            output=output,
+            router_status="failed",
+        )
+
+    assert "run_chat agent_error" in caplog.text
+    assert "CHAT_COMPOSE_MODEL_UNAVAILABLE" in caplog.text
+    assert "模型不可用，无法组织最终回复。" in caplog.text
+    assert "quality.final_analyze" in caplog.text
+    assert "trace-error-log" in caplog.text
+    assert "deepseek" in caplog.text
 
 
 @pytest.mark.asyncio

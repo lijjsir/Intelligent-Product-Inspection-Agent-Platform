@@ -216,8 +216,15 @@ class QualityAgentOrchestratorService:
                 fallback_agent=rd.fallback_agent,
                 signals=RouteSignals(),
             )
+            agent_output = self._normalize_agent_output(
+                request=request,
+                output=agent_output,
+                router_status=router_output.status,
+            )
             result_payload = {"agent_output": agent_output.model_dump()}
+            self._log_agent_output(request=request, output=agent_output, router_status=router_output.status)
         except Exception as exc:
+            logger.exception("AgentManager failed, exception details:")
             if settings.enable_legacy_agent_fallback:
                 logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
                 result = await self._graph.run(request)
@@ -240,6 +247,117 @@ class QualityAgentOrchestratorService:
             latency_ms=int(round((perf_counter() - started_at) * 1000)),
         )
         return result_payload
+
+    @staticmethod
+    def _is_error_output(output: AgentOutput, *, router_status: str | None = None) -> bool:
+        if str(router_status or "").lower() == "failed":
+            return True
+        if str(output.message_type or "").lower() == "error":
+            return True
+        if str(output.ui_schema or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+            return True
+        return False
+
+    @staticmethod
+    def _error_payload_from_output(output: AgentOutput) -> Any:
+        direct = getattr(output, "error", None)
+        if direct:
+            return direct
+        raw_state = output.raw_state if isinstance(output.raw_state, dict) else {}
+        response_payload = raw_state.get("response_payload")
+        if isinstance(response_payload, dict):
+            return response_payload.get("error")
+        return None
+
+    @classmethod
+    def _normalize_agent_output(
+        cls,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        router_status: str | None,
+    ) -> AgentOutput:
+        if str(router_status or "").lower() != "completed":
+            return output
+
+        dumped = output.model_dump()
+        stale_error = dumped.get("error") or dumped.get("error_code") or dumped.get("error_message")
+        raw_state = dumped.get("raw_state") if isinstance(dumped.get("raw_state"), dict) else {}
+        response_payload = raw_state.get("response_payload") if isinstance(raw_state, dict) else None
+        if isinstance(response_payload, dict):
+            stale_error = stale_error or response_payload.get("error") or response_payload.get("error_code")
+            response_payload = dict(response_payload)
+            for key in ("error", "error_code", "error_message", "detail", "module", "suggestion", "recoverable"):
+                response_payload.pop(key, None)
+            if str(response_payload.get("message_type") or "").lower() == "error":
+                response_payload["message_type"] = dumped.get("message_type") or "quality_answer"
+            if str(response_payload.get("ui_schema") or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+                response_payload["ui_schema"] = "chat_answer_v2"
+            if str(response_payload.get("status") or "").lower() == "failed":
+                response_payload["status"] = "completed"
+            raw_state["response_payload"] = response_payload
+            dumped["raw_state"] = raw_state
+
+        for key in ("error", "error_code", "error_message", "detail", "module", "suggestion", "recoverable"):
+            dumped.pop(key, None)
+        if str(dumped.get("message_type") or "").lower() == "error":
+            dumped["message_type"] = "quality_answer"
+        if str(dumped.get("ui_schema") or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+            dumped["ui_schema"] = None
+
+        if stale_error:
+            logger.warning(
+                "dropped stale agent error from completed chat response request_id=%s workflow_run_id=%s "
+                "assistant_message_id=%s stale_error=%s",
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                stale_error,
+            )
+
+        return AgentOutput.model_validate(dumped)
+
+    @classmethod
+    def _log_agent_output(
+        cls,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        router_status: str | None,
+    ) -> None:
+        error_payload = cls._error_payload_from_output(output)
+        if cls._is_error_output(output, router_status=router_status) or error_payload:
+            error_dict = error_payload if isinstance(error_payload, dict) else {}
+            logger.error(
+                "run_chat agent_error router_status=%s message_type=%s code=%s message=%s category=%s "
+                "agent=%s stage=%s capability=%s request_id=%s workflow_run_id=%s assistant_message_id=%s "
+                "trace_id=%s detail=%s raw_error=%s",
+                router_status,
+                output.message_type,
+                error_dict.get("code") or error_dict.get("error_code"),
+                error_dict.get("message") or output.summary or output.answer,
+                error_dict.get("category"),
+                error_dict.get("agent_name") or (output.route_decision.selected_agent if output.route_decision else None),
+                error_dict.get("stage"),
+                error_dict.get("capability"),
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                error_dict.get("trace_id") or request.workflow_run_id,
+                error_dict.get("detail"),
+                (error_dict.get("debug") or {}).get("raw_error") if isinstance(error_dict.get("debug"), dict) else None,
+            )
+            return
+
+        logger.info(
+            "run_chat completed router_status=%s message_type=%s request_id=%s workflow_run_id=%s "
+            "assistant_message_id=%s",
+            router_status,
+            output.message_type,
+            request.request_id,
+            request.workflow_run_id,
+            request.assistant_message_id,
+        )
 
     async def _persist_chat_result(
         self,
@@ -959,15 +1077,22 @@ class QualityAgentOrchestratorService:
             satisfied=base_payload.get("satisfied"),
             error=None,  # will be patched below if available
         )
-        # Preserve structured error from AgentOutput (ResponseBuilder hardcodes None)
-        if getattr(output, "error", None):
-            payload["error"] = output.error
-        if output.message_type == "error":
+        is_error_output = self._is_error_output(output)
+        output_error = self._error_payload_from_output(output)
+        if is_error_output:
             payload["status"] = "failed"
             payload["ui_schema"] = output.ui_schema or "agent_error_v1"
-            payload["error"] = getattr(output, "error", None) or base_payload.get("error")
-        if base_payload.get("error") and not payload.get("error"):
-            payload["error"] = base_payload["error"]
+            payload["error"] = output_error or base_payload.get("error")
+        elif output_error or base_payload.get("error") or base_payload.get("error_code"):
+            logger.warning(
+                "dropped stale agent error from completed chat response request_id=%s workflow_run_id=%s "
+                "assistant_message_id=%s stale_error=%s",
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                output_error or base_payload.get("error") or base_payload.get("error_code"),
+            )
+            payload["error"] = None
         if base_payload.get("llm_meta"):
             payload["llm_meta"] = base_payload.get("llm_meta")
         if base_payload.get("llm_usage"):
