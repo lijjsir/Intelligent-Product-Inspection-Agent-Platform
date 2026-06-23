@@ -73,6 +73,8 @@ class EvidenceArbitrationExecutor(GraphExecutor):
             if isinstance(item, dict) and item.get("citations"):
                 citations.extend(item["citations"])
 
+        artifacts = self._rag_artifacts_from_graph_result(step, result)
+
         evidence_artifact = self._artifact(
             step,
             "evidence_packet",
@@ -90,14 +92,56 @@ class EvidenceArbitrationExecutor(GraphExecutor):
             empty_result=source_count == 0,
             status=result.get("status", "success") if source_count > 0 else "empty",
         )
+        artifacts.append(evidence_artifact)
 
         return self._observation(
             step,
             status="success",
             summary=result.get("summary", "证据仲裁完成"),
-            artifacts=[evidence_artifact],
+            artifacts=artifacts,
             metrics=evidence_artifact.metrics,
-        ), [evidence_artifact]
+        ), artifacts
+
+    def _rag_artifacts_from_graph_result(self, step: AgentPlanStep, result: dict[str, Any]):
+        artifacts = []
+        rag_hits = [dict(item) for item in list(result.get("rag_hits") or []) if isinstance(item, dict)]
+        if not rag_hits:
+            return artifacts
+
+        content = dict(rag_hits[-1] or {})
+        hits = [dict(item) for item in list(content.get("hits") or []) if isinstance(item, dict)]
+        citations = [
+            {
+                "id": str(item.get("chunk_id") or item.get("id") or index),
+                "title": str(item.get("title") or item.get("document_name") or "RAG 片段"),
+                "source": str(item.get("source") or item.get("full_path") or "rag"),
+                "quote": str(item.get("quote") or item.get("text") or item.get("content") or "")[:220],
+                "score": item.get("score"),
+                "kind": "rag",
+                "ref": f"RAG-{index}",
+            }
+            for index, item in enumerate(hits, start=1)
+        ]
+        hit_count = int(content.get("hit_count") or len(hits))
+        top_score = float(content.get("top_score") or (hits[0].get("score") if hits else 0.0) or 0.0)
+        artifacts.append(
+            self._artifact(
+                step,
+                "rag_hits",
+                content=content,
+                citations=citations,
+                confidence=top_score or None,
+                metrics={"hit_count": hit_count, "top_score": top_score},
+                summary=(
+                    f"RAG 检索完成，命中 {hit_count} 条"
+                    if hit_count
+                    else "RAG 检索成功，但没有命中相关内容。"
+                ),
+                empty_result=hit_count == 0,
+                status="success" if hit_count else "empty",
+            )
+        )
+        return artifacts
 
     async def _execute_direct(self, step, state, request, db_session):
         """Fallback: direct evidence retrieval (battle-tested path)."""

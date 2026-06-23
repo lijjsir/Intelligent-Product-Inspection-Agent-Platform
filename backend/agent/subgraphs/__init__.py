@@ -8,6 +8,7 @@ __all__ = [
     "EvidenceArbitrationGraph",
     "QualityAnalysisGraph",
     "VisionInspectionGraph",
+    "MemoryGovernanceGraph",
 ]
 
 
@@ -32,4 +33,8 @@ def __getattr__(name: str) -> Any:
         from agent.subgraphs.vision_inspection import VisionInspectionGraph
 
         return VisionInspectionGraph
+    if name == "MemoryGovernanceGraph":
+        from agent.subgraphs.memory_governance import MemoryGovernanceGraph
+
+        return MemoryGovernanceGraph
     raise AttributeError(name)

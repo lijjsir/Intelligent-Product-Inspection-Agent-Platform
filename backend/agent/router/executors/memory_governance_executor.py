@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from agent.contracts.quality_contracts import NormalizedRequest
-from agent.graphs.memory_manager.graph import MemoryManagerGraph
 from agent.router.contracts import AgentPlanStep
-from agent.router.errors import make_agent_error
+from agent.router.errors import AgentRuntimeError, make_agent_error
 from agent.router.executors.graph_executor import GraphExecutor
 from agent.router.manager_state import ManagerState
+from agent.subgraphs.memory_governance import MemoryGovernanceGraph
 
 
 class MemoryGovernanceExecutor(GraphExecutor):
@@ -26,8 +26,7 @@ class MemoryGovernanceExecutor(GraphExecutor):
                 source="memory_governance.executor",
             )
         try:
-            graph = MemoryManagerGraph().compile()
-            result = await graph.ainvoke(
+            result = await MemoryGovernanceGraph().run(
                 {
                     "task_context": {
                         "org_id": request.org_id,
@@ -41,23 +40,26 @@ class MemoryGovernanceExecutor(GraphExecutor):
                     "memory_events": list((request.ext or {}).get("memory_events") or []),
                 }
             )
+        except AgentRuntimeError:
+            raise
         except Exception as exc:
             raise make_agent_error(
                 "MEMORY_GOVERNANCE_FAILED",
                 message="记忆治理图执行失败。",
                 debug={"raw_error": str(exc)},
-                source="memory.governance",
+                source="memory_governance.executor",
                 cause=exc,
             ) from exc
-        final = dict(result.get("final_result") or {})
+
+        governance_result = result.get("governance_result") or {}
         art = self._artifact(
             step,
             "memory_governance_result",
-            content=final,
+            content=governance_result,
             metrics={
-                "memory_sources_used": int(final.get("memory_sources_used") or 0),
-                "contamination_nodes": int(final.get("contamination_nodes") or 0),
+                "memory_sources_used": int(governance_result.get("memory_sources_used") or 0),
+                "contamination_nodes": int(governance_result.get("contamination_nodes") or 0),
             },
-            summary="记忆治理完成",
+            summary=governance_result.get("summary", "记忆治理完成"),
         )
         return self._observation(step, status="success", summary=art.summary, artifacts=[art], metrics=art.metrics), [art]

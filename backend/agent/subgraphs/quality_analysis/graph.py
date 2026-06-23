@@ -13,6 +13,7 @@ from agent.subgraphs.quality_analysis.nodes import (
     llm_quality_reasoning,
     standard_gate,
     build_report,
+    build_final_assessment,
     maybe_persist_task_result,
     memory_candidate_hook,
     finalize_response,
@@ -48,6 +49,7 @@ class QualityAnalysisGraph:
         graph.add_node("llm_quality_reasoning", llm_quality_reasoning)
         graph.add_node("standard_gate", standard_gate)
         graph.add_node("build_report", build_report)
+        graph.add_node("build_final_assessment", build_final_assessment)
         graph.add_node("maybe_persist_task_result", maybe_persist_task_result)
         graph.add_node("memory_candidate_hook", memory_candidate_hook)
         graph.add_node("finalize_response", finalize_response)
@@ -62,8 +64,9 @@ class QualityAnalysisGraph:
         graph.add_edge("choose_response_mode", "llm_quality_reasoning")
         graph.add_edge("llm_quality_reasoning", "standard_gate")
         graph.add_edge("standard_gate", "build_report")
+        graph.add_edge("build_report", "build_final_assessment")
         graph.add_conditional_edges(
-            "build_report",
+            "build_final_assessment",
             _route_after_report,
             {
                 "maybe_persist_task_result": "maybe_persist_task_result",

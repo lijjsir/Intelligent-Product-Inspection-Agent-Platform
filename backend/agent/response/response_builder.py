@@ -42,6 +42,8 @@ class ResponseBuilder:
         route_trace: dict[str, Any] | None = None,
         capabilities_used: list[str] | None = None,
         satisfied: bool | None = None,
+        error: dict[str, Any] | str | None = None,
+        status: str = "completed",
     ) -> dict[str, Any]:
         ui_schema = UI_SCHEMA_MAP.get((agent, sub_route), "chat_text_v1")
 
@@ -76,6 +78,6 @@ class ResponseBuilder:
             "route_trace": route_trace,
             "capabilities_used": list(capabilities_used or []),
             "satisfied": satisfied,
-            "status": "completed",
-            "error": None,
+            "status": status,
+            "error": error,
         }

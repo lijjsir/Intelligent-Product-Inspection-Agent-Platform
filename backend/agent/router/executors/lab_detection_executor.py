@@ -64,11 +64,22 @@ class LabDetectionExecutor(GraphExecutor):
             )
 
         content = {
-            "assessment": assessment,
-            "anomaly_features": list(result.get("anomaly_features") or []),
+            "sample_id": input_context.get("sample_id"),
+            "assessment_state": assessment.get("assessment_state") or assessment.get("state"),
+            "abnormal_probability": assessment.get("abnormal_probability"),
+            "risk_level": assessment.get("risk_level"),
+            "data_completeness": assessment.get("data_completeness"),
+            "early_warning": bool(assessment.get("early_warning") or False),
+            "can_make_final_verdict": bool(assessment.get("can_make_final_verdict") or False),
+            "abnormal_indicators": list(result.get("anomaly_features") or []),
             "next_test_priority": list(result.get("next_test_priority") or []),
-            "deterministic_summary": dict(result.get("deterministic_summary") or {}),
-            "metadata": dict(result.get("metadata") or {}),
+            "suggested_action": assessment.get("suggested_action") or assessment.get("recommended_action"),
+            "confidence": assessment.get("confidence"),
+            "raw": {
+                "assessment": assessment,
+                "deterministic_summary": dict(result.get("deterministic_summary") or {}),
+                "metadata": dict(result.get("metadata") or {}),
+            },
         }
         metrics = {
             "abnormal_probability": assessment.get("abnormal_probability"),

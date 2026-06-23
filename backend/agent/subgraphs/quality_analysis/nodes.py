@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.router.errors import AgentRuntimeError, make_agent_error
+
 
 async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
     manager_state = state.get("manager_state") or {}
@@ -38,10 +40,27 @@ async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
 
 async def validate_required_inputs(state: dict[str, Any]) -> dict[str, Any]:
     capability = state.get("capability", "quality.final_analyze")
+    request = state.get("request") or {}
+    ext = request.get("ext") or {}
+
     if capability == "quality.inspection.execute":
         evidence = state.get("evidence_packet")
         if evidence is None:
-            return {"needs_user_input": True, "status": "blocked", "summary": "缺少证据包，无法执行正式质检。"}
+            return {
+                "needs_user_input": True,
+                "status": "blocked",
+                "summary": "缺少证据包，无法执行正式质检。",
+            }
+
+        if ext.get("evidence_packet_required"):
+            source_count = int(evidence.get("source_count") or 0)
+            if source_count <= 0:
+                return {
+                    "needs_user_input": True,
+                    "status": "blocked",
+                    "summary": "证据包为空，无法执行正式质检。请检查 RAG / 记忆 / 知识图谱配置。",
+                }
+
     return {}
 
 
@@ -80,16 +99,22 @@ async def llm_quality_reasoning(state: dict[str, Any]) -> dict[str, Any]:
     else:
         prompt = f"执行正式质检任务：{query}"
 
-    try:
-        from agent.core.llm_client import LLMClient
+    from agent.subgraphs.common.llm_runtime import run_llm_chat
 
-        answer = await LLMClient.chat(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        return {"llm_answer": answer or "", "llm_prompt": prompt, "status": "running"}
-    except Exception as exc:
-        return {"llm_answer": "", "llm_prompt": prompt, "status": "failed", "summary": str(exc)}
+    answer, llm_meta = await run_llm_chat(
+        state=state,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        observation_name="quality_analysis.reasoning",
+        source="quality_analysis.llm_quality_reasoning",
+    )
+
+    return {
+        "llm_answer": answer,
+        "llm_prompt": prompt,
+        "llm_meta": llm_meta,
+        "status": "running",
+    }
 
 
 async def standard_gate(state: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +148,43 @@ async def build_report(state: dict[str, Any]) -> dict[str, Any]:
     return {"report": "\n".join(report_parts), "answer": answer}
 
 
+async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
+    """Generate final_assessment BEFORE persistence, not after."""
+    response_mode = state.get("response_mode", "general_answer")
+    answer = state.get("answer") or state.get("llm_answer") or ""
+
+    evidence_packet = state.get("evidence_packet") or {}
+    visual_result = state.get("visual_inspection_result") or {}
+    lab_result = state.get("lab_detection_result") or {}
+
+    source_count = int(evidence_packet.get("source_count") or 0)
+    confidence = 0.5
+    if source_count > 0:
+        confidence += 0.2
+    if visual_result:
+        confidence += 0.15
+    if lab_result:
+        confidence += 0.15
+    confidence = min(confidence, 0.95)
+
+    assessment = {
+        "final_verdict": "manual_required" if response_mode == "inspection_execute" else "uncertain",
+        "overall_score": round(confidence, 4),
+        "risk_level": "medium" if response_mode == "inspection_execute" else "low",
+        "risk_score": round(1.0 - confidence, 4),
+        "evidence_used": [],
+        "conflicts": list(evidence_packet.get("conflicts") or []),
+        "limitations": [],
+        "recommended_action": ["建议人工复核"] if response_mode == "inspection_execute" else [],
+        "answer": answer,
+        "confidence": confidence,
+        "traceability_score": min(1.0, source_count / 3) if source_count else 0.0,
+        "faithfulness_score": confidence,
+        "physical_hallucination_score": 0.0 if source_count or visual_result or lab_result else 0.5,
+    }
+    return {"final_assessment": assessment}
+
+
 async def maybe_persist_task_result(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("surface") != "quality_task":
         return {}
@@ -132,7 +194,17 @@ async def maybe_persist_task_result(state: dict[str, Any]) -> dict[str, Any]:
 
         db_session = state.get("db_session")
         if db_session is None:
-            return {"persistable_output": None}
+            raise make_agent_error(
+                "INSPECTION_TASK_FAILED",
+                message="正式质检任务缺少数据库会话，无法构建持久化输出。",
+                detail={
+                    "stage": "maybe_persist_task_result",
+                    "missing": ["db_session"],
+                    "workflow_run_id": state.get("workflow_run_id"),
+                },
+                source="quality_analysis.persist_result",
+                retryable=True,
+            )
 
         service = QualityResultMaterializationService(db_session)
         persistable = await service.build_persistable_output(
@@ -141,9 +213,26 @@ async def maybe_persist_task_result(state: dict[str, Any]) -> dict[str, Any]:
             final_state=state,
             standard_evaluation=state.get("standard_evaluation") or {},
         )
+
+        # Ensure PersistableOutput is serialized to dict
+        if hasattr(persistable, "model_dump"):
+            persistable = persistable.model_dump(mode="json")
+
         return {"persistable_output": persistable}
-    except Exception:
-        return {"persistable_output": None}
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        raise make_agent_error(
+            "INSPECTION_TASK_FAILED",
+            message="正式质检持久化输出构建失败。",
+            detail={
+                "stage": "maybe_persist_task_result",
+                "workflow_run_id": state.get("workflow_run_id"),
+            },
+            debug={"raw_error": str(exc), "error_type": exc.__class__.__name__},
+            source="quality_analysis.persist_result",
+            cause=exc,
+        ) from exc
 
 
 async def memory_candidate_hook(state: dict[str, Any]) -> dict[str, Any]:
@@ -181,23 +270,15 @@ async def finalize_response(state: dict[str, Any]) -> dict[str, Any]:
     if response_mode == "inspection_execute":
         message_type = "task_result"
 
-    assessment = {
-        "final_verdict": "uncertain",
-        "risk_level": "low",
-        "evidence_used": [],
-        "conflicts": [],
-        "limitations": [],
-        "recommended_action": [],
-        "answer": state.get("answer", ""),
-        "confidence": 0.8,
-    }
+    # Use already-built final_assessment from build_final_assessment node
+    assessment = state.get("final_assessment") or {}
 
     return {
         "status": state.get("status") or "success",
         "summary": state.get("summary") or "质量分析完成",
         "answer": state.get("answer", ""),
         "message_type": message_type,
-        "confidence": 0.8,
+        "confidence": assessment.get("confidence", 0.8),
         "final_assessment": assessment,
         "metadata": {"response_mode": response_mode},
     }

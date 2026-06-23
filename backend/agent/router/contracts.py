@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 
 AgentName = Literal[
+    "chat",
+    "inspection_task",
     "evidence",
     "vision",
     "lab_detection",

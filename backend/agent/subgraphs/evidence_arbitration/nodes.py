@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.router.errors import AgentRuntimeError, make_agent_error
+
 
 async def query_intake(state: dict[str, Any]) -> dict[str, Any]:
     request = state.get("request") or {}
@@ -36,6 +38,9 @@ async def retrieve_rag_context(state: dict[str, Any]) -> dict[str, Any]:
     if db_session is None:
         return {"rag_hits": [], "status": "rag_skipped_no_session"}
 
+    if state.get("surface") == "quality_task":
+        return await _retrieve_quality_task_rag_context(state, db_session=db_session)
+
     try:
         from agent.contracts.quality_contracts import NormalizedRequest
         from agent.router.capabilities.rag_handler import RagRetrieveHandler
@@ -67,8 +72,98 @@ async def retrieve_rag_context(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "rag_hits": [dict(rag_artifact.content or {})] if rag_artifact else [],
         }
-    except Exception:
-        return {"rag_hits": []}
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        raise make_agent_error(
+            "RAG_RETRIEVE_FAILED",
+            message="RAG 证据检索失败。",
+            detail={"stage": "retrieve_rag_context"},
+            debug={"raw_error": str(exc), "error_type": exc.__class__.__name__},
+            source="evidence.retrieve_rag_context",
+            cause=exc,
+        ) from exc
+
+
+async def _retrieve_quality_task_rag_context(state: dict[str, Any], *, db_session) -> dict[str, Any]:
+    request = state.get("request") or {}
+    metadata = dict(request.get("metadata") or state.get("metadata") or {})
+    ext = dict(request.get("ext") or state.get("ext") or {})
+    rag_scope = dict(ext.get("rag_scope") or {})
+    structured_record = metadata.get("structured_record") if isinstance(metadata.get("structured_record"), dict) else {}
+    product_id = str(request.get("product_id") or metadata.get("product_id") or structured_record.get("product_id") or "").strip()
+    spec_code = str(request.get("spec_code") or metadata.get("spec_code") or structured_record.get("spec_code") or "").strip()
+    product_family = str(metadata.get("product_family") or structured_record.get("product_family") or product_id or "").strip() or None
+    user_rag_space_id = (
+        str(rag_scope.get("rag_space_id") or metadata.get("selected_rag_space_id") or "").strip()
+        or None
+    )
+    scope_node_ids = list(
+        rag_scope.get("scope_node_ids")
+        or metadata.get("selected_rag_scope_node_ids")
+        or []
+    )
+    query_parts = [
+        f"产品 {product_id}",
+        f"标准 {spec_code}",
+        f"类别 {product_family or ''}",
+        "缺陷判定标准",
+        str(structured_record)[:400] if structured_record else "",
+    ]
+    query = " ".join(part.strip() for part in query_parts if str(part or "").strip())
+
+    try:
+        from agent.subgraphs.inspection_task.graph import resolve_and_search_system_rag
+
+        result = await resolve_and_search_system_rag(
+            session=db_session,
+            org_id=str(request.get("org_id") or state.get("org_id") or ""),
+            user_id=request.get("user_id") or state.get("user_id"),
+            query=query,
+            product_family=product_family,
+            product_id=product_id or None,
+            spec_code=spec_code or None,
+            user_rag_space_id=user_rag_space_id,
+            top_k=5,
+            scope_node_ids=scope_node_ids,
+        )
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        raise make_agent_error(
+            "RAG_RETRIEVE_FAILED",
+            message="正式质检任务 RAG 证据检索失败。",
+            detail={"stage": "retrieve_quality_task_rag_context"},
+            debug={"raw_error": str(exc), "error_type": exc.__class__.__name__},
+            source="evidence.retrieve_quality_task_rag_context",
+            cause=exc,
+        ) from exc
+
+    hits = list(result.get("hits") or [])
+    return {
+        "rag_hits": [
+            {
+                "hit_count": int(result.get("hit_count") or len(hits)),
+                "top_score": float(hits[0].get("score") or 0.0) if hits else 0.0,
+                "top_k": 5,
+                "latency_ms": int(float(result.get("latency_ms") or 0)),
+                "candidate_count": int(result.get("candidate_count") or len(hits)),
+                "rejected_count": int(result.get("rejected_count") or 0),
+                "score_threshold": result.get("score_threshold"),
+                "low_confidence_fallback": bool(result.get("low_confidence_fallback")),
+                "overview_mode": bool(result.get("overview_mode")),
+                "rag_space_id": result.get("rag_space_id") or user_rag_space_id,
+                "rag_space_name": result.get("rag_space_name") or metadata.get("selected_rag_space_name"),
+                "rag_space_ids": list(result.get("rag_space_ids") or []),
+                "rag_space_names": list(result.get("rag_space_names") or []),
+                "system_rag_space_ids": list(result.get("system_rag_space_ids") or []),
+                "system_rag_space_names": list(result.get("system_rag_space_names") or []),
+                "standard_binding_name": result.get("standard_binding_name"),
+                "merged_rag_source_count": int(result.get("merged_rag_source_count") or 0),
+                "hits": hits,
+            }
+        ]
+    }
 
 
 async def retrieve_shared_memory_context(state: dict[str, Any]) -> dict[str, Any]:
@@ -98,8 +193,17 @@ async def retrieve_shared_memory_context(state: dict[str, Any]) -> dict[str, Any
         return {
             "shared_memory_hits": [item.model_dump() for item in response.items],
         }
-    except Exception:
-        return {"shared_memory_hits": []}
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        raise make_agent_error(
+            "EVIDENCE_ARBITRATION_FAILED",
+            message="共享记忆证据检索失败。",
+            detail={"stage": "retrieve_shared_memory_context"},
+            debug={"raw_error": str(exc), "error_type": exc.__class__.__name__},
+            source="evidence.retrieve_shared_memory_context",
+            cause=exc,
+        ) from exc
 
 
 async def retrieve_kg_context(state: dict[str, Any]) -> dict[str, Any]:
@@ -121,8 +225,17 @@ async def retrieve_kg_context(state: dict[str, Any]) -> dict[str, Any]:
         )
         paths = await service.search_chain_paths_by_product(domain, product_category)
         return {"kg_hits": paths or []}
-    except Exception:
-        return {"kg_hits": []}
+    except AgentRuntimeError:
+        raise
+    except Exception as exc:
+        raise make_agent_error(
+            "EVIDENCE_ARBITRATION_FAILED",
+            message="质量知识图谱证据检索失败。",
+            detail={"stage": "retrieve_kg_context"},
+            debug={"raw_error": str(exc), "error_type": exc.__class__.__name__},
+            source="evidence.retrieve_kg_context",
+            cause=exc,
+        ) from exc
 
 
 async def normalize_evidence(state: dict[str, Any]) -> dict[str, Any]:
@@ -154,30 +267,38 @@ async def llm_conflict_arbitration(state: dict[str, Any]) -> dict[str, Any]:
     if len(evidence_items) <= 1:
         return {"conflicts": []}
 
+    from agent.subgraphs.common.llm_runtime import run_llm_chat
+
+    evidence_texts = []
+    for item in evidence_items:
+        source = item.get("source", "unknown")
+        content = item.get("content", {})
+        evidence_texts.append(f"[{source}] {str(content)[:500]}")
+
+    prompt = (
+        "你是一个证据冲突裁决专家。请判断以下来自不同来源的证据是否存在冲突。\n\n"
+        + "\n\n".join(evidence_texts)
+        + "\n\n请以 JSON 格式返回：{\"conflicts\": [{\"description\": \"...\", \"sources\": [\"...\"], \"resolution\": \"...\"}]}"
+    )
+
+    content, llm_meta = await run_llm_chat(
+        state=state,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        observation_name="evidence.conflict_arbitration",
+        source="evidence.llm_conflict_arbitration",
+    )
+
+    import json
     try:
-        from agent.core.llm_client import LLMClient
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        parsed = {"conflicts": []}
 
-        evidence_texts = []
-        for item in evidence_items:
-            source = item.get("source", "unknown")
-            content = item.get("content", {})
-            evidence_texts.append(f"[{source}] {str(content)[:500]}")
-
-        prompt = (
-            "你是一个证据冲突裁决专家。请判断以下来自不同来源的证据是否存在冲突。\n\n"
-            + "\n\n".join(evidence_texts)
-            + "\n\n请以 JSON 格式返回：{\"conflicts\": [{\"description\": \"...\", \"sources\": [\"...\"], \"resolution\": \"...\"}]}"
-        )
-        result = await LLMClient.chat(
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        import json
-        parsed = json.loads(result)
-        return {"conflicts": parsed.get("conflicts", [])}
-    except Exception:
-        return {"conflicts": []}
+    return {
+        "conflicts": parsed.get("conflicts", []),
+        "llm_meta": llm_meta,
+    }
 
 
 async def build_evidence_packet(state: dict[str, Any]) -> dict[str, Any]:

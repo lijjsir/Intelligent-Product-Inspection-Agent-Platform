@@ -56,7 +56,12 @@ class QualityAgentOrchestratorService:
         error = exc if isinstance(exc, AgentRuntimeError) else make_agent_error(
             "INTERNAL_AGENT_ERROR",
             message="AgentManager 执行失败，请查看错误信息或联系管理员。",
-            detail={"stage": "quality_agent_orchestrator.run_chat"},
+            detail={
+                "stage": "quality_agent_orchestrator.run_chat",
+                "request_id": request.request_id,
+                "workflow_run_id": request.workflow_run_id,
+                "session_id": request.session_id,
+            },
             debug={
                 "raw_error": str(exc),
                 "error_type": exc.__class__.__name__,
@@ -65,23 +70,45 @@ class QualityAgentOrchestratorService:
             cause=exc,
         )
 
-        error_payload = error.to_dict(include_debug=bool(getattr(settings, "debug", False)))
+        error_payload = error.to_dict(
+            include_debug=bool(getattr(settings, "debug", False)),
+        )
+
+        answer = str(error_payload.get("message") or "Agent 执行失败。")
 
         return AgentOutput(
             message_type="error",
             ui_schema="agent_error_v1",
-            answer=error_payload.get("message") or "系统执行失败。",
-            summary=error_payload.get("message") or "系统执行失败。",
+            answer=answer,
+            summary=answer,
             error=error_payload,
             route_decision=RouteDecision(
-                selected_agent="quality_analysis",
+                mode="router_enabled",
+                selected_agent=str(error_payload.get("agent_name") or "quality_analysis"),
                 sub_route="error",
                 intent="error",
-                reason=error_payload.get("code", "INTERNAL_AGENT_ERROR"),
+                reason=str(error_payload.get("code") or "INTERNAL_AGENT_ERROR"),
                 confidence=0.0,
+                requires_confirmation=False,
                 route_source="manager",
+                fallback_agent=None,
                 signals=RouteSignals(),
             ),
+            raw_state={
+                "response_payload": {
+                    "answer": answer,
+                    "summary": answer,
+                    "agent": str(error_payload.get("agent_name") or "quality_analysis"),
+                    "sub_route": "error",
+                    "intent": "error",
+                    "message_type": "error",
+                    "ui_schema": "agent_error_v1",
+                    "status": "failed",
+                    "error": error_payload,
+                    "trace_id": error_payload.get("trace_id") or request.workflow_run_id,
+                    "workflow_run_id": request.workflow_run_id,
+                }
+            },
         )
 
     @staticmethod
@@ -930,7 +957,17 @@ class QualityAgentOrchestratorService:
             route_trace=base_payload.get("route_trace"),
             capabilities_used=list(base_payload.get("capabilities_used") or []),
             satisfied=base_payload.get("satisfied"),
+            error=None,  # will be patched below if available
         )
+        # Preserve structured error from AgentOutput (ResponseBuilder hardcodes None)
+        if getattr(output, "error", None):
+            payload["error"] = output.error
+        if output.message_type == "error":
+            payload["status"] = "failed"
+            payload["ui_schema"] = output.ui_schema or "agent_error_v1"
+            payload["error"] = getattr(output, "error", None) or base_payload.get("error")
+        if base_payload.get("error") and not payload.get("error"):
+            payload["error"] = base_payload["error"]
         if base_payload.get("llm_meta"):
             payload["llm_meta"] = base_payload.get("llm_meta")
         if base_payload.get("llm_usage"):
@@ -1348,7 +1385,7 @@ class QualityAgentOrchestratorService:
                         continue
                     _triggered = True
                     create_alert = getattr(alert_repo, "create_once", alert_repo.create)
-                    await create_alert(
+                    created_legacy_alert = await create_alert(
                         {
                             "idempotency_key": self._idempotency_key(request, "legacy-alert", _rule.id),
                             "id": str(uuid7()),
@@ -1367,15 +1404,16 @@ class QualityAgentOrchestratorService:
                             "channels": _rule.notification_channels or {"ui": True},
                         }
                     )
+                    legacy_alert_id = str(getattr(created_legacy_alert, "id", None) or created_legacy_alert.get("id"))
                     try:
                         from worker.tasks.alert_dispatch_task import dispatch_alert
-                        dispatch_alert.delay(_legacy_alert_id)
+                        dispatch_alert.delay(legacy_alert_id)
                     except Exception:
-                        _logger.exception("Failed to enqueue dispatch for legacy alert %s", _legacy_alert_id)
+                        logger.exception("Failed to enqueue dispatch for legacy alert %s", legacy_alert_id)
 
                 if not _triggered:
                     create_alert = getattr(alert_repo, "create_once", alert_repo.create)
-                    await create_alert(
+                    created_fallback_alert = await create_alert(
                         {
                             "idempotency_key": self._idempotency_key(request, "legacy-alert", "fallback"),
                             "id": str(uuid7()),
@@ -1394,11 +1432,15 @@ class QualityAgentOrchestratorService:
                             "channels": {"ui": True},
                         }
                     )
+                    legacy_fallback_id = str(
+                        getattr(created_fallback_alert, "id", None)
+                        or created_fallback_alert.get("id")
+                    )
                     try:
                         from worker.tasks.alert_dispatch_task import dispatch_alert
-                        dispatch_alert.delay(_legacy_fallback_id)
+                        dispatch_alert.delay(legacy_fallback_id)
                     except Exception:
-                        _logger.exception("Failed to enqueue dispatch for legacy fallback alert %s", _legacy_fallback_id)
+                        logger.exception("Failed to enqueue dispatch for legacy fallback alert %s", legacy_fallback_id)
 
             usage = self._legacy_usage(output)
             if usage["total_tokens"] > 0:

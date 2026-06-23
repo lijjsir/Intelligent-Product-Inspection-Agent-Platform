@@ -110,11 +110,17 @@ async def normalize_visual_result(state: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(image_artifact, dict):
             legacy_content = dict(image_artifact.get("content") or {})
 
+    image_count = len(state.get("image_attachments") or [])
+
     visual_result = {
         "status": obs_dict.get("status", "success"),
         "summary": obs_dict.get("summary") or legacy_content.get("summary") or "",
         "answer": legacy_content.get("answer") or obs_dict.get("summary") or "",
+        "image_count": int(legacy_content.get("image_count") or image_count),
         "defects": legacy_content.get("defects") or [],
+        "image_quality": legacy_content.get("image_quality") or legacy_content.get("quality") or "unknown",
+        "requires_recheck": bool(legacy_content.get("requires_recheck") or False),
+        "confidence": float(legacy_content.get("confidence") or 0.0),
         "citations": legacy_content.get("citations") or [],
         "raw": obs_dict,
     }

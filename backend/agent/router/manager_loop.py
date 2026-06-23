@@ -324,6 +324,8 @@ class ManagerLoop:
         rag_summary = self._rag_summary(state, answer=answer)
         raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
         composed_persistable = composed.get("persistable_output") if isinstance(composed, dict) else None
+        if hasattr(composed_persistable, "model_dump"):
+            composed_persistable = composed_persistable.model_dump(mode="json")
         persistable_output = (
             composed_persistable
             if sub_route == "inspection_execute" and isinstance(composed_persistable, dict)
@@ -479,7 +481,7 @@ class ManagerLoop:
             "observations": [item.model_dump() for item in state.observations],
             "errors": list(state.errors),
         }
-        return {
+        payload = {
             "answer": answer,
             "summary": self._summary(state, self._status(state, blocked_by_missing_inputs=bool(state.missing_inputs))),
             "message_type": message_type,
@@ -497,6 +499,16 @@ class ManagerLoop:
             "llm_meta": state.llm_metas[-1] if state.llm_metas else None,
             "llm_usage": list(state.llm_usage_events),
         }
+        # Flatten key artifact types to top-level for frontend cards
+        for artifact in state.artifacts:
+            if artifact.type in {
+                "evidence_packet",
+                "visual_inspection_result",
+                "lab_detection_result",
+                "quality_final_assessment",
+            }:
+                payload[artifact.type] = artifact.content
+        return payload
 
     @staticmethod
     def _selected_agent(state: ManagerState) -> str:

@@ -318,6 +318,13 @@ ERROR_CATALOG: dict[str, dict[str, Any]] = {
         "user_action": "请检查后台聊天模型配置。",
         "retryable": True,
     },
+    "MODEL_CALL_FAILED": {
+        "title": "模型调用失败",
+        "message": "图节点模型调用失败。",
+        "category": AgentErrorCategory.MODEL,
+        "user_action": "请检查模型服务、API Key、Base URL 和模型配置后重试。",
+        "retryable": True,
+    },
     "INSPECTION_TASK_FAILED": {
         "title": "正式质检执行失败",
         "message": "正式质检任务执行失败。",

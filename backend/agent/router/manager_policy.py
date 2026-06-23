@@ -545,14 +545,15 @@ class ManagerPolicy:
     def _quality_task_needs(self, state: ManagerState) -> list[str]:
         needs = ["evidence.arbitrate"]
         ext = dict(state.request_ext or {})
-        vision_requested = bool(
-            ext.get("enable_vision_graph")
-            or ext.get("vision_required")
-            or ext.get("vision_context")
-        )
-        if vision_requested and any(attachment_kind(item) == "image" for item in state.attachments):
+
+        has_image = any(attachment_kind(item) == "image" for item in state.attachments)
+        skip_vision = bool(ext.get("skip_vision_inspection"))
+
+        if has_image and not skip_vision:
             needs.append("vision.inspect")
+
         if self._has_lab_signal(state):
             needs.append("lab.early_risk.assess")
+
         needs.append("quality.inspection.execute")
         return needs

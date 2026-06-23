@@ -9,6 +9,7 @@ from agent.contracts.quality_contracts import (
     ResultAggregate,
     StabilityAggregate,
     TaskAggregate,
+    TokenUsageEvent,
 )
 
 
@@ -36,12 +37,45 @@ class QualityResultMaterializationService:
         report = final_state.get("report") or ""
         evidence_packet = final_state.get("evidence_packet") or {}
         llm_prompt = final_state.get("llm_prompt", "")
+        request = final_state.get("request") if isinstance(final_state.get("request"), dict) else {}
+        ext = dict(request.get("ext") or {})
+        ext.update(dict(final_state.get("ext") or {}))
+        metadata = dict(request.get("metadata") or {})
+        metadata.update(dict(final_state.get("metadata") or {}))
+        llm_meta = dict(final_state.get("llm_meta") or {})
+        usage = dict(llm_meta.get("usage") or {})
+
+        task_id = (
+            final_state.get("task_id")
+            or ext.get("task_id")
+            or metadata.get("task_id")
+        )
+        product_id = (
+            final_state.get("product_id")
+            or ext.get("product_id")
+            or metadata.get("product_id")
+        )
+        spec_code = (
+            final_state.get("spec_code")
+            or ext.get("spec_code")
+            or metadata.get("spec_code")
+        )
+        image_urls = list(final_state.get("image_urls") or ext.get("image_urls") or metadata.get("image_urls") or [])
+        image_items = list(final_state.get("image_items") or ext.get("image_items") or metadata.get("image_items") or [])
+        image_count = max(len(image_urls), len(image_items))
+        model_key = str(
+            llm_meta.get("model")
+            or metadata.get("model_key")
+            or metadata.get("model_id")
+            or final_state.get("model_id")
+            or "quality_analysis"
+        )
 
         result = ResultAggregate(
-            task_id=final_state.get("task_id"),
+            task_id=str(task_id) if task_id else None,
             verdict=assessment.get("final_verdict", "uncertain"),
             overall_score=assessment.get("overall_score"),
-            llm_model=final_state.get("metadata", {}).get("model_key"),
+            llm_model=model_key,
             citations=final_state.get("citations") or {},
             reasoning_chain={
                 "standard_evaluation": standard_evaluation,
@@ -61,7 +95,7 @@ class QualityResultMaterializationService:
         )
 
         quality_trace = QualityTraceEvent(
-            trace_id=final_state.get("workflow_run_id"),
+            trace_id=llm_meta.get("trace_id") or final_state.get("trace_id") or final_state.get("workflow_run_id") or workflow_run_id,
             workflow_version="quality_analysis_graph_v1",
             route_subgraph="quality_analysis",
             has_citation=bool(final_state.get("citations")),
@@ -86,9 +120,34 @@ class QualityResultMaterializationService:
                 )
             )
 
+        token_usage = []
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+        if total_tokens > 0:
+            token_usage.append(
+                TokenUsageEvent(
+                    model_key=model_key,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost_amount=float(usage.get("cost_amount") or 0.0),
+                    trace_id=quality_trace.trace_id,
+                )
+            )
+
         return PersistableOutput(
+            task=TaskAggregate(
+                id=str(task_id) if task_id else None,
+                product_id=str(product_id) if product_id else None,
+                spec_code=str(spec_code) if spec_code else None,
+                status=str(ext.get("status") or metadata.get("status") or "done"),
+                priority=int(ext.get("priority") or metadata.get("priority") or 0) or None,
+                image_count=image_count,
+            ),
             result=result,
             stability=stability,
+            token_usage=token_usage,
             quality_trace=quality_trace,
             rag_queries=rag_queries,
         )
