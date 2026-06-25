@@ -547,7 +547,18 @@ class ChatExecutor:
             self._record_llm_meta(state, response)
             return self._extract_answer(response)
         except Exception as exc:
-            logger.warning("Chat model call failed: %s", exc, exc_info=True)
+            logger.exception(
+                "Chat model call failed "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "capability=%s model_id=%s provider=%s query=%r",
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                state.current_capability,
+                runtime.get("model_id"),
+                runtime.get("provider"),
+                state.original_query,
+            )
             return None
 
     async def _run_tool_loop(

@@ -75,6 +75,8 @@ class GraphExecutor:
 
         request_ext = dict(getattr(request, "ext", {}) or {})
         request_metadata = dict(getattr(request, "metadata", {}) or {})
+        manager_model_runtime = getattr(state, "manager_model_runtime", None)
+        runtime_payload = dict(manager_model_runtime or {})
 
         manager_state = {
             "request_id": getattr(state, "request_id", None),
@@ -91,8 +93,8 @@ class GraphExecutor:
             "attachments": list(getattr(state, "attachments", []) or []),
             "request_ext": dict(getattr(state, "request_ext", {}) or {}),
             "request_metadata": dict(getattr(state, "request_metadata", {}) or {}),
+            "manager_model_runtime": runtime_payload,
             "artifacts": artifacts,
-            "manager_model_runtime": getattr(state, "manager_model_runtime", None),
         }
 
         return {
@@ -110,6 +112,7 @@ class GraphExecutor:
             "step": step.model_dump(mode="json"),
             "request": request.model_dump(mode="json"),
             "manager_state": manager_state,
-            "manager_model_runtime": getattr(state, "manager_model_runtime", None),
+            "manager_model_runtime": runtime_payload,
+            "model_runtime": runtime_payload,
             "artifacts": artifacts,
         }

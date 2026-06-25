@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import asyncio
+import logging
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -19,6 +20,8 @@ from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.config import settings
 from app.services.model_config_service import ModelConfigService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,8 +107,35 @@ class ManagerLoop:
             return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
 
         except AgentRuntimeError as exc:
-            include_debug = bool(getattr(settings, "debug", False))
-            error_payload = exc.to_dict(state=state, include_debug=include_debug)
+            log_error_payload = exc.to_dict(state=state, include_debug=True)
+            public_error_payload = exc.to_dict(
+                state=state,
+                include_debug=bool(getattr(settings, "debug", False)),
+            )
+
+            logger.error(
+                "ManagerLoop agent_runtime_error "
+                "code=%s message=%s category=%s status=%s "
+                "stage=%s capability=%s owner_agent=%s step_id=%s "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "raw_error=%s error_type=%s detail=%s",
+                log_error_payload.get("code"),
+                log_error_payload.get("message"),
+                log_error_payload.get("category"),
+                log_error_payload.get("status"),
+                (log_error_payload.get("detail") or {}).get("stage"),
+                state.current_capability,
+                state.current_owner_agent,
+                state.current_step_id,
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                (log_error_payload.get("debug") or {}).get("raw_error"),
+                (log_error_payload.get("debug") or {}).get("error_type")
+                or (log_error_payload.get("debug") or {}).get("type"),
+                log_error_payload.get("detail"),
+            )
+
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
                     selected_agent=self._safe_selected_agent(state),
@@ -115,24 +145,81 @@ class ManagerLoop:
                 ),
                 agent_output={
                     "message_type": "error",
-                    "answer": error_payload["message"],
-                    "summary": error_payload["message"],
-                    "error": error_payload,
+                    "answer": public_error_payload["message"],
+                    "summary": public_error_payload["message"],
+                    "error": public_error_payload,
                     "ui_schema": "agent_error_v1",
                 },
-                status=error_payload.get("status", "failed"),
-                error=error_payload,
+                status=public_error_payload.get("status", "failed"),
+                error=public_error_payload,
             )
         except Exception as exc:
-            include_debug = bool(getattr(settings, "debug", False))
+            logger.exception(
+                "ManagerLoop internal exception "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "surface=%s selected_agent=%s current_step_id=%s "
+                "current_capability=%s current_owner_agent=%s query=%r",
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                state.surface,
+                state.selected_agent,
+                state.current_step_id,
+                state.current_capability,
+                state.current_owner_agent,
+                state.original_query,
+            )
+
             wrapped = AgentInternalError(
                 code="INTERNAL_AGENT_ERROR",
                 title="系统内部错误",
                 message="系统执行失败，请查看错误信息或联系管理员。",
-                debug={"raw_error": str(exc), "type": exc.__class__.__name__},
+                detail={
+                    "stage": "manager_loop.run",
+                    "request_id": state.request_id,
+                    "workflow_run_id": state.workflow_run_id,
+                    "trace_id": state.trace_id,
+                    "surface": state.surface,
+                    "selected_agent": state.selected_agent,
+                    "current_step_id": state.current_step_id,
+                    "current_capability": state.current_capability,
+                    "current_owner_agent": state.current_owner_agent,
+                },
+                debug={
+                    "raw_error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                },
                 cause=exc,
             )
-            error_payload = wrapped.to_dict(state=state, include_debug=include_debug)
+
+            log_error_payload = wrapped.to_dict(state=state, include_debug=True)
+            public_error_payload = wrapped.to_dict(
+                state=state,
+                include_debug=bool(getattr(settings, "debug", False)),
+            )
+
+            logger.error(
+                "ManagerLoop agent_error_full "
+                "code=%s message=%s category=%s status=%s "
+                "stage=%s capability=%s owner_agent=%s step_id=%s "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "raw_error=%s error_type=%s detail=%s",
+                log_error_payload.get("code"),
+                log_error_payload.get("message"),
+                log_error_payload.get("category"),
+                log_error_payload.get("status"),
+                (log_error_payload.get("detail") or {}).get("stage"),
+                state.current_capability,
+                state.current_owner_agent,
+                state.current_step_id,
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                (log_error_payload.get("debug") or {}).get("raw_error"),
+                (log_error_payload.get("debug") or {}).get("error_type"),
+                log_error_payload.get("detail"),
+            )
+
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
                     selected_agent=self._safe_selected_agent(state),
@@ -142,13 +229,13 @@ class ManagerLoop:
                 ),
                 agent_output={
                     "message_type": "error",
-                    "answer": "系统执行失败，请查看错误信息或联系管理员。",
-                    "summary": error_payload["message"],
-                    "error": error_payload,
+                    "answer": public_error_payload["message"],
+                    "summary": public_error_payload["message"],
+                    "error": public_error_payload,
                     "ui_schema": "agent_error_v1",
                 },
                 status="failed",
-                error=error_payload,
+                error=public_error_payload,
             )
 
     @staticmethod
@@ -263,7 +350,15 @@ class ManagerLoop:
 
     async def _resolve_manager_model(self, state: ManagerState, *, db_session=None) -> dict[str, Any] | None:
         if db_session is None:
+            logger.warning(
+                "Manager model resolve skipped: db_session is None "
+                "request_id=%s workflow_run_id=%s org_id=%s",
+                state.request_id,
+                state.workflow_run_id,
+                state.org_id,
+            )
             return None
+
         try:
             models = await ModelConfigService(db_session, state.org_id).list_runtime_models()
             runtime = await self._gateway.select_runtime(
@@ -271,10 +366,27 @@ class ManagerLoop:
                 model_types={"chat", "llm", "text_generation"},
                 reserve=False,
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "Manager model resolve failed "
+                "org_id=%s request_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.request_id,
+                state.workflow_run_id,
+            )
             return None
+
         if not runtime:
+            logger.warning(
+                "Manager model runtime not found "
+                "org_id=%s request_id=%s workflow_run_id=%s model_types=%s",
+                state.org_id,
+                state.request_id,
+                state.workflow_run_id,
+                ["chat", "llm", "text_generation"],
+            )
             return None
+
         state.manager_model_runtime = runtime
         return {
             "logical_name": "manager_model",
@@ -287,8 +399,6 @@ class ManagerLoop:
         }
 
     def _compose_final(self, state: ManagerState, *, blocked_by_missing_inputs: bool) -> AgentRouterOutput:
-        import logging
-        _log = logging.getLogger(__name__)
         composed = self._find_composed(state)
         if composed is None:
             composed = self._recover_file_artifact_response(state)
@@ -308,7 +418,7 @@ class ManagerLoop:
         composed_status = "blocked" if status == "blocked" else "failed" if status == "failed" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
         message_type = composed.get("message_type", "quality_answer") if composed else self._message_type(state, sub_route, composed_status)
-        _log.info(
+        logger.info(
             "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
             "message_type=%s errors=%d obs_failures=%d final_action=%s",
             plan.reason if plan else "no-plan",
@@ -893,4 +1003,15 @@ class ManagerLoop:
 
     @staticmethod
     def _state_dump(state: ManagerState) -> dict[str, Any]:
-        return json.loads(state.model_dump_json())
+        """Serialize ManagerState to a JSON-safe dict for debug/logging.
+
+        Uses Pydantic's native ``fallback`` to convert any non-serializable
+        values (e.g. a function accidentally stored in a dict field) into
+        a readable placeholder string such as ``"<function>"`` so that
+        the debug dump never crashes the request.
+        """
+        return json.loads(
+            state.model_dump_json(
+                fallback=lambda v: f"<{type(v).__name__}>",
+            )
+        )
