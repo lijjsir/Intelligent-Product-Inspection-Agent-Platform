@@ -12,6 +12,7 @@ import type {
   StandardLibraryScanResult,
   StandardRetrievePayload,
   StandardRetrieveResult,
+  StandardUploadResult,
 } from "@/types/governance.types";
 
 export const inspectionStandardApi = {
@@ -38,6 +39,13 @@ export const inspectionStandardApi = {
   },
   reindex(id: string) {
     return http.post<StandardLibraryIndexResult>(`/v1/standard-libraries/${id}/reindex`);
+  },
+  upload(id: string, files: File[]) {
+    const formData = new FormData();
+    files.forEach((file) => formData.append("files", file));
+    return http.post<StandardUploadResult>(`/v1/standard-libraries/${id}/upload`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
   },
   listDocuments(id: string, params?: { page?: number; size?: number }) {
     if (params) {

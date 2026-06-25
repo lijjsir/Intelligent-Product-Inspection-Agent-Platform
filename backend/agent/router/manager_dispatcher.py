@@ -6,14 +6,14 @@ import json
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep, AgentRoutePlan
 from agent.router.executors import (
-    EvidenceArbitrationExecutor,
     FileExecutor,
     LabDetectionExecutor,
-    MemoryGovernanceExecutor,
     QualityAnalysisExecutor,
     VisionInspectionExecutor,
 )
 from agent.router.executors.base import observation
+from agent.router.executors.evidence_arbitration_executor import EvidenceArbitrationExecutor
+from agent.router.executors.memory_governance_executor import MemoryGovernanceExecutor
 from agent.router.manager_state import ManagerState
 from agent.tools import get_registry
 from agent.tools.invoker import ToolInvoker

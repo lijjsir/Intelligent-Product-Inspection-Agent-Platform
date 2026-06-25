@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.router.errors import make_agent_error
-
 
 async def input_adapter(state: dict[str, Any]) -> dict[str, Any]:
     """Validate and normalize memory governance inputs."""
+    from agent.router.errors import make_agent_error
+
     task_context = state.get("task_context") or {}
     if not task_context.get("org_id"):
         raise make_agent_error(
@@ -20,6 +20,8 @@ async def input_adapter(state: dict[str, Any]) -> dict[str, Any]:
 
 async def legacy_memory_manager_node(state: dict[str, Any]) -> dict[str, Any]:
     """Phase-1 compatibility node: wraps old MemoryManagerGraph as formal graph node."""
+    from agent.router.errors import make_agent_error
+
     try:
         from agent.graphs.memory_manager.graph import MemoryManagerGraph
 

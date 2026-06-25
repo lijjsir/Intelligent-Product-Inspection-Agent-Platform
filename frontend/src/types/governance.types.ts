@@ -657,17 +657,9 @@ export interface InspectionStandardLibraryItem {
 
 export interface InspectionStandardPayload {
   name: string;
-  product_family?: string | null;
   domain?: string | null;
-  product_category?: string | null;
-  description?: string | null;
-  rag_space_ids: string[];
-  qdrant_collection?: string | null;
-  pdf_root_dir?: string | null;
-  file_glob?: string;
-  chunk_strategy?: string;
   standard_status?: string;
-  import_mode?: string;
+  chunk_strategy?: string;
   is_active?: boolean;
 }
 
@@ -758,6 +750,14 @@ export interface StandardLibraryIndexResult {
   indexed_document_count: number;
   chunk_count: number;
   failed_count: number;
+}
+
+export interface StandardUploadResult {
+  library_id: string;
+  uploaded_count: number;
+  indexed_count: number;
+  failed_count: number;
+  documents: StandardDocumentItem[];
 }
 
 export interface StandardRetrievePayload {

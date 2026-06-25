@@ -115,23 +115,24 @@ async def test_infrastructure_service_marks_missing_qdrant_collection_unhealthy(
 
 
 @pytest.mark.asyncio
-async def test_infrastructure_service_reports_missing_minio_bucket(monkeypatch):
+async def test_infrastructure_service_auto_creates_minio_bucket_on_health_check(monkeypatch):
     service = InfrastructureService(FakeSession())
 
     class FakeStorage:
         def __init__(self):
-            self.ensured = False
+            self.ensured_buckets: list[str] = []
 
-        def bucket_exists(self, bucket):
-            assert bucket == "piap"
-            return False
+        def ensure_bucket(self, bucket):
+            self.ensured_buckets.append(bucket)
 
     storage = FakeStorage()
     monkeypatch.setattr("app.services.infrastructure_service.settings.object_storage_backend", "minio")
     monkeypatch.setattr("app.services.infrastructure_service.settings.s3_bucket", "piap")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.s3_endpoint", "http://minio:9000")
     monkeypatch.setattr("app.services.infrastructure_service.build_object_storage", lambda: storage)
 
     result = await service._check_object_storage()
 
-    assert result.status == "unhealthy"
-    assert result.detail == "bucket=piap, exists=False, error=bucket_missing"
+    assert result.status == "healthy"
+    assert storage.ensured_buckets == ["piap"]
+    assert "piap" in result.detail

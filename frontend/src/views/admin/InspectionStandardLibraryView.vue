@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentChecked, FolderOpened, Plus, RefreshRight, Search, UploadFilled } from "@element-plus/icons-vue";
-import { ragSpaceApi } from "@/api/rag-space.api";
+import { DocumentChecked, FolderOpened, MoreFilled, Plus, RefreshRight, Search, UploadFilled } from "@element-plus/icons-vue";
 import { useInspectionStandardStore } from "@/stores/inspection_standard.store";
 import type {
   InspectionStandardLibraryItem,
@@ -11,10 +10,8 @@ import type {
   StandardDocumentItem,
   StandardRetrieveHit,
 } from "@/types/governance.types";
-import type { RagSpace } from "@/types/rag-space.types";
 
 const store = useInspectionStandardStore();
-const ragSpaces = ref<RagSpace[]>([]);
 const drawerOpen = ref(false);
 const detailOpen = ref(false);
 const saving = ref(false);
@@ -23,11 +20,17 @@ const editingId = ref("");
 const currentLibrary = ref<InspectionStandardLibraryItem | null>(null);
 const retrieveHits = ref<StandardRetrieveHit[]>([]);
 
-// Chunk drill-down state
+// Upload state
+const uploadFiles = ref<File[]>([]);
+const uploading = ref(false);
+const uploadDialogOpen = ref(false);
+const uploadTargetId = ref("");
+
+// Chunk drill-down
 const chunkDrawerOpen = ref(false);
 const currentDocumentForChunks = ref<StandardDocumentItem | null>(null);
 
-// Document editing state
+// Document editing
 const editingDocumentId = ref("");
 const docForm = reactive({
   standard_no: "",
@@ -41,22 +44,14 @@ const docForm = reactive({
 const filters = reactive({
   domain: "",
   importStatus: "",
-  standardStatus: "",
   keyword: "",
 });
 
 const form = reactive<InspectionStandardPayload>({
   name: "",
-  product_family: "",
   domain: "",
   standard_status: "现行",
-  rag_space_ids: [],
-  qdrant_collection: "",
-  pdf_root_dir: "standard/current",
-  file_glob: "*.pdf",
   chunk_strategy: "heading_then_size",
-  import_mode: "scan_and_index",
-  description: "",
   is_active: true,
 });
 
@@ -72,14 +67,13 @@ const filteredItems = computed(() =>
     const keyword = filters.keyword.trim().toLowerCase();
     const keywordMatched =
       !keyword ||
-      [item.name, item.domain, item.pdf_root_dir, item.description]
+      [item.name, item.domain, item.description]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(keyword));
     return (
       keywordMatched &&
       (!filters.domain || item.domain === filters.domain) &&
-      (!filters.importStatus || item.import_status === filters.importStatus) &&
-      (!filters.standardStatus || item.standard_status === filters.standardStatus)
+      (!filters.importStatus || item.import_status === filters.importStatus)
     );
   }),
 );
@@ -90,16 +84,9 @@ function resetForm() {
   editingId.value = "";
   Object.assign(form, {
     name: "",
-    product_family: "",
     domain: "",
     standard_status: "现行",
-    rag_space_ids: [],
-    qdrant_collection: "",
-    pdf_root_dir: "standard/current",
-    file_glob: "*.pdf",
     chunk_strategy: "heading_then_size",
-    import_mode: "scan_and_index",
-    description: "",
     is_active: true,
   });
 }
@@ -130,8 +117,7 @@ function isActionLoading(action: string, id: string) {
 }
 
 async function loadAll() {
-  const [{ data: spaces }] = await Promise.all([ragSpaceApi.list(500), store.fetchAll()]);
-  ragSpaces.value = spaces.data;
+  await store.fetchAll();
 }
 
 function openCreate() {
@@ -143,34 +129,23 @@ function openEdit(item: InspectionStandardLibraryItem) {
   editingId.value = item.id;
   Object.assign(form, {
     name: item.name,
-    product_family: item.product_family,
     domain: item.domain || "",
     standard_status: item.standard_status || "现行",
-    rag_space_ids: [...item.rag_space_ids],
-    qdrant_collection: item.qdrant_collection || "",
-    pdf_root_dir: item.pdf_root_dir || "standard/current",
-    file_glob: item.file_glob || "*.pdf",
     chunk_strategy: item.chunk_strategy || "heading_then_size",
-    import_mode: "scan_and_index",
-    description: item.description || "",
     is_active: item.is_active,
   });
   drawerOpen.value = true;
 }
 
-async function submit({ scanAfterSave = false } = {}) {
+async function submit() {
   saving.value = true;
   try {
-    const payload = {
-      ...form,
-      product_family: form.product_family || form.domain || form.name,
-    };
-    const saved = editingId.value ? await store.updateOne(editingId.value, payload) : await store.createOne(payload);
-    if (scanAfterSave) {
-      await store.scanOne(saved.id);
-      ElMessage.success("标准库已保存并完成 PDF 扫描");
+    if (editingId.value) {
+      await store.updateOne(editingId.value, { ...form });
+      ElMessage.success("标准库已更新");
     } else {
-      ElMessage.success(editingId.value ? "标准库已更新" : "标准库已创建");
+      await store.createOne({ ...form });
+      ElMessage.success("标准库已创建（已自动创建同名 RAG 空间）");
     }
     drawerOpen.value = false;
   } finally {
@@ -179,7 +154,7 @@ async function submit({ scanAfterSave = false } = {}) {
 }
 
 async function removeItem(item: InspectionStandardLibraryItem) {
-  await ElMessageBox.confirm(`将删除"${item.name}"，标准文档记录也将不再出现在列表中。`, "删除标准库", {
+  await ElMessageBox.confirm(`将删除"${item.name}"及其关联文档。`, "删除标准库", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
     type: "warning",
@@ -188,17 +163,41 @@ async function removeItem(item: InspectionStandardLibraryItem) {
   ElMessage.success("标准库已删除");
 }
 
-async function scanLibrary(item: InspectionStandardLibraryItem) {
-  const result = await store.scanOne(item.id);
-  ElMessage.success(`扫描完成：${result.scanned_count} 个 PDF`);
-  if (currentLibrary.value?.id === item.id) await store.fetchDocuments(item.id);
-}
-
 async function indexLibrary(item: InspectionStandardLibraryItem, reindex = false) {
   const result = await store.indexOne(item.id, reindex);
   const action = reindex ? "重建索引" : "批量导入";
-  ElMessage.success(`${action}完成：${result.chunk_count} 个 chunk，失败 ${result.failed_count} 个`);
+  ElMessage.success(`${action}完成：${result.chunk_count} 个 chunk`);
   if (currentLibrary.value?.id === item.id) await store.fetchDocuments(item.id);
+}
+
+function openUploadDialog(item: InspectionStandardLibraryItem) {
+  uploadTargetId.value = item.id;
+  uploadFiles.value = [];
+  uploadDialogOpen.value = true;
+}
+
+function openUploadForCurrent() {
+  if (currentLibrary.value) openUploadDialog(currentLibrary.value);
+}
+
+async function doUpload() {
+  if (!uploadFiles.value.length) {
+    ElMessage.warning("请选择 PDF 文件");
+    return;
+  }
+  uploading.value = true;
+  try {
+    const result = await store.uploadOne(uploadTargetId.value, uploadFiles.value);
+    ElMessage.success(`已上传 ${result.uploaded_count} 个文件，成功索引 ${result.indexed_count} 个`);
+    uploadDialogOpen.value = false;
+    if (currentLibrary.value?.id === uploadTargetId.value) await store.fetchDocuments(uploadTargetId.value);
+  } finally {
+    uploading.value = false;
+  }
+}
+
+function handleRemoveUploadFile(index: number) {
+  uploadFiles.value.splice(index, 1);
 }
 
 async function openDocuments(item: InspectionStandardLibraryItem) {
@@ -228,14 +227,12 @@ async function retrieveStandards() {
   }
 }
 
-// Chunk drill-down
 async function openChunks(doc: StandardDocumentItem) {
   currentDocumentForChunks.value = doc;
   chunkDrawerOpen.value = true;
   await store.fetchChunks(doc.id);
 }
 
-// Document editing
 function startEditDocument(doc: StandardDocumentItem) {
   editingDocumentId.value = doc.id;
   Object.assign(docForm, {
@@ -293,7 +290,7 @@ onMounted(loadAll);
       </div>
       <div class="heading-actions">
         <el-button :icon="RefreshRight" @click="loadAll">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openCreate">新增标准库</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新建标准库</el-button>
       </div>
     </section>
 
@@ -317,7 +314,7 @@ onMounted(loadAll);
     </section>
 
     <section class="toolbar">
-      <el-input v-model="filters.keyword" :prefix-icon="Search" clearable placeholder="搜索名称、目录、说明" class="keyword" />
+      <el-input v-model="filters.keyword" :prefix-icon="Search" clearable placeholder="搜索名称、说明" class="keyword" />
       <el-select v-model="filters.domain" clearable placeholder="领域" class="filter-select">
         <el-option v-for="domain in domains" :key="domain" :label="domain" :value="domain" />
       </el-select>
@@ -330,12 +327,6 @@ onMounted(loadAll);
         <el-option label="部分失败" value="partial_failed" />
         <el-option label="失败" value="failed" />
       </el-select>
-      <el-select v-model="filters.standardStatus" clearable placeholder="标准状态" class="filter-select">
-        <el-option label="现行" value="现行" />
-        <el-option label="即将实施" value="即将实施" />
-        <el-option label="被代替" value="被代替" />
-        <el-option label="废止" value="废止" />
-      </el-select>
     </section>
 
     <section class="table-surface">
@@ -344,7 +335,7 @@ onMounted(loadAll);
           <template #default="{ row }">
             <div class="primary-cell">
               <strong>{{ row.name }}</strong>
-              <span>{{ row.pdf_root_dir || "未配置 PDF 目录" }}</span>
+              <span>{{ row.domain || "未设领域" }}</span>
             </div>
           </template>
         </el-table-column>
@@ -372,14 +363,24 @@ onMounted(loadAll);
         <el-table-column label="最近索引" width="180">
           <template #default="{ row }">{{ row.last_indexed_at || row.last_scanned_at || "未执行" }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="360" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link :icon="FolderOpened" @click="openDocuments(row)">文档</el-button>
-            <el-button link :loading="isActionLoading('scan', row.id)" @click="scanLibrary(row)">扫描</el-button>
-            <el-button link type="primary" :loading="isActionLoading('index', row.id)" @click="indexLibrary(row)">导入</el-button>
-            <el-button link type="warning" :loading="isActionLoading('reindex', row.id)" @click="indexLibrary(row, true)">重建</el-button>
-            <el-button link @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="removeItem(row)">删除</el-button>
+            <el-button link type="primary" :icon="UploadFilled" @click="openUploadDialog(row)">上传</el-button>
+            <el-dropdown trigger="click" @command="(cmd: string) => {
+              if (cmd === 'reindex') indexLibrary(row, true);
+              else if (cmd === 'edit') openEdit(row);
+              else if (cmd === 'delete') removeItem(row);
+            }">
+              <el-button link :icon="MoreFilled">更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="reindex">重建索引</el-dropdown-item>
+                  <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="delete" style="color: var(--el-color-danger)">删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -396,14 +397,16 @@ onMounted(loadAll);
       </div>
     </section>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑标准库' : '新增标准库'" size="680px">
+    <!-- Create / Edit Drawer -->
+    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑标准库' : '新建标准库'" size="520px">
       <el-form label-position="top" class="drawer-form">
-        <el-form-item label="标准库名称">
-          <el-input v-model="form.name" placeholder="如：陶瓷产品标准库" />
+        <el-form-item label="标准库名称" required>
+          <el-input v-model="form.name" placeholder="如：陶瓷产品检测标准" />
+          <div class="form-hint">将自动创建同名 RAG 知识库空间</div>
         </el-form-item>
         <div class="form-grid">
           <el-form-item label="领域">
-            <el-select v-model="form.domain" allow-create filterable default-first-option placeholder="选择或输入领域">
+            <el-select v-model="form.domain" allow-create filterable clearable default-first-option placeholder="选择或输入领域">
               <el-option label="日用陶瓷" value="日用陶瓷" />
               <el-option label="包装印刷" value="包装印刷" />
               <el-option label="包装材料" value="包装材料" />
@@ -412,8 +415,6 @@ onMounted(loadAll);
               <el-option label="通用质检" value="通用质检" />
             </el-select>
           </el-form-item>
-        </div>
-        <div class="form-grid">
           <el-form-item label="标准状态">
             <el-select v-model="form.standard_status">
               <el-option label="现行" value="现行" />
@@ -422,61 +423,68 @@ onMounted(loadAll);
               <el-option label="废止" value="废止" />
             </el-select>
           </el-form-item>
-          <el-form-item label="启用状态">
-            <el-switch v-model="form.is_active" active-text="启用" inactive-text="停用" />
-          </el-form-item>
         </div>
-        <div class="form-grid">
-          <el-form-item label="导入模式">
-            <el-select v-model="form.import_mode">
-              <el-option label="仅绑定空间" value="bind_only" />
-              <el-option label="扫描目录" value="scan_only" />
-              <el-option label="扫描并索引" value="scan_and_index" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item label="关联 RAG 空间">
-          <el-select v-model="form.rag_space_ids" multiple filterable placeholder="选择一个或多个知识库空间" class="full-width">
-            <el-option v-for="space in ragSpaces" :key="space.id" :label="space.name" :value="space.id" />
-          </el-select>
-        </el-form-item>
-        <div class="form-grid">
-          <el-form-item label="PDF 根目录">
-            <el-input v-model="form.pdf_root_dir" placeholder="standard/current/ceramic" />
-          </el-form-item>
-          <el-form-item label="文件匹配规则">
-            <el-input v-model="form.file_glob" placeholder="*.pdf" />
-          </el-form-item>
-        </div>
-        <div class="form-grid">
-          <el-form-item label="Chunk 策略">
-            <el-select v-model="form.chunk_strategy">
-              <el-option label="标题优先，长度兜底" value="heading_then_size" />
-              <el-option label="按页码" value="page" />
-              <el-option label="固定长度" value="fixed_size" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item label="Qdrant collection">
-          <el-input v-model="form.qdrant_collection" placeholder="默认使用系统配置 collection" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="form.description" type="textarea" :rows="4" placeholder="记录该标准库覆盖的国家标准范围" />
-        </el-form-item>
+        <el-collapse v-if="editingId">
+          <el-collapse-item title="高级设置">
+            <div class="form-grid">
+              <el-form-item label="Chunk 策略">
+                <el-select v-model="form.chunk_strategy">
+                  <el-option label="标题优先，长度兜底" value="heading_then_size" />
+                  <el-option label="按页码" value="page" />
+                  <el-option label="固定长度" value="fixed_size" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="启用状态">
+                <el-switch v-model="form.is_active" active-text="启用" inactive-text="停用" />
+              </el-form-item>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
 
       <template #footer>
         <el-button @click="drawerOpen = false">取消</el-button>
-        <el-button :loading="saving" @click="submit()">保存</el-button>
-        <el-button type="primary" :loading="saving" @click="submit({ scanAfterSave: true })">保存并扫描 PDF</el-button>
+        <el-button type="primary" :loading="saving" @click="submit">
+          {{ editingId ? '保存' : '创建标准库' }}
+        </el-button>
       </template>
     </el-drawer>
 
+    <!-- Upload PDF Dialog -->
+    <el-dialog v-model="uploadDialogOpen" title="上传 PDF 文件" width="520px">
+      <el-upload
+        drag
+        multiple
+        :auto-upload="false"
+        :on-change="(_file: any, _files: any) => uploadFiles = _files.map((f: any) => f.raw)"
+        accept=".pdf"
+      >
+        <el-icon class="upload-icon"><UploadFilled /></el-icon>
+        <div class="upload-text">将 PDF 文件拖到此处，或<em>点击选择</em></div>
+        <template #tip>
+          <div class="upload-tip">支持多文件上传，上传后自动解析并建立索引</div>
+        </template>
+      </el-upload>
+      <div v-if="uploadFiles.length" class="upload-file-list">
+        <el-tag v-for="(f, i) in uploadFiles" :key="i" closable @close="handleRemoveUploadFile(i)">
+          {{ f.name }}
+        </el-tag>
+      </div>
+
+      <template #footer>
+        <el-button @click="uploadDialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="uploading" @click="doUpload">
+          上传并索引（{{ uploadFiles.length }} 个文件）
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Document Detail Drawer -->
     <el-drawer v-model="detailOpen" :title="currentLibrary?.name || '标准库文档'" size="760px">
       <div class="detail-stack">
         <section class="detail-toolbar">
           <el-button :icon="RefreshRight" @click="currentLibrary && store.fetchDocuments(currentLibrary.id)">刷新文档</el-button>
-          <el-button :icon="UploadFilled" type="primary" @click="currentLibrary && indexLibrary(currentLibrary)">批量导入</el-button>
+          <el-button :icon="UploadFilled" type="primary" @click="openUploadForCurrent">上传 PDF</el-button>
         </section>
 
         <el-table :data="store.documents" v-loading="store.documentLoading" row-key="id" max-height="320">
@@ -506,7 +514,6 @@ onMounted(loadAll);
           </el-table-column>
         </el-table>
 
-        <!-- Inline document edit row -->
         <div v-if="editingDocumentId" class="inline-edit-card">
           <el-form label-position="top" class="form-grid-3">
             <el-form-item label="标准号">
@@ -746,6 +753,12 @@ onMounted(loadAll);
   gap: 12px;
 }
 
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: oklch(55% 0.02 250);
+}
+
 .inline-edit-card {
   border: 1px solid oklch(90% 0.01 250);
   border-radius: 8px;
@@ -777,6 +790,34 @@ onMounted(loadAll);
   grid-template-columns: minmax(220px, 2fr) minmax(120px, 1fr) minmax(120px, 1fr) 96px auto;
   gap: 10px;
   align-items: center;
+}
+
+.upload-icon {
+  font-size: 2.5rem;
+  color: oklch(55% 0.04 250);
+}
+
+.upload-text {
+  margin-top: 8px;
+  font-size: 14px;
+  color: oklch(46% 0.018 250);
+}
+
+.upload-text em {
+  color: var(--el-color-primary);
+  font-style: normal;
+}
+
+.upload-tip {
+  font-size: 12px;
+  color: oklch(55% 0.02 250);
+}
+
+.upload-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .hit-list {

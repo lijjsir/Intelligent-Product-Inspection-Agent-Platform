@@ -12,6 +12,7 @@ import type {
   StandardLibraryScanResult,
   StandardRetrievePayload,
   StandardRetrieveResult,
+  StandardUploadResult,
 } from "@/types/governance.types";
 
 export const useInspectionStandardStore = defineStore("inspection-standard-library", () => {
@@ -104,6 +105,17 @@ export const useInspectionStandardStore = defineStore("inspection-standard-libra
     }
   }
 
+  async function uploadOne(id: string, files: File[]): Promise<StandardUploadResult> {
+    actionLoading.value = `upload:${id}`;
+    try {
+      const { data } = await inspectionStandardApi.upload(id, files);
+      await fetchAll();
+      return data.data;
+    } finally {
+      actionLoading.value = "";
+    }
+  }
+
   async function fetchDocuments(libraryId: string, p?: { page?: number; size?: number }) {
     documentLoading.value = true;
     try {
@@ -187,6 +199,7 @@ export const useInspectionStandardStore = defineStore("inspection-standard-libra
     removeOne,
     scanOne,
     indexOne,
+    uploadOne,
     fetchDocuments,
     setDocPage,
     fetchChunks,
