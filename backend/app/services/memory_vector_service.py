@@ -14,6 +14,7 @@ from app.core.config import settings
 
 MEMORY_COLLECTION = "piap_shared_memory"
 CANDIDATE_MEMORY_COLLECTION = "piap_candidate_memory"
+AGENT_LOCAL_MEMORY_COLLECTION = "piap_agent_local_memory"
 
 EmbedderFactory = Callable[..., Awaitable[list[float]]]
 
@@ -256,11 +257,52 @@ class MemoryVectorService:
             })
         return results
 
+    async def scroll(
+        self,
+        *,
+        filter_conditions: dict,
+        limit: int = 100,
+    ) -> list[dict]:
+        """List payloads matching exact filters without generating an embedding."""
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{self._qdrant_url}/collections/{self._collection}/points/scroll",
+                json={
+                    "filter": filter_conditions,
+                    "limit": max(1, min(int(limit), 1000)),
+                    "with_payload": True,
+                    "with_vector": False,
+                },
+                headers=self._headers,
+            )
+            if resp.status_code == 404:
+                raise MemoryVectorServiceError(
+                    f"Qdrant collection {self._collection} is missing; "
+                    "run backend/scripts/init_memory_qdrant.py first."
+                )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise MemoryVectorServiceError(
+                    f"Qdrant memory scroll failed: {exc.response.text}"
+                ) from exc
+            data = resp.json()
+
+        points = data.get("result", {}).get("points", [])
+        return [
+            {
+                "memory_id": (point.get("payload") or {}).get("memory_id")
+                or point.get("id"),
+                "payload": point.get("payload") or {},
+            }
+            for point in points
+        ]
+
     async def delete_memory(self, memory_id: str) -> None:
         """Remove a memory vector point."""
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.delete(
-                f"{self._qdrant_url}/collections/{self._collection}/points",
+            resp = await client.post(
+                f"{self._qdrant_url}/collections/{self._collection}/points/delete",
                 json={"points": [self._point_id(self._org_id, memory_id)]},
                 headers=self._headers,
             )

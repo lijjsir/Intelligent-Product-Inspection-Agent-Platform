@@ -40,10 +40,18 @@ def artifact(
     source = step.owner_agent
     raw = f"{step.step_id}:{artifact_type}:{source}:{uuid.uuid4()}"
     artifact_id = hashlib.sha1(raw.encode()).hexdigest()[:12]
+    source_kind = (
+        "capability"
+        if step.owner_agent in {"orchestrator", "evidence", "memory_governance"}
+        or step.capability in {"evidence.arbitrate", "memory.governance"}
+        else "agent"
+    )
     return AgentArtifact(
         artifact_id=artifact_id,
         type=artifact_type,
         source_agent=source,
+        step_id=step.step_id,
+        source_kind=source_kind,
         status=status,
         content=content or {},
         summary=summary,

@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
 
     redis_url: str = "redis://127.0.0.1:16379/0"
+    task_blackboard_chat_ttl_seconds: int = 7200
+    task_blackboard_analysis_ttl_seconds: int = 86400
+    task_blackboard_inspection_ttl_seconds: int = 604800
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 

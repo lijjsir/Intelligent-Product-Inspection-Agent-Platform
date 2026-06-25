@@ -194,6 +194,11 @@ class ManagerPolicy:
             normalized_query=self._clean(request.query),
             org_id=request.org_id,
             user_id=request.user_id,
+            task_id=str(
+                ext.get("task_id")
+                or (request.metadata or {}).get("task_id")
+                or ""
+            ) or None,
             session_id=request.session_id,
             assistant_message_id=request.assistant_message_id,
             attachments=[item.model_dump() for item in request.attachments],
@@ -245,7 +250,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="检查论文文档的格式、结构和文字规范问题",
                 intent="paper_format_check",
-                needs=["file.paper_format_check", "quality.final_analyze"],
+                needs=["file.paper_format_check"],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -288,7 +293,7 @@ class ManagerPolicy:
             return Understanding(
                 goal="处理聊天上传文件并返回辅助分析",
                 intent=capability.replace(".", "_"),
-                needs=[capability, "quality.final_analyze"],
+                needs=[capability],
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -350,6 +355,18 @@ class ManagerPolicy:
         "quality.inspection.execute": ["task_id is not empty", "status in queued/running/done"],
         "memory.governance": ["memory governance result is present"],
     }
+    _EXPECTED_ARTIFACTS: dict[str, str] = {
+        "evidence.arbitrate": "evidence_packet",
+        "rag.ingest": "rag_ingest_request",
+        "file.summary": "file_summary",
+        "file.qa": "file_answer",
+        "file.paper_format_check": "paper_format_report",
+        "vision.inspect": "visual_inspection_result",
+        "lab.early_risk.assess": "lab_detection_result",
+        "quality.final_analyze": "quality_final_assessment",
+        "quality.inspection.execute": "inspection_result",
+        "memory.governance": "memory_governance_result",
+    }
 
     async def plan(self, state: ManagerState, understanding: Understanding) -> AgentRoutePlan:
         state.goal = understanding.goal
@@ -357,6 +374,7 @@ class ManagerPolicy:
         available = capabilities_for_surface(state.surface, state.allowed_modes)
         steps: list[AgentPlanStep] = []
         previous_step_id: str | None = None
+        step_ids_by_capability: dict[str, str] = {}
         for index, key in enumerate(understanding.needs, start=1):
             capability = available.get(key) or CAPABILITIES.get(key)
             if capability is None:
@@ -374,7 +392,18 @@ class ManagerPolicy:
                 )
             step_id = f"s{index}"
             owner = self._choose_owner_agent(key, capability, understanding, state)
-            depends_on = [previous_step_id] if previous_step_id else []
+            depends_on = self._plan_dependencies(
+                state=state,
+                capability=key,
+                previous_step_id=previous_step_id,
+                step_ids_by_capability=step_ids_by_capability,
+            )
+            parallel_group = (
+                "professional_assessment"
+                if state.surface == "quality_task"
+                and key in {"vision.inspect", "lab.early_risk.assess"}
+                else None
+            )
             steps.append(
                 AgentPlanStep(
                     step_id=step_id,
@@ -385,9 +414,11 @@ class ManagerPolicy:
                     input=self._step_input(key, state),
                     dependencies=[item for item in depends_on if item],
                     depends_on=[item for item in depends_on if item],
-                    expected_artifact=None,
+                    parallel_group=parallel_group,
+                    expected_artifact=self._EXPECTED_ARTIFACTS.get(key),
                 )
             )
+            step_ids_by_capability[key] = step_id
             previous_step_id = step_id
         return AgentRoutePlan(
             plan_id=f"plan_{state.workflow_run_id}_{state.iteration + 1}",
@@ -399,6 +430,31 @@ class ManagerPolicy:
             reason=understanding.intent,
             max_iterations=state.max_iterations,
         )
+
+    @staticmethod
+    def _plan_dependencies(
+        *,
+        state: ManagerState,
+        capability: str,
+        previous_step_id: str | None,
+        step_ids_by_capability: dict[str, str],
+    ) -> list[str]:
+        if state.surface != "quality_task":
+            return [previous_step_id] if previous_step_id else []
+
+        evidence_step = step_ids_by_capability.get("evidence.arbitrate")
+        if capability in {"vision.inspect", "lab.early_risk.assess"}:
+            return [evidence_step] if evidence_step else []
+        if capability == "quality.inspection.execute":
+            branch_steps = [
+                step_ids_by_capability[key]
+                for key in ("vision.inspect", "lab.early_risk.assess")
+                if key in step_ids_by_capability
+            ]
+            if branch_steps:
+                return branch_steps
+            return [evidence_step] if evidence_step else []
+        return [previous_step_id] if previous_step_id else []
 
     @classmethod
     def _resolve_criteria(cls, needs: list[str], goal: str) -> list[str]:
@@ -417,6 +473,9 @@ class ManagerPolicy:
         state: ManagerState,
     ) -> str:
         intent = understanding.intent
+
+        if key in {"evidence.arbitrate", "memory.governance"}:
+            return "orchestrator"
 
         if intent in {"file_summary", "file_qa", "paper_format_check"}:
             if "file" in capability.owner_agents:
@@ -557,3 +616,7 @@ class ManagerPolicy:
 
         needs.append("quality.inspection.execute")
         return needs
+
+
+# Public architecture name; ManagerPolicy remains for compatibility.
+OrchestrationPolicy = ManagerPolicy

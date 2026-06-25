@@ -20,6 +20,7 @@ class QualityAnalysisState(TypedDict, total=False):
     visual_inspection_result: dict[str, Any] | None
     lab_detection_result: dict[str, Any] | None
     file_results: list[dict[str, Any]]
+    consumed_artifact_ids: list[str]
 
     needs_user_input: bool
     response_mode: str
@@ -37,4 +38,5 @@ class QualityAnalysisState(TypedDict, total=False):
     status: str
     summary: str
     confidence: float
+    candidate_extractable: bool
     metadata: dict[str, Any]

@@ -187,3 +187,40 @@ async def test_search_missing_collection_raises_without_lazy_create(monkeypatch)
         await service.search("first candidate", org_id="org-1", user_id="user-1")
 
     assert [call[0] for call in calls] == ["POST"]
+
+
+@pytest.mark.asyncio
+async def test_delete_memory_uses_qdrant_points_delete_endpoint(monkeypatch):
+    calls: list[tuple[str, str, dict | None]] = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append(("POST", url, json))
+            return FakeResponse(status_code=200)
+
+    monkeypatch.setattr(
+        "app.services.memory_vector_service.httpx.AsyncClient",
+        FakeClient,
+    )
+    service = MemoryVectorService(
+        collection="piap_agent_local_memory",
+        org_id="org-1",
+    )
+
+    await service.delete_memory("alm-1")
+
+    assert calls[0][1].endswith(
+        "/collections/piap_agent_local_memory/points/delete"
+    )
+    assert calls[0][2]["points"] == [
+        MemoryVectorService._point_id("org-1", "alm-1")
+    ]

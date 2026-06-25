@@ -8,12 +8,24 @@ from pydantic import BaseModel, Field
 AgentName = Literal[
     "chat",
     "inspection_task",
-    "evidence",
     "vision",
     "lab_detection",
     "quality_analysis",
-    "memory_governance",
     "file",
+    # Compatibility values accepted by old persisted route records.
+    "evidence",
+    "memory_governance",
+]
+
+StepOwner = Literal[
+    "orchestrator",
+    "vision",
+    "lab_detection",
+    "quality_analysis",
+    "file",
+    # Compatibility adapters; new plans use orchestrator for capabilities.
+    "evidence",
+    "memory_governance",
 ]
 
 
@@ -85,7 +97,7 @@ class Capability(BaseModel):
 
 class AgentPlanStep(BaseModel):
     step_id: str
-    owner_agent: AgentName = "quality_analysis"
+    owner_agent: StepOwner = "quality_analysis"
     capability: str = ""
     operation: str = ""
     mode: Literal["answer", "report", "action"] = "answer"
@@ -123,6 +135,14 @@ class AgentArtifact(BaseModel):
     artifact_id: str
     type: str
     source_agent: str
+    workflow_run_id: str | None = None
+    step_id: str | None = None
+    source_kind: Literal["agent", "capability", "orchestrator"] = "agent"
+    visibility: Literal["task"] = "task"
+    consumed_artifact_ids: list[str] = Field(default_factory=list)
+    candidate_extractable: bool = False
+    candidate_reason: str | None = None
+    target_agents: list[str] = Field(default_factory=list)
     status: Literal["success", "empty", "failed", "blocked"] = "success"
     content: dict[str, Any] = Field(default_factory=dict)
     summary: str = ""

@@ -35,12 +35,12 @@ def test_capabilities_for_surface_only_returns_allowed_agents_and_modes():
 
 
 def test_professional_agent_capabilities_are_registered_with_new_owners():
-    assert CAPABILITIES["evidence.arbitrate"].owner_agents == ["evidence"]
+    assert CAPABILITIES["evidence.arbitrate"].owner_agents == ["orchestrator"]
     assert CAPABILITIES["vision.inspect"].owner_agents == ["vision"]
     assert CAPABILITIES["lab.early_risk.assess"].owner_agents == ["lab_detection"]
     assert CAPABILITIES["quality.final_analyze"].owner_agents == ["quality_analysis"]
     assert CAPABILITIES["quality.inspection.execute"].owner_agents == ["quality_analysis"]
-    assert CAPABILITIES["memory.governance"].owner_agents == ["memory_governance"]
+    assert CAPABILITIES["memory.governance"].owner_agents == ["orchestrator"]
 
 
 def test_capabilities_for_surface_excludes_paper_check_when_disabled(monkeypatch):

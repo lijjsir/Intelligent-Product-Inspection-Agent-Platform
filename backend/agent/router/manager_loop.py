@@ -19,7 +19,11 @@ from agent.router.manager_state import ManagerState
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
 from app.core.config import settings
+from app.services.agent_long_term_memory_service import AgentLongTermMemoryService
+from app.services.agent_local_memory_service import AgentLocalMemoryService
+from app.services.memory_candidate_extractor import MemoryCandidateExtractor
 from app.services.model_config_service import ModelConfigService
+from app.services.task_blackboard_service import TaskBlackboardService
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +46,24 @@ class ValidationResult:
 
 
 class ManagerLoop:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        blackboard: TaskBlackboardService | None = None,
+        local_memory: AgentLocalMemoryService | None = None,
+    ) -> None:
         self._policy = ManagerPolicy()
-        self._dispatcher = ManagerDispatcher()
+        self._blackboard = blackboard or TaskBlackboardService()
+        self._local_memory = local_memory or AgentLocalMemoryService()
+        self._dispatcher = ManagerDispatcher(
+            blackboard=self._blackboard,
+            local_memory=self._local_memory,
+        )
         self._evaluator = ManagerEvaluator()
         self._gateway = LLMGateway()
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
         state = self._policy.initialize_state(request)
+        await self._initialize_blackboard(state, request)
         state.manager_model = await self._resolve_manager_model(state, db_session=db_session)
         self._start_chat_trace(state)
         blocked_by_missing_inputs = False
@@ -65,6 +79,20 @@ class ManagerLoop:
                 understanding = await self._policy.understand(state)
                 plan = await self._policy.plan(state, understanding)
                 state.route_plan = plan
+                await self._blackboard.set_global_plan(
+                    state.org_id,
+                    state.workflow_run_id,
+                    plan.model_dump(mode="json"),
+                )
+                await self._blackboard.update_global_state(
+                    state.org_id,
+                    state.workflow_run_id,
+                    {
+                        "status": "planned",
+                        "iteration": state.iteration + 1,
+                        "final_action": state.final_action,
+                    },
+                )
                 state.selected_agent = self._selected_agent(state)
                 state.route_plan_hashes.append(self._plan_hash(plan))
 
@@ -104,9 +132,12 @@ class ManagerLoop:
                     break
                 state = self._refine_for_next_round(state, evaluation)
 
+            await self._finalize_blackboard(state)
+            await self._extract_memory_candidates(state, db_session=db_session)
             return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
 
         except AgentRuntimeError as exc:
+            await self._finalize_blackboard(state, force_status="failed")
             log_error_payload = exc.to_dict(state=state, include_debug=True)
             public_error_payload = exc.to_dict(
                 state=state,
@@ -154,6 +185,7 @@ class ManagerLoop:
                 error=public_error_payload,
             )
         except Exception as exc:
+            await self._finalize_blackboard(state, force_status="failed")
             logger.exception(
                 "ManagerLoop internal exception "
                 "request_id=%s workflow_run_id=%s trace_id=%s "
@@ -237,6 +269,170 @@ class ManagerLoop:
                 status="failed",
                 error=public_error_payload,
             )
+
+    async def _initialize_blackboard(
+        self,
+        state: ManagerState,
+        request: NormalizedRequest,
+    ) -> None:
+        await self._blackboard.init_blackboard(
+            state.org_id,
+            state.workflow_run_id,
+            state.task_id,
+            self._blackboard_ttl(state.surface),
+        )
+        ext = dict(request.ext or {})
+        metadata = dict(request.metadata or {})
+        await self._blackboard.update_global_state(
+            state.org_id,
+            state.workflow_run_id,
+            {
+                "status": "running",
+                "surface": state.surface,
+                "request_id": state.request_id,
+                "product_line": (
+                    ext.get("product_line")
+                    or metadata.get("product_line")
+                    or request.product_id
+                ),
+                "rag_space_id": (
+                    (state.selected_rag_space or {}).get("id")
+                    or (state.rag_scope or {}).get("rag_space_id")
+                ),
+                "used_tool_calls": 0,
+                "used_llm_calls": 0,
+                "satisfaction_score": 0.0,
+                "final_action": "continue",
+            },
+        )
+        state.blackboard_snapshot = await self._blackboard.snapshot(
+            state.org_id,
+            state.workflow_run_id,
+        )
+        state.blackboard_context = state.blackboard_snapshot
+
+    async def _finalize_blackboard(
+        self,
+        state: ManagerState,
+        *,
+        force_status: str | None = None,
+    ) -> None:
+        try:
+            status = force_status or (
+                "completed"
+                if state.satisfied or state.final_action == "finish"
+                else "blocked"
+                if state.final_action == "ask_user" or state.missing_inputs
+                else "failed"
+                if state.final_action == "fail" or state.errors
+                else "completed"
+            )
+            await self._blackboard.update_global_state(
+                state.org_id,
+                state.workflow_run_id,
+                {
+                    "status": status,
+                    "current_step_id": None,
+                    "current_agent": None,
+                    "current_capability": None,
+                    "used_tool_calls": state.used_tool_calls,
+                    "used_llm_calls": state.used_llm_calls,
+                    "satisfaction_score": state.satisfaction_score,
+                    "final_action": state.final_action,
+                },
+            )
+            state.blackboard_snapshot = await self._blackboard.snapshot(
+                state.org_id,
+                state.workflow_run_id,
+            )
+            state.blackboard_context = state.blackboard_snapshot
+        except Exception:
+            logger.exception(
+                "Failed to finalize task blackboard org_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.workflow_run_id,
+            )
+
+    async def _extract_memory_candidates(self, state: ManagerState, *, db_session=None) -> None:
+        if db_session is None:
+            return
+        try:
+            local_memory = AgentLocalMemoryService(
+                long_term_service=AgentLongTermMemoryService(
+                    org_id=state.org_id,
+                    user_id=state.user_id,
+                    trace_id=state.workflow_run_id,
+                )
+            )
+            extractor = MemoryCandidateExtractor(
+                db_session,
+                blackboard=self._blackboard,
+                local_memory_service=local_memory,
+                user_id=state.user_id,
+            )
+            requests = await extractor.extract_from_blackboard(
+                state.org_id,
+                state.workflow_run_id,
+                state.task_id,
+            )
+            requests.extend(
+                await extractor.extract_from_local_memory(
+                    state.org_id,
+                    state.workflow_run_id,
+                    ["vision", "lab_detection", "quality_analysis", "file"],
+                )
+            )
+            requests = self._deduplicate_candidate_requests(requests)
+            responses = await extractor.submit_candidates(requests)
+            await self._blackboard.update_global_state(
+                state.org_id,
+                state.workflow_run_id,
+                {
+                    "candidate_request_count": len(requests),
+                    "candidate_submission_count": len(responses),
+                },
+            )
+            state.blackboard_snapshot = await self._blackboard.snapshot(
+                state.org_id,
+                state.workflow_run_id,
+            )
+            state.blackboard_context = state.blackboard_snapshot
+        except Exception:
+            logger.exception(
+                "Candidate extraction failed org_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.workflow_run_id,
+            )
+
+    @staticmethod
+    def _deduplicate_candidate_requests(requests):
+        unique = []
+        seen: set[str] = set()
+        for request in requests:
+            scope = request.scope.model_dump(mode="json", exclude_none=True)
+            key = json.dumps(
+                {
+                    "org_id": request.org_id,
+                    "memory_type": request.memory_type.value,
+                    "scope": scope,
+                    "summary": request.content.summary.strip(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(request)
+        return unique
+
+    @staticmethod
+    def _blackboard_ttl(surface: str) -> int:
+        if surface == "quality_task":
+            return settings.task_blackboard_inspection_ttl_seconds
+        if surface in {"admin", "batch"}:
+            return settings.task_blackboard_analysis_ttl_seconds
+        return settings.task_blackboard_chat_ttl_seconds
 
     @staticmethod
     def _start_chat_trace(state: ManagerState) -> None:
@@ -531,9 +727,16 @@ class ManagerLoop:
         file_artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
         if file_artifact and isinstance(file_artifact.content, dict):
             content = dict(file_artifact.content or {})
+            parsed_summary = "\n".join(
+                str(item.get("summary") or "").strip()
+                for item in list(content.get("parsed_files") or [])
+                if isinstance(item, dict) and item.get("summary")
+            ).strip()
             answer = (
                 str(content.get("answer") or "").strip()
+                or str(content.get("model_summary") or "").strip()
                 or str(content.get("summary") or "").strip()
+                or parsed_summary
                 or "文件已完成辅助分析。"
             )
             summary = str(content.get("summary") or "").strip() or answer[:200]
@@ -1015,3 +1218,7 @@ class ManagerLoop:
                 fallback=lambda v: f"<{type(v).__name__}>",
             )
         )
+
+
+# Public architecture name; ManagerLoop remains for compatibility.
+OrchestratorLoop = ManagerLoop

@@ -17,6 +17,7 @@ class ManagerState(BaseModel):
 
     org_id: str
     user_id: str | None = None
+    task_id: str | None = None
     session_id: str | None = None
     assistant_message_id: str | None = None
     trace_id: str | None = None
@@ -30,6 +31,10 @@ class ManagerState(BaseModel):
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
     shared_memory_context: dict[str, Any] | None = None
+    blackboard_context: dict[str, Any] | None = None
+    blackboard_snapshot: dict[str, Any] | None = None
+    agent_local_memory_context: list[dict[str, Any]] = Field(default_factory=list)
+    agent_local_memory_owner: str | None = None
     conversation_summary: str | None = None
     session_facts: dict[str, Any] = Field(default_factory=dict)
     pending_action: dict[str, Any] | None = None
@@ -81,3 +86,7 @@ class ManagerState(BaseModel):
     available_tools: list[Any] = Field(default_factory=list, exclude=True)
     forced_tool_names: list[str] = Field(default_factory=list, exclude=True)
     tool_invoker: Any = Field(default=None, exclude=True)
+
+
+# Public architecture name; ManagerState remains as a compatibility alias.
+OrchestrationState = ManagerState

@@ -39,12 +39,7 @@ class SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_mysql_store_create_memory_edge(monkeypatch):
-    dep_repo = FakeDepRepo()
-    monkeypatch.setattr(
-        "app.repositories.memory_repo.MemoryDependencyRepository",
-        lambda session, org_id: dep_repo,
-    )
+async def test_mysql_store_create_memory_edge_is_noop_after_neo4j_migration():
     store = MySQLMemoryGraphStore(FakeSession(), "org-1")
     edge = MemoryGraphEdge(
         org_id="org-1",
@@ -54,8 +49,6 @@ async def test_mysql_store_create_memory_edge(monkeypatch):
         strength=0.9,
     )
     await store.create_memory_edge(edge)
-    assert len(dep_repo.upserted) == 1
-    assert dep_repo.upserted[0]["source_memory_id"] == "mem-a"
 
 
 @pytest.mark.asyncio

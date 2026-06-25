@@ -7,22 +7,22 @@ SURFACE_MODE_POLICY = {
     "chat": {
         "allowed_modes": ["answer", "report"],
         "forbidden_modes": ["action"],
-        "allowed_agents": ["evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"],
+        "allowed_agents": ["orchestrator", "vision", "lab_detection", "quality_analysis", "file"],
     },
     "quality_task": {
         "allowed_modes": ["action", "report", "answer"],
         "forbidden_modes": [],
-        "allowed_agents": ["evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"],
+        "allowed_agents": ["orchestrator", "vision", "lab_detection", "quality_analysis", "file"],
     },
     "admin": {
         "allowed_modes": ["answer", "report", "action"],
         "forbidden_modes": [],
-        "allowed_agents": ["evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"],
+        "allowed_agents": ["orchestrator", "vision", "lab_detection", "quality_analysis", "file"],
     },
     "batch": {
         "allowed_modes": ["report", "action"],
         "forbidden_modes": [],
-        "allowed_agents": ["evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"],
+        "allowed_agents": ["orchestrator", "vision", "lab_detection", "quality_analysis", "file"],
     },
 }
 
@@ -30,7 +30,7 @@ SURFACE_MODE_POLICY = {
 CAPABILITIES: dict[str, Capability] = {
     "evidence.arbitrate": Capability(
         key="evidence.arbitrate",
-        owner_agents=["evidence"],
+        owner_agents=["orchestrator"],
         handler="evidence.arbitrate",
         operation="arbitrate",
         mode="report",
@@ -120,7 +120,7 @@ CAPABILITIES: dict[str, Capability] = {
     ),
     "memory.governance": Capability(
         key="memory.governance",
-        owner_agents=["memory_governance"],
+        owner_agents=["orchestrator"],
         handler="memory.governance",
         operation="govern",
         mode="action",

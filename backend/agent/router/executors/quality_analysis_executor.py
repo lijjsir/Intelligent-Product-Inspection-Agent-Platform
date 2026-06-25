@@ -148,6 +148,19 @@ class QualityAnalysisExecutor(GraphExecutor):
                 needs_user_input=needs_user_input,
                 confidence=float(result.get("confidence") or 0.0),
             )
+            final_assessment = result.get("final_assessment", {})
+            quality_artifact = quality_artifact.model_copy(
+                update={
+                    "consumed_artifact_ids": list(
+                        final_assessment.get("consumed_artifact_ids") or []
+                    ),
+                    "candidate_extractable": bool(
+                        final_assessment.get("candidate_extractable")
+                    ),
+                    "candidate_reason": final_assessment.get("candidate_reason"),
+                    "target_agents": list(final_assessment.get("target_agents") or []),
+                }
+            )
 
             composed = {
                 "answer": answer,
@@ -226,8 +239,29 @@ class QualityAnalysisExecutor(GraphExecutor):
                     "overall_score": result.get("final_assessment", {}).get("overall_score"),
                     "risk_level": result.get("final_assessment", {}).get("risk_level"),
                     "persistable_output": result.get("persistable_output"),
+                    "consumed_artifact_ids": result.get("final_assessment", {}).get("consumed_artifact_ids") or [],
+                    "candidate_extractable": bool(result.get("final_assessment", {}).get("candidate_extractable")),
+                    "candidate_summary": result.get("final_assessment", {}).get("candidate_summary"),
+                    "candidate_reason": result.get("final_assessment", {}).get("candidate_reason"),
+                    "share_value_score": result.get("final_assessment", {}).get("share_value_score"),
+                    "target_agents": result.get("final_assessment", {}).get("target_agents") or [],
+                    "product_line": result.get("final_assessment", {}).get("product_line"),
                 },
                 summary=summary,
+            )
+            art = art.model_copy(
+                update={
+                    "consumed_artifact_ids": list(
+                        result.get("final_assessment", {}).get("consumed_artifact_ids") or []
+                    ),
+                    "candidate_extractable": bool(
+                        result.get("final_assessment", {}).get("candidate_extractable")
+                    ),
+                    "candidate_reason": result.get("final_assessment", {}).get("candidate_reason"),
+                    "target_agents": list(
+                        result.get("final_assessment", {}).get("target_agents") or []
+                    ),
+                }
             )
             return self._observation(
                 step,

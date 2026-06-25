@@ -85,6 +85,7 @@ class GraphExecutor:
             "assistant_message_id": getattr(state, "assistant_message_id", None),
             "org_id": getattr(state, "org_id", None),
             "user_id": getattr(state, "user_id", None),
+            "task_id": getattr(state, "task_id", None),
             "surface": getattr(state, "surface", None),
             "original_query": getattr(state, "original_query", None),
             "selected_agent": getattr(state, "selected_agent", None),
@@ -95,6 +96,12 @@ class GraphExecutor:
             "request_metadata": dict(getattr(state, "request_metadata", {}) or {}),
             "manager_model_runtime": runtime_payload,
             "artifacts": artifacts,
+            "blackboard_context": getattr(state, "blackboard_context", None),
+            "blackboard_snapshot": getattr(state, "blackboard_snapshot", None),
+            "agent_local_memory_context": list(
+                getattr(state, "agent_local_memory_context", []) or []
+            ),
+            "agent_local_memory_owner": getattr(state, "agent_local_memory_owner", None),
         }
 
         return {
@@ -115,4 +122,10 @@ class GraphExecutor:
             "manager_model_runtime": runtime_payload,
             "model_runtime": runtime_payload,
             "artifacts": artifacts,
+            "blackboard_context": getattr(state, "blackboard_context", None),
+            "blackboard_snapshot": getattr(state, "blackboard_snapshot", None),
+            "agent_local_memory_context": list(
+                getattr(state, "agent_local_memory_context", []) or []
+            ),
+            "agent_local_memory_owner": getattr(state, "agent_local_memory_owner", None),
         }

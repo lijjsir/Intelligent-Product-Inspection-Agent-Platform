@@ -7,25 +7,56 @@ from agent.router.errors import AgentRuntimeError, make_agent_error
 
 async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
     manager_state = state.get("manager_state") or {}
-    request = state.get("request") or {}
+    blackboard = (
+        state.get("blackboard_snapshot")
+        or manager_state.get("blackboard_snapshot")
+        or state.get("blackboard_context")
+        or manager_state.get("blackboard_context")
+        or {}
+    )
 
-    artifacts = manager_state.get("artifacts") or state.get("artifacts") or []
+    local_artifacts = [
+        item for item in (manager_state.get("artifacts") or state.get("artifacts") or [])
+        if isinstance(item, dict)
+    ]
+    blackboard_artifacts = [
+        item for item in (blackboard.get("artifacts") or [])
+        if isinstance(item, dict)
+    ]
+    artifacts_by_id: dict[str, dict[str, Any]] = {}
+    anonymous: list[dict[str, Any]] = []
+    for art in [*blackboard_artifacts, *local_artifacts]:
+        artifact_id = str(art.get("artifact_id") or "")
+        if artifact_id:
+            artifacts_by_id[artifact_id] = art
+        elif art not in anonymous:
+            anonymous.append(art)
+    artifacts = [*artifacts_by_id.values(), *anonymous]
     evidence_packet = None
     visual_result = None
     lab_result = None
     file_results = []
+    consumed_artifact_ids = []
 
     for art in artifacts:
         art_type = art.get("type") or art.get("artifact_type", "")
         content = art.get("content") or {}
+        relevant = False
         if art_type == "evidence_packet":
             evidence_packet = content
+            relevant = True
         elif art_type == "visual_inspection_result":
             visual_result = content
+            relevant = True
         elif art_type == "lab_detection_result":
             lab_result = content
+            relevant = True
         elif art_type in ("file_summary", "file_answer", "paper_format_report"):
             file_results.append(content)
+            relevant = True
+        artifact_id = str(art.get("artifact_id") or "")
+        if relevant and artifact_id and artifact_id not in consumed_artifact_ids:
+            consumed_artifact_ids.append(artifact_id)
 
     return {
         "artifacts": artifacts,
@@ -33,6 +64,7 @@ async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
         "visual_inspection_result": visual_result,
         "lab_detection_result": lab_result,
         "file_results": file_results,
+        "consumed_artifact_ids": consumed_artifact_ids,
         "needs_user_input": False,
         "response_mode": "general_answer",
     }
@@ -156,6 +188,7 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
     evidence_packet = state.get("evidence_packet") or {}
     visual_result = state.get("visual_inspection_result") or {}
     lab_result = state.get("lab_detection_result") or {}
+    consumed_artifact_ids = list(state.get("consumed_artifact_ids") or [])
 
     source_count = int(evidence_packet.get("source_count") or 0)
     confidence = 0.5
@@ -167,12 +200,26 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
         confidence += 0.15
     confidence = min(confidence, 0.95)
 
+    candidate_extractable = (
+        response_mode in {"quality_qa", "inspection_execute"}
+        and len(consumed_artifact_ids) >= 2
+        and confidence >= 0.70
+    )
+    request = state.get("request") or {}
+    request_ext = request.get("ext") or {}
+    request_metadata = request.get("metadata") or {}
+    product_line = (
+        request_ext.get("product_line")
+        or request_metadata.get("product_line")
+        or request.get("product_id")
+    )
     assessment = {
         "final_verdict": "manual_required" if response_mode == "inspection_execute" else "uncertain",
         "overall_score": round(confidence, 4),
         "risk_level": "medium" if response_mode == "inspection_execute" else "low",
         "risk_score": round(1.0 - confidence, 4),
-        "evidence_used": [],
+        "evidence_used": consumed_artifact_ids,
+        "consumed_artifact_ids": consumed_artifact_ids,
         "conflicts": list(evidence_packet.get("conflicts") or []),
         "limitations": [],
         "recommended_action": ["建议人工复核"] if response_mode == "inspection_execute" else [],
@@ -181,8 +228,26 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
         "traceability_score": min(1.0, source_count / 3) if source_count else 0.0,
         "faithfulness_score": confidence,
         "physical_hallucination_score": 0.0 if source_count or visual_result or lab_result else 0.5,
+        "candidate_extractable": candidate_extractable,
+        "candidate_type": "inspection_pattern",
+        "candidate_summary": (
+            f"质量分析结论：{answer[:300]}"
+            if candidate_extractable and answer
+            else ""
+        ),
+        "candidate_reason": (
+            "多个任务产物共同支持该质量判断，可供后续 Agent 复用"
+            if candidate_extractable
+            else ""
+        ),
+        "share_value_score": round(confidence, 4) if candidate_extractable else 0.0,
+        "target_agents": ["vision", "lab_detection", "quality_analysis"],
+        "product_line": product_line,
     }
-    return {"final_assessment": assessment}
+    return {
+        "final_assessment": assessment,
+        "candidate_extractable": candidate_extractable,
+    }
 
 
 async def maybe_persist_task_result(state: dict[str, Any]) -> dict[str, Any]:
@@ -236,23 +301,9 @@ async def maybe_persist_task_result(state: dict[str, Any]) -> dict[str, Any]:
 
 
 async def memory_candidate_hook(state: dict[str, Any]) -> dict[str, Any]:
-    try:
-        from agent.memory_governance.runtime import MemoryGovernanceRuntime
-
-        db_session = state.get("db_session")
-        if db_session is None:
-            return {}
-
-        assessment = state.get("final_assessment") or {}
-        runtime = MemoryGovernanceRuntime(db_session)
-        await runtime.submit_candidate_from_artifact(
-            source_agent="quality_analysis",
-            artifact=assessment,
-            trace_id=state.get("workflow_run_id", ""),
-        )
-        return {}
-    except Exception:
-        return {}
+    # Candidate extraction is orchestrator-owned and runs after the completed
+    # artifact has been committed to the task blackboard.
+    return {}
 
 
 async def finalize_response(state: dict[str, Any]) -> dict[str, Any]:

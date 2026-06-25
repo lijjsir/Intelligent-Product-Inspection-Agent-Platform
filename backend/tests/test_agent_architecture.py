@@ -34,8 +34,8 @@ class TestCapabilityModel:
             overlap = set(cap.owner_agents) & forbidden
             assert not overlap, f"{key}: owner_agents contains forbidden values: {overlap}"
 
-    def test_owner_agents_only_business_agents(self):
-        allowed = {"evidence", "vision", "lab_detection", "quality_analysis", "memory_governance", "file"}
+    def test_owner_agents_only_business_agents_or_orchestrator(self):
+        allowed = {"orchestrator", "vision", "lab_detection", "quality_analysis", "file"}
         for key, cap in CAPABILITIES.items():
             invalid = set(cap.owner_agents) - allowed
             assert not invalid, f"{key}: owner_agents contains non-business agents: {invalid}"
@@ -44,9 +44,9 @@ class TestCapabilityModel:
         for key, cap in CAPABILITIES.items():
             assert cap.handler, f"{key}: must have handler field set"
 
-    def test_evidence_arbitrate_owned_by_evidence(self):
+    def test_evidence_arbitrate_owned_by_orchestrator(self):
         cap = CAPABILITIES["evidence.arbitrate"]
-        assert cap.owner_agents == ["evidence"]
+        assert cap.owner_agents == ["orchestrator"]
         assert "rag" not in cap.owner_agents
 
     def test_vision_inspect_owned_by_vision(self):
@@ -122,12 +122,14 @@ class TestManagerDispatcher:
     def test_professional_executors_registered(self):
         dispatcher = ManagerDispatcher()
         assert set(dispatcher._executors.keys()) == {
-            "evidence",
             "vision",
             "lab_detection",
             "quality_analysis",
-            "memory_governance",
             "file",
+        }
+        assert set(dispatcher._capability_executors.keys()) == {
+            "evidence.arbitrate",
+            "memory.governance",
         }
 
     def test_rag_not_registered_as_executor(self):
@@ -247,9 +249,9 @@ class TestSection19Scenarios:
         cap = CAPABILITIES["quality.final_analyze"]
         assert cap.owner_agents == ["quality_analysis"]
 
-    def test_19_2_rag_qa_owned_by_evidence(self):
+    def test_19_2_rag_qa_owned_by_orchestrator_capability(self):
         cap = CAPABILITIES["evidence.arbitrate"]
-        assert cap.owner_agents == ["evidence"]
+        assert cap.owner_agents == ["orchestrator"]
         assert "rag" not in cap.owner_agents
 
     def test_19_3_rag_failure_error_code(self):

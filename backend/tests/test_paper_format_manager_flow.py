@@ -55,7 +55,7 @@ async def test_manager_policy_routes_paper_queries_to_paper_format_check():
     understanding = await policy.understand(state)
 
     assert understanding.intent == "paper_format_check"
-    assert understanding.needs == ["file.paper_format_check", "chat.response.compose"]
+    assert understanding.needs == ["file.paper_format_check"]
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_manager_policy_skips_paper_route_when_disabled(monkeypatch):
     understanding = await policy.understand(state)
 
     assert understanding.intent == "file_qa"
-    assert understanding.needs == ["file.qa", "chat.response.compose"]
+    assert understanding.needs == ["file.qa"]
 
 
 @pytest.mark.asyncio

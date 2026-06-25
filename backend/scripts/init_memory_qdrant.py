@@ -12,7 +12,11 @@ import httpx
 
 from agent.llm.base_url_resolver import resolve_runtime_service_url
 from app.core.config import settings
-from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MEMORY_COLLECTION
+from app.services.memory_vector_service import (
+    AGENT_LOCAL_MEMORY_COLLECTION,
+    CANDIDATE_MEMORY_COLLECTION,
+    MEMORY_COLLECTION,
+)
 
 
 PAYLOAD_INDEX_FIELDS = (
@@ -26,6 +30,9 @@ PAYLOAD_INDEX_FIELDS = (
     "standard_code",
     "standard_version",
     "target_market",
+    "agent_id",
+    "task_type",
+    "shareable",
 )
 
 
@@ -46,9 +53,10 @@ async def _ensure_collection(client: httpx.AsyncClient, base_url: str, collectio
         resp.raise_for_status()
 
     for field in PAYLOAD_INDEX_FIELDS:
+        field_schema = "bool" if field == "shareable" else "keyword"
         index = await client.put(
             f"{base_url}/collections/{collection}/index",
-            json={"field_name": field, "field_schema": "keyword"},
+            json={"field_name": field, "field_schema": field_schema},
             headers=_headers(),
         )
         if index.status_code not in {200, 409}:
@@ -62,7 +70,11 @@ async def main() -> None:
     )
     vector_size = 1536
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for collection in (MEMORY_COLLECTION, CANDIDATE_MEMORY_COLLECTION):
+        for collection in (
+            MEMORY_COLLECTION,
+            CANDIDATE_MEMORY_COLLECTION,
+            AGENT_LOCAL_MEMORY_COLLECTION,
+        ):
             await _ensure_collection(client, base_url, collection, vector_size)
             print(f"OK: {collection}")
 
