@@ -63,12 +63,9 @@ def test_prompt_builder_injects_shared_and_short_term_memory():
     assert meta["session_facts_injected_keys"] == ["standard_version", "target_market"]
 
 
-def test_quality_chat_no_longer_defines_answer_fallbacks():
-    source = (BACKEND_ROOT / "agent/subgraphs/quality_chat/graph.py").read_text(encoding="utf-8")
-
-    assert "_general_answer_fallback" not in source
-    assert "_fallback_answer" not in source
-    assert "_rag_answer_fallback" not in source
+def test_legacy_quality_chat_graph_is_removed():
+    path = BACKEND_ROOT / "agent/subgraphs/quality_chat"
+    assert not any(path.rglob("*.py"))
 
 
 def test_graph_factory_requires_neo4j_even_when_strict_sync_disabled(monkeypatch):
@@ -157,11 +154,9 @@ def test_neo4j_graph_supports_conflict_case_and_domain_nodes():
         assert token in source
 
 
-def test_checkpoint_writes_are_not_silent_noop():
-    source = (BACKEND_ROOT / "agent/graphs/memory_manager/checkpointer.py").read_text(encoding="utf-8")
-
-    assert "async def aput_writes" in source
-    assert "raise NotImplementedError" in source
+def test_legacy_memory_manager_graph_is_removed():
+    path = BACKEND_ROOT / "agent/graphs/memory_manager"
+    assert not any(path.rglob("*.py"))
 
 
 @pytest.mark.asyncio

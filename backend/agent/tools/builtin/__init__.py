@@ -21,7 +21,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="rag.retrieve", title="知识库检索",
             description="从选中的 RAG 空间中检索与查询相关的证据片段，支持语义匹配和基础过滤。",
-            agent_scope=["chat", "inspection_task"], surfaces=["chat", "quality_task"],
+            agent_scope=["chat", "quality_analysis"], surfaces=["chat", "quality_task"],
             mode="read", risk_level="low",
             input_schema={
                 "type": "object",
@@ -45,7 +45,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="file.parse", title="文件内容解析",
             description="解析 PDF、Word、Excel、CSV、JSON 等文件内容，提取结构化文本和表格信息。",
-            agent_scope=["chat", "inspection_task"], surfaces=["chat", "quality_task"],
+            agent_scope=["chat", "quality_analysis"], surfaces=["chat", "quality_task"],
             mode="read", risk_level="low",
             input_schema={
                 "type": "object",
@@ -72,7 +72,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="calc.inspection_score", title="检测评分计算",
             description="根据检测标准评估规则结果，计算产品检测的总体得分和等级。",
-            agent_scope=["inspection_task"], surfaces=["quality_task"],
+            agent_scope=["quality_analysis"], surfaces=["quality_task"],
             mode="read", risk_level="low",
             input_schema={
                 "type": "object",
@@ -95,7 +95,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="calc.standard_compare", title="标准对比评估",
             description="将检测数据与标准规范进行逐项对比，生成偏差分析结果。",
-            agent_scope=["inspection_task"], surfaces=["quality_task"],
+            agent_scope=["quality_analysis"], surfaces=["quality_task"],
             mode="read", risk_level="medium",
             input_schema={
                 "type": "object",
@@ -122,7 +122,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="report.generate", title="检测报告生成",
             description="根据检测结果和评估数据，生成结构化的检测报告。",
-            agent_scope=["inspection_task"], surfaces=["quality_task"],
+            agent_scope=["quality_analysis"], surfaces=["quality_task"],
             mode="write", risk_level="medium",
             input_schema={
                 "type": "object",
@@ -144,7 +144,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="quality.task.status",
             title="检测任务状态查询",
             description="查询质量检测任务的当前状态、进度和基本信息。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="low",
@@ -164,7 +164,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="quality.report.query",
             title="历史报告查询",
             description="查询历史检测报告和结果，支持按产品、批次、时间范围过滤。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="low",
@@ -186,7 +186,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="quality.inspection.execute",
             title="正式质量检测执行",
             description="正式执行质量检测任务，创建任务、运行检测流程、生成结果。仅质量任务页面可调用。",
-            agent_scope=["inspection_task"],
+            agent_scope=["quality_analysis"],
             surfaces=["quality_task"],
             mode="action",
             risk_level="high",
@@ -219,7 +219,7 @@ def register_all(registry: ToolRegistry) -> None:
         ToolSpec(
             name="web.search", title="联网搜索",
             description="提取核心关键词（仅名词/实体名），通过 DuckDuckGo 检索互联网信息。query 参数只传空格分隔的关键词，不要传完整问句。",
-            agent_scope=["chat", "inspection_task"], surfaces=["chat", "quality_task"],
+            agent_scope=["chat", "quality_analysis"], surfaces=["chat", "quality_task"],
             mode="read", risk_level="low",
             input_schema={
                 "type": "object",
@@ -241,7 +241,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="data.analysis",
             title="数据分析",
             description="查询检测统计数据、趋势、合格率汇总等分析结果。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="low",
@@ -409,7 +409,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.search",
             title="共享记忆检索",
             description="检索当前组织、用户和任务范围内可用的共享记忆。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="low",
@@ -432,7 +432,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.write_candidate",
             title="写入候选记忆",
             description="将稳定、有复用价值的信息写入候选记忆区，等待证据支持和晋升。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="write",
             risk_level="medium",
@@ -456,7 +456,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.report_conflict",
             title="上报共享记忆冲突",
             description="记录共享记忆与当前证据或运行结果之间的冲突。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="write",
             risk_level="medium",
@@ -477,7 +477,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.build_propagation_graph",
             title="构建记忆传播图",
             description="从污染根记忆构建依赖传播图。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="medium",
@@ -498,7 +498,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.apply_rollback",
             title="执行共享记忆回滚",
             description="对污染记忆执行隔离、降权、删除或补丁回滚。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="action",
             risk_level="high",
@@ -523,7 +523,7 @@ def register_all(registry: ToolRegistry) -> None:
             name="memory.replay_evaluation",
             title="回滚效果复盘",
             description="运行共享记忆回滚后的恢复验证。",
-            agent_scope=["chat", "inspection_task"],
+            agent_scope=["chat", "quality_analysis"],
             surfaces=["chat", "quality_task"],
             mode="read",
             risk_level="medium",
@@ -618,7 +618,7 @@ async def _quality_report_query(arguments: dict, context) -> dict:
 
 
 async def _quality_inspection_execute(arguments: dict, context) -> dict:
-    """Execute formal quality inspection via InspectionTaskGraph."""
+    """Execute formal quality inspection through the Orchestrator."""
     session = context.metadata.get("__db_session__")
     product_id = arguments.get("product_id", "")
     spec_code = arguments.get("spec_code", "")
@@ -628,11 +628,13 @@ async def _quality_inspection_execute(arguments: dict, context) -> dict:
     if not session:
         return {"task_id": "", "status": "blocked", "reason": "missing db session"}
 
-    from agent.subgraphs.inspection_task.graph import InspectionTaskGraph
     from agent.contracts.quality_contracts import NormalizedRequest
+    from agent.router.agent_manager import AgentManager
 
     request = NormalizedRequest(
+        request_kind="task",
         request_id=context.request_id,
+        workflow_run_id=context.request_id,
         query=product_id + " " + spec_code,
         attachments=[],
         image_urls=image_urls,
@@ -640,19 +642,26 @@ async def _quality_inspection_execute(arguments: dict, context) -> dict:
         user_id=context.user_id or "",
         session_id=context.session_id,
         ext={
+            "surface": "quality_task",
             "action_intent": "quality_inspection_execute",
             "product_id": product_id,
             "spec_code": spec_code,
             "priority": priority,
         },
     )
-    graph = InspectionTaskGraph()
-    result = await graph.run(request, db_session=session)
+    result = await AgentManager().run(request, db_session=session)
+    output = dict(result.agent_output or {})
+    persistable = dict(output.get("persistable_output") or {})
+    result_payload = dict(persistable.get("result") or {})
     return {
-        "task_id": result.get("task_id", ""),
-        "status": result.get("status", "executed"),
-        "verdict": result.get("verdict"),
-        "overall_score": result.get("overall_score"),
+        "task_id": str(
+            result_payload.get("task_id")
+            or (persistable.get("task") or {}).get("id")
+            or ""
+        ),
+        "status": result.status,
+        "verdict": result_payload.get("verdict"),
+        "overall_score": result_payload.get("overall_score"),
     }
 
 

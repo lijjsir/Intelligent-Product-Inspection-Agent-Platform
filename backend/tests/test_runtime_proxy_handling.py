@@ -8,7 +8,6 @@ import pytest
 from agent.llm.client import LLMClient
 from agent.rag.knowledge_indexer import KnowledgeIndexer
 from agent.rag.retriever import Retriever
-from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.vision.detector_client import VisionDetectorClient
 
 
@@ -366,32 +365,3 @@ async def test_vision_detector_disables_env_proxy(monkeypatch):
     result = await VisionDetectorClient().detect(image_urls=["https://example.com/a.png"])
 
     assert result == {"detections": []}
-
-
-@pytest.mark.asyncio
-async def test_run_vision_records_runtime_error_when_llm_client_init_fails(monkeypatch):
-    class FailingClient:
-        def __init__(self, *args, **kwargs):
-            raise ValueError("Unknown scheme for proxy URL URL('socks://127.0.0.1:7897/')")
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient", FailingClient)
-
-    state = await run_vision(
-        {
-            "task_id": "task-1",
-            "org_id": "org-1",
-            "image_urls": ["https://example.com/a.png"],
-            "model_id": "chat-1",
-            "model_base_url": "https://example.com/api/v3",
-            "model_api_key": "secret",
-            "model_provider": "volcengine",
-            "trace_id": "trace-1",
-            "timeline": [],
-            "usage_events": [],
-            "runtime_errors": [],
-        }
-    )
-
-    assert state["defects"] == []
-    assert state["runtime_errors"][0]["stage"] == "vision"
-    assert "Unknown scheme for proxy URL" in state["runtime_errors"][0]["message"]

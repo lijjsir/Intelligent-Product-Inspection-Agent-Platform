@@ -118,11 +118,4 @@ def route_attachment_to_node(agent: str, attachment: dict) -> NodeSpec | None:
             return CHAT_NODE_SPECS["chat.image_explain_node"]
         if kind in {"document", "structured_file"}:
             return CHAT_NODE_SPECS["chat.file_summary_node"]
-    if agent == "inspection_task":
-        if kind == "image":
-            return INSPECTION_NODE_SPECS["inspection.vision_node"]
-        if kind == "document":
-            return INSPECTION_NODE_SPECS["inspection.file_parse_node"]
-        if kind == "structured_file":
-            return INSPECTION_NODE_SPECS["inspection.file_parse_node"]
     return None

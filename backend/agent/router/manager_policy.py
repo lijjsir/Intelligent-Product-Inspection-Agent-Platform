@@ -149,7 +149,7 @@ class ManagerPolicy:
                 "name": "RAG 知识库问答",
                 "condition": "已选择 RAG 空间，或命中 RAG_PATTERNS（知识库/RAG/根据资料/AQL/标准等）",
                 "intent": "rag_qa",
-                "target_agent": "evidence",
+                "target_agent": "chat",
                 "needs": ["evidence.arbitrate", "quality.final_analyze"],
                 "risk": "low",
                 "stop_on_match": True,

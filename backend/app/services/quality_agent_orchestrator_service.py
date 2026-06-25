@@ -11,7 +11,6 @@ from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest
 from agent.contracts.quality_contracts import RouteDecision, RouteSignals
 from agent.llm.pricing import ModelPricing
 from agent.router.errors import AgentRuntimeError, make_agent_error
-from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
 from app.core.config import settings
@@ -46,7 +45,6 @@ _MAX_IDEMPOTENCY_KEY_LENGTH = 191
 
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
-        self._graph = QualityJudgementSubgraph()
         from app.services.agent_manager_service import AgentManagerService
         self._agent_manager = AgentManagerService()
 
@@ -225,19 +223,9 @@ class QualityAgentOrchestratorService:
             self._log_agent_output(request=request, output=agent_output, router_status=router_output.status)
         except Exception as exc:
             logger.exception("AgentManager failed, exception details:")
-            if settings.enable_legacy_agent_fallback:
-                logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
-                result = await self._graph.run(request)
-                if isinstance(result, AgentOutput):
-                    agent_output = result
-                    result_payload = {"agent_output": agent_output.model_dump()}
-                else:
-                    result_payload = dict(result)
-                    agent_output = AgentOutput.model_validate(result_payload["agent_output"])
-            else:
-                logger.exception("AgentManager failed, returning structured agent_error_v1")
-                agent_output = self._build_agent_error_output(request, exc)
-                result_payload = {"agent_output": agent_output.model_dump()}
+            logger.exception("AgentManager failed, returning structured agent_error_v1")
+            agent_output = self._build_agent_error_output(request, exc)
+            result_payload = {"agent_output": agent_output.model_dump()}
         route_decision = agent_output.route_decision
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
@@ -408,30 +396,6 @@ class QualityAgentOrchestratorService:
                 **response_payload,
                 "trust_scoring": trust_payload_from_score(pending_score),
             }
-
-        is_legacy_stream = True  # Graph handler (response_writer) already streams deltas
-        if callable(emit) and not is_legacy_stream:
-            answer = str(output.answer or "")
-            for start in range(0, len(answer), 48):
-                await emit(
-                    {
-                        "event": "message_delta",
-                        "session_id": request.session_id,
-                        "message_id": request.assistant_message_id,
-                        "workflow_run_id": request.workflow_run_id,
-                        "delta": answer[start : start + 48],
-                    }
-                )
-            if output.quality:
-                await emit(
-                    {
-                        "event": "quality_signal",
-                        "session_id": request.session_id,
-                        "message_id": request.assistant_message_id,
-                        "workflow_run_id": request.workflow_run_id,
-                        "quality": output.quality,
-                    }
-                )
 
         async with get_session() as session:
             lifecycle = ChatMessageLifecycleService(
@@ -1121,7 +1085,7 @@ class QualityAgentOrchestratorService:
                 source_kind="chat_quality_answer",
                 persist_usage=True,
             )
-        return await self._materialize_legacy_quality_answer(request, output)
+        return await self._materialize_unstructured_quality_answer(request, output)
 
     async def _materialize_structured_output(
         self,
@@ -1235,10 +1199,10 @@ class QualityAgentOrchestratorService:
                         **reasoning_chain,
                         "trace": trace_merged,
                     },
-                    "llm_model": str(result_data.llm_model or "quality_judgement"),
+                    "llm_model": str(result_data.llm_model or "quality_analysis"),
                     "prompt_version": str(
                         (persistable_output.quality_trace.prompt_version if persistable_output.quality_trace else None)
-                        or "quality_judgement_v2"
+                        or "quality_analysis_v1"
                     ),
                     "tokens_used": sum(int(item.total_tokens or 0) for item in persistable_output.token_usage),
                     "latency_ms": int(
@@ -1376,7 +1340,7 @@ class QualityAgentOrchestratorService:
                 "image_count": len(task.image_urls or []),
             }
 
-    async def _materialize_legacy_quality_answer(
+    async def _materialize_unstructured_quality_answer(
         self,
         request: NormalizedRequest,
         output: AgentOutput,
@@ -1406,7 +1370,7 @@ class QualityAgentOrchestratorService:
                         priority=5,
                         meta_data={
                             "source": "chat_quality_answer",
-                            "source_graph": "quality_judgement",
+                            "source_graph": "quality_analysis",
                             "chat_session_id": request.session_id,
                             "assistant_message_id": request.assistant_message_id,
                             "request_id": request.request_id,
@@ -1423,7 +1387,7 @@ class QualityAgentOrchestratorService:
                 task.meta_data = {
                     **dict(task.meta_data or {}),
                     "source": "chat_quality_answer",
-                    "source_graph": "quality_judgement",
+                    "source_graph": "quality_analysis",
                     "chat_session_id": request.session_id,
                     "assistant_message_id": request.assistant_message_id,
                     "request_id": request.request_id,
@@ -1480,7 +1444,7 @@ class QualityAgentOrchestratorService:
                         "faithfulness_score": float((output.quality or {}).get("faithfulness") or 0.0),
                         "hallucination_flags": list((output.quality or {}).get("hallucination_flags") or []),
                     },
-                    "sampling_results": {"route_subgraph": "quality_judgement"},
+                    "sampling_results": {"route_subgraph": "quality_analysis"},
                     "root_cause": str((output.summary or output.answer or "")[:255]),
                 }
             )
@@ -1664,7 +1628,7 @@ class QualityAgentOrchestratorService:
         raw_state = dict(output.raw_state or {})
         reasoning = dict(raw_state.get("reasoning") or {})
         llm_meta = dict(reasoning.get("llm_meta") or {})
-        return str(llm_meta.get("model") or "quality_judgement")
+        return str(llm_meta.get("model") or "quality_analysis")
 
     def _legacy_prompt_version(self, output: AgentOutput) -> str:
         raw_state = dict(output.raw_state or {})
@@ -1679,12 +1643,12 @@ class QualityAgentOrchestratorService:
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
         return {
-            "model_key": str(llm_meta.get("model") or "quality_judgement"),
+            "model_key": str(llm_meta.get("model") or "quality_analysis"),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "cost_amount": ModelPricing.estimate_cost(
-                str(llm_meta.get("model") or "quality_judgement"),
+                str(llm_meta.get("model") or "quality_analysis"),
                 prompt_tokens,
                 completion_tokens,
             ),

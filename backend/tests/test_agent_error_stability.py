@@ -6,7 +6,6 @@ from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentPlanStep, AgentRoutePlan
 from agent.router.executors.base import observation
 from agent.router.executors.file_executor import FileExecutor
-from agent.router.executors.inspection_task_executor import InspectionTaskExecutor
 from agent.router.executors.quality_analysis_executor import QualityAnalysisExecutor
 from agent.router.manager_dispatcher import ManagerDispatcher
 from agent.router.manager_evaluator import ManagerEvaluator
@@ -72,18 +71,18 @@ def test_make_agent_error_payload_contains_frontend_contract_fields():
 def test_error_payload_exposes_frontend_stage_agent_and_request_id():
     from agent.router.errors import make_agent_error
 
-    state = _state(trace_id="trace-1", request_id="req-visible-1", selected_agent="evidence")
+    state = _state(trace_id="trace-1", request_id="req-visible-1", selected_agent="orchestrator")
     error = make_agent_error(
         "RAG_RETRIEVE_FAILED",
         detail={"rag_space_id": "rag-1"},
         source="evidence.arbitrate",
     )
 
-    payload = error.to_dict(state=state, stage="evidence_arbitration", agent_name="evidence")
+    payload = error.to_dict(state=state, stage="evidence_arbitration", agent_name="orchestrator")
 
     assert payload["request_id"] == "req-visible-1"
     assert payload["stage"] == "evidence_arbitration"
-    assert payload["agent_name"] == "evidence"
+    assert payload["agent_name"] == "orchestrator"
 
 
 @pytest.mark.asyncio
@@ -150,7 +149,7 @@ def test_file_executor_supports_rag_ingest_and_inspection_exposes_only_public_en
 
 
 @pytest.mark.asyncio
-async def test_inspection_task_executor_returns_blocked_when_graph_needs_user_input():
+async def test_quality_analysis_executor_returns_blocked_when_graph_needs_user_input():
     """P1.2: QualityAnalysisGraph is now the entry for quality.inspection.execute."""
     class FakeGraph:
         async def run(self, state):
@@ -182,7 +181,7 @@ async def test_inspection_task_executor_returns_blocked_when_graph_needs_user_in
 
 
 @pytest.mark.asyncio
-async def test_inspection_task_executor_raises_when_graph_fails():
+async def test_quality_analysis_executor_raises_when_graph_fails():
     """P1.2: Graph errors must propagate as structured AgentRuntimeError."""
     from agent.router.errors import AgentRuntimeError
 
@@ -243,7 +242,7 @@ async def test_evaluator_accepts_empty_evidence_packet_and_dedupes_artifacts():
     artifact = AgentArtifact(
         artifact_id="a-quality-empty",
         type="evidence_packet",
-        source_agent="evidence",
+        source_agent="orchestrator",
         status="empty",
         empty_result=True,
         metrics={"source_count": 0},
@@ -253,7 +252,7 @@ async def test_evaluator_accepts_empty_evidence_packet_and_dedupes_artifacts():
         plan_id="plan-report",
         surface="chat",
         goal="query evidence",
-        steps=[AgentPlanStep(step_id="s1", owner_agent="evidence", capability="evidence.arbitrate")],
+        steps=[AgentPlanStep(step_id="s1", owner_agent="orchestrator", capability="evidence.arbitrate")],
     )
 
     result = await evaluator.evaluate(state, plan, [], [artifact])
@@ -299,17 +298,17 @@ def test_validate_plan_rejects_owner_capability_mismatch():
     assert result.code == "PLAN_OWNER_CAPABILITY_MISMATCH"
 
 
-def test_topology_marks_quality_judgement_as_internal_engine_and_report_under_chat():
+def test_topology_exposes_only_business_agents_and_service_capabilities():
     from agent.topology_catalog import REGISTERED_SUBGRAPHS
 
     by_key = {item["subgraph_key"]: item for item in REGISTERED_SUBGRAPHS}
 
-    quality_judgement = by_key["quality_judgement"]
-    assert quality_judgement["type"] == "engine"
-    assert quality_judgement["route_enabled"] is False
-    assert quality_judgement["supports_route_toggle"] is False
-
-    assert by_key["evidence_arbitration"]["route_enabled"] is True
+    assert "quality_judgement" not in by_key
+    assert "inspection_task" not in by_key
+    assert by_key["evidence_arbitration"]["type"] == "capability"
+    assert by_key["evidence_arbitration"]["route_enabled"] is False
+    assert by_key["memory_governance"]["type"] == "capability"
+    assert by_key["memory_governance"]["route_enabled"] is False
     assert by_key["vision_inspection"]["route_enabled"] is True
     assert by_key["lab_detection"]["route_enabled"] is True
     assert by_key["quality_analysis"]["route_enabled"] is True

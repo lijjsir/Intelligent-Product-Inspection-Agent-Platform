@@ -110,10 +110,10 @@ def invalidate_runtime_guard_cache(org_id: str) -> None:
 def _agent_to_subgraph_key(selected_agent: str, sub_route: str) -> str | None:
     if selected_agent == "chat":
         return "chat"
-    if selected_agent == "inspection_task":
-        return "inspection_task"
+    if selected_agent == "quality_analysis":
+        return "quality_analysis"
     if sub_route in ("general_chat", "rag_qa"):
         return "chat"
     if sub_route in ("quality_qa", "task_create", "inspection_execute"):
-        return "inspection_task"
+        return "quality_analysis"
     return None

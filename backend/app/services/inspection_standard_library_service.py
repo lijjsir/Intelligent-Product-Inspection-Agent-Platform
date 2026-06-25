@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -156,6 +157,163 @@ class InspectionStandardLibraryService:
         except Exception as exc:
             self._raise_if_table_missing(exc)
             raise
+
+    async def upload_pdfs(self, library_id: str, files: list[tuple[str, bytes, str | None]]) -> dict[str, Any]:
+        """Upload PDF files to MinIO, parse metadata, create doc records, and index."""
+        import tempfile
+        from app.core.config import settings
+        from app.services.object_storage.factory import build_object_storage
+
+        item = await self._get_library(library_id)
+        storage = build_object_storage()
+
+        uploaded_count = 0
+        indexed_count = 0
+        failed_count = 0
+        documents: list[StandardDocument] = []
+
+        for file_name, file_bytes, content_type in files:
+            # Upload to MinIO
+            object_key = f"standard/{library_id}/{file_name}"
+            try:
+                storage.put_bytes(
+                    bucket=settings.rag_storage_bucket,
+                    object_key=object_key,
+                    data=file_bytes,
+                    content_type=content_type or "application/pdf",
+                )
+            except Exception:
+                failed_count += 1
+                continue
+
+            # Parse metadata from file bytes via temp file
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+
+            try:
+                from app.services.standard_pdf_importer import resolve_standard_meta, sha256_file
+                meta = resolve_standard_meta(
+                    tmp_path,
+                    fallback_domain=item.domain,
+                    fallback_product_category=item.product_category,
+                )
+                meta_payload = {
+                    "domain": meta.get("domain") or item.domain or "",
+                    "product_category": meta.get("product_category") or item.product_category,
+                    "standard_no": meta.get("standard_no") or file_name.replace(".pdf", ""),
+                    "standard_name": meta.get("standard_name") or file_name.replace(".pdf", ""),
+                    "standard_level": meta.get("standard_level") or "GB/T",
+                    "standard_status": meta.get("standard_status") or item.standard_status or "现行",
+                    "file_name": file_name,
+                    "file_path": object_key,
+                    "file_hash": sha256_file(tmp_path),
+                    "file_size": len(file_bytes),
+                    "qdrant_collection": item.qdrant_collection,
+                    "import_status": "pending",
+                    "error_message": None,
+                }
+                row, _created = await self._document_repo.upsert_scanned(
+                    org_id=self._org_id,
+                    library_id=library_id,
+                    payload=meta_payload,
+                )
+                documents.append(row)
+                uploaded_count += 1
+
+                # Index from temp file
+                try:
+                    await self._index_document_from_path(item, row, file_path=tmp_path)
+                    if row.import_status == "completed":
+                        indexed_count += 1
+                    else:
+                        failed_count += 1
+                except Exception:
+                    failed_count += 1
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        item.pdf_count = len(documents)
+        item.document_count = await self._document_repo.count_completed_by_library(self._org_id, library_id)
+        item.chunk_count = await self._chunk_repo.count_by_library(library_id)
+        if failed_count and indexed_count:
+            item.import_status = "partial_failed"
+        elif failed_count:
+            item.import_status = "failed"
+        elif documents:
+            item.import_status = "completed"
+        item.last_indexed_at = utcnow() if documents else item.last_indexed_at
+        await self._session.flush()
+
+        return {
+            "library_id": library_id,
+            "uploaded_count": uploaded_count,
+            "indexed_count": indexed_count,
+            "failed_count": failed_count,
+            "documents": [self._serialize_document(row) for row in documents],
+        }
+
+    async def _index_document_from_path(self, library: InspectionStandardLibrary, document: StandardDocument, *, file_path: str) -> None:
+        """Index a document from a local file path (used for uploaded files)."""
+        if document.import_status == "completed":
+            return
+        document.import_status = "indexing"
+        document.error_message = None
+        await self._session.flush()
+        meta = {
+            "standard_no": document.standard_no,
+            "standard_name": document.standard_name,
+            "domain": document.domain,
+            "product_category": document.product_category,
+            "standard_level": document.standard_level,
+            "standard_status": document.standard_status,
+            "inspection_items": [],
+            "image_defect_keywords": [],
+        }
+        try:
+            result = await self._importer.index_document(
+                library_id=str(library.id),
+                document_id=str(document.id),
+                file_path=file_path,
+                meta=meta,
+                rag_space_id=(library.rag_space_ids or [None])[0],
+                chunk_strategy=library.chunk_strategy or "heading_then_size",
+            )
+            accepted = int(result.get("accepted") or 0)
+            if accepted <= 0:
+                raise ValidationError(f"failed to index document: {document.file_name}")
+            chunk_rows = []
+            for doc in result["docs"]:
+                payload = dict(doc.get("payload") or {})
+                text = str(doc.get("text") or "")
+                chunk_rows.append(
+                    {
+                        "chunk_index": int(payload.get("chunk_index") or 1),
+                        "page_from": payload.get("page_number"),
+                        "page_to": payload.get("page_number"),
+                        "section_title": str(doc.get("title") or "")[:255],
+                        "chunk_text": text,
+                        "payload_json": payload,
+                        "qdrant_point_id": str(doc.get("id") or ""),
+                        "token_count": len(re.findall(r"[A-Za-z0-9_]+|[一-鿿]", text)),
+                    }
+                )
+            await self._chunk_repo.replace_for_document(
+                document_id=str(document.id),
+                library_id=str(library.id),
+                rows=chunk_rows,
+            )
+            document.page_count = int(result.get("page_count") or 0)
+            document.chunk_count = accepted
+            document.import_status = "completed"
+            document.last_indexed_at = utcnow()
+            document.error_message = None
+        except Exception as exc:
+            document.import_status = "failed"
+            document.error_message = str(exc)
+            document.chunk_count = 0
+            await self._chunk_repo.soft_delete_by_document(str(document.id))
+        await self._session.flush()
 
     async def index_library(self, library_id: str, *, reindex: bool = False) -> dict[str, Any]:
         try:
@@ -320,10 +478,12 @@ class InspectionStandardLibraryService:
         if "product_family" in payload or not partial:
             product_family = str(
                 payload.get("product_family")
-                or payload.get("product_category")
                 or payload.get("domain")
+                or payload.get("name")
                 or ""
             ).strip().lower()
+            if not product_family:
+                product_family = str(payload.get("name") or "").strip().lower()
             if not product_family:
                 raise ValidationError("product_family is required")
             normalized["product_family"] = product_family
@@ -347,8 +507,16 @@ class InspectionStandardLibraryService:
         if "rag_space_ids" in payload or not partial:
             rag_space_ids = [str(item).strip() for item in list(payload.get("rag_space_ids") or []) if str(item).strip()]
             if not rag_space_ids:
-                raise ValidationError("at least one rag space is required")
-            await self._ensure_rag_spaces_exist(rag_space_ids)
+                # Auto-create RAG space with same name as standard library
+                name = str(payload.get("name") or "").strip()
+                if not name:
+                    raise ValidationError("name is required to auto-create rag space")
+                from app.services.rag_space_service import RagSpaceService
+                rag_service = RagSpaceService(self._session, org_id=self._org_id, user_id=None)
+                created_space = await rag_service.create_space(name=name, description=f"Auto-created for standard library: {name}")
+                rag_space_ids = [str(created_space.id)]
+            else:
+                await self._ensure_rag_spaces_exist(rag_space_ids)
             normalized["rag_space_ids"] = list(dict.fromkeys(rag_space_ids))
         if "is_active" in payload:
             normalized["is_active"] = bool(payload.get("is_active"))

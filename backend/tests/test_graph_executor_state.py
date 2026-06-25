@@ -32,7 +32,7 @@ def _state(**overrides) -> ManagerState:
         "user_id": "user-1",
         "session_id": "session-1",
         "surface": "chat",
-        "selected_agent": "evidence",
+        "selected_agent": "orchestrator",
     }
     payload.update(overrides)
     return ManagerState(**payload)
@@ -41,7 +41,7 @@ def _state(**overrides) -> ManagerState:
 def _step(**overrides) -> AgentPlanStep:
     payload = {
         "step_id": "step-gs-1",
-        "owner_agent": "evidence",
+        "owner_agent": "orchestrator",
         "capability": "evidence.arbitrate",
     }
     payload.update(overrides)
@@ -71,7 +71,7 @@ def test_base_graph_state_manager_state_has_all_required_fields():
     assert mgr["user_id"] == "user-1"
     assert mgr["surface"] == "chat"
     assert mgr["original_query"] == "test query"
-    assert mgr["selected_agent"] == "evidence"
+    assert mgr["selected_agent"] == "orchestrator"
     assert isinstance(mgr["attachments"], list)
     assert isinstance(mgr["artifacts"], list)
 

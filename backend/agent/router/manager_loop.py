@@ -828,7 +828,7 @@ class ManagerLoop:
     def _selected_agent(state: ManagerState) -> str:
         if state.route_plan and state.route_plan.steps:
             owners = [step.owner_agent for step in state.route_plan.steps]
-            for owner in ("quality_analysis", "file", "vision", "lab_detection", "evidence", "memory_governance"):
+            for owner in ("quality_analysis", "file", "vision", "lab_detection"):
                 if owner in owners:
                     return owner
         return "quality_analysis"
@@ -1042,8 +1042,9 @@ class ManagerLoop:
 
     @staticmethod
     def _safe_selected_agent(state: ManagerState) -> str:
-        if getattr(state, "selected_agent", None):
-            return str(state.selected_agent)
+        selected = str(getattr(state, "selected_agent", None) or "")
+        if selected in {"chat", "vision", "lab_detection", "quality_analysis", "file"}:
+            return selected
         if state.route_plan and state.route_plan.steps:
             return ManagerLoop._selected_agent(state)
         return "quality_analysis"
@@ -1090,7 +1091,7 @@ class ManagerLoop:
                     "hit_count": hit_count,
                     "citation_coverage": citation_coverage,
                     "top_sources": top_sources,
-                    "source_graph": "manager",
+                    "source_graph": "evidence_capability",
                 }
         return None
 
@@ -1146,8 +1147,8 @@ class ManagerLoop:
                     "hit_rate": round(min(1.0, hit_count / top_k), 4) if hit_count else 0.0,
                     "citation_coverage": round(coverage, 4),
                     "latency_ms": int(content.get("latency_ms") or 0),
-                    "source_graph": "manager",
-                    "agent_name": "evidence",
+                    "source_graph": "evidence_capability",
+                    "agent_name": "orchestrator",
                     "sub_route": sub_route,
                     "trace_id": trace_id,
                     "top_score": float(content.get("top_score") or 0.0),

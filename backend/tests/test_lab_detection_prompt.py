@@ -65,7 +65,7 @@ def test_user_prompt_is_json_with_required_context_sections():
 
 
 def test_standalone_dev_script_exists():
-    script = Path("scripts/dev_run_lab_detection_graph.py")
+    script = Path(__file__).parents[1] / "scripts/dev_run_lab_detection_graph.py"
 
     assert script.exists()
     text = script.read_text(encoding="utf-8")

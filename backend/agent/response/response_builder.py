@@ -5,9 +5,9 @@ from typing import Any
 UI_SCHEMA_MAP = {
     ("chat", "general_chat"): "chat_text_v1",
     ("chat", "rag_qa"): "rag_answer_v1",
-    ("inspection_task", "quality_qa"): "quality_answer_v1",
-    ("inspection_task", "task_create"): "task_action_v1",
-    ("inspection_task", "inspection_execute"): "task_result_v1",
+    ("quality_analysis", "quality_qa"): "quality_answer_v1",
+    ("quality_analysis", "task_create"): "task_action_v1",
+    ("quality_analysis", "inspection_execute"): "task_result_v1",
 }
 
 
@@ -36,7 +36,7 @@ class ResponseBuilder:
         trace_id: str | None = None,
         trace_url: str | None = None,
         prompt_version: str = "",
-        workflow_version: str = "quality_chat_v2",
+        workflow_version: str = "orchestrator_v1",
         selected_rag_space: dict[str, Any] | None = None,
         artifacts: list[dict[str, Any]] | None = None,
         route_trace: dict[str, Any] | None = None,

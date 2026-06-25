@@ -7,35 +7,17 @@ from pydantic import BaseModel, Field
 
 class InspectionStandardCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
-    product_family: str | None = Field(default=None, min_length=1, max_length=128)
     domain: str | None = Field(default=None, max_length=100)
-    product_category: str | None = Field(default=None, max_length=100)
-    description: str | None = Field(default=None, max_length=2000)
-    rag_space_ids: list[str] = Field(..., min_length=1)
-    qdrant_collection: str | None = Field(default=None, max_length=128)
-    pdf_root_dir: str | None = Field(default=None, max_length=1000)
-    file_glob: str = Field(default="*.pdf", max_length=64)
-    chunk_strategy: str = Field(default="heading_then_size", max_length=32)
     standard_status: str = Field(default="现行", max_length=32)
-    import_mode: str = Field(default="scan_and_index", max_length=32)
-    auto_reindex: bool = False
+    chunk_strategy: str = Field(default="heading_then_size", max_length=32)
     is_active: bool = True
 
 
 class InspectionStandardUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    product_family: str | None = Field(default=None, min_length=1, max_length=128)
     domain: str | None = Field(default=None, max_length=100)
-    product_category: str | None = Field(default=None, max_length=100)
-    description: str | None = Field(default=None, max_length=2000)
-    rag_space_ids: list[str] | None = Field(default=None, min_length=1)
-    qdrant_collection: str | None = Field(default=None, max_length=128)
-    pdf_root_dir: str | None = Field(default=None, max_length=1000)
-    file_glob: str | None = Field(default=None, max_length=64)
-    chunk_strategy: str | None = Field(default=None, max_length=32)
     standard_status: str | None = Field(default=None, max_length=32)
-    import_mode: str | None = Field(default=None, max_length=32)
-    auto_reindex: bool | None = None
+    chunk_strategy: str | None = Field(default=None, max_length=32)
     is_active: bool | None = None
 
 
@@ -173,6 +155,14 @@ class PaginatedDocuments(BaseModel):
     total: int
     page: int
     size: int
+
+
+class StandardUploadResult(BaseModel):
+    library_id: str
+    uploaded_count: int
+    indexed_count: int
+    failed_count: int
+    documents: list[StandardDocumentResponse] = Field(default_factory=list)
 
 
 class StandardDocumentUpdate(BaseModel):

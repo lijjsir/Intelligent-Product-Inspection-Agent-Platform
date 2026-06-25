@@ -80,7 +80,7 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
     },
     "task_create": {
         "prompt_key": "inspection.task_create.system",
-        "prompt_version": "inspection_task_create_v1",
+        "prompt_version": "quality_task_create_v1",
         "temperature": 0.3,
         "default_content": """你是检测任务创建助手。你的职责是从用户输入中提取产品编号、检测标准、检测图片、优先级，并生成任务草稿。如果信息不足，只追问缺失字段，不要进行质量判定。如果信息完整，请展示任务草稿，并要求用户确认后再提交。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
     },

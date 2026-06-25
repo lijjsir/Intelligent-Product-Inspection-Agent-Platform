@@ -17,7 +17,7 @@ class AgentDefinitionBase(BaseModel):
     prompt_version_id: Optional[str] = Field(default=None, description="Associated prompt version ID")
     workflow_binding: Optional[str] = Field(default=None, max_length=100, description="Workflow binding")
     intent_config_id: Optional[str] = Field(default=None, description="Intent config ID")
-    subgraph_key: str = Field(default="quality_judgement", max_length=64, description="Bound subgraph key")
+    subgraph_key: str = Field(default="quality_analysis", max_length=64, description="Bound subgraph key")
     entry_graph: Optional[str] = Field(default=None, max_length=128, description="Entry graph identifier")
     supports_start_stop: bool = Field(default=True, description="Whether runtime supports start/stop")
     graph_version: str = Field(default="v1", max_length=32, description="Graph version")
@@ -391,8 +391,8 @@ class PauseRouteRequest(BaseModel):
 # === Routing Strategy Viewer schemas (non-config version) ===
 
 class RouteAgentDescriptor(BaseModel):
-    key: str  # "chat" | "inspection_task"
-    label: str  # "Quality Chat" | "Inspection Task Agent"
+    key: str  # "chat" | "quality_analysis"
+    label: str  # "Quality Chat" | "Quality Analysis Agent"
     sub_routes: list[str] = Field(default_factory=list)  # ["general_chat", "rag_qa"]
 
 
@@ -400,7 +400,7 @@ class RouteRuleDescriptor(BaseModel):
     priority: int  # 1-7
     name: str  # "图片检测意图"
     condition_summary: str  # "图片附件 + 检测/质检意图"
-    target_agent: str  # "chat" | "inspection_task"
+    target_agent: str  # "chat" | "quality_analysis"
     target_sub_route: str  # "inspection_execute"
     route_source: str = "rule"
     examples: list[str] = Field(default_factory=list)

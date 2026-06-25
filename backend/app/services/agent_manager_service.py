@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentManagerService:
-    """Agent 管理服务 — 替代原有的直接调用 QualityJudgementSubgraph 方式。
+    """统一 Agent 管理服务。
 
     接收标准化请求 → 调用 AgentManager 路由分发 → 返回带路由信息的输出。
     """

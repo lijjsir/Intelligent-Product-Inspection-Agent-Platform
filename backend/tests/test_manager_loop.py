@@ -141,7 +141,7 @@ async def test_chat_selected_rag_uses_retrieve_then_compose_without_action(mock_
 
     # P0.3: Without silent fallback, evidence graph succeeds with empty results
     # when no DB is available — evidence → quality_analysis flow completes correctly.
-    assert output.route_decision.selected_agent in ("evidence", "quality_analysis")
+    assert output.route_decision.selected_agent == "quality_analysis"
     if output.status == "failed":
         assert output.error["code"] == "RAG_RETRIEVE_FAILED"
         assert payload["message_type"] == "error"
@@ -176,7 +176,7 @@ async def test_selected_rag_space_forces_rag_for_general_question(mock_chat_mode
         )
     )
 
-    assert output.route_decision.selected_agent in ("evidence", "quality_analysis")
+    assert output.route_decision.selected_agent == "quality_analysis"
     # P0.3: Without silent fallback, evidence graph succeeds with empty results
     assert output.status in ("failed", "completed")
     if output.status == "failed":
@@ -238,7 +238,7 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
     assert rag_log["rag_space_id"] == "rag-1"
     assert rag_log["hit_count"] == 1
-    assert rag_log["source_graph"] == "manager"
+    assert rag_log["source_graph"] == "evidence_capability"
     assert rag_log["metadata"]["used_citations"][0]["quote"] == "用户姓名是张三。"
 
 
@@ -1091,6 +1091,13 @@ async def test_manager_respects_forbidden_modes_even_on_quality_surface(mock_cha
 async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
     calls: list[str] = []
 
+    async def fake_system_rag(**_kwargs):
+        return {
+            "hits": [{"id": "rag-1", "text": "标准证据", "score": 0.9}],
+            "hit_count": 1,
+            "rag_space_id": "system-rag",
+        }
+
     async def fake_run(self, state):
         calls.append("inspection_execute")
         return {
@@ -1101,6 +1108,10 @@ async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
         }
 
     monkeypatch.setattr("agent.subgraphs.quality_analysis.graph.QualityAnalysisGraph.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.system_rag_service.resolve_and_search_system_rag",
+        fake_system_rag,
+    )
 
     output = await ManagerLoop().run(
         _request(
@@ -1112,7 +1123,8 @@ async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
                 "allowed_modes": ["action", "report", "answer"],
                 "action_intent": "quality_inspection_execute",
             },
-        )
+        ),
+        db_session=object(),
     )
 
     assert calls == ["inspection_execute"]

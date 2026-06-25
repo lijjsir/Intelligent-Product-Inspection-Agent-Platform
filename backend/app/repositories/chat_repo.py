@@ -206,11 +206,11 @@ class ChatOpsRepository:
             select(AgentDefinition)
             .where(
                 AgentDefinition.org_id == self._org_id,
-                AgentDefinition.workflow_binding == "quality_chat_v2",
+                AgentDefinition.workflow_binding == "quality_analysis_v1",
                 AgentDefinition.deleted_at.is_(None),
             )
             .order_by(
-                case((AgentDefinition.subgraph_key == "chat", 0), else_=1),
+                case((AgentDefinition.subgraph_key == "quality_analysis", 0), else_=1),
                 AgentDefinition.created_at.asc(),
                 AgentDefinition.id.asc(),
             )
@@ -220,25 +220,25 @@ class ChatOpsRepository:
         if agent is None:
             agent = AgentDefinition(
                 org_id=self._org_id,
-                name="质量检测聊天智能体",
-                description="面向质量检测问答场景的聊天子图",
-                workflow_binding="quality_chat_v2",
-                subgraph_key="chat",
-                entry_graph="MemoryManagerGraph",
+                name="Quality Analysis Agent",
+                description="统一质量问答与正式质检终判 Agent",
+                workflow_binding="quality_analysis_v1",
+                subgraph_key="quality_analysis",
+                entry_graph="QualityAnalysisGraph",
                 supports_start_stop=True,
                 graph_version="v2",
                 is_active=True,
             )
-            agent.name = "QualityChatAgent"
-            agent.description = "QualityChat agent for general chat and RAG QA."
+            agent.name = "Quality Analysis Agent"
+            agent.description = "Quality analysis for chat, RAG QA and formal inspection."
             self._session.add(agent)
             await self._session.flush()
         else:
-            agent.name = "QualityChatAgent"
-            agent.description = getattr(agent, "description", None) or "QualityChat agent for general chat and RAG QA."
-            agent.subgraph_key = "chat"
-            agent.entry_graph = str(agent.entry_graph or "MemoryManagerGraph")
-            agent.graph_version = str(agent.graph_version or "v2")
+            agent.name = "Quality Analysis Agent"
+            agent.description = getattr(agent, "description", None) or "Quality analysis for chat, RAG QA and formal inspection."
+            agent.subgraph_key = "quality_analysis"
+            agent.entry_graph = "QualityAnalysisGraph"
+            agent.graph_version = "v1"
 
         route_result = await self._session.execute(
             select(IntentRoute)

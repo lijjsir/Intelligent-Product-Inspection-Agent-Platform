@@ -42,7 +42,7 @@ def artifact(
     artifact_id = hashlib.sha1(raw.encode()).hexdigest()[:12]
     source_kind = (
         "capability"
-        if step.owner_agent in {"orchestrator", "evidence", "memory_governance"}
+        if step.owner_agent == "orchestrator"
         or step.capability in {"evidence.arbitrate", "memory.governance"}
         else "agent"
     )

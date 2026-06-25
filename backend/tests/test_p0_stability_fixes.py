@@ -52,7 +52,7 @@ def _state(**overrides) -> ManagerState:
 def _step(**overrides) -> AgentPlanStep:
     payload = {
         "step_id": "step-st-1",
-        "owner_agent": "evidence",
+        "owner_agent": "orchestrator",
         "capability": "evidence.arbitrate",
     }
     payload.update(overrides)
@@ -95,13 +95,13 @@ def test_make_agent_error_unknown_code_defaults_to_internal():
 
 
 def test_make_agent_error_to_dict_includes_stage():
-    error = make_agent_error("EVIDENCE_ARBITRATION_FAILED", source="evidence.graph")
-    payload = error.to_dict(stage="retrieve_rag_context", agent_name="evidence")
+    error = make_agent_error("EVIDENCE_ARBITRATION_FAILED", source="evidence.capability")
+    payload = error.to_dict(stage="retrieve_rag_context", agent_name="orchestrator")
 
     assert payload["code"] == "EVIDENCE_ARBITRATION_FAILED"
     assert payload["frontend_visible"] is True
     assert payload["retryable"] is True
-    assert payload["agent_name"] == "evidence"
+    assert payload["agent_name"] == "orchestrator"
     assert payload["stage"] == "retrieve_rag_context"
 
 
@@ -125,26 +125,26 @@ def test_make_agent_error_debug_included_when_requested():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_evidence_executor_raises_structured_error_when_graph_fails(monkeypatch):
+async def test_evidence_executor_raises_structured_error_when_service_fails(monkeypatch):
     async def boom(*args, **kwargs):
-        raise RuntimeError("graph broken")
+        raise RuntimeError("service broken")
 
-    from agent.subgraphs.evidence_arbitration import EvidenceArbitrationGraph
+    from app.services.evidence_arbitration_service import EvidenceArbitrationService
 
-    monkeypatch.setattr(EvidenceArbitrationGraph, "run", boom)
+    monkeypatch.setattr(EvidenceArbitrationService, "arbitrate", boom)
 
     from agent.router.executors.evidence_arbitration_executor import EvidenceArbitrationExecutor
 
     executor = EvidenceArbitrationExecutor()
     with pytest.raises(AgentRuntimeError) as exc_info:
         await executor.execute(
-            _step(owner_agent="evidence", capability="evidence.arbitrate"),
-            _state(selected_agent="evidence"),
+            _step(owner_agent="orchestrator", capability="evidence.arbitrate"),
+            _state(selected_agent="quality_analysis"),
             _request(),
         )
 
     assert exc_info.value.code == "EVIDENCE_ARBITRATION_FAILED"
-    assert "graph broken" in str(exc_info.value.message)
+    assert "service broken" in str(exc_info.value.message)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def test_build_agent_error_output_preserves_existing_agent_runtime_error():
     exc = make_agent_error(
         "EVIDENCE_ARBITRATION_FAILED",
         message="证据仲裁失败。",
-        source="evidence.graph",
+        source="evidence.capability",
     )
 
     output = QualityAgentOrchestratorService._build_agent_error_output(request, exc)

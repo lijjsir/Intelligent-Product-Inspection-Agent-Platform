@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.permissions import require_role
@@ -16,6 +16,7 @@ from app.schemas.inspection_standard_library import (
     StandardLibraryScanResult,
     StandardRetrieveRequest,
     StandardRetrieveResponse,
+    StandardUploadResult,
 )
 from app.schemas.user import CurrentUser
 from app.services.inspection_standard_library_service import InspectionStandardLibraryService
@@ -114,6 +115,24 @@ async def reindex_inspection_standard(
     require_role("inspection_standard_library", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
     return ResponseEnvelope(data=await service.index_library(library_id, reindex=True))
+
+
+@router.post("/{library_id}/upload", response_model=ResponseEnvelope[StandardUploadResult])
+async def upload_standard_pdfs(
+    library_id: str,
+    files: list[UploadFile] = File(...),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Upload PDF files to a standard library. Files are stored in MinIO and auto-indexed."""
+    require_role("inspection_standard_library", current.role)
+    service = InspectionStandardLibraryService(db, current.org_id)
+    uploaded_files: list[tuple[str, bytes, str | None]] = []
+    for f in files:
+        content = await f.read()
+        uploaded_files.append((f.filename or "unknown.pdf", content, f.content_type))
+    result = await service.upload_pdfs(library_id, uploaded_files)
+    return ResponseEnvelope(data=result)
 
 
 @router.get("/{library_id}/documents", response_model=ResponseEnvelope[PaginatedDocuments])

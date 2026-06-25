@@ -130,8 +130,8 @@ class QualityResultMaterializationService:
                     rag_space_id=rag_space_id,
                     top_k=top_k or 0,
                     hit_count=len(rag_items),
-                    source_graph="evidence_arbitration",
-                    agent_name="evidence",
+                    source_graph="evidence_capability",
+                    agent_name="orchestrator",
                     sub_route="evidence_arbitration",
                     metadata={
                         "memory_hit_count": len(memory_items),

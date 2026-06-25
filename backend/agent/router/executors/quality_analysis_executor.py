@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
-
-from agent.contracts import AgentOutput
 from agent.contracts.quality_contracts import NormalizedRequest
-from agent.router.contracts import AgentPlanStep, AgentRouteDecision
+from agent.router.contracts import AgentPlanStep
 from agent.router.errors import AgentRuntimeError, make_agent_error
 from agent.router.executors.chat_executor import ChatExecutor
 from agent.router.executors.graph_executor import GraphExecutor
@@ -204,15 +201,7 @@ class QualityAnalysisExecutor(GraphExecutor):
         request: NormalizedRequest,
         db_session=None,
     ):
-        """Execute formal inspection through QualityAnalysisGraph.
-
-        Short-term (P1): routes through QualityAnalysisGraph which internally
-        handles the inspection_execute response mode. The legacy
-        InspectionTaskGraph is preserved as an internal compat path.
-        """
-        if (request.ext or {}).get("use_inspection_task_graph_compat"):
-            return await self._execute_inspection_compat(step, request)
-
+        """Execute formal inspection exclusively through QualityAnalysisGraph."""
         try:
             from agent.subgraphs.quality_analysis import QualityAnalysisGraph
 
@@ -287,49 +276,3 @@ class QualityAnalysisExecutor(GraphExecutor):
                 source="quality.inspection.execute",
                 cause=exc,
             ) from exc
-
-    async def _execute_inspection_compat(
-        self,
-        step: AgentPlanStep,
-        request: NormalizedRequest,
-    ):
-        from agent.subgraphs.inspection_task.graph import InspectionTaskGraph
-
-        decision = AgentRouteDecision(
-            selected_agent="inspection_task",
-            sub_route="inspection_execute",
-            intent="inspection_execute",
-            reason="quality.inspection.execute compat path",
-            route_source="manager",
-        )
-        output = await InspectionTaskGraph().run(request, decision)
-        persistable = output.persistable_output
-        persistable_payload = (
-            persistable.model_dump(mode="json")
-            if hasattr(persistable, "model_dump")
-            else persistable
-        )
-        content = {
-            "answer": output.answer,
-            "summary": output.summary,
-            "quality": output.quality,
-            "result_card": output.result_card,
-            "citations": list(output.citations or []),
-            "expectation_check": output.expectation_check,
-            "rag_summary": output.rag_summary,
-            "persistable_output": persistable_payload,
-            "raw_state": output.raw_state,
-        }
-        art = self._artifact(
-            step,
-            "inspection_result",
-            content=content,
-            citations=list(output.citations or []),
-            summary=output.summary or output.answer[:200],
-        )
-        return self._observation(
-            step,
-            status="success",
-            summary=output.summary or output.answer[:200],
-            artifacts=[art],
-        ), [art]

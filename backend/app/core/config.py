@@ -168,7 +168,6 @@ class Settings(BaseSettings):
     rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
-    enable_legacy_agent_fallback: bool = False
     cors_allowed_origins: list[str] = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",

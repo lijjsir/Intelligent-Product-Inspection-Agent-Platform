@@ -36,6 +36,6 @@ input_adapter → validate_lab_context → normalize_measurements → load_refer
 
 ## 后续接入路线
 
-1. **阶段 B**: 作为 InspectionTaskGraph 内部协作 Agent
+1. **阶段 B**: 作为 QualityAnalysisGraph 的实验室检测协作 Agent
 2. **阶段 C**: 通过 LabDetectionExecutor 接入 ManagerLoop
 3. **阶段 D**: 与 StandardInterpretationAgent、QualityJudgementAgent、QualityReviewAgent 多 Agent 协作

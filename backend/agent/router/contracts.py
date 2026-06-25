@@ -7,14 +7,10 @@ from pydantic import BaseModel, Field
 
 AgentName = Literal[
     "chat",
-    "inspection_task",
     "vision",
     "lab_detection",
     "quality_analysis",
     "file",
-    # Compatibility values accepted by old persisted route records.
-    "evidence",
-    "memory_governance",
 ]
 
 StepOwner = Literal[
@@ -23,9 +19,6 @@ StepOwner = Literal[
     "lab_detection",
     "quality_analysis",
     "file",
-    # Compatibility adapters; new plans use orchestrator for capabilities.
-    "evidence",
-    "memory_governance",
 ]
 
 

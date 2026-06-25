@@ -12,8 +12,6 @@ from app.core.claims import (
     build_auth_claims,
 )
 from app.core.exceptions import NotFoundError
-from agent.subgraphs.inspection_task import InspectionGraph
-from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.health_checker import ModelHealthChecker
@@ -1328,122 +1326,6 @@ async def test_llm_client_embed_raises_on_connect_error(monkeypatch):
     client = LLMClient(api_key="secret", base_url="https://example.com/api/v3", embed_model="embed-1")
     with pytest.raises(httpx.ConnectError):
         await client.embed("hello")
-
-
-@pytest.mark.asyncio
-async def test_run_vision_records_runtime_error_on_invalid_payload(monkeypatch):
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            return None
-
-        @staticmethod
-        def _extract_json_object(text: str):
-            return None
-
-        async def chat(self, *args, **kwargs):
-            return {"text": "not a structured defect payload"}
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient", FakeClient)
-
-    state = await run_vision(
-        {
-            "task_id": "task-1",
-            "org_id": "org-1",
-            "image_urls": ["https://example.com/a.png"],
-            "model_id": "chat-1",
-            "model_base_url": "https://example.com/api/v3",
-            "model_api_key": "secret",
-            "model_provider": "volcengine",
-            "trace_id": "trace-1",
-            "timeline": [],
-            "usage_events": [],
-            "runtime_errors": [],
-        }
-    )
-
-    assert state["defects"] == []
-    assert state["runtime_errors"][0]["stage"] == "vision"
-    assert "structured defects payload" in state["runtime_errors"][0]["message"]
-
-
-@pytest.mark.asyncio
-async def test_inspection_graph_stops_after_runtime_error(monkeypatch):
-    calls: list[str] = []
-
-    async def fake_plan(state):
-        calls.append("planner")
-        return state
-
-    async def fake_vision(state):
-        calls.append("vision")
-        state.setdefault("runtime_errors", []).append({"stage": "vision", "message": "boom"})
-        return state
-
-    async def fake_knowledge(state):
-        calls.append("knowledge")
-        return state
-
-    async def fake_reasoning(state):
-        calls.append("reasoning")
-        return state
-
-    async def fake_finalize(state):
-        calls.append("finalizer")
-        return state
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", fake_plan)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", fake_vision)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", fake_knowledge)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", fake_reasoning)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", fake_finalize)
-
-    state = await InspectionGraph().run({"timeline": [], "runtime_errors": []})
-
-    assert state["runtime_errors"][0]["message"] == "boom"
-    assert calls == ["planner", "vision"]
-
-
-@pytest.mark.asyncio
-async def test_inspection_graph_event_stream_follows_stage_execution_order(monkeypatch):
-    async def fake_node(stage: str):
-        async def _run(state):
-            state.setdefault("timeline", []).append({"stage": stage, "message": f"{stage} done"})
-            return state
-
-        return _run
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", await fake_node("planner"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", await fake_node("vision"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", await fake_node("knowledge"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", await fake_node("reasoning"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", await fake_node("finalizer"))
-
-    events: list[dict] = []
-
-    async def on_event(event):
-        events.append(event)
-
-    state = await InspectionGraph().run({"timeline": [], "runtime_errors": []}, on_event=on_event)
-
-    assert [item["stage"] for item in state["timeline"]] == [
-        "planner",
-        "vision",
-        "knowledge",
-        "reasoning",
-        "finalizer",
-    ]
-    assert [(item["type"], item["stage"]) for item in events] == [
-        ("stage_start", "planner"),
-        ("stage_end", "planner"),
-        ("stage_start", "vision"),
-        ("stage_end", "vision"),
-        ("stage_start", "knowledge"),
-        ("stage_end", "knowledge"),
-        ("stage_start", "reasoning"),
-        ("stage_end", "reasoning"),
-        ("stage_start", "finalizer"),
-        ("stage_end", "finalizer"),
-    ]
 
 
 def test_langfuse_trace_to_item_parses_inspection_trace():

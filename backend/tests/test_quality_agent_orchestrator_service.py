@@ -872,8 +872,8 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
                     hit_rate=0.5,
                     citation_coverage=0.67,
                     latency_ms=188,
-                    source_graph="manager",
-                    agent_name="evidence",
+                    source_graph="evidence_capability",
+                    agent_name="orchestrator",
                     sub_route="inspection_execute",
                     trace_id="trace-rag-detail",
                     top_score=0.92,
@@ -1092,7 +1092,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
         answer="done",
         route_decision=RouteDecision(
             mode="router_enabled",
-                selected_agent="evidence",
+                selected_agent="chat",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="test",
@@ -1104,7 +1104,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
                     rag_space_id="space-1",
                     top_k=3,
                     hit_count=1,
-                    source_graph="manager",
+                    source_graph="evidence_capability",
                 )
             ]
         ),

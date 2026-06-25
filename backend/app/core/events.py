@@ -20,10 +20,29 @@ async def check_neo4j_on_startup() -> None:
         raise
 
 
+async def _ensure_minio_buckets_on_startup() -> None:
+    backend = str(settings.object_storage_backend or "").strip().lower()
+    if backend != "minio":
+        return
+    try:
+        from app.services.object_storage.factory import build_object_storage
+
+        storage = build_object_storage()
+        import asyncio
+
+        for bucket in (settings.s3_bucket, settings.rag_storage_bucket):
+            if bucket:
+                await asyncio.to_thread(storage.ensure_bucket, bucket)
+                logger.info("MinIO bucket ensured: %s", bucket)
+    except Exception as exc:
+        logger.warning("MinIO bucket initialization skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await check_neo4j_on_startup()
+    await _ensure_minio_buckets_on_startup()
     await seed_paper_templates_on_startup()
     await log_paper_review_runtime_status()
     yield

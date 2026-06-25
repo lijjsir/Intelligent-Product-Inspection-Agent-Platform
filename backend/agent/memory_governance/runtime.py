@@ -8,7 +8,7 @@ class MemoryGovernanceRuntime:
 
     提供两个主要入口：
     1. submit_candidate_from_artifact — 从 Agent artifact 提取候选记忆
-    2. handle_contamination_event — 污染事件触发治理图
+    2. handle_contamination_event — 污染事件触发治理能力
     """
 
     def __init__(self, db_session):
@@ -98,18 +98,14 @@ class MemoryGovernanceRuntime:
             return {"status": "failed", "reason": str(exc)}
 
     async def handle_contamination_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        """污染事件入口 — 触发 MemoryManagerGraph 治理路径。"""
+        """污染事件入口 — 调用普通 Memory Capability service。"""
         try:
-            from agent.graphs.memory_manager.graph import MemoryManagerGraph
+            from app.services.memory_capability_service import MemoryCapabilityService
 
-            graph = MemoryManagerGraph().compile()
-            result = await graph.ainvoke({
-                "event": event,
-                "org_id": event.get("org_id", ""),
-                "trace_id": event.get("trace_id", ""),
-                "contamination_alert": True,
-            })
-            return dict(result.get("final_result") or {})
+            return await MemoryCapabilityService(
+                self.db,
+                str(event.get("org_id") or ""),
+            ).handle_contamination_event(event)
         except Exception as exc:
             return {"status": "failed", "reason": str(exc)}
 

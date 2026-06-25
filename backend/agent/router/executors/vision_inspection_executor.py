@@ -51,9 +51,7 @@ class VisionInspectionExecutor(GraphExecutor):
                 artifacts=[visual_artifact],
             ), [visual_artifact]
 
-        except AgentRuntimeError as exc:
-            if getattr(state, "surface", "") == "quality_task":
-                return self._deferred_quality_task_vision(step, state, exc)
+        except AgentRuntimeError:
             raise
         except Exception as exc:
             raise make_agent_error(
@@ -70,43 +68,3 @@ class VisionInspectionExecutor(GraphExecutor):
                 source="vision.executor",
                 cause=exc,
             ) from exc
-
-    def _deferred_quality_task_vision(
-        self,
-        step: AgentPlanStep,
-        state: ManagerState,
-        exc: AgentRuntimeError,
-    ):
-        image_count = sum(
-            1
-            for item in list(getattr(state, "attachments", []) or [])
-            if str((item or {}).get("kind") or "").lower() == "image"
-        )
-        summary = "独立视觉模型不可用，已交由正式质检兼容图处理图片。"
-        visual_result = {
-            "status": "deferred",
-            "summary": summary,
-            "answer": summary,
-            "image_count": image_count,
-            "defects": [],
-            "image_quality": "unknown",
-            "requires_recheck": True,
-            "confidence": 0.0,
-            "fallback_deferred": True,
-            "error": exc.to_dict(include_debug=False) if hasattr(exc, "to_dict") else {"message": str(exc)},
-        }
-        visual_artifact = self._artifact(
-            step,
-            "visual_inspection_result",
-            status="empty",
-            content=visual_result,
-            summary=summary,
-            empty_result=True,
-            needs_user_input=False,
-        )
-        return self._observation(
-            step,
-            status="success",
-            summary=summary,
-            artifacts=[visual_artifact],
-        ), [visual_artifact]

@@ -5,7 +5,7 @@ from typing import Any
 
 from agent.router.contracts import AgentRouteDecision, AgentRouterInput
 
-# 任务创建关键词（从 quality_judgement/graph.py 迁移并扩展）
+# 任务创建关键词
 TASK_KEYWORD_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
@@ -115,7 +115,7 @@ class AgentRoutePolicy:
                 "priority": 1,
                 "name": "结构化文件 + 检测意图",
                 "condition_summary": "xlsx/csv/json/txt/docx/jsonl/md 文件 + 任务/质检信号",
-                "target_agent": "inspection_task",
+                "target_agent": "quality_analysis",
                 "target_sub_route": "inspection_execute",
                 "route_source": "rule",
                 "examples": ["上传 Excel + 创建检测任务", "csv 文件 + 质量检测"],
@@ -125,7 +125,7 @@ class AgentRoutePolicy:
                 "priority": 2,
                 "name": "图片 + 任务创建意图",
                 "condition_summary": "图片附件/URL + 任务意图关键词信号",
-                "target_agent": "inspection_task",
+                "target_agent": "quality_analysis",
                 "target_sub_route": "task_create",
                 "route_source": "rule",
                 "examples": ["图片 + 帮我检测", "图片 + 创建任务"],
@@ -135,7 +135,7 @@ class AgentRoutePolicy:
                 "priority": 3,
                 "name": "图片 + 质检问答",
                 "condition_summary": "图片附件/URL + 质检语义信号",
-                "target_agent": "inspection_task",
+                "target_agent": "quality_analysis",
                 "target_sub_route": "quality_qa",
                 "route_source": "rule",
                 "examples": ["图片 + 这个算不算缺陷", "图片 + 质量判定问题"],
@@ -145,7 +145,7 @@ class AgentRoutePolicy:
                 "priority": 4,
                 "name": "任务创建意图（纯文本）",
                 "condition_summary": "任务意图关键词信号存在，无质检语义",
-                "target_agent": "inspection_task",
+                "target_agent": "quality_analysis",
                 "target_sub_route": "task_create",
                 "route_source": "rule",
                 "examples": ["创建任务", "帮我检测这个产品"],
@@ -155,7 +155,7 @@ class AgentRoutePolicy:
                 "priority": 5,
                 "name": "质检问答意图（纯文本）",
                 "condition_summary": "质检语义信号存在",
-                "target_agent": "inspection_task",
+                "target_agent": "quality_analysis",
                 "target_sub_route": "quality_qa",
                 "route_source": "rule",
                 "examples": ["这个算不算缺陷", "按照 GB/T 标准判定"],
@@ -203,8 +203,8 @@ class AgentRoutePolicy:
                 "sub_routes": ["general_chat", "rag_qa"],
             },
             {
-                "key": "inspection_task",
-                "label": "Inspection Task Agent",
+                "key": "quality_analysis",
+                "label": "Quality Analysis Agent",
                 "sub_routes": ["task_create", "inspection_execute", "quality_qa"],
             },
         ]
@@ -301,13 +301,13 @@ class AgentRoutePolicy:
         }
 
         # ── Manual override: force_agent ──
-        if route_hints.get("force_agent") == "inspection_task" and route_hints.get("force_sub_route"):
+        if route_hints.get("force_agent") == "quality_analysis" and route_hints.get("force_sub_route"):
             forced_sub = route_hints.get("force_sub_route")
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route=forced_sub,
                 intent=forced_sub,
-                reason="前端强制指定检测 Agent",
+                reason="前端强制指定质量分析 Agent",
                 route_source="manual",
             )
         if route_hints.get("force_agent") == "chat":
@@ -337,10 +337,10 @@ class AgentRoutePolicy:
         has_rag_signal = self._has_general_rag_signal(query)
         is_ambiguous = self._is_ambiguous(query)
 
-        if route_hints.get("force_agent") == "inspection_task":
+        if route_hints.get("force_agent") == "quality_analysis":
             forced_sub_route = "quality_qa" if has_quality_signal and not has_task_signal else "task_create"
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route=forced_sub_route,
                 intent=forced_sub_route,
                 reason="front-end selected inspection workspace; policy kept confirmation gate",
@@ -350,7 +350,7 @@ class AgentRoutePolicy:
         # 1. 结构化文件 + 检测意图 → inspection_execute
         if has_structured_file and (has_task_signal or has_quality_signal):
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="inspection_execute",
                 intent="inspection_execute",
                 reason="结构化文件 + 检测意图",
@@ -360,7 +360,7 @@ class AgentRoutePolicy:
         # 2. 图片 + 检测意图 → inspection_execute
         if (has_image_attachment or image_urls) and has_task_signal:
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="task_create",
                 intent="task_create",
                 reason="图片 + 检测意图",
@@ -370,7 +370,7 @@ class AgentRoutePolicy:
         # 3. 明确任务创建意图 → task_create
         if (has_image_attachment or image_urls) and has_quality_signal:
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="quality_qa",
                 intent="quality_qa",
                 reason="image plus quality question; answer before formal task submission",
@@ -379,7 +379,7 @@ class AgentRoutePolicy:
 
         if has_task_signal and not has_quality_signal:
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="task_create",
                 intent="task_create",
                 reason="检测到任务创建意图关键词",
@@ -389,7 +389,7 @@ class AgentRoutePolicy:
         # 4. 质检问答语义 → quality_qa
         if has_quality_signal:
             return AgentRouteDecision(
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="quality_qa",
                 intent="quality_qa",
                 reason="检测到质检问答语义",

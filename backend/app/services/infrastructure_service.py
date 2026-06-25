@@ -173,17 +173,14 @@ class InfrastructureService:
         try:
             storage = build_object_storage()
             if backend == "minio":
-                bucket_exists = await asyncio.to_thread(storage.bucket_exists, settings.s3_bucket)
+                await asyncio.to_thread(storage.ensure_bucket, settings.s3_bucket)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 return InfrastructureComponentStatus(
                     name="MinIO",
                     kind="storage",
-                    status="healthy" if bucket_exists else "unhealthy",
+                    status="healthy",
                     latency_ms=latency_ms,
-                    detail=(
-                        f"bucket={settings.s3_bucket}, exists={bucket_exists}"
-                        + ("" if bucket_exists else ", error=bucket_missing")
-                    ),
+                    detail=f"bucket={settings.s3_bucket}, endpoint={settings.s3_endpoint}",
                     last_check_at=checked_at,
                 )
             upload_dir = Path(settings.local_upload_dir)

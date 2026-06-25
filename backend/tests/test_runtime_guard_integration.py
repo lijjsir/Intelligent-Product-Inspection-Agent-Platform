@@ -1,69 +1,43 @@
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
-from agent.contracts import NormalizedRequest
-from agent.subgraphs.quality_judgement.graph import QualityJudgementSubgraph
 from agent.router.runtime_guard import AgentRuntimeGuard
+from app.services.agent_manager_service import AgentManagerService
 from infra.cache.memory_cache import _runtime_guard_cache
 
 
 @pytest.mark.asyncio
-async def test_quality_judgement_passes_db_session_to_agent_manager(monkeypatch):
+async def test_agent_manager_service_passes_db_session_to_manager():
     captured: dict[str, object] = {}
     fake_session = object()
-
-    @asynccontextmanager
-    async def fake_get_session():
-        captured["session_opened"] = True
-        yield fake_session
 
     class FakeManager:
         async def run(self, request, db_session=None):
             captured["request_id"] = request.request_id
             captured["db_session"] = db_session
-            return SimpleNamespace(
-                route_decision=SimpleNamespace(
-                    selected_agent="chat",
-                    sub_route="general_chat",
-                    reason="test",
-                    intent="general_chat",
-                    confidence=1.0,
-                    requires_confirmation=False,
-                    route_source="rule",
-                    fallback_agent=None,
-                ),
-                agent_output={
-                    "message_type": "assistant_text",
-                    "answer": "guarded",
-                    "summary": "",
-                    "citations": [],
-                    "quality": {},
-                    "persistable_output": {},
-                    "raw_state": {},
-                },
-            )
+            return SimpleNamespace(status="completed")
 
-    monkeypatch.setattr("agent.subgraphs.quality_judgement.graph.get_session", fake_get_session)
-    monkeypatch.setattr("agent.router.AgentManager", FakeManager)
-
-    output = await QualityJudgementSubgraph().run(
-        NormalizedRequest(
-            request_id="req-guard-1",
-            workflow_run_id="wf-guard-1",
-            org_id="org-1",
-            user_id="user-1",
-            query="你好",
-        )
+    service = AgentManagerService()
+    service._manager = FakeManager()
+    output = await service.run_chat(
+        {
+            "request_id": "req-guard-1",
+            "workflow_run_id": "wf-guard-1",
+            "session_id": "session-1",
+            "assistant_message_id": "message-1",
+            "org_id": "org-1",
+            "user_id": "user-1",
+            "query": "你好",
+        },
+        db_session=fake_session,
     )
 
     assert captured == {
-        "session_opened": True,
         "request_id": "req-guard-1",
         "db_session": fake_session,
     }
-    assert output.answer == "guarded"
+    assert output.status == "completed"
 
 
 @pytest.mark.asyncio

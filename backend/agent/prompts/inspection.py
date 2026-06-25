@@ -25,7 +25,7 @@ INSPECTION_PROMPTS = {
         "temperature": 0.2,
     },
     "task_create": {
-        "version": "inspection_task_create_v1",
+        "version": "quality_task_create_v1",
         "system": INSPECTION_TASK_CREATE_V1,
         "temperature": 0.3,
     },
