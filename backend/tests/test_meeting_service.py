@@ -16,6 +16,7 @@ from app.repositories.meeting_repo import MeetingRepository
 from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingAgentRunRequest,
+    MeetingMemoryScopeRequest,
     MeetingMemoryExtractRequest,
     MeetingMemoryUpdateRequest,
 )
@@ -46,9 +47,29 @@ class FakeMeetingRepo:
     def __init__(self):
         self.created_messages: list[dict] = []
         self.messages: list[SimpleNamespace] = []
+        self.memory_tags: list[dict] = []
+        self.room = SimpleNamespace(
+            id="room-1",
+            org_id="org-1",
+            created_by="user-1",
+            status="active",
+            password_hash=None,
+        )
 
     async def get_room(self, org_id: str, room_id: str):
-        return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1")
+        return SimpleNamespace(
+            id=room_id,
+            org_id=org_id,
+            created_by="user-1",
+            status=getattr(self.room, "status", "active"),
+            password_hash=getattr(self.room, "password_hash", None),
+        )
+
+    async def get_room_by_code(self, org_id: str, access_code: str):
+        return self.room
+
+    async def add_member(self, *, org_id: str, room_id: str, user_id: str, role: str = "member"):
+        return SimpleNamespace(id="member-1", org_id=org_id, room_id=room_id, user_id=user_id, role=role)
 
     async def get_member(self, org_id: str, room_id: str, user_id: str):
         return SimpleNamespace(id="member-1", org_id=org_id, room_id=room_id, user_id=user_id)
@@ -91,11 +112,36 @@ class FakeMeetingRepo:
         for message in self.messages:
             if message.room_id != room_id or message.seq_no <= after_seq:
                 continue
-            recipient_id = getattr(message, "private_recipient_user_id", None)
-            if recipient_id and visible_user_id not in {message.user_id, recipient_id}:
+            metadata = dict(getattr(message, "metadata_json", None) or {})
+            recipient_id = getattr(message, "private_recipient_user_id", None) or metadata.get("private_recipient_user_id")
+            visibility = str(metadata.get("visibility") or "room")
+            audience_scope_id = metadata.get("audience_scope_id")
+            if visible_user_id is None:
+                if visibility == "private" or recipient_id or message.message_type in {"agent", "agent_streaming"}:
+                    continue
+            elif visibility == "private":
+                if visible_user_id not in {message.user_id, recipient_id, audience_scope_id}:
+                    continue
+            elif recipient_id and visible_user_id not in {message.user_id, recipient_id}:
                 continue
             results.append(message)
         return results[:limit]
+
+    async def replace_memory_tags(self, *, org_id: str, memory_id: str, tags: list[dict[str, str]]):
+        self.memory_tags = [
+            item
+            for item in self.memory_tags
+            if not (item["org_id"] == org_id and item["memory_id"] == memory_id)
+        ]
+        created = [{"org_id": org_id, "memory_id": memory_id, **tag} for tag in tags]
+        self.memory_tags.extend(created)
+        return [SimpleNamespace(**item) for item in created]
+
+    async def get_agents(self, org_id: str, room_id: str):
+        return []
+
+    async def list_memory_items_for_scopes(self, **kwargs):
+        return []
 
 
 def test_meeting_stream_private_event_visible_to_sender_and_recipient_only():
@@ -225,6 +271,18 @@ async def test_send_message_blocks_closed_room():
 
 
 @pytest.mark.asyncio
+async def test_join_room_blocks_closed_room():
+    repo = FakeMeetingRepo()
+    repo.room.status = "closed"
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = repo
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError):
+        await service.join_room("ABC123")
+
+
+@pytest.mark.asyncio
 async def test_send_message_triggers_general_agent_special_mention(monkeypatch):
     fake_repo = FakeMeetingRepo()
     fake_users = FakeUsersRepo()
@@ -338,6 +396,56 @@ async def test_private_message_is_visible_to_sender_and_recipient_only(monkeypat
     third_party_service._users = FakeUsersRepo()
     third_party_messages = await third_party_service.list_messages("room-1")
     assert third_party_messages == []
+
+
+@pytest.mark.asyncio
+async def test_unmarked_agent_message_is_room_visible_and_legacy_private_flag_is_filtered():
+    fake_repo = FakeMeetingRepo()
+    fake_session = FakeSession()
+    fake_repo.messages = [
+        SimpleNamespace(
+            id="public-1",
+            room_id="room-1",
+            user_id="user-2",
+            username="bob",
+            seq_no=1,
+            content="public",
+            message_type="user",
+            private_recipient_user_id=None,
+        ),
+        SimpleNamespace(
+            id="legacy-agent-1",
+            room_id="room-1",
+            user_id="user-1",
+            username="会议Agent",
+            seq_no=2,
+            content="room answer",
+            message_type="agent",
+            private_recipient_user_id=None,
+        ),
+        SimpleNamespace(
+            id="private-agent-1",
+            room_id="room-1",
+            user_id="user-1",
+            username="会议Agent",
+            seq_no=3,
+            content="private answer",
+            message_type="agent",
+            private_recipient_user_id="user-1",
+        ),
+    ]
+
+    requester_service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    requester_service._repo = fake_repo
+    requester_service._users = FakeUsersRepo()
+    requester_messages = await requester_service.list_messages("room-1")
+    assert [message.id for message in requester_messages] == ["public-1", "legacy-agent-1", "private-agent-1"]
+
+    other_service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-2")
+    other_service._repo = fake_repo
+    other_service._users = FakeUsersRepo()
+    other_messages = await other_service.list_messages("room-1")
+    assert [message.id for message in other_messages] == ["public-1", "legacy-agent-1"]
 
 
 @pytest.mark.asyncio
@@ -916,14 +1024,14 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
             statuses=None,
             limit: int = 50,
         ):
-            if statuses == ["active"]:
+            if statuses == ["confirmed", "active"]:
                 return [
                     SimpleNamespace(
                         memory_id="mem_active_1",
                         content_summary="P001 最近批次风险上升",
-                        content_json={"title": "P001 风险上升", "recommended_scope": "meeting"},
+                        content_json={"title": "P001 风险上升", "recommended_scope": "meeting_room"},
                         confidence=0.8,
-                        status="active",
+                        status="confirmed",
                         memory_type="decision",
                         created_by="user-1",
                         created_at=None,
@@ -963,14 +1071,170 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
     )
 
     assert result.selected_subgraph == "meeting_summary"
+    assert result.response_visibility == "room"
     assert "当前会议上下文" in result.answer
     assert result.memory_sources[0].memory_id == "mem_active_1"
     assert len(result.candidate_memories) == 2
     assert fake_repo.created_messages[-1]["agent_id"] == "general_agent"
     assert fake_repo.created_messages[-1]["metadata_json"]["selected_subgraph"] == "meeting_summary"
+    assert fake_repo.created_messages[-1]["metadata_json"]["visibility"] == "room"
+    assert fake_repo.created_messages[-1]["metadata_json"]["audience_scope_type"] == "meeting_room"
+    assert "private_user_ids" not in published[-1]
     assert fake_repo.scope_bindings[0]["scope_type"] == "meeting_room"
     assert fake_repo.transfer_logs[0]["status"] == "candidate"
     assert published[-1]["event"] == "message_created"
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_sensitive_query_degrades_to_private(monkeypatch):
+    class FakeRepo(FakeMeetingRepo):
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [SimpleNamespace(id="msg-1", content="@会议Agent 帮我查一下 token", message_type="user")]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(query="@会议Agent 帮我查一下 token", mode="meeting_summary"),
+    )
+
+    metadata = fake_repo.created_messages[-1]["metadata_json"]
+    assert result.response_visibility == "private"
+    assert metadata["visibility"] == "private"
+    assert metadata["audience_scope_type"] == "user"
+    assert metadata["audience_scope_id"] == "user-1"
+    assert metadata["private_recipient_user_id"] == "user-1"
+    assert published[-1]["private_user_ids"] == ["user-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_personal_memory_scope_degrades_to_private(monkeypatch):
+    class FakeRepo(FakeMeetingRepo):
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [SimpleNamespace(id="msg-1", content="@会议Agent 结合我的记忆总结", message_type="user")]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(
+            query="@会议Agent 结合我的记忆总结",
+            mode="meeting_summary",
+            memory_scope=MeetingMemoryScopeRequest(include_user=True),
+        ),
+    )
+
+    assert result.response_visibility == "private"
+    assert fake_repo.created_messages[-1]["metadata_json"]["visibility"] == "private"
+    assert published[-1]["private_user_ids"] == ["user-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_recalls_user_meeting_agent_and_org_scope_memories(monkeypatch):
+    def memory(
+        memory_id: str,
+        title: str,
+        summary: str,
+        scope_type: str,
+        scope_id: str,
+        updated_at: int,
+    ):
+        return SimpleNamespace(
+            memory_id=memory_id,
+            content_summary=summary,
+            content_json={
+                "title": title,
+                "target_scope_type": scope_type,
+                "target_scope_id": scope_id,
+                "published_scope": scope_type,
+            },
+            confidence=0.8,
+            status="confirmed",
+            memory_type="decision",
+            created_by="user-1",
+            created_at=None,
+            updated_at=updated_at,
+            scope_json={"scope_type": scope_type, "scope_id": scope_id},
+        )
+
+    class FakeRepo(FakeMeetingRepo):
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50):
+            return [SimpleNamespace(id="msg-1", content="@会议Agent 总结一下可用记忆", message_type="user")]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return [
+                memory("mem-room", "会议室记忆", "当前会议室已确认结论", "meeting_room", "room-1", 1),
+                memory("mem-shared", "重复共享记忆", "同一条记忆只应出现一次", "meeting_room", "room-1", 2),
+            ]
+
+        async def list_memory_items_for_scopes(self, *, org_id: str, scope_pairs, statuses=None, limit: int = 50):
+            assert ("user", "user-1") in scope_pairs
+            assert ("user", "user-2") not in scope_pairs
+            assert ("agent", "general_agent") in scope_pairs
+            assert ("agent", "agent-in-room") not in scope_pairs
+            assert ("agent", "agent-outside") not in scope_pairs
+            assert ("org_space", "org-1") in scope_pairs
+            return [
+                memory("mem-user", "个人记忆", "当前提问人的个人经验", "user", "user-1", 5),
+                memory("mem-agent", "Agent 记忆", "当前会议 Agent 可召回经验", "agent", "general_agent", 4),
+                memory("mem-org", "组织记忆", "组织共享稳定结论", "org_space", "org-1", 3),
+                memory("mem-shared", "重复共享记忆", "同一条记忆只应出现一次", "user", "user-1", 6),
+            ]
+
+    async def fake_publish(room_id: str, event: dict):
+        return None
+
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(
+            query="@会议Agent 总结一下可用记忆",
+            mode="auto",
+            memory_scope=MeetingMemoryScopeRequest(include_user=True),
+        ),
+    )
+
+    assert result.response_visibility == "private"
+    source_by_id = {item.memory_id: item for item in result.memory_sources}
+    assert source_by_id["mem-room"].scope == "meeting_room"
+    assert source_by_id["mem-user"].scope == "user"
+    assert source_by_id["mem-agent"].scope == "agent"
+    assert source_by_id["mem-org"].scope == "org_space"
+    assert [item.memory_id for item in result.memory_sources].count("mem-shared") == 1
+    metadata_sources = fake_repo.created_messages[-1]["metadata_json"]["memory_sources"]
+    assert {item["scope"] for item in metadata_sources} >= {"meeting_room", "user", "agent", "org_space"}
 
 
 @pytest.mark.asyncio
@@ -1113,6 +1377,431 @@ async def test_extract_memories_preserves_full_candidate_detail_and_source_messa
     assert fake_repo.created_memory_items[0].content_json["source_message_id"] == "msg-summary-1"
 
 
+@pytest.mark.asyncio
+async def test_extract_memories_summarizes_candidate_title_from_quality_content():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-edge-lighting",
+                    content="该产品需要注意边缘识别，光照强度更好能识别更清楚准确",
+                    message_type="user",
+                )
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=1))
+
+    candidate = result[0]
+    assert candidate.title == "边缘识别需加强光照条件"
+    assert candidate.content == "该产品需要注意边缘识别，光照强度更好能识别更清楚准确"
+    assert candidate.title != candidate.content
+    assert fake_repo.created_memory_items[0].content_json["title"] == candidate.title
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_filters_low_value_messages():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(id="msg-hello", content="收到，谢谢", message_type="user"),
+                SimpleNamespace(id="msg-question", content="最近一次质检怎么样？", message_type="user"),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    assert result == []
+    assert fake_repo.created_memory_items == []
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_splits_mixed_business_discussion_into_spans():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-mixed",
+                    content="产品 P001 边缘识别需要加强光照；批次 B002 复测不稳定，需要继续关注风险。",
+                    message_type="user",
+                )
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    assert len(result) == 2
+    assert result[0].affected_objects["product_ids"] == ["P001"]
+    assert result[1].affected_objects["batch_nos"] == ["B002"]
+    assert all(item.source_spans for item in result)
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_uses_explicit_business_object_without_room_binding():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(
+                id=room_id,
+                org_id=org_id,
+                created_by="user-1",
+                memory_policy={"business_context": {"task_ids": [], "product_ids": [], "batch_nos": [], "standard_ids": [], "tasks": []}},
+            )
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-product",
+                    content="产品 P900 多次质检出现边缘识别不稳定，建议未来两周重点复核风险。",
+                    message_type="user",
+                )
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    assert len(result) == 1
+    candidate = result[0]
+    assert candidate.memory_category == "business_memory"
+    assert candidate.affected_objects["product_ids"] == ["P900"]
+    assert candidate.object_resolution_status == "resolved"
+    assert candidate.recommended_scope == "org_space"
+    assert candidate.recommended_scope_id == "current"
+    assert "org_space" in candidate.shareability["allowed_scopes"]
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_uses_agent_quality_reply_business_objects():
+    task_id = "019ececf-acba-7fba-b349-48cb5e8dc9cf"
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(
+                id=room_id,
+                org_id=org_id,
+                created_by="user-1",
+                memory_policy={"business_context": {"task_ids": [], "product_ids": [], "batch_nos": [], "standard_ids": [], "tasks": []}},
+            )
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-question",
+                    content="@会议Agent 查看最近一次质检任务分析其失败原因 总结该产品/批次有无风险",
+                    message_type="user",
+                ),
+                SimpleNamespace(
+                    id="msg-agent",
+                    content=(
+                        f"最近一次质检任务（任务ID {task_id}，产品 screw，规格 SCREW-A-2026-V1，"
+                        "2026-06-16 05:03 完成）的判定结果为“需人工复核”（manual_required），整体得分仅 0.08。"
+                        "结合此前讨论中提到的“边缘识别”和“光照强度”问题，失败的直接原因很可能是图像中产品边缘模糊、"
+                        "对比度不足或光照不均匀，导致算法无法准确识别。"
+                    ),
+                    message_type="agent",
+                    metadata_json={"selected_subgraph": "quality_task_status"},
+                ),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    candidate = next(item for item in result if task_id in item.affected_objects["inspection_task_ids"])
+    assert candidate.memory_category == "business_memory"
+    assert candidate.object_resolution_status == "resolved"
+    assert candidate.affected_objects["product_ids"] == ["screw"]
+    assert candidate.affected_objects["standard_ids"] == ["SCREW-A-2026-V1"]
+    assert candidate.recommended_scope == "meeting_room"
+    assert candidate.recommended_scope_id is None
+    assert "meeting_room" in candidate.shareability["allowed_scopes"]
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_prioritizes_latest_agent_quality_context_over_old_member_hint():
+    task_id = "019ececf-acba-7fba-b349-48cb5e8dc9cf"
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(
+                id=room_id,
+                org_id=org_id,
+                created_by="user-1",
+                memory_policy={"business_context": {"task_ids": [], "product_ids": [], "batch_nos": [], "standard_ids": [], "tasks": []}},
+            )
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-old-product-hint",
+                    content="该产品需要注意边缘识别，光照强度更好能识别更清楚准确",
+                    message_type="user",
+                ),
+                SimpleNamespace(
+                    id="msg-question",
+                    content="@会议Agent 查看最近一次检测任务的情况，分析失败原因和产品/批次风险",
+                    message_type="user",
+                ),
+                SimpleNamespace(
+                    id="msg-agent-latest",
+                    content="最近一次检测任务需要人工复核，我已结合质检结果汇总失败原因。",
+                    message_type="agent",
+                    metadata_json={
+                        "selected_subgraph": "quality_task_status",
+                        "message_type": "task_status",
+                        "inspection_context_snapshot": {
+                            "latest_task": {
+                                "task_id": task_id,
+                                "product_id": "screw",
+                                "spec_code": "SCREW-A-2026-V1",
+                                "status": "completed",
+                                "verdict": "manual_required",
+                                "overall_score": 0.08,
+                                "defect_summary": "surface_scratch 92.0%: 螺杆上部靠近螺纹起始位置存在一处表面划痕",
+                                "failure_reasons": [
+                                    "检出表面划痕，当前判定需要人工复核。",
+                                    "未映射缺陷: surface_scratch",
+                                ],
+                                "model_key": "doubao-seed-2-0-lite-260215",
+                                "prompt_version": "phase3-v1",
+                                "latency_ms": 34830,
+                            }
+                        },
+                    },
+                ),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    assert result[0].source_message_id == "msg-agent-latest"
+    assert result[0].recommended_scope == "meeting_room"
+    assert result[0].recommended_scope_id is None
+    assert result[0].affected_objects["inspection_task_ids"] == [task_id]
+    assert result[0].affected_objects["product_ids"] == ["screw"]
+    assert result[0].affected_objects["standard_ids"] == ["SCREW-A-2026-V1"]
+    assert "surface_scratch" in result[0].content
+    assert "msg-old-product-hint" not in result[0].source_message_id
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_skips_seen_source_spans_and_links_related_memory():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.created_memory_items = []
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-old",
+                    content="产品 P001 边缘识别需要加强光照。",
+                    message_type="user",
+                ),
+                SimpleNamespace(
+                    id="msg-new",
+                    content="产品 P001 边缘识别在强光下更稳定，需要纳入复测关注。",
+                    message_type="user",
+                ),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            old_content = "产品 P001 边缘识别需要加强光照。"
+            return [
+                SimpleNamespace(
+                    memory_id="mem-old",
+                    status="candidate",
+                    content_summary=old_content,
+                    content_json={
+                        "title": "P001 边缘识别需加强光照条件",
+                        "content": old_content,
+                        "dedupe_key": "quality_fact|product:P001|pattern:边缘识别|光照|P001",
+                        "source_spans": [
+                            {
+                                "message_id": "msg-old",
+                                "span_index": 1,
+                                "text": old_content,
+                            }
+                        ],
+                    },
+                )
+            ]
+
+        async def create_memory_item(self, item):
+            self.created_memory_items.append(item)
+            return item
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=3))
+
+    assert len(result) == 1
+    assert result[0].source_message_id == "msg-new"
+    assert result[0].related_memory_ids == ["mem-old"]
+    assert result[0].shareability["related_memory_ids"] == ["mem-old"]
+
+
 def test_candidate_detail_text_filters_rejection_noise():
     text = """一条候选记忆已被拒绝，理由：测试
 
@@ -1132,6 +1821,11 @@ async def test_run_general_agent_auto_routes_to_agent_manager(monkeypatch):
     captured_payloads: list[dict] = []
 
     class FakeRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            room = await super().get_room(org_id, room_id)
+            room.allowed_data_domains = ["meeting", "memory", "quality", "standard"]
+            return room
+
         async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50):
             return [
                 SimpleNamespace(id="msg-1", seq_no=1, username="alice", content="我们刚才提到了最近的质检任务。", message_type="user"),
@@ -1198,6 +1892,194 @@ async def test_run_general_agent_auto_routes_to_agent_manager(monkeypatch):
     assert metadata["route_source"] == "agent_manager"
     assert metadata["selected_agent"] == "inspection_task"
     assert metadata["capabilities_used"] == ["quality.task.status", "chat.response.compose"]
+    assert published[-1]["event"] == "message_created"
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_retrieves_object_memories_from_latest_inspection_context(monkeypatch):
+    captured_payloads: list[dict] = []
+    task_id = "019ececf-acba-7fba-b349-48cb5e8dc9cf"
+
+    class FakeRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            room = await super().get_room(org_id, room_id)
+            room.allowed_data_domains = ["meeting", "memory", "quality", "standard"]
+            return room
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-1",
+                    seq_no=1,
+                    username="expert",
+                    content="@会议Agent 最近一次质检任务有没有什么新的讨论内容",
+                    message_type="user",
+                ),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            assert kwargs["business_context"]["task_ids"] == [task_id]
+            content = "最近一次质检任务需要关注 screw 边缘识别，光照条件不足会影响判定稳定性。"
+            return [
+                SimpleNamespace(
+                    memory_id="mem-task-1",
+                    status="active",
+                    content_summary=content,
+                    content_json={
+                        "title": "screw 边缘识别需加强光照条件",
+                        "content": content,
+                        "memory_type": "quality_fact",
+                        "memory_category": "business_memory",
+                        "published_scope": "inspection_task",
+                        "target_scope_type": "inspection_task",
+                        "target_scope_id": task_id,
+                    },
+                    scope_json={"scope_type": "inspection_task", "scope_id": task_id},
+                )
+            ]
+
+    class FakeAgentManagerService:
+        async def run_chat(self, payload: dict, db_session=None):
+            captured_payloads.append(payload)
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="inspection_task",
+                    sub_route="quality_task_status",
+                    intent="quality_task_status",
+                    confidence=0.9,
+                    reason="quality_task_status",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "answer": "已结合业务标签记忆：该任务此前沉淀了 screw 边缘识别需加强光照条件。",
+                    "message_type": "task_status",
+                    "capabilities_used": ["quality.task.status", "chat.response.compose"],
+                },
+                status="completed",
+            )
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_session = FakeSession()
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod, "AgentManagerService", FakeAgentManagerService)
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    async def fake_build_inspection_context(room=None):
+        return {
+            "stats": {"total": 1},
+            "latest_task": {
+                "task_id": task_id,
+                "product_id": "screw",
+                "spec_code": "SCREW-A-2026-V1",
+                "status": "completed",
+                "verdict": "manual_required",
+            },
+            "recent_tasks": [],
+            "recent_failures": [],
+            "selected_tasks": [],
+        }
+
+    service._build_meeting_inspection_context = fake_build_inspection_context
+
+    result = await service.run_general_agent(
+        "room-2",
+        MeetingAgentRunRequest(query="@会议Agent 最近一次质检任务有没有什么新的讨论内容", mode="auto"),
+    )
+
+    assert result.selected_subgraph == "quality_task_status"
+    assert result.memory_sources[0].memory_id == "mem-task-1"
+    assert captured_payloads[0]["ext"]["memory_sources"][0]["memory_id"] == "mem-task-1"
+    assert captured_payloads[0]["ext"]["meeting_context"]["business_binding"]["task_ids"] == [task_id]
+    metadata = fake_repo.created_messages[-1]["metadata_json"]
+    assert metadata["memory_sources"][0]["memory_id"] == "mem-task-1"
+    assert "业务标签记忆" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_run_general_agent_quality_failure_summary_does_not_become_meeting_summary(monkeypatch):
+    captured_payloads: list[dict] = []
+
+    class FakeRepo(FakeMeetingRepo):
+        async def get_room(self, org_id: str, room_id: str):
+            room = await super().get_room(org_id, room_id)
+            room.allowed_data_domains = ["meeting", "memory", "quality", "standard"]
+            return room
+
+        async def list_recent_messages(self, *, org_id: str, room_id: str, limit: int = 50, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-1",
+                    seq_no=1,
+                    username="expert",
+                    content="@会议Agent 分析最近的质检状况并总结为什么没通过",
+                    message_type="user",
+                ),
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+    class FakeAgentManagerService:
+        async def run_chat(self, payload: dict, db_session=None):
+            captured_payloads.append(payload)
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent="inspection_task",
+                    sub_route="quality_task_status",
+                    intent="quality_task_status",
+                    confidence=0.92,
+                    reason="quality failure summary",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "answer": "最近质检未通过原因：评分低于阈值，检测结果为不合格。",
+                    "message_type": "task_status",
+                    "capabilities_used": ["quality.task.status", "chat.response.compose"],
+                },
+                status="completed",
+            )
+
+    published: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published.append(event)
+
+    fake_session = FakeSession()
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_service_mod, "AgentManagerService", FakeAgentManagerService)
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    async def fake_build_inspection_context():
+        return {"stats": {"failed": 1}, "recent_tasks": [{"id": "task-1", "status": "failed"}]}
+
+    service._build_meeting_inspection_context = fake_build_inspection_context
+
+    result = await service.run_general_agent(
+        "room-1",
+        MeetingAgentRunRequest(query="@会议Agent 分析最近的质检状况并总结为什么没通过", mode="auto"),
+    )
+
+    assert result.selected_subgraph == "quality_task_status"
+    assert "未通过原因" in result.answer
+    assert result.candidate_memories == []
+    assert captured_payloads[0]["query"] == "分析最近的质检状况并总结为什么没通过"
+    assert captured_payloads[0]["ext"]["inspection_context"]["stats"]["failed"] == 1
+    metadata = fake_repo.created_messages[-1]["metadata_json"]
+    assert metadata["selected_subgraph"] == "quality_task_status"
+    assert metadata["route_source"] == "agent_manager"
+    assert "candidate_memories" not in metadata
     assert published[-1]["event"] == "message_created"
 
 
@@ -1343,8 +2225,8 @@ async def test_confirm_memory_publishes_meeting_scope_binding():
         MeetingMemoryUpdateRequest(title="P001 抽检策略", content="P001 下月提高抽检比例", scope="meeting"),
     )
 
-    assert result.status == "active"
-    assert result.scope == "meeting"
+    assert result.status == "confirmed"
+    assert result.scope == "meeting_room"
     assert result.confirmed_by == "user-1"
     assert memory.scope_json["scope_type"] == "meeting_room"
     assert memory.scope_json["scope_id"] == "room-1"
@@ -1421,10 +2303,10 @@ async def test_extract_memories_marks_business_memory_with_scope_metadata():
     result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=1))
 
     assert result[0].memory_category == "business_memory"
-    assert result[0].recommended_scope == "inspection_task"
-    assert result[0].recommended_scope_id == "task-1"
+    assert result[0].recommended_scope == "meeting_room"
+    assert result[0].recommended_scope_id is None
     assert result[0].shareability["cross_room_allowed"] is True
-    assert "product" in result[0].shareability["allowed_scopes"]
+    assert "org_space" in result[0].shareability["allowed_scopes"]
     assert result[0].source_refs == [
         {"type": "meeting_room", "id": "room-1"},
         {"type": "meeting_message", "id": "msg-business-1"},
@@ -1483,10 +2365,10 @@ async def test_quality_fact_without_business_binding_is_business_but_meeting_onl
     candidate = result[0]
     assert candidate.memory_type == "quality_fact"
     assert candidate.memory_category == "business_memory"
-    assert candidate.recommended_scope == "meeting"
-    assert candidate.shareability["allowed_scopes"] == ["meeting"]
-    assert "inspection_task" in candidate.shareability["missing_bindings"]
-    assert any("单次质检事实默认发布到质检任务" in warning for warning in candidate.warnings)
+    assert candidate.recommended_scope == "meeting_room"
+    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert candidate.shareability["missing_bindings"] == []
+    assert any("不会把质检任务作为共享目标" in warning for warning in candidate.warnings)
 
 
 def test_meeting_memory_scope_validation_accepts_only_stable_publish_targets():
@@ -1496,9 +2378,9 @@ def test_meeting_memory_scope_validation_accepts_only_stable_publish_targets():
     with pytest.raises(PydanticValidationError):
         MeetingMemoryUpdateRequest(scope="rag_space", scope_id="rag-001")
 
-    request = MeetingMemoryUpdateRequest(scope="workspace", scope_id="quality_risk_library")
+    request = MeetingMemoryUpdateRequest(scope="workspace", scope_id="current")
     assert request.scope == "workspace"
-    assert request.scope_id == "quality_risk_library"
+    assert request.scope_id == "current"
 
 
 def _meeting_memory(
@@ -1541,19 +2423,8 @@ class FakeTaskRepository:
         return None
 
 
-class FakeAlertRepository:
-    created_alerts: list[dict] = []
-
-    def __init__(self, session):
-        self.session = session
-
-    async def create_once(self, payload: dict):
-        self.created_alerts.append(payload)
-        return SimpleNamespace(**payload)
-
-
 @pytest.mark.asyncio
-async def test_non_business_memory_cannot_publish_to_product_scope():
+async def test_business_object_scope_is_rejected_by_schema():
     memory = _meeting_memory(category="meeting_memory", content="会议决定下周三继续同步协作安排")
     memory.content_json["title"] = "会议同步安排"
 
@@ -1581,11 +2452,8 @@ async def test_non_business_memory_cannot_publish_to_product_scope():
     service._repo = FakeRepo()
     service._users = FakeUsersRepo()
 
-    with pytest.raises(ValidationError, match="only business_memory"):
-        await service.confirm_memory(
-            memory.memory_id,
-            MeetingMemoryUpdateRequest(scope="product", scope_id="P001"),
-        )
+    with pytest.raises(PydanticValidationError):
+        MeetingMemoryUpdateRequest(scope="product", scope_id="P001")
 
 
 @pytest.mark.asyncio
@@ -1675,12 +2543,12 @@ async def test_confirm_memory_reclassifies_quality_fact_from_edited_content():
 
     assert result.memory_type == "quality_fact"
     assert result.memory_category == "business_memory"
-    assert result.shareability["allowed_scopes"] == ["meeting"]
-    assert "inspection_task" in result.shareability["missing_bindings"]
+    assert result.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert result.shareability["missing_bindings"] == []
 
 
 @pytest.mark.asyncio
-async def test_business_memory_product_publish_requires_bound_context():
+async def test_business_memory_publishes_to_org_space_and_records_tags():
     memory = _meeting_memory(category="business_memory")
 
     class FakeRepo(FakeMeetingRepo):
@@ -1741,23 +2609,91 @@ async def test_business_memory_product_publish_requires_bound_context():
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 
-    with pytest.raises(ValidationError, match="product scope must be bound"):
-        await service.confirm_memory(
-            memory.memory_id,
-            MeetingMemoryUpdateRequest(scope="product", scope_id="P999", is_business_memory=True),
-        )
+    result = await service.confirm_memory(
+        memory.memory_id,
+        MeetingMemoryUpdateRequest(scope="org_space", scope_id="current", is_business_memory=True),
+    )
+
+    assert result.status == "confirmed"
+    assert result.scope == "org_space"
+    assert result.scope_type == "org_space"
+    assert result.scope_id == "org-1"
+    assert fake_repo.scope_bindings[-1]["scope_type"] == "org_space"
+    assert fake_repo.transfer_logs[-1]["to_scope_type"] == "org_space"
+    assert {"org_id": "org-1", "memory_id": memory.memory_id, "tag_type": "product", "tag_value": "P001"} in fake_repo.memory_tags
+
+
+@pytest.mark.asyncio
+async def test_calibrated_affected_product_becomes_memory_tag_without_scope_binding():
+    memory = _meeting_memory(category="meeting_memory", content="产品 P900 复测不稳定，需要下周重点关注")
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(
+                id=room_id,
+                org_id=org_id,
+                created_by="user-1",
+                memory_policy={"business_context": {"task_ids": [], "product_ids": [], "batch_nos": [], "standard_ids": [], "tasks": []}},
+            )
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def update_memory_item(
+            self,
+            *,
+            org_id: str,
+            memory_id: str,
+            status=None,
+            content_summary=None,
+            content_json=None,
+            scope_json=None,
+        ):
+            if status is not None:
+                memory.status = status
+            if content_summary is not None:
+                memory.content_summary = content_summary
+            if content_json is not None:
+                memory.content_json = content_json
+            if scope_json is not None:
+                memory.scope_json = scope_json
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
 
     result = await service.confirm_memory(
         memory.memory_id,
-        MeetingMemoryUpdateRequest(scope="product", scope_id="P001", is_business_memory=True),
+        MeetingMemoryUpdateRequest(
+            scope="org_space",
+            scope_id="current",
+            is_business_memory=True,
+            affected_objects={"product_ids": ["P900"]},
+            object_resolution_status="resolved",
+        ),
     )
 
-    assert result.status == "active"
-    assert result.scope == "product"
-    assert result.scope_type == "product"
-    assert result.scope_id == "P001"
-    assert fake_repo.scope_bindings[-1]["scope_type"] == "product"
-    assert fake_repo.transfer_logs[-1]["to_scope_type"] == "product"
+    assert result.scope == "org_space"
+    assert result.scope_id == "org-1"
+    assert result.memory_category == "business_memory"
+    assert result.affected_objects["product_ids"] == ["P900"]
+    assert "org_space" in result.shareability["allowed_scopes"]
+    assert {"org_id": "org-1", "memory_id": memory.memory_id, "tag_type": "product", "tag_value": "P900"} in fake_repo.memory_tags
 
 
 @pytest.mark.asyncio
@@ -1819,11 +2755,11 @@ async def test_risk_forecast_generates_risk_insight_candidate():
     candidate = result.candidate_memories[0]
     assert candidate.memory_type == "risk_insight"
     assert candidate.memory_category == "business_memory"
-    assert candidate.recommended_scope == "batch"
-    assert candidate.recommended_scope_id == "B001"
+    assert candidate.recommended_scope == "org_space"
+    assert candidate.recommended_scope_id == "current"
     assert candidate.risk_level == "medium"
     assert candidate.forecast_window["days_min"] == 7
-    assert "workspace" in candidate.shareability["allowed_scopes"]
+    assert "org_space" in candidate.shareability["allowed_scopes"]
     assert fake_repo.created_memory_items[0].content_json["affected_objects"]["batch_nos"] == ["B001"]
 
 
@@ -1869,15 +2805,13 @@ async def test_risk_insight_without_business_binding_stays_in_meeting():
     candidate = result.candidate_memories[0]
     assert candidate.memory_type == "risk_insight"
     assert candidate.memory_category == "meeting_memory"
-    assert candidate.recommended_scope == "meeting"
-    assert candidate.shareability["allowed_scopes"] == ["meeting"]
+    assert candidate.recommended_scope == "meeting_room"
+    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert candidate.shareability["missing_bindings"] == []
 
 
 @pytest.mark.asyncio
-async def test_confirm_risk_insight_to_risk_library_creates_risk_forecast_alert(monkeypatch):
-    FakeAlertRepository.created_alerts = []
-    monkeypatch.setattr(meeting_service_mod, "AlertRepository", FakeAlertRepository)
-
+async def test_confirm_risk_insight_to_org_space_does_not_create_alert():
     memory = _meeting_memory(category="business_memory", content="B001 批次连续出现复测不稳定，未来 7-14 天需要重点关注")
     memory.content_json.update(
         {
@@ -1955,16 +2889,16 @@ async def test_confirm_risk_insight_to_risk_library_creates_risk_forecast_alert(
 
     result = await service.confirm_memory(
         memory.memory_id,
-        MeetingMemoryUpdateRequest(scope="workspace", scope_id="quality_risk_library", is_business_memory=True),
+        MeetingMemoryUpdateRequest(scope="org_space", scope_id="current", is_business_memory=True),
     )
 
-    assert result.scope == "workspace"
-    assert result.scope_type == "workspace"
-    assert result.scope_id == "quality_risk_library"
-    assert fake_repo.scope_bindings[-1]["scope_type"] == "workspace"
-    assert FakeAlertRepository.created_alerts[-1]["alert_type"] == "risk_forecast"
-    assert FakeAlertRepository.created_alerts[-1]["severity"] == "error"
-    assert FakeAlertRepository.created_alerts[-1]["detail"]["target_scope_id"] == "quality_risk_library"
+    assert result.scope == "org_space"
+    assert result.scope_type == "org_space"
+    assert result.scope_id == "org-1"
+    assert fake_repo.scope_bindings[-1]["scope_type"] == "org_space"
+    assert fake_repo.transfer_logs[-1]["to_scope_type"] == "org_space"
+    assert any("风险洞察是预测候选" in warning for warning in result.warnings)
+    assert "alert_on_confirmed_publish" not in result.shareability
 
 
 @pytest.mark.asyncio
@@ -1980,16 +2914,21 @@ async def test_quality_risk_library_requires_bound_business_object():
     service._repo = FakeRepo()
     service._users = FakeUsersRepo()
 
-    with pytest.raises(ValidationError, match="quality risk library publishing requires"):
+    with pytest.raises(ValidationError, match="org_space"):
         await service.confirm_memory(
             memory.memory_id,
-            MeetingMemoryUpdateRequest(scope="workspace", scope_id="quality_risk_library", is_business_memory=True),
+            MeetingMemoryUpdateRequest(scope="org_space", scope_id="quality_risk_library", is_business_memory=True),
         )
 
 
-def test_organization_memory_publish_scope_is_rejected_by_schema():
+def test_organization_memory_publish_scope_is_accepted_as_compat_alias():
+    request = MeetingMemoryUpdateRequest(scope="organization", scope_id="org-1", is_business_memory=True)
+    assert request.scope == "organization"
+
+
+def test_business_object_transfer_scope_is_rejected_by_schema():
     with pytest.raises(PydanticValidationError):
-        MeetingMemoryUpdateRequest(scope="organization", scope_id="org-1", is_business_memory=True)
+        meeting_service_mod.MeetingMemoryTransferRequest(to_scope_type="batch", to_scope_id="B001")
 
 
 @pytest.mark.asyncio
@@ -2076,6 +3015,136 @@ def test_agent_audit_memory_reads_are_serialized():
     result = service._serialize_agent_query_audit(row)
 
     assert result.memory_reads == [{"type": "memory", "id": "mem-1", "scope": "product"}]
+
+
+@pytest.mark.asyncio
+async def test_cross_room_share_creates_pending_approval_without_binding():
+    memory = _meeting_memory(status="active", category="meeting_memory", room_id="room-1")
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1", status="active")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id=f"member-{room_id}", org_id=org_id, room_id=room_id, user_id=user_id, role="host")
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def update_memory_item(self, *, org_id: str, memory_id: str, content_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            row = SimpleNamespace(id=f"transfer-{len(self.transfer_logs) + 1}", **kwargs, created_at=None, updated_at=None)
+            self.transfer_logs.append(kwargs)
+            return row
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.share_memory(
+        memory.memory_id,
+        meeting_service_mod.MeetingMemoryShareRequest(
+            target_scope_type="meeting_room",
+            target_scope_id="room-2",
+            share_reason="同步给目标会议室确认",
+        ),
+    )
+
+    assert fake_repo.scope_bindings == []
+    assert fake_repo.transfer_logs[-1]["status"] == "pending_approval"
+    assert fake_repo.transfer_logs[-1]["to_scope_id"] == "room-2"
+    assert result.shareability["requires_approval"] is True
+    assert result.shareability["approval_role"] == "target_room_host"
+    assert memory.content_json["pending_transfer_id"] == "transfer-1"
+
+
+@pytest.mark.asyncio
+async def test_approve_memory_share_writes_binding_and_executes_transfer():
+    memory = _meeting_memory(status="active", category="meeting_memory", room_id="room-1")
+    transfer = SimpleNamespace(
+        id="transfer-1",
+        memory_id=memory.memory_id,
+        from_scope_type="meeting_room",
+        from_scope_id="room-1",
+        to_scope_type="meeting_room",
+        to_scope_id="room-2",
+        transfer_reason="同步给目标会议室确认",
+        status="pending_approval",
+        operator_id="user-1",
+        created_at=None,
+        updated_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_statuses = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-2", status="active")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id=f"member-{room_id}", org_id=org_id, room_id=room_id, user_id=user_id, role="host")
+
+        async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+            return transfer if transfer_id == transfer.id else None
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def update_memory_item(self, *, org_id: str, memory_id: str, content_json=None, scope_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            if scope_json is not None:
+                memory.scope_json = scope_json
+            return memory
+
+        async def update_memory_transfer_log_status(self, *, org_id: str, transfer_id: str, status: str, operator_id: str):
+            transfer.status = status
+            transfer.operator_id = operator_id
+            self.transfer_statuses.append((transfer_id, status, operator_id))
+            return transfer
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-2")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.approve_memory_share("transfer-1")
+
+    assert fake_repo.scope_bindings == [
+        {
+            "org_id": "org-1",
+            "memory_id": memory.memory_id,
+            "scope_type": "meeting_room",
+            "scope_id": "room-2",
+            "permission": "read",
+            "created_by": "user-2",
+        }
+    ]
+    assert fake_repo.transfer_statuses == [("transfer-1", "executed", "user-2")]
+    assert result.scope_type == "meeting_room"
+    assert result.scope_id == "room-2"
+    assert memory.content_json["approved_transfer_id"] == "transfer-1"
 
 
 @pytest.mark.asyncio
@@ -2480,4 +3549,6 @@ async def test_autonomous_participation_emits_failure_on_llm_error(monkeypatch):
 
     assert any(evt["event"] == "agent_run_started" for evt in events)
     assert any(evt["event"] == "agent_run_failed" for evt in events)
+    assert all(evt.get("private_user_ids") == ["user-1"] for evt in events)
+    assert fake_repo.created_messages[-1]["metadata_json"]["private_recipient_user_id"] == "user-1"
     assert fake_repo.created_messages[-1]["content"].startswith("[Agent AI 助手] 响应失败:")

@@ -8,7 +8,16 @@ from typing import Any
 
 from agent.adapters.factory import AgentAdapterFactory
 from agent.llm.gateway import LLMGateway
+from app.core.data_domain_policy import (
+    RESPONSE_VISIBILITY_PRIVATE,
+    RESPONSE_VISIBILITY_ROOM,
+    authorize_meeting_query,
+    infer_requested_domains_for_query,
+    is_sensitive_authorization,
+    normalize_domains,
+)
 from app.core.ids import uuid7
+from app.core.permissions import ROLE_USER
 from app.repositories.meeting_repo import MeetingRepository
 from app.services.ai_response_text import normalize_ai_response_content
 from app.services.model_config_service import ModelConfigService
@@ -58,12 +67,15 @@ class MeetingAgentService:
         org_id: str,
         user_id: str,
         username: str,
+        user_role: str = ROLE_USER,
     ) -> None:
         workflow_run_id = str(uuid7())
         agent_message_id = str(uuid7())
 
         async def emit(event: dict[str, Any]) -> None:
             event.setdefault("ts", datetime.utcnow().isoformat())
+            event.setdefault("private_user_ids", [user_id])
+            event.setdefault("response_visibility", RESPONSE_VISIBILITY_PRIVATE)
             await meeting_stream_broker.publish(room_id, event)
 
         try:
@@ -73,6 +85,13 @@ class MeetingAgentService:
 
             async with get_session() as session:
                 repo = MeetingRepository(session)
+                room = await self._get_room(repo, org_id=org_id, room_id=room_id)
+                room_agent = await self._get_room_agent(
+                    repo,
+                    org_id=org_id,
+                    room_id=room_id,
+                    agent_id=agent_def_id,
+                )
                 agent_def = await repo.get_visible_agent_definition(org_id, agent_def_id)
                 if not agent_def:
                     logger.warning("agent definition not found: %s", agent_def_id)
@@ -86,11 +105,81 @@ class MeetingAgentService:
                     org_id=org_id,
                     room_id=room_id,
                     limit=50,
+                    visible_user_id=user_id,
                 )
                 context_dicts = [
                     {"role": msg.message_type, "username": msg.username, "content": msg.content}
                     for msg in context_msgs
                 ]
+                access = self._authorize_named_agent_query(
+                    role=user_role,
+                    question=query,
+                    room=room,
+                    room_agent=room_agent,
+                )
+                if access.decision == "denied":
+                    denial_answer = "当前请求超出你的会议室或 Agent 权限范围，无法回答该问题。"
+                    await self._persist_agent_message(
+                        repo,
+                        org_id=org_id,
+                        room_id=room_id,
+                        user_id=user_id,
+                        agent_id=agent_def_id,
+                        agent_name=agent_name,
+                        content=denial_answer,
+                        message_id=agent_message_id,
+                        metadata_json={
+                            "query": query,
+                            "workflow_run_id": workflow_run_id,
+                            "selected_subgraph": "access_denied",
+                            "requested_data_domains": access.requested_domains,
+                            "allowed_data_domains": access.allowed_domains,
+                            "denied_data_domains": access.denied_domains,
+                            "denied_reasons": access.denied_reasons,
+                            "redacted_fields": access.redacted_fields,
+                            "visibility": RESPONSE_VISIBILITY_PRIVATE,
+                            "response_visibility": RESPONSE_VISIBILITY_PRIVATE,
+                            "audience_scope_type": "user",
+                            "audience_scope_id": user_id,
+                            "private_recipient_user_id": user_id,
+                        },
+                        private_recipient_user_id=user_id,
+                    )
+                    await self._record_agent_query_audit(
+                        repo,
+                        org_id=org_id,
+                        room_id=room_id,
+                        user_id=user_id,
+                        agent_id=agent_def_id,
+                        question=query,
+                        intent="access_denied",
+                        authorization=access,
+                    )
+                    await session.commit()
+                    await emit(
+                        {
+                            "event": "message_final",
+                            "room_id": room_id,
+                            "message_id": agent_message_id,
+                            "agent_id": agent_def_id,
+                            "agent_name": agent_name,
+                            "workflow_run_id": workflow_run_id,
+                            "content": denial_answer,
+                        }
+                    )
+                    return
+                if access.denied_domains or is_sensitive_authorization(access):
+                    context_dicts.append(
+                        {
+                            "role": "system",
+                            "username": "权限边界",
+                            "content": (
+                                f"本次只允许回答这些数据域：{', '.join(access.allowed_domains) or '无'}。"
+                                f"这些数据域已被拒绝，不能回答或推测：{', '.join(access.denied_domains) or '无'}。"
+                                "如果涉及 api_key、token、password、secret、连接串等字段，只能说明脱敏状态，不能输出明文。"
+                            ),
+                        }
+                    )
 
             adapter = self._factory.get_for_agent(agent_def)
             await emit(
@@ -116,18 +205,43 @@ class MeetingAgentService:
 
             async with get_session() as session:
                 repo = MeetingRepository(session)
-                await repo.create_message(
+                await self._persist_agent_message(
+                    repo,
                     org_id=org_id,
                     room_id=room_id,
                     user_id=user_id,
                     username=agent_name,
+                    agent_name=agent_name,
                     content=display_content,
                     message_type="agent",
                     agent_id=agent_def_id,
                     metadata_json={
                         "query": query,
+                        "workflow_run_id": workflow_run_id,
+                        "private_recipient_user_id": user_id,
+                        "visibility": RESPONSE_VISIBILITY_PRIVATE,
+                        "response_visibility": RESPONSE_VISIBILITY_PRIVATE,
+                        "audience_scope_type": "user",
+                        "audience_scope_id": user_id,
+                        "requested_data_domains": access.requested_domains,
+                        "allowed_data_domains": access.allowed_domains,
+                        "denied_data_domains": access.denied_domains,
+                        "denied_reasons": access.denied_reasons,
+                        "redacted_fields": access.redacted_fields,
                         **(response_metadata or {}),
                     },
+                    private_recipient_user_id=user_id,
+                    message_id=agent_message_id,
+                )
+                await self._record_agent_query_audit(
+                    repo,
+                    org_id=org_id,
+                    room_id=room_id,
+                    user_id=user_id,
+                    agent_id=agent_def_id,
+                    question=query,
+                    intent="named_agent",
+                    authorization=access,
                 )
                 await session.commit()
 
@@ -303,6 +417,7 @@ class MeetingAgentService:
 
                 async def emit(event: dict[str, Any]) -> None:
                     event.setdefault("ts", datetime.utcnow().isoformat())
+                    event.setdefault("private_user_ids", [user_id])
                     await meeting_stream_broker.publish(room_id, event)
 
                 try:
@@ -338,6 +453,7 @@ class MeetingAgentService:
                         agent_id=str(room_agent.agent_id),
                         metadata_json={
                             "query": autonomous_query,
+                            "private_recipient_user_id": user_id,
                             **(response_metadata or {}),
                         },
                     )
@@ -371,6 +487,7 @@ class MeetingAgentService:
                         content=f"[Agent {agent_name}] 响应失败: {exc}",
                         message_type="agent",
                         agent_id=str(room_agent.agent_id),
+                        metadata_json={"private_recipient_user_id": user_id},
                     )
                     await session.commit()
                     await emit(
@@ -392,6 +509,111 @@ class MeetingAgentService:
             model_types={"chat", "llm", "multimodal"},
         )
 
+    async def _get_room(self, repo: Any, *, org_id: str, room_id: str) -> Any | None:
+        get_room = getattr(repo, "get_room", None)
+        if not get_room:
+            return None
+        try:
+            return await get_room(org_id, room_id)
+        except TypeError:
+            return await get_room(org_id=org_id, room_id=room_id)
+
+    async def _get_room_agent(self, repo: Any, *, org_id: str, room_id: str, agent_id: str) -> Any | None:
+        get_agent = getattr(repo, "get_agent", None)
+        if not get_agent:
+            return None
+        try:
+            return await get_agent(org_id, room_id, agent_id)
+        except TypeError:
+            return await get_agent(org_id=org_id, room_id=room_id, agent_id=agent_id)
+
+    def _authorize_named_agent_query(
+        self,
+        *,
+        role: str,
+        question: str,
+        room: Any | None,
+        room_agent: Any | None,
+    ):
+        room_domains = normalize_domains(getattr(room, "allowed_data_domains", None)) or None
+        agent_domains = normalize_domains(getattr(room_agent, "allowed_domains", None)) if room_agent is not None else None
+        return authorize_meeting_query(
+            role=role,
+            requested_domains=infer_requested_domains_for_query("named_agent", question),
+            room_domains=room_domains,
+            agent_domains=agent_domains,
+            question=question,
+        )
+
+    async def _persist_agent_message(
+        self,
+        repo: Any,
+        *,
+        org_id: str,
+        room_id: str,
+        user_id: str,
+        agent_id: str,
+        agent_name: str,
+        content: str,
+        metadata_json: dict[str, Any],
+        private_recipient_user_id: str,
+        message_id: str | None = None,
+        username: str | None = None,
+        message_type: str = "agent",
+    ) -> Any:
+        kwargs = {
+            "org_id": org_id,
+            "room_id": room_id,
+            "user_id": user_id,
+            "username": username or agent_name,
+            "content": content,
+            "message_type": message_type,
+            "agent_id": agent_id,
+            "metadata_json": metadata_json,
+            "private_recipient_user_id": private_recipient_user_id,
+        }
+        if message_id:
+            kwargs["message_id"] = message_id
+        try:
+            return await repo.create_message(**kwargs)
+        except TypeError:
+            kwargs.pop("message_id", None)
+            return await repo.create_message(**kwargs)
+
+    async def _record_agent_query_audit(
+        self,
+        repo: Any,
+        *,
+        org_id: str,
+        room_id: str,
+        user_id: str,
+        agent_id: str,
+        question: str,
+        intent: str,
+        authorization: Any,
+    ) -> None:
+        create_audit = getattr(repo, "create_agent_query_audit", None)
+        if create_audit is None:
+            return
+        await create_audit(
+            org_id=org_id,
+            room_id=room_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            question=str(question or "").strip()[:4000],
+            intent=intent,
+            requested_domains=authorization.requested_domains,
+            allowed_domains=authorization.allowed_domains,
+            denied_domains=authorization.denied_domains,
+            tool_calls=[],
+            source_refs=[],
+            redacted_fields=authorization.redacted_fields,
+            decision=authorization.decision,
+            response_visibility=authorization.response_visibility,
+            redaction_level=authorization.redaction_level,
+            denied_reasons=authorization.denied_reasons,
+        )
+
     async def _persist_error_message(
         self,
         *,
@@ -404,13 +626,21 @@ class MeetingAgentService:
     ) -> None:
         async with get_session() as session:
             repo = MeetingRepository(session)
-            await repo.create_message(
+            await self._persist_agent_message(
+                repo,
                 org_id=org_id,
                 room_id=room_id,
                 user_id=user_id,
-                username=agent_name,
+                agent_name=agent_name,
                 content=f"[Agent {agent_name}] 响应失败: {error}",
-                message_type="agent",
                 agent_id=agent_id,
+                metadata_json={
+                    "private_recipient_user_id": user_id,
+                    "visibility": RESPONSE_VISIBILITY_PRIVATE,
+                    "response_visibility": RESPONSE_VISIBILITY_PRIVATE,
+                    "audience_scope_type": "user",
+                    "audience_scope_id": user_id,
+                },
+                private_recipient_user_id=user_id,
             )
             await session.commit()

@@ -48,13 +48,13 @@ async def get_room(
 
 
 @router.delete("/{room_id}", response_model=ResponseEnvelope[dict])
-async def archive_room(
+async def delete_room(
     room_id: str,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     service = _build_admin_service(db, current)
-    await service.archive_room(room_id)
+    await service.delete_room(room_id)
     return ResponseEnvelope(data={"ok": True})
 
 

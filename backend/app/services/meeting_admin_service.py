@@ -143,7 +143,7 @@ class MeetingAdminService:
             updated_at=room.updated_at,
         )
 
-    async def archive_room(self, room_id: str) -> None:
+    async def delete_room(self, room_id: str) -> None:
         deleted = await self._repo.delete_room_admin(self._org_id, room_id)
         if not deleted:
             raise NotFoundError("meeting room not found")

@@ -41,8 +41,11 @@ class TaskListQuery(PageParams):
 
 
 class TaskCreate(BaseModel):
-    product_id: str
-    spec_code: str
+    product_sku_id: str
+    batch_id: str
+    inspection_standard_id: str
+    product_id: str | None = None
+    spec_code: str | None = None
     image_urls: List[str]
     image_items: Optional[List[ImageItem]] = None
     priority: int = Field(default=5, ge=1, le=10)
@@ -80,6 +83,15 @@ class TaskResponse(BaseModel):
     org_slug: str | None = None
     product_id: str
     spec_code: str
+    product_sku_id: str | None = None
+    batch_id: str | None = None
+    inspection_standard_id: str | None = None
+    product_line_code: str | None = None
+    product_line_name: str | None = None
+    product_sku_code: str | None = None
+    product_name: str | None = None
+    batch_no: str | None = None
+    standard_name: str | None = None
     status: str
     priority: int
     image_urls: List[str]
@@ -103,6 +115,15 @@ class TaskListItemResponse(BaseModel):
     org_slug: str | None = None
     product_id: str
     spec_code: str
+    product_sku_id: str | None = None
+    batch_id: str | None = None
+    inspection_standard_id: str | None = None
+    product_line_code: str | None = None
+    product_line_name: str | None = None
+    product_sku_code: str | None = None
+    product_name: str | None = None
+    batch_no: str | None = None
+    standard_name: str | None = None
     status: str
     priority: int
     source_kind: str | None = None

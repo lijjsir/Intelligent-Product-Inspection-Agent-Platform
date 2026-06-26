@@ -84,7 +84,7 @@ class MemoryItemRepository:
         stmt = select(MemoryItem).where(
             MemoryItem.org_id == self._org_id,
             MemoryItem.workspace == workspace,
-            MemoryItem.status == "active",
+            MemoryItem.status.in_(["confirmed", "active"]),
             MemoryItem.deleted_at.is_(None),
             MemoryItem.expires_at.is_(None)
             | (MemoryItem.expires_at > datetime.now(timezone.utc)),

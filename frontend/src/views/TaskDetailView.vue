@@ -14,6 +14,7 @@ import {
 import { useChatStore } from "@/stores/chat.store";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useTaskStore } from "@/stores/task.store";
+import { formatTaskEntityLabel } from "@/utils/master-data-labels";
 import type { TaskResultIngestResponse, TaskResultIngestTarget, TaskStreamEvent } from "@/types/task.types";
 import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 
@@ -360,8 +361,10 @@ onUnmounted(() => {
         <el-descriptions :column="2">
           <el-descriptions-item label="任务 ID">{{ taskStore.current.id }}</el-descriptions-item>
           <el-descriptions-item label="组织 ID">{{ taskStore.current.org_id }}</el-descriptions-item>
-          <el-descriptions-item label="产品编号">{{ taskStore.current.product_id }}</el-descriptions-item>
-          <el-descriptions-item label="检测标准">{{ taskStore.current.spec_code }}</el-descriptions-item>
+          <el-descriptions-item label="产品线">{{ formatTaskEntityLabel(taskStore.current.product_line_name, taskStore.current.product_line_code || taskStore.current.product_id) }}</el-descriptions-item>
+          <el-descriptions-item label="SKU">{{ formatTaskEntityLabel(taskStore.current.product_name, taskStore.current.product_sku_code || taskStore.current.product_id) }}</el-descriptions-item>
+          <el-descriptions-item label="批次">{{ taskStore.current.batch_no || "-" }}</el-descriptions-item>
+          <el-descriptions-item label="检测标准">{{ taskStore.current.standard_name || taskStore.current.spec_code }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ taskStore.current.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
             {{ formatTaskTime(taskStore.current.created_at) }}

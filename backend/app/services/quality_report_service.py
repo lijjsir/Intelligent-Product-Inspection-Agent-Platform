@@ -35,6 +35,8 @@ from app.services.langfuse_api_client import LangfuseApiClient, LangfuseApiError
 
 logger = logging.getLogger(__name__)
 
+QUALITY_REPORT_LOCAL_TRACE_LIMIT = 1000
+
 
 class QualityReportService(TenantAwareService):
     def __init__(self, session, org_id: str | None):
@@ -703,7 +705,7 @@ class QualityReportService(TenantAwareService):
         result_feedbacks = self._normalize_result_feedbacks_for_quality(result_feedbacks)
 
         local_traces = await self._list_traces_from_mysql(
-            limit=None,
+            limit=QUALITY_REPORT_LOCAL_TRACE_LIMIT,
             source=source,
             api_client=api_client,
             langfuse_available=False,

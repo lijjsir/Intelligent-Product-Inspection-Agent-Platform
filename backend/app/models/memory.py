@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DECIMAL, DateTime, Integer, String, Text, text
+from sqlalchemy import Boolean, DECIMAL, DateTime, Index, Integer, String, Text, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.ids import uuid7
 from app.models.base import Base, UUIDBinary
 
 
@@ -69,6 +70,25 @@ class MemoryEvent(Base):
     payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     risk_tags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     parent_event_ids: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class MemoryTag(Base):
+    __tablename__ = "memory_tags"
+    __table_args__ = (
+        Index("idx_memory_tags_memory", "org_id", "memory_id"),
+        Index("idx_memory_tags_lookup", "org_id", "tag_type", "tag_value"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tag_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tag_value: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[Any] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

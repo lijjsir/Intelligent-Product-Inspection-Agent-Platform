@@ -77,8 +77,8 @@ function getAdminMenu(): MenuStructure {
         { title: "用户管理", path: "/governance/admin/users" },
         { title: "权限与组织", path: "/governance/admin/roles-orgs" },
         { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
+        { title: "产品与批次", path: "/governance/admin/product-master" },
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
-        { title: "质检门槛", path: "/governance/admin/inspection-specs" },
         { title: "告警规则", path: "/governance/admin/alert-rules" },
         { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
@@ -87,12 +87,16 @@ function getAdminMenu(): MenuStructure {
         { title: "高风险审批", path: "/governance/admin/approvals" },
       ],
     },
+    { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
 
 function getAppDeveloperMenu(): MenuStructure {
   return [
+    { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "Agent 管理", path: "/ops/agents" },
     { title: "路由策略", path: "/ops/agents/intent-routes" },
     { title: "Prompt 管理", path: "/ops/prompts" },
@@ -115,6 +119,8 @@ function getPlatformOperatorMenu(): MenuStructure {
   return [
     { title: "平台运营工作台", path: "/ops/dashboard" },
     { title: "任务查看", path: "/ops/tasks" },
+    { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "分析中心", path: "/ops/analytics" },
     { title: "告警管理", path: "/ops/alerts" },
     { title: "模型观测", path: "/ops/calls" },
@@ -127,6 +133,8 @@ function getPlatformOperatorMenu(): MenuStructure {
 function getAlgorithmEngineerMenu(): MenuStructure {
   return [
     { title: "任务管理", path: "/app/tasks" },
+    { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "数据接入", path: "/ops/data/import" },
     { title: "测试集管理", path: "/ops/data/eval-sets" },
     { title: "微调管理", path: "/ops/training/fine-tune" },
@@ -144,6 +152,7 @@ function getUserMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
     { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
     { title: "异常反馈", path: "/app/feedbacks" },
@@ -156,6 +165,7 @@ function getExpertMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
     { title: "会议室", path: "/app/meetings" },
+    { title: "协作消息", path: "/app/collab" },
     { title: "RAG 空间", path: "/app/rag-spaces" },
     { title: "任务管理", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },

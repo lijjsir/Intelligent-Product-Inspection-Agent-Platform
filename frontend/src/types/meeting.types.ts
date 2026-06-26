@@ -9,7 +9,54 @@ export type MeetingDataDomain =
   | "org_admin"
   | "data_access"
   | "security_audit"
-  | "ai_conversation";
+  | "ai_conversation"
+  | "quality.task"
+  | "quality.result"
+  | "quality.review"
+  | "quality.analytics"
+  | "standard.library"
+  | "standard.rule"
+  | "standard.version"
+  | "standard.approval"
+  | "meeting.message"
+  | "meeting.summary"
+  | "meeting.action_item"
+  | "meeting.private_message"
+  | "memory.user"
+  | "memory.meeting"
+  | "memory.agent"
+  | "memory.org_space"
+  | "memory.business"
+  | "ops.agent"
+  | "ops.prompt"
+  | "ops.route"
+  | "ops.tool"
+  | "ops.release"
+  | "ops.trace"
+  | "model.catalog"
+  | "model.config"
+  | "model.experiment"
+  | "model.deployment"
+  | "model.experiment_cost"
+  | "model.org_usage"
+  | "billing.invoice"
+  | "org.member"
+  | "org.role"
+  | "org.department"
+  | "org.policy"
+  | "data.dataset"
+  | "data.sample"
+  | "data.rag_space"
+  | "data.connector"
+  | "data.import_job"
+  | "audit.auth"
+  | "audit.tool_execution"
+  | "audit.agent_query"
+  | "audit.approval"
+  | "conversation.own"
+  | "conversation.meeting"
+  | "conversation.private"
+  | "conversation.trace_redacted";
 
 export interface MentionInfo {
   agent_id: string;
@@ -50,6 +97,8 @@ export interface MeetingMessage {
   created_at?: string | null;
   updated_at?: string | null;
 }
+
+export type MeetingResponseVisibility = "room" | "private" | string;
 
 export interface MeetingRoomAgent {
   id: string;
@@ -152,6 +201,10 @@ export interface MeetingContextPreview {
   room_role: string;
   allowed_domains: MeetingDataDomain[];
   denied_domains: MeetingDataDomain[];
+  effective_domains?: MeetingDataDomain[];
+  room_configured_domains?: MeetingDataDomain[];
+  sensitive_domains?: MeetingDataDomain[];
+  denied_reasons?: Record<string, string>;
   agent_permissions: Array<{
     agent_id: string;
     agent_name: string;
@@ -162,6 +215,9 @@ export interface MeetingContextPreview {
   query_examples: string[];
   guardrails: string[];
   business_context?: MeetingBusinessContext | null;
+  share_policy?: Record<string, unknown>;
+  conflict_rules?: Record<string, unknown>;
+  visibility_rules?: Record<string, unknown>;
 }
 
 export interface MeetingAgentQueryAudit {
@@ -179,6 +235,10 @@ export interface MeetingAgentQueryAudit {
   memory_reads: Array<Record<string, unknown>>;
   redacted_fields: string[];
   decision: "allowed" | "partial" | "denied" | string;
+  response_visibility?: MeetingResponseVisibility;
+  redaction_level?: string;
+  denied_reasons?: Record<string, string>;
+  conflict_ref_id?: string | null;
   created_at?: string | null;
 }
 
@@ -194,19 +254,26 @@ export interface MeetingMemoryScope {
   include_meeting: boolean;
   include_confirmed: boolean;
   include_personal_authorized: boolean;
+  include_user?: boolean;
+  include_agent?: boolean;
+  include_org_space?: boolean;
 }
 
-export type MeetingMemoryPublishScope =
-  | "meeting"
-  | "inspection_task"
-  | "product"
-  | "standard"
-  | "rag_space"
+export type MemoryScopeType =
+  | "meeting_room"
+  | "collab_thread"
   | "user"
-  | "role"
-  | "workspace"
-  | "organization"
-  | "batch";
+  | "agent"
+  | "org_space";
+
+export type MemoryTagType = "task" | "product" | "batch" | "standard" | "custom";
+
+export interface MemoryTag {
+  tag_type: MemoryTagType | string;
+  tag_value: string;
+}
+
+export type MeetingMemoryPublishScope = MemoryScopeType | "meeting";
 
 export type MeetingMemoryType =
   | "decision"
@@ -223,6 +290,9 @@ export interface MeetingMemoryConfirmPayload {
   scope_id?: string | null;
   publish_reason?: string | null;
   is_business_memory?: boolean | null;
+  affected_objects?: Record<string, unknown> | null;
+  object_resolution_status?: "resolved" | "ambiguous" | "unresolved" | null;
+  related_memory_ids?: string[] | null;
 }
 
 export interface MeetingMemoryDisputePayload {
@@ -272,8 +342,17 @@ export interface MeetingCandidateMemory {
   risk_level?: string | null;
   recommended_actions?: string[];
   source_room_id?: string | null;
+  source_spans?: Array<Record<string, unknown>>;
+  object_resolution_status?: "resolved" | "ambiguous" | "unresolved" | string;
+  object_candidates?: Array<Record<string, unknown>>;
+  value_score?: number | null;
+  dedupe_key?: string | null;
+  related_memory_ids?: string[];
+  tags?: MemoryTag[];
+  extraction_reason?: string | null;
   confidence?: number | null;
   source_message_id?: string | null;
+  qdl_json?: Record<string, unknown> | null;
   created_at?: string | null;
 }
 
@@ -283,6 +362,10 @@ export interface MeetingAgentRunResponse {
   message: MeetingMessage;
   memory_sources: MeetingMemorySource[];
   candidate_memories: MeetingCandidateMemory[];
+  response_visibility?: MeetingResponseVisibility;
+  escalation_required?: boolean;
+  conflict_status?: string | null;
+  conflict_ref_id?: string | null;
 }
 
 export interface MeetingMemory {
@@ -315,13 +398,62 @@ export interface MeetingMemory {
   risk_level?: string | null;
   recommended_actions?: string[];
   source_room_id?: string | null;
+  source_spans?: Array<Record<string, unknown>>;
+  object_resolution_status?: "resolved" | "ambiguous" | "unresolved" | string | null;
+  object_candidates?: Array<Record<string, unknown>>;
+  value_score?: number | null;
+  dedupe_key?: string | null;
+  related_memory_ids?: string[];
+  tags?: MemoryTag[];
+  extraction_reason?: string | null;
   publish_reason?: string | null;
   version_parent_id?: string | null;
   confidence?: number | null;
   source_message_id?: string | null;
+  qdl_json?: Record<string, unknown> | null;
   created_by?: string | null;
   confirmed_by?: string | null;
   confirmed_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MeetingMemorySharePayload {
+  target_scope_type: MemoryScopeType | "meeting" | "workspace" | "organization";
+  target_scope_id: string;
+  share_reason?: string | null;
+}
+
+export interface MeetingMemoryShareApproval {
+  id: string;
+  memory_id: string;
+  from_scope_type: string;
+  from_scope_id: string;
+  to_scope_type: string;
+  to_scope_id: string;
+  transfer_reason?: string | null;
+  status: string;
+  operator_id?: string | null;
+  memory_title: string;
+  can_approve: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface MeetingConflictEvent {
+  id: string;
+  room_id: string;
+  conflict_type: string;
+  resource_key: string;
+  status: string;
+  initiator_user_id: string;
+  workflow_run_id?: string | null;
+  related_message_ids: string[];
+  candidate_actions: Array<Record<string, unknown>>;
+  selected_action?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  metadata_json?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -360,11 +492,11 @@ export interface MeetingActionItemUpdate {
 // ── SSE Event Types ──────────────────────────────────────────────
 
 export type MeetingStreamEvent =
-  | { event: "message_created"; room_id: string; message: MeetingMessage }
-  | { event: "agent_run_started"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; query?: string | null }
-  | { event: "message_delta"; room_id: string; message_id: string; agent_id: string; delta: string; workflow_run_id: string }
-  | { event: "message_final"; room_id: string; message_id: string; agent_id: string; content: string; workflow_run_id: string }
-  | { event: "agent_run_failed"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; error: string };
+  | { event: "message_created"; room_id: string; message: MeetingMessage; private_user_ids?: string[] }
+  | { event: "agent_run_started"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; query?: string | null; attachments?: MeetingAttachment[]; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility }
+  | { event: "message_delta"; room_id: string; message_id: string; agent_id: string; delta: string; workflow_run_id: string; private_user_ids?: string[] }
+  | { event: "message_final"; room_id: string; message_id: string; agent_id: string; agent_name?: string; content: string; workflow_run_id: string; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility }
+  | { event: "agent_run_failed"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; error: string; private_user_ids?: string[] };
 
 // ── Admin Types ──────────────────────────────────────────────────
 

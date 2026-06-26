@@ -669,6 +669,9 @@ class ChatExecutor:
         inspection_context = ChatExecutor._inspection_context_text(state)
         if inspection_context:
             parts.append(inspection_context)
+        memory_context = ChatExecutor._memory_sources_text(state)
+        if memory_context:
+            parts.append(memory_context)
         parts.append(f"Current user question:\n{state.original_query}")
         return "\n\n".join(parts)
 
@@ -681,6 +684,9 @@ class ChatExecutor:
         inspection_context = ChatExecutor._inspection_context_text(state)
         if inspection_context:
             parts.append(inspection_context)
+        memory_context = ChatExecutor._memory_sources_text(state)
+        if memory_context:
+            parts.append(memory_context)
         parts.append(f"Current user question:\n{state.original_query}")
         parts.append(f"Surface:\n{state.surface}")
 
@@ -758,6 +764,31 @@ class ChatExecutor:
             parts.append("recent_tasks:")
             for item in items:
                 parts.append(f"- {ChatExecutor._inspection_task_line(item)}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _memory_sources_text(state: ManagerState) -> str:
+        sources = [item for item in list(getattr(state, "memory_sources", []) or []) if isinstance(item, dict)]
+        if not sources:
+            return ""
+        parts = [
+            "Object-scoped confirmed memories retrieved for this meeting query. Use these as prior business memory when relevant, and say they come from published memory rather than current-room discussion.",
+        ]
+        for index, item in enumerate(sources[:6], 1):
+            title = str(item.get("title") or item.get("memory_id") or f"memory-{index}").strip()
+            summary = str(item.get("summary") or "").strip()
+            scope = str(item.get("scope") or "").strip()
+            memory_id = str(item.get("memory_id") or "").strip()
+            line = f"- [MEM-{index}]"
+            if memory_id:
+                line += f" id={memory_id}"
+            if scope:
+                line += f" scope={scope}"
+            if title:
+                line += f" title={title[:160]}"
+            if summary:
+                line += f" summary={summary[:500]}"
+            parts.append(line)
         return "\n".join(parts)
 
     @staticmethod

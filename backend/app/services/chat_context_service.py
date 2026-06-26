@@ -165,10 +165,12 @@ class ChatContextService:
         stability: StabilityReport | None,
     ) -> dict[str, Any]:
         raw_reasoning_chain = getattr(inspection_result, "reasoning_chain", {}) if inspection_result else {}
-        raw_defects = getattr(inspection_result, "defects", {}) if inspection_result else {}
+        raw_defects = getattr(inspection_result, "defects", []) if inspection_result else []
         reasoning_chain = raw_reasoning_chain if isinstance(raw_reasoning_chain, dict) else {}
-        defects = raw_defects if isinstance(raw_defects, dict) else {}
-        failed_rules = defects.get("failed_rules") if isinstance(defects.get("failed_rules"), list) else []
+        defects = ChatContextService._defect_items(raw_defects)
+        failed_rules = ChatContextService._failed_rules(raw_defects, reasoning_chain)
+        failure_reasons = ChatContextService._failure_reasons(reasoning_chain, defects, stability)
+        verdict = None if inspection_result is None else str(inspection_result.verdict)
         return {
             "task_id": str(task.id),
             "product_id": str(task.product_id),
@@ -177,7 +179,7 @@ class ChatContextService:
             "priority": int(task.priority or 0),
             "created_at": ChatContextService._iso(task.created_at),
             "finished_at": ChatContextService._iso(task.finished_at),
-            "verdict": None if inspection_result is None else str(inspection_result.verdict),
+            "verdict": verdict,
             "overall_score": None
             if inspection_result is None
             else ChatContextService._float(inspection_result.overall_score),
@@ -185,10 +187,175 @@ class ChatContextService:
             "risk_score": None if stability is None else ChatContextService._float(stability.risk_score),
             "prompt_version": None if inspection_result is None else str(inspection_result.prompt_version),
             "model_key": None if inspection_result is None else str(inspection_result.llm_model),
+            "tokens_used": None if inspection_result is None else getattr(inspection_result, "tokens_used", None),
+            "latency_ms": None if inspection_result is None else getattr(inspection_result, "latency_ms", None),
             "trace_id": ChatContextService._trace_id(reasoning_chain),
             "failed_rules": [str(item) for item in failed_rules[:3]],
             "root_cause": None if stability is None else str(stability.root_cause or "") or None,
+            "defects": defects,
+            "defect_summary": ChatContextService._defect_summary(defects),
+            "failure_reasons": failure_reasons,
+            "reasoning_summary": ChatContextService._reasoning_summary(reasoning_chain, failure_reasons),
+            "manual_review": ChatContextService._manual_review_payload(inspection_result, verdict),
         }
+
+    @staticmethod
+    def _defect_items(raw_defects: Any, *, limit: int = 5) -> list[dict[str, Any]]:
+        if isinstance(raw_defects, list):
+            candidates = raw_defects
+        elif isinstance(raw_defects, dict):
+            nested = raw_defects.get("defects") or raw_defects.get("items") or raw_defects.get("detections")
+            candidates = nested if isinstance(nested, list) else []
+        else:
+            candidates = []
+
+        items: list[dict[str, Any]] = []
+        for raw in candidates:
+            if not isinstance(raw, dict):
+                continue
+            defect_type = str(raw.get("type") or raw.get("defect_type") or raw.get("label") or "unknown").strip()
+            if not defect_type:
+                defect_type = "unknown"
+            confidence = ChatContextService._float(raw.get("confidence") or raw.get("score") or raw.get("probability"))
+            bbox_raw = raw.get("bbox") or raw.get("box")
+            bbox = [ChatContextService._float(item) for item in bbox_raw[:4]] if isinstance(bbox_raw, list) else None
+            bbox = [item for item in bbox if item is not None] if bbox else None
+            items.append(
+                {
+                    "type": defect_type[:80],
+                    "confidence": confidence,
+                    "bbox": bbox if bbox and len(bbox) == 4 else None,
+                    "description": str(raw.get("description") or raw.get("desc") or "").strip()[:240] or None,
+                    "image_index": raw.get("image_index"),
+                }
+            )
+        return sorted(items, key=lambda item: float(item.get("confidence") or 0), reverse=True)[:limit]
+
+    @staticmethod
+    def _defect_summary(defects: list[dict[str, Any]], *, limit: int = 3) -> str | None:
+        parts: list[str] = []
+        for item in defects[:limit]:
+            defect_type = str(item.get("type") or "unknown")
+            confidence = item.get("confidence")
+            if isinstance(confidence, (int, float)):
+                percent = confidence * 100 if confidence <= 1 else confidence
+                label = f"{defect_type} {percent:.1f}%"
+            else:
+                label = defect_type
+            description = str(item.get("description") or "").strip()
+            parts.append(f"{label}: {description}" if description else label)
+        return "；".join(parts) or None
+
+    @staticmethod
+    def _failed_rules(raw_defects: Any, reasoning_chain: dict[str, Any]) -> list[str]:
+        values: list[str] = []
+        if isinstance(raw_defects, dict) and isinstance(raw_defects.get("failed_rules"), list):
+            values.extend(str(item) for item in raw_defects.get("failed_rules") or [])
+        standard = reasoning_chain.get("standard_evaluation")
+        if isinstance(standard, dict):
+            for item in list(standard.get("matched_rules") or []):
+                if isinstance(item, dict):
+                    label = item.get("rule_code") or item.get("code") or item.get("defect_type") or item.get("description")
+                    if label:
+                        values.append(str(label))
+                elif item:
+                    values.append(str(item))
+            values.extend(str(item) for item in list(standard.get("reasons") or []) if item)
+        return ChatContextService._dedupe_text(values, limit=8)
+
+    @staticmethod
+    def _failure_reasons(
+        reasoning_chain: dict[str, Any],
+        defects: list[dict[str, Any]],
+        stability: StabilityReport | None,
+    ) -> list[str]:
+        reasons: list[str] = []
+        standard = reasoning_chain.get("standard_evaluation")
+        if isinstance(standard, dict):
+            summary = str(standard.get("summary") or "").strip()
+            if summary:
+                reasons.append(summary)
+            standard_reasons = [str(item) for item in list(standard.get("reasons") or []) if item]
+            if standard_reasons:
+                reasons.append(f"标准判定原因: {', '.join(standard_reasons[:4])}")
+            unmatched = [str(item) for item in list(standard.get("unmatched_defects") or []) if item]
+            if unmatched:
+                reasons.append(f"未映射缺陷: {', '.join(unmatched[:4])}")
+            matched_rules = []
+            for item in list(standard.get("matched_rules") or []):
+                if isinstance(item, dict):
+                    matched_rules.append(
+                        str(item.get("description") or item.get("defect_type") or item.get("rule_code") or "").strip()
+                    )
+                elif item:
+                    matched_rules.append(str(item))
+            if matched_rules:
+                reasons.append(f"命中规则: {', '.join([item for item in matched_rules if item][:4])}")
+            ai_gate = standard.get("ai_gate")
+            if isinstance(ai_gate, dict):
+                gate_reasons = [str(item) for item in list(ai_gate.get("reasons") or []) if item]
+                if gate_reasons:
+                    reasons.append(f"AI 门禁: {', '.join(gate_reasons[:4])}")
+        defect_summary = ChatContextService._defect_summary(defects)
+        if defect_summary:
+            reasons.append(f"检出缺陷: {defect_summary}")
+        if stability is not None and str(getattr(stability, "root_cause", "") or "").strip():
+            reasons.append(f"稳定性根因: {str(stability.root_cause).strip()}")
+        trust = reasoning_chain.get("trust_scoring")
+        if isinstance(trust, dict):
+            risk_bits: list[str] = []
+            for key, label in (
+                ("hallucination_risk", "幻觉风险"),
+                ("overconfidence", "过度肯定风险"),
+            ):
+                value = ChatContextService._float(trust.get(key))
+                if value is not None and value >= 0.3:
+                    risk_bits.append(f"{label} {value:.2f}")
+            if risk_bits:
+                reasons.append("文本可信度风险: " + "，".join(risk_bits))
+        return [item[:300] for item in ChatContextService._dedupe_text(reasons, limit=8)]
+
+    @staticmethod
+    def _reasoning_summary(reasoning_chain: dict[str, Any], failure_reasons: list[str]) -> str | None:
+        for key in ("summary", "llm_reason", "conclusion"):
+            value = str(reasoning_chain.get(key) or "").strip()
+            if value:
+                return value[:500]
+        return failure_reasons[0] if failure_reasons else None
+
+    @staticmethod
+    def _manual_review_payload(inspection_result: InspectionResult | None, verdict: str | None) -> dict[str, Any] | None:
+        if inspection_result is None:
+            return None
+        reviewed_by = getattr(inspection_result, "reviewed_by", None)
+        reviewed_at = getattr(inspection_result, "reviewed_at", None)
+        review_note = str(getattr(inspection_result, "review_note", "") or "").strip()
+        required = str(verdict or "").lower() == "manual_required"
+        if not any([required, reviewed_by, reviewed_at, review_note]):
+            return None
+        return {
+            "required": required,
+            "reviewed_by": str(reviewed_by) if reviewed_by else None,
+            "reviewed_at": ChatContextService._iso(reviewed_at),
+            "review_note": review_note[:500] or None,
+        }
+
+    @staticmethod
+    def _dedupe_text(values: list[str], *, limit: int) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
+            if len(result) >= limit:
+                break
+        return result
 
     @staticmethod
     def _trace_id(reasoning_chain: dict[str, Any]) -> str | None:

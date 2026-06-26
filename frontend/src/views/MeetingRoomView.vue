@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChatDotRound, Check, Close, CopyDocument, Delete, EditPen, FolderOpened, FullScreen, Key, MagicStick, Minus, Paperclip, Plus, Promotion, RefreshRight, ScaleToOriginal, Share, User } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChatDotRound, Check, Close, CopyDocument, Delete, EditPen, FullScreen, Key, MagicStick, Minus, Paperclip, Plus, Promotion, RefreshRight, ScaleToOriginal, Share, User } from "@element-plus/icons-vue";
 import axios from "axios";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type StyleValue } from "vue";
+import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
@@ -16,6 +17,7 @@ import { writeTextToClipboard } from "@/utils/clipboard";
 const auth = useAuthStore();
 const store = useMeetingStore();
 const userStore = useUserStore();
+const router = useRouter();
 const MESSAGE_RECALL_WINDOW_MS = 2 * 60 * 1000;
 const IMAGE_ATTACHMENT_EXT_PATTERN = /\.(?:apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:[?#].*)?$/i;
 
@@ -42,6 +44,9 @@ const activePrivateUserId = ref("");
 const privateDialogVisible = ref(false);
 const privateWindowMinimized = ref(false);
 const privateWindowMaximized = ref(false);
+const privateRosterCollapsed = ref(false);
+const privateRosterShowAll = ref(false);
+const privateMemberSearch = ref("");
 const mentionMenuOpen = ref(false);
 const mentionQuery = ref("");
 const mentionRange = ref<{ start: number; end: number } | null>(null);
@@ -58,9 +63,10 @@ const auditDetailVisible = ref(false);
 const selectedSharedMemory = ref<MeetingMemory | null>(null);
 const memoryDetailVisible = ref(false);
 const memoryPublishForm = reactive({
+  target_key: "current_meeting_room" as MemoryPublishTargetKey,
   title: "",
   content: "",
-  scope: "meeting" as MeetingMemoryPublishScope,
+  scope: "meeting_room" as MeetingMemoryPublishScope,
   scope_id: "",
   publish_reason: "",
 });
@@ -83,6 +89,35 @@ let stopPrivateWindowListeners: (() => void) | null = null;
 let privateRecallTimer: number | null = null;
 
 type PrivateWindowResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+type MemoryAffectedObjects = {
+  inspection_task_ids: string[];
+  product_ids: string[];
+  batch_nos: string[];
+  standard_ids: string[];
+};
+type MemoryPublishTargetKey =
+  | "current_meeting_room"
+  | "target_meeting_room"
+  | "org_space"
+  | "user"
+  | "agent";
+type MemoryPublishTargetOption = {
+  label: string;
+  value: string;
+  description?: string;
+};
+type MemoryPublishScopeOption = {
+  key: MemoryPublishTargetKey;
+  label: string;
+  value: MeetingMemoryPublishScope;
+  scopeId: string;
+  requiresTargetId?: boolean;
+  targetLabel?: string;
+  targetPlaceholder?: string;
+  targetOptions?: MemoryPublishTargetOption[];
+  targetEmptyText?: string;
+  note: string;
+};
 
 const PANEL_WIDTHS = {
   left: { min: 220, max: 420 },
@@ -114,7 +149,7 @@ const privateWindowResizeHandles: Array<{ direction: PrivateWindowResizeDirectio
 ];
 
 const collapsedContextSections = reactive<Record<string, boolean>>({
-  boundary: false,
+  boundary: true,
   candidateMemory: true,
   confirmedMemory: false,
   actions: true,
@@ -122,21 +157,9 @@ const collapsedContextSections = reactive<Record<string, boolean>>({
   events: true,
 });
 
-const domainLabels: Record<string, string> = {
-  quality: "质检业务",
-  standard: "质检标准",
-  meeting: "会议协作",
-  memory: "记忆",
-  platform_ops: "平台运营",
-  model_billing: "模型计费",
-  org_admin: "组织管理",
-  data_access: "数据接入",
-  security_audit: "安全审计",
-  ai_conversation: "AI 会话",
-};
 const memoryCategoryLabels: Record<string, string> = {
-  business_memory: "业务记忆",
-  meeting_memory: "会议记忆",
+  business_memory: "专业经验",
+  meeting_memory: "会议内记忆",
   rejected_noise: "噪声",
 };
 const memoryTypeLabels: Record<string, string> = {
@@ -149,19 +172,12 @@ const memoryTypeLabels: Record<string, string> = {
 const memoryScopeLabels: Record<string, string> = {
   meeting: "本会议室",
   meeting_room: "本会议室",
-  inspection_task: "质检任务",
-  product: "产品",
-  batch: "批次",
-  standard: "标准/规则知识库",
-  workspace: "质检风险库/问题模式库",
+  collab_thread: "协作通道",
+  user: "个人记忆",
+  agent: "Agent 记忆",
+  org_space: "组织共享空间",
+  workspace: "组织共享空间",
 };
-const bindingLabels: Record<string, string> = {
-  inspection_task: "质检任务",
-  product: "产品",
-  batch: "批次",
-  standard: "标准/规则",
-};
-
 const meetingLayoutStyle = computed<StyleValue>(() => ({
   "--left-panel-width": leftPanelCollapsed.value ? "52px" : `${leftPanelWidth.value}px`,
   "--right-panel-width": rightPanelCollapsed.value ? "52px" : `${rightPanelWidth.value}px`,
@@ -194,7 +210,7 @@ const privateWindowStyle = computed<StyleValue>(() => {
 
 const mentionTargets = computed(() => {
   const entries = [
-    { id: "general_agent", agent_name: "会议Agent", description: "总结、查询边界内数据、提取候选记忆" },
+    { id: "general_agent", agent_name: "会议Agent", description: "总结会议、回答问题、提取候选记忆" },
     ...store.agents
       .filter((agent) => agent.role === "participant")
       .map((agent) => ({
@@ -246,30 +262,8 @@ const roomTitleCounts = computed(() => {
   return counts;
 });
 const roomStatusLabel = computed(() => {
-  const status = store.activeRoom?.status || "";
-  if (status === "active") return "进行中";
-  if (status === "closed") return "已关闭";
-  if (status === "archived") return "已归档";
-  return status || "未选择";
+  return meetingRoomStatusLabel(store.activeRoom?.status || "") || "未选择";
 });
-const contextAllowedDomains = computed(() => {
-  const domains = store.contextPreview?.allowed_domains || store.activeRoom?.allowed_data_domains || [];
-  return domains;
-});
-const contextDeniedDomains = computed(() => store.contextPreview?.denied_domains || []);
-const businessBindingGroups = computed(() => {
-  const context = currentBusinessContext.value;
-  return [
-    { key: "task", label: "质检任务", values: context?.task_ids || [] },
-    { key: "product", label: "产品", values: context?.product_ids || [] },
-    { key: "batch", label: "批次", values: context?.batch_nos || [] },
-    { key: "standard", label: "标准", values: context?.standard_ids || [] },
-  ].map((group) => ({
-    ...group,
-    values: group.values.map((value) => String(value || "").trim()).filter(Boolean),
-  }));
-});
-const hasBusinessBindings = computed(() => businessBindingGroups.value.some((group) => group.values.length > 0));
 const memoryGovernanceHint = computed(() => {
   const memory = selectedSharedMemory.value;
   if (!memory) return "暂无记录";
@@ -287,12 +281,39 @@ const currentUserId = computed(() => {
 const privatePartners = computed(() => store.members.filter((member) => member.user_id !== currentUserId.value));
 const currentPrivateMember = computed(() => store.members.find((member) => member.user_id === activePrivateUserId.value) || null);
 const selectedPrivateMessages = computed(() => activePrivateUserId.value ? privateMessagesByUser(activePrivateUserId.value) : []);
-const allPrivateMessages = computed(() => store.messages.filter((message) => Boolean(privatePartnerId(message))));
-const privateConversationCount = computed(() => new Set(allPrivateMessages.value.map(privatePartnerId).filter(Boolean)).size);
+const allPrivateMessages = computed(() => store.activeRoomMessages.filter((message) => Boolean(privatePartnerId(message))));
+const privateConversationPartnerIds = computed(() => new Set(allPrivateMessages.value.map(privatePartnerId).filter(Boolean)));
+const privateConversationCount = computed(() => privateConversationPartnerIds.value.size);
+const privateRosterMembers = computed(() => {
+  const query = privateMemberSearch.value.trim().toLowerCase();
+  const shouldShowAll = privateRosterShowAll.value || Boolean(query) || privateConversationPartnerIds.value.size === 0;
+  return privatePartners.value.filter((member) => {
+    const isSelected = member.user_id === activePrivateUserId.value;
+    const hasConversation = privateConversationPartnerIds.value.has(member.user_id);
+    const matchesQuery = !query
+      || member.username.toLowerCase().includes(query)
+      || member.user_id.toLowerCase().includes(query);
+    return matchesQuery && (shouldShowAll || hasConversation || isSelected);
+  });
+});
+const privateRosterEmptyText = computed(() => {
+  if (privateMemberSearch.value.trim()) return "没有匹配成员";
+  if (!privatePartners.value.length) return "暂无成员";
+  return "暂无私聊会话，可搜索成员发起私聊";
+});
+const hiddenPrivatePartnerCount = computed(() => Math.max(privatePartners.value.length - privateRosterMembers.value.length, 0));
+const privateThreadSubtitle = computed(() => {
+  if (!store.activeRoom) return "未进入会议";
+  if (!currentPrivateMember.value) return privatePartners.value.length ? "选择会议成员开始私聊" : "当前会议暂无其他成员";
+  return `${privateMessagesByUser(currentPrivateMember.value.user_id).length} 条会议内私聊`;
+});
+const visibleAgentPanelMessages = computed(() => store.agentPanelMessages.filter(canShowInAgentPanel));
+const summaryMessages = computed(() => store.systemPanelMessages.filter((message) => message.message_type === "summary"));
+const latestSummaryMessage = computed(() => summaryMessages.value[summaryMessages.value.length - 1] || null);
 const agentConversationGroups = computed(() => {
   const groups: Array<{ id: string; question: MeetingMessage | null; replies: MeetingMessage[] }> = [];
   let currentGroup: { id: string; question: MeetingMessage | null; replies: MeetingMessage[] } | null = null;
-  for (const message of store.agentPanelMessages) {
+  for (const message of visibleAgentPanelMessages.value) {
     if (message.message_type === "user") {
       currentGroup = { id: message.id, question: message, replies: [] };
       groups.push(currentGroup);
@@ -308,8 +329,62 @@ const agentConversationGroups = computed(() => {
 });
 const agentQuestionCount = computed(() => agentConversationGroups.value.length);
 const currentBusinessContext = computed(() => store.contextPreview?.business_context || store.activeRoom?.business_context || null);
+const contextBoundary = computed(() => {
+  const preview = store.contextPreview;
+  const roomConfiguredDomains = preview?.room_configured_domains?.length
+    ? preview.room_configured_domains
+    : store.activeRoom?.allowed_data_domains || [];
+  const effectiveDomains = preview?.effective_domains?.length
+    ? preview.effective_domains
+    : preview?.allowed_domains || roomConfiguredDomains;
+  return {
+    effectiveDomains,
+    roomConfiguredDomains,
+    sensitiveDomains: preview?.sensitive_domains || [],
+    deniedReasons: preview?.denied_reasons || {},
+    agentPermissions: preview?.agent_permissions || [],
+    guardrails: preview?.guardrails || [],
+    queryExamples: preview?.query_examples || [],
+  };
+});
+const domainGroups = computed(() => buildDomainGroups(contextBoundary.value.roomConfiguredDomains));
+const effectiveDomainGroups = computed(() => buildDomainGroups(contextBoundary.value.effectiveDomains));
+const sensitiveDomainGroups = computed(() => buildDomainGroups(contextBoundary.value.sensitiveDomains));
 const memoryPublishPreview = computed<MeetingMemory | null>(() => buildMemoryPublishPreview(selectedCandidateMemory.value));
 const memoryPublishScopeOptions = computed(() => buildMemoryPublishScopeOptions(memoryPublishPreview.value));
+const selectedMemoryPublishScopeOption = computed(() => (
+  memoryPublishScopeOptions.value.find((item) => item.key === memoryPublishForm.target_key) || memoryPublishScopeOptions.value[0]
+));
+const memoryPublishTargetOptions = computed(() => selectedMemoryPublishScopeOption.value?.targetOptions || []);
+const memoryPublishTargetRequired = computed(() => Boolean(selectedMemoryPublishScopeOption.value?.requiresTargetId));
+const selectedMemoryPublishTarget = computed(() => (
+  memoryPublishTargetOptions.value.find((item) => item.value === memoryPublishForm.scope_id) || null
+));
+const memoryPublishTargetPreview = computed(() => {
+  const option = selectedMemoryPublishScopeOption.value;
+  if (!option) return null;
+  const requiresTarget = Boolean(option.requiresTargetId);
+  const target = selectedMemoryPublishTarget.value;
+  return {
+    type: memoryPublishTargetTypeLabel(option.key),
+    label: requiresTarget ? target?.label || "请选择共享目标" : option.label,
+    description: requiresTarget ? target?.description || option.targetPlaceholder || "从可见列表中选择目标" : option.note,
+    pending: requiresTarget && !target,
+  };
+});
+const memoryPublishSubmitDisabled = computed(() => (
+  !memoryPublishForm.title.trim()
+    || !memoryPublishForm.content.trim()
+    || (memoryPublishTargetRequired.value && !memoryPublishForm.scope_id.trim())
+));
+const memoryPublishSubmitText = computed(() => {
+  if (memoryPublishForm.target_key === "current_meeting_room") return "确认并沉淀";
+  if (memoryPublishForm.target_key === "target_meeting_room") return "确认并共享给会议室";
+  if (memoryPublishForm.target_key === "user") return "确认并共享给成员";
+  if (memoryPublishForm.target_key === "agent") return "共享给 Agent 记忆";
+  if (memoryPublishForm.target_key === "org_space") return "沉淀到组织空间";
+  return "确认并共享";
+});
 
 function canDeleteRoom(room: MeetingRoom) {
   return room.created_by === auth.userId;
@@ -317,22 +392,6 @@ function canDeleteRoom(room: MeetingRoom) {
 
 function canLeaveRoom(room: MeetingRoom) {
   return room.created_by !== currentUserId.value;
-}
-
-function domainLabel(value: string) {
-  return domainLabels[value] || value;
-}
-
-function visibleDomainLabels(domains?: string[] | null, fallback = "") {
-  const labels = (domains || [])
-    .map(domainLabel);
-  return labels.join("、") || fallback;
-}
-
-function roomDomainPreview(room: MeetingRoom) {
-  const domains = room.allowed_data_domains || [];
-  if (!domains.length) return "会议协作";
-  return domains.slice(0, 2).map(domainLabel).join("、") + (domains.length > 2 ? ` +${domains.length - 2}` : "");
 }
 
 function auditDecisionLabel(value: string) {
@@ -400,6 +459,12 @@ function roomRecentLabel(room: { last_message_at?: string | null; updated_at?: s
   return formatTime(value);
 }
 
+function meetingRoomStatusLabel(status?: string | null) {
+  if (status === "active") return "进行中";
+  if (status === "closed") return "已结束";
+  return status || "";
+}
+
 function memoryConfidence(memory: MeetingMemory) {
   if (typeof memory.confidence !== "number") return "";
   return `${Math.round(memory.confidence * 100)}%`;
@@ -417,6 +482,126 @@ function memoryScopeLabel(value?: string | null) {
   return memoryScopeLabels[String(value || "meeting")] || String(value || "本会议室");
 }
 
+function domainLabel(value: string) {
+  const map: Record<string, string> = {
+    quality: "质量",
+    "quality.task": "质检任务",
+    "quality.result": "质检结果",
+    "quality.review": "专家复核",
+    "quality.analytics": "质量分析",
+    standard: "标准",
+    "standard.library": "标准库",
+    "standard.rule": "标准规则",
+    "standard.version": "标准版本",
+    "standard.approval": "标准审批",
+    meeting: "会议",
+    "meeting.message": "会议消息",
+    "meeting.summary": "会议总结",
+    "meeting.action_item": "会议待办",
+    "meeting.private_message": "会议私密消息",
+    memory: "记忆",
+    "memory.user": "个人记忆",
+    "memory.meeting": "会议记忆",
+    "memory.agent": "Agent 记忆",
+    "memory.org_space": "组织空间记忆",
+    "memory.business": "业务记忆",
+    platform_ops: "平台运营",
+    "ops.agent": "Agent",
+    "ops.prompt": "Prompt",
+    "ops.route": "路由",
+    "ops.tool": "工具",
+    "ops.release": "发布",
+    "ops.trace": "Trace",
+    model_billing: "模型与计费",
+    "model.catalog": "模型目录",
+    "model.config": "模型配置",
+    "model.experiment": "实验",
+    "model.deployment": "部署",
+    "model.experiment_cost": "实验成本",
+    "model.org_usage": "组织用量",
+    "billing.invoice": "账单",
+    org_admin: "组织治理",
+    "org.member": "成员",
+    "org.role": "角色",
+    "org.department": "部门",
+    "org.policy": "策略",
+    data_access: "数据访问",
+    "data.dataset": "数据集",
+    "data.sample": "样本",
+    "data.rag_space": "RAG 空间",
+    "data.connector": "连接器",
+    "data.import_job": "导入任务",
+    security_audit: "安全审计",
+    "audit.auth": "认证审计",
+    "audit.tool_execution": "工具执行审计",
+    "audit.agent_query": "Agent 查询审计",
+    "audit.approval": "审批审计",
+    ai_conversation: "AI 会话",
+    "conversation.own": "自己的会话",
+    "conversation.meeting": "会议会话",
+    "conversation.private": "私聊原文",
+    "conversation.trace_redacted": "脱敏 Trace",
+  };
+  const key = String(value || "").trim();
+  return map[key] || key;
+}
+
+function domainGroupLabel(value: string) {
+  const prefix = value.includes(".") ? value.split(".")[0] : value;
+  const groupMap: Record<string, string> = {
+    quality: "质量域",
+    standard: "标准域",
+    meeting: "会议域",
+    memory: "记忆域",
+    ops: "平台运营域",
+    model: "模型与计费域",
+    billing: "模型与计费域",
+    org: "组织治理域",
+    data: "数据访问域",
+    audit: "安全审计域",
+    conversation: "AI 会话域",
+    platform_ops: "平台运营域",
+    model_billing: "模型与计费域",
+    org_admin: "组织治理域",
+    data_access: "数据访问域",
+    security_audit: "安全审计域",
+    ai_conversation: "AI 会话域",
+  };
+  return groupMap[prefix] || prefix;
+}
+
+function hasDomainGroup(domains: string[], group: string) {
+  return domains.some((domain) => domain === group || domain.startsWith(`${group}.`));
+}
+
+function domainGroupKey(value: string) {
+  const prefix = value.includes(".") ? value.split(".")[0] : value;
+  if (prefix === "model" || prefix === "billing") return "model_billing";
+  if (prefix === "org") return "org_admin";
+  if (prefix === "data") return "data_access";
+  if (prefix === "audit") return "security_audit";
+  if (prefix === "conversation") return "ai_conversation";
+  if (prefix === "ops") return "platform_ops";
+  return prefix;
+}
+
+function buildDomainGroups(domains: string[]) {
+  const groups = new Map<string, string[]>();
+  for (const domain of domains || []) {
+    const key = domainGroupKey(domain);
+    const items = groups.get(key) || [];
+    if (!items.includes(domain)) {
+      items.push(domain);
+      groups.set(key, items);
+    }
+  }
+  return Array.from(groups.entries()).map(([key, items]) => ({ key, label: domainGroupLabel(key), items }));
+}
+
+function unwrap<T>(payload: unknown): T {
+  return ((payload as { data?: T }).data || payload) as T;
+}
+
 function inferMemoryType(title: string, content: string): MeetingMemory["memory_type"] {
   const text = `${title}\n${content}`.toLowerCase();
   if (["风险洞察", "预测", "预警", "未来", "risk forecast"].some((term) => text.includes(term))) return "risk_insight";
@@ -426,15 +611,14 @@ function inferMemoryType(title: string, content: string): MeetingMemory["memory_
   return "decision";
 }
 
-function inferMemoryCategory(memoryType: MeetingMemory["memory_type"], title: string, content: string): MeetingMemory["memory_category"] {
+function inferMemoryCategory(
+  memoryType: MeetingMemory["memory_type"],
+  title: string,
+  content: string,
+  affectedObjects?: MemoryAffectedObjects,
+): MeetingMemory["memory_category"] {
   const text = `${title}\n${content}`.toLowerCase();
-  const context = currentBusinessContext.value;
-  const hasBinding = Boolean(
-    context?.task_ids?.length
-      || context?.product_ids?.length
-      || context?.batch_nos?.length
-      || context?.standard_ids?.length,
-  );
+  const hasBinding = hasAffectedObjects(mergeAffectedObjects(contextAffectedObjects(), affectedObjects));
   if (memoryType === "quality_fact") return "business_memory";
   if (memoryType === "risk_insight" || memoryType === "quality_pattern") return hasBinding ? "business_memory" : "meeting_memory";
   const businessTerms = ["质检", "检测", "任务", "产品", "批次", "标准", "复核", "抽检", "缺陷", "风险", "判定", "审核", "inspection", "quality", "standard", "batch", "product"];
@@ -442,63 +626,54 @@ function inferMemoryCategory(memoryType: MeetingMemory["memory_type"], title: st
   return "meeting_memory";
 }
 
-function buildMemoryShareability(memoryCategory: MeetingMemory["memory_category"], memoryType: MeetingMemory["memory_type"]) {
-  const context = currentBusinessContext.value;
-  const allowedScopes = ["meeting"];
-  const missingBindings: string[] = [];
-  if (memoryCategory === "business_memory") {
-    if (context?.task_ids?.length) allowedScopes.push("inspection_task");
-    else if (memoryType === "quality_fact") missingBindings.push("inspection_task");
-    if (context?.product_ids?.length) allowedScopes.push("product");
-    else missingBindings.push("product");
-    if (context?.batch_nos?.length) allowedScopes.push("batch");
-    else missingBindings.push("batch");
-    if (context?.standard_ids?.length) allowedScopes.push("standard");
-    else missingBindings.push("standard");
-    if (context?.task_ids?.length || context?.product_ids?.length || context?.batch_nos?.length) allowedScopes.push("workspace");
-  }
+function buildMemoryShareability(
+  memoryCategory: MeetingMemory["memory_category"],
+  memoryType: MeetingMemory["memory_type"],
+  affectedObjects: MemoryAffectedObjects,
+  objectResolutionStatus?: string | null,
+) {
+  const context = mergeAffectedObjects(contextAffectedObjects(), affectedObjects);
+  const hasBusinessTags = hasAffectedObjects(context);
+  const allowedScopes = ["meeting_room", "org_space", "user", "agent", "collab_thread"];
   return {
     allowed_scopes: Array.from(new Set(allowedScopes)),
-    missing_bindings: Array.from(new Set(missingBindings)).sort(),
+    missing_bindings: [],
     requires_host_confirmation: true,
-    cross_room_allowed: allowedScopes.length > 1,
-    organization_scope_enabled: false,
+    cross_room_allowed: true,
+    organization_scope_enabled: true,
+    business_tags_optional: true,
+    has_business_tags: hasBusinessTags,
+    suggested_flow: memoryType === "risk_insight" || memoryType === "quality_pattern" || memoryCategory === "business_memory"
+      ? "confirm_or_share"
+      : "confirm_first",
+    object_resolution_status: objectResolutionStatus || "unresolved",
   };
 }
 
-function recommendedMemoryScope(memoryType: MeetingMemory["memory_type"], memoryCategory: MeetingMemory["memory_category"]) {
-  const context = currentBusinessContext.value;
-  if (memoryCategory !== "business_memory") return { scope: "meeting", scopeId: null };
-  if (memoryType === "quality_pattern") return { scope: "workspace", scopeId: "quality_risk_library" };
-  if (memoryType === "risk_insight") {
-    if (context?.batch_nos?.[0]) return { scope: "batch", scopeId: context.batch_nos[0] };
-    if (context?.product_ids?.[0]) return { scope: "product", scopeId: context.product_ids[0] };
-    if (context?.task_ids?.[0]) return { scope: "inspection_task", scopeId: context.task_ids[0] };
-    return { scope: "meeting", scopeId: null };
-  }
-  if (memoryType === "quality_fact" && context?.task_ids?.[0]) return { scope: "inspection_task", scopeId: context.task_ids[0] };
-  if (context?.product_ids?.[0]) return { scope: "product", scopeId: context.product_ids[0] };
-  return { scope: "meeting", scopeId: null };
+function recommendedMemoryScope(
+  memoryType: MeetingMemory["memory_type"],
+  memoryCategory: MeetingMemory["memory_category"],
+  affectedObjects: MemoryAffectedObjects,
+  objectResolutionStatus?: string | null,
+) {
+  const context = mergeAffectedObjects(contextAffectedObjects(), affectedObjects);
+  const hasBusinessTags = hasAffectedObjects(context);
+  if (memoryType === "quality_pattern" || memoryType === "risk_insight") return { scope: "org_space", scopeId: "current" };
+  if (memoryCategory === "business_memory" && hasBusinessTags && objectResolutionStatus === "resolved") return { scope: "org_space", scopeId: "current" };
+  return { scope: "meeting_room", scopeId: null };
 }
 
-function buildMemoryWarnings(memoryCategory: MeetingMemory["memory_category"], memoryType: MeetingMemory["memory_type"], baseWarnings: string[] = []) {
-  const warnings = new Set(baseWarnings);
-  const context = currentBusinessContext.value;
-  const hasAnyBinding = Boolean(
-    context?.task_ids?.length
-      || context?.product_ids?.length
-      || context?.batch_nos?.length
-      || context?.standard_ids?.length,
-  );
-  if (memoryCategory === "meeting_memory") warnings.add("该记忆仅适合保存在本会议室，不允许跨业务范围共享。");
-  if (memoryCategory === "business_memory" && !hasAnyBinding) {
-    warnings.add("该记忆属于质检相关信息，但当前会议室没有绑定质检任务、产品、批次或标准，只能先保存到本会议室。");
-  }
-  if (memoryType === "quality_fact" && !context?.task_ids?.length) {
-    warnings.add("单次质检事实默认发布到质检任务；当前缺少质检任务绑定，不能发布到产品、批次或预警中心。");
-  }
+function buildMemoryWarnings(
+  memoryCategory: MeetingMemory["memory_category"],
+  memoryType: MeetingMemory["memory_type"],
+  _affectedObjects: MemoryAffectedObjects,
+  _objectResolutionStatus?: string | null,
+  baseWarnings: string[] = [],
+) {
+  const warnings = new Set(baseWarnings.filter((warning) => !isBusinessTagWarning(warning)));
+  if (memoryCategory === "meeting_memory") warnings.add("该记忆默认沉淀到当前会议室；需要跨范围使用时，可共享给其他会议室、成员个人记忆、Agent 记忆或组织共享空间。");
   if (memoryType === "risk_insight") {
-    warnings.add("风险洞察是预测候选，需人工确认后才可发布；没有绑定业务对象时不能进入预警中心。");
+    warnings.add("风险洞察是预测候选，需人工确认后才能沉淀或共享；不会自动触发外部处置。");
   }
   return Array.from(warnings);
 }
@@ -507,19 +682,23 @@ function buildMemoryPublishPreview(memory?: MeetingMemory | null): MeetingMemory
   if (!memory) return null;
   const title = memoryPublishForm.title.trim() || memory.title;
   const content = memoryPublishForm.content.trim() || memory.content;
+  const affectedObjects = memoryAffectedObjects(memory);
+  const objectResolutionStatus = memory.object_resolution_status || (hasAffectedObjects(affectedObjects) ? "resolved" : "unresolved");
   const memoryType = inferMemoryType(title, content);
-  const memoryCategory = inferMemoryCategory(memoryType, title, content);
-  const recommendation = recommendedMemoryScope(memoryType, memoryCategory);
+  const memoryCategory = inferMemoryCategory(memoryType, title, content, affectedObjects);
+  const recommendation = recommendedMemoryScope(memoryType, memoryCategory, affectedObjects, objectResolutionStatus);
   return {
     ...memory,
     title,
     content,
     memory_type: memoryType,
     memory_category: memoryCategory,
+    affected_objects: affectedObjects,
+    object_resolution_status: objectResolutionStatus,
     recommended_scope: recommendation.scope,
     recommended_scope_id: recommendation.scopeId,
-    shareability: buildMemoryShareability(memoryCategory, memoryType),
-    warnings: buildMemoryWarnings(memoryCategory, memoryType, memory.warnings || []),
+    shareability: buildMemoryShareability(memoryCategory, memoryType, affectedObjects, objectResolutionStatus),
+    warnings: buildMemoryWarnings(memoryCategory, memoryType, affectedObjects, objectResolutionStatus, memory.warnings || []),
   };
 }
 
@@ -552,31 +731,59 @@ function memberDisplayName(userId?: string | null) {
   return "未知成员";
 }
 
+function roomNameById(roomId?: string | null) {
+  const cleanId = String(roomId || "").trim();
+  if (!cleanId || cleanId === "current") return store.activeRoom?.title || "当前会议室";
+  const room = store.rooms.find((item) => item.id === cleanId);
+  return room ? roomDisplayTitle(room) : "";
+}
+
+function agentNameById(agentId?: string | null) {
+  const cleanId = String(agentId || "").trim();
+  if (!cleanId) return "";
+  if (cleanId === "general_agent") return "会议Agent";
+  return store.agents.find((agent) => agent.agent_id === cleanId)?.agent_name || "";
+}
+
+function memoryPublishTargetTypeLabel(key: MemoryPublishTargetKey) {
+  if (key === "current_meeting_room" || key === "target_meeting_room") return "会议室";
+  if (key === "user") return "成员";
+  if (key === "agent") return "Agent";
+  if (key === "org_space") return "组织空间";
+  return "目标";
+}
+
 function scopeObjectLabel(memory: MeetingMemory) {
   const scope = String(memory.scope || memory.scope_type || "meeting");
   const scopeId = String(memory.scope_id || "").trim();
   if (scope === "meeting" || scope === "meeting_room") {
+    if (scopeId && scopeId !== store.activeRoom?.id) return `会议室：${roomNameById(scopeId) || "已共享会议室"}`;
     return store.activeRoom?.title ? `当前会议室：${store.activeRoom.title}` : "当前会议室";
   }
+  if (scope === "org_space" || scope === "workspace") return "组织共享空间";
+  if (scope === "collab_thread") return "协作确认流";
+  if (scope === "user") return scopeId ? `成员个人记忆：${memberDisplayName(scopeId)}` : "成员个人记忆";
+  if (scope === "agent") return scopeId ? `Agent 记忆：${agentNameById(scopeId) || "指定 Agent"}` : "Agent 记忆";
   if (scope === "inspection_task") {
     const task = currentBusinessContext.value?.tasks?.find((item) => item.id === scopeId);
-    if (task?.spec_code) return `质检任务：${task.spec_code}`;
-    return "当前绑定质检任务";
+    if (task?.spec_code) return `历史线索：${task.spec_code}`;
+    return "历史线索";
   }
-  if (scope === "product") return scopeId && !isUuidLike(scopeId) ? `产品：${scopeId}` : "当前绑定产品";
-  if (scope === "batch") return scopeId && !isUuidLike(scopeId) ? `批次：${scopeId}` : "当前绑定批次";
-  if (scope === "standard") return scopeId && !isUuidLike(scopeId) ? `标准/规则：${scopeId}` : "当前绑定标准/规则知识库";
-  if (scope === "workspace") return scopeId === "quality_risk_library" ? "质检风险库/问题模式库" : `工作区：${scopeId || "当前工作区"}`;
+  if (scope === "product") return scopeId && !isUuidLike(scopeId) ? `历史线索：${scopeId}` : "历史线索";
+  if (scope === "batch") return scopeId && !isUuidLike(scopeId) ? `历史线索：${scopeId}` : "历史线索";
+  if (scope === "standard") return scopeId && !isUuidLike(scopeId) ? `历史线索：${scopeId}` : "历史线索";
+  if (scope === "workspace") return `组织共享空间${scopeId ? `：${scopeId}` : ""}`;
   return memoryScopeLabel(scope);
 }
 
 function scopeVisibilityNote(memory: MeetingMemory) {
   const scope = String(memory.scope || memory.scope_type || "meeting");
-  if (scope === "inspection_task") return "绑定同一质检任务的上下文可检索";
-  if (scope === "product") return "绑定同一产品的上下文可检索";
-  if (scope === "batch") return "绑定同一批次的上下文可检索";
-  if (scope === "standard") return "绑定同一标准/规则知识库的上下文可检索";
-  if (scope === "workspace") return "具备质检风险库权限的人员可在风险库或告警中心查看";
+  if (scope === "org_space" || scope === "workspace") return "组织内可检索，可被有权限的会议室、成员和 Agent 召回";
+  if (scope === "collab_thread") return "仅对应协作通道可见";
+  if (scope === "user") return "仅对应成员身份可见";
+  if (scope === "agent") return "仅对目标 Agent 身份可见";
+  if (["inspection_task", "product", "batch", "standard"].includes(scope)) return "历史兼容数据；仅作为检索线索参与召回";
+  if (scope === "workspace") return "组织共享空间历史兼容数据";
   return "仅当前会议室可见";
 }
 
@@ -591,6 +798,13 @@ function memoryTechnicalInfo(memory: MeetingMemory) {
     scope_id: memory.scope_id || null,
     memory_type: memory.memory_type || null,
     affected_objects: memory.affected_objects || null,
+    object_resolution_status: memory.object_resolution_status || null,
+    object_candidates: memory.object_candidates || [],
+    source_spans: memory.source_spans || [],
+    value_score: memory.value_score || null,
+    dedupe_key: memory.dedupe_key || null,
+    related_memory_ids: memory.related_memory_ids || [],
+    extraction_reason: memory.extraction_reason || null,
     evidence_refs: memory.evidence_refs || [],
     risk_level: memory.risk_level || null,
     forecast_window: memory.forecast_window || null,
@@ -609,7 +823,63 @@ function memorySourceSummary(memory: MeetingMemory) {
   return "当前会议";
 }
 
+function openMemoryCollabShare(memory: MeetingMemory) {
+  if (!store.activeRoom) return;
+  const room = store.activeRoom;
+  const sourceMessage = sourceMessageId(memory);
+  const draftKey = `${memory.memory_id}-${Date.now()}`;
+  const sourceContext = {
+    source_type: "meeting_room",
+    source_id: room.id,
+    source_title: room.title,
+    source_room_id: room.id,
+    source_message_id: sourceMessage || undefined,
+    label: `会议室${room.title}`,
+  };
+  const draft = {
+    title: `请确认：${memory.title || "会议记忆"}`,
+    content: "请确认这条会议记忆是否需要沉淀到你的作用域，或共享给你负责的会议协作范围。",
+    source_context: sourceContext,
+    memory: {
+      memory_id: memory.memory_id,
+      title: memory.title,
+      summary: memory.summary || memory.content,
+      content: memory.content,
+      memory_type: memory.memory_type,
+      memory_category: memory.memory_category,
+      status: memory.status,
+      recommended_scope: memory.recommended_scope,
+      recommended_scope_id: memory.recommended_scope_id,
+      source_room_id: room.id,
+      source_room_title: room.title,
+      source_message_id: sourceMessage || null,
+      source_label: sourceMessageLabel(memory),
+      affected_objects: memory.affected_objects || null,
+      tags: memory.tags || [],
+    },
+  };
+  try {
+    window.sessionStorage.setItem(`collab:draft:${draftKey}`, JSON.stringify(draft));
+  } catch {
+    ElMessage.warning("浏览器暂存失败，将只带入会议室来源。");
+  }
+  void router.push({
+    path: "/app/collab",
+    query: {
+      draft_key: draftKey,
+      source_type: "meeting_room",
+      source_id: room.id,
+      source_label: room.title,
+      source_room_id: room.id,
+      ...(sourceMessage ? { source_message_id: sourceMessage } : {}),
+      title: draft.title,
+    },
+  });
+}
+
 function memoryStatusLabel(status?: string | null) {
+  if (status === "confirmed") return "已确认";
+  if (status === "short_term") return "短期";
   if (status === "active") return "有效";
   if (status === "candidate") return "候选";
   if (status === "disputed") return "争议中";
@@ -622,58 +892,68 @@ function memoryStatusLabel(status?: string | null) {
 
 function memoryCategoryHint(memory?: MeetingMemory | null) {
   const category = memory?.memory_category;
-  if (memory?.memory_type === "risk_insight") return "风险洞察是预测候选，确认后可发布到产品、批次、质检风险库或预警中心。";
-  if (memory?.memory_type === "quality_fact") return "单次质检事实优先绑定到质检任务；缺少任务绑定时只能先留在本会议室。";
-  if (memory?.memory_type === "quality_pattern") return "可复用的问题模式可发布到质检风险库/问题模式库；普通知识库不作为默认记忆出口。";
-  if (category === "business_memory") return "业务记忆发布到稳定对象后，后续绑定同一对象的会议室可检索。";
-  if (category === "rejected_noise") return "噪声不允许发布为已确认记忆，只能丢弃或保留为普通会议消息。";
-  return "会议记忆仅保存在本会议室，不会跨会议室共享。";
+  if (memory?.memory_type === "risk_insight") return "风险洞察是预测候选，确认后可沉淀到当前会议室，也可共享给其他会议室、成员个人记忆、Agent 记忆或组织共享空间。";
+  if (memory?.memory_type === "quality_fact") return "单次质量事实可先在会议室确认，再按需要共享给会议室、成员、Agent 或组织空间。";
+  if (memory?.memory_type === "quality_pattern") return "可复用的问题模式建议沉淀到组织共享空间，或共享到 Agent 记忆供后续召回。";
+  if (category === "business_memory") return "这类专业经验确认后按目标作用域沉淀或共享。";
+  if (category === "rejected_noise") return "噪声不建议确认为记忆，只能丢弃或保留为普通会议消息。";
+  return "会议内记忆可先在当前会议室沉淀，需要协同时再共享给明确目标。";
 }
 
-function missingBindingLabels(memory?: MeetingMemory | null) {
-  return (memory?.shareability?.missing_bindings || [])
-    .map((item) => bindingLabels[String(item)] || String(item))
+function isBusinessTagWarning(warning?: string | null) {
+  const text = String(warning || "");
+  return [
+    "业务标签",
+    "任务、产品、批次、标准",
+    "质检任务",
+    "默认发布到质检任务",
+    "不能直接进入组织共享记忆",
+    "不允许跨业务范围共享",
+  ].some((keyword) => text.includes(keyword));
+}
+
+function normalizeMemoryWarning(warning: string) {
+  const text = String(warning || "").trim();
+  if (!text) return "";
+  if (isBusinessTagWarning(text)) return "";
+  if (text.includes("预警中心")) return "风险洞察是预测候选，需人工确认后才能沉淀或共享；不会自动触发外部处置。";
+  if (text.includes("确认发布")) return text.replaceAll("确认发布", "确认");
+  return text;
+}
+
+function visibleMemoryWarnings(memory?: MeetingMemory | null) {
+  return (memory?.warnings || [])
+    .map((warning) => normalizeMemoryWarning(warning))
     .filter(Boolean);
 }
 
 function publishDecisionRows(memory?: MeetingMemory | null) {
   if (!memory) return [];
-  const allowed = new Set((memory.shareability?.allowed_scopes || ["meeting"]).map(String));
   const rows: Array<{ label: string; value: string }> = [
     { label: "识别结果", value: `${memoryCategoryLabel(memory.memory_category)} · ${memoryTypeLabel(memory.memory_type)}` },
-    { label: "推荐落点", value: memory.recommended_scope ? memoryScopeLabel(memory.recommended_scope) : "本会议室" },
+    { label: "推荐落点", value: memory.recommended_scope ? memoryScopeLabel(memory.recommended_scope) : "当前会议室" },
   ];
-  const missing = missingBindingLabels(memory);
-  if (missing.length) {
-    rows.push({ label: "缺少绑定", value: missing.join("、") });
-  }
   if (memory.memory_type === "quality_fact") {
     rows.push({
-      label: "发布判断",
-      value: allowed.has("inspection_task")
-        ? "这是单次质检事实，可发布到绑定的质检任务。"
-        : "这是质检事实，但缺少质检任务绑定，暂不能发到产品、批次或预警中心。",
+      label: "沉淀判断",
+      value: "这是一次专业事实，可直接沉淀到会议室，也可共享给其他会议室、成员、Agent 或组织空间。",
     });
   } else if (memory.memory_type === "risk_insight") {
     rows.push({
-      label: "发布判断",
-      value: allowed.has("workspace")
-        ? "有业务对象绑定，可发布到产品、批次、质检风险库，并同步形成预警记录。"
-        : "缺少产品、批次或任务绑定，只能留在本会议室。",
+      label: "沉淀判断",
+      value: "这是预测候选，需人工确认；确认后可沉淀到会议室或共享给组织空间、其他会议室、成员、Agent。",
     });
   } else if (memory.memory_type === "quality_pattern") {
     rows.push({
-      label: "发布判断",
-      value: allowed.has("workspace")
-        ? "可作为跨对象复用的问题模式进入质检风险库/问题模式库。"
-        : "缺少业务对象绑定，暂不能进入质检风险库。",
+      label: "沉淀判断",
+      value: "这是可复用模式，建议进入组织共享空间，或通过协作消息发送给需要处理的目标。",
     });
-  } else if (allowed.size <= 1) {
-    rows.push({ label: "发布判断", value: "不涉及稳定业务对象，只保存为本会议室结论。" });
+  } else {
+    rows.push({ label: "沉淀判断", value: "可保存为当前会议室结论，也可共享给明确协作目标。" });
   }
   rows.push({
-    label: "知识库规则",
-    value: "标准/规则知识库只收判定口径、阈值和标准沉淀；质检风险库只收风险洞察和问题模式；普通 RAG 知识库不是会议记忆的默认发布对象。",
+    label: "共享规则",
+    value: "记忆归属看目标作用域；共享目标只选择会议室、成员、Agent、组织空间或协作确认流。",
   });
   return rows;
 }
@@ -692,6 +972,89 @@ function forecastWindowLabel(memory: MeetingMemory) {
   const label = value.label;
   if (typeof label === "string" && label.trim()) return label.trim();
   return "";
+}
+
+function dedupeObjectValues(values: Array<string | number | null | undefined>) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+  }
+  return result;
+}
+
+function emptyAffectedObjects(): MemoryAffectedObjects {
+  return {
+    inspection_task_ids: [],
+    product_ids: [],
+    batch_nos: [],
+    standard_ids: [],
+  };
+}
+
+function contextAffectedObjects(): MemoryAffectedObjects {
+  const context = currentBusinessContext.value;
+  return {
+    inspection_task_ids: dedupeObjectValues(context?.task_ids || []),
+    product_ids: dedupeObjectValues(context?.product_ids || []),
+    batch_nos: dedupeObjectValues(context?.batch_nos || []),
+    standard_ids: dedupeObjectValues(context?.standard_ids || []),
+  };
+}
+
+function mergeAffectedObjects(...items: Array<Partial<MemoryAffectedObjects> | null | undefined>): MemoryAffectedObjects {
+  const merged = emptyAffectedObjects();
+  for (const item of items) {
+    if (!item) continue;
+    merged.inspection_task_ids.push(...dedupeObjectValues(item.inspection_task_ids || []));
+    merged.product_ids.push(...dedupeObjectValues(item.product_ids || []));
+    merged.batch_nos.push(...dedupeObjectValues(item.batch_nos || []));
+    merged.standard_ids.push(...dedupeObjectValues(item.standard_ids || []));
+  }
+  return {
+    inspection_task_ids: dedupeObjectValues(merged.inspection_task_ids),
+    product_ids: dedupeObjectValues(merged.product_ids),
+    batch_nos: dedupeObjectValues(merged.batch_nos),
+    standard_ids: dedupeObjectValues(merged.standard_ids),
+  };
+}
+
+function memoryAffectedObjects(memory?: MeetingMemory | null): MemoryAffectedObjects {
+  const objects = memory?.affected_objects || {};
+  return {
+    inspection_task_ids: Array.isArray(objects.inspection_task_ids) ? objects.inspection_task_ids.map(String) : [],
+    product_ids: Array.isArray(objects.product_ids) ? objects.product_ids.map(String) : [],
+    batch_nos: Array.isArray(objects.batch_nos) ? objects.batch_nos.map(String) : [],
+    standard_ids: Array.isArray(objects.standard_ids) ? objects.standard_ids.map(String) : [],
+  };
+}
+
+function hasAffectedObjects(objects: MemoryAffectedObjects) {
+  return Boolean(
+    objects.inspection_task_ids.length
+      || objects.product_ids.length
+      || objects.batch_nos.length
+      || objects.standard_ids.length,
+  );
+}
+
+function sourceSpanSummary(memory?: MeetingMemory | null) {
+  const spans = memory?.source_spans || [];
+  if (!spans.length) return "";
+  return spans.slice(0, 3).map((span, index) => {
+    const text = String(span.text || "").replace(/\s+/g, " ").trim();
+    return text ? `片段 ${index + 1}：${clipText(text, 70)}` : `片段 ${index + 1}`;
+  }).join("、");
+}
+
+function relatedMemorySummary(memory?: MeetingMemory | null) {
+  const ids = memory?.related_memory_ids || [];
+  return ids.length ? ids.slice(0, 3).join("、") : "";
 }
 
 function memoryPreview(memory: MeetingMemory, maxLength = 120) {
@@ -764,8 +1127,6 @@ async function copyAuditDetail() {
     `问题：${audit.question}`,
     `时间：${formatTime(audit.created_at) || "未知"}`,
     `决策：${auditDecisionLabel(audit.decision)}`,
-    `允许域：${visibleDomainLabels(audit.allowed_domains, "无")}`,
-    `拒绝域：${visibleDomainLabels(audit.denied_domains, "无")}`,
     `读取记忆：${auditMemoryCount(audit)} 条`,
   ].join("\n"), "审计信息已复制");
 }
@@ -776,7 +1137,7 @@ async function questionAuditAnswer() {
   try {
     const { value } = await ElMessageBox.prompt("说明这次 AI 回答哪里需要质疑", "质疑这次回答", {
       inputType: "textarea",
-      inputPlaceholder: "例如：回答引用了有争议记忆，或没有说明不可访问的数据边界",
+      inputPlaceholder: "例如：回答引用了有争议记忆，或结论需要主持人复核",
       inputPattern: /^.{1,1000}$/,
       inputErrorMessage: "请输入 1 到 1000 个字符",
       confirmButtonText: "生成会议草稿",
@@ -787,7 +1148,7 @@ async function questionAuditAnswer() {
       `问题：${audit.question}`,
       `时间：${formatTime(audit.created_at) || "未知"}`,
       `质疑原因：${String(value || "").trim()}`,
-      "请主持人复核本次回答使用的数据边界、记忆来源和结论是否可靠。",
+      "请主持人复核本次回答的记忆来源和结论是否可靠。",
     ].join("\n");
     auditDetailVisible.value = false;
     await nextTick();
@@ -798,67 +1159,107 @@ async function questionAuditAnswer() {
   }
 }
 
-function isBusinessMemory(memory?: MeetingMemory | null) {
-  return memory?.memory_category === "business_memory";
-}
-
 function buildMemoryPublishScopeOptions(memory?: MeetingMemory | null) {
-  const options: Array<{ label: string; value: MeetingMemoryPublishScope; scopeId: string; disabled?: boolean; note: string }> = [
-    { label: "本会议室", value: "meeting", scopeId: "", note: "只在当前会议室可见" },
+  const allowed = new Set((memory?.shareability?.allowed_scopes || ["meeting_room", "org_space", "user", "agent", "collab_thread"]).map(String));
+  const targetMeetingRooms = store.rooms
+    .filter((room) => room.id !== store.activeRoom?.id)
+    .map((room) => ({
+      label: roomDisplayTitle(room),
+      value: room.id,
+      description: `${room.member_count || 0} 位成员· ${meetingRoomStatusLabel(room.status) || "未知状态"}`,
+    }));
+  const memberTargets = store.members
+    .filter((member) => member.user_id !== currentUserId.value)
+    .map((member) => ({
+      label: member.username,
+      value: member.user_id,
+      description: memberRoleLabel(member.role),
+    }));
+  const agentTargets = store.agents.map((agent) => ({
+    label: agent.agent_name,
+    value: agent.agent_id,
+    description: agent.role === "observer" ? "观察者 Agent" : "参会 Agent",
+  }));
+  const options: MemoryPublishScopeOption[] = [
+    {
+      key: "current_meeting_room",
+      label: "当前会议室沉淀",
+      value: "meeting_room",
+      scopeId: "",
+      note: "保存为当前会议室的已确认记忆，后续本会议室成员和会议 Agent 可召回。",
+    },
+    {
+      key: "target_meeting_room",
+      label: "共享给其他会议室",
+      value: "meeting_room",
+      scopeId: "",
+      requiresTargetId: true,
+      targetLabel: "选择会议室",
+      targetPlaceholder: "搜索你已加入的会议室",
+      targetOptions: targetMeetingRooms,
+      targetEmptyText: "暂无可共享的其他会议室",
+      note: "直接成为目标会议室可检索的共享记忆，目标会议室成员和会议 Agent 后续可召回。",
+    },
   ];
-  if (!memory || !isBusinessMemory(memory)) return options;
-  const allowed = new Set((memory.shareability?.allowed_scopes || ["meeting"]).map(String));
-  const context = currentBusinessContext.value;
-  const addScope = (value: MeetingMemoryPublishScope, ids?: string[] | null, notePrefix = "") => {
-    if (!allowed.has(value)) return;
-    for (const id of ids || []) {
-      const cleanId = String(id || "").trim();
-      if (!cleanId) continue;
-      options.push({
-        label: `${memoryScopeLabel(value)}：${cleanId}`,
-        value,
-        scopeId: cleanId,
-        note: `${notePrefix || memoryScopeLabel(value)}绑定上下文可检索，不按相关会议室推送`,
-      });
-    }
-  };
-  addScope("inspection_task", context?.task_ids, "同任务");
-  addScope("product", context?.product_ids, "同产品");
-  addScope("batch", context?.batch_nos, "同批次");
-  addScope("standard", context?.standard_ids, "同标准/规则");
-  if (allowed.has("workspace") && (memory.memory_type === "risk_insight" || memory.memory_type === "quality_pattern")) {
+  if (allowed.has("org_space") || allowed.has("workspace")) {
     options.push({
-      label: "质检风险库/问题模式库",
-      value: "workspace",
-      scopeId: "quality_risk_library",
-      note: "进入质检风险库/问题模式库；风险洞察确认发布后会同步形成预警中心记录",
+      key: "org_space",
+      label: "组织共享空间",
+      value: "org_space",
+      scopeId: "current",
+      note: "进入组织共享记忆，供有权限的会议室、成员和 Agent 后续召回。",
+    });
+  }
+  if (allowed.has("user")) {
+    options.push({
+      key: "user",
+      label: "共享给成员",
+      value: "user",
+      scopeId: "",
+      requiresTargetId: true,
+      targetLabel: "选择成员",
+      targetPlaceholder: "搜索当前会议室成员",
+      targetOptions: memberTargets,
+      targetEmptyText: "当前会议室暂无其他成员",
+      note: "进入成员个人记忆；后续该成员触发会议 Agent 时可作为本人授权上下文召回。",
+    });
+  }
+  if (allowed.has("agent")) {
+    options.push({
+      key: "agent",
+      label: "共享给 Agent 记忆",
+      value: "agent",
+      scopeId: "",
+      requiresTargetId: true,
+      targetLabel: "选择 Agent",
+      targetPlaceholder: "搜索当前会议室Agent",
+      targetOptions: agentTargets,
+      targetEmptyText: "当前会议室暂无可共享给 Agent",
+      note: "进入目标 Agent 的可检索记忆，用于后续在该 Agent 身份下召回和推理。",
     });
   }
   return options;
 }
 
-function selectedMemoryPublishOptionValue() {
-  const scopeId = memoryPublishForm.scope === "meeting" ? "" : memoryPublishForm.scope_id;
-  return `${memoryPublishForm.scope}:${scopeId}`;
-}
-
-function applyMemoryPublishOption(value: string) {
-  const [scope, ...scopeIdParts] = value.split(":");
-  memoryPublishForm.scope = (scope || "meeting") as MeetingMemoryPublishScope;
-  memoryPublishForm.scope_id = scope === "meeting" ? "" : scopeIdParts.join(":");
+function applyMemoryPublishOption(key: MemoryPublishTargetKey) {
+  const option = memoryPublishScopeOptions.value.find((item) => item.key === key) || memoryPublishScopeOptions.value[0];
+  memoryPublishForm.target_key = option.key;
+  memoryPublishForm.scope = option.value;
+  memoryPublishForm.scope_id = option.requiresTargetId ? "" : option.scopeId;
 }
 
 function syncMemoryPublishSelectionWithPreview() {
   const preview = memoryPublishPreview.value;
   if (!preview) return;
   const options = buildMemoryPublishScopeOptions(preview);
-  const current = selectedMemoryPublishOptionValue();
-  if (options.some((item) => `${item.value}:${item.scopeId}` === current)) return;
+  if (options.some((item) => item.key === memoryPublishForm.target_key)) return;
   const recommended = options.find((item) => (
     item.value === preview.recommended_scope
+    && !item.requiresTargetId
     && (item.value === "meeting" || item.scopeId === String(preview.recommended_scope_id || ""))
   ));
   const selected = recommended || options[0];
+  memoryPublishForm.target_key = selected.key;
   memoryPublishForm.scope = selected.value;
   memoryPublishForm.scope_id = selected.scopeId;
 }
@@ -871,9 +1272,11 @@ function resetMemoryPublishForm(memory: MeetingMemory) {
   const options = buildMemoryPublishScopeOptions(preview);
   const recommended = options.find((item) => (
     item.value === preview.recommended_scope
+    && !item.requiresTargetId
     && (item.value === "meeting" || item.scopeId === String(preview.recommended_scope_id || ""))
   ));
   const selected = recommended || options[0];
+  memoryPublishForm.target_key = selected.key;
   memoryPublishForm.scope = selected.value;
   memoryPublishForm.scope_id = selected.scopeId;
   memoryPublishForm.publish_reason = "";
@@ -881,7 +1284,7 @@ function resetMemoryPublishForm(memory: MeetingMemory) {
 
 function quotedMessageTitle(messageId?: string | null) {
   if (!messageId) return "";
-  const message = store.messages.find((item) => item.id === messageId);
+  const message = store.activeRoomMessages.find((item) => item.id === messageId);
   if (!message) return "引用的会议消息已不可见。";
   return `${message.username}: ${displayMessageContent(message).slice(0, 80)}`;
 }
@@ -899,6 +1302,54 @@ function displayMessageContent(message: MeetingMessage): string {
 
 function messageMetadata(message: MeetingMessage) {
   return message.metadata_json || {};
+}
+
+function messageVisibility(message: MeetingMessage) {
+  const metadata = messageMetadata(message);
+  const visibility = String(metadata.visibility || "").trim();
+  if (visibility) return visibility;
+  return privateRecipientUserId(message) ? "private" : "room";
+}
+
+function messageVisibilityLabel(message: MeetingMessage) {
+  return messageVisibility(message) === "private" ? "仅自己可见" : "公开";
+}
+
+function shareTargetLabel(scopeType: string, scopeId: string) {
+  if (scopeType === "meeting_room") {
+    const room = store.rooms.find((item) => item.id === scopeId);
+    return room?.title || "目标会议室";
+  }
+  if (scopeType === "org_space") return "组织共享空间";
+  if (scopeType === "user") return memberDisplayName(scopeId);
+  if (scopeType === "agent") return scopeId === "general_agent" ? "会议Agent" : scopeId;
+  if (scopeType === "collab_thread") return "协作通道";
+  return scopeId || scopeType;
+}
+
+function conflictTypeLabel(value: string) {
+  const map: Record<string, string> = {
+    preference: "偏好冲突",
+    task: "任务冲突",
+    resource: "资源冲突",
+    knowledge: "知识冲突",
+  };
+  return map[value] || value || "冲突";
+}
+
+async function resolveConflictCard(conflictId: string, selectedAction: "approve" | "queue" | "reject" | "candidate_only") {
+  await store.resolveConflict(conflictId, selectedAction);
+  ElMessage.success("冲突已处理");
+}
+
+async function approveMemoryShare(transferId: string) {
+  await store.approveMemoryShare(transferId);
+  ElMessage.success("共享请求已通过");
+}
+
+async function rejectMemoryShare(transferId: string) {
+  await store.rejectMemoryShare(transferId);
+  ElMessage.success("共享请求已拒绝");
 }
 
 function messageQuoteSnapshot(message: MeetingMessage): MeetingQuoteSnapshot | null {
@@ -961,8 +1412,23 @@ function privatePartnerId(message: MeetingMessage) {
   return "";
 }
 
+function messageHasAgentMention(message: MeetingMessage) {
+  return Array.isArray(message.mentions)
+    && message.mentions.some((mention) => Boolean(mention?.agent_id || mention?.agent_name));
+}
+
+function canShowInAgentPanel(message: MeetingMessage) {
+  const selfId = currentUserId.value;
+  if (!selfId) return false;
+  const recipientId = privateRecipientUserId(message);
+  if (recipientId) return message.user_id === selfId || recipientId === selfId;
+  if (["agent", "agent_streaming"].includes(message.message_type)) return message.user_id === selfId;
+  if (message.message_type === "user" && messageHasAgentMention(message)) return message.user_id === selfId;
+  return false;
+}
+
 function privateMessagesByUser(userId: string) {
-  return store.messages.filter((message) => privatePartnerId(message) === userId);
+  return store.activeRoomMessages.filter((message) => privatePartnerId(message) === userId);
 }
 
 function canMutateMessage(message: MeetingMessage) {
@@ -1256,6 +1722,23 @@ async function quoteAgentMessageToMain(message: MeetingMessage) {
   ElMessage.success("已引用到主会场输入框，确认后发送");
 }
 
+async function quoteSummaryToMain(message: MeetingMessage) {
+  const content = displayMessageContent(message).trim();
+  if (!content) return;
+  quoteSnapshot.value = {
+    source: "agent",
+    author: "会议总结",
+    content,
+    created_at: message.created_at || null,
+  };
+  quotedMessage.value = null;
+  input.value = "";
+  store.clearPendingAttachments();
+  await nextTick();
+  inputRef.value?.focus();
+  ElMessage.success("已引用会议总结到主会场输入框。");
+}
+
 async function askAgentAboutMessage(message: MeetingMessage) {
   const content = displayMessageContent(message).trim();
   const author = message.username || "成员";
@@ -1321,9 +1804,14 @@ function copyInvite() {
 
 async function scrollToBottom(target: "main" | "agent" | "private" = "main") {
   await nextTick();
-  const el = target === "main" ? messageListRef.value : target === "agent" ? agentPanelListRef.value : privatePanelListRef.value;
-  if (!el) return;
-  el.scrollTop = el.scrollHeight;
+  const targets = target === "main"
+    ? [messageListRef.value]
+    : target === "agent"
+      ? [agentPanelListRef.value]
+      : [privatePanelListRef.value];
+  for (const el of targets) {
+    if (el) el.scrollTop = el.scrollHeight;
+  }
 }
 
 // Feedback
@@ -1606,14 +2094,37 @@ function cancelModifyAgentQuestion() {
 }
 
 async function saveModifiedAgentQuestion(message: MeetingMessage) {
-  if (!canModifyAgentQuestion(message)) return;
+  if (!store.activeRoom) {
+    ElMessage.warning("请先进入会议室。");
+    return;
+  }
+  if (store.generalAgentRunning) {
+    ElMessage.warning("会议Agent正在回复，请先停止或等待完成后再重新问。");
+    return;
+  }
+  if (agentEditingMessageId.value !== message.id || message.message_type !== "user" || messageMetadata(message).recalled_at) {
+    ElMessage.warning("这条提问当前不能修改并重新问。");
+    return;
+  }
   const question = agentEditingContent.value.trim();
-  if (!question) return;
+  if (!question) {
+    ElMessage.warning("请输入要重新提问的内容。");
+    return;
+  }
   const attachments = messageAttachments(message);
   try {
-    await store.updateMessage(message.id, `@会议Agent ${question}`);
+    try {
+      await store.updateMessage(message.id, `@会议Agent ${question}`);
+    } catch (error) {
+      ElMessage.warning("原提问未能更新，已直接按修改后的内容重新提问。");
+      console.warn("Failed to update original agent question before rerun", error);
+    }
     cancelModifyAgentQuestion();
-    await store.runGeneralAgent("auto", question, { attachments });
+    const result = await store.runGeneralAgent("auto", question, { attachments });
+    if (!result) {
+      ElMessage.warning("会议Agent暂未开始回复，请稍后再试。");
+      return;
+    }
     await scrollToBottom("agent");
   } catch (error) {
     ElMessage.error("修改后重新提问失败，请稍后重试。");
@@ -1629,17 +2140,25 @@ function ensureActivePrivateMember() {
   }
   const current = members.find((member) => member.user_id === activePrivateUserId.value);
   if (current) return current;
-  activePrivateUserId.value = members[0].user_id;
-  return members[0];
+  const recent = members.find((member) => privateConversationPartnerIds.value.has(member.user_id));
+  if (recent) {
+    activePrivateUserId.value = recent.user_id;
+    return recent;
+  }
+  activePrivateUserId.value = "";
+  return null;
 }
 
 function openPrivateDialog(member?: MeetingRoomMember) {
   if (member) {
     activePrivateUserId.value = member.user_id;
+    privateRosterShowAll.value = false;
+    privateMemberSearch.value = "";
   } else {
     ensureActivePrivateMember();
   }
   rightPanelTab.value = "private";
+  rightPanelCollapsed.value = false;
   privateDialogVisible.value = true;
   privateWindowMinimized.value = false;
   if (!privateWindowRect.x && !privateWindowRect.y) resetPrivateWindowPlacement();
@@ -1678,9 +2197,24 @@ async function sendPrivateMessage() {
     privateAttachments.value = [];
     await scrollToBottom("private");
   } catch (error) {
-    ElMessage.error("私聊发送失败，请稍后重试。");
+    ElMessage.error("私聊消息发送失败，请稍后重试。");
     console.error(error);
   }
+}
+
+function openCollabMessages(member?: MeetingRoomMember) {
+  const query: Record<string, string> = {};
+  if (member) {
+    query.target_type = "user";
+    query.target_id = member.user_id;
+    query.title = `发给 ${member.username}`;
+  }
+  if (store.activeRoom) {
+    query.source_type = "meeting_room";
+    query.source_id = store.activeRoom.id;
+    query.source_label = store.activeRoom.title;
+  }
+  void router.push({ path: "/app/collab", query });
 }
 
 async function extractCandidateMemories() {
@@ -1703,20 +2237,43 @@ async function confirmCandidateMemory(memory: MeetingMemory) {
 async function submitMemoryPublish() {
   const memory = selectedCandidateMemory.value;
   if (!memory || !canReviewMemory.value) return;
+  const cleanScopeId = memoryPublishForm.scope_id.trim();
+  if (memoryPublishTargetRequired.value && !cleanScopeId) {
+    ElMessage.warning("请选择共享目标");
+    return;
+  }
   try {
     memoryPublishSubmitting.value = true;
-    await store.confirmMemory(memory.memory_id, {
-      title: memoryPublishForm.title.trim(),
-      content: memoryPublishForm.content.trim(),
-      scope: memoryPublishForm.scope,
-      scope_id: memoryPublishForm.scope === "meeting" ? null : memoryPublishForm.scope_id,
-      publish_reason: memoryPublishForm.publish_reason.trim() || null,
-    });
+    const isCandidate = memory.status === "candidate";
+    const isLocalRevision = memoryPublishForm.target_key === "current_meeting_room";
+    const resolvedScopeId = cleanScopeId || selectedMemoryPublishScopeOption.value?.scopeId || "current";
+    if (isCandidate || isLocalRevision) {
+      await store.confirmMemory(memory.memory_id, {
+        title: memoryPublishForm.title.trim(),
+        content: memoryPublishForm.content.trim(),
+        scope: memoryPublishForm.scope,
+        scope_id: resolvedScopeId,
+        publish_reason: memoryPublishForm.publish_reason.trim() || null,
+        related_memory_ids: memory.related_memory_ids || [],
+      });
+    } else {
+      await store.shareMemory(memory.memory_id, {
+        target_scope_type: memoryPublishForm.scope,
+        target_scope_id: resolvedScopeId,
+        share_reason: memoryPublishForm.publish_reason.trim() || null,
+      });
+    }
     memoryPublishDialogVisible.value = false;
     selectedCandidateMemory.value = null;
-    ElMessage.success("记忆已确认发布");
+    if (memoryPublishForm.target_key === "agent") {
+      ElMessage.success("记忆已共享到 Agent 记忆");
+    } else if (memoryPublishForm.target_key === "current_meeting_room") {
+      ElMessage.success(isCandidate ? "记忆已确认沉淀" : "记忆修订已沉淀");
+    } else {
+      ElMessage.success(isCandidate ? "记忆已确认共享" : "记忆已共享");
+    }
   } catch (error) {
-    ElMessage.error("确认发布失败，请稍后重试");
+    ElMessage.error("记忆沉淀或共享失败，请稍后重试。");
     console.error(error);
   } finally {
     memoryPublishSubmitting.value = false;
@@ -1756,7 +2313,7 @@ async function updateMemberRole(member: MeetingRoomMember, role: "host" | "membe
   if (!store.activeRoom || !canManageRoom.value || normalizedMemberRole(member.role) === role) return;
   try {
     await store.updateMemberRole(member.user_id, role);
-    ElMessage.success(`已设为${memberRoleLabel(role)}`);
+    ElMessage.success(`已设为 ${memberRoleLabel(role)}`);
   } catch (error) {
     ElMessage.error("成员权限更新失败，请稍后重试。");
     console.error(error);
@@ -1798,7 +2355,7 @@ async function editRoomTitle() {
     const { value } = await ElMessageBox.prompt("修改会议标题", "会议设置", {
       inputValue: store.activeRoom.title,
       inputPattern: /^.{1,120}$/,
-      inputErrorMessage: "标题长度需为 1 到 120 个字符。",
+      inputErrorMessage: "标题长度需为 1 到 120 个字符",
       confirmButtonText: "保存",
       cancelButtonText: "取消",
     });
@@ -1812,28 +2369,13 @@ async function editRoomTitle() {
 async function closeRoom() {
   if (!store.activeRoom) return;
   try {
-    await ElMessageBox.confirm("关闭会议后将停止发送新消息，历史内容仍可查看。", "关闭会议", {
-      confirmButtonText: "关闭",
+    await ElMessageBox.confirm("结束会议后将停止发送新消息和新成员加入，历史内容仍可查看。", "结束会议", {
+      confirmButtonText: "结束",
       cancelButtonText: "取消",
       type: "warning",
     });
     await store.closeRoom();
-    ElMessage.success("会议已关闭。");
-  } catch {
-    // cancelled
-  }
-}
-
-async function archiveRoom() {
-  if (!store.activeRoom) return;
-  try {
-    await ElMessageBox.confirm("归档后会议会保留为历史记录，可继续查看。", "归档会议", {
-      confirmButtonText: "归档",
-      cancelButtonText: "取消",
-      type: "warning",
-    });
-    await store.archiveRoom();
-    ElMessage.success("会议已归档。");
+    ElMessage.success("会议已结束。");
   } catch {
     // cancelled
   }
@@ -1879,7 +2421,7 @@ async function saveEditedMessage(message: MeetingMessage) {
 
 async function recallMessage(message: MeetingMessage) {
   if (!canRecallMessage(message)) {
-    ElMessage.info("这条消息已超过 2 分钟，不能撤回。");
+    ElMessage.info("这条消息已超过 2 分钟，不能撤回");
     return;
   }
   try {
@@ -1932,9 +2474,9 @@ async function loadActiveRoomData(newId: string) {
   }
 
   closeMentionMenu();
+  await store.loadMembers();
   const results = await Promise.allSettled([
     store.loadMessages(0),
-    store.loadMembers(),
     store.loadAgents(),
     store.loadMeetingContext(),
   ]);
@@ -2012,7 +2554,12 @@ onMounted(async () => {
     joinCode.value = invitedCode;
     hubMode.value = "join";
   }
-  await store.loadRooms(true);
+  try {
+    await store.loadRooms(true);
+  } catch (error) {
+    console.warn("Failed to load meeting rooms", error);
+    ElMessage.error("会议室列表加载失败，请确认后端服务已启动后重试。");
+  }
   if (invitedCode) {
     const matchedRoom = store.rooms.find((room) => room.access_code.toUpperCase() === invitedCode);
     store.activeRoomId = matchedRoom?.id || "";
@@ -2109,8 +2656,10 @@ onBeforeUnmount(() => {
 
         <section class="room-list">
         <div class="room-list-head">
-          <h2>我加入过的会议</h2>
-          <el-button text :icon="RefreshRight" :loading="store.loadingRooms" @click="store.loadRooms()" aria-label="刷新会议列表" />
+          <h2>会议列表</h2>
+          <div class="room-list-actions">
+            <el-button text :icon="RefreshRight" :loading="store.loadingRooms" @click="store.loadRooms()" aria-label="刷新会议列表" />
+          </div>
         </div>
         <div
           v-for="room in store.rooms"
@@ -2141,20 +2690,21 @@ onBeforeUnmount(() => {
               type="warning"
               size="small"
               class="room-delete-button"
-              aria-label="退出会议"
-              title="退出会议"
+              aria-label="退出会议
+              title="退出会议
               @click.stop="handleLeaveRoom(room)"
             >
-              退出
-            </el-button>
+              退出            </el-button>
           </span>
           <span class="room-meta">
-            <span>{{ room.access_code }} · {{ room.member_count }} 人</span>
-            <span>{{ roomDomainPreview(room) }}</span>
-            <span v-if="roomRecentLabel(room)">最近 {{ roomRecentLabel(room) }}</span>
+            <span>{{ room.access_code }} · {{ room.member_count }} 位</span>
+            <span>{{ meetingRoomStatusLabel(room.status) || "未知状态" }}</span>
+            <span v-if="roomRecentLabel(room)">最近{{ roomRecentLabel(room) }}</span>
           </span>
         </div>
-        <p v-if="!store.rooms.length && !store.loadingRooms" class="empty-note">暂无加入过的会议</p>
+        <p v-if="!store.rooms.length && !store.loadingRooms" class="empty-note">
+          暂无会议
+        </p>
         </section>
       </div>
       <div
@@ -2173,14 +2723,14 @@ onBeforeUnmount(() => {
           <p class="section-kicker">实时会议</p>
           <h2>{{ store.activeRoom?.title || "实时会议协作" }}</h2>
           <div v-if="store.activeRoom && hostMember" class="room-submeta">
-            <span class="host-pill">主持人 {{ hostMember.username }}</span>
+            <span class="host-pill">主持人{{ hostMember.username }}</span>
             <span class="status-pill" :class="`status-${store.activeRoom.status}`">{{ roomStatusLabel }}</span>
           </div>
         </div>
         <div v-if="store.activeRoom" class="room-header-right">
           <div class="room-toolbar-main">
             <div class="room-code">
-              <span>会议码</span>
+              <span>会议室</span>
               <strong>{{ store.activeRoom.access_code }}</strong>
             </div>
           <el-popover
@@ -2197,7 +2747,7 @@ onBeforeUnmount(() => {
             <div class="member-panel">
               <div class="member-panel-head">
                 <span>会议成员</span>
-                <strong>{{ visibleMemberCount }} 人</strong>
+                <strong>{{ visibleMemberCount }} 位</strong>
               </div>
               <div v-if="store.members.length === 0" class="member-panel-empty">
                 暂无成员信息
@@ -2214,8 +2764,8 @@ onBeforeUnmount(() => {
                     text
                     size="small"
                     :icon="ChatDotRound"
-                    aria-label="私聊"
-                    title="私聊"
+                    aria-label="发起私聊"
+                    title="发起私聊"
                     @click="openPrivateDialog(member)"
                   />
                   <el-select
@@ -2248,7 +2798,7 @@ onBeforeUnmount(() => {
             </template>
             <div class="invite-panel">
               <div class="invite-panel-head">
-                <span>会议码</span>
+                <span>会议室</span>
                 <strong>{{ store.activeRoom.access_code }}</strong>
               </div>
               <p class="invite-note">复制给成员后，对方打开链接会自动填入会议码。</p>
@@ -2270,14 +2820,11 @@ onBeforeUnmount(() => {
               改标题
             </el-button>
             <el-button v-if="store.activeRoom.status === 'active'" size="small" :icon="Close" @click="closeRoom">
-              关闭
-            </el-button>
-            <el-button v-if="store.activeRoom.status !== 'archived'" size="small" :icon="FolderOpened" @click="archiveRoom">
-              归档
+              结束
             </el-button>
           </div>
         </div>
-        <p v-else class="room-hint">创建或加入会议后开始聊天，也可以点名 @会议Agent。</p>
+        <p v-else class="room-hint">创建或加入会议后开始聊天，也可以点 @会议Agent。</p>
       </header>
 
       <div ref="messageListRef" v-loading="store.loadingMessages" class="message-list">
@@ -2370,7 +2917,7 @@ onBeforeUnmount(() => {
           </el-tag>
         </div>
         <div v-if="mentionMenuOpen" class="mention-menu" role="listbox" aria-label="@ 提及对象">
-          <div class="mention-menu-head">选择要 @ 的对象</div>
+          <div class="mention-menu-head">选择 @ 的对象</div>
           <button
             v-for="(target, index) in filteredMentionTargets"
             :key="target.id"
@@ -2392,7 +2939,7 @@ onBeforeUnmount(() => {
           class="composer-textarea"
           :disabled="!store.activeRoom || store.activeRoom.status !== 'active'"
           rows="1"
-          :placeholder="store.activeRoom?.status === 'active' ? '输入公共消息' : '会议已关闭或归档，只能查看历史。'"
+          :placeholder="store.activeRoom?.status === 'active' ? '输入公共消息' : '会议已结束，只能查看历史。'"
           @input="onInputChanged"
           @click="onInputClicked"
           @keyup="onInputClicked"
@@ -2410,8 +2957,8 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="panel-toggle panel-toggle-right"
-        :aria-label="rightPanelCollapsed ? '展开边界与记忆面板' : '收起边界与记忆面板'"
-        :title="rightPanelCollapsed ? '展开边界与记忆面板' : '收起边界与记忆面板'"
+        :aria-label="rightPanelCollapsed ? '展开记忆与协作面板' : '收起记忆与协作面板'"
+        :title="rightPanelCollapsed ? '展开记忆与协作面板' : '收起记忆与协作面板'"
         @click="rightPanelCollapsed = !rightPanelCollapsed"
       >
         <ArrowLeft v-if="rightPanelCollapsed" />
@@ -2445,8 +2992,7 @@ onBeforeUnmount(() => {
             :aria-selected="rightPanelTab === 'context'"
             @click="rightPanelTab = 'context'"
           >
-            边界与记忆
-          </button>
+            记忆与协作          </button>
         </div>
 
         <section v-show="rightPanelTab === 'ai'" class="agent-sidecar sidecar-pane">
@@ -2459,8 +3005,8 @@ onBeforeUnmount(() => {
           <div ref="agentPanelListRef" class="agent-thread-list">
             <div v-if="!store.activeRoom" class="agent-empty">未进入会议</div>
             <div v-else-if="!agentConversationGroups.length" class="agent-empty">暂无 AI 对话</div>
-            <section v-for="(group, groupIndex) in agentConversationGroups" :key="group.id" class="agent-qa-group">
-              <div class="agent-qa-index">第 {{ groupIndex + 1 }} 轮</div>
+            <section v-for="(group, groupIndex) in store.activeRoom ? agentConversationGroups : []" :key="group.id" class="agent-qa-group">
+              <div class="agent-qa-index">问 {{ groupIndex + 1 }}</div>
               <article v-if="group.question" class="agent-thread-item agent-thread-question">
                 <div class="agent-thread-meta">
                   <span>提问 · {{ group.question.username }}</span>
@@ -2469,8 +3015,8 @@ onBeforeUnmount(() => {
                 <div v-if="agentEditingMessageId === group.question.id" class="agent-message-edit">
                   <el-input v-model="agentEditingContent" type="textarea" :rows="3" resize="vertical" />
                   <div class="agent-message-edit-actions">
-                    <el-button size="small" @click="cancelModifyAgentQuestion">取消</el-button>
-                    <el-button size="small" type="primary" :loading="store.generalAgentRunning" @click="saveModifiedAgentQuestion(group.question)">修改并重新问</el-button>
+                    <el-button size="small" @click.stop="cancelModifyAgentQuestion">取消</el-button>
+                    <el-button size="small" type="primary" :loading="store.generalAgentRunning" @click.stop="saveModifiedAgentQuestion(group.question)">修改并重新问</el-button>
                   </div>
                 </div>
                 <div v-else class="agent-thread-body">
@@ -2503,6 +3049,7 @@ onBeforeUnmount(() => {
               >
                 <div class="agent-thread-meta">
                   <span>回复 · 会议Agent</span>
+                  <b class="visibility-pill" :class="`visibility-${messageVisibility(reply)}`">{{ messageVisibilityLabel(reply) }}</b>
                   <time>{{ formatTime(reply.created_at) }}</time>
                 </div>
                 <div class="agent-thread-body">
@@ -2535,7 +3082,7 @@ onBeforeUnmount(() => {
               <div v-if="!group.replies.length" class="agent-awaiting-reply">等待会议Agent回复</div>
             </section>
           </div>
-          <div class="agent-composer" @paste="handleComposerPaste($event, 'agent')">
+          <div v-if="store.activeRoom" class="agent-composer" @paste="handleComposerPaste($event, 'agent')">
             <div v-if="agentAttachments.length" class="composer-attachments agent-composer-attachments">
               <el-tag v-for="att in agentAttachments" :key="att.id" closable effect="plain" @close="removeAttachment(att.id, 'agent')">
                 {{ att.name }}
@@ -2560,13 +3107,33 @@ onBeforeUnmount(() => {
 
         <section v-show="rightPanelTab === 'private'" class="private-sidecar sidecar-pane">
           <div class="private-sidecar-head">
-            <h2>私聊</h2>
-            <span class="private-sidecar-count">{{ privateConversationCount }}</span>
+            <div>
+              <h2>私聊</h2>
+              <span>{{ privateThreadSubtitle }}</span>
+            </div>
+            <div class="private-sidecar-head-actions">
+              <span class="private-sidecar-count">{{ privateConversationCount }}</span>
+              <el-button
+                text
+                size="small"
+                :icon="FullScreen"
+                :disabled="!currentPrivateMember"
+                aria-label="弹出私聊窗口"
+                title="弹出私聊窗口"
+                @click="openPrivateDialog(currentPrivateMember || undefined)"
+              />
+            </div>
           </div>
-          <div class="private-launcher">
+          <div class="private-launcher private-sidecar-roster">
+            <div class="private-roster-tools">
+              <el-input v-model="privateMemberSearch" size="small" clearable placeholder="搜索成员" />
+              <el-button size="small" text @click="privateRosterShowAll = !privateRosterShowAll">
+                {{ privateRosterShowAll ? "只看会话" : "显示全部" }}
+              </el-button>
+            </div>
             <div class="private-launcher-list">
               <button
-                v-for="member in privatePartners"
+                v-for="member in privateRosterMembers"
                 :key="member.user_id"
                 type="button"
                 class="private-launcher-row"
@@ -2579,8 +3146,27 @@ onBeforeUnmount(() => {
                   <small>{{ privateMessagesByUser(member.user_id).length }} 条</small>
                 </span>
               </button>
-              <div v-if="!privatePartners.length" class="private-empty">暂无成员</div>
+              <div v-if="!privateRosterMembers.length" class="private-empty">{{ privateRosterEmptyText }}</div>
+              <button
+                v-if="!privateRosterShowAll && !privateMemberSearch.trim() && hiddenPrivatePartnerCount > 0"
+                type="button"
+                class="private-show-all-button"
+                @click="privateRosterShowAll = true"
+              >
+                显示另外 {{ hiddenPrivatePartnerCount }} 位成员              </button>
             </div>
+          </div>
+          <div class="private-popup-hint">
+            <span>点击成员打开会议室内私聊弹窗</span>
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :disabled="!currentPrivateMember"
+              @click="openPrivateDialog(currentPrivateMember || undefined)"
+            >
+              打开弹窗
+            </el-button>
           </div>
         </section>
 
@@ -2589,66 +3175,144 @@ onBeforeUnmount(() => {
             <div class="context-head">
               <div>
                 <p class="section-kicker">边界</p>
-                <h2>查询边界</h2>
+                <h2>边界与记忆</h2>
               </div>
               <div class="context-head-actions">
-                <span class="count-pill">{{ contextAllowedDomains.length }}</span>
+                <span class="count-pill">{{ contextBoundary.effectiveDomains.length }}</span>
                 <button type="button" class="context-collapse-button" :aria-expanded="isContextExpanded('boundary')" @click="toggleContextSection('boundary')">
                   <ArrowUp v-if="isContextExpanded('boundary')" />
                   <ArrowDown v-else />
                 </button>
               </div>
             </div>
-            <p class="context-note">Agent 只能读取边界内数据作为回答上下文，不能修改质检结果或人工审核结论。</p>
-            <div v-if="store.activeRoom" class="boundary-identity">
-              <span>我的身份：{{ store.contextPreview?.user_role || "user" }}</span>
-              <span>会议角色：{{ store.contextPreview?.room_role || "member" }}</span>
-            </div>
-            <div class="boundary-block">
-              <strong>允许访问</strong>
-              <div v-if="contextAllowedDomains.length" class="domain-chip-list">
-                <span v-for="domain in contextAllowedDomains" :key="domain" class="domain-chip domain-chip-allowed">
-                  {{ domainLabel(domain) }}
-                </span>
-              </div>
-              <div v-else class="context-empty context-empty-compact">暂无允许访问范围</div>
-            </div>
-            <div class="boundary-block">
-              <strong>不可访问</strong>
-              <div v-if="contextDeniedDomains.length" class="domain-chip-list">
-                <span v-for="domain in contextDeniedDomains" :key="domain" class="domain-chip domain-chip-denied">
-                  {{ domainLabel(domain) }}
-                </span>
-              </div>
-              <div v-else class="context-empty context-empty-compact">暂无禁止访问范围</div>
-            </div>
-            <div class="boundary-block">
-              <strong>绑定对象</strong>
-              <div v-if="hasBusinessBindings" class="business-binding-list">
-                <div v-for="group in businessBindingGroups" v-show="group.values.length" :key="group.key" class="business-binding-row">
-                  <span>{{ group.label }}</span>
-                  <div>
-                    <b v-for="value in group.values" :key="value">{{ value }}</b>
+
+            <div class="boundary-grid">
+              <article class="boundary-block">
+                <div class="boundary-block-head">
+                  <strong>我的有效权限</strong>
+                  <span>{{ contextBoundary.effectiveDomains.length }}</span>
+                </div>
+                <div v-if="effectiveDomainGroups.length" class="domain-group-list">
+                  <div v-for="group in effectiveDomainGroups" :key="`effective-${group.key}`" class="domain-group">
+                    <span>{{ group.label }}</span>
+                    <div class="domain-chip-row">
+                      <b v-for="domain in group.items" :key="domain" class="domain-chip">
+                        {{ domainLabel(domain) }}
+                      </b>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <el-alert
-                v-else
-                type="info"
-                show-icon
-                :closable="false"
-                title="未绑定业务对象，业务记忆只能保存到本会议室。"
-              />
-            </div>
-            <div v-if="store.contextPreview?.agent_permissions.length" class="boundary-block">
-              <strong>Agent 权限</strong>
-              <div class="agent-permission-list">
-                <div v-for="agent in store.contextPreview.agent_permissions" :key="agent.agent_id" class="agent-permission-item">
-                  <strong>{{ agent.agent_name }}</strong>
-                  <small>{{ visibleDomainLabels(agent.allowed_domains, "暂无可见数据域") }}</small>
+                <p v-else class="context-empty context-empty-compact">暂无可用域</p>
+              </article>
+
+              <article class="boundary-block">
+                <div class="boundary-block-head">
+                  <strong>会议室开放域</strong>
+                  <span>{{ contextBoundary.roomConfiguredDomains.length }}</span>
                 </div>
+                <div v-if="domainGroups.length" class="domain-group-list">
+                  <div v-for="group in domainGroups" :key="`room-${group.key}`" class="domain-group">
+                    <span>{{ group.label }}</span>
+                    <div class="domain-chip-row">
+                      <b v-for="domain in group.items" :key="domain" class="domain-chip domain-chip-room">
+                        {{ domainLabel(domain) }}
+                      </b>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="context-empty context-empty-compact">沿用默认会议域</p>
+              </article>
+
+              <article class="boundary-block">
+                <div class="boundary-block-head">
+                  <strong>敏感回复</strong>
+                  <span>{{ contextBoundary.sensitiveDomains.length }}</span>
+                </div>
+                <div v-if="sensitiveDomainGroups.length" class="domain-group-list">
+                  <div v-for="group in sensitiveDomainGroups" :key="`sensitive-${group.key}`" class="domain-group">
+                    <span>{{ group.label }}</span>
+                    <div class="domain-chip-row">
+                      <b v-for="domain in group.items" :key="domain" class="domain-chip domain-chip-sensitive">
+                        {{ domainLabel(domain) }}
+                      </b>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="context-note">涉及密钥、Token、密码、连接串时仍只返回脱敏状态。</p>
+              </article>
+            </div>
+
+            <div class="agent-domain-panel">
+              <div class="agent-domain-head">
+                <strong>Agent 允许域</strong>
+                <span>{{ contextBoundary.agentPermissions.length }}</span>
+              </div>
+              <div v-if="contextBoundary.agentPermissions.length" class="agent-domain-list">
+                <article v-for="agent in contextBoundary.agentPermissions" :key="agent.agent_id" class="agent-domain-item">
+                  <div>
+                    <strong>{{ agent.agent_name || agent.agent_id }}</strong>
+                    <small>{{ agent.role === "observer" ? "观察者" : "参与者" }}</small>
+                  </div>
+                  <div class="domain-chip-row">
+                    <b v-for="domain in agent.allowed_domains.slice(0, 8)" :key="domain" class="domain-chip domain-chip-agent">
+                      {{ domainLabel(domain) }}
+                    </b>
+                    <b v-if="agent.allowed_domains.length > 8" class="domain-chip domain-chip-muted">+{{ agent.allowed_domains.length - 8 }}</b>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="context-empty context-empty-compact">暂无已加入的会议 Agent</p>
+            </div>
+
+            <div v-if="Object.keys(contextBoundary.deniedReasons).length" class="denied-reason-list">
+              <span v-for="(reason, domain) in contextBoundary.deniedReasons" :key="domain">
+                {{ domainLabel(domain) }}：{{ reason }}
+              </span>
+            </div>
+          </section>
+
+          <section class="context-card summary-card" :class="{ 'context-card-collapsed': !isContextExpanded('summary') }">
+            <div class="context-head">
+              <div>
+                <p class="section-kicker">总结</p>
+                <h2>会议总结</h2>
+              </div>
+              <div class="context-head-actions">
+                <el-button
+                  text
+                  size="small"
+                  :loading="store.summarizing"
+                  :disabled="!store.activeRoom"
+                  @click="store.summarizeMeeting()"
+                >
+                  生成
+                </el-button>
+                <span class="count-pill">{{ summaryMessages.length }}</span>
+                <button type="button" class="context-collapse-button" :aria-expanded="isContextExpanded('summary')" @click="toggleContextSection('summary')">
+                  <ArrowUp v-if="isContextExpanded('summary')" />
+                  <ArrowDown v-else />
+                </button>
               </div>
             </div>
+            <article v-if="latestSummaryMessage" class="summary-item">
+              <div class="summary-item-head">
+                <strong>最近一次总结</strong>
+                <time>{{ formatTime(latestSummaryMessage.created_at) }}</time>
+              </div>
+              <p>{{ clipText(displayMessageContent(latestSummaryMessage), 420) }}</p>
+              <div class="summary-actions">
+                <el-button size="small" text @click="quoteSummaryToMain(latestSummaryMessage)">引用</el-button>
+                <el-button
+                  v-if="canReviewMemory"
+                  size="small"
+                  text
+                  :loading="store.memoryExtracting"
+                  @click="extractCandidateMemories"
+                >
+                  提取候选                </el-button>
+              </div>
+            </article>
+            <div v-else class="context-empty context-empty-compact">暂无会议总结</div>
           </section>
 
           <section class="context-card" :class="{ 'context-card-collapsed': !isContextExpanded('candidateMemory') }">
@@ -2676,7 +3340,7 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <p v-if="store.candidateMemories.length" class="context-note">候选记忆先由会议室确认；跨范围发布只落到任务、产品、批次、标准或质检风险库，不按相关会议室推送。</p>
+            <p v-if="store.candidateMemories.length" class="context-note">候选记忆先由会议室确认；确认时可沉淀到当前会议室，也可共享到其他会议室、成员个人记忆、Agent 记忆或组织共享空间。</p>
             <div v-if="!store.candidateMemories.length" class="context-empty context-empty-compact">暂无候选记忆，可由主持人点击“提取”。</div>
             <article v-for="memory in store.candidateMemories" :key="memory.memory_id" class="memory-item">
               <div class="memory-title-row">
@@ -2689,18 +3353,25 @@ onBeforeUnmount(() => {
                 </span>
                 <span>{{ memoryTypeLabel(memory.memory_type) }}</span>
                 <span>推荐：{{ memoryScopeLabel(memory.recommended_scope) }}</span>
+                <span>来源：本会议室</span>
               </div>
               <p>{{ memoryPreview(memory, 180) }}</p>
+              <div class="memory-evidence-panel">
+                <span v-if="memory.extraction_reason">提取理由：{{ memory.extraction_reason }}</span>
+                <span v-if="sourceSpanSummary(memory)">来源片段：{{ sourceSpanSummary(memory) }}</span>
+                <span v-if="relatedMemorySummary(memory)">关联记忆：{{ relatedMemorySummary(memory) }}</span>
+              </div>
               <div v-if="memory.memory_type === 'risk_insight'" class="risk-insight-strip">
                 <span>风险：{{ riskLevelLabel(memory.risk_level) }}</span>
                 <span v-if="forecastWindowLabel(memory)">关注：{{ forecastWindowLabel(memory) }}</span>
               </div>
               <small class="memory-source">{{ memoryCategoryHint(memory) }}</small>
-              <div v-if="memory.warnings?.length" class="memory-warning-list">
-                <span v-for="warning in memory.warnings" :key="warning">{{ warning }}</span>
+              <div v-if="visibleMemoryWarnings(memory).length" class="memory-warning-list">
+                <span v-for="warning in visibleMemoryWarnings(memory)" :key="warning">{{ warning }}</span>
               </div>
               <div v-if="canReviewMemory" class="memory-actions">
-                <el-button size="small" type="primary" :icon="Check" @click="confirmCandidateMemory(memory)">确认发布</el-button>
+                <el-button size="small" type="primary" :icon="Check" @click="confirmCandidateMemory(memory)">确认/共享</el-button>
+                <el-button size="small" :icon="Promotion" @click="openMemoryCollabShare(memory)">请求确认</el-button>
                 <el-button size="small" :icon="Close" @click="rejectCandidateMemory(memory)">拒绝</el-button>
               </div>
             </article>
@@ -2710,7 +3381,7 @@ onBeforeUnmount(() => {
             <div class="context-head">
               <div>
                 <p class="section-kicker">确认</p>
-                <h2>已确认记忆</h2>
+                <h2>会议内确认 / 已沉淀记忆</h2>
               </div>
               <div class="context-head-actions">
                 <span class="count-pill">{{ store.confirmedMemories.length }}</span>
@@ -2720,8 +3391,8 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <p v-if="store.confirmedMemories.length" class="context-note">来源保留在本会议室；发布范围决定未来在哪些稳定对象上下文中可检索。</p>
-            <div v-if="!store.confirmedMemories.length" class="context-empty context-empty-compact">暂无已确认记忆</div>
+            <p v-if="store.confirmedMemories.length" class="context-note">确认后仍保留来源；共享目标由会议室、成员个人记忆、Agent 记忆、组织空间或协作通道决定。</p>
+            <div v-if="!store.confirmedMemories.length" class="context-empty context-empty-compact">暂无会议内确认记忆</div>
             <article
               v-for="memory in store.confirmedMemories"
               :key="memory.memory_id"
@@ -2738,10 +3409,10 @@ onBeforeUnmount(() => {
                 </span>
                 <span>{{ memoryTypeLabel(memory.memory_type) }}</span>
                 <span>{{ memoryStatusLabel(memory.status) }}</span>
-                <span>发布范围：{{ scopeObjectLabel(memory) }}</span>
+                <span>沉淀/共享目标：{{ scopeObjectLabel(memory) }}</span>
               </div>
               <p>{{ memoryPreview(memory) }}</p>
-              <small class="memory-source">来源：本会议室 · {{ scopeVisibilityNote(memory) }}</small>
+              <small class="memory-source">来源：本会议室· {{ scopeVisibilityNote(memory) }}</small>
               <div v-if="memory.memory_type === 'risk_insight'" class="risk-insight-strip">
                 <span>风险：{{ riskLevelLabel(memory.risk_level) }}</span>
                 <span v-if="forecastWindowLabel(memory)">关注：{{ forecastWindowLabel(memory) }}</span>
@@ -2750,8 +3421,62 @@ onBeforeUnmount(() => {
                 <el-button size="small" text @click="openMemoryDetail(memory)">{{ memorySourceSummary(memory) }}</el-button>
                 <template v-if="canReviewMemory && memory.status !== 'superseded'">
                   <el-button size="small" text @click="disputeSharedMemory(memory)">质疑</el-button>
-                  <el-button size="small" text type="primary" @click="confirmCandidateMemory(memory)">修订发布</el-button>
+                  <el-button size="small" text type="primary" @click="confirmCandidateMemory(memory)">共享/修订</el-button>
+                  <el-button size="small" text @click="openMemoryCollabShare(memory)">请求确认</el-button>
                 </template>
+              </div>
+            </article>
+          </section>
+
+          <section v-if="canReviewMemory" class="context-card">
+            <div class="context-head">
+              <div>
+                <p class="section-kicker">审批</p>
+                <h2>待审批共享</h2>
+              </div>
+              <div class="context-head-actions">
+                <span class="count-pill">{{ store.pendingMemoryShares.length }}</span>
+              </div>
+            </div>
+            <div v-if="!store.pendingMemoryShares.length" class="context-empty context-empty-compact">暂无待审批共享</div>
+            <article v-for="share in store.pendingMemoryShares" :key="share.id" class="governance-item">
+              <div class="governance-item-head">
+                <strong>{{ share.memory_title || share.memory_id }}</strong>
+                <span>{{ share.status }}</span>
+              </div>
+              <p>{{ shareTargetLabel(share.from_scope_type, share.from_scope_id) }} → {{ shareTargetLabel(share.to_scope_type, share.to_scope_id) }}</p>
+              <small>{{ share.transfer_reason || "暂无说明" }}</small>
+              <div v-if="share.can_approve !== false" class="memory-actions">
+                <el-button size="small" type="primary" @click="approveMemoryShare(share.id)">批准</el-button>
+                <el-button size="small" @click="rejectMemoryShare(share.id)">拒绝</el-button>
+              </div>
+              <div v-else class="context-empty context-empty-compact">等待目标会议室审批</div>
+            </article>
+          </section>
+
+          <section v-if="canReviewMemory" class="context-card">
+            <div class="context-head">
+              <div>
+                <p class="section-kicker">处理</p>
+                <h2>冲突处理</h2>
+              </div>
+              <div class="context-head-actions">
+                <span class="count-pill">{{ store.conflictEvents.length }}</span>
+              </div>
+            </div>
+            <div v-if="!store.conflictEvents.length" class="context-empty context-empty-compact">暂无冲突事件</div>
+            <article v-for="conflict in store.conflictEvents" :key="conflict.id" class="governance-item">
+              <div class="governance-item-head">
+                <strong>{{ conflictTypeLabel(conflict.conflict_type) }}</strong>
+                <span>{{ conflict.status }}</span>
+              </div>
+              <p>{{ conflict.resource_key }}</p>
+              <small>{{ formatTime(conflict.created_at) }}</small>
+              <div v-if="conflict.status === 'pending'" class="memory-actions">
+                <el-button size="small" type="primary" @click="resolveConflictCard(conflict.id, 'approve')">批准</el-button>
+                <el-button size="small" @click="resolveConflictCard(conflict.id, 'queue')">排队</el-button>
+                <el-button size="small" @click="resolveConflictCard(conflict.id, 'candidate_only')">转候选</el-button>
+                <el-button size="small" @click="resolveConflictCard(conflict.id, 'reject')">拒绝</el-button>
               </div>
             </article>
           </section>
@@ -2810,7 +3535,7 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <p class="context-note">AI 使用记录不可修改，用于回溯 Agent 使用了哪些数据、记忆和工具。</p>
+            <p class="context-note">AI 使用记录不可修改，用于回看 Agent 的回答问题、使用时间和记忆引用情况。</p>
             <div v-if="!store.agentQueryAudits.length" class="context-empty context-empty-compact">暂无 AI 使用记录</div>
             <button
               v-for="audit in store.agentQueryAudits.slice(0, 4)"
@@ -2826,7 +3551,6 @@ onBeforeUnmount(() => {
                 <time>{{ formatTime(audit.created_at) }}</time>
               </div>
               <p>{{ audit.question }}</p>
-              <small>{{ visibleDomainLabels(audit.allowed_domains, "无可见允许域") }}</small>
               <small v-if="auditMemoryCount(audit)">读取记忆 {{ auditMemoryCount(audit) }} 条</small>
             </button>
           </section>
@@ -2866,10 +3590,17 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </header>
-      <div v-show="!privateWindowMinimized" class="private-dialog-body">
-        <aside class="private-dialog-roster">
+      <div v-show="!privateWindowMinimized" class="private-dialog-body" :class="{ 'private-dialog-body-roster-collapsed': privateRosterCollapsed }">
+        <aside v-if="!privateRosterCollapsed" class="private-dialog-roster">
+          <div class="private-roster-tools private-dialog-roster-tools">
+            <el-input v-model="privateMemberSearch" size="small" clearable placeholder="搜索成员" />
+            <el-button size="small" text @click="privateRosterShowAll = !privateRosterShowAll">
+              {{ privateRosterShowAll ? "只看会话" : "显示全部" }}
+            </el-button>
+            <el-button size="small" text @click="privateRosterCollapsed = true">收起</el-button>
+          </div>
           <button
-            v-for="member in privatePartners"
+            v-for="member in privateRosterMembers"
             :key="member.user_id"
             type="button"
             class="private-member-row"
@@ -2882,10 +3613,26 @@ onBeforeUnmount(() => {
               <small>{{ privateMessagesByUser(member.user_id).length }} 条</small>
             </span>
           </button>
-          <div v-if="!privatePartners.length" class="private-empty">暂无成员</div>
+          <div v-if="!privateRosterMembers.length" class="private-empty">{{ privateRosterEmptyText }}</div>
+          <button
+            v-if="!privateRosterShowAll && !privateMemberSearch.trim() && hiddenPrivatePartnerCount > 0"
+            type="button"
+            class="private-show-all-button"
+            @click="privateRosterShowAll = true"
+          >
+            显示另外 {{ hiddenPrivatePartnerCount }} 位成员          </button>
         </aside>
         <section class="private-thread-pane private-dialog-thread">
-          <div class="private-thread-head">
+          <div class="private-thread-head" :class="{ 'private-thread-head-roster-collapsed': privateRosterCollapsed }">
+            <button
+              v-if="privateRosterCollapsed"
+              type="button"
+              class="private-roster-expand-button"
+              title="展开私聊列表"
+              @click="privateRosterCollapsed = false"
+            >
+              <ArrowRight />
+            </button>
             <span class="member-avatar private-thread-avatar">{{ currentPrivateMember ? memberInitial(currentPrivateMember.username) : "?" }}</span>
             <div>
               <strong>{{ currentPrivateMember?.username || "选择成员" }}</strong>
@@ -2975,7 +3722,7 @@ onBeforeUnmount(() => {
     >
       <div v-if="selectedAudit" class="detail-drawer-body">
         <section class="detail-section">
-          <p class="context-note">AI 使用记录不可修改，用于回溯 Agent 使用了哪些数据、记忆和工具。</p>
+          <p class="context-note">AI 使用记录不可修改，用于回看 Agent 的回答问题、使用时间和记忆引用情况。</p>
           <h3>问题</h3>
           <p class="detail-main-text">{{ selectedAudit.question }}</p>
           <div class="detail-meta-grid">
@@ -2988,13 +3735,6 @@ onBeforeUnmount(() => {
           </div>
         </section>
         <section class="detail-section">
-          <h3>数据边界</h3>
-          <div class="domain-chip-list">
-            <span v-for="domain in selectedAudit.allowed_domains" :key="`allow-${domain}`" class="domain-chip domain-chip-allowed">{{ domainLabel(domain) }}</span>
-            <span v-for="domain in selectedAudit.denied_domains" :key="`deny-${domain}`" class="domain-chip domain-chip-denied">{{ domainLabel(domain) }}</span>
-          </div>
-        </section>
-        <section class="detail-section">
           <h3>读取记忆</h3>
           <div v-if="selectedAudit.memory_reads.length" class="detail-ref-list">
             <button v-for="(ref, index) in selectedAudit.memory_reads" :key="index" type="button" @click="openAuditMemory(ref)">
@@ -3003,21 +3743,9 @@ onBeforeUnmount(() => {
           </div>
           <p v-else class="context-empty context-empty-compact">暂无记录</p>
         </section>
-        <section class="detail-section">
-          <h3>来源引用</h3>
-          <pre>{{ stableJson(selectedAudit.source_refs) }}</pre>
-        </section>
-        <section class="detail-section">
-          <h3>工具调用</h3>
-          <pre>{{ stableJson(selectedAudit.tool_calls) }}</pre>
-        </section>
-        <section class="detail-section">
-          <h3>脱敏字段</h3>
-          <pre>{{ stableJson(selectedAudit.redacted_fields) }}</pre>
-        </section>
         <div class="detail-actions">
           <el-button size="small" :icon="CopyDocument" @click="copyAuditDetail">复制审计信息</el-button>
-          <el-button size="small" @click="reuseAuditQuestion">用同样边界重新提问</el-button>
+          <el-button size="small" @click="reuseAuditQuestion">重新提问</el-button>
           <el-button size="small" type="warning" @click="questionAuditAnswer">质疑这次回答</el-button>
         </div>
       </div>
@@ -3045,7 +3773,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
         <section class="detail-section">
-          <h3>来源链</h3>
+          <h3>来源</h3>
           <div class="detail-meta-grid">
             <span>来源位置</span>
             <strong>本会议室</strong>
@@ -3053,9 +3781,9 @@ onBeforeUnmount(() => {
             <strong>{{ sourceMessageLabel(selectedSharedMemory) }}</strong>
             <span>父版本</span>
             <strong>{{ selectedSharedMemory.version_parent_id ? "由上一版修订而来" : "暂无历史版本" }}</strong>
-            <span>发布人</span>
+            <span>确认人</span>
             <strong>{{ memberDisplayName(selectedSharedMemory.confirmed_by || selectedSharedMemory.created_by) }}</strong>
-            <span>发布时间</span>
+            <span>确认时间</span>
             <strong>{{ formatTime(selectedSharedMemory.confirmed_at || selectedSharedMemory.created_at) || "暂无记录" }}</strong>
           </div>
         </section>
@@ -3066,23 +3794,21 @@ onBeforeUnmount(() => {
             <strong>{{ riskLevelLabel(selectedSharedMemory.risk_level) }}</strong>
             <span>关注窗口</span>
             <strong>{{ forecastWindowLabel(selectedSharedMemory) || "暂无记录" }}</strong>
-            <span>影响对象</span>
-            <strong>{{ stableJson(selectedSharedMemory.affected_objects || {}) }}</strong>
           </div>
           <div v-if="selectedSharedMemory.recommended_actions?.length" class="recommended-action-list">
             <span v-for="action in selectedSharedMemory.recommended_actions" :key="action">{{ action }}</span>
           </div>
         </section>
         <section class="detail-section">
-          <h3>发布范围</h3>
+          <h3>沉淀与共享</h3>
           <div class="detail-meta-grid">
             <span>作用域</span>
             <strong>{{ memoryScopeLabel(selectedSharedMemory.scope || selectedSharedMemory.scope_type) }}</strong>
-            <span>对象</span>
+            <span>目标</span>
             <strong>{{ scopeObjectLabel(selectedSharedMemory) }}</strong>
             <span>可见范围</span>
             <strong>{{ scopeVisibilityNote(selectedSharedMemory) }}</strong>
-            <span>发布理由</span>
+            <span>确认说明</span>
             <strong>{{ selectedSharedMemory.publish_reason || "暂无记录" }}</strong>
           </div>
         </section>
@@ -3098,14 +3824,15 @@ onBeforeUnmount(() => {
         </section>
         <div class="detail-actions" v-if="canReviewMemory && selectedSharedMemory.status !== 'superseded'">
           <el-button size="small" @click="disputeSharedMemory(selectedSharedMemory)">质疑</el-button>
-          <el-button size="small" type="primary" @click="confirmCandidateMemory(selectedSharedMemory)">修订发布</el-button>
+          <el-button size="small" type="primary" @click="confirmCandidateMemory(selectedSharedMemory)">共享/修订</el-button>
+          <el-button size="small" @click="openMemoryCollabShare(selectedSharedMemory)">请求确认</el-button>
         </div>
       </div>
     </el-drawer>
     <el-dialog
       v-model="memoryPublishDialogVisible"
       class="memory-publish-dialog"
-      title="确认发布记忆"
+      title="记忆沉淀/共享"
       width="640px"
       destroy-on-close
     >
@@ -3116,31 +3843,24 @@ onBeforeUnmount(() => {
           </span>
           <span>{{ memoryTypeLabel(memoryPublishPreview?.memory_type) }}</span>
           <span>推荐：{{ memoryScopeLabel(memoryPublishPreview?.recommended_scope) }}</span>
-          <span>来源：本会议室 · {{ sourceMessageLabel(selectedCandidateMemory) }}</span>
+          <span>来源：本会议室· {{ sourceMessageLabel(selectedCandidateMemory) }}</span>
         </div>
-        <el-alert
-          v-if="memoryPublishPreview?.memory_type === 'risk_insight'"
-          type="warning"
-          show-icon
-          :closable="false"
-          title="风险洞察是预测候选；只有绑定产品、批次或质检任务后，才能发布到稳定对象、质检风险库或预警中心。"
-        />
-        <el-alert
-          v-else-if="!isBusinessMemory(memoryPublishPreview)"
-          type="info"
-          show-icon
-          :closable="false"
-          title="非业务记忆只能保存到本会议室，不会发布到其他业务对象。"
-        />
-        <el-alert
-          v-else
-          type="warning"
-          show-icon
-          :closable="false"
-          title="业务记忆只作为 Agent 上下文和历史经验，不会修改质检任务、人工审核结论或标准依据。"
-        />
-        <div v-if="memoryPublishPreview?.warnings?.length" class="memory-warning-list">
-          <span v-for="warning in memoryPublishPreview.warnings" :key="warning">{{ warning }}</span>
+        <div v-if="visibleMemoryWarnings(memoryPublishPreview).length" class="memory-warning-list">
+          <span v-for="warning in visibleMemoryWarnings(memoryPublishPreview)" :key="warning">{{ warning }}</span>
+        </div>
+        <div class="memory-publish-evidence">
+          <div v-if="selectedCandidateMemory.extraction_reason" class="memory-publish-evidence-row">
+            <span>提取理由</span>
+            <strong>{{ selectedCandidateMemory.extraction_reason }}</strong>
+          </div>
+          <div v-if="sourceSpanSummary(selectedCandidateMemory)" class="memory-publish-evidence-row">
+            <span>来源片段</span>
+            <strong>{{ sourceSpanSummary(selectedCandidateMemory) }}</strong>
+          </div>
+          <div v-if="relatedMemorySummary(selectedCandidateMemory)" class="memory-publish-evidence-row">
+            <span>关联记忆</span>
+            <strong>{{ relatedMemorySummary(selectedCandidateMemory) }}</strong>
+          </div>
         </div>
         <el-form label-position="top" class="memory-publish-form">
           <el-form-item label="标题">
@@ -3159,20 +3879,32 @@ onBeforeUnmount(() => {
         <div v-if="memoryPublishPreview?.memory_type === 'risk_insight'" class="memory-risk-preview">
           <span>风险：{{ riskLevelLabel(memoryPublishPreview.risk_level) }}</span>
           <span v-if="forecastWindowLabel(memoryPublishPreview)">关注：{{ forecastWindowLabel(memoryPublishPreview) }}</span>
-          <span>发布回本会议室不会生成预警。</span>
+          <span>沉淀回本会议室不会生成预警。</span>
+        </div>
+        <div v-if="memoryPublishTargetPreview" class="memory-publish-flow" :class="{ 'memory-publish-flow-pending': memoryPublishTargetPreview.pending }">
+          <div class="memory-publish-flow-node">
+            <span>来源</span>
+            <strong>{{ store.activeRoom?.title || "当前会议室" }}</strong>
+          </div>
+          <div class="memory-publish-flow-arrow">→</div>
+          <div class="memory-publish-flow-node">
+            <span>{{ memoryPublishTargetPreview.type }}</span>
+            <strong>{{ memoryPublishTargetPreview.label }}</strong>
+            <small>{{ memoryPublishTargetPreview.description }}</small>
+          </div>
         </div>
         <el-form label-position="top" class="memory-publish-form">
-          <el-form-item label="发布范围">
+          <el-form-item label="共享目标">
             <el-select
-              :model-value="selectedMemoryPublishOptionValue()"
+              v-model="memoryPublishForm.target_key"
               class="memory-publish-scope-select"
               @update:model-value="applyMemoryPublishOption"
             >
               <el-option
                 v-for="option in memoryPublishScopeOptions"
-                :key="`${option.value}:${option.scopeId}`"
+                :key="option.key"
                 :label="option.label"
-                :value="`${option.value}:${option.scopeId}`"
+                :value="option.key"
               >
                 <div class="memory-scope-option">
                   <strong>{{ option.label }}</strong>
@@ -3181,14 +3913,36 @@ onBeforeUnmount(() => {
               </el-option>
             </el-select>
           </el-form-item>
-          <el-form-item label="发布理由">
+          <el-form-item v-if="memoryPublishTargetRequired" :label="selectedMemoryPublishScopeOption?.targetLabel || '目标对象'">
+            <el-select
+              v-model="memoryPublishForm.scope_id"
+              class="memory-publish-target-select"
+              filterable
+              clearable
+              :placeholder="selectedMemoryPublishScopeOption?.targetPlaceholder || '搜索并选择目标'"
+              :no-data-text="selectedMemoryPublishScopeOption?.targetEmptyText || '暂无可选目标'"
+            >
+              <el-option
+                v-for="target in memoryPublishTargetOptions"
+                :key="target.value"
+                :label="target.label"
+                :value="target.value"
+              >
+                <div class="memory-target-option">
+                  <strong>{{ target.label }}</strong>
+                  <small>{{ target.description }}</small>
+                </div>
+              </el-option>
+            </el-select>
+          </el-form-item>
+          <el-form-item label="说明">
             <el-input
               v-model="memoryPublishForm.publish_reason"
               type="textarea"
               :rows="2"
               maxlength="1000"
               show-word-limit
-              placeholder="说明为什么要保存或发布这条记忆，便于后续追溯"
+              placeholder="可选：说明为什么要沉淀或共享这条记忆，便于后续追溯"
             />
           </el-form-item>
         </el-form>
@@ -3198,10 +3952,10 @@ onBeforeUnmount(() => {
         <el-button
           type="primary"
           :loading="memoryPublishSubmitting"
-          :disabled="!memoryPublishForm.title.trim() || !memoryPublishForm.content.trim()"
+          :disabled="memoryPublishSubmitDisabled"
           @click="submitMemoryPublish"
         >
-          发布记忆
+          {{ memoryPublishSubmitText }}
         </el-button>
       </template>
     </el-dialog>
@@ -3355,6 +4109,28 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.private-sidecar-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.private-sidecar-head span {
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.private-sidecar-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .agent-sidecar-head h2,
@@ -3523,6 +4299,28 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
+.visibility-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.visibility-room {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.visibility-private {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .agent-thread-body {
   color: #111827;
   font-size: 13px;
@@ -3587,6 +4385,32 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.private-sidecar-roster {
+  flex: 0 0 auto;
+}
+
+.private-sidecar-roster .private-launcher-list {
+  max-height: 176px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.private-roster-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.private-dialog-roster-tools {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-bottom: 4px;
+  background: #fafafa;
+}
+
 .private-launcher-list {
   display: grid;
   gap: 6px;
@@ -3633,6 +4457,39 @@ onBeforeUnmount(() => {
 .private-launcher-row small {
   color: #71717a;
   font-size: 11px;
+}
+
+.private-show-all-button {
+  width: 100%;
+  min-height: 32px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 8px;
+  background: #fff;
+  color: #52525b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.private-show-all-button:hover {
+  border-color: #a1a1aa;
+  background: #f8fafc;
+}
+
+.private-popup-hint {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.private-popup-hint span {
+  color: #71717a;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .private-dialog-title {
@@ -3820,6 +4677,10 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 
+.private-dialog-body-roster-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .private-dialog-roster {
   min-width: 0;
   min-height: 0;
@@ -3899,7 +4760,7 @@ onBeforeUnmount(() => {
 
 .private-thread-head {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: auto 30px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -3907,6 +4768,34 @@ onBeforeUnmount(() => {
   border: 1px solid #f1f5f9;
   border-radius: 8px;
   background: #fafafa;
+}
+
+.private-thread-head:not(.private-thread-head-roster-collapsed) {
+  grid-template-columns: 30px minmax(0, 1fr);
+}
+
+.private-roster-expand-button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 7px;
+  background: #fff;
+  color: #52525b;
+  cursor: pointer;
+}
+
+.private-roster-expand-button:hover {
+  border-color: #d4d4d8;
+  background: #f4f4f5;
+}
+
+.private-roster-expand-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .private-thread-head div {
@@ -4310,6 +5199,31 @@ label span {
   font-size: 15px;
 }
 
+.room-list-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.room-list-actions button {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #fff;
+  color: #52525b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.room-list-actions button:hover,
+.room-list-filter-active {
+  border-color: #18181b;
+  background: #18181b;
+  color: #fff;
+}
+
 .room-item {
   width: 100%;
   display: flex;
@@ -4448,11 +5362,6 @@ label span {
 .status-closed {
   background: #f4f4f5;
   color: #52525b;
-}
-
-.status-archived {
-  background: #ecfeff;
-  color: #0e7490;
 }
 
 .room-type-pill {
@@ -5161,11 +6070,6 @@ label span {
   text-align: left;
 }
 
-.boundary-card {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-}
-
 .context-note {
   margin: 0;
   color: #64748b;
@@ -5173,68 +6077,94 @@ label span {
   line-height: 1.6;
 }
 
-.boundary-identity {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.boundary-card {
+  background: #fcfcfd;
 }
 
-.boundary-identity span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  background: #fff;
-  color: #334155;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.boundary-block {
+.boundary-grid {
   display: grid;
-  gap: 7px;
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
-.boundary-block > strong {
-  color: #0f172a;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.business-binding-list {
+.boundary-block,
+.agent-domain-panel {
   display: grid;
-  gap: 7px;
-}
-
-.business-binding-row {
-  display: grid;
-  gap: 5px;
-  padding: 8px;
-  border: 1px solid #e2e8f0;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #edf0f3;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  background: #fff;
 }
 
-.business-binding-row span {
-  color: #64748b;
+.boundary-block-head,
+.agent-domain-head,
+.agent-domain-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.boundary-block-head strong,
+.agent-domain-head strong,
+.agent-domain-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.boundary-block-head span,
+.agent-domain-head span {
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.domain-group-list,
+.agent-domain-list {
+  display: grid;
+  gap: 7px;
+}
+
+.domain-group {
+  display: grid;
+  gap: 5px;
+}
+
+.domain-group > span,
+.agent-domain-item small {
+  color: #71717a;
   font-size: 11px;
   font-weight: 800;
 }
 
-.business-binding-row div {
+.domain-chip-row {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.business-binding-row b {
-  display: inline-flex;
+.domain-chip {
   max-width: 100%;
-  min-height: 21px;
+  min-height: 22px;
+  display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
+  padding: 2px 7px;
+  border: 1px solid #dbeafe;
   border-radius: 999px;
   background: #eff6ff;
   color: #1d4ed8;
@@ -5243,56 +6173,69 @@ label span {
   overflow-wrap: anywhere;
 }
 
-.domain-chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.domain-chip {
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  min-height: 22px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.domain-chip-allowed {
-  background: #dcfce7;
+.domain-chip-room {
+  border-color: #dcfce7;
+  background: #f0fdf4;
   color: #166534;
 }
 
-.domain-chip-denied {
+.domain-chip-sensitive {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.domain-chip-agent {
+  border-color: #e9d5ff;
+  background: #faf5ff;
+  color: #6b21a8;
+}
+
+.domain-chip-muted {
+  border-color: #e4e4e7;
   background: #f4f4f5;
-  color: #71717a;
+  color: #52525b;
 }
 
-.agent-permission-list {
-  display: grid;
-  gap: 7px;
+.agent-domain-list {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
-.agent-permission-item {
+.agent-domain-item {
+  align-items: flex-start;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.agent-domain-item:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.agent-domain-item > div:first-child {
+  min-width: 96px;
   display: grid;
   gap: 2px;
-  padding: 8px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
 }
 
-.agent-permission-item strong {
-  color: #111827;
-  font-size: 12px;
+.denied-reason-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
-.agent-permission-item small {
-  color: #64748b;
+.denied-reason-list span {
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid #fee2e2;
+  border-radius: 999px;
+  background: #fef2f2;
+  color: #991b1b;
   font-size: 11px;
-  line-height: 1.5;
+  font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .audit-card {
@@ -5374,11 +6317,60 @@ label span {
 
 .memory-item,
 .action-item,
-.shared-memory {
+.shared-memory,
+.governance-item {
   padding: 10px;
   border: 1px solid #f1f5f9;
   border-radius: 8px;
   background: #fafafa;
+}
+
+.governance-item {
+  display: grid;
+  gap: 7px;
+}
+
+.governance-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.governance-item-head strong {
+  min-width: 0;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.governance-item-head span {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.governance-item p {
+  margin: 0;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.governance-item small {
+  color: #71717a;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .memory-title-row,
@@ -5452,6 +6444,48 @@ label span {
   opacity: 0.68;
 }
 
+.summary-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.summary-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.summary-item-head strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.summary-item-head time {
+  flex: 0 0 auto;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.summary-item p {
+  margin: 0;
+  color: #3f3f46;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .memory-item p,
 .action-item p,
 .shared-memory p {
@@ -5467,6 +6501,23 @@ label span {
   color: #71717a;
   font-size: 11px;
   line-height: 1.5;
+}
+
+.memory-evidence-panel {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e4e4e7;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.memory-evidence-panel span {
+  color: #52525b;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .memory-warning-list {
@@ -5652,6 +6703,35 @@ label span {
   font-weight: 700;
 }
 
+.memory-publish-evidence {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.memory-publish-evidence-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.memory-publish-evidence-row span {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.memory-publish-evidence-row strong {
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .memory-publish-decision {
   display: grid;
   gap: 8px;
@@ -5681,17 +6761,75 @@ label span {
   overflow-wrap: anywhere;
 }
 
-.memory-publish-scope-select {
+.memory-publish-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 12px;
+  border: 1px solid #d7e2dc;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 12% 20%, rgba(45, 138, 104, 0.12), transparent 28%),
+    linear-gradient(135deg, #f8fbf7 0%, #eef5f1 100%);
+}
+
+.memory-publish-flow-pending {
+  border-color: #ead8a3;
+  background:
+    radial-gradient(circle at 12% 20%, rgba(196, 140, 34, 0.12), transparent 28%),
+    linear-gradient(135deg, #fffaf0 0%, #f7f1df 100%);
+}
+
+.memory-publish-flow-node {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  padding: 10px;
+  border: 1px solid rgba(32, 93, 71, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.memory-publish-flow-node span,
+.memory-publish-flow-node small {
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.memory-publish-flow-node strong {
+  min-width: 0;
+  color: #1f3f34;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-publish-flow-arrow {
+  display: grid;
+  place-items: center;
+  color: #2f7d5d;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.memory-publish-scope-select,
+.memory-publish-target-select {
   width: 100%;
 }
 
-.memory-scope-option {
+.memory-scope-option,
+.memory-target-option {
   display: grid;
   gap: 2px;
   line-height: 1.25;
 }
 
-.memory-scope-option small {
+.memory-scope-option small,
+.memory-target-option small {
   color: #71717a;
   font-size: 11px;
 }
@@ -5750,6 +6888,10 @@ label span {
 
   .context-panel-content {
     padding: 12px;
+  }
+
+  .memory-publish-evidence-row {
+    grid-template-columns: 1fr;
   }
 
   .private-dialog-body {

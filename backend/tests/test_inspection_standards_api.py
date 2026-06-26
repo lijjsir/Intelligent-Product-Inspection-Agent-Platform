@@ -37,6 +37,29 @@ async def test_admin_can_list_inspection_standards(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_non_admin_cannot_access_inspection_standards():
+async def test_non_admin_can_read_inspection_standards(monkeypatch):
+    class FakeService:
+        def __init__(self, db, org_id):
+            self.db = db
+            self.org_id = org_id
+
+        async def list_items(self):
+            return []
+
+    monkeypatch.setattr(standards_api, "InspectionStandardLibraryService", FakeService)
+    response = await standards_api.list_inspection_standards(current=current_user("platform_operator"), db=object())
+    assert response.data == []
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_write_inspection_standards():
     with pytest.raises(ForbiddenError):
-        await standards_api.list_inspection_standards(current=current_user("platform_operator"), db=object())
+        await standards_api.create_inspection_standard(
+            payload=standards_api.InspectionStandardCreate(
+                name="标准",
+                product_family="food",
+                rag_space_ids=["space-1"],
+            ),
+            current=current_user("platform_operator"),
+            db=object(),
+        )

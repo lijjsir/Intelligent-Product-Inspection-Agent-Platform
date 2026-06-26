@@ -1,3 +1,6 @@
+import logging
+from dataclasses import dataclass
+
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +17,17 @@ from app.repositories.user_repo import UserRepository
 from app.services.auth_log_service import AuthLogService, _is_auth_logs_table_missing
 
 
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AuthenticatedUser:
+    id: str
+    org_id: str
+    username: str
+    role: str
+
+
 class AuthService:
     def __init__(self, session: AsyncSession):
         self._session = session
@@ -25,12 +39,23 @@ class AuthService:
         try:
             await self._auth_logs.record_login(**payload)
         except Exception as exc:
-            if _is_auth_logs_table_missing(exc):
+            if self._session is not None:
                 await self._session.rollback()
+            if _is_auth_logs_table_missing(exc):
+                logger.warning("auth_logs table is unavailable; skipping login audit log")
                 return
-            raise
+            logger.warning("failed to write login audit log; continuing auth flow", exc_info=exc)
 
-    async def login(self, org_id: str, username: str, password: str, request: Request | None = None) -> tuple[User, str, str]:
+    @staticmethod
+    def _snapshot_user(user: User) -> AuthenticatedUser:
+        return AuthenticatedUser(
+            id=user.id,
+            org_id=user.org_id,
+            username=user.username,
+            role=user.role,
+        )
+
+    async def login(self, org_id: str, username: str, password: str, request: Request | None = None) -> tuple[AuthenticatedUser, str, str]:
         org = await self._orgs.get_by_id(org_id)
         if not org:
             org = await self._orgs.get_by_slug(org_id)
@@ -49,22 +74,29 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             await self._record_login_log(org_id=org_id, username=username, request=request, success=False, user_id=user.id, detail="invalid credentials")
             raise ForbiddenError("invalid credentials")
-        claims = build_auth_claims(user.role, getattr(org, "plan", None))
+        authenticated_user = self._snapshot_user(user)
+        claims = build_auth_claims(authenticated_user.role, getattr(org, "plan", None))
         access = create_access_token(
-            subject=user.id,
-            extra=claims.as_token_extra(user.org_id),
+            subject=authenticated_user.id,
+            extra=claims.as_token_extra(authenticated_user.org_id),
         )
         refresh = create_refresh_token(
-            subject=user.id,
-            extra=claims.as_token_extra(user.org_id),
+            subject=authenticated_user.id,
+            extra=claims.as_token_extra(authenticated_user.org_id),
         )
-        await self._record_login_log(org_id=org_id, username=user.username, request=request, success=True, user_id=user.id)
-        return user, access, refresh
+        await self._record_login_log(
+            org_id=org_id,
+            username=authenticated_user.username,
+            request=request,
+            success=True,
+            user_id=authenticated_user.id,
+        )
+        return authenticated_user, access, refresh
 
     async def register(
         self, create_org: bool | str = True, org_name: str | None = None, org_slug: str | None = None,
         username: str | None = None, email: str | None = None, password: str | None = None, role: str = "admin",
-    ) -> tuple[User, str, str]:
+    ) -> tuple[AuthenticatedUser, str, str]:
         from app.core.exceptions import NotFoundError
         from app.core.permissions import ensure_valid_role
         if not isinstance(create_org, bool):
@@ -121,13 +153,14 @@ class AuthService:
         )
         await self._users.create(user)
 
-        claims = build_auth_claims(user.role, getattr(org, "plan", None))
+        authenticated_user = self._snapshot_user(user)
+        claims = build_auth_claims(authenticated_user.role, getattr(org, "plan", None))
         access = create_access_token(
-            subject=user.id,
-            extra=claims.as_token_extra(user.org_id),
+            subject=authenticated_user.id,
+            extra=claims.as_token_extra(authenticated_user.org_id),
         )
         refresh = create_refresh_token(
-            subject=user.id,
-            extra=claims.as_token_extra(user.org_id),
+            subject=authenticated_user.id,
+            extra=claims.as_token_extra(authenticated_user.org_id),
         )
-        return user, access, refresh
+        return authenticated_user, access, refresh

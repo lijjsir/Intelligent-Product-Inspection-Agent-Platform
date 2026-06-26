@@ -135,6 +135,30 @@ class MemoryTransferLog(Base, TimestampMixin):
     operator_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
 
 
+class MeetingConflictEvent(Base, TimestampMixin):
+    __tablename__ = "meeting_conflict_events"
+    __table_args__ = (
+        Index("idx_meeting_conflict_events_room_status", "org_id", "room_id", "status"),
+        Index("idx_meeting_conflict_events_resource", "org_id", "room_id", "resource_key", "status"),
+        Index("idx_meeting_conflict_events_initiator", "org_id", "initiator_user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    conflict_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    initiator_user_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    workflow_run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    related_message_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    candidate_actions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    selected_action: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class MeetingActionItem(Base, TimestampMixin):
     __tablename__ = "meeting_action_items"
     __table_args__ = (
@@ -176,3 +200,7 @@ class MeetingAgentQueryAudit(Base, TimestampMixin):
     source_refs: Mapped[list | None] = mapped_column(JSON, nullable=True)
     redacted_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     decision: Mapped[str] = mapped_column(String(32), nullable=False, default="allowed")
+    response_visibility: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    redaction_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    denied_reasons: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    conflict_ref_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)

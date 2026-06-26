@@ -14,7 +14,7 @@ import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import { normalizeAiResponseText } from "@/utils/ai-response";
-import type { InspectionTask, TaskCreate } from "@/types/task.types";
+import type { InspectionTask } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
 import { formatServerDateTime } from "@/utils/date-time";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
@@ -45,6 +45,14 @@ const taskForm = ref({
   image_urls_input: "",
   priority: 5,
 });
+
+interface ChatTaskDraftPayload {
+  product_id: string;
+  spec_code: string;
+  image_urls: string[];
+  priority?: number;
+  metadata?: Record<string, unknown>;
+}
 
 const taskRules: FormRules = {
   product_id: [{ required: true, message: "请选择检测标准以自动填入产品线", trigger: "blur" }],
@@ -222,7 +230,7 @@ function resetTaskDialog() {
   taskFormRef.value?.clearValidate();
 }
 
-function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean): TaskCreate {
+function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean): ChatTaskDraftPayload {
   if (useDialogState) {
     const imageUrls = Array.from(
       new Set([...chatStore.pendingAttachments.map((item) => item.url), ...parseImageUrls(taskForm.value.image_urls_input)]),
@@ -233,7 +241,7 @@ function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean):
   return { product_id: String(draft?.product_id || "").trim(), spec_code: String(draft?.spec_code || "").trim(), image_urls: (draft?.image_urls || []).filter(Boolean), priority: draft?.priority ?? 5, metadata: { source: "chat" } };
 }
 
-async function submitTaskPayload(payload: TaskCreate, sourceMessageId?: string | null) {
+async function submitTaskPayload(payload: ChatTaskDraftPayload, sourceMessageId?: string | null) {
   if (!payload.product_id || !payload.spec_code || payload.image_urls.length === 0) {
     ElMessage.warning("\u68c0\u6d4b\u4efb\u52a1\u4fe1\u606f\u8fd8\u4e0d\u5b8c\u6574\uff0c\u8bf7\u5148\u8865\u5168\u8868\u5355\u3002");
     return;

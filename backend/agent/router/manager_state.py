@@ -25,6 +25,7 @@ class ManagerState(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     history_messages: list[dict[str, Any]] = Field(default_factory=list)
     inspection_context: dict[str, Any] | None = None
+    memory_sources: list[dict[str, Any]] = Field(default_factory=list)
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
     force_web_search: bool = False

@@ -202,6 +202,7 @@ class ManagerPolicy:
             attachments=[item.model_dump() for item in request.attachments],
             history_messages=list(ext.get("history_messages") or []),
             inspection_context=dict(ext.get("inspection_context") or {}) or None,
+            memory_sources=[item for item in list(ext.get("memory_sources") or []) if isinstance(item, dict)],
             selected_rag_space=self._selected_rag_space(ext),
             rag_scope=dict(ext.get("rag_scope") or {}) or None,
             force_web_search=bool(ext.get("force_web_search")),

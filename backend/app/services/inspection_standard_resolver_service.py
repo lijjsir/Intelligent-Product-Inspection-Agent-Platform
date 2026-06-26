@@ -37,6 +37,19 @@ class InspectionStandardResolverService:
         product_id: str | None = None,
         product_family: str | None = None,
     ) -> dict[str, Any] | None:
+        resolve_by_spec_code = getattr(self._service, "resolve_active_by_spec_code", None)
+        if callable(resolve_by_spec_code):
+            binding = await resolve_by_spec_code(spec_code=spec_code)
+            if binding:
+                return {
+                    "binding_id": binding["id"],
+                    "binding_name": binding["name"],
+                    "product_family": binding["product_family"],
+                    "system_rag_space_ids": list(binding.get("rag_space_ids") or []),
+                    "system_rag_space_names": [str(item.get("name") or "") for item in list(binding.get("rag_spaces") or []) if str(item.get("name") or "").strip()],
+                    "spec_code": binding.get("spec_code") or spec_code,
+                    "product_id": product_id,
+                }
         resolved_family = _infer_product_family(product_family, product_id, spec_code)
         binding = await self._service.resolve_active_binding(product_family=resolved_family)
         if not binding:

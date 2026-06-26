@@ -24,6 +24,15 @@ export interface InspectionTask {
   org_slug?: string | null;
   product_id: string;
   spec_code: string;
+  product_sku_id?: string | null;
+  batch_id?: string | null;
+  inspection_standard_id?: string | null;
+  product_line_code?: string | null;
+  product_line_name?: string | null;
+  product_sku_code?: string | null;
+  product_name?: string | null;
+  batch_no?: string | null;
+  standard_name?: string | null;
   status: TaskStatus;
   priority: number;
   image_urls?: string[];
@@ -40,8 +49,11 @@ export interface InspectionTask {
 }
 
 export interface TaskCreate {
-  product_id: string;
-  spec_code: string;
+  product_sku_id: string;
+  batch_id: string;
+  inspection_standard_id: string;
+  product_id?: string | null;
+  spec_code?: string | null;
   image_urls: string[];
   image_items?: ImageItem[];
   priority?: number;

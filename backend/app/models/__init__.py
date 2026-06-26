@@ -1,5 +1,6 @@
 from app.models.base import Base
 from app.models.organization import Organization
+from app.models.product import ProductBatch, ProductLine, ProductSku
 from app.models.user import User
 from app.models.task import InspectionTask
 from app.models.task_execution_event import TaskExecutionEvent
@@ -37,6 +38,14 @@ from app.models.agent_ops import (
 )
 from app.models.agent_management import AgentConfigVersion, AgentExecutionMetrics
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
+from app.models.collab import (
+    CollabMessage,
+    CollabMessageReceipt,
+    CollabThread,
+    CollabThreadParticipant,
+    FileAsset,
+    MessageAttachment,
+)
 from app.models.dataset import Dataset, DatasetAsyncJob, DatasetSample, DatasetUploadSession
 from app.models.export_job import ExportJob
 from app.models.algo_resources import (
@@ -58,6 +67,7 @@ from app.models.algo_resources import (
 )
 from app.models.meeting import (
     MeetingActionItem,
+    MeetingConflictEvent,
     MeetingAgentQueryAudit,
     MeetingMessage,
     MeetingRoom,
@@ -75,11 +85,15 @@ from app.models.memory import (
     MemoryItem,
     MemoryPolicy,
     MemoryRollback,
+    MemoryTag,
 )
 
 __all__ = [
     "Base",
     "Organization",
+    "ProductLine",
+    "ProductSku",
+    "ProductBatch",
     "User",
     "InspectionTask",
     "TaskExecutionEvent",
@@ -123,6 +137,12 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     "ChatMessageScore",
+    "CollabThread",
+    "CollabThreadParticipant",
+    "CollabMessage",
+    "CollabMessageReceipt",
+    "FileAsset",
+    "MessageAttachment",
     "Dataset",
     "DatasetSample",
     "DatasetAsyncJob",
@@ -149,6 +169,7 @@ __all__ = [
     "MeetingMessage",
     "MemoryScopeBinding",
     "MemoryTransferLog",
+    "MeetingConflictEvent",
     "MeetingActionItem",
     "MeetingAgentQueryAudit",
     "RagSpace",
@@ -162,6 +183,7 @@ __all__ = [
     "MemoryPolicy",
     "MemoryRollback",
     "MemoryEvaluation",
+    "MemoryTag",
     "PromptDefinition",
     "PromptSyncEvent",
 ]

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from agent.adapters.llm_adapter import LLMAgentAdapter
+from app.core.permissions import ROLE_USER
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_ai_service as meeting_ai_mod
 
@@ -155,6 +156,8 @@ async def test_meeting_agent_uses_model_config_runtime_even_if_agent_model_is_st
                 message_type=kwargs.get("message_type", "agent"),
                 agent_id=kwargs.get("agent_id"),
                 mentions=kwargs.get("mentions"),
+                metadata_json=kwargs.get("metadata_json"),
+                private_recipient_user_id=(kwargs.get("metadata_json") or {}).get("private_recipient_user_id"),
                 created_at=None,
                 updated_at=None,
             )
@@ -210,7 +213,113 @@ async def test_meeting_agent_uses_model_config_runtime_even_if_agent_model_is_st
     assert fake_adapter.runtime_model is not None
     assert fake_adapter.runtime_model["model_id"] == "doubao-pro"
     assert fake_repo.created_messages[0]["content"] == "doubao response"
+    assert fake_repo.created_messages[0]["metadata_json"]["private_recipient_user_id"] == "user-1"
     assert any(event["event"] == "message_final" for event in events)
+    assert all(event.get("private_user_ids") == ["user-1"] for event in events)
+
+
+@pytest.mark.asyncio
+async def test_meeting_agent_denies_query_outside_user_role_and_records_audit(monkeypatch):
+    runtime_models = make_runtime_models()
+    gateway = make_gateway()
+    events: list[dict] = []
+
+    class FakeRepo:
+        def __init__(self) -> None:
+            self.created_messages: list[dict] = []
+            self.audits: list[dict] = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(
+                id=room_id,
+                org_id=org_id,
+                allowed_data_domains=["meeting", "memory", "model_billing"],
+            )
+
+        async def get_agent(self, org_id: str, room_id: str, agent_id: str):
+            return SimpleNamespace(
+                agent_id=agent_id,
+                allowed_domains=["meeting", "memory", "model.catalog"],
+            )
+
+        async def get_visible_agent_definition(self, org_id: str, agent_def_id: str):
+            return SimpleNamespace(
+                id=agent_def_id,
+                org_id=org_id,
+                name="模型助手",
+                system_prompt="你是一个会议助手。",
+                model="deepseek-chat",
+                adapter_type="llm",
+                participation_strategy={"auto_reply": False},
+                is_active=True,
+            )
+
+        async def list_messages(self, org_id: str, room_id: str, after_seq: int = 0, limit: int = 20, visible_user_id=None):
+            return [SimpleNamespace(message_type="user", username="alice", content="现在模型价格多少")]
+
+        async def create_message(self, **kwargs):
+            self.created_messages.append(kwargs)
+            return SimpleNamespace(
+                id=kwargs.get("message_id", "msg-1"),
+                room_id=kwargs["room_id"],
+                user_id=kwargs["user_id"],
+                username=kwargs["username"],
+                seq_no=len(self.created_messages),
+                content=kwargs["content"],
+                message_type=kwargs.get("message_type", "agent"),
+                agent_id=kwargs.get("agent_id"),
+                mentions=kwargs.get("mentions"),
+                metadata_json=kwargs.get("metadata_json"),
+                private_recipient_user_id=(kwargs.get("metadata_json") or {}).get("private_recipient_user_id"),
+                created_at=None,
+                updated_at=None,
+            )
+
+        async def create_agent_query_audit(self, **kwargs):
+            self.audits.append(kwargs)
+            return SimpleNamespace(id="audit-1", **kwargs, created_at=None, updated_at=None)
+
+    class ExplodingAdapter:
+        async def invoke(self, **kwargs):
+            raise AssertionError("adapter should not run when authorization denies the query")
+
+    class FakeFactory:
+        def get_for_agent(self, agent_def):
+            return ExplodingAdapter()
+
+    async def fake_publish(room_id: str, event: dict):
+        events.append(event)
+
+    fake_repo = FakeRepo()
+    monkeypatch.setattr(meeting_agent_mod, "MeetingRepository", lambda session: fake_repo)
+    monkeypatch.setattr(meeting_agent_mod, "ModelConfigService", make_model_config_service(runtime_models))
+    monkeypatch.setattr(meeting_agent_mod, "LLMGateway", lambda: gateway)
+    monkeypatch.setattr(meeting_agent_mod, "get_session", lambda: FakeSessionCtx())
+    monkeypatch.setattr(meeting_agent_mod.meeting_stream_broker, "publish", fake_publish)
+
+    service = meeting_agent_mod.MeetingAgentService()
+    service._factory = FakeFactory()
+
+    await service.invoke_agent(
+        room_id="room-1",
+        agent_def_id="11111111-1111-1111-1111-111111111111",
+        agent_name="模型助手",
+        query="@模型助手 现在模型价格多少？",
+        org_id="org-1",
+        user_id="user-1",
+        username="alice",
+        user_role=ROLE_USER,
+    )
+
+    assert fake_repo.created_messages[0]["content"] == "当前请求超出你的会议室或 Agent 权限范围，无法回答该问题。"
+    assert fake_repo.created_messages[0]["metadata_json"]["visibility"] == "private"
+    assert fake_repo.created_messages[0]["metadata_json"]["denied_data_domains"]
+    assert fake_repo.audits[0]["decision"] == "denied"
+    assert fake_repo.audits[0]["response_visibility"] == "private"
+    assert fake_repo.audits[0]["denied_reasons"]["model.catalog"] == "role_not_allowed"
+    assert events[-1]["event"] == "message_final"
+    assert events[-1]["private_user_ids"] == ["user-1"]
+    assert events[-1]["response_visibility"] == "private"
 
 
 @pytest.mark.asyncio
@@ -273,6 +382,8 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
                 message_type=kwargs.get("message_type", "agent"),
                 agent_id=kwargs.get("agent_id"),
                 mentions=kwargs.get("mentions"),
+                metadata_json=kwargs.get("metadata_json"),
+                private_recipient_user_id=(kwargs.get("metadata_json") or {}).get("private_recipient_user_id"),
                 created_at=None,
                 updated_at=None,
             )
@@ -302,6 +413,9 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
     assert requests[1]["json"]["temperature"] == 0.2
     assert summary_message.agent_id == "meeting_summary"
     assert any(event["event"] == "message_created" for event in events)
+    assert all(event.get("private_user_ids") == ["user-1"] for event in events)
+    assert message.private_recipient_user_id == "user-1"
+    assert summary_message.private_recipient_user_id == "user-1"
 
 
 @pytest.mark.asyncio
@@ -366,6 +480,8 @@ async def test_meeting_ai_fails_over_to_next_runtime_model_on_auth_error(monkeyp
                 message_type=kwargs.get("message_type", "agent"),
                 agent_id=kwargs.get("agent_id"),
                 mentions=kwargs.get("mentions"),
+                metadata_json=kwargs.get("metadata_json"),
+                private_recipient_user_id=(kwargs.get("metadata_json") or {}).get("private_recipient_user_id"),
                 created_at=None,
                 updated_at=None,
             )
@@ -389,6 +505,8 @@ async def test_meeting_ai_fails_over_to_next_runtime_model_on_auth_error(monkeyp
     assert gateway.calls[1]["excluded_runtime_ids"] == {"cfg-doubao"}
     assert message.content == "qwen fallback reply"
     assert any(event["event"] == "message_created" for event in events)
+    assert all(event.get("private_user_ids") == ["user-1"] for event in events)
+    assert message.private_recipient_user_id == "user-1"
 
 
 @pytest.mark.asyncio

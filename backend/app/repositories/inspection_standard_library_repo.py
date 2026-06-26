@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.inspection_standard_library import InspectionStandardLibrary
@@ -46,6 +46,34 @@ class InspectionStandardLibraryRepository:
             .order_by(
                 InspectionStandardLibrary.updated_at.desc(),
             )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active(self, org_id: str, library_id: str) -> InspectionStandardLibrary | None:
+        result = await self._session.execute(
+            select(InspectionStandardLibrary).where(
+                InspectionStandardLibrary.id == library_id,
+                InspectionStandardLibrary.is_active.is_(True),
+                InspectionStandardLibrary.deleted_at.is_(None),
+                InspectionStandardLibrary.org_id == org_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active_by_spec_code(self, org_id: str, spec_code: str) -> InspectionStandardLibrary | None:
+        result = await self._session.execute(
+            select(InspectionStandardLibrary)
+            .where(
+                InspectionStandardLibrary.is_active.is_(True),
+                InspectionStandardLibrary.deleted_at.is_(None),
+                InspectionStandardLibrary.org_id == org_id,
+                or_(
+                    InspectionStandardLibrary.spec_code == spec_code,
+                    InspectionStandardLibrary.product_family == spec_code,
+                ),
+            )
+            .order_by(InspectionStandardLibrary.updated_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()

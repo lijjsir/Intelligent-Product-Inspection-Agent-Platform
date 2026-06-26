@@ -47,15 +47,15 @@ async function openDetail(roomId: string) {
   }
 }
 
-async function handleArchive(room: AdminMeetingRoom) {
+async function handleDelete(room: AdminMeetingRoom) {
   try {
     await ElMessageBox.confirm(
-      `确定要归档会议室「${room.title}」吗？归档后用户将无法访问。`,
-      "确认归档",
-      { confirmButtonText: "归档", cancelButtonText: "取消", type: "warning" }
+      `确定要删除会议室「${room.title}」吗？删除后用户将无法访问。`,
+      "确认删除",
+      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
     );
     await http.delete(`/v1/admin/meetings/${room.id}`);
-    ElMessage.success("已归档");
+    ElMessage.success("已删除");
     await fetchRooms();
   } catch {
     // cancelled or error
@@ -96,14 +96,14 @@ onMounted(() => fetchRooms());
   <div class="meeting-admin">
     <div class="admin-header">
       <h1>会议管理</h1>
-      <p class="admin-sub">管理所有会议室，包括归档、查看详情和移除成员。</p>
+      <p class="admin-sub">管理所有会议室，包括查看详情、删除会议和移除成员。</p>
     </div>
 
     <div class="toolbar">
       <el-input v-model="keyword" placeholder="搜索标题" clearable style="width: 240px" :prefix-icon="Search" @clear="onSearch" @keydown.enter="onSearch" />
       <el-select v-model="status" placeholder="状态" clearable style="width: 140px" @change="onSearch">
         <el-option label="活跃" value="active" />
-        <el-option label="已归档" value="archived" />
+        <el-option label="已结束" value="closed" />
       </el-select>
       <el-button type="primary" @click="onSearch">搜索</el-button>
     </div>
@@ -126,7 +126,7 @@ onMounted(() => fetchRooms());
       <el-table-column label="操作" width="160" align="center" fixed="right">
         <template #default="{ row }">
           <el-button text type="primary" :icon="InfoFilled" @click="openDetail(row.id)">详情</el-button>
-          <el-button text type="danger" :icon="Delete" @click="handleArchive(row)">归档</el-button>
+          <el-button text type="danger" :icon="Delete" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>

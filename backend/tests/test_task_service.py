@@ -9,7 +9,35 @@ from app.services.task_service import TaskService
 
 class FakeSpec:
     def __init__(self, required_image_count: int = 1):
+        self.id = "spec-1"
+        self.spec_code = "STD-1"
+        self.name = "默认标准"
+        self.product_family = "product-line-1"
         self.required_image_count = required_image_count
+        self.is_active = True
+
+
+class FakeProductLine:
+    id = "line-1"
+    code = "line-1"
+    name = "产品线 1"
+    is_active = True
+
+
+class FakeProductSku:
+    id = "sku-1"
+    product_line_id = "line-1"
+    code = "product-1"
+    name = "产品 1"
+    is_active = True
+
+
+class FakeProductBatch:
+    id = "batch-1"
+    product_sku_id = "sku-1"
+    batch_no = "B-1"
+    name = "批次 1"
+    is_active = True
 
 
 class FakeTask:
@@ -19,6 +47,9 @@ class FakeTask:
         self.created_by = "user-1"
         self.product_id = "product-1"
         self.spec_code = "STD-1"
+        self.product_sku_id = None
+        self.batch_id = None
+        self.inspection_standard_id = None
         self.status = "pending"
         self.priority = 5
         self.image_urls = ["https://example.com/a.png"]
@@ -51,7 +82,11 @@ class FakeTaskRepo:
         fake = FakeTask()
         fake.created_by = task.created_by
         fake.meta_data = task.meta_data
+        fake.product_id = task.product_id
         fake.spec_code = task.spec_code
+        fake.product_sku_id = task.product_sku_id
+        fake.batch_id = task.batch_id
+        fake.inspection_standard_id = task.inspection_standard_id
         fake.image_urls = task.image_urls
         fake.image_items = task.image_items
         return fake
@@ -88,6 +123,69 @@ class FakeSpecRepo:
 
     async def get_active_spec(self, org_id: str, spec_code: str):
         return self.active_specs.get(spec_code)
+
+    async def get(self, org_id: str, inspection_spec_row_id: str):
+        return self.active_specs.get("STD-1") if inspection_spec_row_id == "spec-1" else None
+
+
+class FakeStandard:
+    id = "standard-1"
+    name = "检测标准 1"
+    spec_code = "STD-1"
+    inspection_spec_id = "spec-1"
+    product_family = "product-line-1"
+    applicable_product_line_ids = []
+    applicable_product_sku_ids = []
+    rag_space_ids = ["rag-1"]
+
+
+class FakeStandardRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def get_active(self, org_id: str, library_id: str):
+        return FakeStandard() if library_id == "standard-1" else None
+
+    async def get_active_by_spec_code(self, org_id: str, spec_code: str):
+        return FakeStandard() if spec_code == "STD-1" else None
+
+    async def get(self, org_id: str, library_id: str):
+        return FakeStandard() if library_id == "standard-1" else None
+
+
+class FakeProductMasterService:
+    def __init__(self, session, org_id):
+        self._session = session
+        self._org_id = org_id
+
+    async def require_active_sku_and_batch(self, sku_id: str, batch_id: str):
+        return FakeProductLine(), FakeProductSku(), FakeProductBatch()
+
+    async def ensure_legacy_defaults(self, product_code: str):
+        return FakeProductLine(), FakeProductSku(), FakeProductBatch()
+
+
+class FakeProductRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def get_sku(self, org_id: str, sku_id: str):
+        return FakeProductSku()
+
+    async def get_line(self, org_id: str, line_id: str):
+        return FakeProductLine()
+
+    async def get_batch(self, org_id: str, batch_id: str):
+        return FakeProductBatch()
+
+
+def patch_task_create_dependencies(monkeypatch):
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    monkeypatch.setattr("app.services.task_service.InspectionStandardLibraryRepository", FakeStandardRepo)
+    monkeypatch.setattr("app.services.task_service.ProductMasterService", FakeProductMasterService)
+    monkeypatch.setattr("app.services.task_service.ProductMasterRepository", FakeProductRepo)
 
 
 class FakeResult:
@@ -134,9 +232,7 @@ class FakeQuery:
 
 @pytest.mark.asyncio
 async def test_create_task_returns_serializable_task(monkeypatch):
-    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
-    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
-    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    patch_task_create_dependencies(monkeypatch)
 
     session = FakeSession()
     service = TaskService(session=session, org_id="org-1")
@@ -160,9 +256,7 @@ async def test_create_task_returns_serializable_task(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_task_preserves_image_items_and_sample_numbers(monkeypatch):
-    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
-    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
-    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    patch_task_create_dependencies(monkeypatch)
 
     session = FakeSession()
     service = TaskService(session=session, org_id="org-1")
@@ -188,9 +282,7 @@ async def test_create_task_preserves_image_items_and_sample_numbers(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_create_task_rejects_duplicate_images_in_same_submission(monkeypatch):
-    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
-    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
-    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    patch_task_create_dependencies(monkeypatch)
 
     service = TaskService(session=FakeSession(), org_id="org-1")
 
@@ -217,6 +309,9 @@ async def test_create_task_rejects_when_images_below_spec_requirement(monkeypatc
     monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
     monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
     monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", lambda session: spec_repo)
+    monkeypatch.setattr("app.services.task_service.InspectionStandardLibraryRepository", FakeStandardRepo)
+    monkeypatch.setattr("app.services.task_service.ProductMasterService", FakeProductMasterService)
+    monkeypatch.setattr("app.services.task_service.ProductMasterRepository", FakeProductRepo)
 
     service = TaskService(session=FakeSession(), org_id="org-1")
 
@@ -233,9 +328,7 @@ async def test_create_task_rejects_when_images_below_spec_requirement(monkeypatc
 
 @pytest.mark.asyncio
 async def test_create_task_preserves_rag_metadata(monkeypatch):
-    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
-    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
-    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    patch_task_create_dependencies(monkeypatch)
 
     session = FakeSession()
     service = TaskService(session=session, org_id="org-1")
@@ -256,14 +349,13 @@ async def test_create_task_preserves_rag_metadata(monkeypatch):
         metadata=metadata,
     )
 
-    assert task.meta_data == metadata
+    assert task.meta_data["selected_rag_space_id"] == "user-rag-1"
+    assert task.meta_data["inspection_standard_id"] == "standard-1"
 
 
 @pytest.mark.asyncio
 async def test_create_task_rejects_missing_active_spec(monkeypatch):
-    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
-    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
-    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    patch_task_create_dependencies(monkeypatch)
 
     session = FakeSession()
     service = TaskService(session=session, org_id="org-1")

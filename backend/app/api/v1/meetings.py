@@ -16,6 +16,8 @@ from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingActionItemResponse,
     MeetingActionItemUpdateRequest,
+    MeetingConflictEventResponse,
+    MeetingConflictResolveRequest,
     MeetingAgentQueryAuditResponse,
     MeetingAgentRunRequest,
     MeetingAgentRunResponse,
@@ -25,6 +27,8 @@ from app.schemas.meeting import (
     MeetingMemoryExtractRequest,
     MeetingMemoryDisputeRequest,
     MeetingMemoryResponse,
+    MeetingMemoryShareApprovalResponse,
+    MeetingMemoryShareRequest,
     MeetingMemoryTransferRequest,
     MeetingMemoryUpdateRequest,
     MeetingMemberRoleUpdateRequest,
@@ -181,16 +185,6 @@ async def close_room(
     return ResponseEnvelope(data=await service.close_room(room_id))
 
 
-@router.post("/rooms/{room_id}/archive", response_model=ResponseEnvelope[MeetingRoomResponse])
-async def archive_room(
-    room_id: str,
-    current: CurrentUser = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.archive_room(room_id))
-
-
 # ── Messages ──────────────────────────────────────────────────────
 
 @router.delete("/rooms/{room_id}", response_model=ResponseEnvelope[dict])
@@ -340,6 +334,28 @@ async def list_agent_query_audits(
     return ResponseEnvelope(data=await service.list_agent_query_audits(room_id, limit=limit))
 
 
+@router.get("/rooms/{room_id}/conflicts", response_model=ResponseEnvelope[list[MeetingConflictEventResponse]])
+async def list_room_conflicts(
+    room_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_conflicts(room_id, limit=limit))
+
+
+@router.post("/conflicts/{conflict_id}/resolve", response_model=ResponseEnvelope[MeetingConflictEventResponse])
+async def resolve_meeting_conflict(
+    conflict_id: str,
+    body: MeetingConflictResolveRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.resolve_conflict(conflict_id, body))
+
+
 # ── Meeting memories ──────────────────────────────────────────────────
 
 @router.get("/rooms/{room_id}/memories", response_model=ResponseEnvelope[list[MeetingMemoryResponse]])
@@ -383,8 +399,16 @@ async def extract_room_memories(
             risk_level=item.risk_level,
             recommended_actions=item.recommended_actions,
             source_room_id=item.source_room_id,
+            source_spans=item.source_spans,
+            object_resolution_status=item.object_resolution_status,
+            object_candidates=item.object_candidates,
+            value_score=item.value_score,
+            dedupe_key=item.dedupe_key,
+            related_memory_ids=item.related_memory_ids,
+            extraction_reason=item.extraction_reason,
             confidence=item.confidence,
             source_message_id=item.source_message_id,
+            qdl_json=item.qdl_json,
             created_at=item.created_at,
         )
         for item in candidates
@@ -434,6 +458,47 @@ async def transfer_memory(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.transfer_memory(memory_id, body))
+
+
+@router.post("/memories/{memory_id}/share", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def share_memory(
+    memory_id: str,
+    body: MeetingMemoryShareRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.share_memory(memory_id, body))
+
+
+@router.get("/memory-shares/pending", response_model=ResponseEnvelope[list[MeetingMemoryShareApprovalResponse]])
+async def list_pending_memory_shares(
+    room_id: str | None = Query(default=None),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_pending_memory_shares(room_id=room_id))
+
+
+@router.post("/memory-shares/{transfer_id}/approve", response_model=ResponseEnvelope[MeetingMemoryResponse])
+async def approve_memory_share(
+    transfer_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.approve_memory_share(transfer_id))
+
+
+@router.post("/memory-shares/{transfer_id}/reject", response_model=ResponseEnvelope[MeetingMemoryShareApprovalResponse])
+async def reject_memory_share(
+    transfer_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.reject_memory_share(transfer_id))
 
 
 # ── Action items ──────────────────────────────────────────────────────

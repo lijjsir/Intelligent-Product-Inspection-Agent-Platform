@@ -592,6 +592,17 @@ export interface InspectionStandardLibraryItem {
   org_id: string | null;
   name: string;
   product_family: string;
+  inspection_spec_id?: string | null;
+  spec_code?: string | null;
+  spec_name?: string | null;
+  applicable_product_line_ids?: string[];
+  applicable_product_sku_ids?: string[];
+  required_image_count?: number | null;
+  required_views?: string[];
+  auto_pass_enabled?: boolean | null;
+  ai_gate_confidence_threshold?: number | null;
+  ai_gate_evidence_threshold?: number | null;
+  ai_gate_traceability_threshold?: number | null;
   description?: string | null;
   rag_space_ids: string[];
   rag_spaces: InspectionStandardRagSpace[];
@@ -604,8 +615,85 @@ export interface InspectionStandardLibraryItem {
 export interface InspectionStandardPayload {
   name: string;
   product_family: string;
+  inspection_spec_id?: string | null;
+  spec_code?: string | null;
+  applicable_product_line_ids?: string[];
+  applicable_product_sku_ids?: string[];
   description?: string | null;
   rag_space_ids: string[];
+  is_active?: boolean;
+}
+
+export interface ProductLine {
+  id: string;
+  org_id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ProductSku {
+  id: string;
+  org_id: string;
+  product_line_id: string;
+  product_line_code?: string | null;
+  product_line_name?: string | null;
+  code: string;
+  name: string;
+  description?: string | null;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ProductBatch {
+  id: string;
+  org_id: string;
+  product_sku_id: string;
+  product_sku_code?: string | null;
+  product_sku_name?: string | null;
+  product_line_id?: string | null;
+  product_line_code?: string | null;
+  product_line_name?: string | null;
+  batch_no: string;
+  name: string;
+  production_date?: string | null;
+  description?: string | null;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ProductMasterCatalog {
+  product_lines: ProductLine[];
+  product_skus: ProductSku[];
+  product_batches: ProductBatch[];
+}
+
+export interface ProductLinePayload {
+  code: string;
+  name: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export interface ProductSkuPayload {
+  product_line_id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export interface ProductBatchPayload {
+  product_sku_id: string;
+  batch_no: string;
+  name?: string | null;
+  production_date?: string | null;
+  description?: string | null;
   is_active?: boolean;
 }
 

@@ -94,13 +94,30 @@ class MeetingAiService:
     async def _list_recent_messages(self, room_id: str, limit: int):
         list_recent = getattr(self._repo, "list_recent_messages", None)
         if list_recent:
-            return await list_recent(org_id=self._org_id, room_id=room_id, limit=limit)
-        messages = await self._repo.list_messages(
-            org_id=self._org_id,
-            room_id=room_id,
-            after_seq=0,
-            limit=limit,
-        )
+            try:
+                return await list_recent(
+                    org_id=self._org_id,
+                    room_id=room_id,
+                    limit=limit,
+                    visible_user_id=self._user_id,
+                )
+            except TypeError:
+                return await list_recent(org_id=self._org_id, room_id=room_id, limit=limit)
+        try:
+            messages = await self._repo.list_messages(
+                org_id=self._org_id,
+                room_id=room_id,
+                after_seq=0,
+                limit=limit,
+                visible_user_id=self._user_id,
+            )
+        except TypeError:
+            messages = await self._repo.list_messages(
+                org_id=self._org_id,
+                room_id=room_id,
+                after_seq=0,
+                limit=limit,
+            )
         return messages[-limit:]
 
     async def _call_llm(
@@ -243,7 +260,8 @@ class MeetingAiService:
         next_metadata = {
             **(metadata_json or {}),
             **response_metadata,
-        } or None
+            "private_recipient_user_id": self._user_id,
+        }
         message = await self._repo.create_message(
             org_id=self._org_id,
             room_id=room_id,
@@ -264,6 +282,7 @@ class MeetingAiService:
                 "event": "message_created",
                 "room_id": room_id,
                 "message": response.model_dump(),
+                "private_user_ids": [self._user_id],
             },
         )
         return response

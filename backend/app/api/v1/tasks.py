@@ -67,8 +67,11 @@ async def create_task(
     service = TaskService(db, current.org_id)
     task = await service.create_task(
         created_by=current.user_id,
-        product_id=payload.product_id,
-        spec_code=payload.spec_code,
+        product_id=payload.product_id or "",
+        spec_code=payload.spec_code or "",
+        product_sku_id=payload.product_sku_id,
+        batch_id=payload.batch_id,
+        inspection_standard_id=payload.inspection_standard_id,
         image_urls=payload.image_urls,
         image_items=payload.image_items,
         priority=payload.priority,

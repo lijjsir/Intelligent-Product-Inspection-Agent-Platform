@@ -45,10 +45,7 @@ export const useAuthStore = defineStore("auth", () => {
   const defaultWorkspace = ref(readStoredValue(DEFAULT_WORKSPACE_KEY) || WORKSPACE_APP);
 
   function deriveWorkspacesFromRoles(rs: string[]) {
-    const workspacesForRoles: string[] = [];
-    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_USER) || rs.includes(ROLE_EXPERT)) {
-      workspacesForRoles.push(WORKSPACE_APP);
-    }
+    const workspacesForRoles: string[] = [WORKSPACE_APP];
     if (
       rs.includes(ROLE_ADMIN)
       || rs.includes(ROLE_APP_DEVELOPER)
@@ -57,7 +54,7 @@ export const useAuthStore = defineStore("auth", () => {
     ) {
       workspacesForRoles.push(WORKSPACE_OPS);
     }
-    if (rs.includes(ROLE_ADMIN)) {
+    if (rs.includes(ROLE_ADMIN) || rs.includes(ROLE_ALGORITHM_ENGINEER)) {
       workspacesForRoles.push(WORKSPACE_GOVERNANCE);
     }
     return Array.from(new Set(workspacesForRoles));
@@ -68,7 +65,7 @@ export const useAuthStore = defineStore("auth", () => {
   }
   {
     const derived = deriveWorkspacesFromRoles(roles.value);
-    workspaces.value = Array.from(new Set([...(workspaces.value || []), ...derived]));
+    workspaces.value = workspaces.value.length ? [...workspaces.value] : derived;
     if (!workspaces.value.length) {
       workspaces.value = [WORKSPACE_APP];
     }
@@ -94,7 +91,7 @@ export const useAuthStore = defineStore("auth", () => {
     capabilities.value = [...(session.capabilities || [])];
     const sessionWorkspaces = [...(session.workspaces || [])];
     const derivedWorkspaces = deriveWorkspacesFromRoles(roles.value);
-    workspaces.value = Array.from(new Set([...(sessionWorkspaces.length ? sessionWorkspaces : [WORKSPACE_APP]), ...derivedWorkspaces]));
+    workspaces.value = sessionWorkspaces.length ? sessionWorkspaces : derivedWorkspaces;
     defaultWorkspace.value = session.default_workspace || workspaces.value[0] || WORKSPACE_APP;
 
     setStoredValue(TOKEN_KEY, token.value);
@@ -175,6 +172,9 @@ export const useAuthStore = defineStore("auth", () => {
       return "/governance/admin/users";
     }
     if (r === ROLE_ALGORITHM_ENGINEER) {
+      if (defaultWorkspace.value === WORKSPACE_GOVERNANCE) {
+        return "/governance/admin/models";
+      }
       return "/ops/data/import";
     }
     if (r === ROLE_APP_DEVELOPER) {

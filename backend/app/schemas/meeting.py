@@ -150,10 +150,17 @@ class MeetingContextPreviewResponse(BaseModel):
     room_role: str
     allowed_domains: list[str] = []
     denied_domains: list[str] = []
+    effective_domains: list[str] = []
+    room_configured_domains: list[str] = []
+    sensitive_domains: list[str] = []
+    denied_reasons: dict[str, str] = Field(default_factory=dict)
     agent_permissions: list[dict] = []
     query_examples: list[str] = []
     guardrails: list[str] = []
     business_context: MeetingBusinessContext = Field(default_factory=MeetingBusinessContext)
+    share_policy: dict = Field(default_factory=dict)
+    conflict_rules: dict = Field(default_factory=dict)
+    visibility_rules: dict = Field(default_factory=dict)
 
 
 class MeetingBusinessContextUpdateRequest(BaseModel):
@@ -178,6 +185,10 @@ class MeetingAgentQueryAuditResponse(BaseModel):
     memory_reads: list[dict] = []
     redacted_fields: list[str] = []
     decision: str = "allowed"
+    response_visibility: str = "room"
+    redaction_level: str = "none"
+    denied_reasons: dict[str, str] = Field(default_factory=dict)
+    conflict_ref_id: str | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
@@ -187,6 +198,9 @@ class MeetingMemoryScopeRequest(BaseModel):
     include_meeting: bool = True
     include_confirmed: bool = True
     include_personal_authorized: bool = False
+    include_user: bool = False
+    include_agent: bool = True
+    include_org_space: bool = True
 
 
 class MeetingAgentRunRequest(BaseModel):
@@ -199,7 +213,7 @@ class MeetingAgentRunRequest(BaseModel):
 
 class MeetingMemorySourceResponse(BaseModel):
     memory_id: str
-    scope: str = "meeting"
+    scope: str = "meeting_room"
     title: str = ""
     summary: str = ""
 
@@ -212,7 +226,7 @@ class MeetingCandidateMemoryResponse(BaseModel):
     memory_type: str = "decision"
     status: str = "candidate"
     memory_category: str = "meeting_memory"
-    recommended_scope: str = "meeting"
+    recommended_scope: str = "meeting_room"
     recommended_scope_id: str | None = None
     source_refs: list[dict] = []
     business_context: dict | None = None
@@ -224,8 +238,16 @@ class MeetingCandidateMemoryResponse(BaseModel):
     risk_level: str | None = None
     recommended_actions: list[str] = []
     source_room_id: str | None = None
+    source_spans: list[dict] = []
+    object_resolution_status: str = "unresolved"
+    object_candidates: list[dict] = []
+    value_score: float | None = None
+    dedupe_key: str | None = None
+    related_memory_ids: list[str] = []
+    extraction_reason: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
+    qdl_json: dict | None = None
     created_at: datetime | None = None
 
 
@@ -235,6 +257,10 @@ class MeetingAgentRunResponse(BaseModel):
     message: MeetingMessageResponse
     memory_sources: list[MeetingMemorySourceResponse] = []
     candidate_memories: list[MeetingCandidateMemoryResponse] = []
+    response_visibility: str = "room"
+    escalation_required: bool = False
+    conflict_status: str | None = None
+    conflict_ref_id: str | None = None
 
 
 class MeetingMemoryExtractRequest(BaseModel):
@@ -249,7 +275,7 @@ class MeetingMemoryResponse(BaseModel):
     summary: str = ""
     memory_type: str
     status: str
-    scope: str = "meeting"
+    scope: str = "meeting_room"
     scope_type: str | None = None
     scope_id: str | None = None
     memory_category: str = "meeting_memory"
@@ -265,10 +291,18 @@ class MeetingMemoryResponse(BaseModel):
     risk_level: str | None = None
     recommended_actions: list[str] = []
     source_room_id: str | None = None
+    source_spans: list[dict] = []
+    object_resolution_status: str | None = None
+    object_candidates: list[dict] = []
+    value_score: float | None = None
+    dedupe_key: str | None = None
+    related_memory_ids: list[str] = []
+    extraction_reason: str | None = None
     publish_reason: str | None = None
     version_parent_id: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
+    qdl_json: dict | None = None
     created_by: str | None = None
     confirmed_by: str | None = None
     confirmed_at: datetime | None = None
@@ -279,10 +313,13 @@ class MeetingMemoryResponse(BaseModel):
 class MeetingMemoryUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     content: str | None = Field(default=None, min_length=1, max_length=4000)
-    scope: str = Field(default="meeting", pattern="^(meeting|inspection_task|product|standard|workspace|batch)$")
+    scope: str = Field(default="meeting_room", pattern="^(meeting|meeting_room|collab_thread|user|agent|org_space|workspace|organization)$")
     scope_id: str | None = Field(default=None, min_length=1, max_length=128)
     publish_reason: str | None = Field(default=None, max_length=1000)
     is_business_memory: bool | None = None
+    affected_objects: dict | None = None
+    object_resolution_status: str | None = Field(default=None, pattern="^(resolved|ambiguous|unresolved)$")
+    related_memory_ids: list[str] | None = None
 
 
 class MeetingMemoryDisputeRequest(BaseModel):
@@ -291,9 +328,53 @@ class MeetingMemoryDisputeRequest(BaseModel):
 
 
 class MeetingMemoryTransferRequest(BaseModel):
-    to_scope_type: str = Field(default="meeting_room", pattern="^(meeting_room|inspection_task|product|standard|workspace|batch)$")
+    to_scope_type: str = Field(default="meeting_room", pattern="^(meeting|meeting_room|collab_thread|user|agent|org_space|workspace|organization)$")
     to_scope_id: str = Field(default="current", min_length=1, max_length=128)
     transfer_reason: str | None = Field(default=None, max_length=1000)
+
+
+class MeetingMemoryShareRequest(BaseModel):
+    target_scope_type: str = Field(default="meeting_room", pattern="^(meeting|meeting_room|collab_thread|user|agent|org_space|workspace|organization)$")
+    target_scope_id: str = Field(default="current", min_length=1, max_length=128)
+    share_reason: str | None = Field(default=None, max_length=1000)
+
+
+class MeetingConflictEventResponse(BaseModel):
+    id: str
+    room_id: str
+    conflict_type: str
+    resource_key: str
+    status: str
+    initiator_user_id: str
+    workflow_run_id: str | None = None
+    related_message_ids: list[str] = []
+    candidate_actions: list[dict] = []
+    selected_action: str | None = None
+    resolved_by: str | None = None
+    resolved_at: datetime | None = None
+    metadata_json: dict | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MeetingConflictResolveRequest(BaseModel):
+    selected_action: str = Field(..., pattern="^(approve|queue|reject|candidate_only)$")
+
+
+class MeetingMemoryShareApprovalResponse(BaseModel):
+    id: str
+    memory_id: str
+    from_scope_type: str
+    from_scope_id: str
+    to_scope_type: str
+    to_scope_id: str
+    transfer_reason: str | None = None
+    status: str
+    operator_id: str | None = None
+    memory_title: str = ""
+    can_approve: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class MeetingActionItemCreateRequest(BaseModel):

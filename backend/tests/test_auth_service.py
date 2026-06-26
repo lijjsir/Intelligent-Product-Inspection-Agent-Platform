@@ -204,3 +204,38 @@ async def test_login_success_ignores_missing_auth_logs_table(monkeypatch):
     _, access, refresh = await svc.login("org-1", "alice", "pw")
     assert access == "access"
     assert refresh == "refresh"
+
+
+@pytest.mark.asyncio
+async def test_login_success_ignores_auth_log_write_failure(monkeypatch):
+    fake_user_repo = FakeUserRepo(None)
+    fake_org_repo = FakeOrgRepo(None)
+    fake_org_repo.orgs["org-1"] = FakeOrg(id="org-1", is_active=True)
+    fake_user_repo.users[("org-1", "alice")] = FakeUser(
+        id="u1",
+        org_id="org-1",
+        username="alice",
+        password_hash="hashed",
+        role="admin",
+        is_active=True,
+    )
+
+    class FailingAuthLogService:
+        def __init__(self, _session):
+            pass
+
+        async def record_login(self, **_payload):
+            raise RuntimeError("audit store unavailable")
+
+    monkeypatch.setattr(auth_mod, "UserRepository", lambda s: fake_user_repo)
+    monkeypatch.setattr(auth_mod, "OrganizationRepository", lambda s: fake_org_repo)
+    monkeypatch.setattr(auth_mod, "AuthLogService", lambda s: FailingAuthLogService(s))
+    monkeypatch.setattr(auth_mod, "verify_password", lambda p, h: True)
+    monkeypatch.setattr(auth_mod, "create_access_token", lambda **_: "access")
+    monkeypatch.setattr(auth_mod, "create_refresh_token", lambda **_: "refresh")
+
+    svc = auth_mod.AuthService(None)
+    _, access, refresh = await svc.login("org-1", "alice", "pw")
+
+    assert access == "access"
+    assert refresh == "refresh"

@@ -183,7 +183,13 @@ class ChatService:
             return deleted
 
     async def create_stream_session(self, *, resource: str, resource_id: str) -> StreamSessionResponse:
-        require_role("chat" if resource in ("chat", "meeting") else "task", self._current.role)
+        permission_by_resource = {
+            "chat": "chat",
+            "meeting": "meeting",
+            "task": "task",
+            "collab": "collab",
+        }
+        require_role(permission_by_resource.get(resource, "task"), self._current.role)
         async with get_session() as session:
             if resource == "chat":
                 session_repo = ChatSessionRepository(session)
@@ -195,6 +201,9 @@ class ChatService:
                 member = await meeting_repo.get_member(self._org_id, resource_id, self._user_id)
                 if not member:
                     raise ForbiddenError("you are not a member of this meeting room")
+            elif resource == "collab":
+                if resource_id != self._user_id:
+                    raise ForbiddenError("cannot subscribe to another user's collaboration inbox")
             else:
                 task_repo = TaskRepository(session)
                 owner_user_id = self._user_id if self._current.role in (ROLE_USER, ROLE_EXPERT) else None

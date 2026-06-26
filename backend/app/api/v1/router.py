@@ -15,6 +15,7 @@ from app.api.v1 import (
     auth,
     chat,
     billing,
+    collab,
     datasets,
     feedbacks,
     exports,
@@ -23,6 +24,7 @@ from app.api.v1 import (
     organizations,
     paper_templates,
     paper_review_runtime,
+    product_master,
     inspection_specs,
     inspection_standards,
     infrastructure,
@@ -58,6 +60,7 @@ router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(agent_ops.router, tags=["agent-ops"])
 router.include_router(prompt_admin.router, tags=["prompt-admin"])
 router.include_router(chat.router, tags=["chat"])
+router.include_router(collab.router, tags=["collab"])
 router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 router.include_router(algo_workspace.router, tags=["algo-workspace"])
 router.include_router(algo_runtime.router, tags=["algo-runtime"])
@@ -68,6 +71,7 @@ router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
 router.include_router(inspection_standards.router, prefix="/inspection-standards", tags=["inspection-standards"])
 router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
+router.include_router(product_master.router, prefix="/product-master", tags=["product-master"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(infrastructure.router, prefix="/infrastructure", tags=["infrastructure"])
 router.include_router(auth_logs.router, prefix="/auth-logs", tags=["auth-logs"])

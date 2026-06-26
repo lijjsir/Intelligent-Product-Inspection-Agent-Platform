@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from app.core.claims import (
     CAPABILITY_CUSTOM_WORKFLOW,
+    WORKSPACE_APP,
     WORKSPACE_GOVERNANCE,
     WORKSPACE_OPS,
     build_auth_claims,
@@ -823,7 +824,7 @@ def test_build_auth_claims_for_app_developer():
     assert claims.role == "app_developer"
     assert claims.roles == ["app_developer"]
     assert claims.default_workspace == WORKSPACE_OPS
-    assert claims.workspaces == [WORKSPACE_OPS]
+    assert claims.workspaces == [WORKSPACE_APP, WORKSPACE_OPS]
     assert CAPABILITY_CUSTOM_WORKFLOW in claims.capabilities
 
 

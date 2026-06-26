@@ -199,6 +199,15 @@ services:
       retries: 10
       start_period: 20s
 
+  adminer:
+    image: adminer
+    container_name: piap-adminer
+    ports:
+      - "127.0.0.1:18081:8080"
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
   redis:
     image: redis:7
     container_name: piap-redis

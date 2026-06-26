@@ -19,7 +19,7 @@ async def list_inspection_standards(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("inspection_standard_library", current.role)
+    require_role("inspection_standard_library_read", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
     return ResponseEnvelope(data=await service.list_items())
 
@@ -30,7 +30,7 @@ async def get_inspection_standard(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("inspection_standard_library", current.role)
+    require_role("inspection_standard_library_read", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
     return ResponseEnvelope(data=await service.get_item(library_id))
 

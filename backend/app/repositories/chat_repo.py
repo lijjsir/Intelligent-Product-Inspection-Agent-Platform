@@ -158,24 +158,33 @@ class ChatMessageRepository:
         end_date=None,
         limit: int | None = 100,
     ) -> list[ChatMessage]:
-        stmt = (
-            select(ChatMessage)
+        row_limit = min(limit or 1000, 1000)
+        id_stmt = (
+            select(ChatMessage.id)
             .where(
                 ChatMessage.role == "assistant",
                 ChatMessage.deleted_at.is_(None),
             )
             .order_by(ChatMessage.created_at.desc())
+            .limit(row_limit)
         )
         if org_id:
-            stmt = stmt.where(ChatMessage.org_id == org_id)
+            id_stmt = id_stmt.where(ChatMessage.org_id == org_id)
         if start_date:
-            stmt = stmt.where(ChatMessage.created_at >= start_date)
+            id_stmt = id_stmt.where(ChatMessage.created_at >= start_date)
         if end_date:
-            stmt = stmt.where(ChatMessage.created_at <= end_date)
-        if limit:
-            stmt = stmt.limit(limit)
+            id_stmt = id_stmt.where(ChatMessage.created_at <= end_date)
+
+        id_result = await self._session.execute(id_stmt)
+        message_ids = list(id_result.scalars().all())
+        if not message_ids:
+            return []
+
+        stmt = select(ChatMessage).where(ChatMessage.id.in_(message_ids))
         result = await self._session.execute(stmt)
-        return list(result.scalars().all())
+        messages = list(result.scalars().all())
+        position = {message_id: index for index, message_id in enumerate(message_ids)}
+        return sorted(messages, key=lambda message: position.get(message.id, len(position)))
 
     async def update_assistant_message(
         self,
