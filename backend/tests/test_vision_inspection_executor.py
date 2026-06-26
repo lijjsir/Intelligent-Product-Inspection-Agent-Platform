@@ -9,6 +9,7 @@ from agent.router.executors.vision_inspection_executor import VisionInspectionEx
 from agent.router.manager_state import ManagerState
 from agent.router.capabilities.vision_handler import VisionUnderstandingHandler
 from agent.router.manager_loop import ManagerLoop
+from agent.subgraphs.vision_inspection.nodes import normalize_visual_result
 
 
 @pytest.mark.asyncio
@@ -103,6 +104,15 @@ def test_parse_vision_response_accepts_preparsed_model_payload():
             "summary": "图片中有一个红色苹果",
             "objects": ["苹果"],
             "possible_defects": ["表面有轻微斑点"],
+            "defects": [
+                {
+                    "type": "rot",
+                    "confidence": 0.82,
+                    "bbox": [0.2, 0.3, 0.4, 0.25],
+                    "description": "局部腐烂",
+                    "image_index": 0,
+                }
+            ],
             "risk": "low",
             "__meta__": {"model": "vision-model"},
         }
@@ -112,8 +122,69 @@ def test_parse_vision_response_accepts_preparsed_model_payload():
         "summary": "图片中有一个红色苹果",
         "objects": ["苹果"],
         "possible_defects": ["表面有轻微斑点"],
+        "defects": [
+            {
+                "type": "rot",
+                "confidence": 0.82,
+                "bbox": [0.2, 0.3, 0.4, 0.25],
+                "description": "局部腐烂",
+                "image_index": 0,
+            }
+        ],
         "risk": "low",
     }
+
+
+@pytest.mark.asyncio
+async def test_normalize_visual_result_preserves_model_bbox_defects():
+    step = AgentPlanStep(
+        step_id="vision-step-1",
+        owner_agent="vision",
+        capability="vision.inspect",
+        operation="inspect",
+    )
+    image_artifact = artifact(
+        step,
+        "image_understanding",
+        content={
+            "summary": "图片中有一个腐烂苹果",
+            "image_count": 1,
+            "model_result": {
+                "summary": "图片中有一个腐烂苹果",
+                "possible_defects": ["右上区域腐烂"],
+                "defects": [
+                    {
+                        "label": "rot",
+                        "score": 88,
+                        "box": [0.42, 0.18, 0.26, 0.22],
+                        "detail": "右上区域腐烂",
+                    }
+                ],
+            },
+        },
+    )
+
+    state = await normalize_visual_result(
+        {
+            "image_attachments": [{"kind": "image", "url": "data:image/png;base64,abc"}],
+            "legacy_result": [
+                {"status": "success", "summary": "图片中有一个腐烂苹果"},
+                [image_artifact.model_dump(mode="json")],
+            ],
+        }
+    )
+
+    assert state["legacy_result"] is None
+    assert state["visual_inspection_result"]["possible_defects"] == ["右上区域腐烂"]
+    assert state["visual_inspection_result"]["defects"] == [
+        {
+            "type": "rot",
+            "confidence": 0.88,
+            "bbox": [0.42, 0.18, 0.26, 0.22],
+            "description": "右上区域腐烂",
+            "image_index": 0,
+        }
+    ]
 
 
 def test_manager_answer_includes_real_visual_summary():

@@ -8,6 +8,14 @@ import { resultApi, type ReviewSubmit } from "@/api/result.api";
 import { usePermission } from "@/composables/usePermission";
 import { useResultStore } from "@/stores/result.store";
 import { useTaskStore } from "@/stores/task.store";
+import {
+  buildDefectEmptyDescription,
+  buildDefectImageNotice,
+  extractVisualPossibleDefects,
+  extractResultReport,
+  extractStandardEvaluation,
+  shouldShowDefectImagePanel,
+} from "@/views/result-detail-display";
 
 const route = useRoute();
 const router = useRouter();
@@ -100,6 +108,13 @@ function sampleLabel(imageIndex?: number | null): string {
 
 const selectedImageIndex = ref(0);
 const defects = computed(() => currentResult.value?.defects || []);
+const analysisReport = computed(() => extractResultReport(currentResult.value));
+const standardEvaluation = computed(() => extractStandardEvaluation(currentResult.value));
+const standardEvaluationText = computed(() => standardEvaluation.value ? JSON.stringify(standardEvaluation.value, null, 2) : "");
+const defectEmptyDescription = computed(() => buildDefectEmptyDescription(currentResult.value));
+const defectImageNotice = computed(() => buildDefectImageNotice(currentResult.value));
+const visualPossibleDefects = computed(() => extractVisualPossibleDefects(currentResult.value));
+const showDefectImagePanel = computed(() => shouldShowDefectImagePanel(taskImages.value, currentResult.value));
 const hasDefectImageIndex = computed(() => defects.value.some((item) => item.image_index != null));
 const imageDefectGroups = computed(() => {
   return taskImages.value.map((url, index) => {
@@ -194,13 +209,29 @@ async function submitReview() {
         <!-- 主体数据面板 -->
         <div>
           <!-- 缺陷图像可视化 -->
-          <el-card v-if="taskImages.length > 0 && defects.length > 0" shadow="never" class="mb-4">
+          <el-card v-if="analysisReport || standardEvaluation" shadow="never" class="mb-4">
+            <template #header>质量分析报告</template>
+            <pre v-if="analysisReport" class="report-viewer">{{ analysisReport }}</pre>
+            <pre v-else-if="standardEvaluationText" class="json-viewer">{{ standardEvaluationText }}</pre>
+          </el-card>
+
+          <el-card v-if="showDefectImagePanel" shadow="never" class="mb-4">
             <template #header>
               <div class="viewer-header">
                 <span>缺陷可视化标注</span>
-                <span class="viewer-header-meta">共 {{ taskImages.length }} 张图，问题图 {{ erroredImageGroups.length }} 张</span>
+                <span class="viewer-header-meta">
+                  共 {{ taskImages.length }} 张图，坐标缺陷 {{ defects.length }} 个，问题图 {{ erroredImageGroups.length }} 张
+                </span>
               </div>
             </template>
+            <el-alert
+              v-if="defectImageNotice"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="mb-3"
+              :title="defectImageNotice"
+            />
             <div v-if="imageDefectGroups.length > 1" class="image-group-list">
               <button
                 v-for="group in imageDefectGroups"
@@ -215,7 +246,7 @@ async function submitReview() {
               </button>
             </div>
             <el-alert
-              v-if="taskImages.length > 1 && !hasDefectImageIndex"
+              v-if="defects.length > 0 && taskImages.length > 1 && !hasDefectImageIndex"
               type="warning"
               :closable="false"
               class="mb-3"
@@ -227,13 +258,24 @@ async function submitReview() {
               :loading="loading"
               :normalized="true"
             />
+            <div v-if="visualPossibleDefects.length > 0 && defects.length === 0" class="possible-defect-list">
+              <div class="possible-defect-title">模型可能缺陷描述（未返回坐标）</div>
+              <el-tag
+                v-for="item in visualPossibleDefects"
+                :key="item"
+                type="warning"
+                effect="plain"
+              >
+                {{ item }}
+              </el-tag>
+            </div>
           </el-card>
 
           <el-card shadow="never" class="mb-4">
             <template #header>缺陷与推理明细</template>
             <el-tabs type="border-card">
               <el-tab-pane label="缺陷坐标清单 (Defects)">
-                <el-empty v-if="!store.current.defects || store.current.defects.length === 0" description="未检出明确缺陷包裹" />
+                <el-empty v-if="!store.current.defects || store.current.defects.length === 0" :description="defectEmptyDescription" />
                 <div v-else>
                   <div v-if="erroredImageGroups.length > 0" class="error-image-summary">
                     <span class="error-image-summary-label">问题图片</span>
@@ -414,6 +456,40 @@ async function submitReview() {
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
+}
+
+.possible-defect-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+
+.possible-defect-title {
+  width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+}
+
+.report-viewer {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #111827;
+  font-family: inherit;
+  line-height: 1.8;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .json-viewer {

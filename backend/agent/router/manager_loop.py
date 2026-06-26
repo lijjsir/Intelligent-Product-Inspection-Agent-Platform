@@ -1199,7 +1199,7 @@ class ManagerLoop:
                 "trace_id": state.trace_id or state.workflow_run_id or state.request_id,
                 "trace_url": state.trace_url,
                 "workflow_version": "agent_manager_v1",
-                "prompt_version": None,
+                "prompt_version": "agent_manager_prompt_v1",
                 "route_subgraph": "agent_manager",
             },
             "token_usage": list(state.llm_usage_events),

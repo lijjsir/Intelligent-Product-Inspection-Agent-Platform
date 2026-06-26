@@ -32,7 +32,7 @@ export const chatApi = {
   },
 
   sendMessage(sessionId: string, payload: ChatMessageSendRequest) {
-    return http.post<ChatSendResponse>(`/v1/chat/sessions/${sessionId}/messages`, payload, { timeout: 180000 });
+    return http.post<ChatSendResponse>(`/v1/chat/sessions/${sessionId}/messages`, payload, { timeout: 600000 });
   },
 
   cancelMessage(sessionId: string, messageId: string) {
@@ -74,7 +74,7 @@ export const chatApi = {
     }
     return http.post<{ items: ChatAttachment[] }>("/v1/chat/uploads", form, {
       headers: { "Content-Type": "multipart/form-data" },
-      timeout: 180000,
+      timeout: 600000,
     });
   },
 
@@ -97,8 +97,8 @@ export const chatApi = {
       }
     };
     source.onmessage = consume;
-    source.addEventListener("message", consume as EventListener);
     source.addEventListener("ready", consume as EventListener);
+    source.addEventListener("heartbeat", consume as EventListener);
     return source;
   },
 };

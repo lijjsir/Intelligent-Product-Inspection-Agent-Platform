@@ -3,8 +3,45 @@ from __future__ import annotations
 import pytest
 
 from agent.router.errors import AgentRuntimeError
-from agent.subgraphs.quality_analysis.nodes import maybe_persist_task_result
+from agent.subgraphs.quality_analysis.nodes import llm_quality_reasoning, maybe_persist_task_result
 from app.services.quality_result_materialization_service import QualityResultMaterializationService
+
+
+@pytest.mark.asyncio
+async def test_quality_task_prompt_includes_real_context_and_blocks_fabrication(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_run_llm_chat(**kwargs):
+        captured.update(kwargs)
+        return "需人工复核", {"model": "quality-model"}
+
+    monkeypatch.setattr("agent.subgraphs.common.llm_runtime.run_llm_chat", fake_run_llm_chat)
+
+    result = await llm_quality_reasoning(
+        {
+            "response_mode": "inspection_execute",
+            "query": "执行质量检测 task_id=task-1 product_id=screw spec_code=SCREW-A-2026-V1",
+            "visual_inspection_result": {
+                "summary": "图片中是三枚腐烂苹果",
+                "possible_defects": ["右侧苹果大面积腐烂"],
+            },
+            "evidence_packet": {"source_count": 1, "sources": {"rag": {"items": [{"hits": []}]}}},
+            "request": {
+                "ext": {
+                    "task_id": "task-1",
+                    "product_id": "screw",
+                    "spec_code": "SCREW-A-2026-V1",
+                }
+            },
+        }
+    )
+
+    prompt = captured["messages"][0]["content"]
+    assert "禁止编造任何实测值" in prompt
+    assert "图片内容与任务产品/检测标准不一致" in prompt
+    assert "三枚腐烂苹果" in prompt
+    assert '"product_id": "screw"' in prompt
+    assert result["llm_answer"] == "需人工复核"
 
 
 @pytest.mark.asyncio
@@ -73,6 +110,18 @@ async def test_materialization_builds_task_and_token_usage_from_graph_state():
                 "risk_score": 0.28,
                 "confidence": 0.72,
             },
+            "visual_inspection_result": {
+                "summary": "图片中有一处腐蚀",
+                "defects": [
+                    {
+                        "type": "corrosion",
+                        "confidence": 0.91,
+                        "bbox": [0.12, 0.2, 0.3, 0.24],
+                        "description": "表面腐蚀",
+                        "image_index": 0,
+                    }
+                ],
+            },
             "llm_meta": {
                 "model": "quality-model",
                 "trace_id": "trace-1",
@@ -94,6 +143,16 @@ async def test_materialization_builds_task_and_token_usage_from_graph_state():
     assert persistable.result is not None
     assert persistable.result.task_id == "task-1"
     assert persistable.result.llm_model == "quality-model"
+    assert persistable.result.reasoning_chain is not None
+    assert persistable.result.reasoning_chain["defects"] == [
+        {
+            "type": "corrosion",
+            "confidence": 0.91,
+            "bbox": [0.12, 0.2, 0.3, 0.24],
+            "description": "表面腐蚀",
+            "image_index": 0,
+        }
+    ]
     assert persistable.quality_trace is not None
     assert persistable.quality_trace.workflow_version == "quality_analysis_graph_v1"
     assert persistable.quality_trace.prompt_version == "quality_analysis_prompt_v1"

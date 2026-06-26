@@ -121,6 +121,9 @@ class QualityAnalysisExecutor(GraphExecutor):
             result = await QualityAnalysisGraph().run(graph_state)
 
             status = result.get("status", "success")
+            # Normalize: only allow valid AgentArtifact status values
+            _VALID_ARTIFACT_STATUSES = {"success", "empty", "failed", "blocked"}
+            normalized_status = status if status in _VALID_ARTIFACT_STATUSES else "success"
             summary = result.get("summary") or result.get("answer") or "质量分析完成"
             answer = result.get("answer") or ""
             needs_user_input = result.get("needs_user_input", False)
@@ -128,7 +131,7 @@ class QualityAnalysisExecutor(GraphExecutor):
             quality_artifact = self._artifact(
                 step,
                 "quality_final_assessment",
-                status="blocked" if needs_user_input else status,
+                status="blocked" if needs_user_input else normalized_status,
                 content={
                     "answer": answer,
                     "summary": summary,
@@ -170,7 +173,7 @@ class QualityAnalysisExecutor(GraphExecutor):
             composed_artifact = self._artifact(
                 step,
                 "composed_response",
-                status="blocked" if needs_user_input else status,
+                status="blocked" if needs_user_input else normalized_status,
                 content=composed,
                 summary=summary,
                 needs_user_input=needs_user_input,
@@ -178,7 +181,7 @@ class QualityAnalysisExecutor(GraphExecutor):
 
             return self._observation(
                 step,
-                status="blocked" if needs_user_input else status,
+                status="blocked" if needs_user_input else normalized_status,
                 summary=summary,
                 artifacts=[quality_artifact, composed_artifact],
             ), [quality_artifact, composed_artifact]
@@ -213,13 +216,16 @@ class QualityAnalysisExecutor(GraphExecutor):
             result = await QualityAnalysisGraph().run(graph_state)
 
             status = result.get("status", "success")
+            # Normalize: only allow valid AgentArtifact status values
+            _VALID_ARTIFACT_STATUSES = {"success", "empty", "failed", "blocked"}
+            normalized_status = status if status in _VALID_ARTIFACT_STATUSES else "success"
             summary = result.get("summary") or result.get("answer") or "正式质检执行完成"
             answer = result.get("answer") or ""
 
             art = self._artifact(
                 step,
                 "inspection_result",
-                status="blocked" if status == "blocked" else status,
+                status="blocked" if normalized_status == "blocked" else normalized_status,
                 needs_user_input=status == "blocked",
                 content={
                     "answer": answer,
@@ -254,7 +260,7 @@ class QualityAnalysisExecutor(GraphExecutor):
             )
             return self._observation(
                 step,
-                status="blocked" if status == "blocked" else status,
+                status="blocked" if normalized_status == "blocked" else normalized_status,
                 summary=summary,
                 artifacts=[art],
             ), [art]

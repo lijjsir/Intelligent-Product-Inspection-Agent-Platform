@@ -11,7 +11,7 @@ export interface ChatSession {
   updated_at?: string | null;
 }
 
-export type ChatStreamPhase = "idle" | "connecting" | "streaming" | "closing";
+export type ChatStreamPhase = "idle" | "connecting" | "streaming" | "polling" | "reconnecting" | "closing";
 
 export interface ChatAttachment {
   id: string;
@@ -439,12 +439,21 @@ export interface ChatSendResponse {
 }
 
 export interface ChatStreamEvent {
-  event: "run_started" | "message_delta" | "message_final" | "message_patch" | "quality_signal" | "run_failed";
+  event:
+    | "ready"
+    | "heartbeat"
+    | "run_started"
+    | "message_delta"
+    | "message_final"
+    | "message_patch"
+    | "quality_signal"
+    | "run_failed";
   session_id: string;
   message_id?: string | null;
   workflow_run_id?: string | null;
   delta?: string | null;
   content?: string | null;
+  message?: string | null;
   quality?: ChatMessagePayload["quality"] | null;
   payload?: ChatMessagePayload | null;
   message_type?: string | null;

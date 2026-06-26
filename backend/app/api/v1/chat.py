@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.datetime import utcnow_iso
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import require_role
 from app.services.object_storage.factory import build_object_storage
@@ -158,14 +159,26 @@ async def stream_session(
         raise ForbiddenError("invalid stream token")
 
     async def event_iter() -> AsyncIterator[str]:
-        yield 'event: ready\ndata: {"message":"stream_connected"}\n\n'
+        ready = {
+            "event": "ready",
+            "session_id": session_id,
+            "message": "stream_connected",
+            "ts": utcnow_iso(),
+        }
+        yield f"event: ready\ndata: {json.dumps(ready, ensure_ascii=False)}\n\n"
         service = ChatService(org_id=current.org_id, user_id=current.user_id, current=current)
         stream = service.stream_events(session_id).__aiter__()
         while True:
             try:
-                event = await asyncio.wait_for(stream.__anext__(), timeout=45.0)
+                event = await asyncio.wait_for(stream.__anext__(), timeout=8.0)
             except asyncio.TimeoutError:
-                yield ": keepalive\n\n"
+                heartbeat = {
+                    "event": "heartbeat",
+                    "session_id": session_id,
+                    "message": "后台仍在处理，实时连接保持中...",
+                    "ts": utcnow_iso(),
+                }
+                yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
                 continue
             except StopAsyncIteration:
                 break

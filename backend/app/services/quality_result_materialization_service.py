@@ -11,6 +11,7 @@ from agent.contracts.quality_contracts import (
     TaskAggregate,
     TokenUsageEvent,
 )
+from agent.vision.heuristic_detector import extract_defects
 
 QUALITY_ANALYSIS_WORKFLOW_VERSION = "quality_analysis_graph_v1"
 QUALITY_ANALYSIS_PROMPT_VERSION = "quality_analysis_prompt_v1"
@@ -66,6 +67,8 @@ class QualityResultMaterializationService:
         image_urls = list(final_state.get("image_urls") or ext.get("image_urls") or metadata.get("image_urls") or [])
         image_items = list(final_state.get("image_items") or ext.get("image_items") or metadata.get("image_items") or [])
         image_count = max(len(image_urls), len(image_items))
+        visual_result = final_state.get("visual_inspection_result")
+        defects = extract_defects(visual_result, image_count=image_count)
         model_key = str(
             llm_meta.get("model")
             or metadata.get("model_key")
@@ -84,6 +87,10 @@ class QualityResultMaterializationService:
                 "standard_evaluation": standard_evaluation,
                 "report": report,
                 "llm_prompt": llm_prompt,
+                "evidence_packet": final_state.get("evidence_packet"),
+                "visual_inspection_result": visual_result,
+                "lab_detection_result": final_state.get("lab_detection_result"),
+                "defects": defects,
             },
         )
 

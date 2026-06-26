@@ -255,10 +255,16 @@ class ManagerPolicy:
                 entities=self._extract_entities(query, state.attachments),
             )
         if state.surface != "quality_task" and "image" in attachment_kinds:
+            needs = ["vision.inspect", "quality.final_analyze"]
+            # When user has selected a RAG space, also retrieve evidence
+            # so the quality analysis can reference inspection standards.
+            # Insert after vision so visual result can guide RAG retrieval.
+            if state.selected_rag_space or self._matches(query, RAG_PATTERNS):
+                needs.insert(1, "evidence.arbitrate")
             return Understanding(
                 goal="对图片进行非正式理解和初步判断",
                 intent="vision_inspection",
-                needs=["vision.inspect", "quality.final_analyze"],
+                needs=needs,
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
             )
@@ -442,18 +448,20 @@ class ManagerPolicy:
         if state.surface != "quality_task":
             return [previous_step_id] if previous_step_id else []
 
+        # Execution order: vision → evidence → quality.
+        vision_step = step_ids_by_capability.get("vision.inspect")
         evidence_step = step_ids_by_capability.get("evidence.arbitrate")
+        if capability == "evidence.arbitrate":
+            return [vision_step] if vision_step else []
         if capability in {"vision.inspect", "lab.early_risk.assess"}:
-            return [evidence_step] if evidence_step else []
+            return []
         if capability == "quality.inspection.execute":
-            branch_steps = [
-                step_ids_by_capability[key]
-                for key in ("vision.inspect", "lab.early_risk.assess")
-                if key in step_ids_by_capability
-            ]
-            if branch_steps:
-                return branch_steps
-            return [evidence_step] if evidence_step else []
+            deps: list[str] = []
+            if evidence_step:
+                deps.append(evidence_step)
+            if vision_step and vision_step not in deps:
+                deps.append(vision_step)
+            return deps
         return [previous_step_id] if previous_step_id else []
 
     @classmethod
@@ -610,7 +618,12 @@ class ManagerPolicy:
         )
 
     def _quality_task_needs(self, state: ManagerState) -> list[str]:
-        needs = ["evidence.arbitrate"]
+        """Build capability needs in execution order: vision → evidence → quality.
+
+        Visual inspection runs first so the image description can guide RAG
+        retrieval, then both results feed into the final quality analysis.
+        """
+        needs: list[str] = []
         ext = dict(state.request_ext or {})
 
         has_image = any(attachment_kind(item) == "image" for item in state.attachments)
@@ -618,6 +631,8 @@ class ManagerPolicy:
 
         if has_image and not skip_vision:
             needs.append("vision.inspect")
+
+        needs.append("evidence.arbitrate")
 
         if self._has_lab_signal(state):
             needs.append("lab.early_risk.assess")

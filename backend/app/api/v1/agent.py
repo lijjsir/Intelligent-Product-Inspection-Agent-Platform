@@ -106,7 +106,12 @@ async def stream_task_events(
 
     async def event_iter() -> AsyncIterator[str]:
         """按 SSE 协议格式输出历史事件和后续实时事件。"""
-        yield "event: ready\ndata: {\"message\":\"stream_connected\"}\n\n"
+        ready = {
+            "type": "ready",
+            "message": "stream_connected",
+            "ts": utcnow_iso(),
+        }
+        yield f"event: ready\ndata: {json.dumps(ready, ensure_ascii=False)}\n\n"
         last_event_id: str | None = None
         idle_ticks = 0
         while True:
@@ -125,8 +130,13 @@ async def stream_task_events(
                     yield f"id: {event.id}\nevent: message\ndata: {payload}\n\n"
             else:
                 idle_ticks += 1
-                if idle_ticks % 20 == 0:
-                    yield ": heartbeat\n\n"
+                if idle_ticks % 8 == 0:
+                    heartbeat = {
+                        "type": "heartbeat",
+                        "message": "后台仍在处理，实时连接保持中...",
+                        "ts": utcnow_iso(),
+                    }
+                    yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.75)
 
     return StreamingResponse(event_iter(), media_type="text/event-stream")

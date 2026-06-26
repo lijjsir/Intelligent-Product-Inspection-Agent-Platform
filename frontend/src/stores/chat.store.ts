@@ -17,10 +17,10 @@ import type {
 import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
-const POLL_TIMEOUT_MS = 25000;
-const PAPER_REVIEW_POLL_TIMEOUT_MS = 180000;
+const POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const PAPER_REVIEW_POLL_TIMEOUT_MS = 30 * 60 * 1000;
 const TRUST_POLL_INTERVAL_MS = 2500;
-const TRUST_POLL_TIMEOUT_MS = 35000;
+const TRUST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
 
 const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
@@ -124,6 +124,9 @@ export const useChatStore = defineStore("chat", () => {
   const messages = ref<ChatMessage[]>([]);
   const streamPhase = ref<ChatStreamPhase>("idle");
   const streamConnected = ref(false);
+  const waitStartedAt = ref<number | null>(null);
+  const lastStreamEventAt = ref<number | null>(null);
+  const streamStatusMessage = ref("");
   const eventSource = ref<EventSource | null>(null);
   const initPromise = ref<Promise<void> | null>(null);
   const streamPromise = ref<Promise<void> | null>(null);
@@ -233,6 +236,26 @@ export const useChatStore = defineStore("chat", () => {
     return ["failed", "done", "finished", "completed", "success"].includes(status);
   }
 
+  function beginWaiting(message: string) {
+    const now = Date.now();
+    waitStartedAt.value = now;
+    lastStreamEventAt.value = now;
+    streamStatusMessage.value = message;
+  }
+
+  function markStreamActivity(message?: string | null) {
+    lastStreamEventAt.value = Date.now();
+    if (message && message.trim()) {
+      streamStatusMessage.value = message.trim();
+    }
+  }
+
+  function clearWaitingStatus() {
+    waitStartedAt.value = null;
+    lastStreamEventAt.value = null;
+    streamStatusMessage.value = "";
+  }
+
   function patchMessage(event: ChatStreamEvent) {
     if (!event.message_id) return;
     const current = messages.value.find((item) => item.id === event.message_id);
@@ -277,6 +300,7 @@ export const useChatStore = defineStore("chat", () => {
     activeAssistantMessageId.value = null;
     loading.value = false;
     streamPhase.value = "idle";
+    clearWaitingStatus();
   }
 
   function stopStreamForIdle() {
@@ -303,10 +327,43 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
-  function startFallbackPolling(sessionId: string, messageId: string) {
+  function markAssistantWaitTimeout(messageId: string) {
+    const current = messages.value.find((item) => item.id === messageId);
+    if (!current || isTerminalAssistantMessage(current)) return;
+    const timeoutText = current.content
+      ? `${current.content}\n\n[等待提示] 前端已超过最长等待时间，未收到后台最终结果。请稍后刷新会话查看真实结果，或重新发送问题。`
+      : "前端已超过最长等待时间，未收到后台最终结果。请稍后刷新会话查看真实结果，或重新发送问题。";
+    upsertMessage({
+      ...current,
+      message_type: "error",
+      content: timeoutText,
+      payload: {
+        ...(current.payload || {}),
+        status: "timeout",
+        message_type: "error",
+        error_code: "FRONTEND_RESPONSE_WAIT_TIMEOUT",
+        error: "未收到后台最终结果，不能生成替代结果。",
+      },
+    });
+    sortMessages();
+  }
+
+  function startFallbackPolling(
+    sessionId: string,
+    messageId: string,
+    reason: "reconcile" | "stream_error" = "reconcile",
+  ) {
     if (!messageId || pollTimer.value != null) return;
+    const now = Date.now();
     pollDeadline.value = Date.now() + POLL_TIMEOUT_MS;
-    streamPhase.value = "streaming";
+    if (!waitStartedAt.value) waitStartedAt.value = now;
+    if (!lastStreamEventAt.value) lastStreamEventAt.value = now;
+    if (reason === "stream_error" || !streamConnected.value) {
+      streamPhase.value = "polling";
+      streamStatusMessage.value = "实时连接暂不可用，正在轮询后台结果...";
+    } else if (!streamStatusMessage.value) {
+      streamStatusMessage.value = "后台正在处理，实时连接保持中...";
+    }
 
     const tick = async () => {
       if (!session.value || session.value.id !== sessionId || activeAssistantMessageId.value !== messageId) {
@@ -319,6 +376,7 @@ export const useChatStore = defineStore("chat", () => {
         pollDeadline.value = Math.max(pollDeadline.value, Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS);
       }
       if (Date.now() > pollDeadline.value) {
+        markAssistantWaitTimeout(messageId);
         stopPolling();
         finishActiveSend();
         return;
@@ -330,6 +388,9 @@ export const useChatStore = defineStore("chat", () => {
       pollInFlight.value = true;
       try {
         const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        if (rows.data.data.length > 0) {
+          markStreamActivity("已从后台同步到最新回复状态。");
+        }
         appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
         if (checkAndFinalizeByMessage(messageId)) {
@@ -624,6 +685,7 @@ export const useChatStore = defineStore("chat", () => {
 
     loading.value = true;
     streamPhase.value = "connecting";
+    beginWaiting("正在建立实时连接...");
     let streamStarted = false;
     try {
       await ensureStream(sessionId);
@@ -670,12 +732,13 @@ export const useChatStore = defineStore("chat", () => {
         },
       ]);
       activeAssistantMessageId.value = data.data.assistant_message_id;
+      markStreamActivity("后台已接收请求，等待智能体输出...");
       clearPendingAttachments();
       await fetchSessions();
       // Always reconcile the active response from the database. SSE is the
       // low-latency path, but an already-open connection can still miss the
       // final event during a proxy reconnect or backend reload.
-      startFallbackPolling(sessionId, data.data.assistant_message_id);
+      startFallbackPolling(sessionId, data.data.assistant_message_id, streamStarted ? "reconcile" : "stream_error");
       if (streamStarted && eventSource.value && !checkAndFinalizeByMessage(data.data.assistant_message_id)) {
         streamPhase.value = streamConnected.value ? "streaming" : "connecting";
       }
@@ -762,7 +825,31 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function applyStreamEvent(event: ChatStreamEvent) {
-    if (!session.value || event.session_id !== session.value.id || !event.message_id) return;
+    if (!session.value || event.session_id !== session.value.id) return;
+    if (event.event === "ready") {
+      markStreamActivity(event.message || "实时连接已建立，等待后台输出...");
+      if (streamPhase.value !== "polling") {
+        streamPhase.value = streamConnected.value ? "streaming" : "connecting";
+      }
+      return;
+    }
+    if (event.event === "heartbeat") {
+      markStreamActivity(event.message || "后台仍在处理，实时连接保持中...");
+      if (streamPhase.value !== "polling") {
+        streamPhase.value = streamConnected.value ? "streaming" : "connecting";
+      }
+      return;
+    }
+    markStreamActivity(
+      event.event === "message_delta"
+        ? "正在输出回复..."
+        : event.event === "run_started"
+          ? "智能体已开始分析..."
+          : event.event === "message_final" || event.event === "run_failed"
+            ? "正在整理回复..."
+            : "收到后台进度更新...",
+    );
+    if (!event.message_id) return;
     const current = messages.value.find((item) => item.id === event.message_id);
     const basePayload: ChatMessagePayload = {
       ...(current?.payload || {}),
@@ -784,6 +871,9 @@ export const useChatStore = defineStore("chat", () => {
         created_at: current?.created_at || event.ts || new Date().toISOString(),
       });
       sortMessages();
+      return;
+    }
+    if (event.event === "run_started") {
       return;
     }
     if (event.event === "message_patch") {
@@ -847,13 +937,15 @@ export const useChatStore = defineStore("chat", () => {
       source.onopen = () => {
         streamConnected.value = true;
         streamPhase.value = "streaming";
+        markStreamActivity("实时连接已建立，等待后台输出...");
       };
       source.onerror = () => {
         streamConnected.value = false;
         closeStreamConnection();
         if (activeAssistantMessageId.value) {
-          streamPhase.value = "streaming";
-          startFallbackPolling(sessionId, activeAssistantMessageId.value);
+          streamPhase.value = "polling";
+          markStreamActivity("实时连接中断，正在轮询后台结果...");
+          startFallbackPolling(sessionId, activeAssistantMessageId.value, "stream_error");
           return;
         }
         streamPhase.value = "idle";
@@ -874,6 +966,9 @@ export const useChatStore = defineStore("chat", () => {
   return {
     loading,
     streamPhase,
+    waitStartedAt,
+    lastStreamEventAt,
+    streamStatusMessage,
     sessions,
     session,
     messages,

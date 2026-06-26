@@ -177,7 +177,7 @@ class ChatService:
                 org_scope = None if self._current.role == ROLE_ADMIN else self._org_id
                 if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
-        expires_at = utcnow() + timedelta(minutes=10)
+        expires_at = utcnow() + timedelta(minutes=30)
         token = create_stream_token(
             self._user_id,
             extra={
@@ -192,7 +192,7 @@ class ChatService:
                 "resource": resource,
                 "resource_id": resource_id,
             },
-            ttl_seconds=600,
+            ttl_seconds=1800,
         )
         return StreamSessionResponse(
             stream_token=token,

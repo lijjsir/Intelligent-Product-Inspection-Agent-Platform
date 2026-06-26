@@ -6,6 +6,7 @@ from langgraph.runtime import Runtime
 
 from agent.router.errors import make_agent_error
 from agent.subgraphs.vision_inspection.state import VisionInspectionContext
+from agent.vision.heuristic_detector import extract_defects
 
 
 async def input_adapter(state: dict[str, Any]) -> dict[str, Any]:
@@ -140,13 +141,17 @@ async def normalize_visual_result(state: dict[str, Any]) -> dict[str, Any]:
         or obs_dict.get("summary")
         or ""
     ).strip()
+    defects = (
+        extract_defects(legacy_content, image_count=image_count)
+        or extract_defects(model_result, image_count=image_count)
+    )
 
     visual_result = {
         "status": obs_dict.get("status", "success"),
         "summary": model_summary,
         "answer": str(legacy_content.get("answer") or model_summary),
         "image_count": int(legacy_content.get("image_count") or image_count),
-        "defects": legacy_content.get("defects") or [],
+        "defects": defects,
         "objects": model_result.get("objects") or legacy_content.get("objects") or [],
         "possible_defects": (
             model_result.get("possible_defects")

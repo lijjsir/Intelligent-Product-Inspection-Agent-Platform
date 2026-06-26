@@ -82,7 +82,7 @@ class QualityAnalysisGraph:
     async def run(self, state: QualityAnalysisState | dict[str, Any]) -> dict:
         started_at = perf_counter()
         state = dict(state)
-        state.setdefault("status", "running")
+        state.setdefault("status", "success")
         state.setdefault("summary", "")
 
         result = await self._graph.ainvoke(state)

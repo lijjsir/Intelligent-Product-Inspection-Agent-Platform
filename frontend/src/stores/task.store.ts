@@ -10,6 +10,12 @@ import type {
   TaskStreamEvent,
 } from "@/types/task.types";
 
+export interface TaskStreamLifecycle {
+  onOpen?: () => void;
+  onError?: () => void;
+  onHeartbeat?: (event: TaskStreamEvent) => void;
+}
+
 export const useTaskStore = defineStore("task", () => {
   const items = ref<InspectionTask[]>([]);
   const current = ref<InspectionTask | null>(null);
@@ -78,10 +84,14 @@ export const useTaskStore = defineStore("task", () => {
     }));
   }
 
-  function subscribeTaskStream(id: string, onMessage: (event: TaskStreamEvent) => void): () => void {
+  function subscribeTaskStream(
+    id: string,
+    onMessage: (event: TaskStreamEvent) => void,
+    lifecycle: TaskStreamLifecycle = {},
+  ): () => void {
     let source: EventSource | null = null;
     let closed = false;
-    taskApi.stream(id, onMessage)
+    taskApi.stream(id, onMessage, lifecycle)
       .then((instance) => {
         if (closed) {
           instance.close();

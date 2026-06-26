@@ -36,12 +36,15 @@ class VisionInspectionExecutor(GraphExecutor):
 
             visual_result = result.get("visual_inspection_result") or {}
             status = result.get("status", "success")
+            # Normalize: only allow valid AgentArtifact status values
+            _VALID_ARTIFACT_STATUSES = {"success", "empty", "failed", "blocked"}
+            normalized_status = status if status in _VALID_ARTIFACT_STATUSES else "success"
             summary = visual_result.get("summary", "视觉检验完成")
 
             visual_artifact = self._artifact(
                 step,
                 "visual_inspection_result",
-                status=status,
+                status=normalized_status,
                 content=visual_result,
                 summary=summary,
             )

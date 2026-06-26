@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent.router.errors import AgentRuntimeError, make_agent_error
+
+
+def _compact_json(value: Any, *, max_chars: int = 4000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    except TypeError:
+        text = str(value)
+    return text if len(text) <= max_chars else f"{text[:max_chars]}...（已截断）"
+
+
+def _build_quality_context(state: dict[str, Any]) -> str:
+    request = state.get("request") if isinstance(state.get("request"), dict) else {}
+    ext = request.get("ext") if isinstance(request.get("ext"), dict) else {}
+    metadata = request.get("metadata") if isinstance(request.get("metadata"), dict) else {}
+    return _compact_json(
+        {
+            "task": {
+                "task_id": state.get("task_id") or ext.get("task_id") or metadata.get("task_id"),
+                "product_id": state.get("product_id") or ext.get("product_id") or metadata.get("product_id") or request.get("product_id"),
+                "spec_code": state.get("spec_code") or ext.get("spec_code") or metadata.get("spec_code") or request.get("spec_code"),
+                "image_urls": state.get("image_urls") or ext.get("image_urls") or metadata.get("image_urls") or request.get("image_urls"),
+            },
+            "evidence_packet": state.get("evidence_packet"),
+            "visual_inspection_result": state.get("visual_inspection_result"),
+            "lab_detection_result": state.get("lab_detection_result"),
+            "file_results": state.get("file_results"),
+        }
+    )
 
 
 async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
@@ -127,9 +156,21 @@ async def llm_quality_reasoning(state: dict[str, Any]) -> dict[str, Any]:
             evidence_context += f"\n视觉检查结果：{state['visual_inspection_result']}"
         if state.get("lab_detection_result"):
             evidence_context += f"\n实验室检测结果：{state['lab_detection_result']}"
-        prompt = f"请基于以下证据进行质量分析并回答用户问题。\n用户问题：{query}{evidence_context}"
+        prompt = (
+            "请基于以下真实证据进行质量分析并回答用户问题。\n"
+            "要求：只能引用输入中已经存在的数据；不得编造实测值、检测时间、检测人或不存在的标准条款。"
+            "如果证据不足或证据与任务产品不一致，必须明确说明限制并建议人工复核。\n"
+            f"用户问题：{query}{evidence_context}"
+        )
     else:
-        prompt = f"执行正式质检任务：{query}"
+        prompt = (
+            "执行正式质检任务，但必须严格遵守真实数据约束。\n"
+            "禁止编造任何实测值、尺寸、硬度、扭矩、材质成分、检测时间、检测人或合格结论。\n"
+            "如果输入中没有真实检测值，或图片内容与任务产品/检测标准不一致，"
+            "结论必须是需人工复核，并列出：已知事实、缺失数据、风险原因、下一步建议。\n"
+            f"用户任务：{query}\n"
+            f"真实上下文：{_build_quality_context(state)}"
+        )
 
     from agent.subgraphs.common.llm_runtime import run_llm_chat
 
@@ -145,7 +186,6 @@ async def llm_quality_reasoning(state: dict[str, Any]) -> dict[str, Any]:
         "llm_answer": answer,
         "llm_prompt": prompt,
         "llm_meta": llm_meta,
-        "status": "running",
     }
 
 

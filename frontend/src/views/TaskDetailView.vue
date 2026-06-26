@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
@@ -37,6 +37,12 @@ const currentTask = computed(() => taskStore.current?.id === taskId.value ? task
 const isOpsView = computed(() => route.path.startsWith("/ops/"));
 const listBasePath = computed(() => (isOpsView.value ? "/ops/tasks" : "/app/tasks"));
 const timeline = ref<TaskStreamEvent[]>([]);
+const streamConnected = ref(false);
+const streamMode = ref<"connecting" | "live" | "polling" | "closed">("connecting");
+const streamNotice = ref("");
+const taskWaitStartedAt = ref<number | null>(null);
+const taskLastActivityAt = ref<number | null>(null);
+const nowTick = ref(Date.now());
 const seenEventIds = new Set<string>();
 const seenEventFingerprints = new Set<string>();
 const ingestForm = ref({
@@ -47,10 +53,15 @@ const ingestForm = ref({
   mode: "candidate" as const,
 });
 let unsubscribe: (() => void) | null = null;
+let progressPollTimer: number | null = null;
+let progressPollInFlight = false;
+let clockTimer: number | null = null;
 
 const canIngestTaskResult = computed(() =>
   hasRole([ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]),
 );
+const canViewInspectionResult = computed(() => hasRole([ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR]));
+const canViewStabilityReport = computed(() => hasRole([ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR]));
 const canBrowseRagSpaces = computed(() => hasRole([ROLE_ADMIN, ROLE_USER, ROLE_EXPERT]));
 const canBrowseDatasets = computed(() => hasRole(ROLE_ALGORITHM_ENGINEER));
 const canIngestDataset = computed(() => canBrowseDatasets.value);
@@ -60,11 +71,53 @@ const resolvedRagSpaceId = computed(() => ingestForm.value.rag_space_id_manual.t
 const datasetNameOptions = computed(() => datasetStore.nameOptions);
 const resolvedDatasetName = computed(() => ingestForm.value.dataset_name.trim());
 const canOpenIngest = computed(() => currentTask.value?.status === "done" && currentTask.value?.has_result);
+const isTaskWaitingForBackend = computed(() => {
+  const status = currentTask.value?.status;
+  return running.value || status === "queued" || status === "running";
+});
+const taskStreamBadgeType = computed<"success" | "warning" | "info">(() => {
+  if (!isTaskWaitingForBackend.value) return "info";
+  if (streamMode.value === "live") return "success";
+  if (streamMode.value === "polling") return "warning";
+  return "info";
+});
+const taskStreamBadgeText = computed(() => {
+  if (!isTaskWaitingForBackend.value) return "";
+  if (streamMode.value === "live") return "实时连接中";
+  if (streamMode.value === "polling") return "轮询同步中";
+  return "连接中";
+});
 const ingestStatusText = computed(() => {
   if (!currentTask.value) return "";
   if (currentTask.value.status !== "done") return "任务完成后才可手动导入。";
   if (!currentTask.value.has_result) return "当前任务还没有可沉淀的检测结果。";
   return "会基于任务结构化结果做沉淀，不会直接把 PDF 报告整份塞进 RAG 或训练集。";
+});
+
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒`;
+}
+
+const taskStreamStatusText = computed(() => {
+  if (!isTaskWaitingForBackend.value) return "";
+  const now = nowTick.value;
+  const waited = taskWaitStartedAt.value ? formatElapsed(now - taskWaitStartedAt.value) : "0 秒";
+  const idleSeconds = taskLastActivityAt.value ? Math.floor((now - taskLastActivityAt.value) / 1000) : 0;
+  const stage = timeline.value.slice().reverse().find((item) => item.stage || item.message);
+  const stageText = stage?.message || stage?.stage || "等待 Agent 输出阶段事件";
+  const connectionText =
+    streamMode.value === "live"
+      ? idleSeconds >= 8
+        ? "实时连接正常，后台仍在处理"
+        : "实时连接正常"
+      : streamMode.value === "polling"
+        ? "实时连接波动，正在轮询同步"
+        : "正在建立实时连接";
+  return `${connectionText} · 已等待 ${waited} · ${streamNotice.value || stageText}`;
 });
 
 function getStatusType(status: string) {
@@ -99,6 +152,85 @@ function displayDateTime(value?: string | null) {
   return formatServerDateTime(value, { includeSeconds: true }) || "-";
 }
 
+function isTerminalStatus(status?: string | null) {
+  return status === "done" || status === "failed" || status === "reviewing";
+}
+
+function markTaskStreamActivity(message?: string | null) {
+  taskLastActivityAt.value = Date.now();
+  if (message && message !== "stream_connected") {
+    streamNotice.value = message;
+  }
+}
+
+function resetTaskStreamState() {
+  streamConnected.value = false;
+  streamMode.value = "connecting";
+  streamNotice.value = "";
+  taskWaitStartedAt.value = null;
+  taskLastActivityAt.value = null;
+}
+
+function stopProgressPolling() {
+  if (progressPollTimer != null) {
+    window.clearTimeout(progressPollTimer);
+    progressPollTimer = null;
+  }
+  progressPollInFlight = false;
+}
+
+function startProgressPolling(id: string, mode: "safety" | "stream_error" = "safety") {
+  if (!id) return;
+  if (mode === "stream_error") {
+    streamMode.value = "polling";
+    streamNotice.value = "实时连接中断，正在从后台轮询最新事件...";
+  }
+  if (progressPollTimer != null) return;
+  if (!taskWaitStartedAt.value) taskWaitStartedAt.value = Date.now();
+  if (!taskLastActivityAt.value) taskLastActivityAt.value = Date.now();
+
+  const tick = async () => {
+    if (taskId.value !== id) {
+      stopProgressPolling();
+      return;
+    }
+    if (progressPollInFlight) {
+      progressPollTimer = window.setTimeout(tick, 3000);
+      return;
+    }
+    progressPollInFlight = true;
+    try {
+      const [events, task] = await Promise.all([
+        taskStore.fetchTaskEvents(id),
+        taskStore.fetchTask(id),
+      ]);
+      for (const event of events) {
+        pushEvent(event);
+      }
+      if (isTerminalStatus(task.status)) {
+        running.value = false;
+        streamMode.value = "closed";
+        stopProgressPolling();
+        return;
+      }
+      running.value = task.status === "queued" || task.status === "running";
+      markTaskStreamActivity("已轮询同步后台状态。");
+    } catch {
+      streamMode.value = "polling";
+      streamNotice.value = "暂时没有拿到新事件，继续等待后台返回...";
+    } finally {
+      progressPollInFlight = false;
+    }
+    if (isTaskWaitingForBackend.value) {
+      progressPollTimer = window.setTimeout(tick, 3000);
+    } else {
+      stopProgressPolling();
+    }
+  };
+
+  progressPollTimer = window.setTimeout(tick, 1200);
+}
+
 function rememberEvent(event: TaskStreamEvent) {
   const id = event.id ? String(event.id) : "";
   if (id) {
@@ -121,9 +253,11 @@ function sortTimeline() {
 }
 
 function pushEvent(event: TaskStreamEvent) {
-  if (event.type === "ready" || event.message === "stream_connected") {
+  if (event.type === "ready" || event.type === "heartbeat" || event.message === "stream_connected") {
+    markTaskStreamActivity(typeof event.message === "string" ? event.message : null);
     return;
   }
+  markTaskStreamActivity(typeof event.message === "string" ? event.message : null);
   if (!rememberEvent(event)) {
     return;
   }
@@ -138,8 +272,10 @@ function pushEvent(event: TaskStreamEvent) {
   if (event.status === "queued" || event.status === "running") {
     running.value = true;
   }
-  if (event.status === "done" || event.status === "failed" || event.status === "reviewing") {
+  if (isTerminalStatus(event.status)) {
     running.value = false;
+    streamMode.value = "closed";
+    stopProgressPolling();
     taskStore.fetchTask(taskId.value).catch((err) => {
       console.error("Failed to refresh task after completion:", err);
       setTimeout(() => taskStore.fetchTask(taskId.value).catch(() => {}), 2000);
@@ -150,6 +286,10 @@ function pushEvent(event: TaskStreamEvent) {
 async function startPipeline() {
   try {
     running.value = true;
+    taskWaitStartedAt.value = Date.now();
+    taskLastActivityAt.value = Date.now();
+    streamMode.value = streamConnected.value ? "live" : "connecting";
+    streamNotice.value = "任务已提交，等待后台 Agent 输出...";
     const result = await taskStore.runTask(taskId.value);
     if (taskStore.current) {
       taskStore.current.status = result.status || "queued";
@@ -161,6 +301,7 @@ async function startPipeline() {
       ts: new Date().toISOString(),
     });
     await taskStore.fetchTask(taskId.value);
+    startProgressPolling(taskId.value, "safety");
   } catch (error: any) {
     running.value = false;
     ElMessage.error(error?.response?.data?.message || "启动任务失败");
@@ -265,6 +406,8 @@ async function submitIngest() {
 async function loadTaskDetail(id: string) {
   unsubscribe?.();
   unsubscribe = null;
+  stopProgressPolling();
+  resetTaskStreamState();
   if (taskStore.current?.id !== id) taskStore.current = null;
   timeline.value = [];
   seenEventIds.clear();
@@ -281,7 +424,30 @@ async function loadTaskDetail(id: string) {
     }
     sortTimeline();
     running.value = taskStore.current?.status === "queued" || taskStore.current?.status === "running";
-    unsubscribe = taskStore.subscribeTaskStream(id, pushEvent);
+    if (running.value) {
+      taskWaitStartedAt.value = Date.now();
+      taskLastActivityAt.value = Date.now();
+      streamNotice.value = "任务正在后台执行，等待 Agent 输出...";
+      startProgressPolling(id, "safety");
+    }
+    unsubscribe = taskStore.subscribeTaskStream(id, pushEvent, {
+      onOpen: () => {
+        streamConnected.value = true;
+        streamMode.value = "live";
+        markTaskStreamActivity("实时连接已建立。");
+      },
+      onError: () => {
+        streamConnected.value = false;
+        if (isTaskWaitingForBackend.value) {
+          startProgressPolling(id, "stream_error");
+        }
+      },
+      onHeartbeat: (event) => {
+        streamConnected.value = true;
+        if (streamMode.value !== "polling") streamMode.value = "live";
+        markTaskStreamActivity(typeof event.message === "string" ? event.message : "实时连接保持中。");
+      },
+    });
   } catch (error) {
     console.error(error);
     ElMessage.error("获取任务详情失败");
@@ -294,9 +460,20 @@ watch(taskId, (id) => {
   if (id) void loadTaskDetail(id);
 }, { immediate: true });
 
+onMounted(() => {
+  clockTimer = window.setInterval(() => {
+    nowTick.value = Date.now();
+  }, 1000);
+});
+
 onUnmounted(() => {
   unsubscribe?.();
   unsubscribe = null;
+  stopProgressPolling();
+  if (clockTimer != null) {
+    window.clearInterval(clockTimer);
+    clockTimer = null;
+  }
 });
 </script>
 
@@ -318,7 +495,7 @@ onUnmounted(() => {
           启动 AI 推演
         </el-button>
         <el-button
-          v-if="taskStore.current.has_result"
+          v-if="taskStore.current.has_result && canViewInspectionResult"
           type="success"
           plain
           @click="router.push(`/app/results/${taskStore.current.id}`)"
@@ -326,7 +503,7 @@ onUnmounted(() => {
           查看分析结果
         </el-button>
         <el-button
-          v-if="taskStore.current.has_stability"
+          v-if="taskStore.current.has_stability && canViewStabilityReport"
           type="warning"
           plain
           @click="router.push(`/app/stability/${taskStore.current.id}`)"
@@ -395,7 +572,18 @@ onUnmounted(() => {
       </el-card>
 
       <el-card shadow="never" class="timeline-card">
-        <template #header>AI 检测 Agent 实时流</template>
+        <template #header>
+          <div class="timeline-header">
+            <span>AI 检测 Agent 实时流</span>
+            <el-tag v-if="taskStreamBadgeText" :type="taskStreamBadgeType" effect="plain">
+              {{ taskStreamBadgeText }}
+            </el-tag>
+          </div>
+        </template>
+        <div v-if="taskStreamStatusText" class="task-stream-status">
+          <span class="task-stream-dot" />
+          <span>{{ taskStreamStatusText }}</span>
+        </div>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
           <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="displayDateTime(item.ts)" placement="top">
@@ -616,6 +804,44 @@ onUnmounted(() => {
 
 .timeline-card {
   margin-top: 0;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-stream-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-stream-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
+  animation: stream-pulse 1.4s ease-out infinite;
+}
+
+@keyframes stream-pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
 }
 
 .missing-result-alert {

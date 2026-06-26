@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 
@@ -49,7 +50,7 @@ def build_variable_defects(
     return defects
 
 
-def normalize_defects(payload: object) -> list[dict[str, Any]]:
+def normalize_defects(payload: object, *, image_count: int | None = None) -> list[dict[str, Any]]:
     """把不同来源的缺陷候选统一标准化为系统内部结构。"""
     if not isinstance(payload, list):
         return []
@@ -66,36 +67,79 @@ def normalize_defects(payload: object) -> list[dict[str, Any]]:
         if not defect_type:
             defect_type = f"defect_{index + 1}"
         confidence = _normalize_confidence(item.get("confidence") or item.get("score") or item.get("probability"))
-        normalized.append(
-            {
-                "type": defect_type,
-                "confidence": confidence,
-                "bbox": coords,
-                "description": str(item.get("description") or item.get("reason") or item.get("detail") or "").strip()
-                or f"模型识别到 {defect_type}",
-            }
+        defect = {
+            "type": defect_type,
+            "confidence": confidence,
+            "bbox": coords,
+            "description": str(item.get("description") or item.get("reason") or item.get("detail") or "").strip()
+            or f"模型识别到 {defect_type}",
+        }
+        image_index = _normalize_image_index(
+            _first_present(item, ("image_index", "imageIndex", "image_id", "imageId", "image")),
+            image_count=image_count,
         )
+        if image_index is not None:
+            defect["image_index"] = image_index
+        elif image_count == 1:
+            defect["image_index"] = 0
+        normalized.append(defect)
     return normalized
 
 
-def extract_defects(data: object) -> list[dict[str, Any]]:
+def extract_defects(data: object, *, image_count: int | None = None) -> list[dict[str, Any]]:
     """从字典、字符串或嵌套 JSON 文本中提取缺陷列表。"""
     if isinstance(data, dict):
         candidates = data.get("defects") or data.get("items") or data.get("detections")
-        defects = normalize_defects(candidates)
+        defects = normalize_defects(candidates, image_count=image_count)
         if defects:
             return defects
+
+        model_result = data.get("model_result")
+        if isinstance(model_result, dict):
+            defects = extract_defects(model_result, image_count=image_count)
+            if defects:
+                return defects
 
         text = data.get("text")
         if isinstance(text, str):
             parsed = _extract_json(text)
             if parsed is not None:
-                return extract_defects(parsed)
+                return extract_defects(parsed, image_count=image_count)
     elif isinstance(data, str):
         parsed = _extract_json(data)
         if parsed is not None:
-            return extract_defects(parsed)
+            return extract_defects(parsed, image_count=image_count)
     return []
+
+
+def _first_present(item: dict[str, Any], keys: tuple[str, ...]) -> object:
+    for key in keys:
+        if key in item and item.get(key) is not None:
+            return item.get(key)
+    return None
+
+
+def _normalize_image_index(value: object, *, image_count: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if not match:
+            return None
+        value = match.group(0)
+    try:
+        index = int(value)
+    except (TypeError, ValueError):
+        return None
+    if index < 0:
+        return None
+    if image_count is None or image_count <= 0:
+        return index
+    if index < image_count:
+        return index
+    if 1 <= index <= image_count:
+        return index - 1
+    return None
 
 
 def _normalize_confidence(value: object) -> float:

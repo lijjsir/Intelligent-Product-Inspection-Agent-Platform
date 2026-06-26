@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     task_blackboard_chat_ttl_seconds: int = 7200
     task_blackboard_analysis_ttl_seconds: int = 86400
     task_blackboard_inspection_ttl_seconds: int = 604800
-    agent_quality_task_timeout_ms: int = 600000
+    agent_quality_task_timeout_ms: int = 1200000
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     local_openai_model_id: str = "qwen2.5:7b-instruct"
     trust_review_provider: str = "local_openai"
     trust_review_model: str = "qwen2.5:7b-instruct"
-    trust_review_timeout_sec: int = 30
+    trust_review_timeout_sec: int = 120
     trust_scoring_enabled: bool = True
     paper_review_enabled: bool = True
     paper_check_languagetool_url: str = ""
@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     paper_check_pycorrector_language_model: str = "people_chars_lm.klm"
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
-    vision_detector_timeout_sec: int = 20
+    vision_detector_timeout_sec: int = 120
 
     qdrant_url: str = "http://127.0.0.1:63330"
     qdrant_docker_url: str = "http://qdrant:6333"

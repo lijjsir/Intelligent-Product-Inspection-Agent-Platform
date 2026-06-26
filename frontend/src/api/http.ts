@@ -34,7 +34,7 @@ export interface ApiRequestConfig extends AxiosRequestConfig {
 
 const instance: AxiosInstance = axios.create({
   baseURL: apiBase,
-  timeout: 15000,
+  timeout: 60000,
 });
 
 function isTimeoutError(error: unknown): boolean {

@@ -288,7 +288,7 @@ async def _materialize_manager_task_output(
             "citations": result_data.citations or {"items": output.citations},
             "reasoning_chain": reasoning_chain,
             "llm_model": result_data.llm_model or "quality_analysis",
-            "prompt_version": quality_trace.prompt_version if quality_trace else None,
+            "prompt_version": (quality_trace.prompt_version if quality_trace else None) or "agent_manager_prompt_v1",
             "tokens_used": sum(int(item.total_tokens or 0) for item in persistable.token_usage),
             "latency_ms": max(1, int(pipeline_latency_ms)),
         }

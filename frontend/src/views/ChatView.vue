@@ -33,6 +33,7 @@ const inspectionSpecStore = useInspectionSpecStore();
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
+const uiNow = ref(Date.now());
 const webSearchEnabled = ref(false);
 const inspectionContextEnabled = false;
 const selectedInspectionTasks = ref<InspectionTask[]>([]);
@@ -71,12 +72,35 @@ const taskRules: FormRules = {
 
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
 const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
+let uiClockTimer: number | null = null;
+
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒`;
+}
+
 const streamStatusText = computed(() => {
   if (!chatStore.loading) return "";
-  if (chatStore.streamPhase === "connecting") return "正在建立连接...";
-  if (chatStore.streamPhase === "streaming") return "智能体处理中...";
-  if (chatStore.streamPhase === "closing") return "正在整理回复...";
-  return "智能体处理中...";
+  const now = uiNow.value;
+  const elapsedText = chatStore.waitStartedAt ? formatElapsed(now - chatStore.waitStartedAt) : "0 秒";
+  const idleSeconds = chatStore.lastStreamEventAt ? Math.floor((now - chatStore.lastStreamEventAt) / 1000) : 0;
+  const phaseText =
+    chatStore.streamPhase === "connecting"
+      ? "正在建立实时连接"
+      : chatStore.streamPhase === "polling"
+        ? "连接波动，正在轮询后台结果"
+        : chatStore.streamPhase === "reconnecting"
+          ? "正在重连实时通道"
+          : chatStore.streamPhase === "closing"
+            ? "正在整理回复"
+            : idleSeconds >= 10
+              ? "后台仍在处理，连接保持中"
+              : "智能体正在思考";
+  const detail = chatStore.streamStatusMessage || "等待后台输出";
+  return `${phaseText} · 已等待 ${elapsedText} · ${detail}`;
 });
 const FINAL_ASSISTANT_MESSAGE_TYPES = new Set([
   "assistant_text",
@@ -432,7 +456,7 @@ function getDisplayedContent(message: ChatMessage): string {
 function streamingPlaceholder(message: ChatMessage) {
   const attachmentNames = (message.payload?.attachment_echo || []).map((item) => item.name.toLowerCase());
   if (attachmentNames.some((name) => name.endsWith(".docx") || name.endsWith(".tex"))) {
-    return "正在解析文档并检查格式...";
+    return streamStatusText.value || "正在解析文档并检查格式...";
   }
   return streamStatusText.value || "智能体处理中...";
 }
@@ -731,10 +755,52 @@ function disposeTaskStreams() {
 
 function ensureTaskStream(taskId: string) {
   if (!taskId || taskStreamDisposers.has(taskId)) return;
-  taskStreamStates.value = { ...taskStreamStates.value, [taskId]: taskStreamStates.value[taskId] || { status: "running" } };
+  taskStreamStates.value = { ...taskStreamStates.value, [taskId]: taskStreamStates.value[taskId] || { status: "running", message: "等待任务实时输出..." } };
   const dispose = taskStore.subscribeTaskStream(taskId, async (event) => {
+    if (event.type === "ready" || event.type === "heartbeat") {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: typeof event.message === "string" && event.message !== "stream_connected" ? event.message : "后台仍在处理，实时连接保持中...",
+        },
+      };
+      return;
+    }
     taskStreamStates.value = { ...taskStreamStates.value, [taskId]: { status: String(event.status || taskStreamStates.value[taskId]?.status || "running"), stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage, message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message } };
     if (event.status === "done" || event.status === "failed") { const currentDispose = taskStreamDisposers.get(taskId); currentDispose?.(); taskStreamDisposers.delete(taskId); await chatStore.reloadCurrentSessionMessages(); }
+  }, {
+    onOpen: () => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: "任务实时连接已建立，等待后台输出...",
+        },
+      };
+    },
+    onError: () => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: "任务实时连接波动，请到任务详情页查看轮询同步状态。",
+        },
+      };
+    },
+    onHeartbeat: (event) => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: typeof event.message === "string" && event.message !== "stream_connected" ? event.message : "后台仍在处理，实时连接保持中...",
+        },
+      };
+    },
   });
   taskStreamDisposers.set(taskId, dispose);
 }
@@ -750,6 +816,9 @@ function syncTaskStreamsFromMessages() {
 }
 
 onMounted(async () => {
+  uiClockTimer = window.setInterval(() => {
+    if (chatStore.loading) uiNow.value = Date.now();
+  }, 1000);
   try { await chatStore.initForChatPage(); } catch (error) { ElMessage.error("聊天初始化失败，请刷新页面后重试。"); console.error(error); }
   await ensureInspectionSpecsLoaded();
   try { await billingStore.fetchMyUsage({ suppressErrorToast: true }); } catch { /* non-blocking */ }
@@ -758,7 +827,14 @@ onMounted(async () => {
   await loadMessageReactions();
 });
 
-onBeforeUnmount(() => { chatStore.stopStream(); disposeTaskStreams(); });
+onBeforeUnmount(() => {
+  chatStore.stopStream();
+  disposeTaskStreams();
+  if (uiClockTimer != null) {
+    window.clearInterval(uiClockTimer);
+    uiClockTimer = null;
+  }
+});
 
 watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
@@ -1136,6 +1212,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           <el-tag v-for="att in chatStore.pendingAttachments" :key="att.id" closable effect="plain" @close="removePendingAttachment(att.id)">{{ att.name }}</el-tag>
         </div>
         <div v-if="streamStatusText" class="stream-status">
+          <span class="stream-status-dot" />
           <span>{{ streamStatusText }}</span>
           <el-button
             v-if="chatStore.canCancelResponse"
@@ -1594,6 +1671,22 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-size: 12px;
   font-weight: 600;
   margin-bottom: 6px;
+}
+.stream-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
+  animation: stream-status-pulse 1.4s ease-out infinite;
+}
+@keyframes stream-status-pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
 }
 .prompt-template-entry {
   margin-bottom: 8px;
