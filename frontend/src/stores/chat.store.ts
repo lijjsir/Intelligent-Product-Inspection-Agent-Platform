@@ -672,9 +672,11 @@ export const useChatStore = defineStore("chat", () => {
       activeAssistantMessageId.value = data.data.assistant_message_id;
       clearPendingAttachments();
       await fetchSessions();
-      if (!streamStarted || !eventSource.value) {
-        startFallbackPolling(sessionId, data.data.assistant_message_id);
-      } else if (!checkAndFinalizeByMessage(data.data.assistant_message_id)) {
+      // Always reconcile the active response from the database. SSE is the
+      // low-latency path, but an already-open connection can still miss the
+      // final event during a proxy reconnect or backend reload.
+      startFallbackPolling(sessionId, data.data.assistant_message_id);
+      if (streamStarted && eventSource.value && !checkAndFinalizeByMessage(data.data.assistant_message_id)) {
         streamPhase.value = streamConnected.value ? "streaming" : "connecting";
       }
       return data.data;

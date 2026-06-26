@@ -29,8 +29,10 @@ class VisionInspectionExecutor(GraphExecutor):
             from agent.subgraphs.vision_inspection.graph import VisionInspectionGraph
 
             graph_state = self.base_graph_state(state, request, step)
-            graph_state["db_session"] = db_session
-            result = await VisionInspectionGraph().run(graph_state)
+            result = await VisionInspectionGraph().run(
+                graph_state,
+                db_session=db_session,
+            )
 
             visual_result = result.get("visual_inspection_result") or {}
             status = result.get("status", "success")

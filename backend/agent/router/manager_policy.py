@@ -511,7 +511,15 @@ class ManagerPolicy:
     @staticmethod
     def _budget_for_surface(surface: str) -> dict[str, int]:
         if surface == "quality_task":
-            return {"max_iterations": 5, "max_tool_calls": 8, "max_llm_calls": 5, "timeout_ms": 60000}
+            # Formal inspection includes visual understanding plus a second
+            # database-configured quality-analysis model call. One minute is
+            # routinely shorter than the combined real inference latency.
+            return {
+                "max_iterations": 5,
+                "max_tool_calls": 8,
+                "max_llm_calls": 5,
+                "timeout_ms": max(60000, int(settings.agent_quality_task_timeout_ms)),
+            }
         return {"max_iterations": 2, "max_tool_calls": 3, "max_llm_calls": 3, "timeout_ms": 600000}
 
     @staticmethod

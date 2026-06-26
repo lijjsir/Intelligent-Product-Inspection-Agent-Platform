@@ -94,6 +94,9 @@ async def test_materialization_builds_task_and_token_usage_from_graph_state():
     assert persistable.result is not None
     assert persistable.result.task_id == "task-1"
     assert persistable.result.llm_model == "quality-model"
+    assert persistable.quality_trace is not None
+    assert persistable.quality_trace.workflow_version == "quality_analysis_graph_v1"
+    assert persistable.quality_trace.prompt_version == "quality_analysis_prompt_v1"
     assert persistable.token_usage[0].model_key == "quality-model"
     assert persistable.token_usage[0].prompt_tokens == 11
     assert persistable.token_usage[0].completion_tokens == 7

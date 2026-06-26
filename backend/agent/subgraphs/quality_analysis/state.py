@@ -13,6 +13,8 @@ class QualityAnalysisState(TypedDict, total=False):
     capability: str
     request: dict[str, Any]
     manager_state: dict[str, Any]
+    manager_model_runtime: dict[str, Any]
+    model_runtime: dict[str, Any]
     db_session: Any
 
     artifacts: list[dict[str, Any]]
@@ -26,6 +28,7 @@ class QualityAnalysisState(TypedDict, total=False):
     response_mode: str
     llm_prompt: str
     llm_answer: str
+    llm_meta: dict[str, Any]
     reasoning_chain: dict[str, Any]
     standard_evaluation: dict[str, Any]
     report: str

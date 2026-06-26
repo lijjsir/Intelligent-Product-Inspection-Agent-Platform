@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timezone
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.datetime import utcnow_iso
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import ROLE_USER, require_role
 from app.core.security import safe_decode_token
@@ -31,7 +33,12 @@ def _task_event_payload(event) -> dict:
         payload.setdefault("status", event.status)
     if event.message is not None:
         payload.setdefault("message", event.message)
-    payload.setdefault("ts", event.created_at.isoformat() if event.created_at else None)
+    if not payload.get("ts") and event.created_at:
+        created_at = event.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        payload["ts"] = created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    payload.setdefault("ts", utcnow_iso())
     payload["id"] = event.id
     return payload
 

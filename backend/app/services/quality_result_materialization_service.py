@@ -12,6 +12,9 @@ from agent.contracts.quality_contracts import (
     TokenUsageEvent,
 )
 
+QUALITY_ANALYSIS_WORKFLOW_VERSION = "quality_analysis_graph_v1"
+QUALITY_ANALYSIS_PROMPT_VERSION = "quality_analysis_prompt_v1"
+
 
 class QualityResultMaterializationService:
     """质量检测结果落库服务 — 从 QualityAnalysisGraph 调用。
@@ -96,7 +99,8 @@ class QualityResultMaterializationService:
 
         quality_trace = QualityTraceEvent(
             trace_id=llm_meta.get("trace_id") or final_state.get("trace_id") or final_state.get("workflow_run_id") or workflow_run_id,
-            workflow_version="quality_analysis_graph_v1",
+            workflow_version=QUALITY_ANALYSIS_WORKFLOW_VERSION,
+            prompt_version=QUALITY_ANALYSIS_PROMPT_VERSION,
             route_subgraph="quality_analysis",
             has_citation=bool(final_state.get("citations")),
         )

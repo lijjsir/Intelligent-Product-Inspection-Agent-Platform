@@ -15,6 +15,7 @@ import { useChatStore } from "@/stores/chat.store";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import type { TaskStatus } from "@/types/task.types";
+import { formatServerDateTime } from "@/utils/date-time";
 
 const router = useRouter();
 const route = useRoute();
@@ -492,7 +493,7 @@ watch(
         <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">
-            {{ row.created_at ? new Date(row.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
+            {{ formatServerDateTime(row.created_at, { includeSeconds: true }) || "-" }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">

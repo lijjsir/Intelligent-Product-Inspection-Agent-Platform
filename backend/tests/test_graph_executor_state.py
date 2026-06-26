@@ -111,3 +111,17 @@ def test_base_graph_state_query_falls_back_to_request():
     graph_state = GraphExecutor.base_graph_state(state, _request(query="fallback query"), _step())
 
     assert graph_state["query"] == "fallback query"
+
+
+def test_base_graph_state_excludes_runtime_callbacks_from_request_ext():
+    async def emit(_event):
+        return None
+
+    request = _request(ext={"surface": "chat", "emit": emit})
+    state = _state(request_ext={"surface": "chat", "emit": emit})
+
+    graph_state = GraphExecutor.base_graph_state(state, request, _step())
+
+    assert graph_state["ext"] == {"surface": "chat"}
+    assert graph_state["request"]["ext"] == {"surface": "chat"}
+    assert graph_state["manager_state"]["request_ext"] == {"surface": "chat"}

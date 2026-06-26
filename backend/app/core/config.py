@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     task_blackboard_chat_ttl_seconds: int = 7200
     task_blackboard_analysis_ttl_seconds: int = 86400
     task_blackboard_inspection_ttl_seconds: int = 604800
+    agent_quality_task_timeout_ms: int = 600000
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 

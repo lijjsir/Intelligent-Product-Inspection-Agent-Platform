@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
 
-from agent.subgraphs.vision_inspection.state import VisionInspectionState
+from agent.subgraphs.vision_inspection.state import VisionInspectionContext, VisionInspectionState
 from agent.subgraphs.vision_inspection.nodes import (
     input_adapter,
     legacy_vision_understanding_node,
@@ -20,7 +20,7 @@ class VisionInspectionGraph:
     """
 
     def __init__(self) -> None:
-        graph = StateGraph(VisionInspectionState)
+        graph = StateGraph(VisionInspectionState, context_schema=VisionInspectionContext)
         graph.add_node("input_adapter", input_adapter)
         graph.add_node("legacy_vision_understanding", legacy_vision_understanding_node)
         graph.add_node("normalize_visual_result", normalize_visual_result)
@@ -34,5 +34,13 @@ class VisionInspectionGraph:
 
         self._graph = graph.compile()
 
-    async def run(self, state: VisionInspectionState) -> VisionInspectionState:
-        return await self._graph.ainvoke(state)
+    async def run(
+        self,
+        state: VisionInspectionState,
+        *,
+        db_session=None,
+    ) -> VisionInspectionState:
+        return await self._graph.ainvoke(
+            state,
+            context=VisionInspectionContext(db_session=db_session),
+        )

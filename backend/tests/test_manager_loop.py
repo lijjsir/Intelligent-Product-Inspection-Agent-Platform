@@ -10,6 +10,7 @@ from agent.router.executors.chat_executor import ChatExecutor
 from agent.router.capabilities.vision_handler import VisionUnderstandingHandler
 from agent.router.manager_state import ManagerState
 from agent.router.manager_loop import ManagerLoop
+from agent.router.manager_policy import ManagerPolicy
 from agent.tools.contracts import ToolResult, ToolSpec
 
 
@@ -1044,6 +1045,17 @@ async def test_chat_rag_ingest_request_is_blocked_by_surface_boundary(mock_chat_
     assert output.route_decision.sub_route == "action_blocked"
     assert output.agent_output["created_task"] is None
     assert output.agent_output["route_trace"]["steps"][0]["capability"] == "rag.ingest"
+
+
+def test_quality_task_budget_allows_two_real_model_calls():
+    state = ManagerPolicy().initialize_state(
+        _request(
+            workspace="quality_task",
+            ext={"surface": "quality_task"},
+        )
+    )
+
+    assert state.timeout_ms == 600000
 
 
 @pytest.mark.asyncio

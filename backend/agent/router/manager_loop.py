@@ -938,8 +938,22 @@ class ManagerLoop:
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "聊天页面不能创建或执行正式质量检测任务。请前往质量检测任务页面提交正式检测。"
-        if state.route_plan and state.route_plan.reason == "image_understanding":
-            return "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
+        if state.route_plan and state.route_plan.reason in {"image_understanding", "vision_inspection"}:
+            artifact = ManagerLoop._latest_artifact(
+                state,
+                {"visual_inspection_result", "image_understanding"},
+            )
+            summary = ""
+            if artifact:
+                content = dict(artifact.content or {})
+                summary = str(
+                    content.get("answer")
+                    or content.get("summary")
+                    or artifact.summary
+                    or ""
+                ).strip()
+            notice = "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
+            return f"{summary}\n\n{notice}" if summary else notice
         if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa", "paper_format_check"}:
             artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer", "paper_format_report"})
             if artifact:

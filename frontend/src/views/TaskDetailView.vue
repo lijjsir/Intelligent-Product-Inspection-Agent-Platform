@@ -15,6 +15,7 @@ import { useChatStore } from "@/stores/chat.store";
 import { useDatasetStore } from "@/stores/dataset.store";
 import { useTaskStore } from "@/stores/task.store";
 import type { TaskResultIngestResponse, TaskResultIngestTarget, TaskStreamEvent } from "@/types/task.types";
+import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 
 const route = useRoute();
 const router = useRouter();
@@ -90,10 +91,12 @@ function eventFingerprint(event: TaskStreamEvent) {
 }
 
 function eventTime(event: TaskStreamEvent) {
-  const raw = String(event.ts || "");
-  const normalized = raw && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? `${raw}Z` : raw;
-  const value = Date.parse(normalized);
+  const value = parseServerDateTime(event.ts)?.getTime() ?? Number.NaN;
   return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function displayDateTime(value?: string | null) {
+  return formatServerDateTime(value, { includeSeconds: true }) || "-";
 }
 
 function rememberEvent(event: TaskStreamEvent) {
@@ -361,7 +364,7 @@ onUnmounted(() => {
           <el-descriptions-item label="检测标准">{{ taskStore.current.spec_code }}</el-descriptions-item>
           <el-descriptions-item label="优先级">{{ taskStore.current.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
-            {{ taskStore.current.created_at ? new Date(taskStore.current.created_at).toLocaleString("zh-CN", { hour12: false }) : "-" }}
+            {{ displayDateTime(taskStore.current.created_at) }}
           </el-descriptions-item>
           <el-descriptions-item label="执行模式">{{ taskStore.current.execution?.mode || "-" }}</el-descriptions-item>
           <el-descriptions-item label="执行 Job">{{ taskStore.current.execution?.job_id || "-" }}</el-descriptions-item>
@@ -395,7 +398,7 @@ onUnmounted(() => {
         <template #header>AI 检测 Agent 实时流</template>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
-          <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="item.ts || ''" placement="top">
+          <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="displayDateTime(item.ts)" placement="top">
             <div class="event-line">
               <strong>{{ item.type }}</strong>
               <span v-if="item.stage"> / {{ item.stage }}</span>

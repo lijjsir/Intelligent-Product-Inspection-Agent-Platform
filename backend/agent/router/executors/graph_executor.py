@@ -73,10 +73,20 @@ class GraphExecutor:
             for item in list(getattr(state, "artifacts", []) or [])
         ]
 
-        request_ext = dict(getattr(request, "ext", {}) or {})
+        # Runtime callbacks belong to the service layer, not persisted graph
+        # state. In chat requests ``ext["emit"]`` is an async function; passing
+        # it to Pydantic's JSON serializer raises:
+        # "Unable to serialize unknown type: <class 'function'>".
+        request_ext = {
+            key: value
+            for key, value in dict(getattr(request, "ext", {}) or {}).items()
+            if not callable(value)
+        }
         request_metadata = dict(getattr(request, "metadata", {}) or {})
         manager_model_runtime = getattr(state, "manager_model_runtime", None)
         runtime_payload = dict(manager_model_runtime or {})
+        request_payload = request.model_dump(mode="json", exclude={"ext"})
+        request_payload["ext"] = request_ext
 
         manager_state = {
             "request_id": getattr(state, "request_id", None),
@@ -92,7 +102,11 @@ class GraphExecutor:
             "selected_rag_space": getattr(state, "selected_rag_space", None),
             "rag_scope": getattr(state, "rag_scope", None),
             "attachments": list(getattr(state, "attachments", []) or []),
-            "request_ext": dict(getattr(state, "request_ext", {}) or {}),
+            "request_ext": {
+                key: value
+                for key, value in dict(getattr(state, "request_ext", {}) or {}).items()
+                if not callable(value)
+            },
             "request_metadata": dict(getattr(state, "request_metadata", {}) or {}),
             "manager_model_runtime": runtime_payload,
             "artifacts": artifacts,
@@ -117,7 +131,7 @@ class GraphExecutor:
             "metadata": request_metadata,
             "ext": request_ext,
             "step": step.model_dump(mode="json"),
-            "request": request.model_dump(mode="json"),
+            "request": request_payload,
             "manager_state": manager_state,
             "manager_model_runtime": runtime_payload,
             "model_runtime": runtime_payload,

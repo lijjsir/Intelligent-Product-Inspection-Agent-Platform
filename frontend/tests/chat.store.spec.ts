@@ -219,4 +219,66 @@ describe("chat store", () => {
     expect(store.messages[1].content).toBe("answer");
     expect(store.messages[1].seq_no).toBe(2);
   });
+
+  it("reconciles the final message even while the event stream is connected", async () => {
+    vi.useFakeTimers();
+    const { chatApi } = await import("@/api/chat.api");
+    const source = {
+      close: vi.fn(),
+      onopen: null,
+      onerror: null,
+      readyState: 1,
+    };
+
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: { data: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" } },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.stream = vi.fn().mockResolvedValue(source);
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "识别图片",
+            payload: {},
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-1",
+        },
+      },
+    });
+    chatApi.listMessages = vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: "msg-assistant",
+            session_id: "session-1",
+            seq_no: 2,
+            role: "assistant",
+            message_type: "visual_answer",
+            content: "图片中有三个苹果",
+            payload: { status: "completed" },
+            created_at: "2026-06-25T20:29:20.000000",
+          },
+        ],
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("session");
+    await store.sendMessage({ message: "识别图片" });
+    await vi.advanceTimersByTimeAsync(1200);
+
+    expect(chatApi.listMessages).toHaveBeenCalledWith("session-1", 1, 500);
+    expect(store.messages[1].message_type).toBe("visual_answer");
+    expect(store.messages[1].content).toBe("图片中有三个苹果");
+    expect(store.loading).toBe(false);
+    expect(source.close).toHaveBeenCalled();
+  });
 });

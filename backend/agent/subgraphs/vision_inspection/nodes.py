@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.runtime import Runtime
+
 from agent.router.errors import make_agent_error
+from agent.subgraphs.vision_inspection.state import VisionInspectionContext
 
 
 async def input_adapter(state: dict[str, Any]) -> dict[str, Any]:
@@ -25,7 +28,10 @@ async def input_adapter(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def legacy_vision_understanding_node(state: dict[str, Any]) -> dict[str, Any]:
+async def legacy_vision_understanding_node(
+    state: dict[str, Any],
+    runtime: Runtime[VisionInspectionContext],
+) -> dict[str, Any]:
     """Phase-1 compatibility node: wraps old VisionUnderstandingHandler as a formal graph node."""
     try:
         from agent.router.capabilities.vision_handler import VisionUnderstandingHandler
@@ -60,9 +66,25 @@ async def legacy_vision_understanding_node(state: dict[str, Any]) -> dict[str, A
                 step=vision_step,
                 state=manager_state,
                 request=request,
-                db_session=state.get("db_session"),
+                db_session=runtime.context.db_session,
             )
         )
+        # Keep graph state JSON-safe for checkpointing and transport.
+        if isinstance(result, (tuple, list)) and len(result) >= 1:
+            obs, artifacts = result[0], result[1] if len(result) > 1 else []
+            if hasattr(obs, "model_dump"):
+                obs_dict = obs.model_dump(mode="json", fallback=str)
+            elif isinstance(obs, dict):
+                obs_dict = dict(obs)
+            else:
+                obs_dict = {"status": "success", "summary": str(obs)}
+            art_dicts = []
+            for a in (artifacts if isinstance(artifacts, list) else [artifacts]):
+                if hasattr(a, "model_dump"):
+                    art_dicts.append(a.model_dump(mode="json", fallback=str))
+                elif isinstance(a, dict):
+                    art_dicts.append(a)
+            result = [obs_dict, art_dicts]
         return {
             **state,
             "legacy_result": result,
@@ -90,7 +112,7 @@ async def normalize_visual_result(state: dict[str, Any]) -> dict[str, Any]:
         obs = legacy_result[0]
         artifacts = legacy_result[1] if len(legacy_result) > 1 else []
         if hasattr(obs, "model_dump"):
-            obs_dict = obs.model_dump()
+            obs_dict = obs.model_dump(mode="json", fallback=str)
         elif isinstance(obs, dict):
             obs_dict = obs
         else:
@@ -111,22 +133,54 @@ async def normalize_visual_result(state: dict[str, Any]) -> dict[str, Any]:
             legacy_content = dict(image_artifact.get("content") or {})
 
     image_count = len(state.get("image_attachments") or [])
+    model_result = dict(legacy_content.get("model_result") or {})
+    model_summary = str(
+        model_result.get("summary")
+        or legacy_content.get("summary")
+        or obs_dict.get("summary")
+        or ""
+    ).strip()
 
     visual_result = {
         "status": obs_dict.get("status", "success"),
-        "summary": obs_dict.get("summary") or legacy_content.get("summary") or "",
-        "answer": legacy_content.get("answer") or obs_dict.get("summary") or "",
+        "summary": model_summary,
+        "answer": str(legacy_content.get("answer") or model_summary),
         "image_count": int(legacy_content.get("image_count") or image_count),
         "defects": legacy_content.get("defects") or [],
-        "image_quality": legacy_content.get("image_quality") or legacy_content.get("quality") or "unknown",
+        "objects": model_result.get("objects") or legacy_content.get("objects") or [],
+        "possible_defects": (
+            model_result.get("possible_defects")
+            or legacy_content.get("possible_defects")
+            or []
+        ),
+        "risk": model_result.get("risk") or legacy_content.get("risk"),
+        "model_id": model_result.get("model_id"),
+        "image_quality": (
+            model_result.get("image_quality")
+            or legacy_content.get("image_quality")
+            or legacy_content.get("quality")
+            or None
+        ),
         "requires_recheck": bool(legacy_content.get("requires_recheck") or False),
-        "confidence": float(legacy_content.get("confidence") or 0.0),
+        "confidence": (
+            float(model_result.get("confidence"))
+            if model_result.get("confidence") is not None
+            else (
+                float(legacy_content.get("confidence"))
+                if legacy_content.get("confidence") is not None
+                else None
+            )
+        ),
         "citations": legacy_content.get("citations") or [],
+        "model_result": model_result,
         "raw": obs_dict,
     }
 
+    # Remove legacy_result with raw Pydantic objects to prevent LangGraph
+    # checkpoint serialization errors (e.g. "Unable to serialize unknown type").
     return {
         **state,
+        "legacy_result": None,
         "visual_inspection_result": visual_result,
     }
 

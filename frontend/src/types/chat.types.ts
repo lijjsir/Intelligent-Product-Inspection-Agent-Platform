@@ -350,7 +350,13 @@ export interface ChatMessagePayload {
     normalized_evidence?: Array<Record<string, unknown>>;
   } | null;
   visual_inspection_result?: {
+    summary?: string;
+    answer?: string;
     image_count?: number;
+    objects?: unknown[];
+    possible_defects?: unknown[];
+    risk?: string;
+    model_id?: string;
     defects?: Array<{
       defect_type: string;
       location: string;

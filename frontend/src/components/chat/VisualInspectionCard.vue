@@ -1,6 +1,10 @@
 <script setup lang="ts">
 defineProps<{
+  summary?: string;
   imageCount?: number;
+  objects?: unknown[];
+  possibleDefects?: unknown[];
+  risk?: string;
   defects?: Array<{
     defect_type: string;
     location: string;
@@ -13,6 +17,16 @@ defineProps<{
   requiresRecheck?: boolean;
   confidence?: number;
 }>();
+
+function formatItem(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (item == null) return "";
+  try {
+    return JSON.stringify(item);
+  } catch {
+    return String(item);
+  }
+}
 </script>
 
 <template>
@@ -24,8 +38,20 @@ defineProps<{
     <div class="visual-card-meta">
       <el-tag size="small" effect="plain" type="info">{{ imageCount ?? 0 }} 张图片</el-tag>
       <el-tag v-if="imageQuality" size="small" effect="plain" type="warning">{{ imageQuality }}</el-tag>
+      <el-tag v-if="risk" size="small" effect="plain" :type="risk === 'high' ? 'danger' : risk === 'medium' ? 'warning' : 'success'">
+        风险 {{ risk }}
+      </el-tag>
       <el-tag v-if="requiresRecheck" size="small" type="danger" effect="plain">需复核</el-tag>
       <el-tag v-if="confidence != null" size="small" effect="plain">置信度 {{ (confidence * 100).toFixed(0) }}%</el-tag>
+    </div>
+    <p v-if="summary" class="visual-card-summary">{{ summary }}</p>
+    <div v-if="objects?.length" class="visual-card-list">
+      <strong>识别对象</strong>
+      <span>{{ objects.map(formatItem).filter(Boolean).join("、") }}</span>
+    </div>
+    <div v-if="possibleDefects?.length" class="visual-card-list visual-card-list--warning">
+      <strong>可能异常</strong>
+      <span>{{ possibleDefects.map(formatItem).filter(Boolean).join("；") }}</span>
     </div>
     <div v-if="defects?.length" class="visual-card-defects">
       <div v-for="(d, di) in defects" :key="di" class="visual-defect">
@@ -45,7 +71,7 @@ defineProps<{
         </div>
       </div>
     </div>
-    <div v-else class="visual-card-empty">
+    <div v-else-if="!possibleDefects?.length" class="visual-card-empty">
       未发现明显缺陷。
     </div>
   </div>
@@ -85,6 +111,36 @@ defineProps<{
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.visual-card-summary {
+  margin: 0;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.visual-card-list {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.visual-card-list strong {
+  flex: 0 0 auto;
+  color: #374151;
+}
+
+.visual-card-list--warning {
+  border-color: #fde68a;
+  background: #fffbeb;
 }
 
 .visual-card-empty {

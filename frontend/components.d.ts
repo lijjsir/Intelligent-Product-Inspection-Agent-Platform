@@ -97,6 +97,7 @@ declare module 'vue' {
     StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
     ThumbsDownTrendChart: typeof import('./src/components/business/analytics/ThumbsDownTrendChart.vue')['default']
     ThumbsUpTrendChart: typeof import('./src/components/business/analytics/ThumbsUpTrendChart.vue')['default']
+    VisualInspectionCard: typeof import('./src/components/chat/VisualInspectionCard.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

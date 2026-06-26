@@ -130,6 +130,18 @@ class VisionExecutor:
     @staticmethod
     def _parse_vision_response(response: dict) -> dict:
         import json as _json
+        if not isinstance(response, dict):
+            return {"raw": str(response)[:500]}
+        if any(
+            key in response
+            for key in ("summary", "objects", "possible_defects", "risk")
+        ):
+            parsed = dict(response)
+            parsed.pop("__meta__", None)
+            return parsed
+        text = response.get("text")
+        if isinstance(text, str) and text.strip():
+            return {"summary": text.strip()[:2000]}
         content = response.get("content") if isinstance(response, dict) else None
         if isinstance(content, dict):
             return content

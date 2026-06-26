@@ -9,4 +9,5 @@ def utcnow() -> datetime:
 
 
 def utcnow_iso() -> str:
-    return utcnow().isoformat()
+    """Return an ISO-8601 UTC timestamp with an explicit timezone marker."""
+    return utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")

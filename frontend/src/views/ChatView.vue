@@ -20,6 +20,7 @@ import { useTaskStore } from "@/stores/task.store";
 import type { AgentErrorPayload, ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
 import type { InspectionTask, TaskCreate } from "@/types/task.types";
 import { writeTextToClipboard } from "@/utils/clipboard";
+import { formatServerDateTime } from "@/utils/date-time";
 import { agentErrorPayload, messageCardType } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
 
@@ -111,10 +112,7 @@ const editingMessageId = ref("");
 const editingContent = ref("");
 
 function formatTime(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return formatServerDateTime(value, { includeSeconds: true });
 }
 
 function roleLabel(role: ChatMessage["role"]) {
@@ -1049,7 +1047,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <!-- Visual inspection card -->
               <div v-if="message.payload?.visual_inspection_result" class="agent-card-wrapper">
                 <VisualInspectionCard
+                  :summary="message.payload.visual_inspection_result.summary"
                   :image-count="message.payload.visual_inspection_result.image_count"
+                  :objects="message.payload.visual_inspection_result.objects"
+                  :possible-defects="message.payload.visual_inspection_result.possible_defects"
+                  :risk="message.payload.visual_inspection_result.risk"
                   :defects="message.payload.visual_inspection_result.defects"
                   :image-quality="message.payload.visual_inspection_result.image_quality"
                   :requires-recheck="message.payload.visual_inspection_result.requires_recheck"

@@ -326,6 +326,7 @@ async def test_run_inspection_pipeline_uses_manager_quality_analysis_contract(mo
     assert manager_session is session
     assert manager_request.ext["surface"] == "quality_task"
     assert result_repo.saved_payload["verdict"] == "pass"
+    assert result_repo.saved_payload["latency_ms"] >= 1
     assert result_repo.saved_payload["reasoning_chain"]["consumed_artifact_ids"] == [
         "evidence-1",
         "vision-1",

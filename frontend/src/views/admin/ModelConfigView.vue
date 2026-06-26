@@ -136,6 +136,7 @@ async function submit() {
     return;
   }
   const payload: Record<string, unknown> = {
+    provider,
     display_name: displayName,
     source_type: form.source_type,
     source_uri: sourceUri,
@@ -161,7 +162,6 @@ async function submit() {
     await store.updateOne(editingId.value, payload);
     ElMessage.success("模型配置已更新");
   } else {
-    payload.provider = provider;
     payload.model_key = modelKey;
     payload.api_key = form.api_key || undefined;
     const created = await store.createOne(payload as unknown as ModelConfigPayload);
@@ -294,7 +294,7 @@ onMounted(() => {
     <el-drawer v-model="drawerOpen" :title="editingId ? '编辑 Base Model' : '新增 Base Model'" size="500px">
       <el-form label-position="top">
         <el-form-item label="提供方">
-          <el-input v-model="form.provider" :disabled="isEditing" />
+          <el-input v-model="form.provider" />
         </el-form-item>
         <el-form-item label="模型标识">
           <el-input v-model="form.model_key" :disabled="isEditing" />

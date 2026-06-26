@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent.llm.client import LLMClient
@@ -16,13 +17,22 @@ def _extract_content(response: Any) -> str:
     for key in ("answer", "text"):
         if response.get(key):
             return str(response[key])
+    for key in ("summary", "report", "analysis", "reasoning", "result"):
+        if response.get(key):
+            value = response[key]
+            return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     choices = response.get("choices") or []
     if choices:
         message = (choices[0] or {}).get("message") or {}
         content = message.get("content")
         if content:
             return str(content)
-    return ""
+    structured = {
+        key: value
+        for key, value in response.items()
+        if key != "__meta__"
+    }
+    return json.dumps(structured, ensure_ascii=False) if structured else ""
 
 
 async def run_llm_chat(
@@ -69,9 +79,22 @@ async def run_llm_chat(
         ) from exc
 
     content = _extract_content(response)
+    response_meta = (
+        dict(response.get("__meta__") or {})
+        if isinstance(response, dict) and isinstance(response.get("__meta__"), dict)
+        else {}
+    )
     meta = {
-        "model": response.get("model") if isinstance(response, dict) else runtime.get("model_id"),
-        "usage": response.get("usage") if isinstance(response, dict) else None,
+        "model": (
+            response.get("model") or response_meta.get("model")
+            if isinstance(response, dict)
+            else runtime.get("model_id")
+        ),
+        "usage": (
+            response.get("usage") or response_meta.get("usage")
+            if isinstance(response, dict)
+            else None
+        ),
         "trace_id": client.trace_id,
     }
     return content, meta

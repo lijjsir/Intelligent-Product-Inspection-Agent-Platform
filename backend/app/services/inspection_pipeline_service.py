@@ -7,7 +7,14 @@ import traceback
 from typing import Any
 
 from agent.contracts import AgentOutput
-from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
+from agent.contracts.quality_contracts import (
+    NormalizedAttachment,
+    NormalizedRequest,
+    PersistableOutput,
+    ResultAggregate,
+    StabilityAggregate,
+    TaskAggregate,
+)
 from agent.router.manager_provider import get_agent_manager
 from agent.llm.pricing import ModelPricing
 from app.core.datetime import utcnow, utcnow_iso
@@ -220,17 +227,56 @@ async def _materialize_manager_task_output(
     alert_repo: AlertRepository,
     token_ledger_repo: TokenLedgerRepository,
     user_token_usage_repo: UserTokenUsageSummaryRepository,
+    pipeline_latency_ms: int,
 ) -> tuple[Any, Any]:
     persistable = output.persistable_output
     if not (persistable and persistable.result and persistable.stability):
-        raise RuntimeError("quality_analysis did not return persistable task result")
+        logger.warning(
+            "inspection_pipeline persistable_output missing result/stability "
+            "task_id=%s – rebuilding from raw agent output",
+            task.id,
+        )
+        quality = dict(output.quality or {})
+        result_card = dict(output.result_card or {})
+        persistable = PersistableOutput(
+            task=TaskAggregate(
+                product_id=task.product_id,
+                spec_code=task.spec_code,
+                status="done",
+                priority=int(task.priority or 5),
+                image_count=len(task.image_urls or []),
+            ),
+            result=ResultAggregate(
+                verdict=str(result_card.get("verdict") or quality.get("verdict") or "manual_required"),
+                overall_score=float(result_card.get("overall_score") or quality.get("confidence") or 0.0),
+                llm_model="quality_analysis",
+                citations={"items": list(output.citations or [])},
+                reasoning_chain={
+                    "quality": quality,
+                    "result_card": result_card,
+                    "rag_summary": output.rag_summary,
+                },
+            ),
+            stability=StabilityAggregate(
+                risk_score=float(quality.get("risk_score") or 0.5),
+                risk_level=str(quality.get("risk_level") or "medium"),
+                evidence_score=float(quality.get("evidence_coverage") or 0.0),
+                confidence_score=float(quality.get("confidence") or 0.0),
+                traceability_score=float(quality.get("traceability") or 0.0),
+                faithfulness_score=float(quality.get("faithfulness") or 0.0),
+                physical_hallucination_score=float(
+                    1.0 if "low_evidence" in list(quality.get("hallucination_flags") or []) else 0.0
+                ),
+            ),
+            token_usage=[],
+            rag_queries=[],
+        )
     result_data = persistable.result
     stability_data = persistable.stability
     quality_trace = persistable.quality_trace
     reasoning_chain = dict(result_data.reasoning_chain or {})
     if quality_trace:
         reasoning_chain.setdefault("trace", quality_trace.model_dump(exclude_none=True))
-    latency_ms = int(max(1, sum(float(item.latency_ms or 0.0) for item in persistable.rag_queries) if persistable.rag_queries else 1))
     result = await result_repo.upsert_by_task(
         {
             "id": result_data.id or str(uuid7()),
@@ -244,7 +290,7 @@ async def _materialize_manager_task_output(
             "llm_model": result_data.llm_model or "quality_analysis",
             "prompt_version": quality_trace.prompt_version if quality_trace else None,
             "tokens_used": sum(int(item.total_tokens or 0) for item in persistable.token_usage),
-            "latency_ms": latency_ms,
+            "latency_ms": max(1, int(pipeline_latency_ms)),
         }
     )
     stability = await stability_repo.upsert_by_task(
@@ -590,6 +636,10 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                 alert_repo=alert_repo,
                 token_ledger_repo=token_ledger_repo,
                 user_token_usage_repo=user_token_usage_repo,
+                pipeline_latency_ms=max(
+                    1,
+                    int(round((perf_counter() - pipeline_started_at) * 1000)),
+                ),
             )
             await emit({"type": "result", "verdict": result.verdict, "overall_score": float(result.overall_score)})
             await emit({"type": "stability", "risk_level": stability_obj.risk_level, "risk_score": float(stability_obj.risk_score)})
@@ -618,6 +668,10 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
 
         except Exception as exc:
             logger.exception("inspection_pipeline failed task_id=%s", task_id)
+            try:
+                await session.rollback()
+            except Exception:
+                logger.exception("inspection_pipeline failed to rollback task_id=%s", task_id)
             try:
                 await task_repo.update_status(org_id, task_id, "failed")
                 failed_metadata = dict(task.meta_data or {})
@@ -652,6 +706,11 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                     )
             except Exception:
                 logger.exception("inspection_pipeline failed to append chat failure task_id=%s", task_id)
+            return {
+                "task_id": task_id,
+                "status": "failed",
+                "error": str(exc),
+            }
 
         finally:
             # Safety net: ensure task status is never left as "running" permanently.

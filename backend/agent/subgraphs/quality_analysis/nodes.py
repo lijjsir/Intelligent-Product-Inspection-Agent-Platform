@@ -325,7 +325,7 @@ async def finalize_response(state: dict[str, Any]) -> dict[str, Any]:
     assessment = state.get("final_assessment") or {}
 
     return {
-        "status": state.get("status") or "success",
+        "status": "success",
         "summary": state.get("summary") or "质量分析完成",
         "answer": state.get("answer", ""),
         "message_type": message_type,
