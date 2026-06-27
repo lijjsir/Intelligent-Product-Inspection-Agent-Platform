@@ -57,5 +57,5 @@ class StabilityRepository:
             stmt = stmt.where(StabilityReport.created_at >= datetime.combine(start_date, datetime.min.time()))
         if end_date:
             stmt = stmt.where(StabilityReport.created_at <= datetime.combine(end_date, datetime.max.time()))
-        result = await self._session.execute(stmt.order_by(StabilityReport.created_at.asc()))
+        result = await self._session.execute(stmt)
         return list(result.scalars().all())

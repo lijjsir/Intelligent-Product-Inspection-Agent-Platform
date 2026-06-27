@@ -19,6 +19,9 @@ class PagedResponse(BaseModel, Generic[T]):
 
 
 class ResponseEnvelope(BaseModel, Generic[T]):
+    success: bool = True
     code: str = "ok"
     message: str = "success"
     data: Optional[T] = None
+    trace_id: Optional[str] = None
+    warnings: List[dict | str] = Field(default_factory=list)

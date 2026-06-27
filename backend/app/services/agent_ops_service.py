@@ -135,23 +135,11 @@ class AgentOpsService:
     def _derive_rag_source_key(cls, item: dict) -> str | None:
         metadata = dict(item.get("metadata") or {})
         raw_agent = cls._clean_rag_text(item.get("agent_name")) or cls._clean_rag_text(metadata.get("agent"))
-        if raw_agent in {"chat", "inspection_task"}:
+        if raw_agent in {"chat", "quality_analysis"}:
             return raw_agent
         raw_graph = cls._clean_rag_text(item.get("source_graph")) or cls._clean_rag_text(metadata.get("source_graph"))
-        if raw_graph in {"chat", "inspection_task"}:
+        if raw_graph in {"chat", "quality_analysis"}:
             return raw_graph
-        normalized_sub_route = cls._normalize_rag_sub_route(
-            item.get("sub_route") or metadata.get("sub_route") or metadata.get("intent")
-        )
-        if raw_graph in {"quality_judgement", "llm_native_quality", "legacy_quality"}:
-            if normalized_sub_route in {"task_create", "inspection_execute"}:
-                return "inspection_task"
-            if normalized_sub_route in {"general_chat", "rag_qa", "quality_qa"}:
-                return "chat"
-            if item.get("task_id"):
-                return "inspection_task"
-            if item.get("session_id"):
-                return "chat"
         return raw_agent or raw_graph
 
     @classmethod
@@ -166,7 +154,7 @@ class AgentOpsService:
         raw_agent = cls._clean_rag_text(item.get("agent_name")) or cls._clean_rag_text(metadata.get("agent"))
         source_graph = normalized_key or cls._clean_rag_text(item.get("source_graph"))
         source_agent = source_display_map.get(normalized_key or "") if normalized_key else None
-        if source_agent is None and raw_agent and raw_agent not in {"chat", "inspection_task", "quality_judgement", "llm_native_quality", "legacy_quality"}:
+        if source_agent is None and raw_agent and raw_agent not in {"chat", "quality_analysis"}:
             source_agent = raw_agent
         if source_agent is None and source_graph:
             source_agent = source_display_map.get(source_graph) or source_graph
@@ -317,9 +305,9 @@ class AgentOpsService:
                     "hit_rate": round(min(1.0, hit_count / max(top_k, 1)), 4),
                     "citation_coverage": round(min(1.0, len(citations) / max(hit_count, 1)), 4) if citations else 0.0,
                     "latency_ms": int(summary.get("latency_ms") or 0),
-                    "source_graph": "inspection_task",
-                    "agent_name": "inspection_task",
-                    "sub_route": "task_execution",
+                    "source_graph": "quality_analysis",
+                    "agent_name": "quality_analysis",
+                    "sub_route": "inspection_execute",
                     "trace_id": trace_id,
                     "top_score": top_score,
                     "metadata_json": {
@@ -549,21 +537,8 @@ class AgentOpsService:
         from agent.router.route_policy import AgentRoutePolicy
 
         all_topology = get_topology("all", include_root=True)
-        root_node_ids = {
-            node["id"]
-            for node in all_topology["nodes"]
-            if node["kind"] in {"root", "subgraph"}
-        }
-        root_nodes = [
-            node
-            for node in all_topology["nodes"]
-            if node["id"] in root_node_ids
-        ]
-        root_edges = [
-            edge
-            for edge in all_topology["edges"]
-            if edge["source"] in root_node_ids and edge["target"] in root_node_ids
-        ]
+        root_nodes = list(all_topology["nodes"])
+        root_edges = list(all_topology["edges"])
 
         route_mode = str(settings.agent_route_mode or "router_enabled").strip() or "router_enabled"
         if route_mode not in {"legacy_only", "canary_non_pdf", "router_enabled"}:
@@ -672,8 +647,8 @@ class AgentOpsService:
                 selected_subgraph="all",
                 nodes=root_nodes,
                 edges=root_edges,
-                intent_name="memory_manager",
-                agent_name="MemoryManagerGraph",
+                intent_name="orchestrator",
+                agent_name="OrchestratorLoop",
             ),
             subgraphs=subgraphs,
             priority_rules=priority_rules,
@@ -749,8 +724,7 @@ class AgentOpsService:
             agent_name_map = {}
         source_display_map = {
             "chat": agent_name_map.get("chat") or "Quality Chat",
-            "inspection_task": agent_name_map.get("inspection_task") or "Inspection Task Agent",
-            "quality_judgement": agent_name_map.get("quality_judgement") or "Quality Judgement",
+            "quality_analysis": agent_name_map.get("quality_analysis") or "Quality Analysis Agent",
         }
 
         space_options = [
@@ -928,8 +902,7 @@ class AgentOpsService:
             agent_name_map = {}
         source_display_map = {
             "chat": agent_name_map.get("chat") or "Quality Chat",
-            "inspection_task": agent_name_map.get("inspection_task") or "Inspection Task Agent",
-            "quality_judgement": agent_name_map.get("quality_judgement") or "Quality Judgement",
+            "quality_analysis": agent_name_map.get("quality_analysis") or "Quality Analysis Agent",
         }
 
         metadata = dict(item.get("metadata") or {})
@@ -1192,12 +1165,12 @@ class AgentOpsService:
         if not route:
             raise NotFoundError(f"Intent route {route_id} not found")
         agent_name = None
-        subgraph_key = "quality_judgement"
+        subgraph_key = "quality_analysis"
         if route.agent_id:
             agent = await self._agent_repo.get(str(route.agent_id))
             if agent:
                 agent_name = agent.name
-                subgraph_key = str(agent.subgraph_key or "quality_judgement")
+                subgraph_key = str(agent.subgraph_key or "quality_analysis")
         topology = get_route_topology(
             intent_name=route.intent_name,
             agent_name=agent_name,

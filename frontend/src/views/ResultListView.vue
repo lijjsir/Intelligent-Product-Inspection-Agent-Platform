@@ -173,7 +173,7 @@ const VERDICT_LABELS: Record<string, string> = {
             <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{ VERDICT_LABELS[scope.row.verdict] || scope.row.verdict }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="overall_score" label="分数" width="100">
+        <el-table-column prop="overall_score" label="置信分" width="100">
           <template #default="scope">{{ (scope.row.overall_score * 100).toFixed(1) }}</template>
         </el-table-column>
         <el-table-column prop="created_at" label="时间" min-width="180">

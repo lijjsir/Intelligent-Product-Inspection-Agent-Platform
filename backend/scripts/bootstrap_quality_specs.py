@@ -4,13 +4,21 @@ import argparse
 import asyncio
 import json
 import re
+import sys
+from pathlib import Path
 
 from sqlalchemy import desc, func, select
 
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
 from app.core.ids import uuid7
+from app.models.inspection_standard_library import InspectionStandardLibrary
 from app.models.inspection_spec import InspectionSpec, InspectionSpecItem
+from app.models.product import ProductLine, ProductSku
 from app.models.task import InspectionTask
-from infra.database.session import get_session
+from infra.database.session import get_session, reset_async_engine_pool
 
 
 def slugify(value: str) -> str:
@@ -20,13 +28,11 @@ def slugify(value: str) -> str:
 
 def build_spec_payload(*, org_id: str | None, spec_code: str, name: str, product_id: str | None, product_family: str) -> dict:
     required_views = ["front", "rear", "detail"]
-    required_image_count = 3
+    required_image_count = 1
     if product_family == "food":
         required_views = ["label", "packaging", "traceability"]
-        required_image_count = 1
     elif product_family == "electronics":
         required_views = ["marking", "safety", "documents"]
-        required_image_count = 1
     return {
         "id": str(uuid7()),
         "org_id": org_id,
@@ -54,7 +60,7 @@ def build_spec_payload(*, org_id: str | None, spec_code: str, name: str, product
             "unmapped_defect": "manual_required",
             "low_evidence": "manual_required",
         },
-        "auto_pass_enabled": False,
+        "auto_pass_enabled": True,
         "is_active": True,
     }
 
@@ -423,6 +429,29 @@ def build_spec_items(spec_row_id: str, product_family: str) -> list[dict]:
     return build_screw_spec_items(spec_row_id)
 
 
+def _spec_code_for_sku(sku_code: str) -> str:
+    if slugify(sku_code) == "SCREW":
+        return "SCREW-A-2026-V1"
+    return f"AUTO-{slugify(sku_code)}-V1"
+
+
+def _spec_name_for_sku(sku_name: str, sku_code: str) -> str:
+    return f"{sku_name or sku_code} 质检门槛"
+
+
+def _library_name_for_sku(sku_name: str, sku_code: str) -> str:
+    return f"{sku_name or sku_code} 检测标准"
+
+
+def _apply_sku_scope(spec: InspectionSpec, *, org_id: str, sku_code: str, sku_name: str) -> None:
+    spec.org_id = org_id
+    spec.name = _spec_name_for_sku(sku_name, sku_code)
+    spec.product_id = sku_code
+    spec.product_family = sku_code
+    spec.applicable_skus = [sku_code]
+    spec.is_active = True
+
+
 async def resolve_top_product_ids(org_id: str | None, limit: int) -> list[str]:
     async with get_session() as session:
         stmt = (
@@ -514,16 +543,153 @@ async def upsert_specs(org_id: str | None, product_ids: list[str]) -> dict:
     }
 
 
+async def seed_specs_and_libraries_for_active_skus(org_id: str) -> dict:
+    created_specs: list[str] = []
+    updated_libraries: list[str] = []
+    created_libraries: list[str] = []
+
+    async with get_session() as session:
+        sku_rows = (
+            await session.execute(
+                select(ProductSku, ProductLine)
+                .join(ProductLine, ProductLine.id == ProductSku.product_line_id)
+                .where(
+                    ProductSku.org_id == org_id,
+                    ProductSku.deleted_at.is_(None),
+                    ProductSku.is_active.is_(True),
+                    ProductLine.deleted_at.is_(None),
+                    ProductLine.is_active.is_(True),
+                )
+                .order_by(ProductLine.code.asc(), ProductSku.code.asc())
+            )
+        ).all()
+        library_rows = (
+            await session.execute(
+                select(InspectionStandardLibrary).where(
+                    InspectionStandardLibrary.org_id == org_id,
+                    InspectionStandardLibrary.deleted_at.is_(None),
+                    InspectionStandardLibrary.applicable_product_sku_ids.is_not(None),
+                )
+            )
+        ).scalars().all()
+
+        for sku, line in sku_rows:
+            spec_code = _spec_code_for_sku(str(sku.code))
+            spec = (
+                await session.execute(
+                    select(InspectionSpec).where(
+                        InspectionSpec.org_id == org_id,
+                        InspectionSpec.spec_code == spec_code,
+                        InspectionSpec.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if spec is None:
+                spec = (
+                    await session.execute(
+                        select(InspectionSpec).where(
+                            InspectionSpec.org_id.is_(None),
+                            InspectionSpec.spec_code == spec_code,
+                            InspectionSpec.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if spec is None:
+                payload = build_spec_payload(
+                    org_id=org_id,
+                    spec_code=spec_code,
+                    name=_spec_name_for_sku(str(sku.name), str(sku.code)),
+                    product_id=str(sku.code),
+                    product_family=str(sku.code),
+                )
+                spec = InspectionSpec(**payload)
+                session.add(spec)
+                for item in build_spec_items(payload["id"], str(sku.code)):
+                    session.add(InspectionSpecItem(**item))
+                created_specs.append(spec_code)
+            else:
+                _apply_sku_scope(spec, org_id=org_id, sku_code=str(sku.code), sku_name=str(sku.name))
+
+            matched_library = next(
+                (
+                    item
+                    for item in library_rows
+                    if str(sku.id) in list(item.applicable_product_sku_ids or [])
+                ),
+                None,
+            )
+            if matched_library is None:
+                matched_library = InspectionStandardLibrary(
+                    id=str(uuid7()),
+                    org_id=org_id,
+                    name=_library_name_for_sku(str(sku.name), str(sku.code)),
+                    product_family=str(sku.code),
+                    inspection_spec_id=str(spec.id),
+                    spec_code=str(spec.spec_code),
+                    applicable_product_line_ids=[str(line.id)],
+                    applicable_product_sku_ids=[str(sku.id)],
+                    description=f"Auto-seeded standard binding for SKU {sku.code}.",
+                    rag_space_ids=[],
+                    domain=str(line.code),
+                    product_category=str(sku.code),
+                    file_glob="*.pdf",
+                    chunk_strategy="heading_then_size",
+                    standard_status="现行",
+                    auto_reindex=False,
+                    pdf_count=0,
+                    document_count=0,
+                    chunk_count=0,
+                    import_status="not_scanned",
+                    is_active=True,
+                )
+                session.add(matched_library)
+                library_rows.append(matched_library)
+                created_libraries.append(str(sku.code))
+            else:
+                matched_library.name = _library_name_for_sku(str(sku.name), str(sku.code))
+                matched_library.product_family = str(sku.code)
+                matched_library.inspection_spec_id = str(spec.id)
+                matched_library.spec_code = str(spec.spec_code)
+                matched_library.applicable_product_line_ids = [str(line.id)]
+                matched_library.applicable_product_sku_ids = [str(sku.id)]
+                matched_library.domain = str(line.code)
+                matched_library.product_category = str(sku.code)
+                matched_library.is_active = True
+                updated_libraries.append(str(sku.code))
+
+        await session.commit()
+
+    return {
+        "org_id": org_id,
+        "created_specs": created_specs,
+        "created_libraries": created_libraries,
+        "updated_libraries": updated_libraries,
+    }
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap multi-product quality specs")
     parser.add_argument("--org-id", default=None, help="Target org id. Omit to seed global defaults.")
     parser.add_argument("--top-products", type=int, default=5, help="Number of top product_ids to bootstrap")
+    parser.add_argument("--active-skus", action="store_true", help="Seed one spec and one standard binding for each active SKU in the org.")
     args = parser.parse_args()
 
-    product_ids = await resolve_top_product_ids(args.org_id, args.top_products)
-    result = await upsert_specs(args.org_id, product_ids)
+    if args.active_skus:
+        if not args.org_id:
+            raise ValueError("--org-id is required when using --active-skus")
+        result = await seed_specs_and_libraries_for_active_skus(args.org_id)
+    else:
+        product_ids = await resolve_top_product_ids(args.org_id, args.top_products)
+        result = await upsert_specs(args.org_id, product_ids)
     print(json.dumps(result, ensure_ascii=False))
 
 
+async def _run_cli() -> None:
+    try:
+        await main()
+    finally:
+        await reset_async_engine_pool()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(_run_cli())

@@ -13,12 +13,6 @@ from app.core.datetime import utcnow
 
 # ---- Enums ----
 
-class Workspace(str, Enum):
-    APP = "app"
-    OPS = "ops"
-    GOVERNANCE = "governance"
-
-
 class MemoryType(str, Enum):
     USER_PREFERENCE = "user_preference"
     TASK_EPISODE = "task_episode"
@@ -31,26 +25,11 @@ class MemoryType(str, Enum):
 class MemoryStatus(str, Enum):
     CANDIDATE = "candidate"
     ACTIVE = "active"
-    REJECTED = "rejected"
-    DISPUTED = "disputed"
-    SUPERSEDED = "superseded"
     ISOLATED = "isolated"
     DISABLED = "disabled"
     DELETED = "deleted"
     EXPIRED = "expired"
-
-
-class MemoryScopeType(str, Enum):
-    MEETING_ROOM = "meeting_room"
-    INSPECTION_TASK = "inspection_task"
-    PRODUCT = "product"
-    STANDARD = "standard"
-    RAG_SPACE = "rag_space"
-    USER = "user"
-    ROLE = "role"
-    WORKSPACE = "workspace"
-    ORGANIZATION = "organization"
-    BATCH = "batch"
+    CONTESTED = "contested"
 
 
 class EventType(str, Enum):
@@ -59,6 +38,10 @@ class EventType(str, Enum):
     TOOL_CALLED = "tool.called"
     AGENT_MESSAGE_CREATED = "agent.message_created"
     MEMORY_CANDIDATE_CREATED = "memory.candidate_created"
+    MEMORY_CANDIDATE_SUPPORTED = "memory.candidate_supported"
+    MEMORY_CANDIDATE_MERGED = "memory.candidate_merged"
+    MEMORY_CANDIDATE_REJECTED = "memory.candidate_rejected"
+    MEMORY_PROMOTED_TO_ACTIVE = "memory.promoted_to_active"
     MEMORY_WRITE_CREATED = "memory.write_created"
     MEMORY_WRITE_REJECTED = "memory.write_rejected"
     MEMORY_RETRIEVAL_COMPLETED = "memory.retrieval_completed"
@@ -67,20 +50,36 @@ class EventType(str, Enum):
     MEMORY_ROLLBACK_PLANNED = "memory.rollback_planned"
     MEMORY_ROLLBACK_APPLIED = "memory.rollback_applied"
     MEMORY_EVALUATION_COMPLETED = "memory.evaluation_completed"
-    MEMORY_DEGRADED = "memory.degraded"
+
+
+PROVENANCE_EDGE_VALUES = {
+    "version_of",
+    "summarized_from",
+    "merged_from",
+    "derived_from",
+    "cited_as_evidence",
+    "planned_from",
+    "rollback_depends_on",
+}
 
 
 class EdgeType(str, Enum):
-    DERIVED_FROM = "derived_from"
-    READ_BY = "read_by"
-    USED_AS_TOOL_PARAM = "used_as_tool_param"
-    CITED_AS_EVIDENCE = "cited_as_evidence"
+    # Provenance edges: written by system context during memory write.
     VERSION_OF = "version_of"
-    MERGED_FROM = "merged_from"
-    CONFLICTS_WITH = "conflicts_with"
     SUMMARIZED_FROM = "summarized_from"
+    MERGED_FROM = "merged_from"
+    DERIVED_FROM = "derived_from"
+    CITED_AS_EVIDENCE = "cited_as_evidence"
     PLANNED_FROM = "planned_from"
     ROLLBACK_DEPENDS_ON = "rollback_depends_on"
+
+    # Semantic edge: only conflicts_with is persisted (has actionable value —
+    # next retrieval can check existing conflicts and skip LLM detection).
+    CONFLICTS_WITH = "conflicts_with"
+
+    # Audit-only edges — NOT for default propagation, NOT for semantic relation.
+    READ_BY = "read_by"
+    USED_AS_TOOL_PARAM = "used_as_tool_param"
 
 
 class RollbackAction(str, Enum):
@@ -89,6 +88,21 @@ class RollbackAction(str, Enum):
     ISOLATE = "isolate"
     PATCH = "patch"
     BRANCH = "branch"
+
+
+class MemoryDependencyInput(BaseModel):
+    """Explicit provenance dependency declaration in write request."""
+    target_memory_id: str = Field(..., min_length=1)
+    edge_type: EdgeType
+    strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    reason: str | None = None
+    metadata: dict | None = None
+
+    @model_validator(mode="after")
+    def validate_provenance_edge(self) -> MemoryDependencyInput:
+        if self.edge_type.value not in PROVENANCE_EDGE_VALUES:
+            raise ValueError("dependency_edges only accepts provenance edge types")
+        return self
 
 
 class ReviewStatus(str, Enum):
@@ -104,6 +118,7 @@ class MemorySource(BaseModel):
     kind: str
     task_id: str | None = None
     trace_id: str | None = None
+    agent_id: str | None = None
 
 
 class MemoryContent(BaseModel):
@@ -115,80 +130,22 @@ class MemoryContent(BaseModel):
 
 
 class MemoryScope(BaseModel):
-    scope_type: MemoryScopeType | None = None
-    scope_id: str | None = None
-    room_id: str | None = None
     task_id: str | None = None
-    product_id: str | None = None
     product_line: str | None = None
-    spec_code: str | None = None
-    standard_id: str | None = None
     rag_space_id: str | None = None
-    user_id: str | None = None
     role: str | None = None
-    workspace: str | None = None
-    organization_id: str | None = None
-    batch_no: str | None = None
-
-    def has_business_scope(self) -> bool:
-        return any(
-            [
-                self.scope_type and self.scope_id,
-                self.room_id,
-                self.task_id,
-                self.product_id,
-                self.product_line,
-                self.spec_code,
-                self.standard_id,
-                self.rag_space_id,
-                self.user_id,
-                self.role,
-                self.workspace,
-                self.organization_id,
-                self.batch_no,
-            ]
-        )
-
-    def primary_pair(self) -> tuple[str, str] | None:
-        if self.scope_type and self.scope_id:
-            return self.scope_type.value, self.scope_id
-        if self.room_id:
-            return MemoryScopeType.MEETING_ROOM.value, self.room_id
-        if self.task_id:
-            return MemoryScopeType.INSPECTION_TASK.value, self.task_id
-        if self.product_id:
-            return MemoryScopeType.PRODUCT.value, self.product_id
-        if self.product_line:
-            return MemoryScopeType.PRODUCT.value, self.product_line
-        if self.spec_code:
-            return MemoryScopeType.STANDARD.value, self.spec_code
-        if self.standard_id:
-            return MemoryScopeType.STANDARD.value, self.standard_id
-        if self.rag_space_id:
-            return MemoryScopeType.RAG_SPACE.value, self.rag_space_id
-        if self.user_id:
-            return MemoryScopeType.USER.value, self.user_id
-        if self.role:
-            return MemoryScopeType.ROLE.value, self.role
-        if self.workspace:
-            return MemoryScopeType.WORKSPACE.value, self.workspace
-        if self.organization_id:
-            return MemoryScopeType.ORGANIZATION.value, self.organization_id
-        if self.batch_no:
-            return MemoryScopeType.BATCH.value, self.batch_no
-        return None
 
 
 class MemoryWriteRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     source: MemorySource
     memory_type: MemoryType
     scope: MemoryScope | None = None
     content: MemoryContent
     evidence_pointers: dict | None = None
     version_parent_id: str | None = None
+    dependency_edges: list[MemoryDependencyInput] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     ttl_policy: str = "90d"
     privacy_level: str = "tenant_private"
@@ -201,49 +158,15 @@ class MemoryWriteRequest(BaseModel):
         if self.memory_type == MemoryType.USER_PREFERENCE and not self.user_id:
             raise ValueError("user_preference requires user_id")
         if self.memory_type == MemoryType.TASK_EPISODE:
-            has_task = (
-                self.scope
-                and (
-                    self.scope.task_id
-                    or (
-                        self.scope.scope_type == MemoryScopeType.INSPECTION_TASK
-                        and self.scope.scope_id
-                    )
-                )
-            ) or (self.source and self.source.task_id)
+            has_task = (self.scope and self.scope.task_id) or (self.source and self.source.task_id)
             if not has_task:
                 raise ValueError("task_episode requires task_id in scope or source")
         if self.memory_type == MemoryType.INSPECTION_PATTERN:
-            has_product_scope = (
-                self.scope
-                and (
-                    self.scope.product_line
-                    or self.scope.product_id
-                    or (
-                        self.scope.scope_type == MemoryScopeType.PRODUCT
-                        and self.scope.scope_id
-                    )
-                )
-            )
-            if not has_product_scope:
-                raise ValueError("inspection_pattern requires product_id/product_line in scope")
+            if not self.scope or not self.scope.product_line:
+                raise ValueError("inspection_pattern requires product_line in scope")
         if self.memory_type == MemoryType.RAG_USAGE_MEMORY:
-            has_rag_scope = (
-                self.scope
-                and (
-                    self.scope.rag_space_id
-                    or (
-                        self.scope.scope_type == MemoryScopeType.RAG_SPACE
-                        and self.scope.scope_id
-                    )
-                )
-            )
-            if not has_rag_scope:
+            if not self.scope or not self.scope.rag_space_id:
                 raise ValueError("rag_usage_memory requires rag_space_id in scope")
-        if self.memory_type == MemoryType.AGENT_OPS_MEMORY and self.workspace != Workspace.OPS:
-            raise ValueError("agent_ops_memory must use ops workspace")
-        if self.memory_type == MemoryType.GOVERNANCE_MEMORY and self.workspace != Workspace.GOVERNANCE:
-            raise ValueError("governance_memory must use governance workspace")
         return self
 
 
@@ -253,31 +176,46 @@ class MemoryWriteResponse(BaseModel):
     trust_score: float | None = None
     confidence: float | None = None
     warnings: list[str] = Field(default_factory=list)
+    policy_key: str | None = None
+    policy_version: str | None = None
+
+
+class CandidateSupportCreate(BaseModel):
+    support_type: str = Field(default="support", min_length=1)
+    source_kind: str | None = None
+    source_agent: str | None = None
+    task_id: str | None = None
+    trace_id: str | None = None
+    rag_space_id: str | None = None
+    document_id: str | None = None
+    chunk_id: str | None = None
+    evidence_pointer: dict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+    weight: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class PromotionEvaluationResponse(BaseModel):
+    memory_id: str
+    status: MemoryStatus
+    promotion_score: float
+    promoted: bool = False
+    reason: str | None = None
+    blocked_reasons: list[str] = Field(default_factory=list)
 
 
 # ---- Search ----
 
 class ScopeFilter(BaseModel):
     memory_type: list[MemoryType] | None = None
-    scope_type: list[MemoryScopeType] | None = None
-    room_id: str | None = None
-    product_id: str | None = None
     product_line: str | None = None
-    spec_code: str | None = None
-    standard_id: str | None = None
     rag_space_id: str | None = None
-    user_id: str | None = None
     task_id: str | None = None
-    role: str | None = None
-    workspace: str | None = None
-    organization_id: str | None = None
-    batch_no: str | None = None
 
 
 class MemorySearchRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     query: str = Field(..., min_length=1)
     scope_filter: ScopeFilter | None = None
     top_k: int = Field(default=5, ge=1, le=10)
@@ -298,16 +236,17 @@ class MemorySearchItem(BaseModel):
 class MemorySearchResponse(BaseModel):
     memory_context: dict | None = None
     items: list[MemorySearchItem] = Field(default_factory=list)
-    degraded: bool = False
-    warnings: list[str] = Field(default_factory=list)
+    policy_version: str = "default:v1"
+    trace_id: str | None = None
+    conflict_info: dict | None = None
 
     @model_validator(mode="after")
     def ensure_context(self) -> MemorySearchResponse:
         if self.memory_context is None:
             self.memory_context = {
                 "items": [item.model_dump() for item in self.items],
-                "warnings": self.warnings,
-                "degraded": self.degraded,
+                "policy_version": self.policy_version,
+                "trace_id": self.trace_id,
             }
         return self
 
@@ -318,7 +257,6 @@ class MemoryEventPayload(BaseModel):
     event_id: str = Field(..., min_length=1)
     org_id: str = Field(..., min_length=1)
     user_id: str | None = None
-    workspace: Workspace
     event_type: EventType
     source_kind: str | None = None
     agent_id: str | None = None
@@ -337,15 +275,17 @@ class MemoryEventPayload(BaseModel):
 
 class MemoryPropagationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = "governance"
     root_memory_id: str = Field(..., min_length=1)
     trace_id: str | None = None
     max_depth: int = Field(default=4, ge=1, le=10)
     include_edge_types: list[EdgeType] = Field(default_factory=lambda: [
-        EdgeType.DERIVED_FROM,
-        EdgeType.READ_BY,
-        EdgeType.USED_AS_TOOL_PARAM,
         EdgeType.VERSION_OF,
+        EdgeType.SUMMARIZED_FROM,
+        EdgeType.MERGED_FROM,
+        EdgeType.DERIVED_FROM,
+        EdgeType.CITED_AS_EVIDENCE,
+        EdgeType.PLANNED_FROM,
+        EdgeType.ROLLBACK_DEPENDS_ON,
     ])
 
 
@@ -370,7 +310,6 @@ class MemoryPropagationResponse(BaseModel):
 
 class MemoryRollbackRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: Workspace
     operator_id: str = Field(..., min_length=1)
     trace_id: str = Field(..., min_length=1)
     root_memory_id: str = Field(..., min_length=1)
@@ -395,7 +334,6 @@ class MemoryRollbackResponse(BaseModel):
 
 class MemoryEvaluationRequest(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: str = "governance"
     rollback_id: str = Field(..., min_length=1)
     task_id: str | None = None
     trace_id: str | None = None
@@ -415,7 +353,6 @@ class MemoryEvaluationResponse(BaseModel):
 
 class MemoryPolicyContract(BaseModel):
     org_id: str = Field(..., min_length=1)
-    workspace: Workspace
     policy_key: str
     policy_type: str
     config: dict

@@ -22,7 +22,6 @@ from app.repositories.paper_template_repo import (
     PaperTemplateClauseRepository,
     PaperTemplateRepository,
 )
-from app.services.model_config_service import ModelConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,6 @@ logger = logging.getLogger(__name__)
 class PaperTemplateIndexService:
     def __init__(self, session: AsyncSession, *, org_id: str | None = None):
         self._session = session
-        self._org_id = org_id
         self._template_repo = PaperTemplateRepository(session)
         self._clause_repo = PaperTemplateClauseRepository(session)
         self._embedder = Embedder(org_id=org_id, allow_pseudo_fallback=False)
@@ -115,39 +113,14 @@ class PaperTemplateIndexService:
             await self._clause_repo.upsert_clause(clause)
 
         # 5. Vectorize and index into Qdrant (PUT = upsert by point id)
-        embedding_models: list[dict[str, Any]] = []
-        model_lookup_error: str | None = None
-        if self._org_id:
-            ModelConfigService.invalidate_runtime_cache(str(self._org_id))
-            try:
-                embedding_models = await ModelConfigService(
-                    self._session,
-                    str(self._org_id),
-                ).list_runtime_models("embedding")
-            except Exception as exc:
-                model_lookup_error = f"{type(exc).__name__}: {exc}"
-
         points = []
-        embed_errors: list[str] = []
         for clause_data in clauses:
             vector_text = clause_data.get("vector_text", clause_data["clause_text"])[:2000]
             try:
                 vector = await self._embedder.embed(vector_text)
-            except Exception as exc:
-                if len(embed_errors) < 5:
-                    embed_errors.append(
-                        f"{clause_data.get('clause_id')}: {type(exc).__name__}: {exc}"
-                    )
-                logger.warning(
-                    "paper template clause embedding failed template_id=%s clause_id=%s error=%s",
-                    template_id,
-                    clause_data.get("clause_id"),
-                    exc,
-                )
+            except Exception:
                 continue
             if not vector:
-                if len(embed_errors) < 5:
-                    embed_errors.append(f"{clause_data.get('clause_id')}: empty embedding vector")
                 continue
             points.append({
                 "id": str(clause_data["clause_id"]),
@@ -169,11 +142,9 @@ class PaperTemplateIndexService:
         if clauses and not points:
             await self._session.rollback()
             raise RuntimeError(
-                self._build_embedding_failure_message(
-                    embedding_models=embedding_models,
-                    model_lookup_error=model_lookup_error,
-                    embed_errors=embed_errors,
-                )
+                "模板条款向量化失败：未找到可用的嵌入模型。"
+                "请在模型配置页面添加 model_type=embedding 的模型，确保 is_active=1。"
+                " 错误码: PAPER_TEMPLATE_EMBED_FAILED"
             )
 
         if points:
@@ -194,37 +165,6 @@ class PaperTemplateIndexService:
         }
 
     # ---- internal ----
-
-    @staticmethod
-    def _build_embedding_failure_message(
-        *,
-        embedding_models: list[dict[str, Any]],
-        model_lookup_error: str | None,
-        embed_errors: list[str],
-    ) -> str:
-        model_names = [
-            str(item.get("display_name") or item.get("model_key") or item.get("id") or "").strip()
-            for item in embedding_models
-            if isinstance(item, dict)
-        ]
-        model_summary = (
-            f"已找到 {len(model_names)} 个 active embedding 模型"
-            if model_names
-            else "未从运行时配置读取到 active embedding 模型"
-        )
-        details: list[str] = [model_summary]
-        if model_names:
-            details.append("模型: " + ", ".join(model_names[:3]))
-        if model_lookup_error:
-            details.append(f"模型配置读取错误: {model_lookup_error}")
-        if embed_errors:
-            details.append("向量化错误样例: " + " | ".join(embed_errors[:5]))
-        return (
-            "模板条款向量化失败：没有成功生成任何向量。"
-            + "；".join(details)
-            + "。请检查 embedding 模型的 API Key、endpoint、model_key、健康状态以及网络连通性。"
-            + " 错误码: PAPER_TEMPLATE_EMBED_FAILED"
-        )
 
     async def _ensure_qdrant_collection(self, vector_size: int) -> None:
         headers = {"Content-Type": "application/json"}

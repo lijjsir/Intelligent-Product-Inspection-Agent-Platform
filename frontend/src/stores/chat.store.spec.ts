@@ -29,7 +29,7 @@ describe("chat store", () => {
     vi.mocked(ragSpaceApi.list).mockReset();
   });
 
-  it("preserves the saved RAG space when initializing the chat page", async () => {
+  it("does not restore a saved RAG space when initializing the chat page", async () => {
     sessionStorage.setItem("chat_current_session_id", "session-1");
     sessionStorage.setItem("chat_selected_rag_space_id", "rag-1");
     vi.mocked(chatApi.listSessions).mockResolvedValue({
@@ -54,7 +54,7 @@ describe("chat store", () => {
 
     await store.initForChatPage();
 
-    expect(store.selectedRagSpaceId).toBe("rag-1");
-    expect(sessionStorage.getItem("chat_selected_rag_space_id")).toBe("rag-1");
+    expect(store.selectedRagSpaceId).toBe("");
+    expect(sessionStorage.getItem("chat_selected_rag_space_id")).toBeNull();
   });
 });

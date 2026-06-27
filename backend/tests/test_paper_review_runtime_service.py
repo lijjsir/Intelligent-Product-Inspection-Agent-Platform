@@ -6,6 +6,20 @@ from app.services.paper_review_runtime_service import PaperReviewRuntimeService
 
 
 @pytest.mark.asyncio
+async def test_runtime_reports_disabled_when_paper_review_is_off(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.paper_review_runtime_service.settings.paper_review_enabled",
+        False,
+    )
+
+    status = await PaperReviewRuntimeService.diagnose()
+
+    assert status["ok"] is True
+    assert status["status"] == "disabled"
+    assert status["engines_used"] == []
+
+
+@pytest.mark.asyncio
 async def test_runtime_marks_pycorrector_unhealthy_when_probe_fails(monkeypatch):
     async def _ok_docx():
         return {"name": "docx", "ok": True, "detail": "installed"}
@@ -43,7 +57,7 @@ async def test_runtime_marks_pycorrector_unhealthy_when_probe_fails(monkeypatch)
         staticmethod(_ok_vale),
     )
     monkeypatch.setattr(
-        "agent.tools.paper_review_pycorrector.diagnose_pycorrector",
+        "app.services.paper_review_runtime_service.diagnose_pycorrector",
         lambda: {"ok": False, "detail": "Corrector init failed: missing kenlm"},
     )
 
@@ -86,7 +100,7 @@ async def test_runtime_marks_macro_correct_unhealthy_when_probe_fails(monkeypatc
         staticmethod(_ok_vale),
     )
     monkeypatch.setattr(
-        "agent.tools.paper_review_pycorrector.diagnose_pycorrector",
+        "app.services.paper_review_runtime_service.diagnose_pycorrector",
         lambda: {"ok": True, "detail": "pycorrector.correct"},
     )
     monkeypatch.setattr(

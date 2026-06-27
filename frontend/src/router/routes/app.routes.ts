@@ -1,13 +1,21 @@
-import { ALL_ROLES, ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
+import {
+  CHAT_ROLES,
+  COLLABORATION_ROLES,
+  ROLE_ADMIN,
+  ROLE_USER,
+  ROLE_EXPERT,
+  ROLE_PLATFORM_OPERATOR,
+  ROLE_ALGORITHM_ENGINEER,
+} from "@/constants/roles";
 
-const APP_ROLES = [ROLE_USER, ROLE_EXPERT];
-const COLLAB_ROLES = [...ALL_ROLES];
+const APP_ROLES = [...CHAT_ROLES];
+const COLLAB_APP_ROLES = [...COLLABORATION_ROLES];
 
 export const appRoutes = [
   { path: "dashboard", name: "app-dashboard", redirect: { name: "app-chat" }, meta: { title: "工作台概览", roles: APP_ROLES } },
   { path: "chat", name: "app-chat", component: () => import("@/views/ChatView.vue"), meta: { title: "AI 对话", roles: APP_ROLES } },
-  { path: "meetings", name: "app-meetings", component: () => import("@/views/MeetingRoomView.vue"), meta: { title: "聊天会议室", roles: COLLAB_ROLES } },
-  { path: "collab", name: "app-collab", component: () => import("@/views/CollabMessagesView.vue"), meta: { title: "协作消息", roles: COLLAB_ROLES } },
+  { path: "meetings", name: "app-meetings", component: () => import("@/views/MeetingRoomView.vue"), meta: { title: "聊天会议室", roles: COLLAB_APP_ROLES } },
+  { path: "collab", name: "app-collab", component: () => import("@/views/CollabMessagesView.vue"), meta: { title: "协作消息", roles: COLLAB_APP_ROLES } },
   { path: "rag-spaces", name: "app-rag-spaces", component: () => import("@/views/RagSpaceView.vue"), meta: { title: "RAG 空间", roles: [ROLE_ADMIN, ROLE_EXPERT] } },
   { path: "tasks", name: "app-tasks", component: () => import("@/views/TaskListView.vue"), meta: { title: "任务管理", roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER] } },
   { path: "tasks/:id", name: "app-task-detail", component: () => import("@/views/TaskDetailView.vue"), meta: { roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER] } },

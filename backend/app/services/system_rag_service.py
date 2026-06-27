@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.subgraphs.quality_judgement.product_adapters import detect_product_family
+from app.services.quality_product_adapter import detect_product_family
 
 from app.services.inspection_standard_resolver_service import InspectionStandardResolverService
 from app.services.rag_retrieval_service import RagRetrievalService

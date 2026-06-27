@@ -42,7 +42,7 @@ export function buildFallbackRoutingStrategy(): RoutingStrategyOverview {
       {
         key: "has_file_attachments",
         label: "文件附件",
-        description: "非图片文件会参与新 Agent 的文件解析和结构化质检判断。",
+        description: "非图片文件会参与新智能体的文件解析和结构化质检判断。",
         source_stage: "route_signal_builder",
       },
       {
@@ -96,7 +96,7 @@ export function buildFallbackRoutingStrategy(): RoutingStrategyOverview {
       },
       {
         key: "image-first",
-        title: "图片走旧 Agent",
+        title: "图片走旧智能体",
         target_subgraph: "legacy_quality",
         reason: "Image attachment detected; route to legacy vision workflow",
         priority_order: 2,
@@ -105,7 +105,7 @@ export function buildFallbackRoutingStrategy(): RoutingStrategyOverview {
       },
       {
         key: "text-file-native",
-        title: "文本与非图片文件走新 Agent",
+        title: "文本与非图片文件走新智能体",
         target_subgraph: "llm_native_quality",
         reason: "Text or non-image file detected; route to LLM-native quality flow",
         priority_order: 3,
@@ -117,7 +117,7 @@ export function buildFallbackRoutingStrategy(): RoutingStrategyOverview {
       {
         subgraph_key: "legacy_quality",
         label: "Legacy Quality",
-        summary: "旧 Agent 负责图片与任务流兼容处理。",
+        summary: "旧智能体负责图片与任务流兼容处理。",
         entry_node: "legacy_quality.input_adapter",
         nodes: [
           { id: "legacy_quality", label: "Legacy Quality", kind: "subgraph" },
@@ -152,7 +152,7 @@ export function buildFallbackRoutingStrategy(): RoutingStrategyOverview {
       {
         subgraph_key: "llm_native_quality",
         label: "LLM-native Quality",
-        summary: "新 Agent 负责文本与非图片文件驱动的解析、推断和质检物化。",
+        summary: "新智能体负责文本与非图片文件驱动的解析、推断和质检物化。",
         entry_node: "llm_native_quality.intake_normalizer",
         nodes: [
           { id: "llm_native_quality", label: "LLM-native Quality", kind: "subgraph" },

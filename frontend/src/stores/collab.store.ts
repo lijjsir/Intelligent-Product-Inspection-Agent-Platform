@@ -124,6 +124,17 @@ export const useCollabStore = defineStore("collab", () => {
     ));
   }
 
+  function touchThreadFromReceipt(receipt: CollabMessageReceipt) {
+    threads.value = sortThreads(threads.value.map((thread) => (
+      thread.id === receipt.thread_id
+        ? {
+            ...thread,
+            last_message_at: receipt.acted_at || receipt.read_at || thread.last_message_at || thread.updated_at,
+          }
+        : thread
+    )));
+  }
+
   async function loadThreads(selectFirst = false) {
     loadingThreads.value = true;
     let nextThreadId = "";
@@ -319,6 +330,7 @@ export const useCollabStore = defineStore("collab", () => {
       }
       case "collab_message_action_updated": {
         upsertReceipt(evt.receipt);
+        touchThreadFromReceipt(evt.receipt);
         break;
       }
       case "collab_message_deleted": {

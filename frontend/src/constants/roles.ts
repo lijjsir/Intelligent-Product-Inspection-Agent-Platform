@@ -14,9 +14,8 @@ export const ALL_ROLES = [
   ROLE_EXPERT,
 ] as const;
 
-export const WORKSPACE_APP = "app";
-export const WORKSPACE_OPS = "ops";
-export const WORKSPACE_GOVERNANCE = "governance";
+export const CHAT_ROLES = [ROLE_USER, ROLE_EXPERT] as const;
+export const COLLABORATION_ROLES = ALL_ROLES;
 
 export const CAPABILITY_PRIVATE_RAG = "private_rag";
 export const CAPABILITY_CUSTOM_PROMPT = "custom_prompt";

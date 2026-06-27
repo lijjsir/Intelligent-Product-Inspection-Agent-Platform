@@ -9,11 +9,11 @@ SET @now = NOW();
 -- ==============================================
 INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, product_family, applicable_skus, required_views, required_image_count, ai_gate_confidence_threshold, ai_gate_evidence_threshold, ai_gate_traceability_threshold, aggregation_rules, ai_gate_rules, manual_review_policies, auto_pass_enabled, is_active, created_at, updated_at)
 VALUES (UUID_TO_BIN(UUID()), NULL, 'AUTO-RAG-BASE-V1', '汽车零部件检测基线', '2026.1', 'auto-parts', '汽车零部件',
-        '["auto-parts"]', '["exterior", "interior", "safety", "documents"]', 3, 0.72, 0.50, 0.50,
+        '["auto-parts"]', '["exterior", "interior", "safety", "documents"]', 1, 0.72, 0.50, 0.50,
         '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
         '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
         '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-        0, 1, @now, @now);
+        1, 1, @now, @now);
 
 SET @auto_id = (SELECT id FROM inspection_specs WHERE spec_code = 'AUTO-RAG-BASE-V1');
 
@@ -32,11 +32,11 @@ INSERT INTO inspection_spec_items (id, spec_row_id, defect_type, severity, dispo
 -- ==============================================
 INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, product_family, applicable_skus, required_views, required_image_count, ai_gate_confidence_threshold, ai_gate_evidence_threshold, ai_gate_traceability_threshold, aggregation_rules, ai_gate_rules, manual_review_policies, auto_pass_enabled, is_active, created_at, updated_at)
 VALUES (UUID_TO_BIN(UUID()), NULL, 'MED-DEVICE-BASE-V1', '医疗器械检测基线', '2026.1', 'medical-device', '医疗器械',
-        '["medical-device"]', '["label", "packaging", "sterility", "documents"]', 3, 0.72, 0.50, 0.50,
+        '["medical-device"]', '["label", "packaging", "sterility", "documents"]', 1, 0.72, 0.50, 0.50,
         '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
         '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
         '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-        0, 1, @now, @now);
+        1, 1, @now, @now);
 
 SET @med_id = (SELECT id FROM inspection_specs WHERE spec_code = 'MED-DEVICE-BASE-V1');
 
@@ -55,11 +55,11 @@ INSERT INTO inspection_spec_items (id, spec_row_id, defect_type, severity, dispo
 -- ==============================================
 INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, product_family, applicable_skus, required_views, required_image_count, ai_gate_confidence_threshold, ai_gate_evidence_threshold, ai_gate_traceability_threshold, aggregation_rules, ai_gate_rules, manual_review_policies, auto_pass_enabled, is_active, created_at, updated_at)
 VALUES (UUID_TO_BIN(UUID()), NULL, 'TEXTILE-BASE-V1', '纺织品检测基线', '2026.1', 'textile', '纺织品',
-        '["textile"]', '["fabric", "label", "stitching"]', 3, 0.72, 0.50, 0.50,
+        '["textile"]', '["fabric", "label", "stitching"]', 1, 0.72, 0.50, 0.50,
         '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
         '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
         '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-        0, 1, @now, @now);
+        1, 1, @now, @now);
 
 SET @textile_id = (SELECT id FROM inspection_specs WHERE spec_code = 'TEXTILE-BASE-V1');
 
@@ -77,11 +77,11 @@ INSERT INTO inspection_spec_items (id, spec_row_id, defect_type, severity, dispo
 -- ==============================================
 INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, product_family, applicable_skus, required_views, required_image_count, ai_gate_confidence_threshold, ai_gate_evidence_threshold, ai_gate_traceability_threshold, aggregation_rules, ai_gate_rules, manual_review_policies, auto_pass_enabled, is_active, created_at, updated_at)
 VALUES (UUID_TO_BIN(UUID()), NULL, 'HOME-APPLIANCE-BASE-V1', '家电产品检测基线', '2026.1', 'home-appliance', '家电产品',
-        '["home-appliance"]', '["marking", "safety", "functional"]', 3, 0.72, 0.50, 0.50,
+        '["home-appliance"]', '["marking", "safety", "functional"]', 1, 0.72, 0.50, 0.50,
         '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
         '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
         '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-        0, 1, @now, @now);
+        1, 1, @now, @now);
 
 SET @appl_id = (SELECT id FROM inspection_specs WHERE spec_code = 'HOME-APPLIANCE-BASE-V1');
 
@@ -99,11 +99,11 @@ INSERT INTO inspection_spec_items (id, spec_row_id, defect_type, severity, dispo
 -- ==============================================
 INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, product_family, applicable_skus, required_views, required_image_count, ai_gate_confidence_threshold, ai_gate_evidence_threshold, ai_gate_traceability_threshold, aggregation_rules, ai_gate_rules, manual_review_policies, auto_pass_enabled, is_active, created_at, updated_at)
 VALUES (UUID_TO_BIN(UUID()), NULL, 'PACKAGING-BASE-V1', '包装材料检测基线', '2026.1', 'packaging', '包装材料',
-        '["packaging"]', '["printing", "structure", "material"]', 3, 0.72, 0.50, 0.50,
+        '["packaging"]', '["printing", "structure", "material"]', 1, 0.72, 0.50, 0.50,
         '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
         '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
         '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-        0, 1, @now, @now);
+        1, 1, @now, @now);
 
 SET @pkg_id = (SELECT id FROM inspection_specs WHERE spec_code = 'PACKAGING-BASE-V1');
 

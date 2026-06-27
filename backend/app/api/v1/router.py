@@ -24,7 +24,6 @@ from app.api.v1 import (
     organizations,
     paper_templates,
     paper_review_runtime,
-    product_master,
     inspection_specs,
     inspection_standards,
     infrastructure,
@@ -32,8 +31,10 @@ from app.api.v1 import (
     memory,
     meetings,
     model_configs,
+    product_master,
     prompt_admin,
     quality,
+    quality_kg,
     rag_spaces,
     roles,
     results,
@@ -69,9 +70,12 @@ router.include_router(admin_meetings.router, tags=["admin-meetings"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
-router.include_router(inspection_standards.router, prefix="/inspection-standards", tags=["inspection-standards"])
-router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(product_master.router, prefix="/product-master", tags=["product-master"])
+router.include_router(inspection_standards.router, prefix="/inspection-standards", tags=["inspection-standards"])
+router.include_router(inspection_standards.router, prefix="/standard-libraries", tags=["standard-libraries"])
+router.include_router(inspection_standards.standard_documents_router, prefix="/standard-documents", tags=["standard-documents"])
+router.include_router(inspection_standards.standards_router, prefix="/standards", tags=["standards"])
+router.include_router(inspection_specs.router, prefix="/inspection-specs", tags=["inspection-specs"])
 router.include_router(billing.router, prefix="/billing", tags=["billing"])
 router.include_router(infrastructure.router, prefix="/infrastructure", tags=["infrastructure"])
 router.include_router(auth_logs.router, prefix="/auth-logs", tags=["auth-logs"])
@@ -82,6 +86,7 @@ router.include_router(exports.router, prefix="/exports", tags=["exports"])
 router.include_router(files.router)
 router.include_router(gpu_nodes.router, tags=["gpu-nodes"])
 router.include_router(quality.router, prefix="/quality", tags=["quality"])
+router.include_router(quality_kg.router, prefix="/quality-kg", tags=["quality-kg"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])
 router.include_router(memory.router, prefix="/memory", tags=["memory"])
 router.include_router(paper_templates.router)

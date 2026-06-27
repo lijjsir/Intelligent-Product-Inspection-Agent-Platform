@@ -11,13 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 class AgentManagerService:
-    """Agent 管理服务 — 替代原有的直接调用 QualityJudgementSubgraph 方式。
+    """统一 Agent 管理服务。
 
     接收标准化请求 → 调用 AgentManager 路由分发 → 返回带路由信息的输出。
     """
 
     def __init__(self) -> None:
-        self._manager = get_agent_manager()
+        self._manager = None
 
     async def run_chat(self, payload: dict, db_session=None) -> AgentRouterOutput:
         request = NormalizedRequest(
@@ -28,7 +28,6 @@ class AgentManagerService:
             assistant_message_id=str(payload["assistant_message_id"]),
             org_id=str(payload["org_id"]),
             user_id=str(payload["user_id"]),
-            workspace=str(payload.get("workspace") or "app"),
             plan_tier=str(payload.get("plan_tier") or "basic"),
             capabilities=list(payload.get("capabilities") or []),
             query=str(payload.get("query") or ""),
@@ -47,4 +46,5 @@ class AgentManagerService:
             spec_code=str(payload.get("spec_code") or "") or None,
             route_hints=dict(payload.get("route_hints") or {}),
         )
-        return await self._manager.run(request, db_session=db_session)
+        manager = self._manager or get_agent_manager()
+        return await manager.run(request, db_session=db_session)

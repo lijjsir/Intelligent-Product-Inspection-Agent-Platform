@@ -40,13 +40,19 @@ class QualityReportExecutor:
             task = tasks[0] if tasks else None
             result = await result_repo.get_by_task(request.org_id, str(task.id)) if task else None
 
-        if step.capability_key == "quality.task.status":
+        if step.capability == "quality.task.status":
             content = self._task_content(task)
             art_type = "task_status"
         else:
             content = self._report_content(task, result)
             art_type = "quality_report"
-        art = artifact(art_type, "quality_report", content, confidence=0.86 if content.get("found") else 0.35)
+        art = artifact(
+            step,
+            art_type,
+            content=content,
+            confidence=0.86 if content.get("found") else 0.35,
+            metrics={"report_count": 1 if content.get("found") else 0},
+        )
         return (
             observation(
                 step,
@@ -59,12 +65,13 @@ class QualityReportExecutor:
         )
 
     def _empty(self, step: AgentPlanStep, state: ManagerState, reason: str) -> tuple[AgentObservation, list[AgentArtifact]]:
-        art_type = "task_status" if step.capability_key == "quality.task.status" else "quality_report"
+        art_type = "task_status" if step.capability == "quality.task.status" else "quality_report"
         art = artifact(
+            step,
             art_type,
-            "quality_report",
-            {"found": False, "query": state.original_query, "readonly": True, "summary": reason},
+            content={"found": False, "query": state.original_query, "readonly": True, "summary": reason},
             confidence=0.2,
+            metrics={"report_count": 0},
         )
         return observation(step, status="skipped", summary=reason, artifact_ids=[art.artifact_id]), [art]
 

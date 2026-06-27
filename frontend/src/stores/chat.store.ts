@@ -1,6 +1,7 @@
 ﻿import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { chatApi } from "@/api/chat.api";
+import { extractApiErrorMessage } from "@/api/http";
 import { ragSpaceApi } from "@/api/rag-space.api";
 import type {
   ChatAttachment,
@@ -13,14 +14,13 @@ import type {
   ChatStreamPhase,
   ChatStreamEvent,
 } from "@/types/chat.types";
-import { normalizeAiResponseText } from "@/utils/ai-response";
 import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
-const POLL_TIMEOUT_MS = 25000;
-const PAPER_REVIEW_POLL_TIMEOUT_MS = 600000;
+const POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const PAPER_REVIEW_POLL_TIMEOUT_MS = 30 * 60 * 1000;
 const TRUST_POLL_INTERVAL_MS = 2500;
-const TRUST_POLL_TIMEOUT_MS = 35000;
+const TRUST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
 
 const EMPTY_INSPECTION_CONTEXT: ChatInspectionContext = {
@@ -41,25 +41,7 @@ function safeRandomId() {
 }
 
 function resolveErrorMessage(error: unknown, fallback: string) {
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as {
-      response?: {
-        data?: {
-          message?: string;
-        };
-      };
-      message?: string;
-    };
-    return candidate.response?.data?.message || candidate.message || fallback;
-  }
-  return fallback;
-}
-
-function looksLikePaperReview(message: string, attachments: ChatAttachment[]) {
-  const text = String(message || "");
-  const hasPaperIntent = /查非|论文|格式|排版|模板|错别字|标点/.test(text);
-  const hasDocument = attachments.some((item) => /\.(docx|pdf|tex)$/i.test(item.name || item.url || ""));
-  return hasPaperIntent && hasDocument;
+  return extractApiErrorMessage(error, fallback);
 }
 
 function orderNo(message: ChatMessage) {
@@ -102,15 +84,10 @@ function normalizeMessage(message: ChatMessage): ChatMessage {
   const payloadAttachments = normalizeAttachments(payload.attachment_echo);
   const selected = normalizeSelectedRagSpace(payload.selected_rag_space) ?? normalizeSelectedRagSpace(ext?.selected_rag_space);
   const attachments = payloadAttachments.length > 0 ? payloadAttachments : normalizeAttachments(ext?.attachments);
-  const normalized =
-    message.role === "assistant"
-      ? normalizeAssistantContent(message.content, payload)
-      : { content: message.content, payload };
   return {
     ...message,
-    content: normalized.content,
     payload: {
-      ...normalized.payload,
+      ...payload,
       selected_rag_space: selected,
       attachment_echo: attachments,
     },
@@ -140,20 +117,6 @@ function mergePayload(current: ChatMessage["payload"], incoming: ChatMessage["pa
   return next;
 }
 
-function normalizeAssistantContent(content: string, payload: ChatMessagePayload = {}) {
-  const normalized = normalizeAiResponseText(content);
-  if (normalized.content === content.trim() && !normalized.summary) {
-    return { content, payload };
-  }
-  return {
-    content: normalized.content,
-    payload: {
-      ...payload,
-      ...(normalized.summary ? { summary: normalized.summary } : {}),
-    },
-  };
-}
-
 export const useChatStore = defineStore("chat", () => {
   const loading = ref(false);
   const sessions = ref<ChatSession[]>([]);
@@ -161,6 +124,9 @@ export const useChatStore = defineStore("chat", () => {
   const messages = ref<ChatMessage[]>([]);
   const streamPhase = ref<ChatStreamPhase>("idle");
   const streamConnected = ref(false);
+  const waitStartedAt = ref<number | null>(null);
+  const lastStreamEventAt = ref<number | null>(null);
+  const streamStatusMessage = ref("");
   const eventSource = ref<EventSource | null>(null);
   const initPromise = ref<Promise<void> | null>(null);
   const streamPromise = ref<Promise<void> | null>(null);
@@ -168,7 +134,6 @@ export const useChatStore = defineStore("chat", () => {
   const pollTimer = ref<number | null>(null);
   const pollDeadline = ref<number>(0);
   const pollInFlight = ref(false);
-  const activeFallbackTimeoutMs = ref(POLL_TIMEOUT_MS);
   const trustPollTimer = ref<number | null>(null);
   const trustPollDeadline = ref<number>(0);
   const trustPollInFlight = ref(false);
@@ -193,15 +158,11 @@ export const useChatStore = defineStore("chat", () => {
     return sessionStorage.getItem(STORAGE_CURRENT_SESSION) || "";
   }
 
-  function getSavedSelectedRagSpace() {
-    return sessionStorage.getItem(STORAGE_SELECTED_RAG_SPACE) || "";
-  }
-
   function clearSavedSelectedRagSpace() {
     sessionStorage.removeItem(STORAGE_SELECTED_RAG_SPACE);
   }
 
-  const selectedRagSpaceId = ref(getSavedSelectedRagSpace());
+  const selectedRagSpaceId = ref("");
 
   function getSelectedRagSpaceSnapshot() {
     return ragSpaces.value.find((item) => item.id === selectedRagSpaceId.value) || null;
@@ -237,10 +198,11 @@ export const useChatStore = defineStore("chat", () => {
     if (index === -1) {
       messages.value.push(incoming);
     } else {
+      const shouldReplacePayload = incoming.role === "assistant" && incoming.message_type === "streaming";
       messages.value[index] = {
         ...messages.value[index],
         ...incoming,
-        payload: mergePayload(messages.value[index].payload || {}, incoming.payload || {}),
+        payload: shouldReplacePayload ? (incoming.payload || {}) : mergePayload(messages.value[index].payload || {}, incoming.payload || {}),
       };
     }
   }
@@ -271,17 +233,35 @@ export const useChatStore = defineStore("chat", () => {
     return ["failed", "done", "finished", "completed", "success"].includes(status);
   }
 
+  function beginWaiting(message: string) {
+    const now = Date.now();
+    waitStartedAt.value = now;
+    lastStreamEventAt.value = now;
+    streamStatusMessage.value = message;
+  }
+
+  function markStreamActivity(message?: string | null) {
+    lastStreamEventAt.value = Date.now();
+    if (message && message.trim()) {
+      streamStatusMessage.value = message.trim();
+    }
+  }
+
+  function clearWaitingStatus() {
+    waitStartedAt.value = null;
+    lastStreamEventAt.value = null;
+    streamStatusMessage.value = "";
+  }
+
   function patchMessage(event: ChatStreamEvent) {
     if (!event.message_id) return;
     const current = messages.value.find((item) => item.id === event.message_id);
     if (!current) return;
-    const nextPayload = mergePayload(current.payload || {}, event.payload || {});
-    const normalized = normalizeAssistantContent(event.content ?? current.content, nextPayload);
     upsertMessage({
       ...current,
-      content: normalized.content,
+      content: event.content ?? current.content,
       message_type: String(event.message_type || event.payload?.message_type || current.message_type || "file_answer"),
-      payload: normalized.payload,
+      payload: mergePayload(current.payload || {}, event.payload || {}),
       created_at: current.created_at || event.ts || new Date().toISOString(),
     });
     sortMessages();
@@ -294,7 +274,6 @@ export const useChatStore = defineStore("chat", () => {
     }
     pollDeadline.value = 0;
     pollInFlight.value = false;
-    activeFallbackTimeoutMs.value = POLL_TIMEOUT_MS;
   }
 
   function stopTrustPolling() {
@@ -318,6 +297,7 @@ export const useChatStore = defineStore("chat", () => {
     activeAssistantMessageId.value = null;
     loading.value = false;
     streamPhase.value = "idle";
+    clearWaitingStatus();
   }
 
   function stopStreamForIdle() {
@@ -344,10 +324,43 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
-  function startFallbackPolling(sessionId: string, messageId: string, timeoutMs = POLL_TIMEOUT_MS) {
+  function markAssistantWaitTimeout(messageId: string) {
+    const current = messages.value.find((item) => item.id === messageId);
+    if (!current || isTerminalAssistantMessage(current)) return;
+    const timeoutText = current.content
+      ? `${current.content}\n\n[等待提示] 前端已超过最长等待时间，未收到后台最终结果。请稍后刷新会话查看真实结果，或重新发送问题。`
+      : "前端已超过最长等待时间，未收到后台最终结果。请稍后刷新会话查看真实结果，或重新发送问题。";
+    upsertMessage({
+      ...current,
+      message_type: "error",
+      content: timeoutText,
+      payload: {
+        ...(current.payload || {}),
+        status: "timeout",
+        message_type: "error",
+        error_code: "FRONTEND_RESPONSE_WAIT_TIMEOUT",
+        error: "未收到后台最终结果，不能生成替代结果。",
+      },
+    });
+    sortMessages();
+  }
+
+  function startFallbackPolling(
+    sessionId: string,
+    messageId: string,
+    reason: "reconcile" | "stream_error" = "reconcile",
+  ) {
     if (!messageId || pollTimer.value != null) return;
-    pollDeadline.value = Date.now() + timeoutMs;
-    streamPhase.value = "streaming";
+    const now = Date.now();
+    pollDeadline.value = Date.now() + POLL_TIMEOUT_MS;
+    if (!waitStartedAt.value) waitStartedAt.value = now;
+    if (!lastStreamEventAt.value) lastStreamEventAt.value = now;
+    if (reason === "stream_error" || !streamConnected.value) {
+      streamPhase.value = "polling";
+      streamStatusMessage.value = "实时连接暂不可用，正在轮询后台结果...";
+    } else if (!streamStatusMessage.value) {
+      streamStatusMessage.value = "后台正在处理，实时连接保持中...";
+    }
 
     const tick = async () => {
       if (!session.value || session.value.id !== sessionId || activeAssistantMessageId.value !== messageId) {
@@ -360,6 +373,7 @@ export const useChatStore = defineStore("chat", () => {
         pollDeadline.value = Math.max(pollDeadline.value, Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS);
       }
       if (Date.now() > pollDeadline.value) {
+        markAssistantWaitTimeout(messageId);
         stopPolling();
         finishActiveSend();
         return;
@@ -371,6 +385,9 @@ export const useChatStore = defineStore("chat", () => {
       pollInFlight.value = true;
       try {
         const rows = await chatApi.listMessages(sessionId, pollingAfterSeq(messageId), 500);
+        if (rows.data.data.length > 0) {
+          markStreamActivity("已从后台同步到最新回复状态。");
+        }
         appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
         sortMessages();
         if (checkAndFinalizeByMessage(messageId)) {
@@ -426,7 +443,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function fetchSessions() {
-    const { data } = await chatApi.listSessions(200, { suppressErrorToast: true, timeout: 60000 });
+    const { data } = await chatApi.listSessions(200);
     sessions.value = data.data;
     return sessions.value;
   }
@@ -559,6 +576,7 @@ export const useChatStore = defineStore("chat", () => {
       return;
     }
     initPromise.value = (async () => {
+      clearSelectedRagSpace();
       await fetchSessions();
       try {
         await fetchRagSpaces();
@@ -593,10 +611,20 @@ export const useChatStore = defineStore("chat", () => {
     if (!session.value) return null;
     const sessionId = session.value.id;
     stopStreamForIdle();
-    const usePaperReviewDeadline = looksLikePaperReview(payload.message, pendingAttachments.value);
-    activeFallbackTimeoutMs.value = usePaperReviewDeadline ? PAPER_REVIEW_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS;
 
-    const clientSeqStart = allocateClientSeq(2);
+    const editFromMessageId = String(payload.metadata?.edited_from_message_id || "").trim();
+    const replaceAssistantMessageId = String(payload.metadata?.replace_assistant_message_id || "").trim();
+    const editedUserMessage = editFromMessageId ? messages.value.find((item) => item.id === editFromMessageId && item.role === "user") : undefined;
+    const editedUserIndex = editedUserMessage ? messages.value.findIndex((item) => item.id === editedUserMessage.id) : -1;
+    const explicitAssistantMessage = replaceAssistantMessageId
+      ? messages.value.find((item) => item.id === replaceAssistantMessageId && item.role === "assistant")
+      : undefined;
+    const editedAssistantMessage = explicitAssistantMessage
+      || (editedUserIndex >= 0
+        ? messages.value.slice(editedUserIndex + 1).find((item) => item.role === "assistant")
+        : undefined);
+    const previousEditedMessages = [editedUserMessage, editedAssistantMessage].filter(Boolean).map((item) => ({ ...item!, payload: item!.payload ? { ...item!.payload } : item!.payload }));
+    const clientSeqStart = editedUserMessage?.client_seq || editedUserMessage?.seq_no || allocateClientSeq(2);
     const selected = getSelectedRagSpaceSnapshot();
     const ext: Record<string, unknown> = {
       ...(payload.ext || {}),
@@ -624,16 +652,20 @@ export const useChatStore = defineStore("chat", () => {
           }
         : { enabled: false, scope_node_ids: [] },
     };
-    const tempUserId = `temp-user-${safeRandomId()}`;
-    const tempAssistantId = `temp-assistant-${safeRandomId()}`;
+    const tempUserId = editedUserMessage?.id || `temp-user-${safeRandomId()}`;
+    const tempAssistantId = editedAssistantMessage?.id || `temp-assistant-${safeRandomId()}`;
+    const transientIds = [
+      ...(editedUserMessage ? [] : [tempUserId]),
+      ...(editedAssistantMessage ? [] : [tempAssistantId]),
+    ];
 
     appendMessages([
       {
         id: tempUserId,
         session_id: sessionId,
-        seq_no: 0,
+        seq_no: editedUserMessage?.seq_no || 0,
         client_seq: clientSeqStart,
-        optimistic: true,
+        optimistic: !editedUserMessage,
         role: "user",
         message_type: "text",
         content: payload.message,
@@ -652,9 +684,9 @@ export const useChatStore = defineStore("chat", () => {
       {
         id: tempAssistantId,
         session_id: sessionId,
-        seq_no: 0,
+        seq_no: editedAssistantMessage?.seq_no || 0,
         client_seq: clientSeqStart + 1,
-        optimistic: true,
+        optimistic: !editedAssistantMessage,
         role: "assistant",
         message_type: "streaming",
         content: "",
@@ -667,6 +699,7 @@ export const useChatStore = defineStore("chat", () => {
 
     loading.value = true;
     streamPhase.value = "connecting";
+    beginWaiting("正在建立实时连接...");
     let streamStarted = false;
     try {
       await ensureStream(sessionId);
@@ -680,7 +713,7 @@ export const useChatStore = defineStore("chat", () => {
         ...payload,
         ext,
       });
-      removeMessages([tempUserId, tempAssistantId]);
+      removeMessages(transientIds);
       appendMessages([
         {
           ...data.data.user_message,
@@ -713,20 +746,20 @@ export const useChatStore = defineStore("chat", () => {
         },
       ]);
       activeAssistantMessageId.value = data.data.assistant_message_id;
+      markStreamActivity("后台已接收请求，等待智能体输出...");
       clearPendingAttachments();
       await fetchSessions();
-      if (!streamStarted || !eventSource.value) {
-        startFallbackPolling(
-          sessionId,
-          data.data.assistant_message_id,
-          usePaperReviewDeadline ? PAPER_REVIEW_POLL_TIMEOUT_MS : POLL_TIMEOUT_MS,
-        );
-      } else if (!checkAndFinalizeByMessage(data.data.assistant_message_id)) {
+      // Always reconcile the active response from the database. SSE is the
+      // low-latency path, but an already-open connection can still miss the
+      // final event during a proxy reconnect or backend reload.
+      startFallbackPolling(sessionId, data.data.assistant_message_id, streamStarted ? "reconcile" : "stream_error");
+      if (streamStarted && eventSource.value && !checkAndFinalizeByMessage(data.data.assistant_message_id)) {
         streamPhase.value = streamConnected.value ? "streaming" : "connecting";
       }
       return data.data;
     } catch (error) {
-      removeMessages([tempUserId, tempAssistantId]);
+      removeMessages(transientIds);
+      if (previousEditedMessages.length) appendMessages(previousEditedMessages);
       stopStreamForIdle();
       throw error;
     }
@@ -807,7 +840,31 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function applyStreamEvent(event: ChatStreamEvent) {
-    if (!session.value || event.session_id !== session.value.id || !event.message_id) return;
+    if (!session.value || event.session_id !== session.value.id) return;
+    if (event.event === "ready") {
+      markStreamActivity(event.message || "实时连接已建立，等待后台输出...");
+      if (streamPhase.value !== "polling") {
+        streamPhase.value = streamConnected.value ? "streaming" : "connecting";
+      }
+      return;
+    }
+    if (event.event === "heartbeat") {
+      markStreamActivity(event.message || "后台仍在处理，实时连接保持中...");
+      if (streamPhase.value !== "polling") {
+        streamPhase.value = streamConnected.value ? "streaming" : "connecting";
+      }
+      return;
+    }
+    markStreamActivity(
+      event.event === "message_delta"
+        ? "正在输出回复..."
+        : event.event === "run_started"
+          ? "智能体已开始分析..."
+          : event.event === "message_final" || event.event === "run_failed"
+            ? "正在整理回复..."
+            : "收到后台进度更新...",
+    );
+    if (!event.message_id) return;
     const current = messages.value.find((item) => item.id === event.message_id);
     const basePayload: ChatMessagePayload = {
       ...(current?.payload || {}),
@@ -831,6 +888,9 @@ export const useChatStore = defineStore("chat", () => {
       sortMessages();
       return;
     }
+    if (event.event === "run_started") {
+      return;
+    }
     if (event.event === "message_patch") {
       patchMessage(event);
       return;
@@ -843,7 +903,6 @@ export const useChatStore = defineStore("chat", () => {
         basePayload.ui_schema = event.payload.ui_schema;
         basePayload.trace_url = event.payload.trace_url || event.payload.trust_scoring?.trace_url;
       }
-      const normalized = normalizeAssistantContent(event.content || current?.content || "", basePayload);
       upsertMessage({
         id: event.message_id,
         session_id: event.session_id,
@@ -854,8 +913,8 @@ export const useChatStore = defineStore("chat", () => {
           event.event === "run_failed"
             ? "error"
             : String(basePayload.message_type || current?.message_type || "quality_answer"),
-        content: normalized.content,
-        payload: normalized.payload,
+        content: event.content || current?.content || "",
+        payload: basePayload,
         created_at: current?.created_at || event.ts || new Date().toISOString(),
       });
       sortMessages();
@@ -893,13 +952,15 @@ export const useChatStore = defineStore("chat", () => {
       source.onopen = () => {
         streamConnected.value = true;
         streamPhase.value = "streaming";
+        markStreamActivity("实时连接已建立，等待后台输出...");
       };
       source.onerror = () => {
         streamConnected.value = false;
         closeStreamConnection();
         if (activeAssistantMessageId.value) {
-          streamPhase.value = "streaming";
-          startFallbackPolling(sessionId, activeAssistantMessageId.value, activeFallbackTimeoutMs.value);
+          streamPhase.value = "polling";
+          markStreamActivity("实时连接中断，正在轮询后台结果...");
+          startFallbackPolling(sessionId, activeAssistantMessageId.value, "stream_error");
           return;
         }
         streamPhase.value = "idle";
@@ -920,6 +981,9 @@ export const useChatStore = defineStore("chat", () => {
   return {
     loading,
     streamPhase,
+    waitStartedAt,
+    lastStreamEventAt,
+    streamStatusMessage,
     sessions,
     session,
     messages,

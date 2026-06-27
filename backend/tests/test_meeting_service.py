@@ -648,6 +648,101 @@ async def test_update_private_message_is_blocked():
 
 
 @pytest.mark.asyncio
+async def test_update_agent_sidecar_private_question_is_allowed(monkeypatch):
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.message = SimpleNamespace(
+                id="msg-1",
+                room_id="room-1",
+                user_id="user-1",
+                username="alice",
+                seq_no=1,
+                content="@会议Agent 你能检测到有几条质检任务被创建吗？",
+                message_type="user",
+                agent_id=None,
+                mentions=[{"agent_id": "general_agent", "agent_name": "会议Agent"}],
+                quote_message_id=None,
+                metadata_json={"private_recipient_user_id": "user-1"},
+                private_recipient_user_id=None,
+                created_at=datetime.utcnow(),
+                updated_at=None,
+            )
+
+        async def get_message(self, org_id: str, room_id: str, message_id: str):
+            return self.message if message_id == self.message.id else None
+
+        async def update_message_content(self, **kwargs):
+            self.message.content = kwargs["content"]
+            self.message.metadata_json = kwargs["metadata_json"]
+            return self.message
+
+    published_events: list[dict] = []
+
+    async def fake_publish(room_id: str, event: dict):
+        published_events.append({"room_id": room_id, "event": event})
+
+    monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
+
+    fake_repo = FakeRepo()
+    fake_session = FakeSession()
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.update_message("room-1", "msg-1", "@会议Agent 重新分析质检任务")
+
+    assert result.content == "@会议Agent 重新分析质检任务"
+    assert result.metadata_json["private_recipient_user_id"] == "user-1"
+    assert "edited_at" in result.metadata_json
+    assert fake_session.commits == 1
+    assert published_events[0]["event"]["message"]["content"] == "@会议Agent 重新分析质检任务"
+
+
+@pytest.mark.asyncio
+async def test_update_private_message_mentioning_agent_to_other_user_is_blocked():
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.update_called = False
+            self.message = SimpleNamespace(
+                id="msg-1",
+                room_id="room-1",
+                user_id="user-1",
+                username="alice",
+                seq_no=1,
+                content="@会议Agent 这条是发给 Bob 的私聊",
+                message_type="user",
+                agent_id=None,
+                mentions=[{"agent_id": "general_agent", "agent_name": "会议Agent"}],
+                quote_message_id=None,
+                metadata_json={"private_recipient_user_id": "user-2"},
+                private_recipient_user_id=None,
+                created_at=datetime.utcnow(),
+                updated_at=None,
+            )
+
+        async def get_message(self, org_id: str, room_id: str, message_id: str):
+            return self.message if message_id == self.message.id else None
+
+        async def update_message_content(self, **kwargs):
+            self.update_called = True
+            return self.message
+
+    fake_repo = FakeRepo()
+    fake_session = FakeSession()
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError, match="private messages cannot be edited"):
+        await service.update_message("room-1", "msg-1", "@会议Agent 修改私聊")
+
+    assert fake_repo.update_called is False
+    assert fake_session.commits == 0
+
+
+@pytest.mark.asyncio
 async def test_recall_private_message_blocks_after_two_minutes():
     class FakeRepo(FakeMeetingRepo):
         def __init__(self):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import case, func, select
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
@@ -27,30 +28,65 @@ class RagSpaceRepository:
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
         return obj
 
-    async def get(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None) -> RagSpace | None:
+    def _ownership_filter(self, owner_user_id: str | None, *, include_system: bool = False):
+        if owner_user_id is None:
+            return None
+        if include_system:
+            return or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None))
+        return RagSpace.created_by == owner_user_id
+
+    async def get(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ) -> RagSpace | None:
         stmt = select(RagSpace).where(
             RagSpace.org_id == org_id,
             RagSpace.id == rag_space_id,
             RagSpace.deleted_at.is_(None),
         )
-        if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+        ownership = self._ownership_filter(owner_user_id, include_system=include_system)
+        if ownership is not None:
+            stmt = stmt.where(ownership)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200) -> list[RagSpace]:
+    async def list_for_org(
+        self,
+        *,
+        org_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+        limit: int = 200,
+    ) -> list[RagSpace]:
         stmt = select(RagSpace).where(
             RagSpace.org_id == org_id,
             RagSpace.deleted_at.is_(None),
         )
-        if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+        ownership = self._ownership_filter(owner_user_id, include_system=include_system)
+        if ownership is not None:
+            stmt = stmt.where(ownership)
         stmt = stmt.order_by(RagSpace.updated_at.desc(), RagSpace.created_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
-    async def increment_selected_count(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None) -> None:
-        obj = await self.get(org_id=org_id, rag_space_id=rag_space_id, owner_user_id=owner_user_id)
+    async def increment_selected_count(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ) -> None:
+        obj = await self.get(
+            org_id=org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=owner_user_id,
+            include_system=include_system,
+        )
         if obj is None:
             return
         obj.selected_count = int(obj.selected_count or 0) + 1
@@ -168,6 +204,7 @@ class RagNodeRepository:
         rag_space_id: str,
         node_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> RagNode | None:
         stmt = (
             select(RagNode)
@@ -181,7 +218,10 @@ class RagNodeRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -191,6 +231,7 @@ class RagNodeRepository:
         org_id: str,
         rag_space_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> list[RagNode]:
         stmt = (
             select(RagNode)
@@ -203,7 +244,10 @@ class RagNodeRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         stmt = stmt.order_by(RagNode.depth.asc(), RagNode.sort_order.asc(), RagNode.created_at.asc(), RagNode.name.asc())
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -215,8 +259,14 @@ class RagNodeRepository:
         rag_space_id: str,
         parent_id: str | None,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> list[RagNode]:
-        rows = await self.list_for_space(org_id=org_id, rag_space_id=rag_space_id, owner_user_id=owner_user_id)
+        rows = await self.list_for_space(
+            org_id=org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=owner_user_id,
+            include_system=include_system,
+        )
         return [row for row in rows if row.parent_id == parent_id]
 
     async def find_sibling(
@@ -227,6 +277,7 @@ class RagNodeRepository:
         parent_id: str | None,
         name: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> RagNode | None:
         stmt = (
             select(RagNode)
@@ -241,7 +292,10 @@ class RagNodeRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -251,8 +305,14 @@ class RagNodeRepository:
         org_id: str,
         rag_space_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> None:
-        rows = await self.list_for_space(org_id=org_id, rag_space_id=rag_space_id, owner_user_id=owner_user_id)
+        rows = await self.list_for_space(
+            org_id=org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=owner_user_id,
+            include_system=include_system,
+        )
         children_by_parent: dict[str | None, int] = {}
         for row in rows:
             children_by_parent[row.parent_id] = children_by_parent.get(row.parent_id, 0) + 1
@@ -323,6 +383,7 @@ class RagDocumentRepository:
         org_id: str,
         rag_space_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
         limit: int = 1000,
     ) -> list[RagDocument]:
         stmt = (
@@ -336,7 +397,10 @@ class RagDocumentRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         stmt = stmt.order_by(RagDocument.created_at.desc()).limit(limit)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
@@ -348,6 +412,7 @@ class RagDocumentRepository:
         rag_space_id: str,
         document_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> RagDocument | None:
         stmt = (
             select(RagDocument)
@@ -361,7 +426,10 @@ class RagDocumentRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -372,6 +440,7 @@ class RagDocumentRepository:
         rag_space_id: str,
         node_id: str,
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> RagDocument | None:
         stmt = (
             select(RagDocument)
@@ -385,7 +454,38 @@ class RagDocumentRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_file_name(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        file_name: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ) -> RagDocument | None:
+        stmt = (
+            select(RagDocument)
+            .join(RagSpace, RagSpace.id == RagDocument.rag_space_id)
+            .where(
+                RagDocument.org_id == org_id,
+                RagDocument.rag_space_id == rag_space_id,
+                RagDocument.file_name == file_name,
+                RagDocument.deleted_at.is_(None),
+                RagSpace.deleted_at.is_(None),
+            )
+        )
+        if owner_user_id is not None:
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -396,6 +496,7 @@ class RagDocumentRepository:
         rag_space_id: str,
         node_ids: list[str],
         owner_user_id: str | None = None,
+        include_system: bool = False,
     ) -> list[RagDocument]:
         if not node_ids:
             return []
@@ -411,7 +512,10 @@ class RagDocumentRepository:
             )
         )
         if owner_user_id is not None:
-            stmt = stmt.where(RagSpace.created_by == owner_user_id)
+            if include_system:
+                stmt = stmt.where(or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None)))
+            else:
+                stmt = stmt.where(RagSpace.created_by == owner_user_id)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 

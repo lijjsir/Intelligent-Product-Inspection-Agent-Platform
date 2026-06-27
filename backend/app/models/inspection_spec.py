@@ -26,7 +26,7 @@ class InspectionSpec(Base, TimestampMixin):
     aggregation_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ai_gate_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     manual_review_policies: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    auto_pass_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_pass_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

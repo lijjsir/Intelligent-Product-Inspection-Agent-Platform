@@ -39,9 +39,9 @@ class FakeMeetingRepo:
         self.rooms = {"room-1": SimpleNamespace(id="room-1", title="质量复盘室")}
         self.members = {
             "room-1": [
-                SimpleNamespace(user_id="user-1"),
-                SimpleNamespace(user_id="user-2"),
-                SimpleNamespace(user_id="user-3"),
+                SimpleNamespace(user_id="user-1", role="host"),
+                SimpleNamespace(user_id="user-2", role="member"),
+                SimpleNamespace(user_id="user-3", role="member"),
             ]
         }
         self.memory_items = {
@@ -487,6 +487,16 @@ async def test_recipient_can_mark_read_and_complete_action_request():
     assert read_receipt.read_at is not None
     assert done_receipt.action_status == "done"
     assert done_receipt.acted_at is not None
+    status_messages = [
+        item for item in repo.messages.values()
+        if item.message_type == "system"
+        and (item.metadata_json or {}).get("event") == "collab_action_status"
+    ]
+    assert len(status_messages) == 1
+    assert status_messages[0].reply_to_message_id == message.id
+    assert (status_messages[0].metadata_json or {}).get("action_status") == "done"
+    owner_threads = await owner.list_threads()
+    assert owner_threads[0].unread_count == 1
 
 
 @pytest.mark.asyncio
@@ -545,3 +555,43 @@ async def test_recipient_confirms_memory_card_into_personal_scope_once():
             "operator_id": "user-2",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_meeting_room_memory_card_can_only_be_handled_by_host_once():
+    repo = FakeCollabRepo()
+    session = FakeSession()
+    sender = _service(repo, user_id="user-2", session=session)
+    thread = await sender.create_thread(CollabThreadCreateRequest(target_type="meeting_room", target_id="room-1"))
+    message = await sender.send_message(
+        thread.id,
+        CollabMessageCreateRequest(
+            content="请会议室确认这条会议记忆",
+            message_type="memory_card",
+            metadata_json={
+                "memory": {
+                    "memory_id": "mem-1",
+                    "title": "边缘识别复盘",
+                    "source_room_id": "room-1",
+                },
+            },
+        ),
+    )
+    non_host = _service(repo, user_id="user-3", session=session)
+    host = _service(repo, user_id="user-1", session=session)
+    non_host._meetings = sender._meetings
+    host._meetings = sender._meetings
+
+    with pytest.raises(ForbiddenError, match="only the meeting host"):
+        await non_host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
+
+    host_receipt = await host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
+    repeated_receipt = await host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
+
+    assert host_receipt.action_status == "done"
+    assert repeated_receipt.action_status == "done"
+    with pytest.raises(ValidationError, match="already been handled"):
+        await host.update_action(message.id, CollabMessageActionRequest(action_status="rejected"))
+    assert len(sender._meetings.scope_bindings) == 1
+    assert sender._meetings.scope_bindings[0]["scope_type"] == "meeting_room"
+    assert sender._meetings.scope_bindings[0]["scope_id"] == "room-1"

@@ -55,7 +55,29 @@ async def test_manager_policy_routes_paper_queries_to_paper_format_check():
     understanding = await policy.understand(state)
 
     assert understanding.intent == "paper_format_check"
-    assert understanding.needs == ["file.paper_format_check", "chat.response.compose"]
+    assert understanding.needs == ["file.paper_format_check"]
+
+
+@pytest.mark.asyncio
+async def test_manager_policy_skips_paper_route_when_disabled(monkeypatch):
+    monkeypatch.setattr("agent.router.manager_policy.settings.paper_review_enabled", False)
+    policy = ManagerPolicy()
+    request = NormalizedRequest(
+        request_id="req-disabled",
+        workflow_run_id="wf-disabled",
+        org_id="org-1",
+        user_id="user-1",
+        session_id="session-1",
+        query="please check this paper format",
+        attachments=[NormalizedAttachment(name="paper.docx", kind="file")],
+        ext={"surface": "chat"},
+    )
+
+    state = policy.initialize_state(request)
+    understanding = await policy.understand(state)
+
+    assert understanding.intent == "file_qa"
+    assert understanding.needs == ["file.qa"]
 
 
 @pytest.mark.asyncio
@@ -171,8 +193,7 @@ async def test_file_executor_defaults_paper_check_to_cqupt_template(monkeypatch)
 
     step = AgentPlanStep(
         step_id="paper-1",
-        capability_key="file.paper_format_check",
-        agent="chat",
+        capability="file.paper_format_check",
         operation="paper_format_check",
         mode="report",
         input={"attachments": []},

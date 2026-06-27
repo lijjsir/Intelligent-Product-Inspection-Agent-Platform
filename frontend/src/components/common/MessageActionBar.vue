@@ -1,14 +1,11 @@
 <script setup lang="ts">
-import { ChatDotRound, CopyDocument, DocumentAdd, Edit, RefreshRight } from "@element-plus/icons-vue";
+import { CopyDocument, Edit, RefreshRight, Share } from "@element-plus/icons-vue";
 
 withDefaults(
   defineProps<{
     reaction?: "up" | "down" | "";
     showEdit?: boolean;
     showFeedback?: boolean;
-    showAskAgent?: boolean;
-    showShare?: boolean;
-    shareLabel?: string;
     showRetry?: boolean;
     retryDisabled?: boolean;
   }>(),
@@ -16,9 +13,6 @@ withDefaults(
     reaction: "",
     showEdit: false,
     showFeedback: false,
-    showAskAgent: false,
-    showShare: true,
-    shareLabel: "分享",
     showRetry: false,
     retryDisabled: false,
   },
@@ -27,7 +21,6 @@ withDefaults(
 defineEmits<{
   copy: [];
   edit: [];
-  askAgent: [];
   like: [];
   dislike: [];
   share: [];
@@ -42,9 +35,6 @@ defineEmits<{
     </el-tooltip>
     <el-tooltip v-if="showEdit" content="编辑" placement="bottom">
       <el-button text :icon="Edit" aria-label="编辑" @click="$emit('edit')" />
-    </el-tooltip>
-    <el-tooltip v-if="showAskAgent" content="问 Agent" placement="bottom">
-      <el-button text :icon="ChatDotRound" aria-label="问 Agent" @click="$emit('askAgent')" />
     </el-tooltip>
     <el-tooltip v-if="showFeedback" content="喜欢" placement="bottom">
       <el-button
@@ -72,8 +62,8 @@ defineEmits<{
         </svg>
       </el-button>
     </el-tooltip>
-    <el-tooltip v-if="showShare" :content="shareLabel" placement="bottom">
-      <el-button text :icon="DocumentAdd" :aria-label="shareLabel" @click="$emit('share')" />
+    <el-tooltip content="分享" placement="bottom">
+      <el-button text :icon="Share" aria-label="分享" @click="$emit('share')" />
     </el-tooltip>
     <el-tooltip v-if="showRetry" content="重试" placement="bottom">
       <el-button text :icon="RefreshRight" aria-label="重试" :disabled="retryDisabled" @click="$emit('retry')" />

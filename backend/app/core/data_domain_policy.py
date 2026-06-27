@@ -176,7 +176,20 @@ ROLE_DOMAIN_GRANTS: dict[str, set[str]] = {
     ROLE_ADMIN: set(_ALL_FINE_DOMAINS),
 }
 
-DEFAULT_ROOM_DOMAINS = ["meeting.message", "meeting.summary", "meeting.action_item", "memory.meeting"]
+DEFAULT_ROOM_DOMAINS = [
+    "quality.task",
+    "quality.result",
+    "quality.review",
+    "quality.analytics",
+    "standard.library",
+    "standard.rule",
+    "standard.version",
+    "meeting.message",
+    "meeting.summary",
+    "meeting.action_item",
+    "memory.meeting",
+    "memory.business",
+]
 
 CORE_CONTEXT_DOMAIN_ALIASES = ["meeting", "memory"]
 

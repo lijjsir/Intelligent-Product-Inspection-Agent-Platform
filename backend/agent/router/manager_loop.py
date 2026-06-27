@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import asyncio
+import logging
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -10,24 +11,34 @@ from typing import Any
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.capability_registry import CAPABILITIES, capability_allowed
 from agent.router.contracts import AgentRouteDecision, AgentRoutePlan, AgentRouterOutput
+from agent.router.errors import AgentInternalError, AgentRuntimeError, make_agent_error
 from agent.router.manager_dispatcher import ManagerDispatcher
 from agent.router.manager_evaluator import EvaluationResult, ManagerEvaluator
 from agent.router.manager_policy import ManagerPolicy
 from agent.router.manager_state import ManagerState
 from agent.llm.gateway import LLMGateway
 from agent.llm.langfuse_tracer import LangfuseTracer
+from app.core.config import settings
+from app.services.agent_long_term_memory_service import AgentLongTermMemoryService
+from app.services.agent_local_memory_service import AgentLocalMemoryService
+from app.services.memory_candidate_extractor import MemoryCandidateExtractor
 from app.services.model_config_service import ModelConfigService
+from app.services.task_blackboard_service import TaskBlackboardService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ValidationResult:
     allowed: bool
     message: str = ""
+    code: str = "VALIDATION_FAILED"
     need_user_input: bool = False
     missing_inputs: list[str] | None = None
 
     def to_error(self) -> dict[str, Any]:
         return {
+            "code": self.code,
             "message": self.message,
             "need_user_input": self.need_user_input,
             "missing_inputs": list(self.missing_inputs or []),
@@ -35,67 +46,393 @@ class ValidationResult:
 
 
 class ManagerLoop:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        blackboard: TaskBlackboardService | None = None,
+        local_memory: AgentLocalMemoryService | None = None,
+    ) -> None:
         self._policy = ManagerPolicy()
-        self._dispatcher = ManagerDispatcher()
+        self._blackboard = blackboard or TaskBlackboardService()
+        self._local_memory = local_memory or AgentLocalMemoryService()
+        self._dispatcher = ManagerDispatcher(
+            blackboard=self._blackboard,
+            local_memory=self._local_memory,
+        )
         self._evaluator = ManagerEvaluator()
         self._gateway = LLMGateway()
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
         state = self._policy.initialize_state(request)
+        await self._initialize_blackboard(state, request)
         state.manager_model = await self._resolve_manager_model(state, db_session=db_session)
         self._start_chat_trace(state)
         blocked_by_missing_inputs = False
         started_at = perf_counter()
 
-        while self._can_continue(state):
-            remaining_timeout = (state.timeout_ms / 1000) - (perf_counter() - started_at)
-            if remaining_timeout <= 0:
-                state.errors.append({"message": "Manager Agent 执行超时", "need_user_input": False, "missing_inputs": []})
-                state.final_action = "fail"
-                break
-            understanding = await self._policy.understand(state)
-            plan = await self._policy.plan(state, understanding)
-            state.route_plan = plan
-            state.route_plan_hashes.append(self._plan_hash(plan))
-
-            validation = self._validate_plan(state, plan)
-            if not validation.allowed:
-                state.errors.append(validation.to_error())
-                state.final_action = "ask_user" if validation.need_user_input else "fail"
-                state.missing_inputs = list(validation.missing_inputs or [])
-                blocked_by_missing_inputs = validation.need_user_input
-                break
-
-            state.iteration += 1
-            try:
-                observations, artifacts = await asyncio.wait_for(
-                    self._dispatcher.dispatch(
-                        plan,
-                        state,
-                        request,
-                        db_session=db_session,
-                    ),
-                    timeout=max(0.1, remaining_timeout),
+        try:
+            while self._can_continue(state):
+                remaining_timeout = (state.timeout_ms / 1000) - (perf_counter() - started_at)
+                if remaining_timeout <= 0:
+                    state.errors.append({"message": "Manager Agent 执行超时", "need_user_input": False, "missing_inputs": []})
+                    state.final_action = "fail"
+                    break
+                understanding = await self._policy.understand(state)
+                plan = await self._policy.plan(state, understanding)
+                state.route_plan = plan
+                await self._blackboard.set_global_plan(
+                    state.org_id,
+                    state.workflow_run_id,
+                    plan.model_dump(mode="json"),
                 )
-            except asyncio.TimeoutError:
-                state.errors.append({"message": "Manager Agent dispatch 超时", "need_user_input": False, "missing_inputs": []})
-                state.final_action = "fail"
-                break
-            state.last_artifact_counts.append(len(state.artifacts))
+                await self._blackboard.update_global_state(
+                    state.org_id,
+                    state.workflow_run_id,
+                    {
+                        "status": "planned",
+                        "iteration": state.iteration + 1,
+                        "final_action": state.final_action,
+                    },
+                )
+                state.selected_agent = self._selected_agent(state)
+                state.route_plan_hashes.append(self._plan_hash(plan))
 
-            evaluation = await self._evaluator.evaluate(state, plan, observations, artifacts)
-            state.satisfied = evaluation.satisfied
-            state.satisfaction_score = evaluation.score
-            state.final_action = evaluation.next_action
+                validation = self._validate_plan(state, plan)
+                if not validation.allowed:
+                    state.errors.append(validation.to_error())
+                    state.final_action = "ask_user" if validation.need_user_input else "fail"
+                    state.missing_inputs = list(validation.missing_inputs or [])
+                    blocked_by_missing_inputs = validation.need_user_input
+                    break
 
-            if evaluation.satisfied or evaluation.next_action in {"ask_user", "fail"}:
-                break
-            if self._no_progress(state, evaluation):
-                break
-            state = self._refine_for_next_round(state, evaluation)
+                state.iteration += 1
+                try:
+                    observations, artifacts = await asyncio.wait_for(
+                        self._dispatcher.dispatch(
+                            plan,
+                            state,
+                            request,
+                            db_session=db_session,
+                        ),
+                        timeout=max(0.1, remaining_timeout),
+                    )
+                except asyncio.TimeoutError:
+                    state.errors.append({"message": "Manager Agent dispatch 超时", "need_user_input": False, "missing_inputs": []})
+                    state.final_action = "fail"
+                    break
+                state.last_artifact_counts.append(len(state.artifacts))
 
-        return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+                evaluation = await self._evaluator.evaluate(state, plan, observations, artifacts)
+                state.satisfied = evaluation.satisfied
+                state.satisfaction_score = evaluation.score
+                state.final_action = evaluation.next_action
+
+                if evaluation.satisfied or evaluation.next_action in {"ask_user", "fail"}:
+                    break
+                if self._no_progress(state, evaluation):
+                    break
+                state = self._refine_for_next_round(state, evaluation)
+
+            await self._finalize_blackboard(state)
+            await self._extract_memory_candidates(state, db_session=db_session)
+            return self._compose_final(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
+
+        except AgentRuntimeError as exc:
+            await self._finalize_blackboard(state, force_status="failed")
+            log_error_payload = exc.to_dict(state=state, include_debug=True)
+            public_error_payload = exc.to_dict(
+                state=state,
+                include_debug=bool(getattr(settings, "debug", False)),
+            )
+
+            logger.error(
+                "ManagerLoop agent_runtime_error "
+                "code=%s message=%s category=%s status=%s "
+                "stage=%s capability=%s owner_agent=%s step_id=%s "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "raw_error=%s error_type=%s detail=%s",
+                log_error_payload.get("code"),
+                log_error_payload.get("message"),
+                log_error_payload.get("category"),
+                log_error_payload.get("status"),
+                (log_error_payload.get("detail") or {}).get("stage"),
+                state.current_capability,
+                state.current_owner_agent,
+                state.current_step_id,
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                (log_error_payload.get("debug") or {}).get("raw_error"),
+                (log_error_payload.get("debug") or {}).get("error_type")
+                or (log_error_payload.get("debug") or {}).get("type"),
+                log_error_payload.get("detail"),
+            )
+
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent=self._safe_selected_agent(state),
+                    sub_route="error",
+                    intent="error",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "message_type": "error",
+                    "answer": public_error_payload["message"],
+                    "summary": public_error_payload["message"],
+                    "error": public_error_payload,
+                    "ui_schema": "agent_error_v1",
+                },
+                status=public_error_payload.get("status", "failed"),
+                error=public_error_payload,
+            )
+        except Exception as exc:
+            await self._finalize_blackboard(state, force_status="failed")
+            logger.exception(
+                "ManagerLoop internal exception "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "surface=%s selected_agent=%s current_step_id=%s "
+                "current_capability=%s current_owner_agent=%s query=%r",
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                state.surface,
+                state.selected_agent,
+                state.current_step_id,
+                state.current_capability,
+                state.current_owner_agent,
+                state.original_query,
+            )
+
+            wrapped = AgentInternalError(
+                code="INTERNAL_AGENT_ERROR",
+                title="系统内部错误",
+                message="系统执行失败，请查看错误信息或联系管理员。",
+                detail={
+                    "stage": "manager_loop.run",
+                    "request_id": state.request_id,
+                    "workflow_run_id": state.workflow_run_id,
+                    "trace_id": state.trace_id,
+                    "surface": state.surface,
+                    "selected_agent": state.selected_agent,
+                    "current_step_id": state.current_step_id,
+                    "current_capability": state.current_capability,
+                    "current_owner_agent": state.current_owner_agent,
+                },
+                debug={
+                    "raw_error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                },
+                cause=exc,
+            )
+
+            log_error_payload = wrapped.to_dict(state=state, include_debug=True)
+            public_error_payload = wrapped.to_dict(
+                state=state,
+                include_debug=bool(getattr(settings, "debug", False)),
+            )
+
+            logger.error(
+                "ManagerLoop agent_error_full "
+                "code=%s message=%s category=%s status=%s "
+                "stage=%s capability=%s owner_agent=%s step_id=%s "
+                "request_id=%s workflow_run_id=%s trace_id=%s "
+                "raw_error=%s error_type=%s detail=%s",
+                log_error_payload.get("code"),
+                log_error_payload.get("message"),
+                log_error_payload.get("category"),
+                log_error_payload.get("status"),
+                (log_error_payload.get("detail") or {}).get("stage"),
+                state.current_capability,
+                state.current_owner_agent,
+                state.current_step_id,
+                state.request_id,
+                state.workflow_run_id,
+                state.trace_id,
+                (log_error_payload.get("debug") or {}).get("raw_error"),
+                (log_error_payload.get("debug") or {}).get("error_type"),
+                log_error_payload.get("detail"),
+            )
+
+            return AgentRouterOutput(
+                route_decision=AgentRouteDecision(
+                    selected_agent=self._safe_selected_agent(state),
+                    sub_route="error",
+                    intent="error",
+                    route_source="manager",
+                ),
+                agent_output={
+                    "message_type": "error",
+                    "answer": public_error_payload["message"],
+                    "summary": public_error_payload["message"],
+                    "error": public_error_payload,
+                    "ui_schema": "agent_error_v1",
+                },
+                status="failed",
+                error=public_error_payload,
+            )
+
+    async def _initialize_blackboard(
+        self,
+        state: ManagerState,
+        request: NormalizedRequest,
+    ) -> None:
+        await self._blackboard.init_blackboard(
+            state.org_id,
+            state.workflow_run_id,
+            state.task_id,
+            self._blackboard_ttl(state.surface),
+        )
+        ext = dict(request.ext or {})
+        metadata = dict(request.metadata or {})
+        await self._blackboard.update_global_state(
+            state.org_id,
+            state.workflow_run_id,
+            {
+                "status": "running",
+                "surface": state.surface,
+                "request_id": state.request_id,
+                "product_line": (
+                    ext.get("product_line")
+                    or metadata.get("product_line")
+                    or request.product_id
+                ),
+                "rag_space_id": (
+                    (state.selected_rag_space or {}).get("id")
+                    or (state.rag_scope or {}).get("rag_space_id")
+                ),
+                "used_tool_calls": 0,
+                "used_llm_calls": 0,
+                "satisfaction_score": 0.0,
+                "final_action": "continue",
+            },
+        )
+        state.blackboard_snapshot = await self._blackboard.snapshot(
+            state.org_id,
+            state.workflow_run_id,
+        )
+        state.blackboard_context = state.blackboard_snapshot
+
+    async def _finalize_blackboard(
+        self,
+        state: ManagerState,
+        *,
+        force_status: str | None = None,
+    ) -> None:
+        try:
+            status = force_status or (
+                "completed"
+                if state.satisfied or state.final_action == "finish"
+                else "blocked"
+                if state.final_action == "ask_user" or state.missing_inputs
+                else "failed"
+                if state.final_action == "fail" or state.errors
+                else "completed"
+            )
+            await self._blackboard.update_global_state(
+                state.org_id,
+                state.workflow_run_id,
+                {
+                    "status": status,
+                    "current_step_id": None,
+                    "current_agent": None,
+                    "current_capability": None,
+                    "used_tool_calls": state.used_tool_calls,
+                    "used_llm_calls": state.used_llm_calls,
+                    "satisfaction_score": state.satisfaction_score,
+                    "final_action": state.final_action,
+                },
+            )
+            state.blackboard_snapshot = await self._blackboard.snapshot(
+                state.org_id,
+                state.workflow_run_id,
+            )
+            state.blackboard_context = state.blackboard_snapshot
+        except Exception:
+            logger.exception(
+                "Failed to finalize task blackboard org_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.workflow_run_id,
+            )
+
+    async def _extract_memory_candidates(self, state: ManagerState, *, db_session=None) -> None:
+        if db_session is None:
+            return
+        try:
+            local_memory = AgentLocalMemoryService(
+                long_term_service=AgentLongTermMemoryService(
+                    org_id=state.org_id,
+                    user_id=state.user_id,
+                    trace_id=state.workflow_run_id,
+                )
+            )
+            extractor = MemoryCandidateExtractor(
+                db_session,
+                blackboard=self._blackboard,
+                local_memory_service=local_memory,
+                user_id=state.user_id,
+            )
+            requests = await extractor.extract_from_blackboard(
+                state.org_id,
+                state.workflow_run_id,
+                state.task_id,
+            )
+            requests.extend(
+                await extractor.extract_from_local_memory(
+                    state.org_id,
+                    state.workflow_run_id,
+                    ["vision", "lab_detection", "quality_analysis", "file"],
+                )
+            )
+            requests = self._deduplicate_candidate_requests(requests)
+            responses = await extractor.submit_candidates(requests)
+            await self._blackboard.update_global_state(
+                state.org_id,
+                state.workflow_run_id,
+                {
+                    "candidate_request_count": len(requests),
+                    "candidate_submission_count": len(responses),
+                },
+            )
+            state.blackboard_snapshot = await self._blackboard.snapshot(
+                state.org_id,
+                state.workflow_run_id,
+            )
+            state.blackboard_context = state.blackboard_snapshot
+        except Exception:
+            logger.exception(
+                "Candidate extraction failed org_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.workflow_run_id,
+            )
+
+    @staticmethod
+    def _deduplicate_candidate_requests(requests):
+        unique = []
+        seen: set[str] = set()
+        for request in requests:
+            scope = request.scope.model_dump(mode="json", exclude_none=True)
+            key = json.dumps(
+                {
+                    "org_id": request.org_id,
+                    "memory_type": request.memory_type.value,
+                    "scope": scope,
+                    "summary": request.content.summary.strip(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(request)
+        return unique
+
+    @staticmethod
+    def _blackboard_ttl(surface: str) -> int:
+        if surface == "quality_task":
+            return settings.task_blackboard_inspection_ttl_seconds
+        if surface in {"admin", "batch"}:
+            return settings.task_blackboard_analysis_ttl_seconds
+        return settings.task_blackboard_chat_ttl_seconds
 
     @staticmethod
     def _start_chat_trace(state: ManagerState) -> None:
@@ -124,31 +461,57 @@ class ManagerLoop:
         state.trace_url = trace.get("trace_url")
 
     def _validate_plan(self, state: ManagerState, plan: AgentRoutePlan) -> ValidationResult:
+        if state.surface == "chat" and plan.reason in {"action_blocked", "rag_ingest"}:
+            return ValidationResult(
+                allowed=False,
+                message="聊天页面不能创建、执行正式质量检测任务或写入知识库。请前往对应业务页面显式确认后提交。",
+                code="ACTION_BLOCKED_BY_SURFACE",
+                need_user_input=True,
+            )
         if state.missing_inputs:
             return ValidationResult(
                 allowed=False,
                 message=f"缺少必要输入：{', '.join(state.missing_inputs)}",
+                code="ACTION_INTENT_REQUIRED" if "action_intent" in state.missing_inputs else "MISSING_REQUIRED_INPUT",
                 need_user_input=True,
                 missing_inputs=list(state.missing_inputs),
             )
         if len(plan.steps) > max(0, state.max_tool_calls - state.used_tool_calls):
             return ValidationResult(False, "route_plan 超出工具调用预算")
         for step in plan.steps:
-            capability = CAPABILITIES.get(step.capability_key)
+            capability_key = step.capability
+            capability = CAPABILITIES.get(capability_key)
             if capability is None:
-                return ValidationResult(False, f"未知 capability：{step.capability_key}")
+                return ValidationResult(False, f"未知 capability：{capability_key}")
+            if capability is not None and step.owner_agent not in capability.owner_agents:
+                return ValidationResult(
+                    False,
+                    f"能力 {capability_key} 不允许由 {step.owner_agent} 执行",
+                    code="PLAN_OWNER_CAPABILITY_MISMATCH",
+                )
             if step.mode in state.forbidden_modes:
-                return ValidationResult(False, f"当前页面已禁止模式：{step.mode}")
+                return ValidationResult(
+                    False,
+                    f"当前页面已禁止模式：{step.mode}",
+                    code="ACTION_MODE_FORBIDDEN",
+                    need_user_input=True,
+                )
             if state.surface == "chat" and step.mode == "action":
-                return ValidationResult(False, "聊天页面不允许执行正式业务动作")
+                return ValidationResult(
+                    False,
+                    "聊天页面不允许执行正式业务动作",
+                    code="ACTION_BLOCKED_BY_SURFACE",
+                    need_user_input=True,
+                )
             if not capability_allowed(capability, state.surface, state.allowed_modes):
-                return ValidationResult(False, f"当前页面不允许调用 capability：{step.capability_key}")
+                return ValidationResult(False, f"当前页面不允许调用 capability：{capability_key}")
             if capability.key == "quality.inspection.execute" and state.action_intent != "quality_inspection_execute":
                 return ValidationResult(
                     allowed=False,
                     message="正式质量检测缺少 action_intent=quality_inspection_execute",
                     need_user_input=True,
                     missing_inputs=["action_intent"],
+                    code="ACTION_INTENT_REQUIRED",
                 )
         return ValidationResult(True)
 
@@ -159,6 +522,8 @@ class ManagerLoop:
         if state.iteration >= state.max_iterations:
             return False
         if state.used_tool_calls >= state.max_tool_calls:
+            return False
+        if state.used_plan_steps >= state.max_tool_calls:
             return False
         if state.used_llm_calls >= state.max_llm_calls:
             return False
@@ -181,18 +546,43 @@ class ManagerLoop:
 
     async def _resolve_manager_model(self, state: ManagerState, *, db_session=None) -> dict[str, Any] | None:
         if db_session is None:
+            logger.warning(
+                "Manager model resolve skipped: db_session is None "
+                "request_id=%s workflow_run_id=%s org_id=%s",
+                state.request_id,
+                state.workflow_run_id,
+                state.org_id,
+            )
             return None
+
         try:
             models = await ModelConfigService(db_session, state.org_id).list_runtime_models()
             runtime = await self._gateway.select_runtime(
                 models=models,
-                model_types={"chat"},
+                model_types={"chat", "llm", "text_generation"},
                 reserve=False,
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "Manager model resolve failed "
+                "org_id=%s request_id=%s workflow_run_id=%s",
+                state.org_id,
+                state.request_id,
+                state.workflow_run_id,
+            )
             return None
+
         if not runtime:
+            logger.warning(
+                "Manager model runtime not found "
+                "org_id=%s request_id=%s workflow_run_id=%s model_types=%s",
+                state.org_id,
+                state.request_id,
+                state.workflow_run_id,
+                ["chat", "llm", "text_generation"],
+            )
             return None
+
         state.manager_model_runtime = runtime
         return {
             "logical_name": "manager_model",
@@ -205,11 +595,11 @@ class ManagerLoop:
         }
 
     def _compose_final(self, state: ManagerState, *, blocked_by_missing_inputs: bool) -> AgentRouterOutput:
-        import logging
-        _log = logging.getLogger(__name__)
         composed = self._find_composed(state)
         if composed is None:
             composed = self._recover_file_artifact_response(state)
+        if composed is None:
+            composed = self._recover_inspection_artifact_response(state)
         plan = state.route_plan
         sub_route = self._sub_route(state)
         selected_agent = self._selected_agent(state)
@@ -219,12 +609,14 @@ class ManagerLoop:
             if has_failed_observation
             else composed.get("status", "completed") if composed else self._status(state, blocked_by_missing_inputs=blocked_by_missing_inputs)
         )
+        if status == "success":
+            status = "completed"
         composed_status = "blocked" if status == "blocked" else "failed" if status == "failed" else "completed"
         answer = composed.get("answer", "") if composed else self._answer(state, status=composed_status)
-        message_type = composed.get("message_type", "assistant_text") if composed else self._message_type(state, sub_route, composed_status)
-        _log.info(
+        message_type = composed.get("message_type", "quality_answer") if composed else self._message_type(state, sub_route, composed_status)
+        logger.info(
             "_compose_final plan_reason=%s sub_route=%s has_composed=%s composed_status=%s "
-            "message_type=%s errors=%d obs_failures=%d",
+            "message_type=%s errors=%d obs_failures=%d final_action=%s",
             plan.reason if plan else "no-plan",
             sub_route,
             composed is not None,
@@ -232,12 +624,20 @@ class ManagerLoop:
             message_type,
             len(state.errors),
             sum(1 for o in state.observations if o.status == "failed"),
+            state.final_action,
         )
         summary = composed.get("summary", "") if composed else self._summary(state, composed_status)
         citations = self._citations(state, answer=answer)
         rag_summary = self._rag_summary(state, answer=answer)
         raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
-        persistable_output = self._persistable_output(state, answer=answer, sub_route=sub_route)
+        composed_persistable = composed.get("persistable_output") if isinstance(composed, dict) else None
+        if hasattr(composed_persistable, "model_dump"):
+            composed_persistable = composed_persistable.model_dump(mode="json")
+        persistable_output = (
+            composed_persistable
+            if sub_route == "inspection_execute" and isinstance(composed_persistable, dict)
+            else self._persistable_output(state, answer=answer, sub_route=sub_route)
+        )
         agent_output = {
             "message_type": message_type,
             "answer": answer,
@@ -283,11 +683,17 @@ class ManagerLoop:
                 }
             )
 
+        error_payload = self._error_payload_from_state(state)
+        if error_payload:
+            agent_output["error"] = error_payload
+            agent_output["ui_schema"] = "agent_error_v1"
+
         return AgentRouterOutput(
             route_decision=decision,
             agent_output=agent_output,
             status=status,
-            degrade_reason=state.errors[-1]["message"] if state.errors else None,
+            degrade_reason=None,
+            error=error_payload,
         )
 
     @staticmethod
@@ -321,9 +727,16 @@ class ManagerLoop:
         file_artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
         if file_artifact and isinstance(file_artifact.content, dict):
             content = dict(file_artifact.content or {})
+            parsed_summary = "\n".join(
+                str(item.get("summary") or "").strip()
+                for item in list(content.get("parsed_files") or [])
+                if isinstance(item, dict) and item.get("summary")
+            ).strip()
             answer = (
                 str(content.get("answer") or "").strip()
+                or str(content.get("model_summary") or "").strip()
                 or str(content.get("summary") or "").strip()
+                or parsed_summary
                 or "文件已完成辅助分析。"
             )
             summary = str(content.get("summary") or "").strip() or answer[:200]
@@ -337,6 +750,24 @@ class ManagerLoop:
             }
         return None
 
+    @staticmethod
+    def _recover_inspection_artifact_response(state: ManagerState) -> dict[str, Any] | None:
+        artifact = ManagerLoop._latest_artifact(state, {"inspection_result"})
+        if not artifact or not isinstance(artifact.content, dict):
+            return None
+        content = dict(artifact.content or {})
+        answer = str(content.get("answer") or content.get("summary") or artifact.summary or "").strip()
+        if not answer:
+            answer = "正式质量检测任务已完成。"
+        return {
+            **content,
+            "answer": answer,
+            "summary": str(content.get("summary") or artifact.summary or answer[:200]),
+            "message_type": "task_result",
+            "status": artifact.status,
+            "ui_schema": "task_result_v1",
+        }
+
     def _payload(
         self,
         state: ManagerState,
@@ -348,13 +779,13 @@ class ManagerLoop:
     ) -> dict[str, Any]:
         artifacts = [item.model_dump() for item in state.artifacts]
         steps = [step.model_dump() for step in (state.route_plan.steps if state.route_plan else [])]
-        capabilities_used = [
-            item.capability_key
-            for item in state.observations
-            if item.status in {"success", "skipped"} and item.capability_key != "chat.response.compose"
-        ]
-        if state.route_plan and any(step.capability_key == "chat.response.compose" for step in state.route_plan.steps):
-            capabilities_used.append("chat.response.compose")
+        capabilities_used = list(
+            dict.fromkeys(
+                item.capability_key
+                for item in state.observations
+                if item.status in {"success", "skipped"}
+            )
+        )
         route_trace = {
             "iterations": state.iteration,
             "capabilities_used": capabilities_used,
@@ -366,7 +797,7 @@ class ManagerLoop:
             "observations": [item.model_dump() for item in state.observations],
             "errors": list(state.errors),
         }
-        return {
+        payload = {
             "answer": answer,
             "summary": self._summary(state, self._status(state, blocked_by_missing_inputs=bool(state.missing_inputs))),
             "message_type": message_type,
@@ -384,18 +815,44 @@ class ManagerLoop:
             "llm_meta": state.llm_metas[-1] if state.llm_metas else None,
             "llm_usage": list(state.llm_usage_events),
         }
+        # Flatten key artifact types to top-level for frontend cards
+        for artifact in state.artifacts:
+            if artifact.type in {
+                "evidence_packet",
+                "visual_inspection_result",
+                "lab_detection_result",
+                "quality_final_assessment",
+            }:
+                payload[artifact.type] = artifact.content
+        return payload
 
     @staticmethod
     def _selected_agent(state: ManagerState) -> str:
         if state.route_plan and state.route_plan.steps:
-            action_steps = [step for step in state.route_plan.steps if step.agent == "inspection_task"]
-            if action_steps:
-                return "inspection_task"
-        return "chat"
+            owners = [step.owner_agent for step in state.route_plan.steps]
+            for owner in ("quality_analysis", "file", "vision", "lab_detection"):
+                if owner in owners:
+                    return owner
+        return "quality_analysis"
 
     @staticmethod
     def _sub_route(state: ManagerState) -> str:
-        if state.errors and state.surface == "chat":
+        if state.final_action == "fail":
+            return "error"
+        if state.errors and state.errors[-1].get("code") == "ACTION_BLOCKED_BY_SURFACE":
+            return "action_blocked"
+        if (
+            state.surface == "chat"
+            and state.route_plan
+            and state.route_plan.reason == "rag_ingest"
+            and state.final_action == "ask_user"
+        ):
+            return "action_blocked"
+        if (
+            state.errors
+            and state.route_plan
+            and state.route_plan.reason == "action_blocked"
+        ):
             return "action_blocked"
         if state.route_plan:
             reason = state.route_plan.reason
@@ -403,7 +860,9 @@ class ManagerLoop:
                 "general_chat": "general_chat",
                 "rag_qa": "rag_qa",
                 "rag_ingest": "rag_ingest",
-                "image_understanding": "image_understanding",
+                "image_understanding": "vision_inspection",
+                "vision_inspection": "vision_inspection",
+                "lab_detection": "lab_detection",
                 "file_summary": "file_summary",
                 "file_qa": "file_qa",
                 "paper_format_check": "paper_format_check",
@@ -418,11 +877,13 @@ class ManagerLoop:
 
     @staticmethod
     def _status(state: ManagerState, *, blocked_by_missing_inputs: bool) -> str:
-        if state.errors or blocked_by_missing_inputs:
+        if state.final_action == "fail":
+            return "failed"
+        if blocked_by_missing_inputs or state.missing_inputs:
             return "blocked"
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "blocked"
-        if state.final_action == "fail":
+        if state.errors:
             return "failed"
         return "completed"
 
@@ -434,6 +895,10 @@ class ManagerLoop:
             return "action_blocked"
         if sub_route == "image_understanding":
             return "image_analysis"
+        if sub_route == "vision_inspection":
+            return "visual_answer"
+        if sub_route == "lab_detection":
+            return "lab_answer"
         if sub_route in {"file_summary", "file_qa", "paper_format_check"}:
             return "file_answer"
         if sub_route == "quality_task_status":
@@ -442,7 +907,7 @@ class ManagerLoop:
             return "report_answer"
         if sub_route == "inspection_execute":
             return "task_result"
-        return "assistant_text"
+        return "quality_answer"
 
     @staticmethod
     def _summary(state: ManagerState, status: str) -> str:
@@ -461,17 +926,36 @@ class ManagerLoop:
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if status == "blocked":
             error_message = state.errors[-1]["message"] if state.errors else ""
+            error_code = state.errors[-1].get("code") if state.errors else ""
             if "超时" in error_message:
                 return "处理超时，请稍后重试。论文查非涉及文档解析和AI审阅，可能需要较长时间。"
             if "action_intent" in error_message:
                 return "正式质量检测需要由质量检测任务页面显式提交，并携带 action_intent=quality_inspection_execute。"
+            if error_code == "ACTION_BLOCKED_BY_SURFACE":
+                return "聊天页面不能创建、执行正式质量检测任务或写入知识库。请前往对应业务页面显式确认后提交。"
+            if error_code == "ACTION_MODE_FORBIDDEN":
+                return error_message
             if "能力执行失败" in error_message:
                 return f"论文查非处理出错：{error_message}。请稍后重试或联系管理员。"
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if state.route_plan and state.route_plan.reason == "action_blocked":
             return "聊天页面不能创建或执行正式质量检测任务。请前往质量检测任务页面提交正式检测。"
-        if state.route_plan and state.route_plan.reason == "image_understanding":
-            return "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
+        if state.route_plan and state.route_plan.reason in {"image_understanding", "vision_inspection"}:
+            artifact = ManagerLoop._latest_artifact(
+                state,
+                {"visual_inspection_result", "image_understanding"},
+            )
+            summary = ""
+            if artifact:
+                content = dict(artifact.content or {})
+                summary = str(
+                    content.get("answer")
+                    or content.get("summary")
+                    or artifact.summary
+                    or ""
+                ).strip()
+            notice = "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
+            return f"{summary}\n\n{notice}" if summary else notice
         if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa", "paper_format_check"}:
             artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer", "paper_format_report"})
             if artifact:
@@ -510,12 +994,76 @@ class ManagerLoop:
     def _latest_failure_message(state: ManagerState) -> str:
         for observation in reversed(state.observations):
             if observation.status == "failed":
-                detail = str(observation.error or observation.summary or "").strip()
+                err = observation.error or {}
+                if isinstance(err, dict):
+                    message = (
+                        err.get("message")
+                        or err.get("detail")
+                        or err.get("raw_error")
+                        or observation.summary
+                        or ""
+                    )
+                    return str(message).strip()
+                detail = str(err or observation.summary or "").strip()
                 if detail:
                     return detail
+
         if state.errors:
             return str(state.errors[-1].get("message") or "").strip()
+
         return ""
+
+    def _error_payload_from_state(self, state: ManagerState) -> dict[str, Any] | None:
+        # Only emit error when there are actual errors OR final_action is fail/ask_user with errors
+        if not state.errors:
+            return None
+        if state.final_action not in {"fail", "ask_user"}:
+            return None
+
+        code = self._latest_failure_code(state)
+
+        if state.final_action == "ask_user" and code == "AGENT_FAILED":
+            if state.missing_inputs:
+                code = "ACTION_INTENT_REQUIRED"
+            else:
+                code = "ACTION_BLOCKED_BY_SURFACE"
+
+        error = make_agent_error(
+            code,
+            message=self._latest_failure_message(state) or "请求需要补充信息或被当前页面阻止。",
+            detail={
+                "final_action": state.final_action,
+                "missing_inputs": list(state.missing_inputs or []),
+                "satisfaction_score": state.satisfaction_score,
+            },
+            source="manager.evaluate",
+        )
+
+        return error.to_dict(
+            state=state,
+            include_debug=bool(getattr(settings, "debug", False)),
+        )
+
+    @staticmethod
+    def _latest_failure_code(state: ManagerState) -> str:
+        for observation_item in reversed(state.observations):
+            if observation_item.status == "failed":
+                err = observation_item.error or {}
+                if isinstance(err, dict):
+                    return str(err.get("code") or "AGENT_STEP_FAILED")
+                return "AGENT_STEP_FAILED"
+        if state.errors:
+            return str(state.errors[-1].get("code") or "AGENT_FAILED")
+        return "AGENT_FAILED"
+
+    @staticmethod
+    def _safe_selected_agent(state: ManagerState) -> str:
+        selected = str(getattr(state, "selected_agent", None) or "")
+        if selected in {"chat", "vision", "lab_detection", "quality_analysis", "file"}:
+            return selected
+        if state.route_plan and state.route_plan.steps:
+            return ManagerLoop._selected_agent(state)
+        return "quality_analysis"
 
     @staticmethod
     def _paper_review_error_code(message: str) -> str:
@@ -537,7 +1085,7 @@ class ManagerLoop:
     def _citations(cls, state: ManagerState, *, answer: str = "") -> list[dict[str, Any]]:
         citations: list[dict[str, Any]] = []
         for artifact in state.artifacts:
-            if artifact.type == "rag_hits":
+            if artifact.type in {"rag_hits", "evidence_packet"}:
                 citations.extend(cls._used_citations_from_answer(answer, artifact.citations))
             else:
                 citations.extend(artifact.citations)
@@ -559,7 +1107,7 @@ class ManagerLoop:
                     "hit_count": hit_count,
                     "citation_coverage": citation_coverage,
                     "top_sources": top_sources,
-                    "source_graph": "manager",
+                    "source_graph": "evidence_capability",
                 }
         return None
 
@@ -615,8 +1163,8 @@ class ManagerLoop:
                     "hit_rate": round(min(1.0, hit_count / top_k), 4) if hit_count else 0.0,
                     "citation_coverage": round(coverage, 4),
                     "latency_ms": int(content.get("latency_ms") or 0),
-                    "source_graph": "manager",
-                    "agent_name": "chat",
+                    "source_graph": "evidence_capability",
+                    "agent_name": "orchestrator",
                     "sub_route": sub_route,
                     "trace_id": trace_id,
                     "top_score": float(content.get("top_score") or 0.0),
@@ -653,7 +1201,7 @@ class ManagerLoop:
                 "trace_id": state.trace_id or state.workflow_run_id or state.request_id,
                 "trace_url": state.trace_url,
                 "workflow_version": "agent_manager_v1",
-                "prompt_version": None,
+                "prompt_version": "agent_manager_prompt_v1",
                 "route_subgraph": "agent_manager",
             },
             "token_usage": list(state.llm_usage_events),
@@ -675,4 +1223,19 @@ class ManagerLoop:
 
     @staticmethod
     def _state_dump(state: ManagerState) -> dict[str, Any]:
-        return json.loads(state.model_dump_json())
+        """Serialize ManagerState to a JSON-safe dict for debug/logging.
+
+        Uses Pydantic's native ``fallback`` to convert any non-serializable
+        values (e.g. a function accidentally stored in a dict field) into
+        a readable placeholder string such as ``"<function>"`` so that
+        the debug dump never crashes the request.
+        """
+        return json.loads(
+            state.model_dump_json(
+                fallback=lambda v: f"<{type(v).__name__}>",
+            )
+        )
+
+
+# Public architecture name; ManagerLoop remains for compatibility.
+OrchestratorLoop = ManagerLoop

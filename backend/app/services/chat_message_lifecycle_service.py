@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from app.repositories.chat_repo import ChatMessageRepository, ChatSessionRepository
-from app.services.ai_response_text import normalize_ai_response_content
 
 
 class ChatMessageLifecycleService:
@@ -40,13 +39,12 @@ class ChatMessageLifecycleService:
         )
         if current_payload.get("status") == "interrupted":
             return False
-        next_content, next_payload = self._normalize_content_payload(content, payload)
         await self._messages.update_assistant_message(
             org_id=org_id,
             message_id=assistant_message_id,
-            content=next_content,
+            content=content,
             message_type=message_type,
-            payload=next_payload,
+            payload=payload,
         )
         await self._sessions.touch(org_id, user_id, session_id)
         return True
@@ -74,14 +72,10 @@ class ChatMessageLifecycleService:
         if current_payload.get("status") == "interrupted":
             return None
         next_payload = {**current_payload, **dict(payload_patch or {})}
-        next_content, next_payload = self._normalize_content_payload(
-            current_message.content if content is None else content,
-            next_payload,
-        )
         updated = await self._messages.update_assistant_message(
             org_id=org_id,
             message_id=assistant_message_id,
-            content=next_content,
+            content=current_message.content if content is None else content,
             message_type=current_message.message_type if message_type is None else message_type,
             payload=next_payload,
         )
@@ -91,17 +85,6 @@ class ChatMessageLifecycleService:
             "message_type": getattr(updated, "message_type", current_message.message_type if current_message else ""),
             "payload": next_payload,
         }
-
-    @staticmethod
-    def _normalize_content_payload(
-        content: str,
-        payload: dict[str, Any] | None,
-    ) -> tuple[str, dict[str, Any]]:
-        display_content, response_metadata = normalize_ai_response_content(content)
-        next_payload: dict[str, Any] = dict(payload or {})
-        if response_metadata:
-            next_payload.update(response_metadata)
-        return display_content, next_payload
 
     @staticmethod
     async def emit_final(
@@ -116,18 +99,14 @@ class ChatMessageLifecycleService:
     ) -> None:
         if not callable(emit):
             return
-        display_content, response_metadata = normalize_ai_response_content(content)
-        next_payload = dict(payload or {})
-        if response_metadata:
-            next_payload.update(response_metadata)
         await emit(
             {
                 "event": "message_final",
                 "session_id": session_id,
                 "message_id": assistant_message_id,
                 "workflow_run_id": workflow_run_id,
-                "content": display_content,
-                "payload": next_payload,
+                "content": content,
+                "payload": payload,
                 "quality": dict(quality or {}),
             }
         )
@@ -145,10 +124,6 @@ class ChatMessageLifecycleService:
     ) -> None:
         if not callable(emit):
             return
-        if content is not None:
-            content, response_metadata = normalize_ai_response_content(content)
-            if response_metadata:
-                payload = {**dict(payload or {}), **response_metadata}
         event: dict[str, Any] = {
             "event": "message_patch",
             "session_id": session_id,

@@ -5,10 +5,9 @@ from datetime import datetime
 from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.datetime import utcnow, utcnow_iso
+from app.core.datetime import utcnow
 from app.models.agent_ops import AgentDefinition, IntentRoute
 from app.models.chat import ChatMessage, ChatSession
-from app.services.ai_response_text import normalize_ai_response_content
 
 
 class ChatSessionRepository:
@@ -128,6 +127,46 @@ class ChatMessageRepository:
         )
         return result.scalar_one_or_none()
 
+    async def update_message(
+        self,
+        *,
+        org_id: str,
+        message_id: str,
+        content: str,
+        message_type: str = "text",
+        payload: dict | None = None,
+    ) -> ChatMessage | None:
+        obj = await self.get(org_id, message_id)
+        if not obj:
+            return None
+        obj.content = content
+        obj.message_type = message_type
+        obj.payload = payload
+        await self._session.flush()
+        await self._session.refresh(obj, attribute_names=["updated_at"])
+        return obj
+
+    async def find_next_assistant_message(
+        self,
+        *,
+        org_id: str,
+        session_id: str,
+        after_seq_no: int,
+    ) -> ChatMessage | None:
+        result = await self._session.execute(
+            select(ChatMessage)
+            .where(
+                ChatMessage.org_id == org_id,
+                ChatMessage.session_id == session_id,
+                ChatMessage.seq_no > after_seq_no,
+                ChatMessage.role == "assistant",
+                ChatMessage.deleted_at.is_(None),
+            )
+            .order_by(ChatMessage.seq_no.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list_for_session(
         self,
         *,
@@ -158,33 +197,24 @@ class ChatMessageRepository:
         end_date=None,
         limit: int | None = 100,
     ) -> list[ChatMessage]:
-        row_limit = min(limit or 1000, 1000)
-        id_stmt = (
-            select(ChatMessage.id)
+        stmt = (
+            select(ChatMessage)
             .where(
                 ChatMessage.role == "assistant",
                 ChatMessage.deleted_at.is_(None),
             )
             .order_by(ChatMessage.created_at.desc())
-            .limit(row_limit)
         )
         if org_id:
-            id_stmt = id_stmt.where(ChatMessage.org_id == org_id)
+            stmt = stmt.where(ChatMessage.org_id == org_id)
         if start_date:
-            id_stmt = id_stmt.where(ChatMessage.created_at >= start_date)
+            stmt = stmt.where(ChatMessage.created_at >= start_date)
         if end_date:
-            id_stmt = id_stmt.where(ChatMessage.created_at <= end_date)
-
-        id_result = await self._session.execute(id_stmt)
-        message_ids = list(id_result.scalars().all())
-        if not message_ids:
-            return []
-
-        stmt = select(ChatMessage).where(ChatMessage.id.in_(message_ids))
+            stmt = stmt.where(ChatMessage.created_at <= end_date)
+        if limit:
+            stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
-        messages = list(result.scalars().all())
-        position = {message_id: index for index, message_id in enumerate(message_ids)}
-        return sorted(messages, key=lambda message: position.get(message.id, len(position)))
+        return list(result.scalars().all())
 
     async def update_assistant_message(
         self,
@@ -198,61 +228,12 @@ class ChatMessageRepository:
         obj = await self.get(org_id, message_id)
         if not obj:
             return None
-        display_content, response_metadata = normalize_ai_response_content(content)
-        next_payload = dict(payload or {})
-        if response_metadata:
-            next_payload.update(response_metadata)
-        obj.content = display_content
+        obj.content = content
         obj.message_type = message_type
-        obj.payload = next_payload if payload is not None or response_metadata else None
+        obj.payload = payload
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["updated_at"])
         return obj
-
-    async def mark_stale_running_assistant_messages(
-        self,
-        *,
-        older_than: datetime,
-        org_id: str | None = None,
-        session_id: str | None = None,
-        exclude_message_ids: set[str] | None = None,
-        limit: int = 200,
-        content: str,
-        reason: str = "orphaned_workflow",
-    ) -> int:
-        stmt = select(ChatMessage).where(
-            ChatMessage.role == "assistant",
-            ChatMessage.message_type == "streaming",
-            ChatMessage.updated_at < older_than,
-            ChatMessage.deleted_at.is_(None),
-        )
-        if org_id:
-            stmt = stmt.where(ChatMessage.org_id == org_id)
-        if session_id:
-            stmt = stmt.where(ChatMessage.session_id == session_id)
-        if exclude_message_ids:
-            stmt = stmt.where(ChatMessage.id.notin_(list(exclude_message_ids)))
-        result = await self._session.execute(stmt.order_by(ChatMessage.updated_at.asc()).limit(limit))
-        rows = list(result.scalars().all())
-        now = utcnow_iso()
-        for message in rows:
-            payload = dict(message.payload or {})
-            payload.update(
-                {
-                    "status": "failed",
-                    "message_type": "error",
-                    "error_type": "workflow_interrupted",
-                    "error": reason,
-                    "failed_at": now,
-                    "stale_cleanup": True,
-                }
-            )
-            message.content = content
-            message.message_type = "error"
-            message.payload = payload
-        if rows:
-            await self._session.flush()
-        return len(rows)
 
 
 class ChatOpsRepository:
@@ -265,11 +246,11 @@ class ChatOpsRepository:
             select(AgentDefinition)
             .where(
                 AgentDefinition.org_id == self._org_id,
-                AgentDefinition.workflow_binding == "quality_chat_v2",
+                AgentDefinition.workflow_binding == "quality_analysis_v1",
                 AgentDefinition.deleted_at.is_(None),
             )
             .order_by(
-                case((AgentDefinition.subgraph_key == "chat", 0), else_=1),
+                case((AgentDefinition.subgraph_key == "quality_analysis", 0), else_=1),
                 AgentDefinition.created_at.asc(),
                 AgentDefinition.id.asc(),
             )
@@ -279,25 +260,25 @@ class ChatOpsRepository:
         if agent is None:
             agent = AgentDefinition(
                 org_id=self._org_id,
-                name="质量检测聊天智能体",
-                description="面向质量检测问答场景的聊天子图",
-                workflow_binding="quality_chat_v2",
-                subgraph_key="chat",
-                entry_graph="MemoryManagerGraph",
+                name="Quality Analysis Agent",
+                description="统一质量问答与正式质检终判 Agent",
+                workflow_binding="quality_analysis_v1",
+                subgraph_key="quality_analysis",
+                entry_graph="QualityAnalysisGraph",
                 supports_start_stop=True,
                 graph_version="v2",
                 is_active=True,
             )
-            agent.name = "QualityChatAgent"
-            agent.description = "QualityChat agent for general chat and RAG QA."
+            agent.name = "Quality Analysis Agent"
+            agent.description = "Quality analysis for chat, RAG QA and formal inspection."
             self._session.add(agent)
             await self._session.flush()
         else:
-            agent.name = "QualityChatAgent"
-            agent.description = getattr(agent, "description", None) or "QualityChat agent for general chat and RAG QA."
-            agent.subgraph_key = "chat"
-            agent.entry_graph = str(agent.entry_graph or "MemoryManagerGraph")
-            agent.graph_version = str(agent.graph_version or "v2")
+            agent.name = "Quality Analysis Agent"
+            agent.description = getattr(agent, "description", None) or "Quality analysis for chat, RAG QA and formal inspection."
+            agent.subgraph_key = "quality_analysis"
+            agent.entry_graph = "QualityAnalysisGraph"
+            agent.graph_version = "v1"
 
         route_result = await self._session.execute(
             select(IntentRoute)

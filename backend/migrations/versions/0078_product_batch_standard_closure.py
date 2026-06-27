@@ -1,7 +1,7 @@
 """product batch standard closure
 
-Revision ID: 0078
-Revises: 0077
+Revision ID: 0078_product_batch_standard_closure
+Revises: 0077_remove_meeting_room_type
 Create Date: 2026-06-19
 """
 
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import mysql
 from app.models.base import UUIDBinary
 
 
-revision = "0078"
-down_revision = "0077"
+revision = "0078_product_batch_standard_closure"
+down_revision = "0077_remove_meeting_room_type"
 branch_labels = None
 depends_on = None
 

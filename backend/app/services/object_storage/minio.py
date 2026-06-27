@@ -49,7 +49,12 @@ class MinioObjectStorage:
         }
 
     def get_bytes(self, *, bucket: str, object_key: str) -> tuple[bytes, str | None] | None:
-        response = self._client.get_object(bucket, object_key)
+        try:
+            response = self._client.get_object(bucket, object_key)
+        except S3Error as exc:
+            if exc.code in {"NoSuchKey", "NoSuchBucket", "NoSuchObject"}:
+                return None
+            raise
         try:
             content = response.read()
             content_type = None

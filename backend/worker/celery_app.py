@@ -17,6 +17,7 @@ celery_app.conf.imports = (
     "worker.tasks.langfuse_sync_task",
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
+    "worker.tasks.memory_sync_outbox_task",
 )
 
 celery_app.conf.beat_schedule = {
@@ -32,6 +33,10 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.algo_workspace_task.poll_gpu_nodes",
         "schedule": settings.gpu_metric_poll_interval_sec,
     },
+    "memory-sync-outbox-dispatch": {
+        "task": "worker.tasks.memory_sync_outbox_task.dispatch_memory_sync_outbox",
+        "schedule": 60.0,
+    },
 }
 
 # Import task modules eagerly so the worker always registers named tasks.
@@ -43,6 +48,7 @@ from worker.tasks import (  # noqa: E402,F401
     health_check_task,
     inspection_task,
     langfuse_sync_task,
+    memory_sync_outbox_task,
     report_generate_task,
     stability_task,
 )

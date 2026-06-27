@@ -6,6 +6,8 @@ from agent.router.executors.base import artifact, observation
 from agent.router.manager_state import ManagerState
 from agent.router.node_registry import route_attachment_to_node
 from agent.llm.gateway import LLMGateway
+from agent.vision.heuristic_detector import extract_defects
+from agent.vision.prompts import VISION_INSPECTION_JSON_PROMPT
 
 
 class VisionExecutor:
@@ -23,7 +25,16 @@ class VisionExecutor:
             if node:
                 routed.append({"attachment": attachment, "node": node.model_dump()})
         if not routed:
-            return observation(step, status="skipped", summary="没有可处理的图片"), []
+            art = artifact(
+                step,
+                "image_understanding",
+                content={"image_count": 0, "informal": True},
+                confidence=0.0,
+                status="empty",
+                empty_result=True,
+                metrics={"images_processed": 0},
+            )
+            return observation(step, status="skipped", summary="没有可处理的图片", artifact_ids=[art.artifact_id], metrics={"images_processed": 0}), [art]
 
         model_result = await self._try_multimodal_understanding(routed, state, request, db_session=db_session)
         if model_result is None:
@@ -48,11 +59,12 @@ class VisionExecutor:
             )
 
         art = artifact(
+            step,
             "image_understanding",
-            "vision",
-            {
+            content={
                 "objects": model_result.get("objects", []),
                 "possible_defects": model_result.get("possible_defects", []),
+                "defects": model_result.get("defects", []),
                 "risk": model_result.get("risk", "medium"),
                 "informal": True,
                 "local_routes": routed,
@@ -60,6 +72,7 @@ class VisionExecutor:
                 "model_result": model_result,
             },
             confidence=0.7,
+            metrics={"images_processed": len(routed), "confidence": 0.7},
         )
         return (
             observation(
@@ -91,6 +104,20 @@ class VisionExecutor:
                 attachment = item.get("attachment") or {}
                 url = str(attachment.get("url") or "")
                 image_urls.append(attachment_to_data_url(attachment) or url)
+            detector_result = None
+            detector_defects = []
+            try:
+                from agent.vision.detector_client import VisionDetectorClient
+
+                detector = VisionDetectorClient()
+                detector_result = await detector.detect(
+                    image_urls=image_urls,
+                    product_id=getattr(request, "product_id", None),
+                    spec_code=getattr(request, "spec_code", None),
+                )
+                detector_defects = extract_defects(detector_result, image_count=len(image_urls))
+            except Exception as detector_exc:
+                detector_result = {"error": str(detector_exc)}
             client = LLMClient(
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
@@ -102,18 +129,40 @@ class VisionExecutor:
             )
             state.used_llm_calls += 1
             response = await client.vision_chat(
-                "请描述这张图片的内容，识别其中的物体、文字、可能的缺陷或异常。返回 JSON：{\"summary\":\"...\",\"objects\":[],\"possible_defects\":[],\"risk\":\"low|medium|high\"}。",
+                VISION_INSPECTION_JSON_PROMPT,
                 image_urls,
             )
             parsed = self._parse_vision_response(response)
+            model_defects = extract_defects(parsed, image_count=len(image_urls))
+            parsed["defects"] = detector_defects or model_defects
+            if detector_result is not None:
+                parsed["detector_result"] = detector_result
             parsed["model_id"] = runtime.get("model_id")
             return parsed
         except Exception as exc:
-            return {"error": str(exc)}
+            from agent.router.contracts import AgentCapabilityError
+            raise AgentCapabilityError(
+                code="IMAGE_UNDERSTANDING_FAILED",
+                message="图片理解失败，无法完成当前图片分析。",
+                detail={"raw_error": str(exc)},
+                frontend_visible=True,
+            ) from exc
 
     @staticmethod
     def _parse_vision_response(response: dict) -> dict:
         import json as _json
+        if not isinstance(response, dict):
+            return {"raw": str(response)[:500]}
+        if any(
+            key in response
+            for key in ("summary", "objects", "possible_defects", "defects", "risk")
+        ):
+            parsed = dict(response)
+            parsed.pop("__meta__", None)
+            return parsed
+        text = response.get("text")
+        if isinstance(text, str) and text.strip():
+            return {"summary": text.strip()[:2000]}
         content = response.get("content") if isinstance(response, dict) else None
         if isinstance(content, dict):
             return content

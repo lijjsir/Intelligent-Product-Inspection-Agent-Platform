@@ -63,7 +63,7 @@ async def test_chat_binding_tolerates_duplicate_existing_agents_and_routes():
         SimpleNamespace(
             id="agent-old",
             subgraph_key="chat",
-            entry_graph="MemoryManagerGraph",
+            entry_graph="OrchestratorLoop",
             graph_version="v1",
         ),
         SimpleNamespace(

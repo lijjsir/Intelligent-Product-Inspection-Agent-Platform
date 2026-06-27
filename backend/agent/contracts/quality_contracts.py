@@ -57,7 +57,13 @@ class RouteSignals(BaseModel):
 
 class RouteDecision(BaseModel):
     mode: Literal["legacy_only", "canary_non_pdf", "router_enabled"] = "router_enabled"
-    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    selected_agent: Literal[
+        "chat",
+        "vision",
+        "lab_detection",
+        "quality_analysis",
+        "file",
+    ] = "quality_analysis"
     sub_route: Literal[
         "general_chat",
         "rag_qa",
@@ -70,9 +76,15 @@ class RouteDecision(BaseModel):
         "paper_format_check",
         "quality_report_query",
         "quality_task_status",
+        "evidence_arbitration",
+        "vision_inspection",
+        "lab_detection",
+        "quality_analysis",
+        "memory_governance",
         "action_blocked",
         "data_analysis",
         "rag_ingest",
+        "error",
     ] = "general_chat"
     reason: str = ""
     intent: str = ""

@@ -190,7 +190,7 @@ def test_effective_rag_metrics_zero_coverage_when_answer_did_not_use_rag():
 
 def test_inspection_rag_effectiveness_keeps_structured_citations():
     item = {
-        "source_graph": "inspection_task",
+        "source_graph": "quality_analysis",
         "sub_route": "inspection_execute",
         "hit_count": 1,
         "top_score": 0.72,
@@ -213,9 +213,9 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
             self.dedupe_calls = []
             self.set_runtime_status_calls = []
             self.runtime = SimpleNamespace(
-                runtime_key="Legacy Quality:quality_judgement",
+                runtime_key="Quality Analysis:quality_analysis",
                 agent_id="agent-1",
-                subgraph_key="quality_judgement",
+                subgraph_key="quality_analysis",
                 status="running",
                 runtime_status="running",
                 supports_start_stop=True,
@@ -278,16 +278,16 @@ async def test_set_runtime_status_dedupes_runtime_key_before_stop():
     original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
     agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
     try:
-        data = await svc.set_runtime_status("Legacy Quality:quality_judgement", status="stopped")
+        data = await svc.set_runtime_status("Quality Analysis:quality_analysis", status="stopped")
     finally:
         agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
 
     assert sync_calls == [True]
-    assert svc._runtime_repo.dedupe_calls == ["Legacy Quality:quality_judgement"]
+    assert svc._runtime_repo.dedupe_calls == ["Quality Analysis:quality_analysis"]
     assert svc._runtime_repo.set_runtime_status_calls == [
-        ("Legacy Quality:quality_judgement", "stopped", "user-1")
+        ("Quality Analysis:quality_analysis", "stopped", "user-1")
     ]
-    assert data.runtime_key == "Legacy Quality:quality_judgement"
+    assert data.runtime_key == "Quality Analysis:quality_analysis"
     assert data.status == "stopped"
     assert data.runtime_status == "stopped"
 
@@ -402,16 +402,16 @@ async def test_get_agents_topology_runtime_hides_planned_and_deprecated_nodes():
             return [
                 (
                     SimpleNamespace(
-                        runtime_key="quality:quality_judgement",
+                        runtime_key="quality:quality_analysis",
                         agent_id="agent-1",
-                        subgraph_key="quality_judgement",
+                        subgraph_key="quality_analysis",
                         status="running",
                         runtime_status="running",
                     ),
                     SimpleNamespace(
                         id="agent-1",
-                        name="Quality Judgement",
-                        subgraph_key="quality_judgement",
+                        name="Quality Analysis",
+                        subgraph_key="quality_analysis",
                         lifecycle_status="active",
                         route_enabled=True,
                     ),
@@ -473,7 +473,7 @@ async def test_get_agents_topology_runtime_hides_planned_and_deprecated_nodes():
 
     node_ids = {node.id for node in topology.nodes}
     assert "request_intake" in node_ids
-    assert "agent:quality_judgement" in node_ids
+    assert "agent:quality_analysis" in node_ids
     assert "agent:market_monitor" not in node_ids
     assert "agent:legacy_quality" not in node_ids
 
@@ -483,9 +483,9 @@ async def test_pause_and_resume_route_also_updates_runtime_status():
     class FakeRuntimeRepo:
         def __init__(self):
             self.runtime = SimpleNamespace(
-                runtime_key="quality:quality_judgement",
+                runtime_key="quality:quality_analysis",
                 agent_id="agent-1",
-                subgraph_key="quality_judgement",
+                subgraph_key="quality_analysis",
                 status="running",
                 runtime_status="running",
                 supports_start_stop=True,
@@ -498,7 +498,7 @@ async def test_pause_and_resume_route_also_updates_runtime_status():
             self.events = []
 
         async def dedupe_by_runtime_key(self, runtime_key: str):
-            assert runtime_key == "quality:quality_judgement"
+            assert runtime_key == "quality:quality_analysis"
             return self.runtime
 
         async def set_runtime_status(self, runtime_key: str, status: str, *, updated_by: str | None = None):
@@ -515,7 +515,7 @@ async def test_pause_and_resume_route_also_updates_runtime_status():
         def __init__(self):
             self.agent = SimpleNamespace(
                 id="agent-1",
-                name="Quality Judgement",
+                name="Quality Analysis",
                 is_active=True,
                 lifecycle_status="active",
                 group_key="core",
@@ -550,14 +550,14 @@ async def test_pause_and_resume_route_also_updates_runtime_status():
     original_metrics_repo = agent_ops_mod.AgentExecutionMetricsRepository
     agent_ops_mod.AgentExecutionMetricsRepository = FakeMetricsRepo
     try:
-        paused = await svc.pause_route("quality:quality_judgement", "maintenance")
-        resumed = await svc.resume_route("quality:quality_judgement")
+        paused = await svc.pause_route("quality:quality_analysis", "maintenance")
+        resumed = await svc.resume_route("quality:quality_analysis")
     finally:
         agent_ops_mod.AgentExecutionMetricsRepository = original_metrics_repo
 
     assert svc._runtime_repo.runtime_status_calls == [
-        ("quality:quality_judgement", "stopped", "user-1"),
-        ("quality:quality_judgement", "running", "user-1"),
+        ("quality:quality_analysis", "stopped", "user-1"),
+        ("quality:quality_analysis", "running", "user-1"),
     ]
     assert paused.route_enabled is False
     assert paused.runtime_status == "stopped"
@@ -589,17 +589,17 @@ async def test_get_agents_topology_specific_agent_returns_agent_overview_slice()
                 ),
                 (
                     SimpleNamespace(
-                        runtime_key="quality:quality_judgement",
+                        runtime_key="quality:quality_analysis",
                         agent_id="agent-2",
-                        subgraph_key="quality_judgement",
+                        subgraph_key="quality_analysis",
                         status="running",
                         runtime_status="running",
                         last_started_at=None,
                     ),
                     SimpleNamespace(
                         id="agent-2",
-                        name="Quality Judgement",
-                        subgraph_key="quality_judgement",
+                        name="Quality Analysis",
+                        subgraph_key="quality_analysis",
                         lifecycle_status="active",
                         route_enabled=True,
                     ),
@@ -630,13 +630,14 @@ async def test_get_agents_topology_specific_agent_returns_agent_overview_slice()
     node_ids = {node.id for node in topology.nodes}
     assert node_ids >= {
         "request_intake",
-        "memory_context_loader",
-        "manager_route_policy",
-        "subgraph_runner",
+        "global_plan",
+        "task_blackboard",
+        "capability_dispatch",
+        "agent_dispatch",
         "result_synthesizer",
         "agent:chat",
     }
-    assert "agent:quality_judgement" not in node_ids
+    assert "agent:quality_analysis" not in node_ids
 
 
 @pytest.mark.asyncio
@@ -657,23 +658,24 @@ async def test_get_routing_strategy_returns_root_graph_and_priority_rules():
     data = await svc.get_routing_strategy()
 
     assert data.default_target == "chat"
-    assert data.root_graph.agent_name == "MemoryManagerGraph"
+    assert data.root_graph.agent_name == "OrchestratorLoop"
     assert {node.id for node in data.root_graph.nodes} >= {
         "request_intake",
-        "memory_context_loader",
-        "manager_route_policy",
-        "subgraph_runner",
+        "global_plan",
+        "task_blackboard",
+        "capability_dispatch",
+        "agent_dispatch",
         "result_synthesizer",
-        "quality_judgement",
+        "quality_analysis",
     }
     from agent.router.route_policy import AgentRoutePolicy
 
     engine_rules = AgentRoutePolicy.get_rules()
     assert len(data.priority_rules) == len(engine_rules)
     assert data.priority_rules[0].order == 1
-    assert data.priority_rules[0].target_subgraph == "inspection_task"
+    assert data.priority_rules[0].target_subgraph == "quality_analysis"
     assert [item.order for item in data.priority_rules] == [rule["priority"] for rule in engine_rules]
-    assert {item.target_subgraph for item in data.priority_rules} >= {"inspection_task", "chat"}
+    assert {item.target_subgraph for item in data.priority_rules} >= {"quality_analysis", "chat"}
     # decision_cards derived from engine rules
     assert len(data.decision_cards) >= 1
     # subgraphs now iterate all registered subgraphs
@@ -708,8 +710,8 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "hit_rate": 1.0,
                     "citation_coverage": 1.0,
                     "latency_ms": 12,
-                    "source_graph": "quality_judgement",
-                    "agent_name": "Inspection Task Agent",
+                    "source_graph": "quality_analysis",
+                    "agent_name": "Quality Analysis Agent",
                     "sub_route": "task_create",
                     "trace_id": "trace-1",
                     "top_score": 0.93,
@@ -731,7 +733,7 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "hit_rate": 0.5,
                     "citation_coverage": 0.4,
                     "latency_ms": 24,
-                    "source_graph": "quality_judgement",
+                    "source_graph": "quality_analysis",
                     "agent_name": "",
                     "sub_route": "task_review",
                     "trace_id": "trace-2",
@@ -755,8 +757,8 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
                     "hit_rate": 0.0,
                     "citation_coverage": 0.0,
                     "latency_ms": 32,
-                    "source_graph": "quality_judgement",
-                    "agent_name": "Inspection Task Agent",
+                    "source_graph": "quality_analysis",
+                    "agent_name": "Quality Analysis Agent",
                     "sub_route": "task_create",
                     "trace_id": "trace-3",
                     "top_score": 0.0,
@@ -787,7 +789,7 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
     class FakeAgentRepo:
         async def list_all_active(self):
             return [
-                SimpleNamespace(name="Inspection Task Agent", subgraph_key="quality_judgement"),
+                SimpleNamespace(name="Quality Analysis Agent", subgraph_key="quality_analysis"),
                 SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
             ]
 
@@ -806,18 +808,18 @@ async def test_get_rag_analysis_returns_breakdowns_and_evidence_impact():
     assert data.stats.total_queries == 3
     assert [(item.key, item.label) for item in data.space_options] == [("rag-food", "食品知识库"), ("rag-drink", "饮料知识库")]
     assert [(item.key, item.label) for item in data.source_agent_options] == [
-        ("Inspection Task Agent", "Inspection Task Agent"),
+        ("Quality Analysis Agent", "Quality Analysis Agent"),
         ("Quality Chat", "Quality Chat"),
     ]
     assert data.recent_items[0].rag_space_name == "食品知识库"
-    assert data.recent_items[0].source_agent == "Inspection Task Agent"
-    assert data.recent_items[1].source_agent == "Inspection Task Agent"
+    assert data.recent_items[0].source_agent == "Quality Analysis Agent"
+    assert data.recent_items[1].source_agent == "Quality Analysis Agent"
     assert data.recent_items[1].sub_route == "task_review"
     assert data.recent_items[1].trace_id == "trace-2"
     assert data.space_breakdown[0].key == "rag-food"
     assert data.space_breakdown[0].label == "食品知识库"
     assert [item.key for item in data.space_breakdown] == ["rag-food"]
-    assert data.source_agent_breakdown[0].key == "Inspection Task Agent"
+    assert data.source_agent_breakdown[0].key == "Quality Analysis Agent"
     assert {item.rule_key for item in data.evidence_impact} == {
         "food.traceability.qr_code_required",
         "food.packaging.seal_integrity",
@@ -875,7 +877,7 @@ async def test_get_rag_analysis_uses_global_scope_when_requested():
 
 
 @pytest.mark.asyncio
-async def test_get_rag_analysis_normalizes_legacy_quality_rows_to_chat_agent():
+async def test_get_rag_analysis_resolves_chat_rows_to_chat_agent():
     class FakeRagRepo:
         async def get_rag_stats(self, days: int = 7):
             return {
@@ -892,14 +894,14 @@ async def test_get_rag_analysis_normalizes_legacy_quality_rows_to_chat_agent():
                 {
                     "task_id": "",
                     "session_id": "session-1",
-                    "query": "legacy rag question",
+                        "query": "rag question",
                     "rag_space_id": "rag-food",
                     "top_k": 4,
                     "hit_count": 1,
                     "hit_rate": 0.25,
                     "citation_coverage": 1.0,
                     "latency_ms": 18,
-                    "source_graph": "quality_judgement",
+                        "source_graph": "chat",
                     "agent_name": "",
                     "sub_route": "",
                     "trace_id": None,
@@ -925,8 +927,7 @@ async def test_get_rag_analysis_normalizes_legacy_quality_rows_to_chat_agent():
         async def list_all_active(self):
             return [
                 SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
-                SimpleNamespace(name="Inspection Task Agent", subgraph_key="inspection_task"),
-                SimpleNamespace(name="Quality Judgement", subgraph_key="quality_judgement"),
+                SimpleNamespace(name="Quality Analysis Agent", subgraph_key="quality_analysis"),
             ]
 
     original_repo = agent_ops_mod.RagAnalysisRepository
@@ -965,8 +966,8 @@ async def test_get_rag_trace_detail_returns_database_backed_payload():
             return {
                 "query": "苹果划痕怎么判定",
                 "rag_space_id": "rag-food",
-                "source_graph": "quality_judgement",
-                "agent_name": "Inspection Task Agent",
+                "source_graph": "quality_analysis",
+                "agent_name": "Quality Analysis Agent",
                 "sub_route": "inspection_execute",
                 "top_k": 4,
                 "hit_count": 2,
@@ -1007,7 +1008,7 @@ async def test_get_rag_trace_detail_returns_database_backed_payload():
     class FakeAgentRepo:
         async def list_all_active(self):
             return [
-                SimpleNamespace(name="Inspection Task Agent", subgraph_key="quality_judgement"),
+                SimpleNamespace(name="Quality Analysis Agent", subgraph_key="quality_analysis"),
                 SimpleNamespace(name="Quality Chat", subgraph_key="chat"),
             ]
 
@@ -1026,7 +1027,7 @@ async def test_get_rag_trace_detail_returns_database_backed_payload():
     assert captured_org_ids == ["org-1"]
     assert data.query == "苹果划痕怎么判定"
     assert data.rag_space_name == "食品知识库"
-    assert data.source_agent == "Inspection Task Agent"
+    assert data.source_agent == "Quality Analysis Agent"
     assert data.top_k == 4
     assert data.retrieval_config["scope_node_ids"] == ["n-1"]
     assert data.retrieved_chunks[0]["chunk_id"] == "chunk-1"

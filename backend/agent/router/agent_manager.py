@@ -15,24 +15,9 @@ class AgentManager:
     """统一入口路由，通过 ManagerLoop 调度 capability-level route plan。"""
 
     def __init__(self) -> None:
+        # Runtime routing is handled exclusively by ManagerLoop + ManagerPolicy.
         self._route_policy = AgentRoutePolicy()
         self._loop = ManagerLoop()
-        self._chat_agent = None
-        self._task_agent = None
-
-    @property
-    def chat_agent(self):
-        if self._chat_agent is None:
-            from agent.subgraphs.quality_chat import QualityChatGraph
-            self._chat_agent = QualityChatGraph()
-        return self._chat_agent
-
-    @property
-    def task_agent(self):
-        if self._task_agent is None:
-            from agent.subgraphs.inspection_task import InspectionTaskGraph
-            self._task_agent = InspectionTaskGraph()
-        return self._task_agent
 
     async def run(self, request: NormalizedRequest, db_session=None) -> AgentRouterOutput:
         return await self._loop.run(request, db_session=db_session)

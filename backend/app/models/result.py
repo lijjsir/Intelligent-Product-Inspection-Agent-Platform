@@ -17,7 +17,7 @@ class InspectionResult(Base, TimestampMixin):
     citations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     reasoning_chain: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     llm_model: Mapped[str] = mapped_column(String(64))
-    prompt_version: Mapped[str] = mapped_column(String(32))
+    prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)

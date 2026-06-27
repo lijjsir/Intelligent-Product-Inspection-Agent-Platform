@@ -905,6 +905,7 @@ class AlgoWorkspaceService(TenantAwareService):
     async def create_kg_entity(self, *, dataset_id: str, payload: DatasetKgEntityCreateRequest) -> DatasetKgEntityResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
+        graph_store = build_graph_store(required=True)
         created = await self._kg_repo.create_entity(
             {
                 "org_id": self._org_id,
@@ -918,7 +919,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "confidence": payload.confidence,
             }
         )
-        self._graph_store.upsert_entity(
+        graph_store.upsert_entity(
             GraphNodePayload(
                 id=created.id,
                 dataset_id=dataset_id,
@@ -938,12 +939,14 @@ class AlgoWorkspaceService(TenantAwareService):
             raise NotFoundError("knowledge graph entity not found")
         resource = await self._require_processing_resource(dataset_id=entity.dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
+        graph_store = build_graph_store(required=True)
         await self._kg_repo.delete_entity(entity)
-        self._graph_store.delete_entity(entity_id=entity.id)
+        graph_store.delete_entity(entity_id=entity.id)
 
     async def create_kg_relation(self, *, dataset_id: str, payload: DatasetKgRelationCreateRequest) -> DatasetKgRelationResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
+        graph_store = build_graph_store(required=True)
         await self._require_kg_entity(payload.source_entity_id)
         await self._require_kg_entity(payload.target_entity_id)
         created = await self._kg_repo.create_relation(
@@ -959,7 +962,7 @@ class AlgoWorkspaceService(TenantAwareService):
                 "confidence": payload.confidence,
             }
         )
-        self._graph_store.upsert_relation(
+        graph_store.upsert_relation(
             GraphEdgePayload(
                 id=created.id,
                 dataset_id=dataset_id,
@@ -979,8 +982,9 @@ class AlgoWorkspaceService(TenantAwareService):
             raise NotFoundError("knowledge graph relation not found")
         resource = await self._require_processing_resource(dataset_id=relation.dataset_id, processing_type="kg")
         self._ensure_processing_resource_editable(resource)
+        graph_store = build_graph_store(required=True)
         await self._kg_repo.delete_relation(relation)
-        self._graph_store.delete_relation(relation_id=relation.id)
+        graph_store.delete_relation(relation_id=relation.id)
 
     async def create_alignment_pair(self, *, dataset_id: str, payload: DatasetAlignmentPairCreateRequest) -> DatasetAlignmentPairResponse:
         resource = await self._require_processing_resource(dataset_id=dataset_id, processing_type="alignment")
@@ -1160,7 +1164,20 @@ class AlgoWorkspaceService(TenantAwareService):
         }
 
     async def _run_kg_build(self, *, dataset_id: str, resource) -> dict[str, Any]:
-        return await self._processing.run_kg_build(dataset_id=dataset_id, resource_id=resource.id, config_json=resource.config_json)
+        processing = AlgoProcessingService(
+            ProcessingDeps(
+                org_id=self._org_id,
+                user_id=self._user_id,
+                datasets=self._datasets,
+                samples=self._dataset_samples,
+                kg_repo=self._kg_repo,
+                pair_repo=self._pair_repo,
+                proposal_repo=self._proposal_repo,
+                storage=self._storage,
+                graph_store=build_graph_store(required=True),
+            )
+        )
+        return await processing.run_kg_build(dataset_id=dataset_id, resource_id=resource.id, config_json=resource.config_json)
 
     async def _run_alignment_build(self, *, dataset_id: str, resource) -> dict[str, Any]:
         model = await self._get_active_embedding_model(resource.config_json)

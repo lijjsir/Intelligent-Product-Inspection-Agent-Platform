@@ -13,7 +13,7 @@ CLASSIFIER_SYSTEM_PROMPT = """你是 PIAP 平台的消息路由分类器。
 
 输出严格 JSON：
 {
-  "selected_agent": "chat" | "inspection_task",
+  "selected_agent": "chat" | "quality_analysis",
   "sub_route": "general_chat" | "rag_qa" | "quality_qa" | "task_create" | "inspection_execute",
   "confidence": 0.0 ~ 1.0,
   "reason": "简短理由"
@@ -55,7 +55,7 @@ class ModelClassifier:
                 ],
                 temperature=0.0,
                 observation_name="agent_router.model_classifier",
-                observation_metadata={"router": "quality_chat_v2"},
+                observation_metadata={"router": "orchestrator_v1"},
             )
             if isinstance(result, dict) and "content" in result:
                 data = json.loads(str(result.get("content") or "{}"))
@@ -64,7 +64,11 @@ class ModelClassifier:
             else:
                 data = dict(result or {})
             return AgentRouteDecision(
-                selected_agent=data.get("selected_agent", "chat"),
+                selected_agent=(
+                    "quality_analysis"
+                    if data.get("selected_agent") == "quality_analysis"
+                    else "chat"
+                ),
                 sub_route=data.get("sub_route", "general_chat"),
                 intent=data.get("sub_route", "general_chat"),
                 confidence=float(data.get("confidence", 0.5)),

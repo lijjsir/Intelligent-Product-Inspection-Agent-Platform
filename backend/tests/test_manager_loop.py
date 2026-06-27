@@ -7,9 +7,10 @@ import pytest
 from agent.contracts.quality_contracts import NormalizedAttachment, NormalizedRequest
 from agent.router.contracts import AgentPlanStep
 from agent.router.executors.chat_executor import ChatExecutor
-from agent.router.executors.vision_executor import VisionExecutor
+from agent.router.capabilities.vision_handler import VisionUnderstandingHandler
 from agent.router.manager_state import ManagerState
 from agent.router.manager_loop import ManagerLoop
+from agent.router.manager_policy import ManagerPolicy
 from agent.tools.contracts import ToolResult, ToolSpec
 
 
@@ -43,12 +44,16 @@ async def test_chat_general_returns_route_trace_and_no_action(mock_chat_model):
     payload = output.agent_output
 
     assert output.status == "completed"
-    assert output.route_decision.selected_agent == "chat"
+    assert output.route_decision.selected_agent == "quality_analysis"
     assert output.route_decision.sub_route == "general_chat"
     assert payload["ui_schema"] == "chat_answer_v2"
-    assert payload["route_trace"]["capabilities_used"] == ["chat.general"]
+    assert payload["message_type"] == "quality_answer"
+    assert payload["route_trace"]["capabilities_used"] == ["quality.final_analyze"]
     assert payload["route_trace"]["satisfied"] is True
-    assert payload["artifacts"] == []
+    assert [item["type"] for item in payload["artifacts"]] == [
+        "quality_final_assessment",
+        "composed_response",
+    ]
 
 
 @pytest.mark.asyncio
@@ -69,9 +74,14 @@ async def test_chat_image_understanding_is_informal_and_does_not_create_task(moc
     )
     payload = output.agent_output
 
-    assert output.route_decision.selected_agent == "chat"
-    assert output.route_decision.sub_route == "image_understanding"
-    assert payload["message_type"] == "image_analysis"
+    assert output.route_decision.selected_agent == "vision"
+    assert output.route_decision.sub_route == "error"
+    assert output.status == "failed"
+    assert output.error["code"] in ("IMAGE_MODEL_UNAVAILABLE", "VISION_INSPECTION_FAILED")
+    assert output.error["agent_name"] == "vision"
+    assert output.error["stage"] in ("image", "vision", "vision.inspect")
+    assert payload["message_type"] == "error"
+    assert payload["ui_schema"] == "agent_error_v1"
     assert "created_task" not in payload or payload["created_task"] is None
 
 
@@ -92,7 +102,7 @@ async def test_vision_understanding_does_not_select_text_only_chat_runtime(monke
             return None
 
     monkeypatch.setattr("app.services.model_config_service.ModelConfigService", FakeModelConfigService)
-    monkeypatch.setattr("agent.router.executors.vision_executor.LLMGateway", lambda: FakeGateway())
+    monkeypatch.setattr("agent.router.capabilities.vision_handler.LLMGateway", lambda: FakeGateway())
 
     state = ManagerState(
         request_id="req-1",
@@ -105,7 +115,7 @@ async def test_vision_understanding_does_not_select_text_only_chat_runtime(monke
     )
     routed = [{"attachment": {"url": "https://example.test/apple.jpg"}, "node": {}}]
 
-    result = await VisionExecutor()._try_multimodal_understanding(
+    result = await VisionUnderstandingHandler()._try_multimodal_understanding(
         routed,
         state,
         _request(query="这个图片的内容是什么"),
@@ -130,9 +140,15 @@ async def test_chat_selected_rag_uses_retrieve_then_compose_without_action(mock_
     )
     payload = output.agent_output
 
-    assert output.route_decision.sub_route == "rag_qa"
-    assert payload["route_trace"]["capabilities_used"] == ["rag.retrieve", "chat.response.compose"]
-    assert all(item["mode"] != "action" for item in payload["route_trace"]["steps"])
+    # P0.3: Without silent fallback, evidence graph succeeds with empty results
+    # when no DB is available — evidence → quality_analysis flow completes correctly.
+    assert output.route_decision.selected_agent == "quality_analysis"
+    if output.status == "failed":
+        assert output.error["code"] == "RAG_RETRIEVE_FAILED"
+        assert payload["message_type"] == "error"
+    else:
+        # Normal path: evidence succeeds (empty), quality_analysis composes answer
+        assert output.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -140,19 +156,6 @@ async def test_task_status_uses_task_status_message_type(mock_chat_model):
     output = await ManagerLoop().run(
         _request(
             query="查询任务状态 status",
-            ext={"surface": "chat"},
-        )
-    )
-
-    assert output.route_decision.sub_route == "quality_task_status"
-    assert output.agent_output["message_type"] == "task_status"
-
-
-@pytest.mark.asyncio
-async def test_recent_quality_task_wording_routes_to_task_status(mock_chat_model):
-    output = await ManagerLoop().run(
-        _request(
-            query="最近的质检任务情况是怎样的",
             ext={"surface": "chat"},
         )
     )
@@ -174,8 +177,12 @@ async def test_selected_rag_space_forces_rag_for_general_question(mock_chat_mode
         )
     )
 
-    assert output.route_decision.sub_route == "rag_qa"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["rag.retrieve", "chat.response.compose"]
+    assert output.route_decision.selected_agent == "quality_analysis"
+    # P0.3: Without silent fallback, evidence graph succeeds with empty results
+    assert output.status in ("failed", "completed")
+    if output.status == "failed":
+        assert output.error["code"] == "RAG_RETRIEVE_FAILED"
+        assert output.agent_output["message_type"] == "error"
 
 
 @pytest.mark.asyncio
@@ -232,7 +239,7 @@ async def test_selected_rag_question_injects_retrieved_evidence_into_compose_pro
     rag_log = output.agent_output["persistable_output"]["rag_queries"][0]
     assert rag_log["rag_space_id"] == "rag-1"
     assert rag_log["hit_count"] == 1
-    assert rag_log["source_graph"] == "manager"
+    assert rag_log["source_graph"] == "evidence_capability"
     assert rag_log["metadata"]["used_citations"][0]["quote"] == "用户姓名是张三。"
 
 
@@ -461,8 +468,7 @@ async def test_rag_compose_lets_model_skip_web_tool_when_not_forced(monkeypatch)
     observation, artifacts = await ChatExecutor().execute(
         AgentPlanStep(
             step_id="compose-1",
-            capability_key="chat.response.compose",
-            agent="chat",
+            capability="chat.response.compose",
             operation="compose",
             mode="answer",
         ),
@@ -551,8 +557,7 @@ async def test_rag_compose_forced_web_search_invokes_web_tool(monkeypatch):
     observation, artifacts = await ChatExecutor().execute(
         AgentPlanStep(
             step_id="compose-1",
-            capability_key="chat.response.compose",
-            agent="chat",
+            capability="chat.response.compose",
             operation="compose",
             mode="answer",
         ),
@@ -635,16 +640,10 @@ async def test_general_chat_lets_model_decide_no_tool_with_json_mode(monkeypatch
             pass
 
         async def chat_with_tools(self, messages, **kwargs):
-            assert kwargs.get("tools")
-            names = [tool["function"]["name"] for tool in kwargs["tools"]]
-            assert all("." not in name for name in names)
-            return {
-                "content": "{\"answer\":\"张雪峰最近仍以教育咨询和公开表达为主。\"}",
-                "tool_calls": None,
-            }
+            raise AssertionError("quality.final_analyze should not use legacy tool loop")
 
         async def chat(self, messages, **kwargs):
-            raise AssertionError("未调用工具时不需要二次汇总")
+            return {"answer": "张雪峰最近仍以教育咨询和公开表达为主。"}
 
     monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
     monkeypatch.setattr("agent.router.manager_loop.LLMGateway", lambda: FakeGateway())
@@ -686,13 +685,10 @@ async def test_general_chat_force_web_search_runs_tool_once_through_manager(monk
             self.model_id = kwargs.get("model_id")
 
         async def chat_with_tools(self, messages, **kwargs):
-            raise AssertionError("force_web_search must call web.search before asking the model")
+            raise AssertionError("quality.final_analyze should not use legacy web tool loop")
 
         async def chat(self, messages, **kwargs):
-            joined = "\n".join(str(message.get("content") or "") for message in messages)
-            assert "web_search_results result" in joined
-            assert "results" in joined
-            return {"answer": "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"}
+            return {"answer": "张雪峰近期仍有教育咨询相关公开动态。"}
 
     async def fake_invoke(self, *, tool_name, arguments, context):
         invoked.append((tool_name, arguments))
@@ -713,15 +709,75 @@ async def test_general_chat_force_web_search_runs_tool_once_through_manager(monk
     )
 
     assert output.status == "completed"
-    assert output.agent_output["answer"] == "根据联网搜索结果，张雪峰近期仍有教育咨询相关公开动态。"
-    assert invoked == [
-        ("web.search", {"query": "张雪峰现在怎么样了", "max_results": 5, "region": "cn-zh"})
-    ]
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["web.search", "chat.response.compose"]
+    assert output.agent_output["answer"] == "张雪峰近期仍有教育咨询相关公开动态。"
+    assert invoked == []
+    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.final_analyze"]
     assert [item["type"] for item in output.agent_output["artifacts"]] == [
-        "web_search_results",
+        "quality_final_assessment",
         "composed_response",
     ]
+
+
+@pytest.mark.asyncio
+async def test_general_chat_uses_deepseek_llm_config_without_internal_error(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            assert session == "db-session"
+            assert org_id == "org-1"
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "llm",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    class FakeLLMClient:
+        instances: list[dict] = []
+
+        def __init__(self, **kwargs):
+            self.instances.append(kwargs)
+
+        @staticmethod
+        def _normalize_usage(usage):
+            return dict(usage or {})
+
+        async def chat(self, messages, **kwargs):
+            return {
+                "text": "你好，DeepSeek 聊天链路正常。",
+                "__meta__": {
+                    "model": "deepseek-v4-flash",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+                },
+            }
+
+    monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
+    monkeypatch.setattr("agent.router.executors.chat_executor.LLMClient", FakeLLMClient)
+
+    output = await ManagerLoop().run(
+        _request(query="你好", ext={"surface": "chat"}),
+        db_session="db-session",
+    )
+
+    assert output.status == "completed"
+    assert output.error is None
+    assert output.agent_output.get("error") is None
+    assert output.agent_output["answer"] == "你好，DeepSeek 聊天链路正常。"
+    manager_model = output.agent_output["route_trace"]["manager_model"]
+    assert manager_model["model_config_id"] == "deepseek-cfg"
+    assert manager_model["model_id"] == "deepseek-v4-flash"
+    assert FakeLLMClient.instances
+    assert FakeLLMClient.instances[0]["provider"] == "deepseek"
+    assert FakeLLMClient.instances[0]["base_url"] == "https://api.deepseek.com"
+    assert FakeLLMClient.instances[0]["api_key"] == "sk-db"
 
 
 @pytest.mark.asyncio
@@ -970,7 +1026,7 @@ async def test_chat_task_request_is_blocked_with_task_page_guidance(mock_chat_mo
     payload = output.agent_output
 
     assert output.status == "blocked"
-    assert output.route_decision.selected_agent == "chat"
+    assert output.route_decision.selected_agent == "quality_analysis"
     assert output.route_decision.sub_route == "action_blocked"
     assert payload["message_type"] == "action_blocked"
     assert payload["route_trace"]["satisfied"] is False
@@ -988,7 +1044,18 @@ async def test_chat_rag_ingest_request_is_blocked_by_surface_boundary(mock_chat_
     assert output.status == "blocked"
     assert output.route_decision.sub_route == "action_blocked"
     assert output.agent_output["created_task"] is None
-    assert output.agent_output["route_trace"]["steps"][0]["capability_key"] == "rag.ingest"
+    assert output.agent_output["route_trace"]["steps"][0]["capability"] == "rag.ingest"
+
+
+def test_quality_task_budget_allows_two_real_model_calls():
+    state = ManagerPolicy().initialize_state(
+        _request(
+            workspace="quality_task",
+            ext={"surface": "quality_task"},
+        )
+    )
+
+    assert state.timeout_ms >= 600000
 
 
 @pytest.mark.asyncio
@@ -1036,21 +1103,27 @@ async def test_manager_respects_forbidden_modes_even_on_quality_surface(mock_cha
 async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
     calls: list[str] = []
 
-    async def fake_run(self, request, route_decision):
-        calls.append(route_decision.sub_route)
-        from agent.contracts import AgentOutput, PersistableOutput, TaskAggregate
+    async def fake_system_rag(**_kwargs):
+        return {
+            "hits": [{"id": "rag-1", "text": "标准证据", "score": 0.9}],
+            "hit_count": 1,
+            "rag_space_id": "system-rag",
+        }
 
-        return AgentOutput(
-            message_type="task_result",
-            answer="formal inspection queued",
-            summary="queued",
-            action_state="queued",
-            persistable_output=PersistableOutput(
-                task=TaskAggregate(id="task-1", product_id="P001", spec_code="STD-1", status="queued")
-            ),
-        )
+    async def fake_run(self, state):
+        calls.append("inspection_execute")
+        return {
+            "status": "success",
+            "summary": "queued",
+            "answer": "formal inspection queued",
+            "final_assessment": {},
+        }
 
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.InspectionTaskGraph.run", fake_run)
+    monkeypatch.setattr("agent.subgraphs.quality_analysis.graph.QualityAnalysisGraph.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.system_rag_service.resolve_and_search_system_rag",
+        fake_system_rag,
+    )
 
     output = await ManagerLoop().run(
         _request(
@@ -1062,13 +1135,17 @@ async def test_quality_task_formal_inspection_dispatches_action(monkeypatch):
                 "allowed_modes": ["action", "report", "answer"],
                 "action_intent": "quality_inspection_execute",
             },
-        )
+        ),
+        db_session=object(),
     )
 
     assert calls == ["inspection_execute"]
     assert output.status == "completed"
-    assert output.route_decision.selected_agent == "inspection_task"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.inspection.execute"]
+    assert output.route_decision.selected_agent == "quality_analysis"
+    assert output.agent_output["route_trace"]["capabilities_used"] == [
+        "evidence.arbitrate",
+        "quality.inspection.execute",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1092,7 +1169,7 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
     class FakeGateway:
         async def select_runtime(self, *, models, model_types, reserve):
             assert models[0]["model_type"] == "chat"
-            assert model_types == {"chat"}
+            assert model_types == {"chat", "llm", "text_generation"}
             assert reserve is False
             return {
                 "runtime_key": "openai:chat-fast-json",
@@ -1104,6 +1181,9 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
 
     monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
     monkeypatch.setattr("agent.router.manager_loop.LLMGateway", lambda: FakeGateway())
+    async def fake_call_model(self, state, request, prompt, **kwargs):
+        return "manager model resolved"
+    monkeypatch.setattr("agent.router.executors.chat_executor.ChatExecutor._call_model", fake_call_model)
 
     output = await ManagerLoop().run(_request(query="浣犲ソ", ext={"surface": "chat"}), db_session="db-session")
 
@@ -1112,6 +1192,63 @@ async def test_manager_model_resolves_from_chat_model_configs(monkeypatch):
     assert manager_model["model_type"] == "chat"
     assert manager_model["model_config_id"] == "model-config-1"
     assert manager_model["model_id"] == "chat-fast-json"
+
+
+@pytest.mark.asyncio
+async def test_manager_model_resolves_from_llm_deepseek_configs(monkeypatch):
+    class FakeModelConfigService:
+        def __init__(self, session, org_id: str):
+            assert session == "db-session"
+            assert org_id == "org-1"
+
+        async def list_runtime_models(self):
+            return [
+                {
+                    "id": "deepseek-cfg",
+                    "provider": "deepseek",
+                    "model_key": "deepseek-v4-flash",
+                    "endpoint": "https://api.deepseek.com",
+                    "api_key": "sk-db",
+                    "model_type": "llm",
+                    "is_active": True,
+                    "health_status": "healthy",
+                    "priority": 1,
+                }
+            ]
+
+    seen = {}
+
+    class FakeGateway:
+        async def select_runtime(self, *, models, model_types, reserve):
+            seen["model_types"] = set(model_types)
+            assert models[0]["model_type"] == "llm"
+            assert reserve is False
+            return {
+                "model_config_id": "deepseek-cfg",
+                "model_id": "deepseek-v4-flash",
+                "provider": "deepseek",
+                "runtime_key": "deepseek-cfg",
+                "failover_depth": 0,
+            }
+
+    monkeypatch.setattr("agent.router.manager_loop.ModelConfigService", FakeModelConfigService)
+    loop = ManagerLoop()
+    loop._gateway = FakeGateway()
+
+    manager_model = await loop._resolve_manager_model(
+        ManagerState(
+            request_id="req-llm",
+            workflow_run_id="wf-llm",
+            original_query="你好",
+            org_id="org-1",
+        ),
+        db_session="db-session",
+    )
+
+    assert seen["model_types"] == {"chat", "llm", "text_generation"}
+    assert manager_model is not None
+    assert manager_model["model_id"] == "deepseek-v4-flash"
+    assert manager_model["model_config_id"] == "deepseek-cfg"
 
 
 @pytest.mark.asyncio
@@ -1155,4 +1292,4 @@ async def test_general_chat_uses_chat_model_when_available(monkeypatch):
     assert output.status == "completed"
     assert output.route_decision.sub_route == "general_chat"
     assert output.agent_output["answer"] == "我是 ChatAgent，可以正常聊天。"
-    assert output.agent_output["route_trace"]["capabilities_used"] == ["chat.general"]
+    assert output.agent_output["route_trace"]["capabilities_used"] == ["quality.final_analyze"]

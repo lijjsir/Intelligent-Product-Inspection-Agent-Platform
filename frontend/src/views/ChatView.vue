@@ -1,24 +1,31 @@
-<script setup lang="ts">
-import { CircleClose, CollectionTag, Paperclip, Promotion } from "@element-plus/icons-vue";
+﻿<script setup lang="ts">
+import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
+import AgentErrorAlert from "@/components/chat/AgentErrorAlert.vue";
+import AgentTraceTimeline from "@/components/chat/AgentTraceTimeline.vue";
 import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
+import EvidencePacketCard from "@/components/chat/EvidencePacketCard.vue";
+import LabDetectionCard from "@/components/chat/LabDetectionCard.vue";
 import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
+import QualityAssessmentCard from "@/components/chat/QualityAssessmentCard.vue";
+import VisualInspectionCard from "@/components/chat/VisualInspectionCard.vue";
+import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
-import type { ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
-import { normalizeAiResponseText } from "@/utils/ai-response";
-import type { InspectionTask } from "@/types/task.types";
+import type { AgentErrorPayload, ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
+import type { InspectionTask, TaskCreate } from "@/types/task.types";
+import { attachmentDisplayName, isImageAttachment } from "@/utils/attachments";
 import { writeTextToClipboard } from "@/utils/clipboard";
 import { formatServerDateTime } from "@/utils/date-time";
+import { agentErrorPayload, messageCardType } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
-import { isImageAttachment } from "./chat-rendering";
 
 const router = useRouter();
 const billingStore = useBillingStore();
@@ -29,9 +36,12 @@ const inspectionSpecStore = useInspectionSpecStore();
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
+const uiNow = ref(Date.now());
 const webSearchEnabled = ref(false);
 const inspectionContextEnabled = false;
 const selectedInspectionTasks = ref<InspectionTask[]>([]);
+const previewImage = ref({ url: "", name: "" });
+const imagePreviewVisible = ref(false);
 
 const taskDialogVisible = ref(false);
 const taskSubmitting = ref(false);
@@ -45,14 +55,6 @@ const taskForm = ref({
   image_urls_input: "",
   priority: 5,
 });
-
-interface ChatTaskDraftPayload {
-  product_id: string;
-  spec_code: string;
-  image_urls: string[];
-  priority?: number;
-  metadata?: Record<string, unknown>;
-}
 
 const taskRules: FormRules = {
   product_id: [{ required: true, message: "请选择检测标准以自动填入产品线", trigger: "blur" }],
@@ -75,14 +77,50 @@ const taskRules: FormRules = {
 
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
 const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
+let uiClockTimer: number | null = null;
+
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒`;
+}
+
 const streamStatusText = computed(() => {
   if (!chatStore.loading) return "";
-  if (chatStore.streamPhase === "connecting") return "正在建立连接...";
-  if (chatStore.streamPhase === "streaming") return "Agent 处理中...";
-  if (chatStore.streamPhase === "closing") return "正在整理回复...";
-  return "Agent 处理中...";
+  const now = uiNow.value;
+  const elapsedText = chatStore.waitStartedAt ? formatElapsed(now - chatStore.waitStartedAt) : "0 秒";
+  const idleSeconds = chatStore.lastStreamEventAt ? Math.floor((now - chatStore.lastStreamEventAt) / 1000) : 0;
+  const phaseText =
+    chatStore.streamPhase === "connecting"
+      ? "正在建立实时连接"
+      : chatStore.streamPhase === "polling"
+        ? "连接波动，正在轮询后台结果"
+        : chatStore.streamPhase === "reconnecting"
+          ? "正在重连实时通道"
+          : chatStore.streamPhase === "closing"
+            ? "正在整理回复"
+            : idleSeconds >= 10
+              ? "后台仍在处理，连接保持中"
+              : "智能体正在思考";
+  const detail = chatStore.streamStatusMessage || "等待后台输出";
+  return `${phaseText} · 已等待 ${elapsedText} · ${detail}`;
 });
-const FINAL_ASSISTANT_MESSAGE_TYPES = new Set(["assistant_text", "quality_answer", "file_answer", "report_answer", "task_status", "task_result", "image_analysis", "error", "interrupted"]);
+const FINAL_ASSISTANT_MESSAGE_TYPES = new Set([
+  "assistant_text",
+  "quality_answer",
+  "evidence_answer",
+  "visual_answer",
+  "lab_answer",
+  "file_answer",
+  "report_answer",
+  "task_status",
+  "task_result",
+  "image_analysis",
+  "error",
+  "interrupted",
+]);
 const specOptions = computed(() => inspectionSpecStore.items);
 const filteredSpecOptions = computed(() =>
   specOptions.value.filter((item) => item.is_active),
@@ -101,16 +139,14 @@ const syncedUsageMessageId = ref("");
 const messageReactions = ref<Record<string, "up" | "down">>({});
 const editingMessageId = ref("");
 const editingContent = ref("");
-const imagePreviewVisible = ref(false);
-const imagePreview = ref({ url: "", name: "" });
 
 function formatTime(value?: string | null) {
-  return formatServerDateTime(value, { compactDate: true, includeSeconds: true });
+  return formatServerDateTime(value, { includeSeconds: true });
 }
 
 function roleLabel(role: ChatMessage["role"]) {
   if (role === "user") return "你";
-  if (role === "assistant") return "Agent";
+  if (role === "assistant") return "智能体";
   return "系统";
 }
 
@@ -190,7 +226,7 @@ async function ensureInspectionSpecsLoaded(force = false) {
   if (!specsLoadPromise) {
     specsLoadPromise = (async () => {
       try {
-        await inspectionSpecStore.fetchAll({ suppressErrorToast: true, timeout: 60000 });
+        await inspectionSpecStore.fetchAll();
       } catch (error) {
         ElMessage.error("检测标准加载失败，请稍后重试。");
         console.error(error);
@@ -230,7 +266,7 @@ function resetTaskDialog() {
   taskFormRef.value?.clearValidate();
 }
 
-function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean): ChatTaskDraftPayload {
+function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean): TaskCreate {
   if (useDialogState) {
     const imageUrls = Array.from(
       new Set([...chatStore.pendingAttachments.map((item) => item.url), ...parseImageUrls(taskForm.value.image_urls_input)]),
@@ -241,7 +277,7 @@ function buildTaskPayload(message: ChatMessage | null, useDialogState: boolean):
   return { product_id: String(draft?.product_id || "").trim(), spec_code: String(draft?.spec_code || "").trim(), image_urls: (draft?.image_urls || []).filter(Boolean), priority: draft?.priority ?? 5, metadata: { source: "chat" } };
 }
 
-async function submitTaskPayload(payload: ChatTaskDraftPayload, sourceMessageId?: string | null) {
+async function submitTaskPayload(payload: TaskCreate, sourceMessageId?: string | null) {
   if (!payload.product_id || !payload.spec_code || payload.image_urls.length === 0) {
     ElMessage.warning("\u68c0\u6d4b\u4efb\u52a1\u4fe1\u606f\u8fd8\u4e0d\u5b8c\u6574\uff0c\u8bf7\u5148\u8865\u5168\u8868\u5355\u3002");
     return;
@@ -406,60 +442,33 @@ function messageAttachments(message: ChatMessage): ChatAttachment[] {
 }
 
 function openImagePreview(attachment: ChatAttachment) {
-  imagePreview.value = { url: attachment.url, name: attachment.name };
+  previewImage.value = { url: attachment.url, name: attachmentDisplayName(attachment) };
   imagePreviewVisible.value = true;
 }
 
-// Typewriter effect
+// ── Typewriter effect ────────────────────────────────────────────
 const typewriterPos = ref<Record<string, number>>({});
 const typewriterTimers = new Map<string, ReturnType<typeof setInterval>>();
-
-function looksLikeAnswerSummaryEnvelope(content: string): boolean {
-  const text = content.trim();
-  return (
-    /["'](?:answer|summary)["']\s*:/.test(text)
-    || /^(?:answer|summary|text)(?:\s*[:：]|\s*$)/i.test(text)
-    || /^answer\s+summary\b/i.test(text)
-    || /^```(?:json)?\s*\{?/i.test(text)
-    || /^\{\s*["']?(?:a|an|ans|answer|s|su|sum|summary|text)?/i.test(text)
-  );
-}
-
-function displayAssistantContent(content: string, fallback = "", limit?: number): string {
-  const normalized = normalizeAiResponseText(content);
-  const changed = normalized.content !== content.trim() || Boolean(normalized.summary);
-  if (changed) {
-    return typeof limit === "number" ? normalized.content.slice(0, limit) : normalized.content;
-  }
-  if (looksLikeAnswerSummaryEnvelope(content)) {
-    return fallback;
-  }
-  return typeof limit === "number" ? content.slice(0, limit) : content;
-}
 
 function getDisplayedContent(message: ChatMessage): string {
   if (message.role !== "assistant") return message.content;
   const pos = typewriterPos.value[message.id];
   if (pos === undefined) {
     if (message.message_type === "streaming") {
-      if (message.content) return displayAssistantContent(message.content, streamingPlaceholder(message));
+      if (message.content) return message.content;
       return streamingPlaceholder(message);
     }
-    return displayAssistantContent(message.content);
+    return message.content;
   }
-  return displayAssistantContent(message.content, streamingPlaceholder(message), pos);
-}
-
-function getCopyContent(message: ChatMessage): string {
-  return message.role === "assistant" ? normalizeAiResponseText(message.content).content : message.content;
+  return message.content.slice(0, pos);
 }
 
 function streamingPlaceholder(message: ChatMessage) {
   const attachmentNames = (message.payload?.attachment_echo || []).map((item) => item.name.toLowerCase());
   if (attachmentNames.some((name) => name.endsWith(".docx") || name.endsWith(".tex"))) {
-    return "正在解析文档并检查格式...";
+    return streamStatusText.value || "正在解析文档并检查格式...";
   }
-  return streamStatusText.value || "Agent 处理中...";
+  return streamStatusText.value || "智能体处理中...";
 }
 
 function ensureTypewriter(msgId: string) {
@@ -494,7 +503,7 @@ function disposeAllTypewriters() {
   typewriterPos.value = {};
 }
 
-// Only start typewriters here; each timer stops itself when the message is done.
+// Only START typewriters — never stop them from the watch.
 // The timer self-destructs when content is fully revealed AND streaming ended.
 watch(
   () =>
@@ -697,6 +706,10 @@ async function retryFromAssistantMessage(message: ChatMessage) {
   try {
     await chatStore.sendMessage({
       message: source.content,
+      metadata: {
+        edited_from_message_id: source.id,
+        replace_assistant_message_id: message.id,
+      },
       ext: {
         ui_mode: "auto",
       },
@@ -705,6 +718,39 @@ async function retryFromAssistantMessage(message: ChatMessage) {
     ElMessage.error("重试失败，请稍后再试。");
     console.error(error);
   }
+}
+
+async function resendFromErrorMessage(message: ChatMessage) {
+  await retryFromAssistantMessage(message);
+}
+
+function messageAgentError(message: ChatMessage) {
+  return agentErrorPayload(message.payload);
+}
+
+function fallbackAgentError(message: ChatMessage): AgentErrorPayload {
+  return {
+    code: "AGENT_FAILED",
+    title: "执行失败",
+    message: message.content || "Agent 执行失败。",
+    category: "internal",
+    severity: "error",
+    status: "failed",
+    frontend_visible: true,
+    retryable: false,
+    detail: message.payload?.detail || null,
+    workflow_run_id: message.payload?.workflow_run_id || null,
+    trace_id: message.payload?.trace_id || null,
+  };
+}
+
+function errorCardTitle(message: ChatMessage): string {
+  const error = messageAgentError(message);
+  if (error?.title) return error.title;
+  const code = error?.code || "";
+  if (code.startsWith("SHORT_TERM_")) return "短期记忆构建失败";
+  if (code.startsWith("GRAPH_MEMORY_") || code.startsWith("NEO4J_")) return "图数据库服务异常";
+  return "执行失败";
 }
 
 async function scrollToBottom() {
@@ -723,10 +769,52 @@ function disposeTaskStreams() {
 
 function ensureTaskStream(taskId: string) {
   if (!taskId || taskStreamDisposers.has(taskId)) return;
-  taskStreamStates.value = { ...taskStreamStates.value, [taskId]: taskStreamStates.value[taskId] || { status: "running" } };
+  taskStreamStates.value = { ...taskStreamStates.value, [taskId]: taskStreamStates.value[taskId] || { status: "running", message: "等待任务实时输出..." } };
   const dispose = taskStore.subscribeTaskStream(taskId, async (event) => {
+    if (event.type === "ready" || event.type === "heartbeat") {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: typeof event.message === "string" && event.message !== "stream_connected" ? event.message : "后台仍在处理，实时连接保持中...",
+        },
+      };
+      return;
+    }
     taskStreamStates.value = { ...taskStreamStates.value, [taskId]: { status: String(event.status || taskStreamStates.value[taskId]?.status || "running"), stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage, message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message } };
     if (event.status === "done" || event.status === "failed") { const currentDispose = taskStreamDisposers.get(taskId); currentDispose?.(); taskStreamDisposers.delete(taskId); await chatStore.reloadCurrentSessionMessages(); }
+  }, {
+    onOpen: () => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: "任务实时连接已建立，等待后台输出...",
+        },
+      };
+    },
+    onError: () => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: "任务实时连接波动，请到任务详情页查看轮询同步状态。",
+        },
+      };
+    },
+    onHeartbeat: (event) => {
+      taskStreamStates.value = {
+        ...taskStreamStates.value,
+        [taskId]: {
+          status: taskStreamStates.value[taskId]?.status || "running",
+          stage: taskStreamStates.value[taskId]?.stage,
+          message: typeof event.message === "string" && event.message !== "stream_connected" ? event.message : "后台仍在处理，实时连接保持中...",
+        },
+      };
+    },
   });
   taskStreamDisposers.set(taskId, dispose);
 }
@@ -742,6 +830,9 @@ function syncTaskStreamsFromMessages() {
 }
 
 onMounted(async () => {
+  uiClockTimer = window.setInterval(() => {
+    if (chatStore.loading) uiNow.value = Date.now();
+  }, 1000);
   try { await chatStore.initForChatPage(); } catch (error) { ElMessage.error("聊天初始化失败，请刷新页面后重试。"); console.error(error); }
   await ensureInspectionSpecsLoaded();
   try { await billingStore.fetchMyUsage({ suppressErrorToast: true }); } catch { /* non-blocking */ }
@@ -750,7 +841,14 @@ onMounted(async () => {
   await loadMessageReactions();
 });
 
-onBeforeUnmount(() => { chatStore.stopStream(); disposeTaskStreams(); });
+onBeforeUnmount(() => {
+  chatStore.stopStream();
+  disposeTaskStreams();
+  if (uiClockTimer != null) {
+    window.clearInterval(uiClockTimer);
+    uiClockTimer = null;
+  }
+});
 
 watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
 watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
@@ -770,12 +868,13 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         <span class="token-badge">Token: {{ totalTokenText }}</span>
         <el-select
           v-model="chatStore.selectedRagSpaceId"
-          placeholder="选择知识库"
+          placeholder="普通聊天（不使用知识库）"
           clearable
           size="small"
           class="rag-select"
           @change="(val: string) => val ? chatStore.selectRagSpace(val) : chatStore.clearSelectedRagSpace()"
         >
+          <el-option label="普通聊天（不使用知识库）" value="" />
           <el-option
             v-for="space in chatStore.ragSpaces"
             :key="space.id"
@@ -790,7 +889,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :icon="Promotion"
             @click="webSearchEnabled = !webSearchEnabled"
           >
-            {{ webSearchEnabled ? '联网搜索 · 开' : '联网搜索' }}
+            {{ webSearchEnabled ? '联网搜索·开' : '联网搜索' }}
           </el-button>
         </el-tooltip>
         <el-tag v-if="chatStore.pendingAttachments.length" size="small" effect="plain" type="warning">
@@ -803,8 +902,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
       v-if="chatStore.ragSpacesError"
       class="alert-bar"
       type="warning" :closable="false" show-icon
-      title="知识库暂不可用"
-      :description="chatStore.ragSpacesError"
+      title="知识库暂不可用" :description="chatStore.ragSpacesError"
     />
 
     <ChatInspectionContextPanel
@@ -867,18 +965,13 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <!-- Attachments -->
               <div v-if="message.payload?.attachment_echo?.length" class="bubble-attachments">
                 <template v-for="att in message.payload.attachment_echo" :key="att.id">
-                  <button
+                  <ImageAttachmentCard
                     v-if="isImageAttachment(att)"
-                    type="button"
-                    class="att-image-button"
-                    :aria-label="`预览图片 ${att.name}`"
-                    :title="att.name"
-                    @click="openImagePreview(att)"
-                  >
-                    <img :src="att.url" :alt="att.name" loading="lazy" />
-                    <span class="att-image-name">{{ att.name }}</span>
-                  </button>
-                  <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                    :src="att.url"
+                    :name="attachmentDisplayName(att)"
+                    @preview="openImagePreview(att)"
+                  />
+                  <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
                 </template>
               </div>
 
@@ -935,10 +1028,10 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               <!-- Paper review report card -->
               <div v-if="message.payload?.paper_format_report" class="paper-review-card">
                 <div class="prc-header">
-                  <span class="prc-title">论文格式检查报告</span>
+                  <span class="prc-title">论文查非辅助报告</span>
                   <div class="prc-header-right">
                     <el-tag v-if="message.payload.paper_format_report.model_used === false" size="small" type="warning" effect="dark">
-                      模型未生效，仅规则检查
+                      模型未生效-仅规则检查
                     </el-tag>
                     <el-tag size="small" effect="dark" :type="paperScoreTagType(message.payload.paper_format_report.score)">
                       {{ message.payload.paper_format_report.score }} / 100
@@ -1026,11 +1119,90 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
 
+              <!-- Error card -->
+              <div v-if="message.message_type === 'error'" class="error-card">
+                <div class="error-card-header">
+                  <el-icon color="#dc2626"><WarningFilled /></el-icon>
+                  <span class="error-card-title">{{ errorCardTitle(message) }}</span>
+                </div>
+                <div class="error-card-body">
+                  <AgentErrorAlert :error="messageAgentError(message) || fallbackAgentError(message)" />
+                </div>
+                <div class="error-card-actions">
+                  <el-button size="small" type="primary" @click="resendFromErrorMessage(message)" :disabled="chatStore.loading">重新发送</el-button>
+                </div>
+              </div>
+
+              <!-- Evidence packet card -->
+              <div v-if="message.payload?.evidence_packet" class="agent-card-wrapper">
+                <EvidencePacketCard
+                  :rag-hit-count="(message.payload.evidence_packet.sources as any)?.rag?.hit_count"
+                  :memory-count="(message.payload.evidence_packet.sources as any)?.memory?.items?.length"
+                  :kg-path-count="(message.payload.evidence_packet.sources as any)?.quality_kg?.paths?.length"
+                  :source-count="message.payload.evidence_packet.source_count"
+                />
+              </div>
+
+              <!-- Visual inspection card -->
+              <div v-if="message.payload?.visual_inspection_result" class="agent-card-wrapper">
+                <VisualInspectionCard
+                  :summary="message.payload.visual_inspection_result.summary"
+                  :image-count="message.payload.visual_inspection_result.image_count"
+                  :objects="message.payload.visual_inspection_result.objects"
+                  :possible-defects="message.payload.visual_inspection_result.possible_defects"
+                  :risk="message.payload.visual_inspection_result.risk"
+                  :defects="message.payload.visual_inspection_result.defects"
+                  :image-quality="message.payload.visual_inspection_result.image_quality"
+                  :requires-recheck="message.payload.visual_inspection_result.requires_recheck"
+                  :confidence="message.payload.visual_inspection_result.confidence"
+                />
+              </div>
+
+              <!-- Lab detection card -->
+              <div v-if="message.payload?.lab_detection_result" class="agent-card-wrapper">
+                <LabDetectionCard
+                  :sample-id="message.payload.lab_detection_result.sample_id"
+                  :assessment-state="message.payload.lab_detection_result.assessment_state"
+                  :abnormal-probability="message.payload.lab_detection_result.abnormal_probability"
+                  :risk-level="message.payload.lab_detection_result.risk_level"
+                  :data-completeness="message.payload.lab_detection_result.data_completeness"
+                  :early-warning="message.payload.lab_detection_result.early_warning"
+                  :can-make-final-verdict="message.payload.lab_detection_result.can_make_final_verdict"
+                  :abnormal-indicators="message.payload.lab_detection_result.abnormal_indicators"
+                  :next-test-priority="message.payload.lab_detection_result.next_test_priority"
+                  :suggested-action="message.payload.lab_detection_result.suggested_action"
+                  :confidence="message.payload.lab_detection_result.confidence"
+                />
+              </div>
+
+              <!-- Quality assessment card -->
+              <div v-if="message.payload?.quality_final_assessment" class="agent-card-wrapper">
+                <QualityAssessmentCard
+                  :final-verdict="message.payload.quality_final_assessment.final_verdict"
+                  :overall-score="message.payload.quality_final_assessment.overall_score"
+                  :risk-level="message.payload.quality_final_assessment.risk_level"
+                  :evidence-used="message.payload.quality_final_assessment.evidence_used"
+                  :conflicts="message.payload.quality_final_assessment.conflicts"
+                  :limitations="message.payload.quality_final_assessment.limitations"
+                  :recommended-action="message.payload.quality_final_assessment.recommended_action"
+                  :answer="message.payload.quality_final_assessment.answer"
+                  :confidence="message.payload.quality_final_assessment.confidence"
+                />
+              </div>
+
+              <!-- Agent trace timeline -->
+              <div v-if="message.payload?.route_trace || message.payload?.capabilities_used?.length" class="agent-card-wrapper">
+                <AgentTraceTimeline
+                  :trace="message.payload.route_trace"
+                  :capabilities-used="message.payload.capabilities_used"
+                />
+              </div>
+
               <!-- Task actions -->
               <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
                 <div class="task-action-note">
                   <strong>当前还是任务草稿</strong>
-                  <span>你可以继续追问识别依据、补充检测关注点或修改字段；确认后才会创建正式任务并进入执行队列。</span>
+                  <span>你可以继续追问识别依据、补充检测关注点或修改字段；点确认后才会创建正式任务并进入执行队列。</span>
                 </div>
                 <el-alert v-if="message.payload?.missing_slots?.length" type="info" :closable="false" show-icon title="任务信息还不完整，请补充后再提交。" />
                 <div class="task-actions-btns">
@@ -1045,7 +1217,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               :show-feedback="isVisibleAssistantAnswer(message)"
               :show-retry="isVisibleAssistantAnswer(message)"
               :retry-disabled="chatStore.loading"
-              @copy="copyToClipboard(getCopyContent(message), '消息已复制')"
+              @copy="copyToClipboard(message.content, '消息已复制')"
               @edit="editUserMessage(message)"
               @like="submitChatFeedback(message, 'up')"
               @dislike="submitChatFeedback(message, 'down')"
@@ -1063,6 +1235,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           <el-tag v-for="att in chatStore.pendingAttachments" :key="att.id" closable effect="plain" @close="removePendingAttachment(att.id)">{{ att.name }}</el-tag>
         </div>
         <div v-if="streamStatusText" class="stream-status">
+          <span class="stream-status-dot" />
           <span>{{ streamStatusText }}</span>
           <el-button
             v-if="chatStore.canCancelResponse"
@@ -1138,7 +1311,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         <el-button type="primary" :loading="taskSubmitting" @click="submitTaskDialog">{{ taskSourceMessage ? "前往任务页确认提交" : "发送给 Agent 整理草稿" }}</el-button>
       </template>
     </el-dialog>
-    <ImagePreviewDialog v-model="imagePreviewVisible" :src="imagePreview.url" :title="imagePreview.name" />
+    <ImagePreviewDialog v-model="imagePreviewVisible" :src="previewImage.url" :title="previewImage.name" />
   </div>
 </template>
 
@@ -1150,7 +1323,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   gap: 0;
 }
 
-/* Toolbar */
+.agent-card-wrapper {
+  margin-top: 8px;
+}
+
+/* ── Toolbar ── */
 .toolbar {
   display: flex;
   align-items: center;
@@ -1170,7 +1347,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .token-badge { font-size: 12px; color: #6b7280; white-space: nowrap; }
 .rag-select { width: 180px; }
 
-/* Alert */
+/* ── Alert ── */
 .alert-bar { margin: 0 12px; border-radius: 10px; }
 
 .inspection-context-strip {
@@ -1186,7 +1363,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   background: #fff;
 }
 
-/* Message list */
+/* ── Message list ── */
 .message-list {
   overflow-y: auto;
   padding: 12px 20px;
@@ -1219,7 +1396,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .role-name { font-weight: 600; color: #374151; }
 .time { font-variant-numeric: tabular-nums; }
 
-/* Bubble */
+/* ── Bubble ── */
 .bubble {
   max-width: min(860px, 92%);
   padding: 12px 16px;
@@ -1296,7 +1473,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-.bubble-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: flex-start; }
+.bubble-attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 8px; }
 .att-link {
   display: inline-flex;
   align-items: center;
@@ -1310,60 +1487,8 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 .att-link:hover { background: #d1d5db; }
 .bubble.user .att-link { background: rgba(255,255,255,0.15); color: #e5e7eb; }
-.att-image-button {
-  position: relative;
-  display: block;
-  width: min(180px, 62vw);
-  aspect-ratio: 4 / 3;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 8px;
-  background: #111827;
-  color: inherit;
-  cursor: zoom-in;
-  font-family: inherit;
-  line-height: 0;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
-}
-.att-image-button img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  background: #f3f4f6;
-  transition: transform 0.18s ease;
-}
-.att-image-button:hover img,
-.att-image-button:focus-visible img {
-  transform: scale(1.03);
-}
-.att-image-button:focus-visible {
-  outline: 2px solid #60a5fa;
-  outline-offset: 2px;
-}
-.bubble.user .att-image-button {
-  border-color: rgba(255,255,255,0.22);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
-}
-.att-image-name {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  padding: 20px 8px 7px;
-  overflow: hidden;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.2;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0));
-}
 
-/* Result card */
+/* ── Result card ── */
 .result-card {
   margin-top: 10px;
   padding: 14px;
@@ -1386,7 +1511,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .rc-sources { max-width: 50%; }
 .rc-sync { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-/* Paper review report card */
+/* ── Paper review report card ── */
 .paper-review-card {
   margin-top: 10px;
   padding: 14px;
@@ -1410,7 +1535,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .prc-limit-tag { font-size: 11px; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
 .prc-no-files { font-size: 12px; color: #94a3b8; }
 
-/* Task card */
+/* ── Task card ── */
 .task-card {
   margin-top: 10px;
   padding: 14px;
@@ -1435,6 +1560,78 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-weight: 600;
 }
 .task-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* ── Error card ── */
+.error-card {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+.error-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.error-card-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: #991b1b;
+}
+.error-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.error-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #991b1b;
+}
+.error-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.error-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b91c1c;
+  text-transform: uppercase;
+}
+.error-message-text {
+  font-size: 13px;
+  color: #7f1d1d;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.error-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fee2e2;
+}
+.error-detail-row {
+  font-size: 12px;
+  color: #991b1b;
+  line-height: 1.5;
+}
+.error-detail-key {
+  font-weight: 600;
+  color: #7f1d1d;
+}
+.error-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .task-actions { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .task-action-note {
   display: grid;
@@ -1468,7 +1665,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .task-spec-preview-grid span { color: #64748b; }
 .task-spec-preview-grid strong { color: #111827; font-weight: 700; }
 
-/* Composer */
+/* ── Composer ── */
 .composer {
   padding: 10px 16px;
   border-top: 1px solid #e5e7eb;
@@ -1498,6 +1695,22 @@ watch(latestTokenCountedMessageId, async (messageId) => {
   font-size: 12px;
   font-weight: 600;
   margin-bottom: 6px;
+}
+.stream-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
+  animation: stream-status-pulse 1.4s ease-out infinite;
+}
+@keyframes stream-status-pulse {
+  70% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
 }
 .prompt-template-entry {
   margin-bottom: 8px;

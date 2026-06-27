@@ -142,18 +142,7 @@ async def generate_ai_review_output(
         str(normalized.get("markdown_report") or "")
     )
     if not normalized.get("markdown_report"):
-        fallback_report = _fallback_markdown_report(response)
-        if fallback_report:
-            normalized["markdown_report"] = _sanitize_ai_markdown_report(fallback_report)
-            normalized["format_fallback"] = True
-            normalized["limitations"] = list(
-                dict.fromkeys([
-                    *list(normalized.get("limitations") or []),
-                    "AI Review 返回格式不完整，已使用模型原始文本生成审阅报告。",
-                ])
-            )
-        else:
-            raise PaperReviewModelError("Ai-Review 返回内容缺少 markdown_report。")
+        raise PaperReviewModelError("Ai-Review 返回内容缺少 markdown_report。")
 
     if isinstance(response.get("__meta__"), dict):
         normalized["model_meta"] = response["__meta__"]
@@ -257,14 +246,6 @@ def _trim_issues_for_model(
 
 def normalize_ai_review_output(raw: dict[str, Any] | None) -> dict[str, Any]:
     payload = _extract_payload(raw or {})
-    if not payload and _looks_like_issue_dict(raw or {}):
-        raw_issue = dict(raw or {})
-        payload = {
-            "answer": str(raw_issue.get("suggestion") or raw_issue.get("title") or "AI Review 已返回审阅意见。"),
-            "summary": str(raw_issue.get("title") or raw_issue.get("code") or "AI Review 已返回审阅意见。"),
-            "markdown_report": _issue_markdown(raw_issue, index=1),
-            "issues": [raw_issue],
-        }
     issues = payload.get("issues")
     if not isinstance(issues, list):
         issues = []
@@ -279,61 +260,6 @@ def normalize_ai_review_output(raw: dict[str, Any] | None) -> dict[str, Any]:
         "limitations": [str(item) for item in limitations],
         "download_title": str(payload.get("download_title") or "论文查非辅助报告"),
     }
-
-
-def _fallback_markdown_report(raw: dict[str, Any] | None) -> str:
-    raw = raw or {}
-    text = str(raw.get("text") or "").strip()
-    if text:
-        return text
-    if _looks_like_issue_dict(raw):
-        return _issue_markdown(raw, index=1)
-    payload = _extract_payload(raw)
-    if not payload:
-        return ""
-    parts = [
-        str(payload.get("summary") or "").strip(),
-        str(payload.get("answer") or "").strip(),
-    ]
-    issues = payload.get("issues")
-    if isinstance(issues, list) and issues:
-        parts.append("## 模型审阅问题")
-        for index, item in enumerate(issues[:30], start=1):
-            if not isinstance(item, dict):
-                continue
-            parts.append(_issue_markdown(item, index=index))
-    return "\n\n".join(part for part in parts if part).strip()
-
-
-def _looks_like_issue_dict(value: dict[str, Any]) -> bool:
-    if not isinstance(value, dict):
-        return False
-    issue_keys = {"code", "title", "severity", "location", "evidence", "suggestion"}
-    return len(issue_keys.intersection(value.keys())) >= 3
-
-
-def _issue_markdown(item: dict[str, Any], *, index: int) -> str:
-    title = str(item.get("title") or item.get("code") or f"问题 {index}").strip()
-    severity = str(item.get("severity") or "").strip()
-    location = str(item.get("location") or "").strip()
-    evidence = str(item.get("evidence") or "").strip()
-    basis = str(item.get("template_basis") or "").strip()
-    impact = str(item.get("impact") or "").strip()
-    suggestion = str(item.get("suggestion") or item.get("message") or "").strip()
-    lines = [f"## {index}. {title}"]
-    if severity:
-        lines.append(f"- 优先级：{severity}")
-    if location:
-        lines.append(f"- 位置：{location}")
-    if evidence:
-        lines.append(f"- 证据：{evidence}")
-    if basis:
-        lines.append(f"- 模板依据：{basis}")
-    if impact:
-        lines.append(f"- 影响：{impact}")
-    if suggestion:
-        lines.append(f"- 建议：{suggestion}")
-    return "\n".join(lines)
 
 
 def _sanitize_ai_limitations(limitations: list[Any], *, allowed: list[Any]) -> list[str]:

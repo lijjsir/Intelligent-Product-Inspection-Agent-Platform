@@ -219,4 +219,140 @@ describe("chat store", () => {
     expect(store.messages[1].content).toBe("answer");
     expect(store.messages[1].seq_no).toBe(2);
   });
+
+  it("reconciles the final message even while the event stream is connected", async () => {
+    vi.useFakeTimers();
+    const { chatApi } = await import("@/api/chat.api");
+    const source = {
+      close: vi.fn(),
+      onopen: null,
+      onerror: null,
+      readyState: 1,
+    };
+
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: { data: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" } },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.stream = vi.fn().mockResolvedValue(source);
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "识别图片",
+            payload: {},
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-1",
+        },
+      },
+    });
+    chatApi.listMessages = vi.fn().mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: "msg-assistant",
+            session_id: "session-1",
+            seq_no: 2,
+            role: "assistant",
+            message_type: "visual_answer",
+            content: "图片中有三个苹果",
+            payload: { status: "completed" },
+            created_at: "2026-06-25T20:29:20.000000",
+          },
+        ],
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("session");
+    await store.sendMessage({ message: "识别图片" });
+    await vi.advanceTimersByTimeAsync(1200);
+
+    expect(chatApi.listMessages).toHaveBeenCalledWith("session-1", 1, 500);
+    expect(store.messages[1].message_type).toBe("visual_answer");
+    expect(store.messages[1].content).toBe("图片中有三个苹果");
+    expect(store.loading).toBe(false);
+    expect(source.close).toHaveBeenCalled();
+  });
+
+  it("reuses the original user and assistant messages when resending an edited question", async () => {
+    const { chatApi } = await import("@/api/chat.api");
+
+    chatApi.createSession = vi.fn().mockResolvedValue({
+      data: { data: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" } },
+    });
+    chatApi.listSessions = vi.fn().mockResolvedValue({ data: { data: [] } });
+    chatApi.stream = vi.fn().mockRejectedValue(new Error("stream unavailable"));
+    chatApi.sendMessage = vi.fn().mockResolvedValue({
+      data: {
+        data: {
+          session: { id: "session-1", org_id: "org-1", user_id: "user-1", status: "active" },
+          user_message: {
+            id: "msg-user",
+            session_id: "session-1",
+            seq_no: 1,
+            role: "user",
+            message_type: "text",
+            content: "你好，帮我看下质检任务",
+            payload: { metadata: { edited_from_message_id: "msg-user" } },
+          },
+          assistant_message_id: "msg-assistant",
+          workflow_run_id: "run-edited",
+        },
+      },
+    });
+
+    const store = useChatStore();
+    await store.createNewSession("session");
+    store.messages = [
+      {
+        id: "msg-user",
+        session_id: "session-1",
+        seq_no: 1,
+        client_seq: 1,
+        role: "user",
+        message_type: "text",
+        content: "你好",
+        payload: {},
+      },
+      {
+        id: "msg-assistant",
+        session_id: "session-1",
+        seq_no: 2,
+        client_seq: 2,
+        role: "assistant",
+        message_type: "assistant_text",
+        content: "你好！有什么可以帮你的？",
+        payload: { answer: "你好！有什么可以帮你的？", status: "completed" },
+      },
+    ] as any;
+
+    await store.sendMessage({
+      message: "你好，帮我看下质检任务",
+      metadata: { edited_from_message_id: "msg-user", replace_assistant_message_id: "msg-assistant" },
+      ext: { ui_mode: "auto" },
+    });
+
+    expect(chatApi.sendMessage).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        metadata: {
+          edited_from_message_id: "msg-user",
+          replace_assistant_message_id: "msg-assistant",
+        },
+      }),
+    );
+    expect(store.messages.map((item) => item.id)).toEqual(["msg-user", "msg-assistant"]);
+    expect(store.messages[0].content).toBe("你好，帮我看下质检任务");
+    expect(store.messages[1].message_type).toBe("streaming");
+    expect(store.messages[1].content).toBe("");
+    expect(store.messages[1].payload).toMatchObject({ status: "running", workflow_run_id: "run-edited" });
+  });
 });

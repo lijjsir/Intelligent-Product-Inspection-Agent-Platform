@@ -5,9 +5,28 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+AgentName = Literal[
+    "chat",
+    "vision",
+    "lab_detection",
+    "quality_analysis",
+    "inspection_task",
+    "file",
+]
+
+StepOwner = Literal[
+    "orchestrator",
+    "vision",
+    "lab_detection",
+    "quality_analysis",
+    "inspection_task",
+    "file",
+]
+
+
 class AgentRouteDecision(BaseModel):
     """AgentManager 路由决策结果"""
-    selected_agent: Literal["chat", "inspection_task"] = "chat"
+    selected_agent: AgentName = "quality_analysis"
     sub_route: Literal[
         "general_chat",
         "rag_qa",
@@ -20,9 +39,15 @@ class AgentRouteDecision(BaseModel):
         "paper_format_check",
         "quality_report_query",
         "quality_task_status",
+        "evidence_arbitration",
+        "vision_inspection",
+        "lab_detection",
+        "quality_analysis",
+        "memory_governance",
         "action_blocked",
         "data_analysis",
         "rag_ingest",
+        "error",  # Added for architecture refactor error propagation
     ] = "general_chat"
     intent: str = "general_chat"
     confidence: float = 1.0
@@ -46,13 +71,15 @@ class AgentRouterOutput(BaseModel):
     """AgentManager 输出，包装原始 Agent 输出 + 路由元信息"""
     route_decision: AgentRouteDecision
     agent_output: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["completed", "failed", "degraded", "blocked"] = "completed"
+    status: Literal["completed", "failed", "blocked"] = "completed"
     degrade_reason: str | None = None
+    error: dict[str, Any] | None = None
 
 
 class Capability(BaseModel):
     key: str
-    agent: str
+    owner_agents: list[str] = Field(default_factory=list)
+    handler: str = ""
     operation: str
     mode: Literal["answer", "report", "action"]
     surfaces: list[str] = Field(default_factory=list)
@@ -65,14 +92,16 @@ class Capability(BaseModel):
 
 class AgentPlanStep(BaseModel):
     step_id: str
-    capability_key: str
-    agent: str
-    operation: str
-    mode: Literal["answer", "report", "action"]
+    owner_agent: StepOwner = "quality_analysis"
+    capability: str = ""
+    operation: str = ""
+    mode: Literal["answer", "report", "action"] = "answer"
     input: dict[str, Any] = Field(default_factory=dict)
-    depends_on: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)  # kept for backward compat
     parallel_group: str | None = None
     required: bool = True
+    expected_artifact: str | None = None
 
 
 class AgentRoutePlan(BaseModel):
@@ -89,11 +118,11 @@ class AgentRoutePlan(BaseModel):
 class AgentObservation(BaseModel):
     step_id: str
     capability_key: str
-    agent: str
+    owner_agent: str = ""
     status: Literal["success", "failed", "blocked", "skipped"]
     summary: str = ""
     metrics: dict[str, Any] = Field(default_factory=dict)
-    error: str | None = None
+    error: dict[str, Any] | None = None
     artifact_ids: list[str] = Field(default_factory=list)
 
 
@@ -101,9 +130,23 @@ class AgentArtifact(BaseModel):
     artifact_id: str
     type: str
     source_agent: str
+    workflow_run_id: str | None = None
+    step_id: str | None = None
+    source_kind: Literal["agent", "capability", "orchestrator"] = "agent"
+    visibility: Literal["task"] = "task"
+    consumed_artifact_ids: list[str] = Field(default_factory=list)
+    candidate_extractable: bool = False
+    candidate_reason: str | None = None
+    target_agents: list[str] = Field(default_factory=list)
+    status: Literal["success", "empty", "failed", "blocked"] = "success"
     content: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
     citations: list[dict[str, Any]] = Field(default_factory=list)
     confidence: float | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    needs_user_input: bool = False
+    empty_result: bool = False
+    error: dict[str, Any] | None = None
     created_at: str | None = None
 
 
@@ -113,3 +156,33 @@ class NodeSpec(BaseModel):
     required_model_types: list[str] = Field(default_factory=list)
     mode: Literal["answer", "report", "action"]
     output_artifact_types: list[str] = Field(default_factory=list)
+
+
+class CapabilityContext(BaseModel):
+    """Context passed to capability handlers — everything they need to execute."""
+    step: Any = Field(default=None)  # AgentPlanStep
+    state: Any = Field(default=None)  # ManagerState
+    request: Any = Field(default=None)  # NormalizedRequest
+    db_session: Any = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+from agent.router.errors import (
+    AgentBlockedError,
+    AgentCapabilityError,
+    AgentDataError,
+    AgentDispatchError,
+    AgentErrorCategory,
+    AgentErrorStatus,
+    AgentExecutionError,
+    AgentExternalServiceError,
+    AgentInternalError,
+    AgentModelError,
+    AgentPermissionError,
+    AgentRoutingError,
+    AgentRuntimeError,
+    AgentTimeoutError,
+    AgentToolError,
+    AgentValidationError,
+    make_agent_error,
+)

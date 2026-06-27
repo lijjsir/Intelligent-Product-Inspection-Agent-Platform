@@ -1,7 +1,7 @@
 """meeting data domain policy audit fields
 
 Revision ID: 0081_meeting_data_domain_policy
-Revises: 0080
+Revises: 0080_meeting_agent_conflict_governance
 Create Date: 2026-06-25 00:00:00.000000
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import mysql
 
 
 revision = "0081_meeting_data_domain_policy"
-down_revision = "0080"
+down_revision = "0080_meeting_agent_conflict_governance"
 branch_labels = None
 depends_on = None
 

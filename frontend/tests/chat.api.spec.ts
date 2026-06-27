@@ -23,7 +23,7 @@ describe("chat api stream", () => {
       "/v1/chat/uploads",
       expect.any(FormData),
       expect.objectContaining({
-        timeout: 180000,
+        timeout: 600000,
         headers: { "Content-Type": "multipart/form-data" },
       }),
     );
@@ -52,8 +52,8 @@ describe("chat api stream", () => {
     await chatApi.stream("session-1", 0, vi.fn());
 
     expect(EventSourceMock).toHaveBeenCalledTimes(1);
-    expect(addEventListener).toHaveBeenCalledWith("message", expect.any(Function));
     expect(addEventListener).toHaveBeenCalledWith("ready", expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith("heartbeat", expect.any(Function));
     expect(typeof source.onmessage).toBe("function");
   });
 });

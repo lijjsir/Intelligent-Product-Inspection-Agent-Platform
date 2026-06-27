@@ -221,7 +221,7 @@ npm run dev
 VITE_API_BASE=/api
 ```
 
-开发模式下 Vite 会把 `/api` 代理到 `http://127.0.0.1:8000`。
+开发模式下 Vite 会把 `/api` 代理到 `http://localhost:8000`。
 
 访问：
 

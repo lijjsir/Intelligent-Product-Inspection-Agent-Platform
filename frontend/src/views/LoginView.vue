@@ -44,6 +44,7 @@
         native-type="submit"
         :loading="loading"
         class="!w-full !mt-2"
+        @click="submit"
       >
         {{ loading ? "登录中..." : "登录" }}
       </el-button>
@@ -70,19 +71,14 @@ const password = ref("");
 const loading = ref(false);
 
 const submit = async () => {
-  if (loading.value) {
-    return;
-  }
-  const normalizedOrgId = orgId.value.trim();
-  const normalizedUsername = username.value.trim();
-  if (!normalizedOrgId || !normalizedUsername || !password.value) {
+  if (!orgId.value || !username.value || !password.value) {
     return;
   }
   loading.value = true;
   try {
     await auth.login({
-      org_id: normalizedOrgId,
-      username: normalizedUsername,
+      org_id: orgId.value,
+      username: username.value,
       password: password.value,
     });
     await router.push(auth.resolveDefaultRoute());

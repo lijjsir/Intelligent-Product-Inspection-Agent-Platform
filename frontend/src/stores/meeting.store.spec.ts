@@ -164,6 +164,45 @@ describe("meeting store", () => {
     expect(store.messages[0].metadata_json?.visibility).toBe("room");
   });
 
+  it("keeps local question linkage metadata on general agent replies", async () => {
+    const store = useMeetingStore();
+    store.rooms = [{ id: "room-1", status: "active" }] as any;
+    store.activeRoomId = "room-1";
+    vi.mocked(meetingApi.runGeneralAgent).mockResolvedValue({
+      data: {
+        data: {
+          selected_subgraph: "auto",
+          answer: "ok",
+          memory_sources: [],
+          candidate_memories: [],
+          message: {
+            id: "agent-msg-1",
+            room_id: "room-1",
+            user_id: "general_agent",
+            username: "会议Agent",
+            seq_no: 1,
+            content: "ok",
+            message_type: "agent",
+            agent_id: "general_agent",
+            metadata_json: { visibility: "room" },
+            created_at: "2026-06-11T06:10:00Z",
+          },
+        },
+      },
+    } as any);
+
+    await store.runGeneralAgent("auto", "revised question", {
+      parentMessageId: "question-1",
+      questionRevision: "2026-06-27T08:40:00Z",
+    });
+
+    expect(store.messages[0].metadata_json).toMatchObject({
+      visibility: "room",
+      question_message_id: "question-1",
+      question_revision: "2026-06-27T08:40:00Z",
+    });
+  });
+
   it("updates the streaming message by stream id on final event", () => {
     const store = useMeetingStore();
     store.rooms = [{ id: "room-1", status: "active" }] as any;

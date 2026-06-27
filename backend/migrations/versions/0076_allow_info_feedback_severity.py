@@ -1,15 +1,15 @@
 """allow info feedback severity
 
-Revision ID: 0076
-Revises: 0075
+Revision ID: 0076_allow_info_feedback_severity
+Revises: 0075_meeting_room_v2_boundaries
 Create Date: 2026-06-16
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0076"
-down_revision = "0075"
+revision = "0076_allow_info_feedback_severity"
+down_revision = "0075_meeting_room_v2_boundaries"
 branch_labels = None
 depends_on = None
 

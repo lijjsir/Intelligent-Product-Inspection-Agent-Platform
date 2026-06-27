@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -9,6 +10,9 @@ try:
     from neo4j import GraphDatabase
 except Exception:  # pragma: no cover - optional dependency for local dev
     GraphDatabase = None
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -158,12 +162,20 @@ class Neo4jGraphStore:
             session.run(query, params)
 
 
-def build_graph_store() -> GraphStore:
+def build_graph_store(*, required: bool = False) -> GraphStore:
     if not settings.neo4j_enabled:
+        if required:
+            raise RuntimeError("neo4j is disabled")
         return NullGraphStore()
-    return Neo4jGraphStore(
-        uri=settings.neo4j_uri,
-        username=settings.neo4j_username,
-        password=settings.neo4j_password,
-        database=settings.neo4j_database,
-    )
+    try:
+        return Neo4jGraphStore(
+            uri=settings.neo4j_uri,
+            username=settings.neo4j_username,
+            password=settings.neo4j_password,
+            database=settings.neo4j_database,
+        )
+    except RuntimeError as exc:
+        if required:
+            raise
+        logger.warning("Neo4j graph store unavailable, falling back to null graph store: %s", exc)
+        return NullGraphStore()

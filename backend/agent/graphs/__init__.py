@@ -1,3 +1,7 @@
-from agent.graphs.memory_manager import MemoryManagerGraph
+"""Business LangGraphs live under agent.subgraphs.
 
-__all__ = ["MemoryManagerGraph"]
+Only VisionInspectionGraph, LabDetectionGraph and QualityAnalysisGraph are
+exposed as business graph implementations.
+"""
+
+__all__: list[str] = []

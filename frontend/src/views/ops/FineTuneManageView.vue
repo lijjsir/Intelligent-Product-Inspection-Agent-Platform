@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, reactive } from "vue";
+import { computed, onMounted, reactive } from "vue";
+import { useRoute } from "vue-router";
 
 import AlgoResourcePage from "@/components/business/algo/AlgoResourcePage.vue";
 import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
@@ -10,10 +11,18 @@ import { useFineTuneStore } from "@/stores/fineTune.store";
 import { useModelConfigStore } from "@/stores/model_config.store";
 
 const store = useFineTuneStore();
+const route = useRoute();
 const datasetStore = useDatasetStore();
 const evalStore = useEvalDatasetStore();
 const experimentStore = useExperimentStore();
 const modelConfigStore = useModelConfigStore();
+const isTrainingJobsRoute = computed(() => route.path.startsWith("/ops/training/jobs"));
+const pageTitle = computed(() => (isTrainingJobsRoute.value ? "训练任务" : "微调管理"));
+const pageSubtitle = computed(() =>
+  isTrainingJobsRoute.value
+    ? "管理模型训练任务，绑定训练数据、评测集与基础模型。"
+    : "管理 LoRA 微调任务，直接绑定源数据集与 Base Model。");
+const detailPath = (id: string) => (isTrainingJobsRoute.value ? `/ops/training/jobs/${id}` : `/ops/training/fine-tune/${id}`);
 const refs = reactive({
   source_dataset_id: "",
   eval_set_id: "",
@@ -84,18 +93,19 @@ function populateForm(item: {
 
 <template>
   <div v-if="!datasetStore.items.length" class="flex flex-col gap-5">
-    <AlgoWorkspaceHero title="微调管理" description="管理 LoRA 微调任务，直接绑定源数据集与 Base Model。" />
+    <AlgoWorkspaceHero :title="pageTitle" :description="pageSubtitle" />
     <section class="card-surface p-8 text-center text-zinc-500">
       暂无可用数据集，请先到“数据接入”准备训练数据。
     </section>
   </div>
   <AlgoResourcePage
     v-else
-    title="微调管理"
-    subtitle="管理 LoRA 微调任务，直接绑定源数据集与 Base Model。"
+    :title="pageTitle"
+    :subtitle="pageSubtitle"
     :store="store"
     :build-payload="buildPayload"
     :populate-form="populateForm"
+    :detail-path="detailPath"
     :detail-description="(item) => `数据集：${item?.source_dataset_name || item?.source_dataset_id || '-'}；基础模型：${item?.model_config_ref?.display_name || item?.model_config_ref?.model_key || item?.model_config_id || '-'}`"
     show-launch
   >

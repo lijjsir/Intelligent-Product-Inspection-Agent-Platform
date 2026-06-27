@@ -126,7 +126,12 @@ class RagSpaceService:
 
     async def list_spaces(self, limit: int = 200) -> list[RagSpaceResponse]:
         try:
-            rows = await self._spaces.list_for_org(org_id=self._org_id, owner_user_id=None, limit=limit)
+            rows = await self._spaces.list_for_org(
+                org_id=self._org_id,
+                owner_user_id=self._user_id,
+                include_system=True,
+                limit=limit,
+            )
             return [RagSpaceResponse.model_validate(row) for row in rows]
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
@@ -173,16 +178,18 @@ class RagSpaceService:
 
     async def get_tree(self, *, rag_space_id: str) -> list[RagNodeResponse]:
         try:
-            await self._get_owned_space(rag_space_id)
+            await self._get_readable_space(rag_space_id)
             nodes = await self._nodes.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
             )
             documents = await self._documents.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
                 limit=5000,
             )
             return self._build_tree(nodes=nodes, documents=documents)
@@ -234,6 +241,7 @@ class RagSpaceService:
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
             )
             target = next((node for node in nodes if str(node.id) == node_id), None)
             if target is None:
@@ -290,17 +298,19 @@ class RagSpaceService:
 
     async def list_documents(self, *, rag_space_id: str, limit: int = 1000) -> list[RagSpaceDocumentListItem]:
         try:
-            await self._get_owned_space(rag_space_id)
+            await self._get_readable_space(rag_space_id)
             nodes = await self._nodes.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
             )
             node_map = {node.id: node for node in nodes}
             rows = await self._documents.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
                 limit=limit,
             )
             rows.sort(key=lambda item: (node_map.get(item.node_id).full_path if node_map.get(item.node_id) else item.file_name))
@@ -641,11 +651,12 @@ class RagSpaceService:
         if not rag_space_id:
             return
         try:
-            await self._get_owned_space(rag_space_id)
+            await self._get_readable_space(rag_space_id)
             await self._spaces.increment_selected_count(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                include_system=True,
             )
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
@@ -947,6 +958,17 @@ class RagSpaceService:
             org_id=self._org_id,
             rag_space_id=rag_space_id,
             owner_user_id=self._user_id,
+        )
+        if space is None:
+            raise NotFoundError("rag space not found")
+        return space
+
+    async def _get_readable_space(self, rag_space_id: str) -> RagSpace:
+        space = await self._spaces.get(
+            org_id=self._org_id,
+            rag_space_id=rag_space_id,
+            owner_user_id=self._user_id,
+            include_system=True,
         )
         if space is None:
             raise NotFoundError("rag space not found")

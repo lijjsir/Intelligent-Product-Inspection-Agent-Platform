@@ -1,21 +1,75 @@
-import type { ChatAttachment, ChatMessagePayload } from "@/types/chat.types";
-
-const IMAGE_EXTENSION_PATTERN = /\.(?:apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:[?#].*)?$/i;
-
-function hasImageExtension(value?: string | null): boolean {
-  return IMAGE_EXTENSION_PATTERN.test(String(value || "").trim());
-}
+import type { AgentErrorPayload, ChatMessagePayload } from "@/types/chat.types";
 
 export function agentLabel(payload: Pick<ChatMessagePayload, "agent"> | null | undefined): string {
+  if (payload?.agent === "evidence") return "EvidenceArbitrationAgent";
+  if (payload?.agent === "vision") return "VisionInspectionAgent";
+  if (payload?.agent === "lab_detection") return "LabDetectionAgent";
+  if (payload?.agent === "quality_analysis") return "QualityAnalysisAgent";
+  if (payload?.agent === "memory_governance") return "MemoryGovernanceAgent";
   if (payload?.agent === "chat") return "ChatAgent";
   if (payload?.agent === "inspection_task") return "InspectionTaskAgent";
+  if (payload?.agent === "file") return "FileAgent";
   return "";
 }
 
-export function isImageAttachment(
-  attachment: Pick<ChatAttachment, "kind" | "content_type" | "name" | "url">,
-): boolean {
-  const kind = String(attachment.kind || "").toLowerCase();
-  const contentType = String(attachment.content_type || "").toLowerCase();
-  return kind === "image" || contentType.startsWith("image/") || hasImageExtension(attachment.name) || hasImageExtension(attachment.url);
+function isAgentErrorPayload(value: unknown): value is AgentErrorPayload {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<AgentErrorPayload>;
+  return typeof candidate.code === "string" && typeof candidate.message === "string";
+}
+
+export type ChatCardType = "evidence" | "vision" | "lab" | "quality" | "trace" | "error" | "result" | "paper_review" | "task" | "text";
+
+export function messageCardType(payload: ChatMessagePayload | null | undefined): ChatCardType {
+  if (!payload) return "text";
+  if (payload.quality_final_assessment) return "quality";
+  if (payload.visual_inspection_result) return "vision";
+  if (payload.lab_detection_result) return "lab";
+  if (payload.evidence_packet) return "evidence";
+  if (payload.route_trace || payload.capabilities_used?.length) return "trace";
+  if (payload.error || payload.error_code) return "error";
+  if (payload.result_card) return "result";
+  if (payload.paper_format_report) return "paper_review";
+  if (payload.created_task) return "task";
+  return "text";
+}
+
+export function agentErrorPayload(payload: ChatMessagePayload | null | undefined): AgentErrorPayload | null {
+  if (!payload) return null;
+  if (isAgentErrorPayload(payload.error)) return payload.error;
+  const legacyError = typeof payload.error === "string" ? payload.error : "";
+  const code = payload.error_code || (legacyError ? "AGENT_FAILED" : "");
+  if (!code && !legacyError) return null;
+  return {
+    code: code || "AGENT_FAILED",
+    title: "执行失败",
+    message: legacyError || "Agent 执行失败。",
+    category: "internal",
+    severity: "error",
+    status: payload.status === "blocked" ? "blocked" : "failed",
+    frontend_visible: true,
+    retryable: false,
+    user_action: payload.suggestion || null,
+    source: payload.module || null,
+    detail: payload.detail || null,
+    workflow_run_id: payload.workflow_run_id || null,
+    trace_id: payload.trace_id || null,
+    stage: null,
+    agent_name: payload.agent || null,
+  };
+}
+
+export function agentErrorBrief(error: AgentErrorPayload | null | undefined): { title: string; message: string } {
+  if (!error) {
+    return {
+      title: "处理失败",
+      message: "系统执行失败，请稍后重试。",
+    };
+  }
+  const title = String(error.title || (error.status === "blocked" ? "需要补充信息" : "处理失败")).trim();
+  const message = String(error.message || error.user_action || "系统执行失败，请稍后重试。").trim();
+  return {
+    title: title || "处理失败",
+    message: message || "系统执行失败，请稍后重试。",
+  };
 }

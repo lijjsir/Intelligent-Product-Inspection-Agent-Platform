@@ -19,6 +19,10 @@ class ChatSession(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_facts_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    summary_seq_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    context_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
 
 class ChatMessage(Base, TimestampMixin):
@@ -26,7 +30,6 @@ class ChatMessage(Base, TimestampMixin):
     __table_args__ = (
         Index("idx_chat_messages_session_seq", "session_id", "seq_no"),
         Index("idx_chat_messages_org_session_seq", "org_id", "session_id", "seq_no"),
-        Index("idx_chat_messages_org_role_created", "org_id", "role", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))

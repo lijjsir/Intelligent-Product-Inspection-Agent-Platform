@@ -70,6 +70,7 @@ class Retriever:
                     "score": float(point.get("score") or 0.0),
                     "title": item_payload.get("title") or "标准文档",
                     "text": item_payload.get("text") or "",
+                    "quote": item_payload.get("text") or "",
                     "source": item_payload.get("source") or "",
                     "full_path": item_payload.get("full_path") or item_payload.get("source") or "",
                     "rag_space_id": item_payload.get("rag_space_id"),
@@ -78,6 +79,13 @@ class Retriever:
                     "node_id": item_payload.get("node_id"),
                     "chunk_index": item_payload.get("chunk_index"),
                     "page_number": item_payload.get("page_number"),
+                    "standard_no": item_payload.get("standard_no"),
+                    "standard_name": item_payload.get("standard_name"),
+                    "domain": item_payload.get("domain"),
+                    "product_category": item_payload.get("product_category"),
+                    "standard_level": item_payload.get("standard_level"),
+                    "standard_status": item_payload.get("standard_status"),
+                    "payload": item_payload,
                     "ancestor_node_ids": item_payload.get("ancestor_node_ids") or [],
                 }
             )

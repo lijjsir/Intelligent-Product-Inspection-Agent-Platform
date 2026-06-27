@@ -9,11 +9,11 @@ INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, 
 VALUES (UUID_TO_BIN(UUID()), NULL, 'BOTTLE-RAG-BASE-V1',
   0xE793B6E5AD90E6A380E6B58BE59FBAE7BABF, '2026.1',
   'bottle', 0xE793B6E7BD90E5AEB9E599A8,
-  '["bottle"]', '["exterior", "label", "opening", "bottom"]', 3, 0.72, 0.50, 0.50,
+  '["bottle"]', '["exterior", "label", "opening", "bottom"]', 1, 0.72, 0.50, 0.50,
   '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
   '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
   '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-  0, 1, @now, @now);
+  1, 1, @now, @now);
 
 SET @bottle_id = (SELECT id FROM inspection_specs WHERE spec_code = 'BOTTLE-RAG-BASE-V1');
 
@@ -34,11 +34,11 @@ INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, 
 VALUES (UUID_TO_BIN(UUID()), NULL, 'CABLE-RAG-BASE-V1',
   0xE794B5E7BC86E6A380E6B58BE59FBAE7BABF, '2026.1',
   'cable', 0xE794B5E7BABFE794B5E7BC86,
-  '["cable"]', '["exterior", "cross_section", "marking", "connector"]', 3, 0.72, 0.50, 0.50,
+  '["cable"]', '["exterior", "cross_section", "marking", "connector"]', 1, 0.72, 0.50, 0.50,
   '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
   '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
   '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-  0, 1, @now, @now);
+  1, 1, @now, @now);
 
 SET @cable_id = (SELECT id FROM inspection_specs WHERE spec_code = 'CABLE-RAG-BASE-V1');
 
@@ -59,11 +59,11 @@ INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, 
 VALUES (UUID_TO_BIN(UUID()), NULL, 'CAPSULE-RAG-BASE-V1',
   0xE883B6E59B8AE6A380E6B58BE59FBAE7BABF, '2026.1',
   'capsule', 0xE58CBBE88DAFE883B6E59B8A,
-  '["capsule"]', '["exterior", "seal", "marking", "fill"]', 3, 0.72, 0.50, 0.50,
+  '["capsule"]', '["exterior", "seal", "marking", "fill"]', 1, 0.72, 0.50, 0.50,
   '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
   '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
   '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-  0, 1, @now, @now);
+  1, 1, @now, @now);
 
 SET @capsule_id = (SELECT id FROM inspection_specs WHERE spec_code = 'CAPSULE-RAG-BASE-V1');
 
@@ -84,11 +84,11 @@ INSERT INTO inspection_specs (id, org_id, spec_code, name, version, product_id, 
 VALUES (UUID_TO_BIN(UUID()), NULL, 'CARPET-RAG-BASE-V1',
   0xE59CB0E6AFAFE6A380E6B58BE59FBAE7BABF, '2026.1',
   'carpet', 0xE7BB87E7BB87E59CB0E6AFAF,
-  '["carpet"]', '["front", "back", "edge", "label"]', 3, 0.72, 0.50, 0.50,
+  '["carpet"]', '["front", "back", "edge", "label"]', 1, 0.72, 0.50, 0.50,
   '{"overall": "fail_if_any_critical_else_manual_when_unmapped", "max_minor_count": 2}',
   '{"evidence": 0.5, "confidence": 0.72, "faithfulness": 0.85, "traceability": 0.5, "physical_hallucination": 0.2}',
   '{"low_evidence": "manual_required", "unmapped_defect": "manual_required", "missing_required_views": "manual_required"}',
-  0, 1, @now, @now);
+  1, 1, @now, @now);
 
 SET @carpet_id = (SELECT id FROM inspection_specs WHERE spec_code = 'CARPET-RAG-BASE-V1');
 

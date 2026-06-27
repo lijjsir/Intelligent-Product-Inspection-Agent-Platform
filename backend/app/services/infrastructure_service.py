@@ -122,6 +122,19 @@ class InfrastructureService:
         try:
             async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
                 response = await client.get(url, headers=headers)
+                if response.status_code == 404:
+                    latency_ms = int((time.perf_counter() - started) * 1000)
+                    return InfrastructureComponentStatus(
+                        name="Qdrant",
+                        kind="vector_db",
+                        status="unhealthy",
+                        latency_ms=latency_ms,
+                        detail=(
+                            f"endpoint={qdrant_url}, collection={settings.qdrant_collection}, "
+                            "exists=False, error=collection_missing"
+                        ),
+                        last_check_at=checked_at,
+                    )
                 response.raise_for_status()
                 payload = response.json().get("result") or {}
                 status = payload.get("status") or "healthy"
@@ -160,14 +173,14 @@ class InfrastructureService:
         try:
             storage = build_object_storage()
             if backend == "minio":
-                bucket_exists = await asyncio.to_thread(storage.bucket_exists, settings.s3_bucket)
+                await asyncio.to_thread(storage.ensure_bucket, settings.s3_bucket)
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 return InfrastructureComponentStatus(
                     name="MinIO",
                     kind="storage",
-                    status="healthy" if bucket_exists else "degraded",
+                    status="healthy",
                     latency_ms=latency_ms,
-                    detail=f"bucket={settings.s3_bucket}, exists={bucket_exists}",
+                    detail=f"bucket={settings.s3_bucket}, endpoint={settings.s3_endpoint}",
                     last_check_at=checked_at,
                 )
             upload_dir = Path(settings.local_upload_dir)

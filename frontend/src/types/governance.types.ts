@@ -435,7 +435,6 @@ export interface InfrastructureStatus {
 
 export interface MemorySearchQueryPayload {
   org_id: string;
-  workspace: "governance" | "ops" | "app";
   query: string;
   user_id?: string | null;
   top_k?: number;
@@ -469,6 +468,51 @@ export interface MemorySearchResult {
   warnings: string[];
 }
 
+export interface CandidateMemoryItem {
+  memory_id: string;
+  memory_type: string;
+  status: string;
+  summary: string;
+  candidate_key?: string | null;
+  canonical_claim?: Record<string, unknown> | null;
+  support_count: number;
+  negative_count: number;
+  conflict_count: number;
+  rag_evidence_count: number;
+  agent_verifier_count: number;
+  human_approved: boolean;
+  promotion_score?: number | null;
+  confidence?: number | null;
+  trust_score?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_supported_at?: string | null;
+}
+
+export interface CandidateSupportPayload {
+  support_type?: string;
+  source_kind?: string | null;
+  source_agent?: string | null;
+  task_id?: string | null;
+  trace_id?: string | null;
+  rag_space_id?: string | null;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  evidence_pointer?: Record<string, unknown> | null;
+  confidence?: number | null;
+  similarity?: number | null;
+  weight?: number | null;
+}
+
+export interface PromotionEvaluationResult {
+  memory_id: string;
+  status: string;
+  promotion_score: number;
+  promoted: boolean;
+  reason?: string | null;
+  blocked_reasons: string[];
+}
+
 export interface MemoryEventItem {
   event_id: string;
   event_type: string;
@@ -497,7 +541,6 @@ export interface MemoryPropagationGraph {
 
 export interface MemoryRollbackPayload {
   org_id: string;
-  workspace: "governance" | "ops";
   operator_id: string;
   trace_id: string;
   root_memory_id: string;
@@ -521,7 +564,6 @@ export interface MemoryRollbackResult {
 
 export interface MemoryEvaluationPayload {
   org_id: string;
-  workspace?: "governance";
   rollback_id: string;
   task_id?: string | null;
   trace_id?: string | null;
@@ -540,7 +582,6 @@ export interface MemoryEvaluationResult {
 export interface MemoryPolicy {
   policy_key: string;
   policy_type: string;
-  workspace: string;
   config?: Record<string, unknown> | null;
   status: string;
   version: number;
@@ -548,7 +589,6 @@ export interface MemoryPolicy {
 }
 
 export interface MemoryPolicyUpsertPayload {
-  workspace: "governance" | "ops" | "app";
   policy_type: "write_gate" | "retrieval" | "rollback" | "audit";
   config: Record<string, unknown>;
   status?: string;
@@ -578,50 +618,6 @@ export interface ApprovalListQuery {
   source_module?: string;
   risk_level?: string;
   requester_id?: string;
-}
-
-export interface InspectionStandardRagSpace {
-  id: string;
-  name: string;
-  document_count: number;
-  status?: string | null;
-}
-
-export interface InspectionStandardLibraryItem {
-  id: string;
-  org_id: string | null;
-  name: string;
-  product_family: string;
-  inspection_spec_id?: string | null;
-  spec_code?: string | null;
-  spec_name?: string | null;
-  applicable_product_line_ids?: string[];
-  applicable_product_sku_ids?: string[];
-  required_image_count?: number | null;
-  required_views?: string[];
-  auto_pass_enabled?: boolean | null;
-  ai_gate_confidence_threshold?: number | null;
-  ai_gate_evidence_threshold?: number | null;
-  ai_gate_traceability_threshold?: number | null;
-  description?: string | null;
-  rag_space_ids: string[];
-  rag_spaces: InspectionStandardRagSpace[];
-  total_document_count: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface InspectionStandardPayload {
-  name: string;
-  product_family: string;
-  inspection_spec_id?: string | null;
-  spec_code?: string | null;
-  applicable_product_line_ids?: string[];
-  applicable_product_sku_ids?: string[];
-  description?: string | null;
-  rag_space_ids: string[];
-  is_active?: boolean;
 }
 
 export interface ProductLine {
@@ -667,12 +663,6 @@ export interface ProductBatch {
   updated_at?: string | null;
 }
 
-export interface ProductMasterCatalog {
-  product_lines: ProductLine[];
-  product_skus: ProductSku[];
-  product_batches: ProductBatch[];
-}
-
 export interface ProductLinePayload {
   code: string;
   name: string;
@@ -695,6 +685,200 @@ export interface ProductBatchPayload {
   production_date?: string | null;
   description?: string | null;
   is_active?: boolean;
+}
+
+export interface ProductMasterCatalog {
+  product_lines: ProductLine[];
+  product_skus: ProductSku[];
+  product_batches: ProductBatch[];
+}
+
+export interface InspectionStandardRagSpace {
+  id: string;
+  name: string;
+  document_count: number;
+  status?: string | null;
+}
+
+export interface InspectionStandardLibraryItem {
+  id: string;
+  org_id: string | null;
+  name: string;
+  product_family: string;
+  inspection_spec_id?: string | null;
+  spec_code?: string | null;
+  spec_name?: string | null;
+  has_quality_threshold?: boolean;
+  applicable_product_line_ids?: string[];
+  applicable_product_sku_ids?: string[];
+  required_image_count?: number | null;
+  required_views?: string[];
+  auto_pass_enabled?: boolean | null;
+  ai_gate_confidence_threshold?: number | null;
+  ai_gate_evidence_threshold?: number | null;
+  ai_gate_traceability_threshold?: number | null;
+  domain?: string | null;
+  product_category?: string | null;
+  description?: string | null;
+  rag_space_ids: string[];
+  rag_spaces: InspectionStandardRagSpace[];
+  total_document_count: number;
+  qdrant_collection?: string | null;
+  pdf_root_dir?: string | null;
+  file_glob: string;
+  chunk_strategy: string;
+  standard_status: string;
+  pdf_count: number;
+  document_count: number;
+  chunk_count: number;
+  import_status: string;
+  last_scanned_at?: string | null;
+  last_indexed_at?: string | null;
+  error_message?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InspectionStandardPayload {
+  name: string;
+  product_family?: string | null;
+  inspection_spec_id?: string | null;
+  spec_code?: string | null;
+  applicable_product_line_ids?: string[];
+  applicable_product_sku_ids?: string[];
+  domain?: string | null;
+  standard_status?: string;
+  chunk_strategy?: string;
+  is_active?: boolean;
+}
+
+export interface InspectionStandardQuery {
+  domain?: string;
+  product_category?: string;
+  import_status?: string;
+  standard_status?: string;
+  keyword?: string;
+  page?: number;
+  size?: number;
+}
+
+export interface PaginatedInspectionStandards {
+  items: InspectionStandardLibraryItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface PaginatedDocuments {
+  items: StandardDocumentItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface StandardDocumentPayload {
+  standard_no?: string | null;
+  standard_name?: string | null;
+  domain?: string | null;
+  product_category?: string | null;
+  standard_level?: string | null;
+  standard_status?: string | null;
+  error_message?: string | null;
+}
+
+export interface StandardDocumentItem {
+  id: string;
+  library_id: string;
+  standard_no: string;
+  standard_name: string;
+  domain: string;
+  product_category?: string | null;
+  standard_level: string;
+  standard_status: string;
+  file_name: string;
+  file_path: string;
+  file_hash?: string | null;
+  file_size?: number | null;
+  page_count?: number | null;
+  chunk_count: number;
+  qdrant_collection?: string | null;
+  import_status: string;
+  last_indexed_at?: string | null;
+  error_message?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface StandardDocumentChunkItem {
+  id: string;
+  document_id: string;
+  library_id: string;
+  chunk_index: number;
+  page_from?: number | null;
+  page_to?: number | null;
+  section_title?: string | null;
+  chunk_text: string;
+  payload_json?: Record<string, unknown> | null;
+  qdrant_point_id: string;
+  token_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface StandardLibraryScanResult {
+  library_id: string;
+  scanned_count: number;
+  created_count: number;
+  updated_count: number;
+  documents: StandardDocumentItem[];
+}
+
+export interface StandardLibraryIndexResult {
+  library_id: string;
+  document_count: number;
+  indexed_document_count: number;
+  chunk_count: number;
+  failed_count: number;
+}
+
+export interface StandardUploadResult {
+  library_id: string;
+  uploaded_count: number;
+  indexed_count: number;
+  failed_count: number;
+  documents: StandardDocumentItem[];
+}
+
+export interface StandardRetrievePayload {
+  query: string;
+  domain?: string | null;
+  product_category?: string | null;
+  defect_keywords?: string[];
+  top_k?: number;
+  only_active?: boolean;
+}
+
+export interface StandardRetrieveHit {
+  id: string;
+  title: string;
+  source: string;
+  quote: string;
+  score: number;
+  standard_no?: string | null;
+  standard_name?: string | null;
+  domain?: string | null;
+  product_category?: string | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  payload: Record<string, unknown>;
+}
+
+export interface StandardRetrieveResult {
+  hits: StandardRetrieveHit[];
+  hit_count: number;
+  candidate_count: number;
+  latency_ms: number;
 }
 
 export interface InspectionSpecItem {

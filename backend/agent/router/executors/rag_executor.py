@@ -8,6 +8,25 @@ from agent.router.executors.base import artifact, observation
 from agent.router.manager_state import ManagerState
 
 
+def _is_rag_overview_query(query: str) -> bool:
+    text = str(query or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "检测标准",
+            "知识库目录",
+            "目录",
+            "有哪些标准",
+            "有哪些文件",
+            "包含什么",
+            "列出",
+            "overview",
+        )
+    )
+
+
 class RagExecutor:
     async def execute(
         self,
@@ -17,11 +36,11 @@ class RagExecutor:
         *,
         db_session=None,
     ) -> tuple[AgentObservation, list[AgentArtifact]]:
-        if step.capability_key == "rag.ingest":
+        if step.capability == "rag.ingest":
             art = artifact(
+                step,
                 "rag_ingest_request",
-                "rag",
-                {
+                content={
                     "requires_confirmation": True,
                     "readonly": False,
                     "message": "RAG 入库需要用户在知识库页面或确认流程中显式提交。",
@@ -34,31 +53,33 @@ class RagExecutor:
         rag_space_name = str((state.selected_rag_space or {}).get("name") or "").strip()
         top_score = 0.0
         retrieval_meta: dict[str, Any] = {}
-        overview_mode = self._is_overview_query(state.original_query)
-        top_k = 12 if overview_mode else 5
         if db_session is not None and rag_space_id:
             try:
                 from app.services.rag_retrieval_service import RagRetrievalService
 
                 service = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id)
-                if overview_mode and hasattr(service, "list_space_documents"):
-                    result = await service.list_space_documents(rag_space_id=rag_space_id, limit=top_k)
+                if _is_rag_overview_query(state.original_query):
+                    result = await service.list_space_documents(rag_space_id=rag_space_id, limit=12)
                 else:
                     result = await service.search(
                         rag_space_id=rag_space_id,
                         query=state.original_query,
-                        top_k=top_k,
+                        top_k=5,
                         scope_node_ids=list((state.rag_scope or {}).get("scope_node_ids") or []),
                     )
                 retrieval_meta = dict(result)
                 hits = list(result.get("hits") or [])
                 rag_space_name = str(result.get("rag_space_name") or rag_space_name)
                 top_score = float(hits[0].get("score") or 0.0) if hits else 0.0
-                top_k = int(result.get("top_k") or top_k)
                 latency_ms = int(result.get("latency_ms") or 0)
-            except Exception:
-                hits = []
-                latency_ms = 0
+            except Exception as exc:
+                from agent.router.contracts import AgentCapabilityError
+                raise AgentCapabilityError(
+                    code="RAG_RETRIEVE_FAILED",
+                    message="知识库检索失败，无法完成当前 RAG 问答。",
+                    detail={"raw_error": str(exc), "rag_space_id": rag_space_id},
+                    frontend_visible=True,
+                ) from exc
         else:
             latency_ms = 0
         citations = [
@@ -73,42 +94,37 @@ class RagExecutor:
             }
             for index, item in enumerate(hits, start=1)
         ]
+        is_empty = len(hits) == 0
         art = artifact(
+            step,
             "rag_hits",
-            "rag",
-            {
+            status="empty" if is_empty else "success",
+            empty_result=is_empty,
+            content={
                 "hit_count": len(hits),
                 "top_score": top_score,
-                "top_k": top_k,
+                "top_k": 5,
                 "latency_ms": latency_ms,
                 "candidate_count": int(retrieval_meta.get("candidate_count") or len(hits)),
                 "rejected_count": int(retrieval_meta.get("rejected_count") or 0),
                 "score_threshold": retrieval_meta.get("score_threshold"),
+                "low_confidence_fallback": bool(retrieval_meta.get("low_confidence_fallback")),
+                "overview_mode": bool(retrieval_meta.get("overview_mode")),
                 "rag_space_id": rag_space_id,
                 "rag_space_name": rag_space_name,
-                "overview_mode": bool(retrieval_meta.get("overview_mode") or overview_mode),
                 "hits": hits,
             },
             confidence=top_score or None,
             citations=citations,
+            metrics={"hit_count": len(hits), "top_score": top_score},
         )
         return (
             observation(
                 step,
-                status="success",
-                summary="RAG 检索完成" if hits else "RAG 检索未命中或未配置知识库",
+                status="success",  # observation is still success for zero hits (normal operation)
+                summary=f"RAG 检索完成，命中 {len(hits)} 条" if hits else "RAG 检索成功，但没有命中相关内容。",
                 artifact_ids=[art.artifact_id],
                 metrics={"hit_count": len(hits), "top_score": top_score},
             ),
             [art],
         )
-
-    @staticmethod
-    def _is_overview_query(query: str) -> bool:
-        text = str(query or "").strip().lower()
-        if not text:
-            return False
-        if any(word in text for word in ("有哪些", "有什么", "包含", "目录", "列表", "列出", "知识库里", "知识库中")):
-            return True
-        compact = "".join(text.split())
-        return "检测标准" in compact and len(compact) <= 12

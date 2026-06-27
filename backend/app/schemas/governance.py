@@ -115,6 +115,7 @@ class ModelConfigCreate(BaseModel):
 
 
 class ModelConfigUpdate(BaseModel):
+    provider: Optional[str] = None
     display_name: Optional[str] = None
     source_type: Optional[str] = None
     source_uri: Optional[str] = None
@@ -136,7 +137,7 @@ class ModelConfigUpdate(BaseModel):
     health_status: Optional[str] = None
     health_message: Optional[str] = None
 
-    @field_validator("display_name", "source_uri", "endpoint", "model_type", "source_type")
+    @field_validator("provider", "display_name", "source_uri", "endpoint", "model_type", "source_type")
     @classmethod
     def _normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:

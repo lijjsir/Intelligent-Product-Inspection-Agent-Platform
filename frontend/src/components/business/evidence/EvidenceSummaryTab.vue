@@ -110,7 +110,7 @@ const fallbackBusinessSummary = computed(() => {
     return `本次质检判定为通过，综合得分 ${score} 分，当前未发现阻断通过的缺陷或规则风险。`
   }
   if (props.result.verdict === "fail") {
-    return `本次质检判定为不通过，综合得分 ${score} 分，请结合缺陷、规则命中和引用证据继续复核。`
+    return `本次质检判定为不通过，综合得分 ${score} 分，请结合缺陷、规则命中和引用证据处理异常。`
   }
   if (props.result.verdict === "manual_required") {
     return `本次质检需要人工复核，综合得分 ${score} 分，自动判定未达到直接放行条件。`

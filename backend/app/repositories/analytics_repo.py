@@ -785,11 +785,12 @@ class AnalyticsRepository:
 
         ledger_stmt = (
             select(
-                TokenUsageLedger.model_key.label("model_key"),
+                func.coalesce(InspectionResult.llm_model, TokenUsageLedger.model_key).label("model_key"),
                 func.count().label("call_count"),
                 func.coalesce(func.sum(TokenUsageLedger.total_tokens), 0).label("total_tokens"),
                 func.coalesce(func.sum(TokenUsageLedger.cost_amount), 0).label("total_cost"),
             )
+            .outerjoin(InspectionResult, InspectionResult.id == TokenUsageLedger.result_id)
             .outerjoin(InspectionTask, InspectionTask.id == TokenUsageLedger.task_id)
             .where(
                 TokenUsageLedger.org_id == org_id,
@@ -797,7 +798,8 @@ class AnalyticsRepository:
             )
         )
         ledger_stmt = self._apply_range(ledger_stmt, TokenUsageLedger.created_at, start_date, end_date)
-        ledger_stmt = ledger_stmt.group_by(TokenUsageLedger.model_key).order_by(TokenUsageLedger.model_key)
+        ledger_model_key = func.coalesce(InspectionResult.llm_model, TokenUsageLedger.model_key)
+        ledger_stmt = ledger_stmt.group_by(ledger_model_key).order_by(ledger_model_key)
         ledger_rows = (await self._session.execute(ledger_stmt)).all()
 
         result_map = {
@@ -816,6 +818,10 @@ class AnalyticsRepository:
             }
             for row in ledger_rows
         }
+        return self._merge_model_metric_maps(result_map, ledger_map)
+
+    @staticmethod
+    def _merge_model_metric_maps(result_map: dict[str, dict], ledger_map: dict[str, dict]) -> list[dict]:
         model_keys = sorted(set(result_map) | set(ledger_map))
         return [
             {

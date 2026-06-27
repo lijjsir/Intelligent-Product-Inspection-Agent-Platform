@@ -1,0 +1,6 @@
+Collecting PyMuPDF
+  Downloading pymupdf-1.27.2.3-cp310-abi3-manylinux_2_28_x86_64.whl.metadata (24 kB)
+Downloading pymupdf-1.27.2.3-cp310-abi3-manylinux_2_28_x86_64.whl (25.0 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 25.0/25.0 MB 966.3 kB/s  0:00:26
+Installing collected packages: PyMuPDF
+Successfully installed PyMuPDF-1.27.2.3

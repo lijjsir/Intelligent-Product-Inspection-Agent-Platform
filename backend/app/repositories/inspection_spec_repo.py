@@ -32,6 +32,7 @@ class InspectionSpecRepository:
         result = await self._session.execute(
             select(InspectionSpec).where(
                 InspectionSpec.id == inspection_spec_row_id,
+                InspectionSpec.deleted_at.is_(None),
                 or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)),
             )
         )
@@ -50,6 +51,7 @@ class InspectionSpecRepository:
         result = await self._session.execute(
             select(InspectionSpec).where(
                 InspectionSpec.id == inspection_spec_row_id,
+                InspectionSpec.deleted_at.is_(None),
                 or_(*conditions),
             )
         )
@@ -62,6 +64,7 @@ class InspectionSpecRepository:
             .where(
                 InspectionSpec.spec_code == spec_code,
                 InspectionSpec.is_active.is_(True),
+                InspectionSpec.deleted_at.is_(None),
                 or_(InspectionSpec.org_id == org_id, InspectionSpec.org_id.is_(None)),
             )
             .order_by(

@@ -164,18 +164,7 @@ const profileName = computed(
   () => userStore.current?.username || auth.username || auth.userId || "当前用户",
 );
 
-const workspaceLabel = computed(() => {
-  switch (auth.defaultWorkspace) {
-    case "app":
-      return "应用";
-    case "ops":
-      return "运维";
-    case "governance":
-      return "治理";
-    default:
-      return auth.defaultWorkspace || "工作台";
-  }
-});
+const workspaceLabel = "PIAP";
 
 const roleLabel = computed(() => {
   switch (primaryRole.value) {

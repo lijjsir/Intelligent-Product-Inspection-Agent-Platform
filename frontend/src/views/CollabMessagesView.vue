@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { meetingApi } from "@/api/meeting.api";
+import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
+import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useCollabStore } from "@/stores/collab.store";
 import type {
@@ -14,6 +16,7 @@ import type {
   CollabThreadCreatePayload,
 } from "@/types/collab.types";
 import type { MeetingMemory, MeetingRoom } from "@/types/meeting.types";
+import { isImageAttachment } from "@/utils/attachments";
 import { formatServerDateTime } from "@/utils/date-time";
 
 const auth = useAuthStore();
@@ -23,6 +26,8 @@ const route = useRoute();
 const composer = ref("");
 const selectedMessageType = ref<CollabMessageType>("text");
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const previewImage = ref({ url: "", name: "" });
+const imagePreviewVisible = ref(false);
 const createDialogVisible = ref(false);
 const creatingThread = ref(false);
 const lastAutoCreateTitle = ref("");
@@ -100,6 +105,15 @@ function formatBytes(value?: number | null) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function collabAttachmentName(file: { file_name?: string | null; name?: string | null }) {
+  return String(file.file_name || file.name || "附件");
+}
+
+function openCollabImagePreview(file: { url?: string | null; file_name?: string | null; name?: string | null }) {
+  previewImage.value = { url: String(file.url || ""), name: collabAttachmentName(file) };
+  imagePreviewVisible.value = true;
+}
+
 function participantTypeLabel(type?: string | null) {
   if (type === "user") return "成员";
   if (type === "meeting_room") return "会议室";
@@ -172,6 +186,94 @@ function myReceipt(message: CollabMessage) {
 
 function myActionStatus(message: CollabMessage) {
   return myReceipt(message)?.action_status || "pending";
+}
+
+function activeThreadTargetsMeetingRoom() {
+  return store.activeThread?.target_type === "meeting_room";
+}
+
+function isCurrentUserMeetingRoomHost() {
+  if (!activeThreadTargetsMeetingRoom()) return false;
+  return Boolean(store.activeThread?.participants.some((participant) =>
+    participant.participant_type === "user"
+    && participant.participant_id === auth.userId
+    && participant.role === "host",
+  ));
+}
+
+function actionableReceipts(message: CollabMessage) {
+  return message.receipts.filter((receipt) => {
+    if (receipt.recipient_type !== "user") return false;
+    return !(message.sender_type === "user" && receipt.recipient_id === message.sender_id);
+  });
+}
+
+function handledActionReceipt(message: CollabMessage) {
+  return actionOutcomeReceipts(message)[0] || null;
+}
+
+function meetingRoomActionStatus(message: CollabMessage) {
+  if (!activeThreadTargetsMeetingRoom()) return myActionStatus(message);
+  return handledActionReceipt(message)?.action_status || "pending";
+}
+
+function canHandleMessageAction(message: CollabMessage) {
+  if (isOwnMessage(message)) return false;
+  if (activeThreadTargetsMeetingRoom()) {
+    return isCurrentUserMeetingRoomHost() && meetingRoomActionStatus(message) === "pending";
+  }
+  return !["done", "rejected"].includes(myActionStatus(message));
+}
+
+function meetingRoomHostHint(message: CollabMessage) {
+  if (!activeThreadTargetsMeetingRoom()) return "";
+  if (meetingRoomActionStatus(message) !== "pending") return "";
+  if (isOwnMessage(message) || isCurrentUserMeetingRoomHost()) return "";
+  return "等待会议室主持人处理";
+}
+
+function receiptDisplayName(recipientId: string) {
+  if (recipientId === auth.userId) return "我";
+  const target = store.targets.find((item) => item.target_type === "user" && item.target_id === recipientId);
+  return target?.label || `成员 ${recipientId.slice(0, 8)}`;
+}
+
+function actionOutcomeReceipts(message: CollabMessage) {
+  return actionableReceipts(message)
+    .filter((receipt) => receipt.action_status && receipt.action_status !== "pending")
+    .sort((a, b) => new Date(b.acted_at || b.read_at || 0).getTime() - new Date(a.acted_at || a.read_at || 0).getTime());
+}
+
+function actionReceiptSummary(message: CollabMessage) {
+  const receipts = actionableReceipts(message);
+  if (!receipts.length) return "暂无接收方回执";
+  if (activeThreadTargetsMeetingRoom()) {
+    const handled = handledActionReceipt(message);
+    if (!handled) return "会议室待处理";
+    return `会议室已处理：${receiptDisplayName(handled.recipient_id)}${actionStatusLabel(handled.action_status)}`;
+  }
+  const countByStatus = receipts.reduce<Record<string, number>>((acc, receipt) => {
+    const status = receipt.action_status || "pending";
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+  const parts = [
+    countByStatus.done ? `${countByStatus.done} 已确认/完成` : "",
+    countByStatus.accepted ? `${countByStatus.accepted} 已接受` : "",
+    countByStatus.rejected ? `${countByStatus.rejected} 已拒绝` : "",
+    countByStatus.pending ? `${countByStatus.pending} 待处理` : "",
+  ].filter(Boolean);
+  return `接收方：${parts.join("，")}`;
+}
+
+function memoryCardVisibleStatus(message: CollabMessage) {
+  if (activeThreadTargetsMeetingRoom()) return meetingRoomActionStatus(message);
+  if (!isOwnMessage(message)) return myActionStatus(message);
+  const receipts = actionableReceipts(message);
+  if (receipts.some((receipt) => receipt.action_status === "done")) return "done";
+  if (receipts.some((receipt) => receipt.action_status === "rejected")) return "rejected";
+  if (receipts.some((receipt) => receipt.action_status === "accepted")) return "accepted";
+  return "pending";
 }
 
 function isOwnMessage(message: CollabMessage) {
@@ -361,6 +463,10 @@ function memorySummary(message: CollabMessage) {
 function receiptSummary(message: CollabMessage) {
   const unread = message.receipts.filter((receipt) => !receipt.read_at && receipt.recipient_type === "user").length;
   if (unread > 0) return `${unread} 人未读`;
+  if (activeThreadTargetsMeetingRoom() && ["memory_card", "action_request"].includes(message.message_type)) {
+    const handled = handledActionReceipt(message);
+    if (handled) return `会议室已由${receiptDisplayName(handled.recipient_id)}处理`;
+  }
   const pending = message.receipts.filter((receipt) => receipt.action_status === "pending").length;
   if (message.message_type === "action_request" && pending > 0) return `${pending} 个待处理`;
   if (message.message_type === "memory_card" && pending > 0) return `${pending} 个待确认`;
@@ -632,12 +738,20 @@ async function onFileChange(event: Event) {
 }
 
 async function updateAction(message: CollabMessage, status: "accepted" | "rejected" | "done") {
-  await store.updateAction(message.id, status);
-  if (message.message_type === "memory_card") {
-    ElMessage.success(status === "rejected" ? "记忆卡片已拒绝。" : "记忆已确认沉淀。");
-    return;
+  try {
+    await store.updateAction(message.id, status);
+    if (message.message_type === "memory_card") {
+      ElMessage.success(status === "rejected" ? "记忆卡片已拒绝。" : "记忆已确认沉淀。");
+      return;
+    }
+    ElMessage.success(actionStatusLabel(status));
+  } catch (error) {
+    if (activeThreadTargetsMeetingRoom()) {
+      ElMessage.warning("这条会议室请求已由其他成员处理。");
+      return;
+    }
+    throw error;
   }
-  ElMessage.success(actionStatusLabel(status));
 }
 
 async function deleteActiveThread() {
@@ -699,7 +813,7 @@ onBeforeUnmount(() => {
         <div>
           <p class="eyebrow">Collaboration Inbox</p>
           <h1>协作消息</h1>
-          <span>成员与会议室的共享、确认和处理请求入口</span>
+          <span class="rail-subtitle">成员与会议室的共享、确认及处理入口</span>
         </div>
         <el-badge :value="store.totalUnread" :hidden="store.totalUnread === 0" type="danger">
           <el-button :icon="Plus" circle @click="createDialogVisible = true" />
@@ -776,48 +890,66 @@ onBeforeUnmount(() => {
             </div>
             <span>接收方确认后，会沉淀到这条协作记录的目标作用域。</span>
             <div class="memory-card-actions">
-              <span class="memory-status-pill" :class="`memory-status-${myActionStatus(message) || 'pending'}`">
-                {{ memoryCardActionStatusLabel(myActionStatus(message)) }}
+              <span class="memory-status-pill" :class="`memory-status-${memoryCardVisibleStatus(message) || 'pending'}`">
+                {{ memoryCardActionStatusLabel(memoryCardVisibleStatus(message)) }}
               </span>
-              <template v-if="!isOwnMessage(message) && !['done', 'rejected'].includes(myActionStatus(message))">
+              <template v-if="canHandleMessageAction(message)">
                 <el-button size="small" :icon="Close" @click="updateAction(message, 'rejected')">拒绝</el-button>
                 <el-button size="small" type="success" :icon="Check" @click="updateAction(message, 'done')">确认沉淀</el-button>
               </template>
+              <small v-else-if="meetingRoomHostHint(message)" class="meeting-host-hint">{{ meetingRoomHostHint(message) }}</small>
             </div>
+            <div v-if="isOwnMessage(message)" class="action-receipt-summary">{{ actionReceiptSummary(message) }}</div>
           </div>
 
           <p v-if="message.content" class="message-content">{{ message.content }}</p>
 
           <div v-if="message.attachments.length" class="attachment-grid">
-            <a
-              v-for="file in message.attachments"
-              :key="file.id"
-              class="attachment-chip"
-              :href="file.url"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Paperclip />
-              <span>{{ file.file_name }}</span>
-              <small>{{ formatBytes(file.size_bytes) }}</small>
-            </a>
+            <template v-for="file in message.attachments" :key="file.id">
+              <ImageAttachmentCard
+                v-if="isImageAttachment(file)"
+                :src="file.url"
+                :name="collabAttachmentName(file)"
+                @preview="openCollabImagePreview(file)"
+              />
+              <a
+                v-else
+                class="attachment-chip"
+                :href="file.url"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Paperclip />
+                <span>{{ collabAttachmentName(file) }}</span>
+                <small>{{ formatBytes(file.size_bytes) }}</small>
+              </a>
+            </template>
           </div>
 
           <div class="message-footer">
             <span>{{ receiptSummary(message) }}</span>
             <template v-if="message.message_type === 'action_request'">
-              <el-tag size="small" :type="actionStatusType(myActionStatus(message))" effect="light">
-                {{ actionStatusLabel(myActionStatus(message)) }}
+              <el-tag size="small" :type="actionStatusType(meetingRoomActionStatus(message))" effect="light">
+                {{ actionStatusLabel(meetingRoomActionStatus(message)) }}
               </el-tag>
-              <div v-if="!isOwnMessage(message) && myActionStatus(message) !== 'done'" class="action-buttons">
+              <div v-if="canHandleMessageAction(message)" class="action-buttons">
                 <el-button size="small" :icon="Check" @click="updateAction(message, 'accepted')">接受</el-button>
                 <el-button size="small" :icon="Close" @click="updateAction(message, 'rejected')">拒绝</el-button>
                 <el-button size="small" type="success" @click="updateAction(message, 'done')">完成</el-button>
               </div>
+              <small v-else-if="meetingRoomHostHint(message)" class="meeting-host-hint">{{ meetingRoomHostHint(message) }}</small>
             </template>
+            <span v-if="isOwnMessage(message) && message.message_type === 'action_request'" class="action-receipt-summary">
+              {{ actionReceiptSummary(message) }}
+            </span>
             <el-button v-if="isOwnMessage(message)" size="small" text :icon="Delete" @click="deleteCollabMessage(message)">
               删除
             </el-button>
+          </div>
+          <div v-if="isOwnMessage(message) && actionOutcomeReceipts(message).length" class="action-outcomes">
+            <span v-for="receipt in actionOutcomeReceipts(message)" :key="receipt.id">
+              {{ receiptDisplayName(receipt.recipient_id) }}：{{ actionStatusLabel(receipt.action_status) }}
+            </span>
           </div>
         </article>
       </el-scrollbar>
@@ -1003,6 +1135,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
+    <ImagePreviewDialog v-model="imagePreviewVisible" :src="previewImage.url" :title="previewImage.name" />
   </main>
 </template>
 
@@ -1065,6 +1198,13 @@ h3 {
 .empty-stage p {
   color: #64748b;
   font-size: 13px;
+}
+
+.rail-subtitle {
+  display: block;
+  max-width: 18em;
+  line-height: 1.7;
+  text-wrap: balance;
 }
 
 .stage-source-line {
@@ -1330,8 +1470,16 @@ h3 {
   color: #7f1d1d;
 }
 
+.meeting-host-hint {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .attachment-grid {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 12px;
 }
@@ -1362,6 +1510,35 @@ h3 {
   margin-top: 12px;
   color: #64748b;
   font-size: 12px;
+}
+
+.action-receipt-summary {
+  color: #475569;
+  font-weight: 700;
+}
+
+.message-footer .meeting-host-hint {
+  color: #64748b;
+}
+
+.action-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.action-outcomes span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(24, 94, 112, 0.18);
+  border-radius: 999px;
+  background: #f8fbfb;
+  color: #185e70;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .action-buttons {

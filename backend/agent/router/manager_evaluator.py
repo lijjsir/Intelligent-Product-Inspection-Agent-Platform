@@ -18,6 +18,47 @@ class EvaluationResult:
 
 
 class ManagerEvaluator:
+
+    SUCCESS_RULES = {
+        "evidence.arbitrate": lambda a: (
+            a.type == "evidence_packet"
+            and a.status in {"success", "empty"}
+        ),
+        "vision.inspect": lambda a: (
+            a.type == "visual_inspection_result"
+            and a.status == "success"
+        ),
+        "lab.early_risk.assess": lambda a: (
+            a.type == "lab_detection_result"
+            and a.status == "success"
+        ),
+        "file.paper_format_check": lambda a: (
+            a.type == "paper_format_report"
+            and a.status == "success"
+        ),
+        "quality.inspection.execute": lambda a: (
+            a.type in {"inspection_result", "quality_final_assessment"}
+            and a.status == "success"
+            and not a.needs_user_input
+        ),
+        "file.summary": lambda a: (
+            a.type in {"file_summary", "file_answer"}
+            and a.status == "success"
+        ),
+        "file.qa": lambda a: (
+            a.type in {"file_summary", "file_answer"}
+            and a.status == "success"
+        ),
+        "quality.final_analyze": lambda a: (
+            a.type in {"quality_final_assessment", "composed_response"}
+            and a.status == "success"
+        ),
+        "memory.governance": lambda a: (
+            a.type == "memory_governance_result"
+            and a.status == "success"
+        ),
+    }
+
     async def evaluate(
         self,
         state: ManagerState,
@@ -43,30 +84,76 @@ class ManagerEvaluator:
         if any(item.status == "failed" for item in observations):
             failed_items = [item.capability_key for item in observations if item.status == "failed"]
             return EvaluationResult(False, 0.2, "fail", f"能力执行失败：{', '.join(failed_items)}")
-        artifact_types = {item.type for item in [*state.artifacts, *artifacts]}
-        if any(step.capability_key == "chat.general" for step in plan.steps):
-            return EvaluationResult(True, 1.0, "finish", "普通聊天已生成回复")
-        composed_artifacts = [
-            item for item in [*state.artifacts, *artifacts] if item.type == "composed_response"
-        ]
-        if any(str((item.content or {}).get("status") or "completed") != "blocked" for item in composed_artifacts):
+
+        # Blocked observations that require user confirmation / input
+        if any(item.status == "blocked" for item in observations):
+            blocked_items = [item for item in observations if item.status == "blocked"]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="ask_user",
+                reason="能力执行被阻止或需要用户确认",
+                missing_inputs=[item.summary for item in blocked_items if item.summary],
+            )
+
+        # FAILED ARTIFACTS FIRST — Section 9.3 of spec
+        all_artifacts = self._dedupe_artifacts([*state.artifacts, *artifacts])
+        if any(a.status == "failed" for a in all_artifacts):
+            failed_artifacts = [a for a in all_artifacts if a.status == "failed"]
+            reasons = [f"{a.type}: {a.summary}" for a in failed_artifacts if a.summary]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="fail",
+                reason=f"能力执行失败：{'; '.join(reasons)}" if reasons else "Artifact 状态为 failed",
+            )
+
+        # BLOCKED artifacts that need user input — ask_user
+        if any(a.status == "blocked" for a in all_artifacts) and any(a.needs_user_input for a in all_artifacts):
+            blocked = [a for a in all_artifacts if a.status == "blocked"]
+            return EvaluationResult(
+                satisfied=False,
+                score=0.0,
+                next_action="ask_user",
+                reason="缺少用户输入",
+                missing_inputs=[a.summary for a in blocked if a.summary],
+            )
+
+        # --- Rule-driven evaluation per plan step (Section 9.2 of spec) ---
+        # Check each plan step against its SUCCESS_RULE
+        all_steps_satisfied = True
+        any_rule_matched = False
+        for step in plan.steps:
+            cap = step.capability
+            rule = self.SUCCESS_RULES.get(cap)
+            if rule is None:
+                continue
+            any_rule_matched = True
+            matching = [a for a in all_artifacts if rule(a)]
+            if not matching:
+                all_steps_satisfied = False
+                break
+
+        # composed_response signals completion
+        composed_artifacts = [item for item in all_artifacts if item.type == "composed_response"]
+        if composed_artifacts and any(
+            str((item.content or {}).get("status") or "completed") != "blocked"
+            for item in composed_artifacts
+        ):
             return EvaluationResult(True, 1.0, "finish", "聊天回复已生成")
-        if "quality_report" in artifact_types:
-            return EvaluationResult(True, 0.86, "finish", "已经找到报告信息")
-        if "task_status" in artifact_types:
-            return EvaluationResult(True, 0.8, "finish", "已经找到任务状态")
-        if "rag_hits" in artifact_types:
-            return EvaluationResult(True, 0.76, "finish", "已经完成知识检索")
-        if "paper_format_report" in artifact_types:
-            return EvaluationResult(True, 0.82, "finish", "已经完成论文查非分析")
-        if "file_summary" in artifact_types or "file_answer" in artifact_types:
-            return EvaluationResult(True, 0.78, "finish", "已经完成文件辅助分析")
-        if "image_understanding" in artifact_types:
-            return EvaluationResult(True, 0.75, "finish", "已经完成图片辅助分析")
-        if "inspection_result" in artifact_types or "inspection_task" in artifact_types:
-            return EvaluationResult(True, 0.9, "finish", "正式质检任务已处理")
-        if "data_analysis" in artifact_types:
-            return EvaluationResult(True, 0.7, "finish", "数据分析能力已返回只读统计结果")
+        # If all composed_responses are blocked, the action was blocked
+        if composed_artifacts:
+            return EvaluationResult(False, 0.2, "continue", "回复已被阻止，等待用户处理")
+
+        # If rules were checked and all satisfied
+        if any_rule_matched and all_steps_satisfied:
+            return EvaluationResult(True, 0.85, "finish", "所有能力步骤已按规则完成")
+
+        # If rules were checked but some not satisfied
+        if any_rule_matched and not all_steps_satisfied:
+            return EvaluationResult(False, 0.3, "continue", "能力步骤尚未全部满足成功条件")
+
+        # Fallback: model evaluator or continue
         model_result = await self._model_evaluate_if_available(state, plan, observations, artifacts)
         if model_result is not None:
             return model_result
@@ -150,7 +237,10 @@ class ManagerEvaluator:
                 missing_inputs=list(data.get("missing_inputs") or []),
                 recommended_next_capabilities=list(data.get("recommended_next_capabilities") or []),
             )
-        except Exception:
+        except Exception as exc:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning("ManagerEvaluator model evaluation failed: %s", exc)
             return None
 
     @staticmethod
@@ -169,3 +259,14 @@ class ManagerEvaluator:
                 except Exception:
                     return None
         return None
+
+    @staticmethod
+    def _dedupe_artifacts(artifacts: list[AgentArtifact]) -> list[AgentArtifact]:
+        seen: set[str] = set()
+        result: list[AgentArtifact] = []
+        for item in artifacts:
+            if item.artifact_id in seen:
+                continue
+            seen.add(item.artifact_id)
+            result.append(item)
+        return result

@@ -2,10 +2,13 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 
+import { extractApiErrorDetail } from "@/api/http";
+import type { ApiErrorDetail } from "@/api/http";
 import { memoryGovernanceApi } from "@/api/memory-governance.api";
 import { ROLE_ADMIN } from "@/constants/roles";
 import { useAuthStore } from "@/stores/auth.store";
 import type {
+  CandidateMemoryItem,
   MemoryEvaluationResult,
   MemoryEventItem,
   MemoryPolicy,
@@ -19,22 +22,31 @@ const activeTab = ref("search");
 const loading = ref(false);
 const policySaving = ref(false);
 const searchResults = ref<MemorySearchItem[]>([]);
+const candidates = ref<CandidateMemoryItem[]>([]);
 const events = ref<MemoryEventItem[]>([]);
 const graph = ref<MemoryPropagationGraph | null>(null);
+const searchError = ref<ApiErrorDetail | null>(null);
+const candidateError = ref<ApiErrorDetail | null>(null);
+const eventError = ref<ApiErrorDetail | null>(null);
+const graphError = ref<ApiErrorDetail | null>(null);
+const operationError = ref<ApiErrorDetail | null>(null);
+const memoryWarnings = ref<Array<string | Record<string, unknown>>>([]);
 const rollbackResult = ref<MemoryRollbackResult | null>(null);
 const evaluationResult = ref<MemoryEvaluationResult | null>(null);
 const policies = ref<MemoryPolicy[]>([]);
 const selectedPolicyKey = ref("");
 const policyForm = reactive({
-  workspace: "governance",
   policy_type: "rollback",
   status: "active",
   configText: "{}",
 });
 const searchForm = reactive({
   query: "",
-  workspace: "governance",
   top_k: 5,
+});
+const candidateFilters = reactive({
+  status: "candidate",
+  memory_type: "",
 });
 const eventFilters = reactive({
   memory_id: "",
@@ -63,22 +75,143 @@ const orgId = computed(() => auth.orgId || "");
 const userId = computed(() => auth.userId || "");
 
 onMounted(async () => {
-  await Promise.all([fetchEvents(), fetchPolicies()]);
+  await Promise.all([fetchCandidates(), fetchEvents(), fetchPolicies()]);
 });
+
+function showApiError(error: unknown, fallback: string, target?: { value: ApiErrorDetail | null }) {
+  const detail = extractApiErrorDetail(error, fallback);
+  if (target) target.value = detail;
+  ElMessage.error(detail.message);
+}
+
+function formatApiError(error: ApiErrorDetail | null): string {
+  if (!error) return "";
+  const lines = [error.message];
+  if (error.code) lines.push(`code: ${error.code}`);
+  if (error.trace_id) lines.push(`trace_id: ${error.trace_id}`);
+  if (error.suggestion) lines.push(`suggestion: ${error.suggestion}`);
+  if (error.detail !== undefined && error.detail !== null) {
+    lines.push(`detail: ${typeof error.detail === "string" ? error.detail : JSON.stringify(error.detail)}`);
+  }
+  return lines.join("\n");
+}
 
 async function searchMemory() {
   if (!orgId.value) return;
   loading.value = true;
+  searchError.value = null;
   try {
     const { data } = await memoryGovernanceApi.search({
       org_id: orgId.value,
-      workspace: searchForm.workspace as "governance",
       query: searchForm.query,
       top_k: searchForm.top_k,
     });
     searchResults.value = data.data.items;
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "记忆检索失败");
+    searchResults.value = [];
+    showApiError(error, "记忆检索失败", searchError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function fetchCandidates() {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    const { data } = await memoryGovernanceApi.listCandidates({
+      status: candidateFilters.status || "candidate",
+      memory_type: candidateFilters.memory_type || undefined,
+      limit: 100,
+    });
+    candidates.value = data.data;
+  } catch (error: any) {
+    showApiError(error, "加载候选记忆失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function evaluateCandidate(memoryId: string) {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    const { data } = await memoryGovernanceApi.evaluateCandidate(memoryId);
+    ElMessage.success(data.data.promoted ? "候选记忆已晋升" : "晋升评估已完成");
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "晋升评估失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function batchEvaluateCandidates() {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    const { data } = await memoryGovernanceApi.evaluateCandidateBatch(100);
+    const promoted = data.data.filter((item) => item.promoted).length;
+    ElMessage.success(`批量评估完成，晋升 ${promoted} 条`);
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "批量评估失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function approveCandidate(memoryId: string) {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    await memoryGovernanceApi.approveCandidate(memoryId);
+    ElMessage.success("候选记忆已确认");
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "确认候选失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function rejectCandidate(memoryId: string) {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    await memoryGovernanceApi.rejectCandidate(memoryId);
+    ElMessage.success("候选记忆已拒绝");
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "拒绝候选失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function isolateCandidate(memoryId: string) {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    await memoryGovernanceApi.isolateCandidate(memoryId);
+    ElMessage.success("候选记忆已隔离");
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "隔离候选失败", candidateError);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function contestCandidate(memoryId: string) {
+  loading.value = true;
+  candidateError.value = null;
+  try {
+    await memoryGovernanceApi.contestCandidate(memoryId);
+    ElMessage.success("候选记忆已标记争议");
+    await fetchCandidates();
+  } catch (error: any) {
+    showApiError(error, "标记争议失败", candidateError);
   } finally {
     loading.value = false;
   }
@@ -86,6 +219,7 @@ async function searchMemory() {
 
 async function fetchEvents() {
   loading.value = true;
+  eventError.value = null;
   try {
     const { data } = await memoryGovernanceApi.listEvents({
       memory_id: eventFilters.memory_id || undefined,
@@ -95,7 +229,7 @@ async function fetchEvents() {
     });
     events.value = data.data;
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "加载记忆事件失败");
+    showApiError(error, "加载记忆事件失败", eventError);
   } finally {
     loading.value = false;
   }
@@ -104,16 +238,16 @@ async function fetchEvents() {
 async function buildGraph() {
   if (!orgId.value) return;
   loading.value = true;
+  graphError.value = null;
   try {
     const { data } = await memoryGovernanceApi.buildPropagationGraph({
       org_id: orgId.value,
-      workspace: "governance",
       root_memory_id: graphForm.root_memory_id,
       max_depth: graphForm.max_depth,
     });
     graph.value = data.data;
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "构建污染传播图失败");
+    showApiError(error, "构建污染传播图失败", graphError);
   } finally {
     loading.value = false;
   }
@@ -122,11 +256,12 @@ async function buildGraph() {
 async function executeRollback() {
   if (!orgId.value || !userId.value) return;
   loading.value = true;
+  operationError.value = null;
+  memoryWarnings.value = [];
   try {
     const traceId = `mem-rb-${Date.now()}`;
     const { data } = await memoryGovernanceApi.executeRollback({
       org_id: orgId.value,
-      workspace: "governance",
       operator_id: userId.value,
       trace_id: traceId,
       root_memory_id: rollbackForm.root_memory_id,
@@ -137,10 +272,11 @@ async function executeRollback() {
       propagation_graph: graph.value ? { node_count: graph.value.nodes.length, root_memory_id: graph.value.root_memory_id } : null,
     });
     rollbackResult.value = data.data;
+    memoryWarnings.value = data.warnings || [];
     evaluationForm.rollback_id = data.data.rollback_id;
     ElMessage.success(data.data.approval_id ? "回滚已执行，并已生成审批留痕" : "回滚已执行");
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "执行回滚失败");
+    showApiError(error, "执行回滚失败", operationError);
   } finally {
     loading.value = false;
   }
@@ -149,6 +285,7 @@ async function executeRollback() {
 async function evaluateRecovery() {
   if (!orgId.value || !evaluationForm.rollback_id) return;
   loading.value = true;
+  operationError.value = null;
   try {
     const { data } = await memoryGovernanceApi.evaluateRecovery({
       org_id: orgId.value,
@@ -158,27 +295,30 @@ async function evaluateRecovery() {
     });
     evaluationResult.value = data.data;
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "恢复验证失败");
+    showApiError(error, "恢复验证失败", operationError);
   } finally {
     loading.value = false;
   }
 }
 
+function formatWarning(warning: string | Record<string, unknown>): string {
+  return typeof warning === "string" ? warning : JSON.stringify(warning);
+}
+
 async function fetchPolicies() {
   try {
-    const { data } = await memoryGovernanceApi.listPolicies({ workspace: "governance" });
+    const { data } = await memoryGovernanceApi.listPolicies();
     policies.value = data.data;
     if (!selectedPolicyKey.value && policies.value.length) {
       selectedPolicyKey.value = policies.value[0].policy_key;
     }
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "加载记忆策略失败");
+    showApiError(error, "加载记忆策略失败");
   }
 }
 
 function loadPolicy(policy: MemoryPolicy) {
   selectedPolicyKey.value = policy.policy_key;
-  policyForm.workspace = policy.workspace;
   policyForm.policy_type = policy.policy_type;
   policyForm.status = policy.status;
   policyForm.configText = JSON.stringify(policy.config || {}, null, 2);
@@ -190,7 +330,6 @@ async function savePolicy() {
   try {
     const config = JSON.parse(policyForm.configText || "{}");
     await memoryGovernanceApi.upsertPolicy(selectedPolicyKey.value, {
-      workspace: policyForm.workspace as "governance",
       policy_type: policyForm.policy_type as "rollback",
       status: policyForm.status,
       config,
@@ -198,7 +337,7 @@ async function savePolicy() {
     ElMessage.success("策略已更新");
     await fetchPolicies();
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "策略保存失败");
+    showApiError(error, "策略保存失败");
   } finally {
     policySaving.value = false;
   }
@@ -233,18 +372,59 @@ function graphStats() {
           <div class="flex flex-col gap-4">
             <div class="flex flex-wrap gap-3">
               <el-input v-model="searchForm.query" class="!w-[320px]" placeholder="输入关键词检索治理记忆" />
-              <el-select v-model="searchForm.workspace" class="!w-[180px]">
-                <el-option label="治理空间" value="governance" />
-              </el-select>
               <el-input-number v-model="searchForm.top_k" :min="1" :max="10" />
               <el-button type="primary" :loading="loading" @click="searchMemory">检索</el-button>
             </div>
+            <el-alert v-if="searchError" type="error" show-icon :closable="false" title="记忆检索失败" :description="formatApiError(searchError)" />
             <el-table :data="searchResults" size="small" class="list-table" v-loading="loading">
               <el-table-column prop="memory_id" label="Memory ID" min-width="180" />
               <el-table-column prop="memory_type" label="类型" min-width="160" />
               <el-table-column prop="summary" label="摘要" min-width="240" show-overflow-tooltip />
               <el-table-column prop="score" label="召回分" width="100" />
               <el-table-column prop="trust_score" label="信任分" width="100" />
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="候选池" name="candidates">
+          <div class="flex flex-col gap-4">
+            <div class="flex flex-wrap gap-3">
+              <el-select v-model="candidateFilters.status" class="!w-[160px]">
+                <el-option label="候选" value="candidate" />
+                <el-option label="争议" value="contested" />
+                <el-option label="隔离" value="isolated" />
+                <el-option label="已禁用" value="disabled" />
+                <el-option label="已激活" value="active" />
+              </el-select>
+              <el-input v-model="candidateFilters.memory_type" class="!w-[220px]" placeholder="按 memory_type 筛选" />
+              <el-button type="primary" :loading="loading" @click="fetchCandidates">查询</el-button>
+              <el-button :loading="loading" @click="batchEvaluateCandidates">批量评估</el-button>
+            </div>
+            <el-alert v-if="candidateError" type="error" show-icon :closable="false" title="候选池操作失败" :description="formatApiError(candidateError)" />
+            <el-table :data="candidates" size="small" class="list-table" v-loading="loading">
+              <el-table-column prop="memory_id" label="Memory ID" min-width="170" />
+              <el-table-column prop="memory_type" label="类型" min-width="150" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="summary" label="摘要" min-width="260" show-overflow-tooltip />
+              <el-table-column prop="support_count" label="支持" width="80" />
+              <el-table-column prop="rag_evidence_count" label="RAG" width="80" />
+              <el-table-column prop="agent_verifier_count" label="Agent" width="90" />
+              <el-table-column prop="conflict_count" label="冲突" width="80" />
+              <el-table-column prop="promotion_score" label="晋升分" width="100" />
+              <el-table-column label="最近支持" min-width="160">
+                <template #default="{ row }">{{ formatDateTime(row.last_supported_at) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" fixed="right" width="300">
+                <template #default="{ row }">
+                  <div class="flex flex-wrap gap-2">
+                    <el-button size="small" @click="evaluateCandidate(row.memory_id)">评估</el-button>
+                    <el-button size="small" type="success" @click="approveCandidate(row.memory_id)">确认</el-button>
+                    <el-button size="small" type="warning" @click="contestCandidate(row.memory_id)">争议</el-button>
+                    <el-button size="small" @click="isolateCandidate(row.memory_id)">隔离</el-button>
+                    <el-button size="small" type="danger" @click="rejectCandidate(row.memory_id)">拒绝</el-button>
+                  </div>
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </el-tab-pane>
@@ -257,6 +437,7 @@ function graphStats() {
               <el-input v-model="eventFilters.trace_id" class="!w-[220px]" placeholder="按 trace_id 筛选" />
               <el-button type="primary" :loading="loading" @click="fetchEvents">查询</el-button>
             </div>
+            <el-alert v-if="eventError" type="error" show-icon :closable="false" title="事件加载失败" :description="formatApiError(eventError)" />
             <el-table :data="events" size="small" class="list-table" v-loading="loading">
               <el-table-column prop="event_id" label="事件 ID" min-width="180" />
               <el-table-column prop="event_type" label="事件类型" min-width="180" />
@@ -276,6 +457,7 @@ function graphStats() {
               <el-input-number v-model="graphForm.max_depth" :min="1" :max="10" />
               <el-button type="primary" :loading="loading" @click="buildGraph">构建传播图</el-button>
             </div>
+            <el-alert v-if="graphError" type="error" show-icon :closable="false" title="传播图构建失败" :description="formatApiError(graphError)" />
             <section class="grid gap-4 md:grid-cols-4" v-if="graph">
               <el-card v-for="item in graphStats()" :key="item.label" shadow="never">
                 <div class="text-sm text-zinc-500">{{ item.label }}</div>
@@ -295,6 +477,27 @@ function graphStats() {
         </el-tab-pane>
 
         <el-tab-pane label="回滚与验证" name="rollback">
+          <el-alert
+            v-if="operationError"
+            class="mb-4"
+            type="error"
+            show-icon
+            :closable="false"
+            title="内存治理操作失败"
+            :description="formatApiError(operationError)"
+          />
+          <el-alert
+            v-if="memoryWarnings.length"
+            class="mb-4"
+            type="warning"
+            show-icon
+            :closable="false"
+            title="内存同步警告"
+          >
+            <ul class="m-0 pl-4">
+              <li v-for="(warning, index) in memoryWarnings" :key="index">{{ formatWarning(warning) }}</li>
+            </ul>
+          </el-alert>
           <div class="grid gap-4 xl:grid-cols-2">
             <el-card shadow="never">
               <template #header>执行回滚</template>
@@ -398,9 +601,6 @@ function graphStats() {
               <el-form label-position="top">
                 <el-form-item label="策略 Key">
                   <el-input :model-value="selectedPolicyKey" readonly />
-                </el-form-item>
-                <el-form-item label="工作区">
-                  <el-input v-model="policyForm.workspace" :disabled="!canEditPolicy" />
                 </el-form-item>
                 <el-form-item label="策略类型">
                   <el-input v-model="policyForm.policy_type" :disabled="!canEditPolicy" />

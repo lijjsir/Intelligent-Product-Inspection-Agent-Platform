@@ -3,7 +3,6 @@ import pytest
 from app.core.claims import (
     CAPABILITY_GOVERNANCE,
     CAPABILITY_MODEL_CONTROL,
-    WORKSPACE_APP,
     WORKSPACE_GOVERNANCE,
     WORKSPACE_OPS,
     build_auth_claims,
@@ -23,7 +22,7 @@ from app.core.permissions import (
 def test_admin_is_limited_to_governance_claims():
     claims = build_auth_claims(ROLE_ADMIN)
 
-    assert claims.workspaces == [WORKSPACE_APP, WORKSPACE_OPS, WORKSPACE_GOVERNANCE]
+    assert claims.workspaces == [WORKSPACE_GOVERNANCE]
     assert CAPABILITY_GOVERNANCE in claims.capabilities
     assert CAPABILITY_MODEL_CONTROL in claims.capabilities
 
@@ -31,7 +30,7 @@ def test_admin_is_limited_to_governance_claims():
 def test_algorithm_engineer_owns_model_config_control():
     claims = build_auth_claims(ROLE_ALGORITHM_ENGINEER)
 
-    assert claims.workspaces == [WORKSPACE_APP, WORKSPACE_OPS, WORKSPACE_GOVERNANCE]
+    assert claims.workspaces == [WORKSPACE_OPS]
     assert CAPABILITY_MODEL_CONTROL in claims.capabilities
     require_role("model_config", ROLE_ALGORITHM_ENGINEER)
 
@@ -43,15 +42,18 @@ def test_role_specific_resources_do_not_bleed_between_workspaces():
     require_role("auth_log", ROLE_ADMIN)
     require_role("infrastructure", ROLE_ADMIN)
     require_role("memory_governance", ROLE_ADMIN)
-    for role in {
-        ROLE_ADMIN,
-        ROLE_APP_DEVELOPER,
-        ROLE_PLATFORM_OPERATOR,
-        ROLE_ALGORITHM_ENGINEER,
-        ROLE_USER,
-        ROLE_EXPERT,
-    }:
-        require_role("meeting", role)
+    require_role("meeting", ROLE_USER)
+    require_role("meeting", ROLE_EXPERT)
+    require_role("meeting", ROLE_ADMIN)
+    require_role("meeting", ROLE_APP_DEVELOPER)
+    require_role("meeting", ROLE_PLATFORM_OPERATOR)
+    require_role("meeting", ROLE_ALGORITHM_ENGINEER)
+    require_role("collab", ROLE_USER)
+    require_role("collab", ROLE_EXPERT)
+    require_role("collab", ROLE_ADMIN)
+    require_role("collab", ROLE_APP_DEVELOPER)
+    require_role("collab", ROLE_PLATFORM_OPERATOR)
+    require_role("collab", ROLE_ALGORITHM_ENGINEER)
     require_role("agent_ops_read", ROLE_PLATFORM_OPERATOR)
     require_role("agent_ops", ROLE_APP_DEVELOPER)
     require_role("alert", ROLE_ADMIN)

@@ -12,7 +12,7 @@ import type { ModelConfig } from "@/types/governance.types";
 
 use([CanvasRenderer, BarChart, PieChart, GridComponent, LegendComponent, TooltipComponent] as any);
 
-type ChartTab = "cost" | "share" | "tokens" | "ranking";
+type ChartTab = "cost" | "share" | "tokens";
 
 const analyticsStore = useAnalyticsStore();
 const loading = ref(false);
@@ -38,11 +38,10 @@ const models = ref<ModelConfig[]>([]);
 const modelsLoading = ref(false);
 const modelsError = ref("");
 
-const chartTabs: { key: ChartTab; label: string; desc: string }[] = [
-  { key: "cost", label: "消耗分布", desc: "按模型看成本消耗，沿用配置中的输入/输出单价折算。" },
-  { key: "share", label: "调用占比", desc: "看调用次数在各模型之间的分布，不额外引入没有的数据。" },
-  { key: "tokens", label: "Token 对比", desc: "观察平均单次 Token 使用量，辅助发现高消耗模型。" },
-  { key: "ranking", label: "调用排行", desc: "按调用量快速定位主力模型和尾部模型。" },
+const chartTabs: { key: ChartTab; label: string }[] = [
+  { key: "cost", label: "消耗分布" },
+  { key: "share", label: "调用占比" },
+  { key: "tokens", label: "Token 对比" },
 ];
 
 const modelTypeLabels: Record<string, string> = {
@@ -294,7 +293,7 @@ function renderChart() {
           })),
         },
       ],
-    });
+    }, true);
     return;
   }
 
@@ -338,48 +337,13 @@ function renderChart() {
           },
         },
       ],
-    });
-    return;
-  }
-
-  if (activeChart.value === "ranking") {
-    mainChart.setOption({
-      animationDuration: 420,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "shadow" },
-        formatter: (params: any) => {
-          const point = params[0];
-          return `${point.name}<br/>调用 ${Number(point.value).toLocaleString()} 次`;
-        },
-      },
-      grid: { left: 54, right: 24, top: 22, bottom: 46 },
-      xAxis: {
-        type: "category",
-        data: metrics.map((item) => item.model_key),
-        axisLabel: { color: "#475569", interval: 0, rotate: 16 },
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: { color: "#64748b" },
-        splitLine: { lineStyle: { color: "rgba(148, 163, 184, 0.16)" } },
-      },
-      series: [
-        {
-          type: "bar",
-          barMaxWidth: 42,
-          data: metrics.map((item) => metricCallCount(item)),
-          itemStyle: {
-            borderRadius: [10, 10, 0, 0],
-            color: "#334155",
-          },
-        },
-      ],
-    });
+    }, true);
     return;
   }
 
   const costMetrics = [...metrics].sort((a, b) => (b.total_cost || 0) - (a.total_cost || 0));
+  const positiveCosts = costMetrics.map((item) => Number(item.total_cost || 0)).filter((value) => value > 0);
+  const minVisibleCost = positiveCosts.length ? Math.max(Math.max(...positiveCosts) * 0.025, 0.000001) : 0;
   mainChart.setOption({
     animationDuration: 420,
     tooltip: {
@@ -387,7 +351,7 @@ function renderChart() {
       axisPointer: { type: "shadow" },
       formatter: (params: any) => {
         const point = params[0];
-        return `${point.name}<br/>成本 ${formatCost(Number(point.value))}`;
+        return `${point.name}<br/>成本 ${formatCost(Number(point.data?.actualValue ?? point.value))}`;
       },
     },
     grid: { left: 54, right: 24, top: 22, bottom: 46 },
@@ -405,14 +369,27 @@ function renderChart() {
       {
         type: "bar",
         barMaxWidth: 42,
-        data: costMetrics.map((item) => Number(item.total_cost || 0)),
+        data: costMetrics.map((item) => {
+          const value = Number(item.total_cost || 0);
+          const hasCalls = metricCallCount(item) > 0;
+          return {
+            value: value > 0 ? Math.max(value, minVisibleCost) : hasCalls ? minVisibleCost : 0,
+            actualValue: value,
+          };
+        }),
         itemStyle: {
           borderRadius: [10, 10, 0, 0],
           color: "#f59e0b",
         },
+        label: {
+          show: true,
+          position: "top",
+          color: "#b45309",
+          formatter: (params: any) => formatCost(Number(params.data?.actualValue ?? params.value)),
+        },
       },
     ],
-  });
+  }, true);
 }
 
 function handleResize() {
@@ -471,27 +448,6 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
       show-icon
     />
 
-    <el-alert
-      title="模型成本按模型配置中的输入/输出单价折算；没有单价的模型不会被补算虚构价格。"
-      type="info"
-      :closable="false"
-      show-icon
-    />
-    <el-alert
-      title="口径说明：本页的质检通过率和质检幻觉率来自检测任务结果，不等同于分析中心质量报告里的聊天幻觉率；embedding 模型没有质检结果归属时不会展示质量率。"
-      type="info"
-      :closable="false"
-      show-icon
-    />
-
-    <el-alert
-      v-if="hasUnpricedUsage"
-      title="发现有模型已经产生 Token，但模型配置里仍缺少输入或输出价格，请补全后再看完整成本。"
-      type="warning"
-      :closable="false"
-      show-icon
-    />
-
     <section class="summary-grid">
       <article v-for="card in summaryCards" :key="card.label" :class="['summary-card', card.tone]">
         <span class="summary-label">{{ card.label }}</span>
@@ -506,7 +462,6 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
           <div class="analysis-head">
             <div>
               <strong>模型用量分析</strong>
-              <span>{{ chartTabs.find((item) => item.key === activeChart)?.desc }}</span>
             </div>
 
             <nav class="chart-tabs">
@@ -562,10 +517,6 @@ const pieColors = ["#334155", "#fbbf24", "#38bdf8", "#22c55e", "#f97316", "#a855
           </div>
         </el-card>
 
-        <el-card shadow="never" class="spotlight-card note-card">
-          <strong>页面口径说明</strong>
-          <p>这里负责模型观测：调用、Token、成本、健康和质检模型表现统一看；分析中心保留质量趋势与质检/聊天质量口径，告警分布留在告警管理。</p>
-        </el-card>
       </div>
     </section>
 

@@ -11,7 +11,6 @@ from app.core.permissions import (
     ROLE_USER,
     ROLE_EXPERT,
 )
-from app.core.data_domain_policy import derive_workspaces_for_roles
 
 
 WORKSPACE_APP = "app"
@@ -93,7 +92,18 @@ def derive_capabilities(plan_tier: str, roles: list[str]) -> list[str]:
 
 
 def derive_workspaces(roles: list[str], plan_tier: str = PLAN_BASIC) -> list[str]:
-    return derive_workspaces_for_roles(roles, plan_tier)
+    workspaces: list[str] = []
+    if any(r in {ROLE_USER, ROLE_EXPERT} for r in roles):
+        workspaces.append(WORKSPACE_APP)
+    if any(r in {ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER} for r in roles):
+        workspaces.append(WORKSPACE_OPS)
+    if ROLE_ADMIN in roles or (
+        ROLE_ALGORITHM_ENGINEER in roles and plan_tier == PLAN_ENTERPRISE
+    ):
+        workspaces.append(WORKSPACE_GOVERNANCE)
+    if not workspaces:
+        workspaces.append(WORKSPACE_APP)
+    return workspaces
 
 
 def derive_default_workspace(roles: list[str], workspaces: list[str], plan_tier: str = PLAN_BASIC) -> str:

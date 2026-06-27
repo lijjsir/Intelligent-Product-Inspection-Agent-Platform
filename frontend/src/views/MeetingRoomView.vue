@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type StyleValue } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
+import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
@@ -12,6 +13,7 @@ import { useMeetingStore } from "@/stores/meeting.store";
 import { useUserStore } from "@/stores/user.store";
 import type { MeetingAgentQueryAudit, MeetingAttachment, MeetingDataDomain, MeetingMemory, MeetingMemoryPublishScope, MeetingMessage, MeetingQuoteSnapshot, MeetingRoom, MeetingRoomMember } from "@/types/meeting.types";
 import { normalizeAiResponseText } from "@/utils/ai-response";
+import { attachmentDisplayName, isImageAttachment } from "@/utils/attachments";
 import { writeTextToClipboard } from "@/utils/clipboard";
 
 const auth = useAuthStore();
@@ -19,7 +21,6 @@ const store = useMeetingStore();
 const userStore = useUserStore();
 const router = useRouter();
 const MESSAGE_RECALL_WINDOW_MS = 2 * 60 * 1000;
-const IMAGE_ATTACHMENT_EXT_PATTERN = /\.(?:apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:[?#].*)?$/i;
 
 const roomTitle = ref("会议室");
 const roomPassword = ref("");
@@ -310,20 +311,36 @@ const privateThreadSubtitle = computed(() => {
 const visibleAgentPanelMessages = computed(() => store.agentPanelMessages.filter(canShowInAgentPanel));
 const summaryMessages = computed(() => store.systemPanelMessages.filter((message) => message.message_type === "summary"));
 const latestSummaryMessage = computed(() => summaryMessages.value[summaryMessages.value.length - 1] || null);
+type AgentConversationGroup = {
+  id: string;
+  question: MeetingMessage | null;
+  replies: MeetingMessage[];
+  staleReplyCount: number;
+};
+
 const agentConversationGroups = computed(() => {
-  const groups: Array<{ id: string; question: MeetingMessage | null; replies: MeetingMessage[] }> = [];
-  let currentGroup: { id: string; question: MeetingMessage | null; replies: MeetingMessage[] } | null = null;
+  const groups: AgentConversationGroup[] = [];
+  let currentGroup: AgentConversationGroup | null = null;
   for (const message of visibleAgentPanelMessages.value) {
     if (message.message_type === "user") {
-      currentGroup = { id: message.id, question: message, replies: [] };
+      currentGroup = { id: message.id, question: message, replies: [], staleReplyCount: 0 };
       groups.push(currentGroup);
       continue;
     }
     if (!currentGroup) {
-      currentGroup = { id: `agent-${message.id}`, question: null, replies: [] };
+      currentGroup = { id: `agent-${message.id}`, question: null, replies: [], staleReplyCount: 0 };
       groups.push(currentGroup);
     }
-    currentGroup.replies.push(message);
+    if (!currentGroup.question || isCurrentAgentReplyForQuestion(currentGroup.question, message)) {
+      currentGroup.replies.push(message);
+    } else {
+      currentGroup.staleReplyCount += 1;
+    }
+  }
+  for (const group of groups) {
+    if (group.replies.length <= 1) continue;
+    group.staleReplyCount += group.replies.length - 1;
+    group.replies = [group.replies[group.replies.length - 1]];
   }
   return groups;
 });
@@ -1304,6 +1321,26 @@ function messageMetadata(message: MeetingMessage) {
   return message.metadata_json || {};
 }
 
+function agentQuestionRevision(message: MeetingMessage) {
+  const editedAt = messageMetadata(message).edited_at;
+  if (typeof editedAt === "string" && editedAt.trim()) return editedAt.trim();
+  return message.updated_at || message.created_at || message.id;
+}
+
+function isCurrentAgentReplyForQuestion(question: MeetingMessage, reply: MeetingMessage) {
+  const metadata = messageMetadata(reply);
+  const linkedQuestionId = String(metadata.question_message_id || "").trim();
+  if (linkedQuestionId && linkedQuestionId !== question.id) return false;
+  const replyRevision = String(metadata.question_revision || "").trim();
+  if (replyRevision) return replyRevision === agentQuestionRevision(question);
+  const editedAt = messageMetadata(question).edited_at;
+  if (typeof editedAt !== "string" || !editedAt.trim()) return true;
+  const editedTime = new Date(editedAt).getTime();
+  const replyTime = new Date(reply.created_at || "").getTime();
+  if (!Number.isFinite(editedTime) || !Number.isFinite(replyTime)) return true;
+  return replyTime > editedTime;
+}
+
 function messageVisibility(message: MeetingMessage) {
   const metadata = messageMetadata(message);
   const visibility = String(metadata.visibility || "").trim();
@@ -1375,16 +1412,8 @@ function messageAttachments(message: MeetingMessage): MeetingAttachment[] {
   return Array.isArray(attachments) ? attachments as MeetingAttachment[] : [];
 }
 
-function isImageAttachment(attachment: MeetingAttachment) {
-  const kind = String(attachment.kind || "").toLowerCase();
-  const contentType = String(attachment.content_type || "").toLowerCase();
-  const name = String(attachment.name || "");
-  const url = String(attachment.url || "");
-  return kind === "image" || contentType.startsWith("image/") || IMAGE_ATTACHMENT_EXT_PATTERN.test(name) || IMAGE_ATTACHMENT_EXT_PATTERN.test(url);
-}
-
 function openImagePreview(attachment: MeetingAttachment) {
-  previewImage.value = { url: attachment.url, name: attachment.name };
+  previewImage.value = { url: attachment.url, name: attachmentDisplayName(attachment) };
   imagePreviewVisible.value = true;
 }
 
@@ -2044,13 +2073,17 @@ async function sendAgentQuestion() {
   if (!content && !attachments.length) return;
   try {
     const question = content || "请查看附件。";
-    await store.sendMessage(`@会议Agent ${question}`, null, {
+    const message = await store.sendMessage(`@会议Agent ${question}`, null, {
       skipAgentTrigger: true,
       attachments,
     });
     agentInput.value = "";
     agentAttachments.value = [];
-    await store.runGeneralAgent("auto", question, { attachments });
+    await store.runGeneralAgent("auto", question, {
+      attachments,
+      parentMessageId: message?.id,
+      questionRevision: message ? agentQuestionRevision(message) : "",
+    });
     await scrollToBottom("agent");
   } catch (error) {
     if (axios.isCancel(error) || (error as { name?: string })?.name === "CanceledError") return;
@@ -2093,7 +2126,7 @@ function cancelModifyAgentQuestion() {
   agentEditingContent.value = "";
 }
 
-async function saveModifiedAgentQuestion(message: MeetingMessage) {
+async function saveModifiedAgentQuestion(message: MeetingMessage, group?: AgentConversationGroup) {
   if (!store.activeRoom) {
     ElMessage.warning("请先进入会议室。");
     return;
@@ -2112,15 +2145,23 @@ async function saveModifiedAgentQuestion(message: MeetingMessage) {
     return;
   }
   const attachments = messageAttachments(message);
+  let questionRevision = agentQuestionRevision(message);
+  const replacementMessageId = group?.replies[group.replies.length - 1]?.id || "";
   try {
     try {
-      await store.updateMessage(message.id, `@会议Agent ${question}`);
+      const updatedMessage = await store.updateMessage(message.id, `@会议Agent ${question}`);
+      if (updatedMessage) questionRevision = agentQuestionRevision(updatedMessage);
     } catch (error) {
       ElMessage.warning("原提问未能更新，已直接按修改后的内容重新提问。");
       console.warn("Failed to update original agent question before rerun", error);
     }
     cancelModifyAgentQuestion();
-    const result = await store.runGeneralAgent("auto", question, { attachments });
+    const result = await store.runGeneralAgent("auto", question, {
+      attachments,
+      parentMessageId: message.id,
+      questionRevision,
+      replaceMessageId: replacementMessageId,
+    });
     if (!result) {
       ElMessage.warning("会议Agent暂未开始回复，请稍后再试。");
       return;
@@ -2868,18 +2909,13 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="messageAttachments(message).length" class="message-attachments">
               <template v-for="att in messageAttachments(message)" :key="att.id">
-                <button
+                <ImageAttachmentCard
                   v-if="isImageAttachment(att)"
-                  type="button"
-                  class="att-image-button"
-                  :title="att.name"
-                  :aria-label="`预览图片 ${att.name}`"
-                  @click="openImagePreview(att)"
-                >
-                  <img :src="att.url" :alt="att.name" loading="lazy" />
-                  <span class="att-image-name">{{ att.name }}</span>
-                </button>
-                <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                  :src="att.url"
+                  :name="attachmentDisplayName(att)"
+                  @preview="openImagePreview(att)"
+                />
+                <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
               </template>
             </div>
           </template>
@@ -3016,7 +3052,7 @@ onBeforeUnmount(() => {
                   <el-input v-model="agentEditingContent" type="textarea" :rows="3" resize="vertical" />
                   <div class="agent-message-edit-actions">
                     <el-button size="small" @click.stop="cancelModifyAgentQuestion">取消</el-button>
-                    <el-button size="small" type="primary" :loading="store.generalAgentRunning" @click.stop="saveModifiedAgentQuestion(group.question)">修改并重新问</el-button>
+                    <el-button size="small" type="primary" :loading="store.generalAgentRunning" @click.stop="saveModifiedAgentQuestion(group.question, group)">修改并重新问</el-button>
                   </div>
                 </div>
                 <div v-else class="agent-thread-body">
@@ -3024,11 +3060,8 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="agentEditingMessageId !== group.question.id && messageAttachments(group.question).length" class="message-attachments agent-thread-attachments">
                   <template v-for="att in messageAttachments(group.question)" :key="att.id">
-                    <button v-if="isImageAttachment(att)" type="button" class="att-image-button" :aria-label="`预览图片 ${att.name}`" :title="att.name" @click="openImagePreview(att)">
-                      <img :src="att.url" :alt="att.name" loading="lazy" />
-                      <span class="att-image-name">{{ att.name }}</span>
-                    </button>
-                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                    <ImageAttachmentCard v-if="isImageAttachment(att)" :src="att.url" :name="attachmentDisplayName(att)" @preview="openImagePreview(att)" />
+                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
                   </template>
                 </div>
                 <MessageActionBar
@@ -3060,11 +3093,8 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="messageAttachments(reply).length" class="message-attachments agent-thread-attachments">
                   <template v-for="att in messageAttachments(reply)" :key="att.id">
-                    <button v-if="isImageAttachment(att)" type="button" class="att-image-button" :aria-label="`预览图片 ${att.name}`" :title="att.name" @click="openImagePreview(att)">
-                      <img :src="att.url" :alt="att.name" loading="lazy" />
-                      <span class="att-image-name">{{ att.name }}</span>
-                    </button>
-                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                    <ImageAttachmentCard v-if="isImageAttachment(att)" :src="att.url" :name="attachmentDisplayName(att)" @preview="openImagePreview(att)" />
+                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
                   </template>
                 </div>
                 <MessageActionBar
@@ -3664,11 +3694,8 @@ onBeforeUnmount(() => {
                 <p>{{ displayMessageContent(message) }}</p>
                 <div v-if="messageAttachments(message).length" class="message-attachments private-message-attachments">
                   <template v-for="att in messageAttachments(message)" :key="att.id">
-                    <button v-if="isImageAttachment(att)" type="button" class="att-image-button" :aria-label="`预览图片 ${att.name}`" :title="att.name" @click="openImagePreview(att)">
-                      <img :src="att.url" :alt="att.name" loading="lazy" />
-                      <span class="att-image-name">{{ att.name }}</span>
-                    </button>
-                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ att.name }}</a>
+                    <ImageAttachmentCard v-if="isImageAttachment(att)" :src="att.url" :name="attachmentDisplayName(att)" @preview="openImagePreview(att)" />
+                    <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
                   </template>
                 </div>
                 <div v-if="message.user_id === currentUserId" class="private-message-actions">
@@ -4337,6 +4364,16 @@ onBeforeUnmount(() => {
   color: #64748b;
   font-size: 12px;
   font-weight: 800;
+}
+
+.agent-stale-replies {
+  padding: 7px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .agent-message-edit {
@@ -5744,58 +5781,6 @@ label span {
 
 .att-link:hover {
   background: #d1d5db;
-}
-
-.att-image-button {
-  position: relative;
-  display: block;
-  width: min(220px, 58vw);
-  aspect-ratio: 4 / 3;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  border-radius: 8px;
-  background: #111827;
-  cursor: zoom-in;
-  font: inherit;
-  line-height: 0;
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
-}
-
-.att-image-button img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  background: #f3f4f6;
-  transition: transform 0.18s ease;
-}
-
-.att-image-button:hover img,
-.att-image-button:focus-visible img {
-  transform: scale(1.03);
-}
-
-.att-image-button:focus-visible {
-  outline: 2px solid #60a5fa;
-  outline-offset: 2px;
-}
-
-.att-image-name {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  padding: 22px 9px 8px;
-  overflow: hidden;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.2;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0));
 }
 
 .ai-thinking-bar {

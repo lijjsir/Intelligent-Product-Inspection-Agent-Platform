@@ -1,6 +1,6 @@
 """extend meeting rooms with agent memory workflow
 
-Revision ID: 0074
+Revision ID: 0074_meeting_room_framework
 Revises: 0073
 Create Date: 2026-06-03
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision = "0074"
+revision = "0074_meeting_room_framework"
 down_revision = "0073"
 branch_labels = None
 depends_on = None

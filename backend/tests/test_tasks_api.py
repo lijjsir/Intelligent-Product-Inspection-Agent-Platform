@@ -24,6 +24,14 @@ class FakeAsyncSession:
         self.commit_calls += 1
 
 
+@dataclass
+class FakeTaskCreateSession:
+    commit_calls: int = 0
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+
 def build_current_user(role: str = "algorithm_engineer") -> CurrentUser:
     return CurrentUser(
         user_id="algo-1",
@@ -211,9 +219,12 @@ async def test_create_task_triggers_launch_and_returns_refreshed_task(monkeypatc
         metadata={"source": "task_list"},
     )
 
-    result = await task_api.create_task(payload, current=build_current_user(), db=object())
+    db = FakeTaskCreateSession()
+
+    result = await task_api.create_task(payload, current=build_current_user(), db=db)
 
     assert launched == [{"task_id": "task-1", "org_id": "org-1"}]
+    assert db.commit_calls == 1
     assert result.data.id == "task-1"
     assert result.data.status == "queued"
     assert result.data.execution == {"mode": "local_background"}

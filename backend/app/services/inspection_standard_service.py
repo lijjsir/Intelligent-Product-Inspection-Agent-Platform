@@ -78,6 +78,29 @@ class InspectionStandardService:
                 "spec": cls._serialize_spec(spec),
             }
 
+        product_check = cls._product_match_check(spec, reasoning_chain)
+        if product_check["match"] is False:
+            ai_gate = cls._build_ai_gate(spec, citations, reasoning_chain, defects, overall_score)
+            ai_gate["passed"] = False
+            ai_gate["reasons"].append("product_mismatch")
+            return {
+                "verdict": "fail",
+                "summary": cls._build_summary(
+                    "fail",
+                    spec.spec_code,
+                    [],
+                    [],
+                    ai_gate["reasons"],
+                    product_check=product_check,
+                ),
+                "reasons": ["product_mismatch"],
+                "matched_rules": [],
+                "unmatched_defects": [str(item.get("type") or "unknown") for item in defects],
+                "ai_gate": ai_gate,
+                "product_check": product_check,
+                "spec": cls._serialize_spec(spec),
+            }
+
         matched_rules: list[dict[str, Any]] = []
         unmatched_defects: list[str] = []
         counts: dict[str, int] = {}
@@ -148,7 +171,33 @@ class InspectionStandardService:
             "matched_rules": matched_rules,
             "unmatched_defects": unmatched_defects,
             "ai_gate": ai_gate,
+            "product_check": product_check,
             "spec": cls._serialize_spec(spec),
+        }
+
+    @staticmethod
+    def _product_match_check(spec: InspectionSpec, reasoning_chain: dict[str, Any]) -> dict[str, Any]:
+        visual = reasoning_chain.get("visual_inspection_result") if isinstance(reasoning_chain, dict) else None
+        if not isinstance(visual, dict):
+            return {"match": None}
+
+        expected = str(
+            visual.get("expected_product")
+            or spec.product_id
+            or spec.product_family
+            or ""
+        ).strip()
+        observed = str(visual.get("observed_product") or "").strip()
+        raw_match = visual.get("product_match")
+        if raw_match is None:
+            return {"match": None, "expected_product": expected, "observed_product": observed}
+
+        match = bool(raw_match)
+        return {
+            "match": match,
+            "expected_product": expected,
+            "observed_product": observed,
+            "reason": str(visual.get("product_mismatch_reason") or "").strip(),
         }
 
     @staticmethod
@@ -233,8 +282,15 @@ class InspectionStandardService:
         matched_rules: list[dict[str, Any]],
         unmatched_defects: list[str],
         ai_gate_reasons: list[str],
+        product_check: dict[str, Any] | None = None,
     ) -> str:
         """根据最终判定和命中原因生成人可读的结果摘要。"""
+        if product_check and product_check.get("match") is False:
+            expected = str(product_check.get("expected_product") or "所选标准产品").strip()
+            observed = str(product_check.get("observed_product") or "图片中产品").strip()
+            reason = str(product_check.get("reason") or "").strip()
+            suffix = f"；{reason}" if reason else ""
+            return f"按标准 {spec_code} 判定不通过：图片产品类型不匹配，期望检测 {expected}，实际识别为 {observed}{suffix}。"
         if verdict == "pass":
             return f"按标准 {spec_code} 校验通过，且 AI 门禁满足自动放行条件。"
         if verdict == "fail":

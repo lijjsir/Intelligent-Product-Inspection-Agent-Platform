@@ -1,7 +1,7 @@
 """add collaboration messages and memory tags
 
-Revision ID: 0079
-Revises: 0078
+Revision ID: 0079_collab_messages_and_memory_tags
+Revises: 0078_product_batch_standard_closure
 Create Date: 2026-06-22
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision = "0079"
-down_revision = "0078"
+revision = "0079_collab_messages_and_memory_tags"
+down_revision = "0078_product_batch_standard_closure"
 branch_labels = None
 depends_on = None
 

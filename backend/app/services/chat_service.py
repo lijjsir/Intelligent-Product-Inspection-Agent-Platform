@@ -36,11 +36,6 @@ logger = logging.getLogger(__name__)
 
 _ACTIVE_CHAT_WORKFLOWS: dict[str, asyncio.Task[None]] = {}
 _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW: dict[str, str] = {}
-_STALE_CHAT_WORKFLOW_GRACE_MINUTES = 5
-_STALE_CHAT_WORKFLOW_CONTENT = (
-    "这次论文查非任务因后端服务重启或热更新被中断，已经停止运行。"
-    "请重新发送论文查非请求。"
-)
 
 
 @lru_cache(maxsize=1)
@@ -57,19 +52,6 @@ def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: 
         _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.pop(assistant_message_id, None)
 
     task.add_done_callback(cleanup)
-
-
-async def mark_interrupted_chat_workflows_on_startup() -> int:
-    async with get_session() as session:
-        repo = ChatMessageRepository(session)
-        count = await repo.mark_stale_running_assistant_messages(
-            older_than=utcnow(),
-            content=_STALE_CHAT_WORKFLOW_CONTENT,
-            reason="backend_startup_recovered_orphaned_workflow",
-            limit=1000,
-        )
-        await session.commit()
-        return count
 
 
 def get_current_user_for_stream(
@@ -98,6 +80,21 @@ def get_current_user_for_stream(
         stream_resource=str(payload.get("resource") or ""),
         stream_resource_id=str(payload.get("resource_id") or ""),
     )
+
+
+def _make_embedder_factory(org_id: str, user_id: str | None, trace_id: str | None):
+    from agent.rag.embedder import Embedder
+
+    async def factory(text: str) -> list[float]:
+        embedder = Embedder(
+            org_id=org_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            allow_pseudo_fallback=False,
+        )
+        return await embedder.embed(text)
+
+    return factory
 
 
 class ChatService:
@@ -132,8 +129,6 @@ class ChatService:
             if not await session_repo.get(self._org_id, self._user_id, session_id):
                 raise NotFoundError("chat session not found")
             repo = ChatMessageRepository(session)
-            await self._recover_orphaned_running_messages(repo, session_id)
-            await session.commit()
             rows = await repo.list_for_session(
                 org_id=self._org_id,
                 session_id=session_id,
@@ -141,25 +136,6 @@ class ChatService:
                 limit=limit,
             )
             return [ChatMessageResponse.model_validate(item) for item in rows]
-
-    async def _recover_orphaned_running_messages(
-        self,
-        repo: ChatMessageRepository,
-        session_id: str,
-    ) -> int:
-        active_message_ids = {
-            message_id
-            for message_id, workflow_run_id in _ACTIVE_CHAT_MESSAGE_TO_WORKFLOW.items()
-            if (task := _ACTIVE_CHAT_WORKFLOWS.get(workflow_run_id)) is not None and not task.done()
-        }
-        return await repo.mark_stale_running_assistant_messages(
-            org_id=self._org_id,
-            session_id=session_id,
-            older_than=utcnow() - timedelta(minutes=_STALE_CHAT_WORKFLOW_GRACE_MINUTES),
-            exclude_message_ids=active_message_ids,
-            content=_STALE_CHAT_WORKFLOW_CONTENT,
-            reason="orphaned_chat_workflow_not_active_in_backend",
-        )
 
     async def get_inspection_context(self) -> dict[str, Any]:
         try:
@@ -183,13 +159,8 @@ class ChatService:
             return deleted
 
     async def create_stream_session(self, *, resource: str, resource_id: str) -> StreamSessionResponse:
-        permission_by_resource = {
-            "chat": "chat",
-            "meeting": "meeting",
-            "task": "task",
-            "collab": "collab",
-        }
-        require_role(permission_by_resource.get(resource, "task"), self._current.role)
+        role_resource = resource if resource in {"chat", "meeting", "collab"} else "task"
+        require_role(role_resource, self._current.role)
         async with get_session() as session:
             if resource == "chat":
                 session_repo = ChatSessionRepository(session)
@@ -203,14 +174,14 @@ class ChatService:
                     raise ForbiddenError("you are not a member of this meeting room")
             elif resource == "collab":
                 if resource_id != self._user_id:
-                    raise ForbiddenError("cannot subscribe to another user's collaboration inbox")
+                    raise ForbiddenError("invalid collaboration stream target")
             else:
                 task_repo = TaskRepository(session)
                 owner_user_id = self._user_id if self._current.role in (ROLE_USER, ROLE_EXPERT) else None
                 org_scope = None if self._current.role == ROLE_ADMIN else self._org_id
                 if not await task_repo.get_for_user(org_scope, resource_id, owner_user_id=owner_user_id):
                     raise NotFoundError("task not found")
-        expires_at = utcnow() + timedelta(minutes=10)
+        expires_at = utcnow() + timedelta(minutes=30)
         token = create_stream_token(
             self._user_id,
             extra={
@@ -225,7 +196,7 @@ class ChatService:
                 "resource": resource,
                 "resource_id": resource_id,
             },
-            ttl_seconds=600,
+            ttl_seconds=1800,
         )
         return StreamSessionResponse(
             stream_token=token,
@@ -237,6 +208,9 @@ class ChatService:
     async def send_message(self, session_id: str, payload: ChatMessageSendRequest) -> ChatSendResponse:
         workflow_run_id = str(uuid7())
         ext_payload = dict(payload.ext or {})
+        metadata_payload = dict(payload.metadata or {})
+        edit_from_message_id = str(metadata_payload.get("edited_from_message_id") or "").strip()
+        replace_assistant_message_id = str(metadata_payload.get("replace_assistant_message_id") or "").strip()
 
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
@@ -263,38 +237,101 @@ class ChatService:
                 except ServiceUnavailableError:
                     pass
 
-            user_message = await message_repo.create(
-                session_id=session_id,
-                org_id=self._org_id,
-                user_id=self._user_id,
-                role="user",
-                content=payload.message.strip(),
-                message_type="text",
-                payload={
-                    "schema_version": payload.schema_version,
-                    "workspace": payload.workspace,
-                    "metadata": payload.metadata or {},
-                    "ext": ext_payload,
-                },
-            )
-            assistant_message = await message_repo.create(
-                session_id=session_id,
-                org_id=self._org_id,
-                user_id=None,
-                role="assistant",
-                content="",
-                message_type="streaming",
-                payload={
-                    "status": "running",
-                    "workflow_run_id": workflow_run_id,
-                },
-            )
+            if edit_from_message_id:
+                existing_user_message = await message_repo.get(self._org_id, edit_from_message_id)
+                if (
+                    not existing_user_message
+                    or str(existing_user_message.session_id) != session_id
+                    or existing_user_message.role != "user"
+                    or str(existing_user_message.user_id or "") != self._user_id
+                ):
+                    raise NotFoundError("editable chat message not found")
+                metadata_payload["edited_at"] = utcnow_iso()
+                user_message = await message_repo.update_message(
+                    org_id=self._org_id,
+                    message_id=edit_from_message_id,
+                    content=payload.message.strip(),
+                    message_type="text",
+                    payload={
+                        "schema_version": payload.schema_version,
+                        "metadata": metadata_payload,
+                        "ext": ext_payload,
+                    },
+                )
+                assistant_message = None
+                if replace_assistant_message_id:
+                    candidate_assistant = await message_repo.get(self._org_id, replace_assistant_message_id)
+                    if (
+                        candidate_assistant
+                        and str(candidate_assistant.session_id) == session_id
+                        and candidate_assistant.role == "assistant"
+                    ):
+                        assistant_message = candidate_assistant
+                if not assistant_message:
+                    assistant_message = await message_repo.find_next_assistant_message(
+                        org_id=self._org_id,
+                        session_id=session_id,
+                        after_seq_no=int(existing_user_message.seq_no or 0),
+                    )
+                if assistant_message:
+                    assistant_message = await message_repo.update_assistant_message(
+                        org_id=self._org_id,
+                        message_id=str(assistant_message.id),
+                        content="",
+                        message_type="streaming",
+                        payload={
+                            "status": "running",
+                            "workflow_run_id": workflow_run_id,
+                            "replaces_answer_for_message_id": edit_from_message_id,
+                        },
+                    )
+                else:
+                    assistant_message = await message_repo.create(
+                        session_id=session_id,
+                        org_id=self._org_id,
+                        user_id=None,
+                        role="assistant",
+                        content="",
+                        message_type="streaming",
+                        payload={
+                            "status": "running",
+                            "workflow_run_id": workflow_run_id,
+                            "replaces_answer_for_message_id": edit_from_message_id,
+                        },
+                    )
+            else:
+                user_message = await message_repo.create(
+                    session_id=session_id,
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    role="user",
+                    content=payload.message.strip(),
+                    message_type="text",
+                    payload={
+                        "schema_version": payload.schema_version,
+                        "metadata": metadata_payload,
+                        "ext": ext_payload,
+                    },
+                )
+                assistant_message = await message_repo.create(
+                    session_id=session_id,
+                    org_id=self._org_id,
+                    user_id=None,
+                    role="assistant",
+                    content="",
+                    message_type="streaming",
+                    payload={
+                        "status": "running",
+                        "workflow_run_id": workflow_run_id,
+                    },
+                )
             await session_repo.touch(self._org_id, self._user_id, session_id)
             await session.commit()
 
         workflow_task = asyncio.create_task(
             self._run_workflow(
                 session_id=session_id,
+                user_message_id=str(user_message.id),
                 assistant_message_id=str(assistant_message.id),
                 request=payload.model_copy(update={"ext": ext_payload}),
                 workflow_run_id=workflow_run_id,
@@ -474,6 +511,7 @@ class ChatService:
         workflow_run_id: str,
         current_user_seq_no: int,
         assistant_message_seq_no: int,
+        user_message_id: str | None = None,
     ) -> None:
         async def emit(event: dict[str, Any]) -> None:
             event.setdefault("ts", utcnow_iso())
@@ -496,25 +534,139 @@ class ChatService:
             ext_payload["idempotency_key"] = (
                 f"{self._org_id}:{session_id}:{assistant_message_id}:{workflow_run_id}"
             )
-            # Load recent history (exclude current user message)
-            async with get_session() as hist_session:
-                hist_repo = ChatMessageRepository(hist_session)
-                hist_rows = await hist_repo.list_for_session(
-                    org_id=self._org_id, session_id=session_id, after_seq=0, limit=20
+            # Load shared memory context for this query
+            ext_payload["shared_memory_context"] = None
+            try:
+                from app.schemas.memory import MemorySearchRequest
+                from app.services.memory_service import MemoryService
+                from app.services.memory_vector_service import MemoryVectorService, MemoryVectorServiceError
+
+                memory_search_req = MemorySearchRequest(
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                    query=request.message.strip(),
+                    scope_filter=None,
+                    top_k=5,
                 )
-                ext_payload["history_messages"] = [
-                    {"role": m.role, "content": m.content}
-                    for m in hist_rows
-                    if int(m.seq_no or 0) < current_user_seq_no
-                ][-10:]
-                if ext_payload.get("inspection_context_enabled") is True:
-                    context_service = ChatContextService(
-                        hist_session,
-                        org_id=self._org_id,
+                vector_svc = MemoryVectorService(
+                    embedder_factory=_make_embedder_factory(self._org_id, self._user_id, None),
+                    org_id=self._org_id,
+                    user_id=self._user_id,
+                )
+                async with get_session() as mem_session:
+                    memory_svc = MemoryService(mem_session, self._org_id, vector_service=vector_svc)
+                    result = await memory_svc.search(memory_search_req)
+                    if result.items:
+                        ext_payload["shared_memory_context"] = {
+                            "items": [
+                                {
+                                    "memory_id": item.memory_id,
+                                    "memory_type": item.memory_type,
+                                    "summary": item.summary,
+                                    "score": item.score,
+                                    "confidence": item.confidence,
+                                    "trust_score": item.trust_score,
+                                }
+                                for item in result.items
+                            ],
+                            "policy_version": result.policy_version,
+                        }
+                        # Apply lightweight conflict guard to shared memory results
+                        if result.items:
+                            from app.services.retrieval_conflict_guard import RetrievalConflictGuard
+                            guard = RetrievalConflictGuard(
+                                org_id=self._org_id,
+                                user_id=self._user_id,
+                                trace_id=None,
+                            )
+                            mem_dicts = [
+                                {
+                                    "memory_id": item.memory_id,
+                                    "memory_type": item.memory_type,
+                                    "summary": item.summary,
+                                    "score": item.score,
+                                    "confidence": item.confidence,
+                                    "trust_score": item.trust_score,
+                                    "source": item.source,
+                                    "warnings": item.warnings,
+                                }
+                                for item in result.items
+                            ]
+                            guard_result = guard.check_sync(
+                                query=request.message.strip(),
+                                memory_hits=mem_dicts,
+                                session_facts=ext_payload.get("session_facts"),
+                            )
+                            ext_payload["shared_memory_context"]["conflict_guard"] = {
+                                "conflicts": guard_result["conflicts"],
+                                "suppressed_memory_ids": guard_result["suppressed_memory_ids"],
+                                "downranked_memory_ids": guard_result["downranked_memory_ids"],
+                            }
+            except MemoryVectorServiceError as exc:
+                logger.warning(
+                    "shared memory retrieval degraded session_id=%s workflow_run_id=%s: %s",
+                    session_id,
+                    workflow_run_id,
+                    exc,
+                )
+                ext_payload["shared_memory_context"] = {
+                    "items": [],
+                    "degraded": True,
+                    "degrade_code": "SHARED_MEMORY_SEARCH_FAILED",
+                    "degrade_reason": str(exc),
+                }
+            except Exception as exc:
+                logger.warning(
+                    "shared memory retrieval skipped session_id=%s workflow_run_id=%s: %s",
+                    session_id,
+                    workflow_run_id,
+                    exc,
+                    exc_info=True,
+                )
+                ext_payload["shared_memory_context"] = {
+                    "items": [],
+                    "degraded": True,
+                    "degrade_code": "SHARED_MEMORY_UNAVAILABLE",
+                    "degrade_reason": str(exc),
+                }
+
+            # Load short-term memory context (replaces raw DB history read)
+            ext_payload["history_messages"] = []
+            ext_payload["conversation_summary"] = None
+            ext_payload["session_facts"] = {}
+            ext_payload["pending_action"] = None
+            ext_payload["short_term_memory"] = None
+            try:
+                from app.services.short_term_memory_service import ShortTermMemoryService
+
+                async with get_session() as stm_session:
+                    stm_svc = ShortTermMemoryService(stm_session, self._org_id)
+                    stm = await stm_svc.build_context(
                         user_id=self._user_id,
-                        role=self._current.role,
+                        session_id=session_id,
+                        current_user_seq_no=current_user_seq_no,
+                        current_query=request.message.strip(),
                     )
-                    try:
+                    ext_payload["history_messages"] = stm["recent_messages"]
+                    ext_payload["conversation_summary"] = stm["conversation_summary"]
+                    ext_payload["session_facts"] = stm["session_facts"]
+                    ext_payload["pending_action"] = stm["pending_action"]
+                    structured_stm = dict(stm.get("short_term_memory") or {})
+                    structured_stm["semantic_recall"] = list(stm.get("semantic_recall") or [])
+                    ext_payload["short_term_memory"] = structured_stm
+            except Exception:
+                raise
+
+            # Load inspection context
+            if ext_payload.get("inspection_context_enabled") is True:
+                try:
+                    async with get_session() as ctx_session:
+                        context_service = ChatContextService(
+                            ctx_session,
+                            org_id=self._org_id,
+                            user_id=self._user_id,
+                            role=self._current.role,
+                        )
                         selected_task_ids = [
                             str(item)
                             for item in list(ext_payload.get("selected_inspection_task_ids") or [])
@@ -523,13 +675,12 @@ class ChatService:
                         ext_payload["inspection_context"] = await context_service.build_inspection_context(
                             selected_task_ids=selected_task_ids
                         )
-                    except Exception:
-                        logger.debug("chat inspection context build skipped", exc_info=True)
-                        ext_payload["inspection_context"] = self._empty_inspection_context(scope="unavailable")
-                else:
-                    ext_payload.pop("inspection_context", None)
-                    ext_payload.pop("selected_inspection_task_ids", None)
-            await self._orchestrator.run_chat(
+                except Exception as exc:
+                    raise RuntimeError(f"inspection context build failed: {exc}") from exc
+            else:
+                ext_payload.pop("inspection_context", None)
+                ext_payload.pop("selected_inspection_task_ids", None)
+            result = await self._orchestrator.run_chat(
                 {
                     "request_id": str(uuid7()),
                     "workflow_run_id": workflow_run_id,
@@ -539,7 +690,6 @@ class ChatService:
                     "user_id": self._user_id,
                     "plan_tier": self._current.plan_tier,
                     "capabilities": self._current.capabilities,
-                    "workspace": request.workspace,
                     "query": request.message.strip(),
                     "metadata": dict(request.metadata or {}),
                     "ext": ext_payload,
@@ -554,6 +704,67 @@ class ChatService:
                     ],
                 }
             )
+            # After successful orchestration, extract and persist reusable candidate memories.
+            from app.services.memory_extraction_service import MemoryExtractionService
+            from app.services.memory_service import MemoryService
+            from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+
+            agent_output = result.get("agent_output", {})
+            answer_text = str(agent_output.get("answer") or agent_output.get("summary") or "")
+            task_id = str(
+                ext_payload.get("selected_inspection_task_ids", [None])[0]
+            ) if ext_payload.get("selected_inspection_task_ids") else None
+
+            extraction_svc = MemoryExtractionService(
+                org_id=self._org_id,
+                user_id=self._user_id,
+            )
+            candidates = await extraction_svc.extract_from_chat_result(
+                trace_id=workflow_run_id,
+                user_message=request.message.strip(),
+                assistant_answer=answer_text,
+                task_id=task_id,
+                short_term_memory=ext_payload.get("short_term_memory"),
+            )
+            if candidates:
+                async with get_session() as mem_session:
+                    vector_svc = MemoryVectorService(
+                        embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                        org_id=self._org_id,
+                        user_id=self._user_id,
+                    )
+                    candidate_vector_svc = MemoryVectorService(
+                        collection=CANDIDATE_MEMORY_COLLECTION,
+                        embedder_factory=_make_embedder_factory(self._org_id, self._user_id, workflow_run_id),
+                        org_id=self._org_id,
+                        user_id=self._user_id,
+                    )
+                    memory_svc = MemoryService(
+                        mem_session,
+                        self._org_id,
+                        vector_service=vector_svc,
+                        candidate_vector_service=candidate_vector_svc,
+                    )
+                    for candidate in candidates:
+                        await memory_svc.write_candidate(candidate)
+                    await mem_session.commit()
+
+            # Trigger session summarization
+            try:
+                from app.services.chat_session_summary_service import ChatSessionSummaryService
+                async with get_session() as summary_session:
+                    summary_svc = ChatSessionSummaryService(summary_session, self._org_id, self._user_id)
+                    await summary_svc.maybe_summarize(session_id)
+                    await summary_session.commit()
+            except Exception as exc:
+                logger.warning(
+                    "short-term memory summary skipped session_id=%s workflow_run_id=%s: %s",
+                    session_id,
+                    workflow_run_id,
+                    exc,
+                    exc_info=True,
+                )
+
         except Exception as exc:
             logger.exception(
                 "chat workflow failed session_id=%s assistant_message_id=%s workflow_run_id=%s",
@@ -561,11 +772,9 @@ class ChatService:
                 assistant_message_id,
                 workflow_run_id,
             )
-            content = (
-                "这次聊天任务没有顺利完成。\n"
-                "请稍后重试，或补充更明确的检测标准、产品信息和问题细节。"
-            )
-            failure_payload = {"status": "failed", "error": str(exc)}
+            failure_payload = self._build_error_payload(exc)
+            error_message = str(exc) or exc.__class__.__name__
+            content = f"聊天任务执行失败：{error_message}"
             async with get_session() as session:
                 repo = ChatMessageRepository(session)
                 await repo.update_assistant_message(
@@ -586,6 +795,26 @@ class ChatService:
                     "payload": failure_payload,
                 }
             )
+
+    @staticmethod
+    def _build_error_payload(exc: Exception) -> dict:
+        code = getattr(exc, "code", "CHAT_WORKFLOW_FAILED")
+        detail = getattr(exc, "detail", {})
+        module = getattr(exc, "module", None)
+        trace_id = getattr(exc, "trace_id", None)
+        suggestion = getattr(exc, "suggestion", None)
+        return {
+            "status": "failed",
+            "message_type": "error",
+            "error_code": code,
+            "error": str(exc),
+            "detail": detail,
+            "module": module,
+            "trace_id": trace_id,
+            "suggestion": suggestion,
+            "ui_schema": "chat_error_v1",
+            "recoverable": False,
+        }
 
     @staticmethod
     def _empty_inspection_context(*, scope: str, error: str | None = None) -> dict[str, Any]:

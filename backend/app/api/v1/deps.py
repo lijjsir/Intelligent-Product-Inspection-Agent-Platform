@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,11 +26,23 @@ async def get_db() -> AsyncSession:
             raise
 
 
+def _require_uuid_claim(payload: dict, key: str) -> str:
+    value = str(payload.get(key) or "").strip()
+    if not value:
+        raise ForbiddenError("invalid token claims")
+    try:
+        return str(UUID(value))
+    except (TypeError, ValueError):
+        raise ForbiddenError("invalid token claims") from None
+
+
 def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
     if not authorization.startswith("Bearer "):
         raise ForbiddenError("missing bearer token")
     token = authorization.split(" ", 1)[1]
     payload = safe_decode_token(token)
+    user_id = _require_uuid_claim(payload, "sub")
+    org_id = _require_uuid_claim(payload, "org_id")
     role = payload.get("role", "")
     roles = normalize_roles(role=role, roles=payload.get("roles"))
     workspaces = payload.get("workspaces")
@@ -39,8 +53,8 @@ def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
     if not isinstance(capabilities, list):
         capabilities = derive_capabilities(plan_tier, roles)
     return CurrentUser(
-        user_id=payload.get("sub", ""),
-        org_id=payload.get("org_id", ""),
+        user_id=user_id,
+        org_id=org_id,
         role=role,
         roles=roles,
         plan_tier=plan_tier,

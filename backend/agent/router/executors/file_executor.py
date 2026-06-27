@@ -11,6 +11,15 @@ from agent.llm.gateway import LLMGateway
 
 
 class FileExecutor:
+    SUPPORTED_CAPABILITIES = {
+        "file.summary",
+        "file.qa",
+        "file.paper_format_check",
+        "file.parse",
+        "rag.retrieve",
+        "rag.ingest",
+    }
+
     async def execute(
         self,
         step: AgentPlanStep,
@@ -24,12 +33,33 @@ class FileExecutor:
         from agent.tools.paper_format_templates import DEFAULT_STRICT_PAPER_TEMPLATE_ID
         from app.services.object_storage.resolver import read_attachment_bytes
 
+        cap = step.capability
+
+        # Delegate RAG retrieval through CapabilityRouter (same pattern as ChatExecutor)
+        if cap in {"rag.retrieve", "rag.ingest"}:
+            from agent.router.capability_router import get_capability_router
+            from agent.router.contracts import CapabilityContext
+            router = get_capability_router()
+            return await router.call(cap, CapabilityContext(
+                step=step, state=state, request=request, db_session=db_session,
+            ))
+
+        if cap not in self.SUPPORTED_CAPABILITIES:
+            from agent.router.errors import make_agent_error
+
+            raise make_agent_error(
+                "UNSUPPORTED_CAPABILITY",
+                message=f"FileExecutor 不支持能力：{cap}",
+                detail={"capability": cap, "executor": "file"},
+                source="file.executor",
+            )
+
         parsed_files: list[dict] = []
         routed: list[dict] = []
         unsupported: list[dict] = []
         paper_reports: list[dict] = []
         template_id = str((step.input or {}).get("template_id") or "").strip() or None
-        if step.capability_key == "file.paper_format_check" and not template_id:
+        if cap == "file.paper_format_check" and not template_id:
             template_id = DEFAULT_STRICT_PAPER_TEMPLATE_ID
         for attachment in state.attachments:
             node = route_attachment_to_node("chat", attachment)
@@ -58,7 +88,7 @@ class FileExecutor:
                 "metadata": {k: v for k, v in parsed.items() if k != "text"},
             }
             parsed_files.append(parsed_item)
-            if step.capability_key == "file.paper_format_check":
+            if cap == "file.paper_format_check":
                 paper_reports.append(
                     await asyncio.to_thread(
                         check_paper_format,
@@ -69,20 +99,28 @@ class FileExecutor:
                     )
                 )
 
-        if step.capability_key == "file.paper_format_check":
+        if cap == "file.paper_format_check":
             artifact_type = "paper_format_report"
         else:
-            artifact_type = "file_summary" if step.capability_key == "file.summary" else "file_answer"
+            artifact_type = "file_summary" if cap == "file.summary" else "file_answer"
         model_summary = None
-        if step.capability_key != "file.paper_format_check":
+        if cap != "file.paper_format_check":
             model_summary = await self._try_chat_summary(parsed_files, state, request, db_session=db_session)
         if not parsed_files:
-            art = artifact(artifact_type, "file", {"unsupported": unsupported, "parsed_files": []}, confidence=0.2)
+            if state.attachments:
+                from agent.router.errors import make_agent_error
+                raise make_agent_error(
+                    code="FILE_PARSE_FAILED",
+                    message="文件解析失败，无法继续执行文件总结/问答/论文查非。",
+                    detail={"attachment_count": len(state.attachments), "unsupported": unsupported},
+                    source=cap,
+                )
+            art = artifact(step, artifact_type, content={"unsupported": unsupported, "parsed_files": []}, confidence=0.2)
             return (
-                observation(step, status="skipped", summary="文件无法解析", artifact_ids=[art.artifact_id], error=str(unsupported)),
+                observation(step, status="skipped", summary="没有附件文件", artifact_ids=[art.artifact_id]),
                 [art],
             )
-        if step.capability_key == "file.paper_format_check":
+        if cap == "file.paper_format_check":
             merged = self._merge_paper_reports(paper_reports, unsupported=unsupported, parsed_files=parsed_files, model_summary=model_summary)
             self._finalize_paper_report_counts(merged)
             merged.setdefault("report_files", [])
@@ -112,7 +150,7 @@ class FileExecutor:
             }
             obs_summary = model_summary or self._compose_summary(parsed_files, state.original_query)
             confidence = 0.75
-        art = artifact(artifact_type, "file", content, confidence=confidence)
+        art = artifact(step, artifact_type, content=content, confidence=confidence)
         return (
             observation(
                 step,

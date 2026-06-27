@@ -50,3 +50,18 @@ class TaskExecutionEventRepository:
             stmt.order_by(TaskExecutionEvent.id.asc()).limit(limit)
         )
         return list(result.scalars().all())
+
+    async def has_failed_event(self, org_id: str, task_id: str) -> bool:
+        result = await self._session.execute(
+            select(TaskExecutionEvent.id)
+            .where(
+                TaskExecutionEvent.org_id == org_id,
+                TaskExecutionEvent.task_id == task_id,
+                (
+                    (TaskExecutionEvent.status == "failed")
+                    | (TaskExecutionEvent.event_type == "error")
+                ),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None

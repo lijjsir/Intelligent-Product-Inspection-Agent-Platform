@@ -1,7 +1,7 @@
 """add meeting agent conflict governance
 
-Revision ID: 0080
-Revises: 0079
+Revision ID: 0080_meeting_agent_conflict_governance
+Revises: 0079_collab_messages_and_memory_tags
 Create Date: 2026-06-24
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision = "0080"
-down_revision = "0079"
+revision = "0080_meeting_agent_conflict_governance"
+down_revision = "0079_collab_messages_and_memory_tags"
 branch_labels = None
 depends_on = None
 

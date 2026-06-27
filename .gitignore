@@ -19,6 +19,9 @@ frontend/dist/
 frontend/node_modules/.vite/
 frontend/logs/
 
+# Docs (moved out of git tracking)
+docs/
+
 # Local env / secrets
 .env
 *.env.local
@@ -30,6 +33,9 @@ coverage/
 htmlcov/
 .worktrees/
 *.log
+
+# Standard PDFs (runtime data, not source)
+backend/standard/
 
 # Runtime/generated local data
 runtime/

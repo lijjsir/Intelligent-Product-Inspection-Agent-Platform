@@ -11,7 +11,9 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AgentErrorAlert: typeof import('./src/components/chat/AgentErrorAlert.vue')['default']
     AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
+    AgentTraceTimeline: typeof import('./src/components/chat/AgentTraceTimeline.vue')['default']
     AlertRuleManagerPanel: typeof import('./src/components/ops/AlertRuleManagerPanel.vue')['default']
     AlgoResourceDetail: typeof import('./src/components/business/algo/AlgoResourceDetail.vue')['default']
     AlgoResourcePage: typeof import('./src/components/business/algo/AlgoResourcePage.vue')['default']
@@ -23,7 +25,6 @@ declare module 'vue' {
     ChatTrustTrendChart: typeof import('./src/components/business/analytics/ChatTrustTrendChart.vue')['default']
     DefectImageViewer: typeof import('./src/components/business/result/DefectImageViewer.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
-    ElBadge: typeof import('element-plus/es')['ElBadge']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCard: typeof import('element-plus/es')['ElCard']
     ElCheckbox: typeof import('element-plus/es')['ElCheckbox']
@@ -56,7 +57,6 @@ declare module 'vue' {
     ElRadioGroup: typeof import('element-plus/es')['ElRadioGroup']
     ElResult: typeof import('element-plus/es')['ElResult']
     ElRow: typeof import('element-plus/es')['ElRow']
-    ElScrollbar: typeof import('element-plus/es')['ElScrollbar']
     ElSegmented: typeof import('element-plus/es')['ElSegmented']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSlider: typeof import('element-plus/es')['ElSlider']
@@ -78,12 +78,15 @@ declare module 'vue' {
     EvidenceHeader: typeof import('./src/components/business/evidence/EvidenceHeader.vue')['default']
     EvidenceImageTab: typeof import('./src/components/business/evidence/EvidenceImageTab.vue')['default']
     EvidenceJsonDialog: typeof import('./src/components/business/evidence/EvidenceJsonDialog.vue')['default']
+    EvidencePacketCard: typeof import('./src/components/chat/EvidencePacketCard.vue')['default']
     EvidenceReasoningTab: typeof import('./src/components/business/evidence/EvidenceReasoningTab.vue')['default']
     EvidenceSummaryTab: typeof import('./src/components/business/evidence/EvidenceSummaryTab.vue')['default']
     EvidenceTraceTab: typeof import('./src/components/business/evidence/EvidenceTraceTab.vue')['default']
     FeedbackWidget: typeof import('./src/components/business/result/FeedbackWidget.vue')['default']
     HallucinationChart: typeof import('./src/components/business/analytics/HallucinationChart.vue')['default']
+    ImageAttachmentCard: typeof import('./src/components/common/ImageAttachmentCard.vue')['default']
     ImagePreviewDialog: typeof import('./src/components/common/ImagePreviewDialog.vue')['default']
+    LabDetectionCard: typeof import('./src/components/chat/LabDetectionCard.vue')['default']
     MessageActionBar: typeof import('./src/components/common/MessageActionBar.vue')['default']
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
@@ -91,6 +94,7 @@ declare module 'vue' {
     PipelineNode: typeof import('./src/components/routing/PipelineNode.vue')['default']
     ProductLineSeriesChart: typeof import('./src/components/business/analytics/ProductLineSeriesChart.vue')['default']
     PromptTemplateTray: typeof import('./src/components/chat/PromptTemplateTray.vue')['default']
+    QualityAssessmentCard: typeof import('./src/components/chat/QualityAssessmentCard.vue')['default']
     QualityReportPanel: typeof import('./src/components/business/analytics/QualityReportPanel.vue')['default']
     QualityTracingPanel: typeof import('./src/components/business/analytics/QualityTracingPanel.vue')['default']
     RiskDistributionTrendChart: typeof import('./src/components/business/analytics/RiskDistributionTrendChart.vue')['default']
@@ -99,6 +103,7 @@ declare module 'vue' {
     StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
     ThumbsDownTrendChart: typeof import('./src/components/business/analytics/ThumbsDownTrendChart.vue')['default']
     ThumbsUpTrendChart: typeof import('./src/components/business/analytics/ThumbsUpTrendChart.vue')['default']
+    VisualInspectionCard: typeof import('./src/components/chat/VisualInspectionCard.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -8,8 +8,9 @@ from typing import Any
 import uuid
 
 from agent.contracts import AgentOutput, NormalizedAttachment, NormalizedRequest, PersistableOutput
+from agent.contracts.quality_contracts import RouteDecision, RouteSignals
 from agent.llm.pricing import ModelPricing
-from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
+from agent.router.errors import AgentRuntimeError, make_agent_error
 from agent.topology_catalog import get_registered_subgraphs
 from app.core.ids import uuid7
 from app.core.config import settings
@@ -44,9 +45,69 @@ _MAX_IDEMPOTENCY_KEY_LENGTH = 191
 
 class QualityAgentOrchestratorService:
     def __init__(self) -> None:
-        self._graph = QualityJudgementSubgraph()
         from app.services.agent_manager_service import AgentManagerService
         self._agent_manager = AgentManagerService()
+
+    @staticmethod
+    def _build_agent_error_output(request: NormalizedRequest, exc: Exception) -> AgentOutput:
+        """Build a structured AgentOutput carrying agent_error_v1 when AgentManager fails."""
+        error = exc if isinstance(exc, AgentRuntimeError) else make_agent_error(
+            "INTERNAL_AGENT_ERROR",
+            message="AgentManager 执行失败，请查看错误信息或联系管理员。",
+            detail={
+                "stage": "quality_agent_orchestrator.run_chat",
+                "request_id": request.request_id,
+                "workflow_run_id": request.workflow_run_id,
+                "session_id": request.session_id,
+            },
+            debug={
+                "raw_error": str(exc),
+                "error_type": exc.__class__.__name__,
+            },
+            source="quality_agent_orchestrator",
+            cause=exc,
+        )
+
+        error_payload = error.to_dict(
+            include_debug=bool(getattr(settings, "debug", False)),
+        )
+
+        answer = str(error_payload.get("message") or "Agent 执行失败。")
+
+        return AgentOutput(
+            message_type="error",
+            ui_schema="agent_error_v1",
+            answer=answer,
+            summary=answer,
+            error=error_payload,
+            route_decision=RouteDecision(
+                mode="router_enabled",
+                selected_agent=str(error_payload.get("agent_name") or "quality_analysis"),
+                sub_route="error",
+                intent="error",
+                reason=str(error_payload.get("code") or "INTERNAL_AGENT_ERROR"),
+                confidence=0.0,
+                requires_confirmation=False,
+                route_source="manager",
+                fallback_agent=None,
+                signals=RouteSignals(),
+            ),
+            raw_state={
+                "response_payload": {
+                    "answer": answer,
+                    "summary": answer,
+                    "agent": str(error_payload.get("agent_name") or "quality_analysis"),
+                    "sub_route": "error",
+                    "intent": "error",
+                    "message_type": "error",
+                    "ui_schema": "agent_error_v1",
+                    "status": "failed",
+                    "error": error_payload,
+                    "trace_id": error_payload.get("trace_id") or request.workflow_run_id,
+                    "workflow_run_id": request.workflow_run_id,
+                }
+            },
+        )
 
     @staticmethod
     def _json_safe(value: Any) -> Any:
@@ -116,7 +177,6 @@ class QualityAgentOrchestratorService:
             assistant_message_id=str(payload["assistant_message_id"]),
             org_id=str(payload["org_id"]),
             user_id=str(payload["user_id"]),
-            workspace=str(payload.get("workspace") or "app"),
             plan_tier=str(payload.get("plan_tier") or "basic"),
             capabilities=list(payload.get("capabilities") or []),
             query=str(payload.get("query") or ""),
@@ -141,9 +201,8 @@ class QualityAgentOrchestratorService:
                 router_output = await self._agent_manager.run_chat(payload, db_session=session)
             agent_output = AgentOutput.model_validate(router_output.agent_output)
             # Inject route_decision from router output
-            from agent.contracts.quality_contracts import RouteDecision as RD, RouteSignals
             rd = router_output.route_decision
-            agent_output.route_decision = RD(
+            agent_output.route_decision = RouteDecision(
                 mode="router_enabled",
                 selected_agent=rd.selected_agent,
                 sub_route=rd.sub_route,
@@ -155,18 +214,18 @@ class QualityAgentOrchestratorService:
                 fallback_agent=rd.fallback_agent,
                 signals=RouteSignals(),
             )
+            agent_output = self._normalize_agent_output(
+                request=request,
+                output=agent_output,
+                router_status=router_output.status,
+            )
             result_payload = {"agent_output": agent_output.model_dump()}
+            self._log_agent_output(request=request, output=agent_output, router_status=router_output.status)
         except Exception as exc:
-            if not settings.enable_legacy_agent_fallback:
-                raise RuntimeError(f"AgentManager failed: {exc}") from exc
-            logger.exception("AgentManager failed, falling back to legacy QualityJudgementSubgraph")
-            result = await self._graph.run(request)
-            if isinstance(result, AgentOutput):
-                agent_output = result
-                result_payload = {"agent_output": agent_output.model_dump()}
-            else:
-                result_payload = dict(result)
-                agent_output = AgentOutput.model_validate(result_payload["agent_output"])
+            logger.exception("AgentManager failed, exception details:")
+            logger.exception("AgentManager failed, returning structured agent_error_v1")
+            agent_output = self._build_agent_error_output(request, exc)
+            result_payload = {"agent_output": agent_output.model_dump()}
         route_decision = agent_output.route_decision
         success = await self._persist_chat_result(request, agent_output)
         await self._record_runtime_metrics(
@@ -176,6 +235,117 @@ class QualityAgentOrchestratorService:
             latency_ms=int(round((perf_counter() - started_at) * 1000)),
         )
         return result_payload
+
+    @staticmethod
+    def _is_error_output(output: AgentOutput, *, router_status: str | None = None) -> bool:
+        if str(router_status or "").lower() == "failed":
+            return True
+        if str(output.message_type or "").lower() == "error":
+            return True
+        if str(output.ui_schema or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+            return True
+        return False
+
+    @staticmethod
+    def _error_payload_from_output(output: AgentOutput) -> Any:
+        direct = getattr(output, "error", None)
+        if direct:
+            return direct
+        raw_state = output.raw_state if isinstance(output.raw_state, dict) else {}
+        response_payload = raw_state.get("response_payload")
+        if isinstance(response_payload, dict):
+            return response_payload.get("error")
+        return None
+
+    @classmethod
+    def _normalize_agent_output(
+        cls,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        router_status: str | None,
+    ) -> AgentOutput:
+        if str(router_status or "").lower() != "completed":
+            return output
+
+        dumped = output.model_dump()
+        stale_error = dumped.get("error") or dumped.get("error_code") or dumped.get("error_message")
+        raw_state = dumped.get("raw_state") if isinstance(dumped.get("raw_state"), dict) else {}
+        response_payload = raw_state.get("response_payload") if isinstance(raw_state, dict) else None
+        if isinstance(response_payload, dict):
+            stale_error = stale_error or response_payload.get("error") or response_payload.get("error_code")
+            response_payload = dict(response_payload)
+            for key in ("error", "error_code", "error_message", "detail", "module", "suggestion", "recoverable"):
+                response_payload.pop(key, None)
+            if str(response_payload.get("message_type") or "").lower() == "error":
+                response_payload["message_type"] = dumped.get("message_type") or "quality_answer"
+            if str(response_payload.get("ui_schema") or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+                response_payload["ui_schema"] = "chat_answer_v2"
+            if str(response_payload.get("status") or "").lower() == "failed":
+                response_payload["status"] = "completed"
+            raw_state["response_payload"] = response_payload
+            dumped["raw_state"] = raw_state
+
+        for key in ("error", "error_code", "error_message", "detail", "module", "suggestion", "recoverable"):
+            dumped.pop(key, None)
+        if str(dumped.get("message_type") or "").lower() == "error":
+            dumped["message_type"] = "quality_answer"
+        if str(dumped.get("ui_schema") or "").lower() in {"agent_error_v1", "chat_error_v1", "error_v1"}:
+            dumped["ui_schema"] = None
+
+        if stale_error:
+            logger.warning(
+                "dropped stale agent error from completed chat response request_id=%s workflow_run_id=%s "
+                "assistant_message_id=%s stale_error=%s",
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                stale_error,
+            )
+
+        return AgentOutput.model_validate(dumped)
+
+    @classmethod
+    def _log_agent_output(
+        cls,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        router_status: str | None,
+    ) -> None:
+        error_payload = cls._error_payload_from_output(output)
+        if cls._is_error_output(output, router_status=router_status) or error_payload:
+            error_dict = error_payload if isinstance(error_payload, dict) else {}
+            logger.error(
+                "run_chat agent_error router_status=%s message_type=%s code=%s message=%s category=%s "
+                "agent=%s stage=%s capability=%s request_id=%s workflow_run_id=%s assistant_message_id=%s "
+                "trace_id=%s detail=%s raw_error=%s",
+                router_status,
+                output.message_type,
+                error_dict.get("code") or error_dict.get("error_code"),
+                error_dict.get("message") or output.summary or output.answer,
+                error_dict.get("category"),
+                error_dict.get("agent_name") or (output.route_decision.selected_agent if output.route_decision else None),
+                error_dict.get("stage"),
+                error_dict.get("capability"),
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                error_dict.get("trace_id") or request.workflow_run_id,
+                error_dict.get("detail"),
+                (error_dict.get("debug") or {}).get("raw_error") if isinstance(error_dict.get("debug"), dict) else None,
+            )
+            return
+
+        logger.info(
+            "run_chat completed router_status=%s message_type=%s request_id=%s workflow_run_id=%s "
+            "assistant_message_id=%s",
+            router_status,
+            output.message_type,
+            request.request_id,
+            request.workflow_run_id,
+            request.assistant_message_id,
+        )
 
     async def _persist_chat_result(
         self,
@@ -227,30 +397,6 @@ class QualityAgentOrchestratorService:
                 "trust_scoring": trust_payload_from_score(pending_score),
             }
 
-        is_legacy_stream = True  # Graph handler (response_writer) already streams deltas
-        if callable(emit) and not is_legacy_stream:
-            answer = str(output.answer or "")
-            for start in range(0, len(answer), 48):
-                await emit(
-                    {
-                        "event": "message_delta",
-                        "session_id": request.session_id,
-                        "message_id": request.assistant_message_id,
-                        "workflow_run_id": request.workflow_run_id,
-                        "delta": answer[start : start + 48],
-                    }
-                )
-            if output.quality:
-                await emit(
-                    {
-                        "event": "quality_signal",
-                        "session_id": request.session_id,
-                        "message_id": request.assistant_message_id,
-                        "workflow_run_id": request.workflow_run_id,
-                        "quality": output.quality,
-                    }
-                )
-
         async with get_session() as session:
             lifecycle = ChatMessageLifecycleService(
                 session,
@@ -270,11 +416,22 @@ class QualityAgentOrchestratorService:
                 return False
 
             if output.route_decision:
+                await self._persist_agent_artifacts(
+                    session,
+                    request=request,
+                    output=output,
+                    task_id=None if not materialized else str(materialized["task_id"]),
+                )
                 rag_repo = RagAnalysisRepository(session, request.org_id)
                 for index, item in enumerate(list(output.persistable_output.rag_queries or [])):
                     metadata = dict(item.metadata or {})
                     metadata.setdefault("agent", output.route_decision.selected_agent)
                     metadata.setdefault("sub_route", output.route_decision.sub_route)
+                    trace_id = item.trace_id or (
+                        output.persistable_output.quality_trace.trace_id
+                        if output.persistable_output and output.persistable_output.quality_trace
+                        else None
+                    ) or request.workflow_run_id or request.request_id
                     create_log = getattr(rag_repo, "create_log_once", rag_repo.create_log)
                     await create_log(
                         {
@@ -292,17 +449,18 @@ class QualityAgentOrchestratorService:
                             "source_graph": item.source_graph,
                             "agent_name": item.agent_name or output.route_decision.selected_agent,
                             "sub_route": item.sub_route or output.route_decision.sub_route,
-                            "trace_id": item.trace_id
-                            or (
-                                output.persistable_output.quality_trace.trace_id
-                                if output.persistable_output and output.persistable_output.quality_trace
-                                else None
-                            )
-                            or request.workflow_run_id
-                            or request.request_id,
+                            "trace_id": trace_id,
                             "top_score": float(item.top_score or metadata.get("top_score") or 0.0),
                             "metadata_json": metadata,
                         }
+                    )
+                    await self._write_rag_usage_candidate(
+                        session,
+                        request=request,
+                        trace_id=str(trace_id or request.workflow_run_id or request.request_id),
+                        query=str(item.query or ""),
+                        rag_space_id=str(item.rag_space_id or ""),
+                        hit_count=int(item.hit_count or 0),
                     )
                 await self._persist_rag_tool_executions(
                     session,
@@ -343,6 +501,111 @@ class QualityAgentOrchestratorService:
             emit=emit,
         )
         return materialization_error is None
+
+    async def _persist_agent_artifacts(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        output: AgentOutput,
+        task_id: str | None = None,
+    ) -> None:
+        from app.repositories.agent_artifact_repo import AgentArtifactRepository
+
+        repo = AgentArtifactRepository(session)
+        artifacts = self._response_artifacts(output)
+        response_payload = dict((output.raw_state or {}).get("response_payload") or {})
+        route_trace = dict(response_payload.get("route_trace") or {})
+        capability_by_artifact: dict[str, str] = {}
+        for obs in list(route_trace.get("observations") or []):
+            if not isinstance(obs, dict):
+                continue
+            for artifact_id in list(obs.get("artifact_ids") or []):
+                capability_by_artifact[str(artifact_id)] = str(obs.get("capability_key") or "")
+        for item in artifacts:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+            await repo.create_once(
+                {
+                    "org_id": request.org_id,
+                    "session_id": request.session_id,
+                    "task_id": task_id,
+                    "workflow_run_id": request.workflow_run_id,
+                    "request_id": request.request_id,
+                    "artifact_id": artifact_id,
+                    "agent_name": str(
+                        item.get("source_agent")
+                        or (output.route_decision.selected_agent if output.route_decision else "unknown")
+                    ),
+                    "capability": capability_by_artifact.get(artifact_id) or None,
+                    "artifact_type": str(item.get("type") or "unknown"),
+                    "status": str(item.get("status") or "success"),
+                    "content_json": dict(item.get("content") or {}),
+                    "metrics_json": dict(item.get("metrics") or {}),
+                    "citations_json": list(item.get("citations") or []),
+                    "error_json": item.get("error") if isinstance(item.get("error"), dict) else None,
+                    "confidence": item.get("confidence"),
+                }
+            )
+
+    async def _write_rag_usage_candidate(
+        self,
+        session,
+        *,
+        request: NormalizedRequest,
+        trace_id: str,
+        query: str,
+        rag_space_id: str,
+        hit_count: int,
+    ) -> None:
+        if not query.strip() or not rag_space_id.strip():
+            return
+        from app.services.memory_extraction_service import MemoryExtractionService
+        from app.services.memory_service import MemoryService
+        from app.services.memory_vector_service import CANDIDATE_MEMORY_COLLECTION, MemoryVectorService
+
+        async def embedder_factory(text: str) -> list[float]:
+            from agent.rag.embedder import Embedder
+
+            embedder = Embedder(
+                org_id=request.org_id,
+                user_id=str(request.user_id or "") or None,
+                trace_id=trace_id,
+                allow_pseudo_fallback=False,
+            )
+            return await embedder.embed(text)
+
+        candidate = await MemoryExtractionService(
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+        ).extract_from_rag_query(
+            trace_id=trace_id,
+            query=query,
+            rag_space_id=rag_space_id,
+            hit_count=hit_count,
+        )
+        if candidate is None:
+            return
+        shared_vector = MemoryVectorService(
+            embedder_factory=embedder_factory,
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+            trace_id=trace_id,
+        )
+        candidate_vector = MemoryVectorService(
+            collection=CANDIDATE_MEMORY_COLLECTION,
+            embedder_factory=embedder_factory,
+            org_id=request.org_id,
+            user_id=str(request.user_id or "") or None,
+            trace_id=trace_id,
+        )
+        await MemoryService(
+            session,
+            request.org_id,
+            vector_service=shared_vector,
+            candidate_vector_service=candidate_vector,
+        ).write_candidate(candidate)
 
     async def _enqueue_paper_review_enrichment(
         self,
@@ -650,7 +913,7 @@ class QualityAgentOrchestratorService:
                     "result_id": None,
                     "model_config_id": None,
                     "model_key": item.model_key,
-                    "product_line": str(request.workspace or "chat"),
+                    "product_line": "chat",
                     "trace_id": item.trace_id,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -717,7 +980,7 @@ class QualityAgentOrchestratorService:
             and persistable.stability
         )
 
-        return route == "inspection_task" and sub_route == "inspection_execute" and has_structured_output
+        return route == "quality_analysis" and sub_route == "inspection_execute" and has_structured_output
 
     def _build_response_payload(
         self,
@@ -776,7 +1039,24 @@ class QualityAgentOrchestratorService:
             route_trace=base_payload.get("route_trace"),
             capabilities_used=list(base_payload.get("capabilities_used") or []),
             satisfied=base_payload.get("satisfied"),
+            error=None,  # will be patched below if available
         )
+        is_error_output = self._is_error_output(output)
+        output_error = self._error_payload_from_output(output)
+        if is_error_output:
+            payload["status"] = "failed"
+            payload["ui_schema"] = output.ui_schema or "agent_error_v1"
+            payload["error"] = output_error or base_payload.get("error")
+        elif output_error or base_payload.get("error") or base_payload.get("error_code"):
+            logger.warning(
+                "dropped stale agent error from completed chat response request_id=%s workflow_run_id=%s "
+                "assistant_message_id=%s stale_error=%s",
+                request.request_id,
+                request.workflow_run_id,
+                request.assistant_message_id,
+                output_error or base_payload.get("error") or base_payload.get("error_code"),
+            )
+            payload["error"] = None
         if base_payload.get("llm_meta"):
             payload["llm_meta"] = base_payload.get("llm_meta")
         if base_payload.get("llm_usage"):
@@ -800,12 +1080,12 @@ class QualityAgentOrchestratorService:
                 source_graph=(
                     output.route_decision.selected_agent
                     if output.route_decision
-                    else "inspection_task"
+                    else "quality_analysis"
                 ),
                 source_kind="chat_quality_answer",
                 persist_usage=True,
             )
-        return await self._materialize_legacy_quality_answer(request, output)
+        return await self._materialize_unstructured_quality_answer(request, output)
 
     async def _materialize_structured_output(
         self,
@@ -919,10 +1199,10 @@ class QualityAgentOrchestratorService:
                         **reasoning_chain,
                         "trace": trace_merged,
                     },
-                    "llm_model": str(result_data.llm_model or "quality_judgement"),
+                    "llm_model": str(result_data.llm_model or "quality_analysis"),
                     "prompt_version": str(
                         (persistable_output.quality_trace.prompt_version if persistable_output.quality_trace else None)
-                        or "quality_judgement_v2"
+                        or "quality_analysis_v1"
                     ),
                     "tokens_used": sum(int(item.total_tokens or 0) for item in persistable_output.token_usage),
                     "latency_ms": int(
@@ -1060,7 +1340,7 @@ class QualityAgentOrchestratorService:
                 "image_count": len(task.image_urls or []),
             }
 
-    async def _materialize_legacy_quality_answer(
+    async def _materialize_unstructured_quality_answer(
         self,
         request: NormalizedRequest,
         output: AgentOutput,
@@ -1090,7 +1370,7 @@ class QualityAgentOrchestratorService:
                         priority=5,
                         meta_data={
                             "source": "chat_quality_answer",
-                            "source_graph": "quality_judgement",
+                            "source_graph": "quality_analysis",
                             "chat_session_id": request.session_id,
                             "assistant_message_id": request.assistant_message_id,
                             "request_id": request.request_id,
@@ -1107,7 +1387,7 @@ class QualityAgentOrchestratorService:
                 task.meta_data = {
                     **dict(task.meta_data or {}),
                     "source": "chat_quality_answer",
-                    "source_graph": "quality_judgement",
+                    "source_graph": "quality_analysis",
                     "chat_session_id": request.session_id,
                     "assistant_message_id": request.assistant_message_id,
                     "request_id": request.request_id,
@@ -1164,7 +1444,7 @@ class QualityAgentOrchestratorService:
                         "faithfulness_score": float((output.quality or {}).get("faithfulness") or 0.0),
                         "hallucination_flags": list((output.quality or {}).get("hallucination_flags") or []),
                     },
-                    "sampling_results": {"route_subgraph": "quality_judgement"},
+                    "sampling_results": {"route_subgraph": "quality_analysis"},
                     "root_cause": str((output.summary or output.answer or "")[:255]),
                 }
             )
@@ -1194,7 +1474,7 @@ class QualityAgentOrchestratorService:
                         continue
                     _triggered = True
                     create_alert = getattr(alert_repo, "create_once", alert_repo.create)
-                    await create_alert(
+                    created_legacy_alert = await create_alert(
                         {
                             "idempotency_key": self._idempotency_key(request, "legacy-alert", _rule.id),
                             "id": str(uuid7()),
@@ -1213,15 +1493,16 @@ class QualityAgentOrchestratorService:
                             "channels": _rule.notification_channels or {"ui": True},
                         }
                     )
+                    legacy_alert_id = str(getattr(created_legacy_alert, "id", None) or created_legacy_alert.get("id"))
                     try:
                         from worker.tasks.alert_dispatch_task import dispatch_alert
-                        dispatch_alert.delay(_legacy_alert_id)
+                        dispatch_alert.delay(legacy_alert_id)
                     except Exception:
-                        _logger.exception("Failed to enqueue dispatch for legacy alert %s", _legacy_alert_id)
+                        logger.exception("Failed to enqueue dispatch for legacy alert %s", legacy_alert_id)
 
                 if not _triggered:
                     create_alert = getattr(alert_repo, "create_once", alert_repo.create)
-                    await create_alert(
+                    created_fallback_alert = await create_alert(
                         {
                             "idempotency_key": self._idempotency_key(request, "legacy-alert", "fallback"),
                             "id": str(uuid7()),
@@ -1240,11 +1521,15 @@ class QualityAgentOrchestratorService:
                             "channels": {"ui": True},
                         }
                     )
+                    legacy_fallback_id = str(
+                        getattr(created_fallback_alert, "id", None)
+                        or created_fallback_alert.get("id")
+                    )
                     try:
                         from worker.tasks.alert_dispatch_task import dispatch_alert
-                        dispatch_alert.delay(_legacy_fallback_id)
+                        dispatch_alert.delay(legacy_fallback_id)
                     except Exception:
-                        _logger.exception("Failed to enqueue dispatch for legacy fallback alert %s", _legacy_fallback_id)
+                        logger.exception("Failed to enqueue dispatch for legacy fallback alert %s", legacy_fallback_id)
 
             usage = self._legacy_usage(output)
             if usage["total_tokens"] > 0:
@@ -1343,7 +1628,7 @@ class QualityAgentOrchestratorService:
         raw_state = dict(output.raw_state or {})
         reasoning = dict(raw_state.get("reasoning") or {})
         llm_meta = dict(reasoning.get("llm_meta") or {})
-        return str(llm_meta.get("model") or "quality_judgement")
+        return str(llm_meta.get("model") or "quality_analysis")
 
     def _legacy_prompt_version(self, output: AgentOutput) -> str:
         raw_state = dict(output.raw_state or {})
@@ -1358,12 +1643,12 @@ class QualityAgentOrchestratorService:
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
         return {
-            "model_key": str(llm_meta.get("model") or "quality_judgement"),
+            "model_key": str(llm_meta.get("model") or "quality_analysis"),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "cost_amount": ModelPricing.estimate_cost(
-                str(llm_meta.get("model") or "quality_judgement"),
+                str(llm_meta.get("model") or "quality_analysis"),
                 prompt_tokens,
                 completion_tokens,
             ),

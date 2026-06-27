@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from app.models.product import ProductBatch, ProductLine, ProductSku
 from app.repositories.organization_repo import OrganizationRepository
 from app.repositories.product_master_repo import ProductMasterRepository
+from app.services.product_master_service import UNSPECIFIED_BATCH_NAME, UNSPECIFIED_BATCH_NO
 from infra.database.session import create_session, reset_async_engine_pool
 
 
@@ -114,22 +115,6 @@ def discover_categories(dataset_dir: Path) -> list[str]:
         for item in dataset_dir.iterdir()
         if item.is_dir() and not item.name.startswith(".")
     )
-
-
-def discover_batches(dataset_dir: Path, category: str) -> list[tuple[str, str]]:
-    category_dir = dataset_dir / category
-    discovered: set[tuple[str, str]] = set()
-    for split in ("train", "test"):
-        split_dir = category_dir / split
-        if not split_dir.is_dir():
-            continue
-        for item in split_dir.iterdir():
-            if item.is_dir() and not item.name.startswith("."):
-                discovered.add((split, normalize_code(item.name)))
-    if not discovered:
-        discovered.add(("train", "good"))
-        discovered.add(("test", "good"))
-    return sorted(discovered)
 
 
 async def get_or_create_line(
@@ -259,45 +244,47 @@ async def seed_mvtec_product_master(
                         sku = await repo.update(sku, sku_patch)
                     stats["skus_updated"] += 1
 
-            for split, defect in discover_batches(dataset_dir, category):
-                current_batch_no = batch_no(split, defect)
-                existing_batch = (
-                    await repo.get_batch_by_sku_and_no(str(org.id), str(sku.id), current_batch_no)
-                    if sku.id is not None
-                    else None
-                )
-                if existing_batch is not None:
-                    batch_patch = {}
-                    expected_name = batch_name(split, defect)
-                    if existing_batch.name != expected_name:
-                        batch_patch["name"] = expected_name
-                    if existing_batch.description:
-                        batch_patch["description"] = None
-                    if not existing_batch.is_active:
-                        batch_patch["is_active"] = True
-                    if batch_patch:
-                        if not dry_run:
-                            await repo.update(existing_batch, batch_patch)
-                        stats["batches_updated"] += 1
-                    continue
-                batch = ProductBatch(
-                    org_id=str(org.id),
-                    product_sku_id=str(sku.id),
-                    batch_no=current_batch_no,
-                    name=batch_name(split, defect),
-                    description=None,
-                    is_active=True,
-                )
+            existing_batches = [
+                item
+                for item in await repo.list_batches(str(org.id))
+                if str(item.product_sku_id) == str(sku.id)
+            ]
+            unspecified_batch = next(
+                (item for item in existing_batches if str(item.batch_no).strip().upper() == UNSPECIFIED_BATCH_NO),
+                None,
+            )
+            if unspecified_batch is None:
                 if not dry_run:
-                    await repo.create_batch(batch)
+                    await repo.create_batch(
+                        ProductBatch(
+                            org_id=str(org.id),
+                            product_sku_id=str(sku.id),
+                            batch_no=UNSPECIFIED_BATCH_NO,
+                            name=UNSPECIFIED_BATCH_NAME,
+                            description=None,
+                            is_active=True,
+                        )
+                    )
                 stats["batches_created"] += 1
-
-            if category == "screw" and sku.id is not None:
-                legacy_batch = await repo.get_batch_by_sku_and_no(str(org.id), str(sku.id), "UNSPECIFIED")
-                if legacy_batch is not None:
+            else:
+                batch_patch = {}
+                if unspecified_batch.name != UNSPECIFIED_BATCH_NAME:
+                    batch_patch["name"] = UNSPECIFIED_BATCH_NAME
+                if unspecified_batch.description:
+                    batch_patch["description"] = None
+                if not unspecified_batch.is_active:
+                    batch_patch["is_active"] = True
+                if batch_patch:
                     if not dry_run:
-                        await repo.soft_delete(legacy_batch)
+                        await repo.update(unspecified_batch, batch_patch)
                     stats["batches_updated"] += 1
+
+            for batch in existing_batches:
+                if str(batch.batch_no).strip().upper() == UNSPECIFIED_BATCH_NO:
+                    continue
+                if not dry_run:
+                    await repo.soft_delete(batch)
+                stats["batches_updated"] += 1
 
         for category in discover_categories(dataset_dir):
             if category not in PRODUCT_META:

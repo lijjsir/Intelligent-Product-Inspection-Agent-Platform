@@ -5,7 +5,6 @@ import { computed, ref } from "vue";
 import { taskApi } from "@/api/task.api";
 import type { ChatInspectionContext, ChatInspectionTaskContext } from "@/types/chat.types";
 import type { InspectionTask, TaskStatus } from "@/types/task.types";
-import { formatServerDateTime } from "@/utils/date-time";
 
 const props = defineProps<{
   context: ChatInspectionContext;
@@ -59,7 +58,10 @@ function taskTone(task: ChatInspectionTaskContext) {
 }
 
 function formatDate(value?: string | null) {
-  return formatServerDateTime(value, { compactDate: true }) || "";
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function buildReference(task: ChatInspectionTaskContext) {

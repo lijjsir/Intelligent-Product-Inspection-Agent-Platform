@@ -323,7 +323,7 @@ class MeetingService:
         if not message:
             raise NotFoundError("meeting message not found")
         self._ensure_message_mutable(message)
-        if self._message_recipient_user_id(message):
+        if self._message_recipient_user_id(message) and not self._is_agent_sidecar_question(message):
             raise ForbiddenError("private messages cannot be edited")
         clean_content = content.strip()
         if not clean_content:
@@ -427,6 +427,7 @@ class MeetingService:
             message_metadata["quote_snapshot"] = normalized_quote_snapshot
         if agent_sidecar_private:
             message_metadata["private_recipient_user_id"] = self._user_id
+            message_metadata["agent_sidecar_question"] = True
 
         message = await self._repo.create_message(
             org_id=self._org_id,
@@ -694,16 +695,12 @@ class MeetingService:
         private_user_ids = self._private_user_ids_for_visibility(response_visibility)
         if access.decision == "denied":
             workflow_run_id = str(request.workflow_run_id or uuid7())
-            agent_message_id = str(uuid7())
+            agent_message_id = str(request.replace_message_id or uuid7())
             denial_answer = "当前请求超出你的会议室权限范围，无法回答该问题。"
-            response_message = await self._repo.create_message(
-                org_id=self._org_id,
+            response_message = await self._upsert_general_agent_message(
                 room_id=room_id,
-                user_id=self._user_id,
-                username=_MEETING_GENERAL_AGENT_NAME,
+                message_id=agent_message_id,
                 content=denial_answer,
-                message_type="agent",
-                agent_id=_MEETING_GENERAL_AGENT_ID,
                 metadata_json={
                     "query": request.query,
                     "selected_subgraph": "access_denied",
@@ -745,7 +742,7 @@ class MeetingService:
                 escalation_required=False,
             )
         workflow_run_id = str(request.workflow_run_id or uuid7())
-        agent_message_id = str(uuid7())
+        agent_message_id = str(request.replace_message_id or uuid7())
         attachment_echo = self._normalize_message_attachments(request.attachments)
         response_visibility = (
             _RESPONSE_VISIBILITY_PRIVATE
@@ -806,14 +803,10 @@ class MeetingService:
             if self._is_general_agent_cancelled(room_id, workflow_run_id):
                 raise asyncio.CancelledError()
 
-            message = await self._repo.create_message(
-                org_id=self._org_id,
+            message = await self._upsert_general_agent_message(
                 room_id=room_id,
-                user_id=self._user_id,
-                username=_MEETING_GENERAL_AGENT_NAME,
+                message_id=agent_message_id,
                 content=answer,
-                message_type="agent",
-                agent_id=_MEETING_GENERAL_AGENT_ID,
                 metadata_json={
                     "query": request.query,
                     "selected_subgraph": selected_subgraph,
@@ -886,6 +879,44 @@ class MeetingService:
             raise
         finally:
             meeting_agent_cancel_registry.clear(room_id, workflow_run_id)
+
+    async def _upsert_general_agent_message(
+        self,
+        *,
+        room_id: str,
+        message_id: str,
+        content: str,
+        metadata_json: dict,
+        private_recipient_user_id: str | None = None,
+    ) -> Any:
+        existing = None
+        get_message = getattr(self._repo, "get_message", None)
+        if callable(get_message):
+            existing = await get_message(self._org_id, room_id, message_id)
+        if (
+            existing
+            and str(getattr(existing, "message_type", "")) == "agent"
+            and str(getattr(existing, "agent_id", "")) == _MEETING_GENERAL_AGENT_ID
+            and str(getattr(existing, "user_id", "")) == self._user_id
+        ):
+            return await self._repo.update_message_content(
+                org_id=self._org_id,
+                room_id=room_id,
+                message_id=message_id,
+                content=content,
+                metadata_json=metadata_json,
+            )
+        return await self._repo.create_message(
+            org_id=self._org_id,
+            room_id=room_id,
+            user_id=self._user_id,
+            username=_MEETING_GENERAL_AGENT_NAME,
+            content=content,
+            message_type="agent",
+            agent_id=_MEETING_GENERAL_AGENT_ID,
+            metadata_json=metadata_json,
+            private_recipient_user_id=private_recipient_user_id,
+        )
 
     async def cancel_general_agent_run(self, room_id: str, workflow_run_id: str) -> dict[str, str | bool]:
         await self._ensure_member(room_id)
@@ -1573,6 +1604,30 @@ class MeetingService:
         if isinstance(metadata, dict) and metadata.get("recalled_at"):
             raise ForbiddenError("recalled messages cannot be edited")
 
+    def _is_agent_sidecar_question(self, message: Any) -> bool:
+        if str(getattr(message, "message_type", "")) != "user":
+            return False
+        if str(getattr(message, "user_id", "")) != self._user_id:
+            return False
+        metadata = getattr(message, "metadata_json", None) or {}
+        if isinstance(metadata, dict) and metadata.get("agent_sidecar_question") is True:
+            return True
+        recipient_id = self._message_recipient_user_id(message)
+        sender_label = str(getattr(message, "username", "") or "").strip()
+        if recipient_id and recipient_id not in {self._user_id, sender_label}:
+            return False
+        mentions = getattr(message, "mentions", None) or []
+        if isinstance(mentions, list):
+            for mention in mentions:
+                if not isinstance(mention, dict):
+                    continue
+                if str(mention.get("agent_id") or "") == _MEETING_GENERAL_AGENT_ID:
+                    return True
+                if str(mention.get("agent_name") or "") == _MEETING_GENERAL_AGENT_NAME:
+                    return True
+        content = str(getattr(message, "content", "") or "")
+        return self._contains_general_agent_mention(content) or self._contains_meeting_ai_mention(content)
+
     @staticmethod
     def _is_message_recallable(message: Any) -> bool:
         created_at = getattr(message, "created_at", None)
@@ -1741,18 +1796,14 @@ class MeetingService:
         if not room:
             raise NotFoundError("meeting room not found")
         workflow_run_id = str(workflow_run_id or request.workflow_run_id or uuid7())
+        agent_message_id = str(request.replace_message_id or uuid7())
         access = self._authorize_general_agent_request(room=room, question=request.query, intent="agent_manager")
         if access.decision == "denied":
-            denial_message = MeetingMessageResponse(
-                id=str(uuid7()),
+            denial_content = "当前请求超出你的会议室权限范围，无法回答该问题。"
+            denial_message = await self._upsert_general_agent_message(
                 room_id=room_id,
-                user_id=_MEETING_GENERAL_AGENT_ID,
-                username=_MEETING_GENERAL_AGENT_NAME,
-                seq_no=0,
-                content="当前请求超出你的会议室权限范围，无法回答该问题。",
-                message_type="agent",
-                agent_id=_MEETING_GENERAL_AGENT_ID,
-                private_recipient_user_id=self._user_id if access.response_visibility == _RESPONSE_VISIBILITY_PRIVATE else None,
+                message_id=agent_message_id,
+                content=denial_content,
                 metadata_json={
                     "query": request.query,
                     "selected_subgraph": "access_denied",
@@ -1763,7 +1814,9 @@ class MeetingService:
                     "audience_scope_type": _MEMORY_SCOPE_USER if access.response_visibility == _RESPONSE_VISIBILITY_PRIVATE else _MEMORY_SCOPE_MEETING_ROOM,
                     "audience_scope_id": self._user_id if access.response_visibility == _RESPONSE_VISIBILITY_PRIVATE else room_id,
                 },
+                private_recipient_user_id=self._user_id if access.response_visibility == _RESPONSE_VISIBILITY_PRIVATE else None,
             )
+            denial_response = MeetingMessageResponse.model_validate(denial_message)
             await self._record_agent_query_audit(
                 room=room,
                 question=request.query,
@@ -1778,14 +1831,14 @@ class MeetingService:
                 {
                     "event": "message_created",
                     "room_id": room_id,
-                    "message": denial_message.model_dump(),
+                    "message": denial_response.model_dump(),
                     **({"private_user_ids": [self._user_id]} if access.response_visibility == _RESPONSE_VISIBILITY_PRIVATE else {}),
                 },
             )
             return MeetingAgentRunResponse(
                 selected_subgraph="access_denied",
-                answer=denial_message.content,
-                message=denial_message,
+                answer=denial_response.content,
+                message=denial_response,
                 memory_sources=[],
                 candidate_memories=[],
                 response_visibility=access.response_visibility,
@@ -1819,7 +1872,7 @@ class MeetingService:
             "request_id": str(uuid7()),
             "workflow_run_id": workflow_run_id,
             "session_id": f"meeting:{room_id}",
-            "assistant_message_id": str(uuid7()),
+            "assistant_message_id": agent_message_id,
             "org_id": self._org_id,
             "user_id": self._user_id,
             "workspace": "meeting_room",
@@ -1831,6 +1884,7 @@ class MeetingService:
                 "room_id": room_id,
                 "meeting_agent_name": _MEETING_GENERAL_AGENT_NAME,
                 "allowed_data_domains": allowed_domains,
+                "user_role": self._role,
                 "query": request.query,
                 "attachments_count": len(attachment_echo),
             },
@@ -1865,14 +1919,10 @@ class MeetingService:
         agent_output = dict(router_output.agent_output or {})
         answer = self._agent_manager_answer(agent_output, router_output.status)
         selected_subgraph = str(route_decision.sub_route or "general_chat")
-        message = await self._repo.create_message(
-            org_id=self._org_id,
+        message = await self._upsert_general_agent_message(
             room_id=room_id,
-            user_id=self._user_id,
-            username=_MEETING_GENERAL_AGENT_NAME,
+            message_id=agent_message_id,
             content=answer,
-            message_type="agent",
-            agent_id=_MEETING_GENERAL_AGENT_ID,
             metadata_json={
                 "query": request.query,
                 "selected_subgraph": selected_subgraph,
@@ -1945,15 +1995,20 @@ class MeetingService:
     async def _build_meeting_inspection_context(self, room: Any | None = None) -> dict[str, Any]:
         try:
             user = await self._users.get_by_id(self._org_id, self._user_id)
-            role = str(getattr(user, "role", "") or ROLE_USER)
+            role = str(getattr(user, "role", "") or self._role or ROLE_USER)
+            business_context = self._business_context_from_room(room)
             context = await ChatContextService(
                 self._session,
                 org_id=self._org_id,
                 user_id=self._user_id,
                 role=role,
-            ).build_inspection_context(recent_limit=6, summary_window=12)
+            ).build_inspection_context(
+                recent_limit=12,
+                summary_window=24,
+                selected_task_ids=business_context.task_ids,
+            )
             if room is not None:
-                context["meeting_business_context"] = self._business_context_from_room(room).model_dump(mode="json")
+                context["meeting_business_context"] = business_context.model_dump(mode="json")
             return context
         except Exception:
             logger.debug("meeting inspection context build skipped", exc_info=True)
@@ -1965,6 +2020,7 @@ class MeetingService:
             return {}
         return {
             "stats": context.get("stats") if isinstance(context.get("stats"), dict) else {},
+            "quality_insights": context.get("quality_insights") if isinstance(context.get("quality_insights"), dict) else {},
             "latest_task": MeetingService._inspection_task_memory_snapshot(context.get("latest_task")),
             "recent_failures": [
                 item
@@ -2404,7 +2460,6 @@ class MeetingService:
                 memory_id=memory_id,
                 org_id=self._org_id,
                 user_id=None,
-                workspace="app",
                 memory_type="task_episode",
                 scope_json={
                     "meeting_room_id": room_id,
@@ -3658,7 +3713,6 @@ class MeetingService:
             memory_id=revision_memory_id,
             org_id=self._org_id,
             user_id=getattr(item, "user_id", None),
-            workspace=str(getattr(item, "workspace", "") or "app"),
             memory_type=str(getattr(item, "memory_type", "") or "task_episode"),
             scope_json=self._memory_scope_json(target_scope_type, target_scope_id, source_room_id=room_id),
             content_summary=content[:1000],

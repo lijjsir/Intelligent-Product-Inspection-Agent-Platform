@@ -38,6 +38,7 @@ class Embedder:
         self._runtime_models = runtime_models
         self._allow_pseudo_fallback = allow_pseudo_fallback
         self._llm: LLMClient | None = None
+        self._pinned_runtime: dict[str, Any] | None = None
 
     async def embed(self, text: str) -> list[float]:
         normalized_text = " ".join(str(text or "").strip().lower().split())
@@ -62,6 +63,9 @@ class Embedder:
             embedding = self._pseudo_embed(normalized_text)
         _embedding_cache.set(cache_key, list(embedding), ttl_seconds=1800)
         return embedding
+
+    async def pin_runtime(self) -> None:
+        self._pinned_runtime = await self._resolve_runtime()
 
     async def _record_usage_event(self, runtime: dict[str, Any], usage_event: dict[str, Any] | None) -> None:
         if not usage_event or not self._org_id:
@@ -104,6 +108,8 @@ class Embedder:
         return self._llm
 
     async def _resolve_runtime(self) -> dict[str, Any]:
+        if self._pinned_runtime is not None:
+            return self._pinned_runtime
         runtime_models = self._runtime_models
         if runtime_models is None:
             async with get_session() as session:
@@ -114,6 +120,22 @@ class Embedder:
             model_types=EMBEDDING_MODEL_TYPES,
         )
         if not runtime:
+            configured = [
+                item for item in (runtime_models or [])
+                if str(item.get("model_type") or "").strip().lower() in EMBEDDING_MODEL_TYPES
+                and item.get("is_active")
+            ]
+            missing_key = [
+                item for item in configured
+                if str(item.get("provider") or "").strip().lower() != "local_openai"
+                and not str(item.get("api_key") or "").strip()
+            ]
+            if missing_key:
+                model_keys = ", ".join(str(item.get("model_key") or item.get("display_name") or "") for item in missing_key)
+                raise EmbeddingModelNotConfigured(
+                    "active embedding model configured but provider api_key is missing: "
+                    f"{model_keys}. Set api_key in the model configuration page."
+                )
             raise EmbeddingModelNotConfigured("no active embedding model configured in model config page")
         return runtime
 

@@ -41,7 +41,7 @@ const form = reactive({
   ai_gate_confidence_threshold: 0.72,
   ai_gate_evidence_threshold: 0.5,
   ai_gate_traceability_threshold: 0.5,
-  auto_pass_enabled: false,
+  auto_pass_enabled: true,
   is_active: true,
   items: [] as RuleForm[],
 });
@@ -101,7 +101,7 @@ function resetForm() {
     ai_gate_confidence_threshold: 0.72,
     ai_gate_evidence_threshold: 0.5,
     ai_gate_traceability_threshold: 0.5,
-    auto_pass_enabled: false,
+    auto_pass_enabled: true,
     is_active: true,
     items: [buildDefaultRule()],
   });
@@ -178,7 +178,7 @@ async function duplicateSpec(row: InspectionSpec) {
     ai_gate_confidence_threshold: row.ai_gate_confidence_threshold,
     ai_gate_evidence_threshold: row.ai_gate_evidence_threshold,
     ai_gate_traceability_threshold: row.ai_gate_traceability_threshold,
-    auto_pass_enabled: false,
+    auto_pass_enabled: true,
     is_active: false,
     items: row.items.map((item) => ({
       defect_type: item.defect_type,

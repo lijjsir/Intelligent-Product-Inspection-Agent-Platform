@@ -1,6 +1,7 @@
 ﻿from contextlib import asynccontextmanager
 
 import pytest
+import logging
 from types import SimpleNamespace
 
 from agent.contracts import (
@@ -91,7 +92,7 @@ def test_chat_answer_is_not_materialized_as_task():
     output = AgentOutput(
         message_type="quality_answer",
         route_decision=RouteDecision(
-            selected_agent="chat",
+            selected_agent="quality_analysis",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="ordinary RAG answer",
@@ -105,7 +106,7 @@ def test_inspection_task_result_with_structured_output_is_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="inspection_execute",
             intent="inspection_execute",
             reason="inspection task completed",
@@ -124,7 +125,7 @@ def test_inspection_task_without_full_structured_output_is_not_materialized():
     output = AgentOutput(
         message_type="task_result",
         route_decision=RouteDecision(
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="task_create",
             intent="task_create",
             reason="task accepted but no result yet",
@@ -152,7 +153,7 @@ def test_response_payload_prefers_router_subroute_over_legacy_subgraph_intent():
         summary="RAG answer",
         raw_state={"response_payload": {"intent": "rag_qa", "message_type": "assistant_text"}},
         route_decision=RouteDecision(
-            selected_agent="chat",
+            selected_agent="quality_analysis",
             sub_route="general_chat",
             intent="general_qa",
             reason="default chat route",
@@ -171,6 +172,103 @@ def test_response_payload_prefers_router_subroute_over_legacy_subgraph_intent():
     assert payload["intent"] == "general_chat"
 
 
+def test_response_payload_drops_stale_error_fields_for_completed_answer(caplog):
+    request = NormalizedRequest(
+        request_id="req-stale-error",
+        workflow_run_id="wf-stale-error",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="quality_answer",
+        answer="你好，聊天链路正常。",
+        summary="聊天链路正常",
+        raw_state={
+            "response_payload": {
+                "message_type": "error",
+                "status": "failed",
+                "ui_schema": "agent_error_v1",
+                "trace_id": "trace-stale",
+                "error": {
+                    "code": "INTERNAL_AGENT_ERROR",
+                    "message": "旧的失败 payload 不应污染成功回答",
+                },
+            }
+        },
+        route_decision=RouteDecision(
+            selected_agent="quality_analysis",
+            sub_route="general_chat",
+            intent="general_chat",
+            reason="test",
+            signals=RouteSignals(),
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.services.quality_agent_orchestrator_service"):
+        payload = QualityAgentOrchestratorService()._build_response_payload(
+            request=request,
+            output=output,
+            task_form_defaults={},
+            materialized_task=None,
+            materialization_error=None,
+        )
+
+    assert payload["message_type"] == "quality_answer"
+    assert payload["status"] == "completed"
+    assert payload.get("error") is None
+    assert payload["ui_schema"] != "agent_error_v1"
+    assert "dropped stale agent error from completed chat response" in caplog.text
+
+
+def test_run_chat_agent_error_log_contains_diagnostic_fields(caplog):
+    request = NormalizedRequest(
+        request_id="req-error-log",
+        workflow_run_id="wf-error-log",
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        org_id="org-1",
+        user_id="user-1",
+    )
+    output = AgentOutput(
+        message_type="error",
+        answer="系统执行失败，请稍后重试。",
+        summary="系统执行失败，请稍后重试。",
+        error={
+            "code": "CHAT_COMPOSE_MODEL_UNAVAILABLE",
+            "message": "模型不可用，无法组织最终回复。",
+            "category": "model",
+            "agent_name": "quality_analysis",
+            "stage": "quality.final_analyze",
+            "capability": "quality.final_analyze",
+            "trace_id": "trace-error-log",
+            "detail": {"provider": "deepseek"},
+        },
+        route_decision=RouteDecision(
+            selected_agent="quality_analysis",
+            sub_route="error",
+            intent="error",
+            reason="model unavailable",
+            signals=RouteSignals(),
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="app.services.quality_agent_orchestrator_service"):
+        QualityAgentOrchestratorService._log_agent_output(
+            request=request,
+            output=output,
+            router_status="failed",
+        )
+
+    assert "run_chat agent_error" in caplog.text
+    assert "CHAT_COMPOSE_MODEL_UNAVAILABLE" in caplog.text
+    assert "模型不可用，无法组织最终回复。" in caplog.text
+    assert "quality.final_analyze" in caplog.text
+    assert "trace-error-log" in caplog.text
+    assert "deepseek" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
     persisted: list[tuple[NormalizedRequest, AgentOutput]] = []
@@ -183,7 +281,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
             assert db_session is not None
             return AgentRouterOutput(
                 route_decision=AgentRouteDecision(
-                    selected_agent="chat",
+                        selected_agent="quality_analysis",
                     intent="general_chat",
                     reason="test",
                 ),
@@ -212,7 +310,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
                 answer="hi",
                 route_decision=RouteDecision(
                     mode="router_enabled",
-                    selected_agent="inspection_task",
+                    selected_agent="quality_analysis",
                     sub_route="inspection_execute",
                 ),
             )
@@ -250,7 +348,7 @@ async def test_run_chat_uses_quality_graph_agent_output_contract(monkeypatch):
 
     assert persisted[0][1].answer == "hi"
     assert result["agent_output"]["answer"] == "hi"
-    assert metrics[0]["agent_key"] == "chat"
+    assert metrics[0]["agent_key"] == "quality_analysis"
 
 
 @pytest.mark.asyncio
@@ -323,7 +421,7 @@ async def test_persist_chat_result_updates_assistant_message_for_task_action(mon
         quality={"passed": False, "risk_level": "critical", "risk_score": 0.92},
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="inspection_task",
+            selected_agent="quality_analysis",
             sub_route="inspection_execute",
             reason="file attachment detected",
             signals=RouteSignals(has_file_attachments=True, attachment_types=["txt"]),
@@ -459,7 +557,7 @@ async def test_route_log_failure_does_not_fail_chat_persistence(monkeypatch):
         answer="hello",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="quality_analysis",
             sub_route="general_chat",
             intent="general_qa",
             reason="test",
@@ -533,7 +631,7 @@ async def test_persist_chat_result_adds_pending_trust_scoring_and_enqueues(monke
         citations=[{"id": "RAG-1", "source": "profile.md"}],
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="quality_analysis",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="test",
@@ -687,6 +785,12 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
         async def get(self, model, key):
             return None
 
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
+            return None
+
         async def commit(self):
             return None
 
@@ -753,7 +857,7 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
         summary="inspection done",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="inspection_task",
+                selected_agent="quality_analysis",
             sub_route="inspection_execute",
             intent="inspection_execute",
             reason="inspection flow",
@@ -768,8 +872,8 @@ async def test_persist_chat_result_writes_rag_log_with_top_k_and_trace_detail(mo
                     hit_rate=0.5,
                     citation_coverage=0.67,
                     latency_ms=188,
-                    source_graph="inspection_task",
-                    agent_name="inspection_task",
+                    source_graph="evidence_capability",
+                    agent_name="orchestrator",
                     sub_route="inspection_execute",
                     trace_id="trace-rag-detail",
                     top_score=0.92,
@@ -812,6 +916,12 @@ async def test_persist_chat_result_writes_file_parse_tool_execution(monkeypatch)
 
     class FakeSession:
         async def get(self, model, key):
+            return None
+
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
             return None
 
         async def commit(self):
@@ -876,7 +986,7 @@ async def test_persist_chat_result_writes_file_parse_tool_execution(monkeypatch)
         summary="file parsed",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="file",
             sub_route="file_qa",
             intent="file_qa",
             reason="file attachment detected",
@@ -921,6 +1031,12 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
     rag_logs: dict[str, dict] = {}
 
     class FakeSession:
+        def add(self, _instance):
+            return None
+
+        async def flush(self):
+            return None
+
         async def commit(self):
             return None
 
@@ -976,7 +1092,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
         answer="done",
         route_decision=RouteDecision(
             mode="router_enabled",
-            selected_agent="chat",
+                selected_agent="chat",
             sub_route="rag_qa",
             intent="rag_qa",
             reason="test",
@@ -988,7 +1104,7 @@ async def test_repeated_chat_finalization_uses_idempotent_rag_log(monkeypatch):
                     rag_space_id="space-1",
                     top_k=3,
                     hit_count=1,
-                    source_graph="chat",
+                    source_graph="evidence_capability",
                 )
             ]
         ),
@@ -1013,6 +1129,9 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     task_store = {"task": None}
 
     class FakeSession:
+        def add(self, _instance):
+            return None
+
         async def flush(self):
             return None
 
@@ -1143,14 +1262,14 @@ async def test_repeated_materialization_does_not_duplicate_token_ledger_or_alert
     first = await service._materialize_structured_output(
         request,
         persistable,
-        source_graph="inspection_task",
+        source_graph="quality_analysis",
         source_kind="structured",
         persist_usage=True,
     )
     second = await service._materialize_structured_output(
         request,
         persistable,
-        source_graph="inspection_task",
+        source_graph="quality_analysis",
         source_kind="structured",
         persist_usage=True,
     )

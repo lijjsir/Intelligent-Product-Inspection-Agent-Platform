@@ -54,6 +54,7 @@ class FakeTask:
         self.priority = 5
         self.image_urls = ["https://example.com/a.png"]
         self.image_items = None
+        self.meta_data = {}
         self.created_at = datetime(2026, 3, 25, 12, 0, 0)
         self.updated_at = datetime(2026, 3, 25, 12, 0, 1)
         self.has_result = False
@@ -77,6 +78,8 @@ class FakeTaskRepo:
         self.get_calls = []
         self.list_calls = []
         self.deleted_calls = []
+        self.status_updates = []
+        self.metadata_patches = []
 
     async def create(self, task):
         fake = FakeTask()
@@ -115,6 +118,14 @@ class FakeTaskRepo:
         fake.id = task_id
         return fake
 
+    async def update_status(self, org_id, task_id, status):
+        self.status_updates.append({"org_id": org_id, "task_id": task_id, "status": status})
+        return True
+
+    async def patch_metadata(self, org_id, task_id, patch):
+        self.metadata_patches.append({"org_id": org_id, "task_id": task_id, "patch": patch})
+        return True
+
 
 class FakeSpecRepo:
     def __init__(self, session):
@@ -129,28 +140,35 @@ class FakeSpecRepo:
 
 
 class FakeStandard:
-    id = "standard-1"
-    name = "检测标准 1"
-    spec_code = "STD-1"
-    inspection_spec_id = "spec-1"
-    product_family = "product-line-1"
-    applicable_product_line_ids = []
-    applicable_product_sku_ids = []
-    rag_space_ids = ["rag-1"]
+    def __init__(
+        self,
+        *,
+        spec_code: str | None = "STD-1",
+        inspection_spec_id: str | None = "spec-1",
+    ):
+        self.id = "standard-1"
+        self.name = "检测标准 1"
+        self.spec_code = spec_code
+        self.inspection_spec_id = inspection_spec_id
+        self.product_family = "product-line-1"
+        self.applicable_product_line_ids = []
+        self.applicable_product_sku_ids = []
+        self.rag_space_ids = ["rag-1"]
 
 
 class FakeStandardRepo:
     def __init__(self, session):
         self._session = session
+        self.standard = FakeStandard()
 
     async def get_active(self, org_id: str, library_id: str):
-        return FakeStandard() if library_id == "standard-1" else None
+        return self.standard if library_id == "standard-1" else None
 
     async def get_active_by_spec_code(self, org_id: str, spec_code: str):
-        return FakeStandard() if spec_code == "STD-1" else None
+        return self.standard if spec_code == "STD-1" else None
 
     async def get(self, org_id: str, library_id: str):
-        return FakeStandard() if library_id == "standard-1" else None
+        return self.standard if library_id == "standard-1" else None
 
 
 class FakeProductMasterService:
@@ -203,6 +221,9 @@ class FakeResultRepo:
     async def get_by_task(self, org_id: str, task_id: str):
         return FakeResult()
 
+    async def soft_delete(self, result_id: str):
+        return True
+
 
 class FakeStabilityRepo:
     def __init__(self, session):
@@ -210,6 +231,33 @@ class FakeStabilityRepo:
 
     async def get_by_task(self, org_id: str, task_id: str):
         return FakeStability()
+
+    async def soft_delete(self, stability_id: str):
+        return True
+
+
+class FakeAlertRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def list_by_stability(self, org_id: str, stability_id: str):
+        return []
+
+
+class FakeFailedEventRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def has_failed_event(self, org_id: str, task_id: str):
+        return True
+
+
+class FakeNoFailedEventRepo:
+    def __init__(self, session):
+        self._session = session
+
+    async def has_failed_event(self, org_id: str, task_id: str):
+        return False
 
 
 class FakeAuditService:
@@ -302,7 +350,37 @@ async def test_create_task_rejects_duplicate_images_in_same_submission(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_create_task_rejects_when_images_below_spec_requirement(monkeypatch):
+async def test_create_task_skips_unavailable_recent_hash_check(monkeypatch):
+    class FailingRecentHashRepo(FakeTaskRepo):
+        async def find_recent_image_hashes(self, org_id, hashes):
+            raise RuntimeError("JSON_TABLE is not supported")
+
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FailingRecentHashRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    monkeypatch.setattr("app.services.task_service.InspectionStandardLibraryRepository", FakeStandardRepo)
+    monkeypatch.setattr("app.services.task_service.ProductMasterService", FakeProductMasterService)
+    monkeypatch.setattr("app.services.task_service.ProductMasterRepository", FakeProductRepo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1")
+
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png"],
+        image_items=[ImageItem(index=0, url="https://example.com/a.png", hash="hash-a")],
+        priority=5,
+        metadata=None,
+    )
+
+    assert task.image_items == [
+        {"index": 0, "url": "https://example.com/a.png", "hash": "hash-a", "sample_number": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_task_allows_images_below_quality_threshold(monkeypatch):
     repo = FakeTaskRepo(None)
     spec_repo = FakeSpecRepo(None)
     spec_repo.active_specs["STD-1"] = FakeSpec(required_image_count=2)
@@ -315,15 +393,16 @@ async def test_create_task_rejects_when_images_below_spec_requirement(monkeypatc
 
     service = TaskService(session=FakeSession(), org_id="org-1")
 
-    with pytest.raises(ValidationError, match="至少需要 2 张图片"):
-        await service.create_task(
-            created_by="user-1",
-            product_id="product-1",
-            spec_code="STD-1",
-            image_urls=["https://example.com/a.png"],
-            priority=5,
-            metadata=None,
-        )
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png"],
+        priority=5,
+        metadata=None,
+    )
+
+    assert task.image_urls == ["https://example.com/a.png"]
 
 
 @pytest.mark.asyncio
@@ -368,6 +447,34 @@ async def test_create_task_rejects_missing_active_spec(monkeypatch):
             image_urls=["https://example.com/a.png"],
             priority=5,
             metadata=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_standard_without_quality_threshold(monkeypatch):
+    standard_repo = FakeStandardRepo(None)
+    standard_repo.standard = FakeStandard(spec_code=None, inspection_spec_id=None)
+
+    monkeypatch.setattr("app.services.task_service.TaskRepository", FakeTaskRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+    monkeypatch.setattr("app.services.task_service.InspectionStandardLibraryRepository", lambda session: standard_repo)
+    monkeypatch.setattr("app.services.task_service.ProductMasterService", FakeProductMasterService)
+    monkeypatch.setattr("app.services.task_service.ProductMasterRepository", FakeProductRepo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1")
+
+    with pytest.raises(ValidationError, match="missing a valid quality threshold binding"):
+        await service.create_task(
+            created_by="user-1",
+            product_id="product-1",
+            spec_code="",
+            image_urls=["https://example.com/a.png"],
+            priority=5,
+            metadata=None,
+            product_sku_id="sku-1",
+            batch_id="batch-1",
+            inspection_standard_id="standard-1",
         )
 
 
@@ -463,6 +570,7 @@ async def test_delete_task_rejects_running_task(monkeypatch):
 
     repo.get_for_user = _get_for_user
     monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
+    monkeypatch.setattr("app.services.task_service.TaskExecutionEventRepository", FakeNoFailedEventRepo)
     monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
     monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
 
@@ -470,3 +578,36 @@ async def test_delete_task_rejects_running_task(monkeypatch):
 
     with pytest.raises(ValidationError, match="不能删除"):
         await service.delete_task("task-running")
+
+
+@pytest.mark.asyncio
+async def test_delete_task_allows_stale_running_task_with_failed_event(monkeypatch):
+    repo = FakeTaskRepo(None)
+
+    async def _get_for_user(org_id, task_id, owner_user_id=None):
+        fake = FakeTask()
+        fake.id = task_id
+        fake.status = "running"
+        fake.meta_data = {"execution": {"job_id": "job-1"}}
+        return fake
+
+    repo.get_for_user = _get_for_user
+    monkeypatch.setattr("app.services.task_service.TaskRepository", lambda session: repo)
+    monkeypatch.setattr("app.services.task_service.TaskExecutionEventRepository", FakeFailedEventRepo)
+    monkeypatch.setattr("app.services.task_service.ResultRepository", FakeResultRepo)
+    monkeypatch.setattr("app.services.task_service.StabilityRepository", FakeStabilityRepo)
+    monkeypatch.setattr("app.services.task_service.AlertRepository", FakeAlertRepo)
+    monkeypatch.setattr("app.services.task_service.AuditService", FakeAuditService)
+    monkeypatch.setattr("app.services.task_service.InspectionSpecRepository", FakeSpecRepo)
+
+    service = TaskService(session=FakeSession(), org_id="org-1", actor_user_id="user-1", actor_role="user")
+
+    deleted = await service.delete_task("task-stale-running")
+
+    assert deleted.id == "task-stale-running"
+    assert repo.status_updates == [
+        {"org_id": "org-1", "task_id": "task-stale-running", "status": "failed"}
+    ]
+    assert repo.deleted_calls == [
+        {"org_id": "org-1", "task_id": "task-stale-running", "owner_user_id": "user-1"}
+    ]

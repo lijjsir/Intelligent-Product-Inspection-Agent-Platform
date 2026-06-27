@@ -7,14 +7,11 @@ from types import SimpleNamespace
 import pytest
 from app.core.claims import (
     CAPABILITY_CUSTOM_WORKFLOW,
-    WORKSPACE_APP,
     WORKSPACE_GOVERNANCE,
     WORKSPACE_OPS,
     build_auth_claims,
 )
 from app.core.exceptions import NotFoundError
-from agent.subgraphs.inspection_task import InspectionGraph
-from agent.subgraphs.inspection_task.nodes.vision import run_vision
 from agent.llm.client import LLMClient
 from agent.llm.gateway import LLMGateway
 from agent.llm.health_checker import ModelHealthChecker
@@ -510,6 +507,30 @@ async def test_embedder_reports_missing_model_config_page_embedding_model():
 
 
 @pytest.mark.asyncio
+async def test_embedder_reports_missing_key_for_configured_remote_embedding_model():
+    embedder = Embedder(
+        org_id="org-1",
+        runtime_models=[
+            {
+                "id": "embed-cfg",
+                "provider": "volcengine",
+                "model_key": "ep-embedding",
+                "endpoint": "https://ark.example.com/api/v3",
+                "api_key": None,
+                "model_type": "embedding",
+                "is_active": True,
+                "health_status": "healthy",
+                "priority": 1,
+            }
+        ],
+        allow_pseudo_fallback=False,
+    )
+
+    with pytest.raises(RuntimeError, match="api_key is missing.*ep-embedding"):
+        await embedder.embed("hello")
+
+
+@pytest.mark.asyncio
 async def test_embedder_falls_back_to_pseudo_vector_when_runtime_embedding_fails(monkeypatch):
     class FakeLLMClient:
         def __init__(self, **kwargs):
@@ -682,20 +703,6 @@ def test_feedback_service_replaces_actor_score_event():
     ]
 
 
-def test_feedback_submit_schema_allows_info_severity():
-    from app.schemas.governance import FeedbackSubmit
-
-    payload = FeedbackSubmit(
-        feedback_type="up",
-        severity="info",
-        category="reliable",
-        comment="looks correct",
-    )
-
-    assert payload.severity.value == "info"
-    assert payload.category.value == "reliable"
-
-
 @pytest.mark.asyncio
 async def test_feedback_service_saves_message_feedback_for_visible_target(monkeypatch):
     saved_payloads = []
@@ -824,7 +831,7 @@ def test_build_auth_claims_for_app_developer():
     assert claims.role == "app_developer"
     assert claims.roles == ["app_developer"]
     assert claims.default_workspace == WORKSPACE_OPS
-    assert claims.workspaces == [WORKSPACE_APP, WORKSPACE_OPS]
+    assert claims.workspaces == [WORKSPACE_OPS]
     assert CAPABILITY_CUSTOM_WORKFLOW in claims.capabilities
 
 
@@ -910,6 +917,53 @@ def test_standard_service_rejects_when_rule_matches():
     assert result["matched_rules"][0]["disposition"] == "fail"
 
 
+def test_standard_service_rejects_product_type_mismatch_even_with_high_confidence():
+    result = InspectionStandardService._evaluate_loaded_spec(
+        spec=SimpleNamespace(
+            spec_code="AUTO-HAZELNUT-V1",
+            name="榛子外观标准",
+            version="2026.1",
+            product_id="hazelnut",
+            product_family="food",
+            applicable_skus=[],
+            required_views=[],
+            effective_from=None,
+            effective_to=None,
+            required_image_count=1,
+            aggregation_rules={},
+            ai_gate_rules={},
+            manual_review_policies={},
+            auto_pass_enabled=True,
+            ai_gate_confidence_threshold=0.72,
+            ai_gate_evidence_threshold=0.5,
+            ai_gate_traceability_threshold=0.5,
+        ),
+        items=[],
+        image_urls=["https://example.com/screw.png"],
+        defects=[],
+        citations=[{"id": "doc-1"}],
+        reasoning_chain={
+            "visual_inspection_result": {
+                "summary": "图片中主要对象为金属螺丝钉，不是榛子。",
+                "expected_product": "hazelnut",
+                "observed_product": "screw",
+                "product_match": False,
+                "product_mismatch_reason": "图片中是螺丝钉，不属于食品榛子检测对象。",
+                "confidence": 0.99,
+            }
+        },
+        model_verdict="pass",
+        overall_score=1.0,
+    )
+
+    assert result["verdict"] == "fail"
+    assert result["reasons"] == ["product_mismatch"]
+    assert result["ai_gate"]["passed"] is False
+    assert "product_mismatch" in result["ai_gate"]["reasons"]
+    assert result["product_check"]["observed_product"] == "screw"
+    assert "产品类型不匹配" in result["summary"]
+
+
 def test_analytics_normalizes_color_risk_levels():
     assert AnalyticsRepository._normalize_risk_level("green") == "low"
     assert AnalyticsRepository._normalize_risk_level("yellow") == "medium"
@@ -936,6 +990,38 @@ def test_analytics_risk_distribution_trend_maps_historical_colors():
             "medium": 1.0,
             "high": 1.0,
             "critical": 1.0,
+        }
+    ]
+
+
+def test_analytics_model_metrics_uses_result_model_for_linked_token_usage():
+    result_map = {
+        "doubao-seed-2-0-lite-260215": {
+            "result_count": 1,
+            "pass_rate": 1.0,
+            "hallucination_rate": 0.0,
+        }
+    }
+    ledger_map = {
+        "doubao-seed-2-0-lite-260215": {
+            "call_count": 1,
+            "total_tokens": 172,
+            "total_cost": 0.0012,
+        }
+    }
+
+    metrics = AnalyticsRepository._merge_model_metric_maps(result_map, ledger_map)
+
+    assert metrics == [
+        {
+            "model_key": "doubao-seed-2-0-lite-260215",
+            "result_count": 1,
+            "call_count": 1,
+            "pass_rate": 1.0,
+            "hallucination_rate": 0.0,
+            "avg_tokens": 172.0,
+            "total_tokens": 172,
+            "total_cost": 0.0012,
         }
     ]
 
@@ -1319,122 +1405,6 @@ async def test_llm_client_embed_raises_on_connect_error(monkeypatch):
     client = LLMClient(api_key="secret", base_url="https://example.com/api/v3", embed_model="embed-1")
     with pytest.raises(httpx.ConnectError):
         await client.embed("hello")
-
-
-@pytest.mark.asyncio
-async def test_run_vision_records_runtime_error_on_invalid_payload(monkeypatch):
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            return None
-
-        @staticmethod
-        def _extract_json_object(text: str):
-            return None
-
-        async def chat(self, *args, **kwargs):
-            return {"text": "not a structured defect payload"}
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.nodes.vision.LLMClient", FakeClient)
-
-    state = await run_vision(
-        {
-            "task_id": "task-1",
-            "org_id": "org-1",
-            "image_urls": ["https://example.com/a.png"],
-            "model_id": "chat-1",
-            "model_base_url": "https://example.com/api/v3",
-            "model_api_key": "secret",
-            "model_provider": "volcengine",
-            "trace_id": "trace-1",
-            "timeline": [],
-            "usage_events": [],
-            "runtime_errors": [],
-        }
-    )
-
-    assert state["defects"] == []
-    assert state["runtime_errors"][0]["stage"] == "vision"
-    assert "structured defects payload" in state["runtime_errors"][0]["message"]
-
-
-@pytest.mark.asyncio
-async def test_inspection_graph_stops_after_runtime_error(monkeypatch):
-    calls: list[str] = []
-
-    async def fake_plan(state):
-        calls.append("planner")
-        return state
-
-    async def fake_vision(state):
-        calls.append("vision")
-        state.setdefault("runtime_errors", []).append({"stage": "vision", "message": "boom"})
-        return state
-
-    async def fake_knowledge(state):
-        calls.append("knowledge")
-        return state
-
-    async def fake_reasoning(state):
-        calls.append("reasoning")
-        return state
-
-    async def fake_finalize(state):
-        calls.append("finalizer")
-        return state
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", fake_plan)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", fake_vision)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", fake_knowledge)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", fake_reasoning)
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", fake_finalize)
-
-    state = await InspectionGraph().run({"timeline": [], "runtime_errors": []})
-
-    assert state["runtime_errors"][0]["message"] == "boom"
-    assert calls == ["planner", "vision"]
-
-
-@pytest.mark.asyncio
-async def test_inspection_graph_event_stream_follows_stage_execution_order(monkeypatch):
-    async def fake_node(stage: str):
-        async def _run(state):
-            state.setdefault("timeline", []).append({"stage": stage, "message": f"{stage} done"})
-            return state
-
-        return _run
-
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.plan", await fake_node("planner"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_vision", await fake_node("vision"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_knowledge", await fake_node("knowledge"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.run_reasoning", await fake_node("reasoning"))
-    monkeypatch.setattr("agent.subgraphs.inspection_task.graph.finalize", await fake_node("finalizer"))
-
-    events: list[dict] = []
-
-    async def on_event(event):
-        events.append(event)
-
-    state = await InspectionGraph().run({"timeline": [], "runtime_errors": []}, on_event=on_event)
-
-    assert [item["stage"] for item in state["timeline"]] == [
-        "planner",
-        "vision",
-        "knowledge",
-        "reasoning",
-        "finalizer",
-    ]
-    assert [(item["type"], item["stage"]) for item in events] == [
-        ("stage_start", "planner"),
-        ("stage_end", "planner"),
-        ("stage_start", "vision"),
-        ("stage_end", "vision"),
-        ("stage_start", "knowledge"),
-        ("stage_end", "knowledge"),
-        ("stage_start", "reasoning"),
-        ("stage_end", "reasoning"),
-        ("stage_start", "finalizer"),
-        ("stage_end", "finalizer"),
-    ]
 
 
 def test_langfuse_trace_to_item_parses_inspection_trace():

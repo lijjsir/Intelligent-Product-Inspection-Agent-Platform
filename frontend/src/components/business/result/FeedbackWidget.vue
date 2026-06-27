@@ -21,11 +21,11 @@ const form = reactive({
 const disabled = computed(() => !props.resultId || store.loading);
 
 const severityOptions: Array<{ label: string; value: FeedbackSeverity; rating: number }> = [
-  { label: "无风险", value: "info", rating: 5 },
-  { label: "低危", value: "low", rating: 4 },
-  { label: "中危", value: "medium", rating: 3 },
-  { label: "高危", value: "high", rating: 2 },
-  { label: "致命", value: "critical", rating: 1 },
+  { label: "无影响", value: "info", rating: 5 },
+  { label: "轻微影响", value: "low", rating: 4 },
+  { label: "中等影响", value: "medium", rating: 3 },
+  { label: "严重影响", value: "high", rating: 2 },
+  { label: "关键影响", value: "critical", rating: 1 },
 ];
 
 function severityRating(value: FeedbackSeverity | "") {
@@ -34,7 +34,7 @@ function severityRating(value: FeedbackSeverity | "") {
 
 async function submit(type: "up" | "down") {
   if (!form.severity) {
-    ElMessage.warning("请选择严重程度");
+    ElMessage.warning("请选择影响程度");
     return;
   }
   form.feedback_type = type;
@@ -52,18 +52,18 @@ async function submit(type: "up" | "down") {
 <template>
   <div class="feedback-widget">
     <div class="headline">
-      <h3>结果反馈</h3>
-      <p>将本次判定质量回灌至治理层</p>
+      <h3>AI 结果反馈</h3>
+      <p>反馈用于评估 AI 检测质量，不会直接改变产品判定。</p>
     </div>
     <div class="controls">
-      <el-select v-model="form.category" placeholder="反馈类型" clearable>
-        <el-option label="真实可靠" value="reliable" />
+      <el-select v-model="form.category" placeholder="AI 结果类型" clearable>
+        <el-option label="结果可靠" value="reliable" />
         <el-option label="判定错误" value="wrong_verdict" />
         <el-option label="证据不足" value="weak_evidence" />
-        <el-option label="定位不准" value="bad_bbox" />
-        <el-option label="描述模糊" value="unclear_reasoning" />
+        <el-option label="缺陷定位不准" value="bad_bbox" />
+        <el-option label="描述不清" value="unclear_reasoning" />
       </el-select>
-      <el-select v-model="form.severity" placeholder="严重程度" clearable>
+      <el-select v-model="form.severity" placeholder="影响程度" clearable>
         <el-option
           v-for="item in severityOptions"
           :key="item.value"

@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     db_replica_url: str = "mysql+aiomysql://piap:piap@127.0.0.1:13306/piap_main"
 
     redis_url: str = "redis://127.0.0.1:16379/0"
+    task_blackboard_chat_ttl_seconds: int = 7200
+    task_blackboard_analysis_ttl_seconds: int = 86400
+    task_blackboard_inspection_ttl_seconds: int = 604800
+    agent_quality_task_timeout_ms: int = 1200000
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
 
@@ -97,11 +101,17 @@ class Settings(BaseSettings):
     report_export_bucket: str = "report-exports"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
-    neo4j_enabled: bool = False
+    neo4j_enabled: bool = True
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str = "neo4j_password"
     neo4j_database: str = "neo4j"
+    memory_graph_write_backend: str = "neo4j"  # mysql | neo4j | dual
+    memory_graph_read_backend: str = "neo4j"   # mysql | neo4j
+    memory_strict_sync: bool = True
+    memory_sync_outbox_enabled: bool = True
+    memory_sync_outbox_batch_size: int = 50
+    memory_sync_outbox_max_retries: int = 5
     algo_runner_workdir: str = "runtime_algo_workspace"
     algo_runtime_base_url: str = "http://127.0.0.1:18080"
 
@@ -131,8 +141,9 @@ class Settings(BaseSettings):
     local_openai_model_id: str = "qwen2.5:7b-instruct"
     trust_review_provider: str = "local_openai"
     trust_review_model: str = "qwen2.5:7b-instruct"
-    trust_review_timeout_sec: int = 30
+    trust_review_timeout_sec: int = 120
     trust_scoring_enabled: bool = True
+    paper_review_enabled: bool = True
     paper_check_languagetool_url: str = ""
     paper_check_languagetool_language: str = "zh-CN"
     paper_check_languagetool_timeout_sec: int = 20
@@ -144,13 +155,11 @@ class Settings(BaseSettings):
     paper_check_engine_timeout_sec: int = 20
     paper_check_pycorrector_timeout_sec: int = 8
     paper_check_pycorrector_chunk_chars: int = 1200
-    paper_check_macro_correct_timeout_sec: int = 45
-    paper_check_macro_correct_chunk_chars: int = 1800
     paper_check_pycorrector_data_dir: str = ""
     paper_check_pycorrector_language_model: str = "people_chars_lm.klm"
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
-    vision_detector_timeout_sec: int = 20
+    vision_detector_timeout_sec: int = 120
 
     qdrant_url: str = "http://127.0.0.1:63330"
     qdrant_docker_url: str = "http://qdrant:6333"
@@ -160,7 +169,6 @@ class Settings(BaseSettings):
     rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
-    enable_legacy_agent_fallback: bool = False
     cors_allowed_origins: list[str] = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",

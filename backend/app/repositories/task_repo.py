@@ -74,6 +74,7 @@ class TaskRepository:
         page: int,
         size: int,
         owner_user_id: str | None = None,
+        order_by_recent: bool = False,
     ) -> tuple[list[InspectionTask], int]:
         from sqlalchemy import func
         base = (
@@ -113,8 +114,13 @@ class TaskRepository:
 
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))
         
+        order_by = (
+            (InspectionTask.created_at.desc(), InspectionTask.id.desc())
+            if order_by_recent
+            else (InspectionTask.priority.desc(), InspectionTask.created_at.desc())
+        )
         items = await self._session.execute(
-            base.order_by(InspectionTask.priority.desc(), InspectionTask.created_at.desc())
+            base.order_by(*order_by)
             .offset((page - 1) * size)
             .limit(size)
         )

@@ -2,278 +2,192 @@ from __future__ import annotations
 
 from typing import Any
 
+
 REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
     {
-        "name": "Agent Manager",
-        "description": "统一入口路由，负责将请求分发给聊天或检测 Agent。",
-        "workflow_binding": "agent_manager_v1",
-        "subgraph_key": "agent_manager",
-        "entry_graph": "AgentManagerService",
+        "name": "Orchestrator",
+        "description": "统一入口、计划、调度和任务级黑板管理。",
+        "workflow_binding": "orchestrator_v1",
+        "subgraph_key": "orchestrator",
+        "entry_graph": "OrchestratorLoop",
         "supports_start_stop": True,
         "graph_version": "v1",
         "is_active": True,
         "lifecycle_status": "active",
-        "group": "core",
+        "group_key": "core",
         "route_enabled": True,
         "supports_route_toggle": True,
-        "customer_visible_description": "统一请求入口，负责将用户请求智能路由分发给对应的专业Agent处理。",
+        "type": "orchestrator",
+        "customer_visible_description": "统一编排入口，负责计划、能力调用和业务 Agent 调度。",
     },
     {
-        "name": "Quality Chat",
-        "description": "轻量级智能问答入口，支持附件上传和 RAG 空间选择。",
-        "workflow_binding": "quality_chat_v2",
-        "subgraph_key": "chat",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": True,
-        "graph_version": "v2",
+        "name": "Evidence Capability",
+        "description": "RAG、共享记忆和质量知识图谱证据检索与冲突裁决。",
+        "workflow_binding": "evidence_capability_v1",
+        "subgraph_key": "evidence_arbitration",
+        "entry_graph": "EvidenceArbitrationService",
+        "supports_start_stop": False,
+        "graph_version": "v1",
         "is_active": True,
         "lifecycle_status": "active",
-        "group": "core",
-        "route_enabled": True,
-        "supports_route_toggle": True,
-        "customer_visible_description": "轻量级智能问答入口，支持附件上传和RAG知识空间检索，适用于日常产品质量咨询。",
+        "group_key": "capability",
+        "route_enabled": False,
+        "supports_route_toggle": False,
+        "type": "capability",
+        "customer_visible_description": "由编排器调用的证据检索与裁决能力。",
     },
     {
-        "name": "Inspection Task Agent",
-        "description": "负责正式质检任务创建、文件/图片检测、结果落库。",
-        "workflow_binding": "inspection_task_v1",
-        "subgraph_key": "inspection_task",
-        "entry_graph": "InspectionTaskGraph",
+        "name": "Vision Inspection Agent",
+        "description": "多模态视觉检验、缺陷定位和结构化视觉输出。",
+        "workflow_binding": "vision_inspection_v1",
+        "subgraph_key": "vision_inspection",
+        "entry_graph": "VisionInspectionGraph",
         "supports_start_stop": True,
         "graph_version": "v1",
         "is_active": True,
         "lifecycle_status": "active",
-        "group": "core",
+        "group_key": "core",
         "route_enabled": True,
         "supports_route_toggle": True,
-        "customer_visible_description": "负责正式质检任务的全流程：创建任务、图片/文件检测、结果计算与入库。",
+        "type": "agent",
+        "customer_visible_description": "负责图片理解、缺陷线索识别和视觉风险说明。",
     },
     {
-        "name": "Quality Judgement",
-        "description": "统一质量判定（合并 Legacy + LLM-native），支持 chat / file / task 多策略。",
-        "workflow_binding": "quality_judgement_v2",
-        "subgraph_key": "quality_judgement",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": True,
-        "graph_version": "v2",
-        "is_active": True,
-        "lifecycle_status": "active",
-        "group": "core",
-        "route_enabled": True,
-        "supports_route_toggle": True,
-        "customer_visible_description": "统一质量判定引擎，支持文本问答、文件解析、图片检测等多模式质检，自动合成判定证据。",
-    },
-    {
-        "name": "Market Monitor",
-        "description": "市场价格、销量、渠道异常检测（规划中）。",
-        "workflow_binding": "market_monitor_v0",
-        "subgraph_key": "market_monitor",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": False,
-        "graph_version": "v0",
-        "is_active": False,
-        "lifecycle_status": "planned",
-        "group": "planned",
-        "route_enabled": False,
-        "supports_route_toggle": False,
-        "customer_visible_description": "市场价格、销量、渠道异常检测与预警（规划中，暂未接入业务链路）。",
-    },
-    {
-        "name": "Public Opinion",
-        "description": "新闻、社交媒体、投诉举报等舆情分析（规划中）。",
-        "workflow_binding": "public_opinion_v0",
-        "subgraph_key": "public_opinion",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": False,
-        "graph_version": "v0",
-        "is_active": False,
-        "lifecycle_status": "planned",
-        "group": "planned",
-        "route_enabled": False,
-        "supports_route_toggle": False,
-        "customer_visible_description": "新闻、社交媒体、投诉举报等多渠道舆情采集与分析（规划中，暂未接入业务链路）。",
-    },
-    {
-        "name": "Trend Evolution",
-        "description": "风险融合、趋势推演和情景预测（规划中）。",
-        "workflow_binding": "trend_evolution_v0",
-        "subgraph_key": "trend_evolution",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": False,
-        "graph_version": "v0",
-        "is_active": False,
-        "lifecycle_status": "planned",
-        "group": "planned",
-        "route_enabled": False,
-        "supports_route_toggle": False,
-        "customer_visible_description": "风险融合、趋势推演和情景预测（规划中，暂未接入业务链路）。",
-    },
-    {
-        "name": "Supervision Sampling",
-        "description": "抽检计划生成、样品管理和现场检查记录（规划中）。",
-        "workflow_binding": "supervision_sampling_v0",
-        "subgraph_key": "supervision_sampling",
-        "entry_graph": "MemoryManagerGraph",
-        "supports_start_stop": False,
-        "graph_version": "v0",
-        "is_active": False,
-        "lifecycle_status": "planned",
-        "group": "planned",
-        "route_enabled": False,
-        "supports_route_toggle": False,
-        "customer_visible_description": "抽检计划生成、样品管理和现场检查记录（规划中，暂未接入业务链路）。",
-    },
-    {
-        "name": "Lab Detection",
-        "description": "样品检测、指标解析和标准比对（规划中）。",
-        "workflow_binding": "lab_detection_v0",
+        "name": "Lab Detection Agent",
+        "description": "实验室、设备和环境数据的多步骤风险研判。",
+        "workflow_binding": "lab_detection_v1",
         "subgraph_key": "lab_detection",
-        "entry_graph": "MemoryManagerGraph",
+        "entry_graph": "LabDetectionGraph",
+        "supports_start_stop": True,
+        "graph_version": "v1",
+        "is_active": True,
+        "lifecycle_status": "active",
+        "group_key": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "type": "agent",
+        "customer_visible_description": "负责实验室和设备环境数据的早期风险研判。",
+    },
+    {
+        "name": "Quality Analysis Agent",
+        "description": "证据聚合、质量问答和正式质检终判。",
+        "workflow_binding": "quality_analysis_v1",
+        "subgraph_key": "quality_analysis",
+        "entry_graph": "QualityAnalysisGraph",
+        "supports_start_stop": True,
+        "graph_version": "v1",
+        "is_active": True,
+        "lifecycle_status": "active",
+        "group_key": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "type": "agent",
+        "customer_visible_description": "负责整合证据并生成最终回答或正式质检结果。",
+    },
+    {
+        "name": "File Agent",
+        "description": "文件总结、问答、RAG 入库请求和论文格式检查。",
+        "workflow_binding": "file_agent_v1",
+        "subgraph_key": "file",
+        "entry_graph": "FileExecutor",
+        "supports_start_stop": True,
+        "graph_version": "v1",
+        "is_active": True,
+        "lifecycle_status": "active",
+        "group_key": "core",
+        "route_enabled": True,
+        "supports_route_toggle": True,
+        "type": "agent",
+        "customer_visible_description": "负责文件解析、总结、问答和论文格式检查。",
+    },
+    {
+        "name": "Memory Capability",
+        "description": "候选记忆、污染传播分析、回滚与恢复评估。",
+        "workflow_binding": "memory_capability_v1",
+        "subgraph_key": "memory_governance",
+        "entry_graph": "MemoryCapabilityService",
         "supports_start_stop": False,
-        "graph_version": "v0",
-        "is_active": False,
-        "lifecycle_status": "planned",
-        "group": "planned",
+        "graph_version": "v1",
+        "is_active": True,
+        "lifecycle_status": "active",
+        "group_key": "capability",
         "route_enabled": False,
         "supports_route_toggle": False,
-        "customer_visible_description": "实验室样品检测指标解析和标准比对（规划中，暂未接入业务链路）。",
+        "type": "capability",
+        "customer_visible_description": "由后台管理流程调用的共享记忆治理能力。",
     },
 ]
 
 
 ROOT_NODES: list[dict[str, Any]] = [
-    {"id": "request_intake", "label": "Request Intake", "kind": "root"},
-    {"id": "memory_context_loader", "label": "Memory Context Loader", "kind": "root"},
-    {"id": "manager_route_policy", "label": "Manager Route Policy", "kind": "root"},
-    {"id": "subgraph_runner", "label": "Subgraph Runner", "kind": "root"},
-    {"id": "result_synthesizer", "label": "Result Synthesizer", "kind": "root"},
+    {"id": "request_intake", "label": "Request Intake", "kind": "orchestrator"},
+    {"id": "global_plan", "label": "Global Plan", "kind": "orchestrator"},
+    {"id": "task_blackboard", "label": "Task Blackboard", "kind": "orchestrator"},
+    {"id": "capability_dispatch", "label": "Capability Dispatch", "kind": "orchestrator"},
+    {"id": "agent_dispatch", "label": "Business Agent Dispatch", "kind": "orchestrator"},
+    {"id": "result_synthesizer", "label": "Result Synthesizer", "kind": "orchestrator"},
 ]
 ROOT_EDGES: list[dict[str, Any]] = [
-    {"source": "request_intake", "target": "memory_context_loader"},
-    {"source": "memory_context_loader", "target": "manager_route_policy"},
-    {"source": "manager_route_policy", "target": "subgraph_runner"},
-    {"source": "subgraph_runner", "target": "result_synthesizer"},
-]
-
-AGENT_OVERVIEW_ROOT_NODES: list[dict[str, Any]] = [
-    {"id": "request_intake", "label": "Request Intake", "kind": "system"},
-    {"id": "memory_context_loader", "label": "Memory Context Loader", "kind": "system"},
-    {"id": "manager_route_policy", "label": "Manager Route Policy", "kind": "system"},
-    {"id": "subgraph_runner", "label": "Subgraph Runner", "kind": "system"},
-    {"id": "result_synthesizer", "label": "Result Synthesizer", "kind": "system"},
-]
-AGENT_OVERVIEW_ROOT_EDGES: list[dict[str, Any]] = [
-    {"source": "request_intake", "target": "memory_context_loader"},
-    {"source": "memory_context_loader", "target": "manager_route_policy"},
-    {"source": "manager_route_policy", "target": "subgraph_runner"},
-]
-
-QUALITY_JUDGEMENT_NODES: list[dict[str, Any]] = [
-    {"id": "quality_judgement", "label": "Quality Judgement Subgraph", "kind": "subgraph"},
-    {"id": "quality_judgement.intake_normalizer", "label": "Intake Normalizer", "kind": "quality"},
-    {"id": "quality_judgement.file_loader", "label": "File Loader", "kind": "quality"},
-    {"id": "quality_judgement.contract_inferencer", "label": "Contract Inferencer", "kind": "quality"},
-    {"id": "quality_judgement.planner", "label": "Planner", "kind": "quality"},
-    {"id": "quality_judgement.task_extractor", "label": "Task Extractor", "kind": "quality"},
-    {"id": "quality_judgement.knowledge_router", "label": "Knowledge Router", "kind": "quality"},
-    {"id": "quality_judgement.tool_loop", "label": "Tool Loop", "kind": "quality"},
-    {"id": "quality_judgement.reasoning", "label": "Reasoning", "kind": "quality"},
-    {"id": "quality_judgement.evidence_synthesizer", "label": "Evidence Synthesizer", "kind": "quality"},
-    {"id": "quality_judgement.review_gate", "label": "Review Gate", "kind": "quality"},
-    {"id": "quality_judgement.task_executor", "label": "Task Executor", "kind": "quality"},
-    {"id": "quality_judgement.persist_emit", "label": "Persist Emit", "kind": "quality"},
-]
-QUALITY_JUDGEMENT_EDGES: list[dict[str, Any]] = [
-    {"source": "quality_judgement", "target": "quality_judgement.intake_normalizer"},
-    {"source": "quality_judgement.intake_normalizer", "target": "quality_judgement.file_loader"},
-    {"source": "quality_judgement.file_loader", "target": "quality_judgement.contract_inferencer"},
-    {"source": "quality_judgement.contract_inferencer", "target": "quality_judgement.planner"},
-    {"source": "quality_judgement.planner", "target": "quality_judgement.task_extractor"},
-    {"source": "quality_judgement.planner", "target": "quality_judgement.knowledge_router"},
-    {"source": "quality_judgement.task_extractor", "target": "quality_judgement.reasoning"},
-    {"source": "quality_judgement.knowledge_router", "target": "quality_judgement.tool_loop"},
-    {"source": "quality_judgement.knowledge_router", "target": "quality_judgement.reasoning"},
-    {"source": "quality_judgement.tool_loop", "target": "quality_judgement.evidence_synthesizer"},
-    {"source": "quality_judgement.reasoning", "target": "quality_judgement.review_gate"},
-    {"source": "quality_judgement.evidence_synthesizer", "target": "quality_judgement.review_gate"},
-    {"source": "quality_judgement.review_gate", "target": "quality_judgement.task_executor"},
-    {"source": "quality_judgement.task_executor", "target": "quality_judgement.persist_emit"},
-]
-
-MEMORY_MANAGER_NODES: list[dict[str, Any]] = [
-    {"id": "memory_manager", "label": "Memory Manager Graph", "kind": "subgraph"},
-    {"id": "memory_manager.request_intake", "label": "Request Intake", "kind": "memory"},
-    {"id": "memory_manager.memory_context_loader", "label": "Memory Context Loader", "kind": "memory"},
-    {"id": "memory_manager.manager_route_policy", "label": "Manager Route Policy", "kind": "memory"},
-    {"id": "memory_manager.market_monitor_agent", "label": "Market Monitor Agent", "kind": "memory"},
-    {"id": "memory_manager.public_opinion_agent", "label": "Public Opinion Agent", "kind": "memory"},
-    {"id": "memory_manager.trend_evolution_agent", "label": "Trend Evolution Agent", "kind": "memory"},
-    {"id": "memory_manager.supervision_sampling_agent", "label": "Supervision Sampling Agent", "kind": "memory"},
-    {"id": "memory_manager.lab_detection_agent", "label": "Lab Detection Agent", "kind": "memory"},
-    {"id": "memory_manager.quality_judgement_agent", "label": "Quality Judgement Agent", "kind": "memory"},
-    {"id": "memory_manager.candidate_memory_builder", "label": "Candidate Memory Builder", "kind": "memory"},
-    {"id": "memory_manager.write_gate_node", "label": "Write Gate", "kind": "memory"},
-    {"id": "memory_manager.contamination_monitor_node", "label": "Contamination Monitor", "kind": "memory"},
-    {"id": "memory_manager.provenance_node", "label": "Provenance", "kind": "memory"},
-    {"id": "memory_manager.propagation_graph_node", "label": "Propagation Graph", "kind": "memory"},
-    {"id": "memory_manager.rollback_planner_node", "label": "Rollback Planner", "kind": "memory"},
-    {"id": "memory_manager.governance_recovery_agent", "label": "Governance Recovery Agent", "kind": "memory"},
-    {"id": "memory_manager.replay_evaluation_node", "label": "Replay Evaluation", "kind": "memory"},
-    {"id": "memory_manager.result_synthesizer", "label": "Result Synthesizer", "kind": "memory"},
-]
-MEMORY_MANAGER_EDGES: list[dict[str, Any]] = [
-    {"source": "memory_manager", "target": "memory_manager.request_intake"},
-    {"source": "memory_manager.request_intake", "target": "memory_manager.memory_context_loader"},
-    {"source": "memory_manager.memory_context_loader", "target": "memory_manager.manager_route_policy"},
-    {"source": "memory_manager.manager_route_policy", "target": "memory_manager.market_monitor_agent"},
-    {"source": "memory_manager.manager_route_policy", "target": "memory_manager.public_opinion_agent"},
-    {"source": "memory_manager.manager_route_policy", "target": "memory_manager.trend_evolution_agent"},
-    {"source": "memory_manager.manager_route_policy", "target": "memory_manager.quality_judgement_agent"},
-    {"source": "memory_manager.market_monitor_agent", "target": "memory_manager.candidate_memory_builder"},
-    {"source": "memory_manager.public_opinion_agent", "target": "memory_manager.candidate_memory_builder"},
-    {"source": "memory_manager.trend_evolution_agent", "target": "memory_manager.candidate_memory_builder"},
-    {"source": "memory_manager.quality_judgement_agent", "target": "memory_manager.candidate_memory_builder"},
-    {"source": "memory_manager.candidate_memory_builder", "target": "memory_manager.write_gate_node"},
-    {"source": "memory_manager.write_gate_node", "target": "memory_manager.contamination_monitor_node"},
-    {"source": "memory_manager.contamination_monitor_node", "target": "memory_manager.result_synthesizer"},
-    {"source": "memory_manager.contamination_monitor_node", "target": "memory_manager.provenance_node"},
-    {"source": "memory_manager.provenance_node", "target": "memory_manager.propagation_graph_node"},
-    {"source": "memory_manager.propagation_graph_node", "target": "memory_manager.rollback_planner_node"},
-    {"source": "memory_manager.rollback_planner_node", "target": "memory_manager.governance_recovery_agent"},
-    {"source": "memory_manager.governance_recovery_agent", "target": "memory_manager.replay_evaluation_node"},
-    {"source": "memory_manager.replay_evaluation_node", "target": "memory_manager.result_synthesizer"},
+    {"source": "request_intake", "target": "global_plan"},
+    {"source": "global_plan", "target": "task_blackboard"},
+    {"source": "task_blackboard", "target": "capability_dispatch"},
+    {"source": "task_blackboard", "target": "agent_dispatch"},
+    {"source": "capability_dispatch", "target": "result_synthesizer"},
+    {"source": "agent_dispatch", "target": "result_synthesizer"},
 ]
 
 
-def get_topology(subgraph_key: str = "quality_judgement", *, include_root: bool = True) -> dict[str, Any]:
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, Any]] = []
-    if include_root:
-        nodes.extend(ROOT_NODES)
-        edges.extend(ROOT_EDGES)
-    selected_keys = [subgraph_key]
-    if subgraph_key in {"all", "*"}:
-        selected_keys = [item["subgraph_key"] for item in REGISTERED_SUBGRAPHS]
-    for key in selected_keys:
-        if key == "quality_judgement":
-            nodes.extend(QUALITY_JUDGEMENT_NODES)
-            edges.extend(QUALITY_JUDGEMENT_EDGES)
-        elif key == "memory_manager":
-            nodes.extend(MEMORY_MANAGER_NODES)
-            edges.extend(MEMORY_MANAGER_EDGES)
-        if include_root:
-            edges.append({"source": "subgraph_runner", "target": key})
-    if include_root and subgraph_key in {"all", "*"}:
-        deduped_nodes = {node["id"]: node for node in nodes}
-        deduped_edges = {(edge["source"], edge["target"]): edge for edge in edges}
-        return {"nodes": list(deduped_nodes.values()), "edges": list(deduped_edges.values())}
-    return {"nodes": nodes, "edges": edges}
-
-
-def get_route_topology(*, intent_name: str, agent_name: str | None, subgraph_key: str) -> dict[str, Any]:
-    topology = get_topology(subgraph_key, include_root=True)
+def _component_node(item: dict[str, Any]) -> dict[str, Any]:
     return {
-        **topology,
+        "id": str(item["subgraph_key"]),
+        "label": str(item["name"]),
+        "kind": str(item.get("type") or "component"),
+    }
+
+
+def get_topology(
+    subgraph_key: str = "all",
+    *,
+    include_root: bool = True,
+) -> dict[str, Any]:
+    nodes = [dict(item) for item in ROOT_NODES] if include_root else []
+    edges = [dict(item) for item in ROOT_EDGES] if include_root else []
+    selected = REGISTERED_SUBGRAPHS
+    if subgraph_key not in {"all", "*"}:
+        selected = [
+            item
+            for item in REGISTERED_SUBGRAPHS
+            if item["subgraph_key"] == subgraph_key
+        ]
+    for item in selected:
+        node = _component_node(item)
+        nodes.append(node)
+        if include_root and node["id"] != "orchestrator":
+            source = (
+                "capability_dispatch"
+                if node["kind"] == "capability"
+                else "agent_dispatch"
+            )
+            edges.append({"source": source, "target": node["id"]})
+    deduped_nodes = {node["id"]: node for node in nodes}
+    deduped_edges = {
+        (edge["source"], edge["target"]): edge
+        for edge in edges
+    }
+    return {
+        "nodes": list(deduped_nodes.values()),
+        "edges": list(deduped_edges.values()),
+    }
+
+
+def get_route_topology(
+    *,
+    intent_name: str,
+    agent_name: str | None,
+    subgraph_key: str,
+) -> dict[str, Any]:
+    return {
+        **get_topology(subgraph_key, include_root=True),
         "intent_name": intent_name,
         "agent_name": agent_name,
         "selected_subgraph": subgraph_key,
@@ -286,8 +200,6 @@ def get_registered_subgraphs() -> list[dict[str, Any]]:
 
 def get_agent_overview_root() -> dict[str, Any]:
     return {
-        "nodes": [dict(item) for item in AGENT_OVERVIEW_ROOT_NODES],
-        "edges": [dict(item) for item in AGENT_OVERVIEW_ROOT_EDGES],
+        "nodes": [dict(item) for item in ROOT_NODES],
+        "edges": [dict(item) for item in ROOT_EDGES],
     }
-
-

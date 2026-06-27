@@ -1,7 +1,7 @@
 """add meeting room v2 permission boundaries
 
-Revision ID: 0075
-Revises: 0074
+Revision ID: 0075_meeting_room_v2_boundaries
+Revises: 0074_meeting_room_framework
 Create Date: 2026-06-04
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import mysql
 
 
-revision = "0075"
-down_revision = "0074"
+revision = "0075_meeting_room_v2_boundaries"
+down_revision = "0074_meeting_room_framework"
 branch_labels = None
 depends_on = None
 

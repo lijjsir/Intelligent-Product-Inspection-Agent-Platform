@@ -1,25 +1,59 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.memory import (
-    MemoryDependencyEdge,
+    MemoryCandidateSupport,
     MemoryEvaluation,
     MemoryEvent,
     MemoryItem,
     MemoryPolicy,
     MemoryRollback,
+    MemorySyncOutbox,
 )
+
+
+async def _get_versioned_out_memory_ids(org_id: str) -> set[str]:
+    """Query Neo4j for memory IDs that are targets of VERSION_OF edges.
+
+    These represent old versions that should be excluded from
+    retrievable-memory queries.  Returns an empty set when Neo4j is
+    unavailable so that queries degrade gracefully (no filtering).
+    """
+    try:
+        from app.services.neo4j_memory_graph_store import Neo4jMemoryGraphStore, MEMORY_RELATIONSHIP_TYPES
+
+        store = Neo4jMemoryGraphStore()
+        version_of = MEMORY_RELATIONSHIP_TYPES.get("version_of", "VERSION_OF")
+        query = """
+        MATCH (s:Memory {org_id: $org_id})-[r]->(t:Memory {org_id: $org_id})
+        WHERE r.edge_type = $edge_type AND coalesce(r.deleted_at, '') = ''
+        RETURN DISTINCT t.memory_id AS memory_id
+        LIMIT 10000
+        """
+        records = await store._execute_read(query, {
+            "org_id": org_id,
+            "edge_type": version_of,
+        })
+        return {r["memory_id"] for r in records}
+    except Exception:
+        return set()
 
 
 class MemoryItemRepository:
     def __init__(self, session: AsyncSession, org_id: str):
         self._session = session
         self._org_id = org_id
+
+    @staticmethod
+    def _scope_equals(field: str, value: str):
+        return MemoryItem.scope_json[field].as_string() == value
 
     async def create(self, item: MemoryItem) -> MemoryItem:
         self._session.add(item)
@@ -36,11 +70,40 @@ class MemoryItemRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_idempotency_key(self, idempotency_key: str) -> MemoryItem | None:
+        result = await self._session.execute(
+            select(MemoryItem).where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.idempotency_key == idempotency_key,
+                MemoryItem.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_candidate_by_key(
+        self,
+        *,
+        memory_type: str,
+        candidate_key: str,
+        user_id: str | None = None,
+        scope: dict | None = None,
+    ) -> MemoryItem | None:
+        stmt = select(MemoryItem).where(
+            MemoryItem.org_id == self._org_id,
+            MemoryItem.memory_type == memory_type,
+            MemoryItem.status.in_(("candidate", "active")),
+            MemoryItem.candidate_key == candidate_key,
+            MemoryItem.deleted_at.is_(None),
+        )
+        if user_id:
+            stmt = stmt.where((MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None)))
+        result = await self._session.execute(stmt.order_by(MemoryItem.updated_at.desc()).limit(1))
+        return result.scalar_one_or_none()
+
     async def list_by_org(
         self,
         status: str | None = None,
         memory_type: str | None = None,
-        workspace: str | None = None,
         user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -53,8 +116,6 @@ class MemoryItemRepository:
             stmt = stmt.where(MemoryItem.status == status)
         if memory_type:
             stmt = stmt.where(MemoryItem.memory_type == memory_type)
-        if workspace:
-            stmt = stmt.where(MemoryItem.workspace == workspace)
         if user_id:
             stmt = stmt.where(MemoryItem.user_id == user_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).offset(offset).limit(limit)
@@ -63,28 +124,17 @@ class MemoryItemRepository:
 
     async def list_active_by_scope(
         self,
-        workspace: str,
         memory_types: list[str] | None = None,
         user_id: str | None = None,
         task_id: str | None = None,
-        room_id: str | None = None,
-        product_id: str | None = None,
         product_line: str | None = None,
-        spec_code: str | None = None,
-        standard_id: str | None = None,
         rag_space_id: str | None = None,
-        scope_user_id: str | None = None,
-        scope_workspace: str | None = None,
-        organization_id: str | None = None,
-        role: str | None = None,
-        batch_no: str | None = None,
-        scope_types: list[str] | None = None,
         limit: int = 50,
     ) -> list[MemoryItem]:
         stmt = select(MemoryItem).where(
             MemoryItem.org_id == self._org_id,
-            MemoryItem.workspace == workspace,
-            MemoryItem.status.in_(["confirmed", "active"]),
+            MemoryItem.status == "active",
+            MemoryItem.vector_status == "success",
             MemoryItem.deleted_at.is_(None),
             MemoryItem.expires_at.is_(None)
             | (MemoryItem.expires_at > datetime.now(timezone.utc)),
@@ -95,92 +145,80 @@ class MemoryItemRepository:
             stmt = stmt.where(
                 (MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None))
             )
-        scope_conditions = []
-        if room_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"room_id": room_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "meeting_room", "scope_id": room_id}
-                )
-            )
+        else:
+            stmt = stmt.where(MemoryItem.user_id.is_(None))
         if task_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"task_id": task_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "inspection_task", "scope_id": task_id}
-                )
-            )
-        if product_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"product_id": product_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains({"scope_type": "product", "scope_id": product_id})
-            )
+            stmt = stmt.where(MemoryItem.task_id == task_id)
         if product_line:
-            scope_conditions.append(MemoryItem.scope_json.contains({"product_line": product_line}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "product", "scope_id": product_line}
-                )
-            )
-        if spec_code:
-            scope_conditions.append(MemoryItem.scope_json.contains({"spec_code": spec_code}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains({"scope_type": "standard", "scope_id": spec_code})
-            )
-        if standard_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"standard_id": standard_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "standard", "scope_id": standard_id}
-                )
-            )
+            stmt = stmt.where(MemoryItem.product_line == product_line)
         if rag_space_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"rag_space_id": rag_space_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "rag_space", "scope_id": rag_space_id}
-                )
-            )
-        if scope_user_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"user_id": scope_user_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "user", "scope_id": scope_user_id}
-                )
-            )
-        if role:
-            scope_conditions.append(MemoryItem.scope_json.contains({"role": role}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains({"scope_type": "role", "scope_id": role})
-            )
-        if scope_workspace:
-            scope_conditions.append(MemoryItem.scope_json.contains({"workspace": scope_workspace}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "workspace", "scope_id": scope_workspace}
-                )
-            )
-        if organization_id:
-            scope_conditions.append(MemoryItem.scope_json.contains({"organization_id": organization_id}))
-            scope_conditions.append(MemoryItem.scope_json.contains({"org_id": organization_id}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains(
-                    {"scope_type": "organization", "scope_id": organization_id}
-                )
-            )
-        if batch_no:
-            scope_conditions.append(MemoryItem.scope_json.contains({"batch_no": batch_no}))
-            scope_conditions.append(
-                MemoryItem.scope_json.contains({"scope_type": "batch", "scope_id": batch_no})
-            )
-        if scope_types:
-            scope_conditions.extend(
-                MemoryItem.scope_json.contains({"scope_type": scope_type})
-                for scope_type in scope_types
-            )
-        if scope_conditions:
-            stmt = stmt.where(or_(*scope_conditions))
+            stmt = stmt.where(MemoryItem.rag_space_id == rag_space_id)
+        # Exclude memories that are old versions (target of a version_of edge).
+        # This data now lives in Neo4j; we fetch the set of versioned-out IDs
+        # from the graph store and filter in Python.
+        versioned_out = await _get_versioned_out_memory_ids(self._org_id)
         stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
+        result = await self._session.execute(stmt)
+        items = list(result.scalars().all())
+        if versioned_out:
+            items = [item for item in items if item.memory_id not in versioned_out]
+        return items
+
+    async def list_retrievable_by_scope(
+        self,
+        memory_types: list[str] | None = None,
+        user_id: str | None = None,
+        task_id: str | None = None,
+        product_line: str | None = None,
+        rag_space_id: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        """Retrievable shared memory is active only."""
+        stmt = select(MemoryItem).where(
+            MemoryItem.org_id == self._org_id,
+            MemoryItem.status == "active",
+            MemoryItem.deleted_at.is_(None),
+            MemoryItem.expires_at.is_(None)
+            | (MemoryItem.expires_at > datetime.now(timezone.utc)),
+        )
+        if memory_types:
+            stmt = stmt.where(MemoryItem.memory_type.in_(memory_types))
+        if user_id:
+            stmt = stmt.where(
+                (MemoryItem.user_id == user_id) | (MemoryItem.user_id.is_(None))
+            )
+        else:
+            stmt = stmt.where(MemoryItem.user_id.is_(None))
+        if task_id:
+            stmt = stmt.where(self._scope_equals("task_id", task_id))
+        if product_line:
+            stmt = stmt.where(self._scope_equals("product_line", product_line))
+        if rag_space_id:
+            stmt = stmt.where(self._scope_equals("rag_space_id", rag_space_id))
+        # Exclude old versions — fetched from Neo4j, filtered in Python
+        versioned_out = await _get_versioned_out_memory_ids(self._org_id)
+        stmt = stmt.order_by(MemoryItem.updated_at.desc()).limit(limit)
+        result = await self._session.execute(stmt)
+        items = list(result.scalars().all())
+        if versioned_out:
+            items = [item for item in items if item.memory_id not in versioned_out]
+        return items
+
+    async def list_promotion_candidates(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[MemoryItem]:
+        stmt = (
+            select(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.status == "candidate",
+                MemoryItem.deleted_at.is_(None),
+            )
+            .order_by(MemoryItem.updated_at.desc())
+            .limit(limit)
+        )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
@@ -209,6 +247,66 @@ class MemoryItemRepository:
                 MemoryItem.deleted_at.is_(None),
             )
             .values(trust_score=trust_score)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_candidate_stats(self, memory_id: str, **values) -> MemoryItem | None:
+        item = await self.get_by_memory_id(memory_id)
+        if not item:
+            return None
+
+        for key, value in values.items():
+            if key.endswith("_delta"):
+                attr = key[: -len("_delta")]
+                setattr(item, attr, int(getattr(item, attr, 0) or 0) + int(value or 0))
+            elif hasattr(item, key):
+                setattr(item, key, value)
+        await self._session.flush()
+        return item
+
+    async def update_index_status(
+        self,
+        memory_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        values: dict[str, Any] = {
+            "index_status": status,
+            "index_error": error,
+            "vector_status": status,
+            "vector_error": error,
+            "last_indexed_at": datetime.now(timezone.utc),
+            "last_vector_sync_at": datetime.now(timezone.utc),
+        }
+        stmt = (
+            update(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.memory_id == memory_id,
+                MemoryItem.deleted_at.is_(None),
+            )
+            .values(**values)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_vector_status(self, memory_id: str, status: str, error: str | None = None) -> None:
+        await self.update_index_status(memory_id, status, error)
+
+    async def update_graph_status(self, memory_id: str, status: str, error: str | None = None) -> None:
+        stmt = (
+            update(MemoryItem)
+            .where(
+                MemoryItem.org_id == self._org_id,
+                MemoryItem.memory_id == memory_id,
+                MemoryItem.deleted_at.is_(None),
+            )
+            .values(
+                graph_status=status,
+                graph_error=error,
+                last_graph_sync_at=datetime.now(timezone.utc),
+            )
         )
         await self._session.execute(stmt)
         await self._session.flush()
@@ -284,6 +382,57 @@ class MemoryEventRepository:
         return result.scalar_one_or_none()
 
 
+class MemoryCandidateSupportRepository:
+    def __init__(self, session: AsyncSession, org_id: str):
+        self._session = session
+        self._org_id = org_id
+
+    async def create(self, support: MemoryCandidateSupport) -> MemoryCandidateSupport:
+        self._session.add(support)
+        await self._session.flush()
+        return support
+
+    async def list_by_candidate(self, candidate_memory_id: str) -> list[MemoryCandidateSupport]:
+        result = await self._session.execute(
+            select(MemoryCandidateSupport)
+            .where(
+                MemoryCandidateSupport.org_id == self._org_id,
+                MemoryCandidateSupport.candidate_memory_id == candidate_memory_id,
+            )
+            .order_by(MemoryCandidateSupport.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def stats_for_candidate(self, candidate_memory_id: str) -> dict[str, float | int]:
+        supports = await self.list_by_candidate(candidate_memory_id)
+        if not supports:
+            return {
+                "support_count": 0,
+                "negative_count": 0,
+                "conflict_count": 0,
+                "rag_evidence_count": 0,
+                "agent_verifier_count": 0,
+                "unique_task_count": 0,
+                "avg_confidence": 0.0,
+            }
+
+        return {
+            "support_count": sum(1 for s in supports if s.support_type not in {"negative", "conflict"}),
+            "negative_count": sum(1 for s in supports if s.support_type == "negative"),
+            "conflict_count": sum(1 for s in supports if s.support_type == "conflict"),
+            "rag_evidence_count": sum(1 for s in supports if s.support_type == "rag_evidence"),
+            "agent_verifier_count": len({
+                str(s.source_agent)
+                for s in supports
+                if s.support_type == "agent_verifier" and s.source_agent
+            }),
+            "unique_task_count": len({str(s.task_id) for s in supports if s.task_id}),
+            "avg_confidence": (
+                sum(float(s.confidence or 0) for s in supports) / len(supports)
+            ),
+        }
+
+
 class MemoryDependencyRepository:
     def __init__(self, session: AsyncSession, org_id: str):
         self._session = session
@@ -293,6 +442,94 @@ class MemoryDependencyRepository:
         self._session.add(edge)
         await self._session.flush()
         return edge
+
+    async def get_active_edge(
+        self,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+    ) -> MemoryDependencyEdge | None:
+        result = await self._session.execute(
+            select(MemoryDependencyEdge).where(
+                MemoryDependencyEdge.org_id == self._org_id,
+                MemoryDependencyEdge.source_memory_id == source_memory_id,
+                MemoryDependencyEdge.target_memory_id == target_memory_id,
+                MemoryDependencyEdge.edge_type == edge_type,
+                MemoryDependencyEdge.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert_edge(
+        self,
+        *,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+        strength: float = 1.0,
+        source_event_id: str | None = None,
+        target_event_id: str | None = None,
+        scope_json: dict | None = None,
+        metadata_json: dict | None = None,
+    ) -> MemoryDependencyEdge:
+        existing = await self.get_active_edge(
+            source_memory_id=source_memory_id,
+            target_memory_id=target_memory_id,
+            edge_type=edge_type,
+        )
+
+        if existing:
+            existing.strength = max(float(existing.strength or 0), strength)
+            existing.metadata_json = self._merge_edge_metadata(
+                existing.metadata_json,
+                metadata_json,
+            )
+            if source_event_id:
+                existing.source_event_id = source_event_id
+            if target_event_id:
+                existing.target_event_id = target_event_id
+            if scope_json:
+                existing.scope_json = scope_json
+            await self._session.flush()
+            return existing
+
+        from app.core.ids import uuid7
+        edge = MemoryDependencyEdge(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            source_memory_id=source_memory_id,
+            target_memory_id=target_memory_id,
+            source_event_id=source_event_id,
+            target_event_id=target_event_id,
+            edge_type=edge_type,
+            strength=strength,
+            scope_json=scope_json,
+            metadata_json=metadata_json,
+        )
+        return await self.create(edge)
+
+    @staticmethod
+    def _merge_edge_metadata(old: dict | None, new: dict | None) -> dict:
+        from datetime import datetime, timezone
+        merged = dict(old or {})
+        incoming = dict(new or {})
+
+        observed_count = int(merged.get("observed_count") or 1)
+        incoming_count = int(incoming.get("observed_count") or 1)
+
+        merged.update(incoming)
+        merged["observed_count"] = observed_count + incoming_count
+        merged["last_observed_at"] = incoming.get("last_observed_at") or datetime.now(timezone.utc).isoformat()
+
+        return merged
+
+    async def list_upstream(self, memory_id: str) -> list[MemoryDependencyEdge]:
+        """Return edges where memory_id is the source (who this memory depends on)."""
+        return await self.list_by_source(memory_id)
+
+    async def list_downstream(self, memory_id: str) -> list[MemoryDependencyEdge]:
+        """Return edges where memory_id is the target (who depends on this memory)."""
+        return await self.list_by_target(memory_id)
 
     async def list_by_source(self, source_memory_id: str) -> list[MemoryDependencyEdge]:
         result = await self._session.execute(
@@ -351,6 +588,44 @@ class MemoryDependencyRepository:
         await self._session.flush()
         return result.rowcount
 
+    async def soft_delete_edges_between(
+        self,
+        source_memory_id: str,
+        target_memory_id: str,
+        edge_type: str,
+    ) -> int:
+        stmt = (
+            update(MemoryDependencyEdge)
+            .where(
+                MemoryDependencyEdge.org_id == self._org_id,
+                MemoryDependencyEdge.edge_type == edge_type,
+                MemoryDependencyEdge.deleted_at.is_(None),
+                (
+                    (
+                        (MemoryDependencyEdge.source_memory_id == source_memory_id)
+                        & (MemoryDependencyEdge.target_memory_id == target_memory_id)
+                    )
+                    | (
+                        (MemoryDependencyEdge.source_memory_id == target_memory_id)
+                        & (MemoryDependencyEdge.target_memory_id == source_memory_id)
+                    )
+                ),
+            )
+            .values(deleted_at=datetime.now(timezone.utc))
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return result.rowcount
+
+    async def list_all(self, *, org_id: str) -> list[MemoryDependencyEdge]:
+        stmt = (
+            select(MemoryDependencyEdge)
+            .where(MemoryDependencyEdge.org_id == org_id)
+            .where(MemoryDependencyEdge.deleted_at.is_(None))
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
 
 class MemoryPolicyRepository:
     def __init__(self, session: AsyncSession, org_id: str):
@@ -377,11 +652,10 @@ class MemoryPolicyRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_by_workspace(self, workspace: str) -> list[MemoryPolicy]:
+    async def list_all(self) -> list[MemoryPolicy]:
         result = await self._session.execute(
             select(MemoryPolicy).where(
                 MemoryPolicy.org_id == self._org_id,
-                MemoryPolicy.workspace == workspace,
                 MemoryPolicy.deleted_at.is_(None),
             )
         )
@@ -441,6 +715,151 @@ class MemoryRollbackRepository:
             .values(review_status=review_status)
         )
         await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def update_execution_status(
+        self,
+        rollback_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        stmt = (
+            update(MemoryRollback)
+            .where(
+                MemoryRollback.org_id == self._org_id,
+                MemoryRollback.rollback_id == rollback_id,
+            )
+            .values(execution_status=status, execution_error=error)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+
+class MemorySyncOutboxRepository:
+    _SUPPORTED_BACKENDS = {"qdrant", "neo4j"}
+    _ACTION_ALIASES = {
+        ("qdrant", "upsert_memory"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "upsert_active_vector"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "UPSERT_ACTIVE_VECTOR"): "UPSERT_ACTIVE_VECTOR",
+        ("qdrant", "delete_memory"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "delete_active_vector"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "DELETE_ACTIVE_VECTOR"): "DELETE_ACTIVE_VECTOR",
+        ("qdrant", "upsert_candidate_memory"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "upsert_candidate_vector"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "UPSERT_CANDIDATE_VECTOR"): "UPSERT_CANDIDATE_VECTOR",
+        ("qdrant", "delete_candidate_memory"): "DELETE_CANDIDATE_VECTOR",
+        ("qdrant", "delete_candidate_vector"): "DELETE_CANDIDATE_VECTOR",
+        ("qdrant", "DELETE_CANDIDATE_VECTOR"): "DELETE_CANDIDATE_VECTOR",
+        ("neo4j", "upsert_memory_node"): "UPSERT_MEMORY_NODE",
+        ("neo4j", "UPSERT_MEMORY_NODE"): "UPSERT_MEMORY_NODE",
+        ("neo4j", "upsert_memory_edge"): "UPSERT_MEMORY_EDGE",
+        ("neo4j", "UPSERT_MEMORY_EDGE"): "UPSERT_MEMORY_EDGE",
+        ("neo4j", "soft_delete_memory_edges"): "SOFT_DELETE_MEMORY_EDGES",
+        ("neo4j", "SOFT_DELETE_MEMORY_EDGES"): "SOFT_DELETE_MEMORY_EDGES",
+        ("neo4j", "update_memory_node_status"): "UPDATE_MEMORY_NODE_STATUS",
+        ("neo4j", "UPDATE_MEMORY_NODE_STATUS"): "UPDATE_MEMORY_NODE_STATUS",
+    }
+
+    def __init__(self, session: AsyncSession, org_id: str):
+        self._session = session
+        self._org_id = org_id
+
+    @classmethod
+    def _canonical_action(cls, *, target_backend: str, action: str) -> str:
+        backend = str(target_backend or "").lower()
+        if backend not in cls._SUPPORTED_BACKENDS:
+            raise ValueError(f"Unsupported memory sync backend: {target_backend}")
+        canonical = cls._ACTION_ALIASES.get((backend, action))
+        if not canonical:
+            raise ValueError(f"Unsupported {backend} memory sync action: {action}")
+        return canonical
+
+    def _idempotency_key(self, *, memory_id: str, target_backend: str, action: str, payload: dict) -> str:
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        return f"{self._org_id}:{target_backend}:{action}:{memory_id}:{payload_hash}"
+
+    @staticmethod
+    async def list_pending_org_ids(session: AsyncSession, *, max_retries: int) -> list[str]:
+        result = await session.execute(
+            select(MemorySyncOutbox.org_id)
+            .where(
+                MemorySyncOutbox.status == "pending",
+                MemorySyncOutbox.retry_count < max_retries,
+            )
+            .distinct()
+            .order_by(MemorySyncOutbox.org_id.asc())
+        )
+        return [str(org_id) for org_id in result.scalars().all()]
+
+    async def create_pending(
+        self,
+        *,
+        memory_id: str,
+        action: str,
+        target_backend: str,
+        payload: dict,
+        trace_id: str | None = None,
+    ) -> MemorySyncOutbox:
+        from app.core.ids import uuid7
+
+        if not isinstance(payload, dict):
+            raise ValueError("memory sync outbox payload must be a dict")
+        backend = str(target_backend or "").lower()
+        canonical_action = self._canonical_action(target_backend=backend, action=action)
+        outbox = MemorySyncOutbox(
+            id=str(uuid7()),
+            org_id=self._org_id,
+            memory_id=memory_id,
+            action=canonical_action,
+            target_backend=backend,
+            payload_json=payload,
+            idempotency_key=self._idempotency_key(
+                memory_id=memory_id,
+                target_backend=backend,
+                action=canonical_action,
+                payload=payload,
+            ),
+            status="pending",
+            retry_count=0,
+            trace_id=trace_id,
+        )
+        self._session.add(outbox)
+        await self._session.flush()
+        return outbox
+
+    async def claim_pending(self, *, limit: int, max_retries: int) -> list[MemorySyncOutbox]:
+        result = await self._session.execute(
+            select(MemorySyncOutbox)
+            .where(
+                MemorySyncOutbox.org_id == self._org_id,
+                MemorySyncOutbox.status == "pending",
+                MemorySyncOutbox.retry_count < max_retries,
+            )
+            .order_by(MemorySyncOutbox.created_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def mark_success(self, outbox_id: str) -> None:
+        await self._session.execute(
+            update(MemorySyncOutbox)
+            .where(MemorySyncOutbox.org_id == self._org_id, MemorySyncOutbox.id == outbox_id)
+            .values(status="success", last_error=None)
+        )
+        await self._session.flush()
+
+    async def mark_failed(self, outbox_id: str, error: str) -> None:
+        await self._session.execute(
+            update(MemorySyncOutbox)
+            .where(MemorySyncOutbox.org_id == self._org_id, MemorySyncOutbox.id == outbox_id)
+            .values(
+                status="pending",
+                retry_count=MemorySyncOutbox.retry_count + 1,
+                last_error=error,
+            )
+        )
         await self._session.flush()
 
 

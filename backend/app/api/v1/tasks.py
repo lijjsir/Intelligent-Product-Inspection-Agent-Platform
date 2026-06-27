@@ -77,6 +77,7 @@ async def create_task(
         priority=payload.priority,
         metadata=payload.metadata,
     )
+    await db.commit()
     await launch_task_execution(task_id=str(task.id), org_id=current.org_id)
     task = await service.get_task(str(task.id)) or task
 

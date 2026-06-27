@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
-from app.core.exceptions import NotFoundError, ForbiddenError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.repositories.result_repo import ResultRepository
 from app.repositories.task_repo import TaskRepository
 from app.services.result_trace_utils import (
@@ -13,6 +13,7 @@ from app.services.result_trace_utils import (
 )
 
 REVIEW_ROLES = {"expert", "platform_operator"}
+MANUAL_REVIEW_VERDICTS = {"pass", "fail"}
 
 
 class ResultService:
@@ -88,13 +89,16 @@ class ResultService:
     async def review(self, result_id: str, actor_user_id: str, actor_role: str, payload: dict) -> dict:
         if actor_role not in REVIEW_ROLES:
             raise ForbiddenError(f"role {actor_role} cannot review results")
+        verdict = str(payload.get("verdict") or "").strip().lower()
+        if verdict not in MANUAL_REVIEW_VERDICTS:
+            raise ValidationError("人工判定只能提交产品合格或产品不合格")
         result = await self._repo.get_by_id(self._org_id, result_id)
         if not result:
             raise NotFoundError("Result not found")
         await self._repo.upsert_by_task({
             "org_id": self._org_id,
             "task_id": result.task_id,
-            "verdict": payload["verdict"],
+            "verdict": verdict,
             "overall_score": result.overall_score,
             "defects": result.defects,
             "citations": result.citations,

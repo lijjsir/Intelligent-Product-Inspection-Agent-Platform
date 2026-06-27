@@ -556,26 +556,9 @@ async def test_finalizer_marks_trust_scoring_reviewing_and_enqueues_once(monkeyp
 async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     captured_payloads: list[dict] = []
 
-    class FakeMessage:
-        def __init__(self, role: str, content: str, seq_no: int):
-            self.role = role
-            self.content = content
-            self.seq_no = seq_no
-
-    class FakeRepo:
-        def __init__(self, _session):
-            pass
-
-        async def list_for_session(self, *, org_id, session_id, after_seq=0, limit=20):
-            return [
-                FakeMessage("user", "old question", 1),
-                FakeMessage("assistant", "old answer", 2),
-                FakeMessage("user", "current question", 3),
-                FakeMessage("assistant", "", 4),
-            ]
-
     class FakeSession:
-        pass
+        async def commit(self):
+            return None
 
     class FakeSessionContext:
         async def __aenter__(self):
@@ -593,9 +576,50 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
             captured_payloads.append(payload)
             return {}
 
+    class FakeMemoryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def search(self, _request):
+            return SimpleNamespace(items=[], policy_version="default:v1")
+
+    class FakeShortTermMemoryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def build_context(self, **_kwargs):
+            return {
+                "recent_messages": [
+                    {"role": "user", "content": "old question"},
+                    {"role": "assistant", "content": "old answer"},
+                ],
+                "conversation_summary": None,
+                "session_facts": {},
+                "pending_action": None,
+                "short_term_memory": {},
+                "semantic_recall": [],
+            }
+
+    class FakeMemoryExtractionService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def extract_from_chat_result(self, **_kwargs):
+            return []
+
+    class FakeSummaryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def maybe_summarize(self, _session_id):
+            raise RuntimeError("summary backend unavailable")
+
     monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(chat_service_mod, "ChatMessageRepository", FakeRepo)
     monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+    monkeypatch.setattr("app.services.memory_service.MemoryService", FakeMemoryService)
+    monkeypatch.setattr("app.services.short_term_memory_service.ShortTermMemoryService", FakeShortTermMemoryService)
+    monkeypatch.setattr("app.services.memory_extraction_service.MemoryExtractionService", FakeMemoryExtractionService)
+    monkeypatch.setattr("app.services.chat_session_summary_service.ChatSessionSummaryService", FakeSummaryService)
 
     service = ChatService(
         org_id="org-1",
@@ -620,6 +644,102 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_degrades_when_shared_memory_retrieval_fails(monkeypatch):
+    from app.services.memory_vector_service import MemoryVectorServiceError
+
+    captured_payloads: list[dict] = []
+    published_events: list[dict] = []
+
+    class FakeSession:
+        async def commit(self):
+            return None
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeBroker:
+        async def publish(self, _session_id: str, event: dict):
+            published_events.append(event)
+
+    class FakeMemoryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def search(self, _request):
+            raise MemoryVectorServiceError("qdrant unavailable")
+
+        async def write_candidate(self, _candidate):
+            return None
+
+    class FakeShortTermMemoryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def build_context(self, **_kwargs):
+            return {
+                "recent_messages": [],
+                "conversation_summary": None,
+                "session_facts": {},
+                "pending_action": None,
+                "short_term_memory": {},
+                "semantic_recall": [],
+            }
+
+    class FakeMemoryExtractionService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def extract_from_chat_result(self, **_kwargs):
+            return []
+
+    class FakeSummaryService:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def maybe_summarize(self, _session_id):
+            return None
+
+    class FakeOrchestrator:
+        async def run_chat(self, payload: dict):
+            captured_payloads.append(payload)
+            return {"agent_output": {"answer": "ok"}}
+
+    monkeypatch.setattr(chat_service_mod, "get_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chat_service_mod, "chat_stream_broker", FakeBroker())
+    monkeypatch.setattr("app.services.memory_service.MemoryService", FakeMemoryService)
+    monkeypatch.setattr("app.services.short_term_memory_service.ShortTermMemoryService", FakeShortTermMemoryService)
+    monkeypatch.setattr("app.services.memory_extraction_service.MemoryExtractionService", FakeMemoryExtractionService)
+    monkeypatch.setattr("app.services.chat_session_summary_service.ChatSessionSummaryService", FakeSummaryService)
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+    service._orchestrator = FakeOrchestrator()
+
+    await service._run_workflow(
+        session_id="session-1",
+        assistant_message_id="assistant-1",
+        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
+        workflow_run_id="workflow-1",
+        current_user_seq_no=1,
+        assistant_message_seq_no=2,
+    )
+
+    assert captured_payloads
+    shared_memory_context = captured_payloads[0]["ext"]["shared_memory_context"]
+    assert shared_memory_context["degraded"] is True
+    assert shared_memory_context["degrade_code"] == "SHARED_MEMORY_SEARCH_FAILED"
+    assert shared_memory_context["items"] == []
+    assert all(event["event"] != "run_failed" for event in published_events)
 
 
 def test_smalltalk_answer_remembers_user_name_from_history():
@@ -1041,6 +1161,46 @@ def test_get_current_user_for_stream_reads_resource_claims():
     assert current.user_id == "user-1"
     assert current.stream_resource == "chat"
     assert current.stream_resource_id == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_platform_operator_can_create_meeting_stream_session(monkeypatch):
+    class FakeMeetingRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            assert org_id == "org-1"
+            assert room_id == "room-1"
+            assert user_id == "operator-1"
+            return object()
+
+    @asynccontextmanager
+    async def fake_get_session():
+        yield object()
+
+    monkeypatch.setattr(chat_service_mod, "get_session", fake_get_session)
+    monkeypatch.setattr("app.repositories.meeting_repo.MeetingRepository", FakeMeetingRepository)
+
+    service = ChatService(
+        org_id="org-1",
+        user_id="operator-1",
+        current=CurrentUser(
+            user_id="operator-1",
+            org_id="org-1",
+            role="platform_operator",
+            roles=["platform_operator"],
+        ),
+    )
+
+    response = await service.create_stream_session(resource="meeting", resource_id="room-1")
+
+    assert response.resource == "meeting"
+    assert response.resource_id == "room-1"
+    current = get_current_user_for_stream(authorization="", token=response.stream_token)
+    assert current.user_id == "operator-1"
+    assert current.stream_resource == "meeting"
+    assert current.stream_resource_id == "room-1"
 
 
 @pytest.mark.asyncio

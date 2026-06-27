@@ -91,17 +91,42 @@ class FakeSpaceRepo:
         self.spaces[created.id] = created
         return created
 
-    async def list_for_org(self, *, org_id: str, owner_user_id: str | None = None, limit: int = 200):
-        self.list_calls.append({"org_id": org_id, "owner_user_id": owner_user_id, "limit": limit})
+    async def list_for_org(
+        self,
+        *,
+        org_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+        limit: int = 200,
+    ):
+        self.list_calls.append(
+            {"org_id": org_id, "owner_user_id": owner_user_id, "include_system": include_system, "limit": limit}
+        )
         return list(self.spaces.values())[:limit]
 
-    async def get(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+    async def get(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         if rag_space_id == "foreign-space":
             return None
         return self.spaces.get(rag_space_id)
 
-    async def increment_selected_count(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
-        self.increment_calls.append({"org_id": org_id, "rag_space_id": rag_space_id, "owner_user_id": owner_user_id})
+    async def increment_selected_count(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
+        self.increment_calls.append(
+            {"org_id": org_id, "rag_space_id": rag_space_id, "owner_user_id": owner_user_id, "include_system": include_system}
+        )
 
     async def recalculate_counters(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
         self.recalculate_calls.append({"org_id": org_id, "rag_space_id": rag_space_id, "owner_user_id": owner_user_id})
@@ -152,7 +177,15 @@ class FakeNodeRepo:
         self.created_nodes.append(node)
         return node
 
-    async def get(self, *, org_id: str, rag_space_id: str, node_id: str, owner_user_id: str | None = None):
+    async def get(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        node_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return next(
             (
                 node
@@ -162,17 +195,41 @@ class FakeNodeRepo:
             None,
         )
 
-    async def list_for_space(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+    async def list_for_space(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return [node for node in self.nodes if node.org_id == org_id and node.rag_space_id == rag_space_id and node.deleted_at is None]
 
-    async def list_children(self, *, org_id: str, rag_space_id: str, parent_id: str | None, owner_user_id: str | None = None):
+    async def list_children(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        parent_id: str | None,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return [
             node
             for node in self.nodes
             if node.org_id == org_id and node.rag_space_id == rag_space_id and node.parent_id == parent_id and node.deleted_at is None
         ]
 
-    async def find_sibling(self, *, org_id: str, rag_space_id: str, parent_id: str | None, name: str, owner_user_id: str | None = None):
+    async def find_sibling(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        parent_id: str | None,
+        name: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         normalized = name.lower()
         return next(
             (
@@ -187,7 +244,14 @@ class FakeNodeRepo:
             None,
         )
 
-    async def recalculate_children_counts(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
+    async def recalculate_children_counts(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         self.children_recalculated += 1
         active = [node for node in self.nodes if node.org_id == org_id and node.rag_space_id == rag_space_id and node.deleted_at is None]
         for node in active:
@@ -214,10 +278,26 @@ class FakeDocumentRepo:
         self.created_documents.append(document)
         return document
 
-    async def list_for_space(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None, limit: int = 1000):
+    async def list_for_space(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+        limit: int = 1000,
+    ):
         return [doc for doc in self.documents if doc.org_id == org_id and doc.rag_space_id == rag_space_id and doc.deleted_at is None][:limit]
 
-    async def get(self, *, org_id: str, rag_space_id: str, document_id: str, owner_user_id: str | None = None):
+    async def get(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        document_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return next(
             (
                 doc
@@ -227,7 +307,15 @@ class FakeDocumentRepo:
             None,
         )
 
-    async def get_by_node_id(self, *, org_id: str, rag_space_id: str, node_id: str, owner_user_id: str | None = None):
+    async def get_by_node_id(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        node_id: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return next(
             (
                 doc
@@ -237,7 +325,33 @@ class FakeDocumentRepo:
             None,
         )
 
-    async def list_for_node_ids(self, *, org_id: str, rag_space_id: str, node_ids: list[str], owner_user_id: str | None = None):
+    async def get_by_file_name(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        file_name: str,
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
+        return next(
+            (
+                doc
+                for doc in self.documents
+                if doc.file_name == file_name and doc.org_id == org_id and doc.rag_space_id == rag_space_id and doc.deleted_at is None
+            ),
+            None,
+        )
+
+    async def list_for_node_ids(
+        self,
+        *,
+        org_id: str,
+        rag_space_id: str,
+        node_ids: list[str],
+        owner_user_id: str | None = None,
+        include_system: bool = False,
+    ):
         return [
             doc
             for doc in self.documents
@@ -375,7 +489,7 @@ async def test_list_spaces_uses_current_user_scope(monkeypatch):
 
     rows = await service.list_spaces(limit=20)
 
-    assert space_repo.list_calls == [{"org_id": "org-1", "owner_user_id": "user-1", "limit": 20}]
+    assert space_repo.list_calls == [{"org_id": "org-1", "owner_user_id": "user-1", "include_system": True, "limit": 20}]
     assert rows[0].created_by == "user-1"
 
 

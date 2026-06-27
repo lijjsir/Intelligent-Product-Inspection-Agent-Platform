@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
@@ -11,9 +13,13 @@ from app.repositories.product_master_repo import ProductMasterRepository
 from app.repositories.result_repo import ResultRepository
 from app.repositories.stability_repo import StabilityRepository
 from app.repositories.task_repo import TaskRepository
+from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.services.audit_service import AuditService
 from app.services.product_master_service import ProductMasterService
 from app.schemas.task import ImageItem
+
+
+logger = logging.getLogger(__name__)
 
 
 def _duplicate_image_item_groups(items: list[ImageItem]) -> list[list[ImageItem]]:
@@ -104,6 +110,8 @@ class TaskService:
                 normalized_spec_code = str(getattr(standard, "spec_code", None) or normalized_spec_code).strip()
 
         spec = await self._resolve_spec_from_standard(standard, normalized_spec_code)
+        if standard is not None and not spec:
+            raise ValidationError("selected inspection standard is missing a valid quality threshold binding")
         if spec and not normalized_spec_code:
             normalized_spec_code = str(spec.spec_code)
         if not normalized_spec_code:
@@ -122,18 +130,20 @@ class TaskService:
             )
             raise ValidationError(f"检测到重复图片：{duplicate_desc}，请删除重复图片后重试")
 
-        required_image_count = max(1, int(getattr(spec, "required_image_count", 1) or 1))
-        if len(normalized_items) < required_image_count:
-            raise ValidationError(
-                f"标准 {normalized_spec_code} 至少需要 {required_image_count} 张图片，当前仅提供 {len(normalized_items)} 张"
-            )
-
         # Re-check hashes against recent tasks in this org to prevent cross-task duplicates.
         find_recent_image_hashes = getattr(self._repo, "find_recent_image_hashes", None)
         if callable(find_recent_image_hashes):
-            existing_hashes = await find_recent_image_hashes(
-                self._org_id, [item.hash for item in normalized_items]
-            )
+            try:
+                existing_hashes = await find_recent_image_hashes(
+                    self._org_id, [item.hash for item in normalized_items]
+                )
+            except Exception as exc:
+                logger.warning(
+                    "task image history duplicate check skipped: %s",
+                    exc,
+                    exc_info=True,
+                )
+                existing_hashes = set()
         else:
             existing_hashes = set()
         if existing_hashes:
@@ -254,7 +264,16 @@ class TaskService:
         if task is None:
             return None
         if str(task.status) == "running":
-            raise ValidationError("运行中的任务不能删除")
+            event_repo = TaskExecutionEventRepository(self._session)
+            if not await event_repo.has_failed_event(self._task_scope_org_id, task_id):
+                raise ValidationError("运行中的任务不能删除")
+            metadata = dict(task.meta_data or {})
+            metadata["execution"] = {
+                **dict(metadata.get("execution") or {}),
+                "error": metadata.get("execution", {}).get("error") or "任务事件流已失败，自动解除 running 状态以允许删除",
+            }
+            await self._repo.update_status(self._task_scope_org_id, task_id, "failed")
+            await self._repo.patch_metadata(self._task_scope_org_id, task_id, metadata)
 
         result_repo = ResultRepository(self._session)
         stability_repo = StabilityRepository(self._session)

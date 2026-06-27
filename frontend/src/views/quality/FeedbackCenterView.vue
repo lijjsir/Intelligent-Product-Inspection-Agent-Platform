@@ -35,7 +35,7 @@ const summaryCards = computed(() => {
   return [
     { label: "今日新增", value: s?.today_new ?? 0, key: "new" },
     { label: "待处理", value: s?.pending_count ?? 0, key: "pending" },
-    { label: "高风险", value: s?.high_risk_count ?? 0, key: "high" },
+    { label: "高影响反馈", value: s?.high_risk_count ?? 0, key: "high" },
     { label: "已解决率", value: s ? `${Math.round(s.resolved_rate * 100)}%` : "0%", key: "rate" },
     { label: "平均处理时长", value: s?.avg_resolution_hours != null ? `${s.avg_resolution_hours}h` : "--", key: "time" },
   ];
@@ -57,11 +57,11 @@ const statusMap: Record<FeedbackStatus, { label: string; type: "" | "warning" | 
 };
 
 const severityMap: Record<FeedbackSeverity, { label: string; type: "" | "warning" | "success" | "info" | "danger" }> = {
-  info: { label: "无风险", type: "success" },
-  low: { label: "低危", type: "info" },
-  medium: { label: "中危", type: "warning" },
-  high: { label: "高危", type: "danger" },
-  critical: { label: "致命", type: "danger" },
+  info: { label: "无影响", type: "success" },
+  low: { label: "轻微影响", type: "info" },
+  medium: { label: "中等影响", type: "warning" },
+  high: { label: "严重影响", type: "danger" },
+  critical: { label: "关键影响", type: "danger" },
 };
 
 const sourceMap: Record<FeedbackSourceType, string> = {
@@ -71,11 +71,11 @@ const sourceMap: Record<FeedbackSourceType, string> = {
 };
 
 const categoryMap: Record<string, string> = {
-  reliable: "真实可靠",
+  reliable: "结果可靠",
   wrong_verdict: "判定错误",
   weak_evidence: "证据不足",
-  bad_bbox: "定位不准",
-  unclear_reasoning: "描述模糊",
+  bad_bbox: "缺陷定位不准",
+  unclear_reasoning: "描述不清",
 };
 
 onMounted(() => {
@@ -194,8 +194,8 @@ function shortId(id: string | null) {
   <div class="flex flex-col gap-5">
     <div class="hero">
       <div>
-        <h2>异常反馈中心</h2>
-        <p>查看、处理异常反馈，实现问题闭环管理。</p>
+        <h2>AI 结果反馈中心</h2>
+        <p>查看、处理 AI 检测结果反馈，跟踪模型表现与证据质量。</p>
       </div>
     </div>
 
@@ -225,7 +225,7 @@ function shortId(id: string | null) {
         <el-tabs v-model="activeTab" class="!mb-0">
           <el-tab-pane label="全部反馈" name="all" />
           <el-tab-pane label="待处理" name="pending" />
-          <el-tab-pane label="高风险" name="high_risk" />
+          <el-tab-pane label="高影响反馈" name="high_risk" />
         </el-tabs>
         <div class="flex items-center gap-2">
           <el-button link @click="showAdvancedFilter = !showAdvancedFilter">
@@ -239,13 +239,13 @@ function shortId(id: string | null) {
         <el-select v-model="filterForm.status" placeholder="状态" clearable size="default" class="!w-28">
           <el-option v-for="(v, k) in statusMap" :key="k" :label="v.label" :value="k" />
         </el-select>
-        <el-select v-model="filterForm.severity" placeholder="严重程度" clearable size="default" class="!w-28">
+        <el-select v-model="filterForm.severity" placeholder="影响程度" clearable size="default" class="!w-28">
           <el-option v-for="(v, k) in severityMap" :key="k" :label="v.label" :value="k" />
         </el-select>
         <el-select v-model="filterForm.source_type" placeholder="来源" clearable size="default" class="!w-28">
           <el-option v-for="(v, k) in sourceMap" :key="k" :label="v" :value="k" />
         </el-select>
-        <el-select v-model="filterForm.category" placeholder="异常类型" clearable size="default" class="!w-32">
+        <el-select v-model="filterForm.category" placeholder="反馈类型" clearable size="default" class="!w-32">
           <el-option v-for="(v, k) in categoryMap" :key="k" :label="v" :value="k" />
         </el-select>
       </div>
@@ -261,12 +261,12 @@ function shortId(id: string | null) {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="category" label="异常类型" width="110">
+        <el-table-column prop="category" label="反馈类型" width="130">
           <template #default="{ row }">
             <span>{{ categoryMap[row.category] || row.category || "--" }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="severity" label="严重程度" width="100">
+        <el-table-column prop="severity" label="影响程度" width="110">
           <template #default="{ row }">
             <el-tag v-if="row.severity" size="small" :type="severityMap[row.severity as FeedbackSeverity]?.type ?? 'info'">
               {{ severityMap[row.severity as FeedbackSeverity]?.label ?? row.severity }}
@@ -328,8 +328,8 @@ function shortId(id: string | null) {
                 <el-descriptions-item label="反馈时间">{{ formatTime(store.currentDetail.created_at) }}</el-descriptions-item>
                 <el-descriptions-item label="反馈类型">{{ store.currentDetail.feedback_type === "up" ? "点赞" : "点踩" }}</el-descriptions-item>
                 <el-descriptions-item label="评分">{{ store.currentDetail.rating ?? "--" }}</el-descriptions-item>
-                <el-descriptions-item label="异常分类">{{ categoryMap[store.currentDetail.category ?? ""] || "--" }}</el-descriptions-item>
-                <el-descriptions-item label="严重程度">{{ store.currentDetail.severity ? severityMap[store.currentDetail.severity as FeedbackSeverity]?.label : "--" }}</el-descriptions-item>
+                <el-descriptions-item label="结果问题">{{ categoryMap[store.currentDetail.category ?? ""] || "--" }}</el-descriptions-item>
+                <el-descriptions-item label="影响程度">{{ store.currentDetail.severity ? severityMap[store.currentDetail.severity as FeedbackSeverity]?.label : "--" }}</el-descriptions-item>
                 <el-descriptions-item label="评论" :span="2">{{ store.currentDetail.comment || "--" }}</el-descriptions-item>
               </el-descriptions>
             </el-tab-pane>

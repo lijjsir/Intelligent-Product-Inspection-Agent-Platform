@@ -91,8 +91,8 @@ const CURATED_BUILTIN_PROMPT_TEMPLATES: PromptTemplate[] = [
   },
   {
     id: "builtin-expert-review",
-    name: "专家：复核判定",
-    description: "从质检专家角度复核结果",
+    name: "专家：人工判定",
+    description: "从质检专家角度给出人工判定",
     content: [
       "请以资深质检专家视角复核下面这条结果，不要泛泛而谈。",
       "",
@@ -103,7 +103,7 @@ const CURATED_BUILTIN_PROMPT_TEMPLATES: PromptTemplate[] = [
       "- 证据/图片：",
       "",
       "请按以下结构回答：",
-      "1. 复核结论",
+      "1. 人工判定结论",
       "2. 判定依据",
       "3. 主要风险点",
       "4. 是否建议人工复检",

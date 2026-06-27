@@ -6,9 +6,6 @@ export const USERNAME_KEY = "piap_username";
 export const ROLES_KEY = "piap_roles";
 export const PLAN_TIER_KEY = "piap_plan_tier";
 export const CAPABILITIES_KEY = "piap_capabilities";
-export const WORKSPACES_KEY = "piap_workspaces";
-export const DEFAULT_WORKSPACE_KEY = "piap_default_workspace";
-
 const STORAGE_KEYS = [
   TOKEN_KEY,
   ORG_ID_KEY,
@@ -18,8 +15,6 @@ const STORAGE_KEYS = [
   ROLES_KEY,
   PLAN_TIER_KEY,
   CAPABILITIES_KEY,
-  WORKSPACES_KEY,
-  DEFAULT_WORKSPACE_KEY,
 ];
 
 function getSessionAuthStorage(): Storage | null {

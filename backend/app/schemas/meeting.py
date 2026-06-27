@@ -209,6 +209,7 @@ class MeetingAgentRunRequest(BaseModel):
     memory_scope: MeetingMemoryScopeRequest = Field(default_factory=MeetingMemoryScopeRequest)
     attachments: list[dict] = Field(default_factory=list)
     workflow_run_id: str | None = None
+    replace_message_id: str | None = None
 
 
 class MeetingMemorySourceResponse(BaseModel):

@@ -4,7 +4,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { useMenu } from "@/composables/useMenu";
 import { useAuthStore } from "@/stores/auth.store";
 import {
-  ALL_ROLES,
   ROLE_ADMIN,
   ROLE_ALGORITHM_ENGINEER,
   ROLE_APP_DEVELOPER,
@@ -13,7 +12,6 @@ import {
 } from "@/constants/roles";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
-import { ROLE_KEY, ROLES_KEY } from "@/utils/auth-session";
 
 function flattenTitles() {
   const { menu } = useMenu();
@@ -69,33 +67,43 @@ describe("useMenu", () => {
     expect(paths).toContain("/app/tasks");
   });
 
-  it("keeps collaboration messages below meeting rooms without a standalone private chat entry", () => {
-    const auth = useAuthStore();
-    auth.role = ROLE_ALGORITHM_ENGINEER;
-    auth.roles = [ROLE_ALGORITHM_ENGINEER];
-
-    const paths = flattenPaths();
-    const meetingIndex = paths.indexOf("/app/meetings");
-
-    expect(paths.slice(meetingIndex, meetingIndex + 2)).toEqual(["/app/meetings", "/app/collab"]);
-    expect(paths).not.toContain("/app/private-chat");
-  });
-
-  it("shows meeting rooms in navigation for every project role", () => {
+  it("shows collaboration entry points to non-expert workbench roles", () => {
     const auth = useAuthStore();
 
-    for (const role of ALL_ROLES) {
+    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]) {
       auth.role = role;
       auth.roles = [role];
 
-      expect(flattenPaths()).toContain("/app/meetings");
+      const paths = flattenPaths();
+
+      expect(paths).toContain("/app/meetings");
+      expect(paths).toContain("/app/collab");
     }
   });
 
-  it("allows every project role to access the meeting room route", () => {
-    const meetingRoute = appRoutes.find((route) => route.name === "app-meetings");
+  it("keeps collaboration entries at the top while chat stays first for app users", () => {
+    const auth = useAuthStore();
 
-    expect(meetingRoute?.meta?.roles).toEqual(expect.arrayContaining([...ALL_ROLES]));
+    auth.role = ROLE_EXPERT;
+    auth.roles = [ROLE_EXPERT];
+    expect(flattenPaths().slice(0, 3)).toEqual(["/app/chat", "/app/meetings", "/app/collab"]);
+
+    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]) {
+      auth.role = role;
+      auth.roles = [role];
+
+      expect(flattenPaths().slice(0, 2)).toEqual(["/app/meetings", "/app/collab"]);
+    }
+  });
+
+  it("allows every first-class role into meeting rooms and collaboration messages", () => {
+    const meetingRoute = appRoutes.find((route) => route.name === "app-meetings");
+    const collabRoute = appRoutes.find((route) => route.name === "app-collab");
+
+    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT]) {
+      expect(meetingRoute?.meta?.roles).toContain(role);
+      expect(collabRoute?.meta?.roles).toContain(role);
+    }
   });
 
   it("keeps governance and infrastructure tools out of platform operator navigation", () => {
@@ -151,16 +159,8 @@ describe("useMenu", () => {
 
     expect(titles).toContain("告警规则");
     expect(titles).not.toContain("告警管理");
+    expect(paths).toContain("/governance/admin/product-master");
     expect(paths).toContain("/governance/admin/alert-rules");
-  });
-
-  it("grants admins access to the ops workspace for shared management pages", () => {
-    sessionStorage.setItem(ROLE_KEY, ROLE_ADMIN);
-    sessionStorage.setItem(ROLES_KEY, JSON.stringify([ROLE_ADMIN]));
-    setActivePinia(createPinia());
-    const auth = useAuthStore();
-
-    expect(auth.workspaces).toContain("ops");
   });
 
   it("exposes the governance analytics center in admin navigation", () => {

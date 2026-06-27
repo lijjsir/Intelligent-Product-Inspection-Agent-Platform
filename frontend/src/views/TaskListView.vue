@@ -43,7 +43,6 @@ const productLines = ref<ProductLine[]>([]);
 const productSkus = ref<ProductSku[]>([]);
 const productBatches = ref<ProductBatch[]>([]);
 const inspectionStandards = ref<InspectionStandardLibraryItem[]>([]);
-const MAX_IMAGE_COUNT = 5;
 const createForm = ref({
   product_line_id: "",
   product_sku_id: "",
@@ -67,17 +66,20 @@ const pageDescription = computed(() =>
 const activeProductLines = computed(() => productLines.value.filter((item) => item.is_active));
 const activeProductSkus = computed(() => productSkus.value.filter((item) => item.is_active));
 const activeProductBatches = computed(() => productBatches.value.filter((item) => item.is_active));
+const activeDatasetBatches = computed(() =>
+  activeProductBatches.value.filter((item) => String(item.batch_no || "").trim().toUpperCase() === "UNSPECIFIED"),
+);
 const availableSkus = computed(() =>
   activeProductSkus.value.filter((item) => item.product_line_id === createForm.value.product_line_id),
 );
 const availableBatches = computed(() =>
-  activeProductBatches.value.filter((item) => item.product_sku_id === createForm.value.product_sku_id),
+  activeDatasetBatches.value.filter((item) => item.product_sku_id === createForm.value.product_sku_id),
 );
 const selectedLine = computed(() => productLines.value.find((item) => item.id === createForm.value.product_line_id) || null);
 const selectedSku = computed(() => productSkus.value.find((item) => item.id === createForm.value.product_sku_id) || null);
 const selectedBatch = computed(() => productBatches.value.find((item) => item.id === createForm.value.batch_id) || null);
 const activeStandards = computed(() =>
-  inspectionStandards.value.filter((item) => item.is_active && Boolean(item.spec_code)),
+  inspectionStandards.value.filter((item) => item.is_active && Boolean(item.spec_code) && Boolean(item.has_quality_threshold)),
 );
 const availableStandards = computed(() => {
   const skuId = createForm.value.product_sku_id;
@@ -182,7 +184,7 @@ async function fetchCreateOptions() {
     productLines.value = catalog.data.product_lines;
     productSkus.value = catalog.data.product_skus;
     productBatches.value = catalog.data.product_batches;
-    inspectionStandards.value = standards.data;
+    inspectionStandards.value = standards.data.items;
   } catch (error) {
     console.error(error);
     ElMessage.warning("产品、批次或检测标准加载失败，请稍后重试。");
@@ -223,7 +225,7 @@ function resetCreateForm() {
 }
 
 function firstBatchForSku(skuId: string) {
-  return activeProductBatches.value.find((item) => item.product_sku_id === skuId)?.id || "";
+  return activeDatasetBatches.value.find((item) => item.product_sku_id === skuId)?.id || "";
 }
 
 function firstStandardForSelection(lineId: string, skuId: string) {
@@ -341,10 +343,6 @@ async function buildImageSubmissionPayload() {
   if (totalCount === 0) {
     throw new Error("请至少提供一张图片 URL 或上传一张图片");
   }
-  if (totalCount > MAX_IMAGE_COUNT) {
-    throw new Error(`当前共选择 ${totalCount} 张图片，最多只能提交 ${MAX_IMAGE_COUNT} 张`);
-  }
-
   const [dataUrls, uploadHashes, urlHashes] = await Promise.all([
     Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item))),
     Promise.all(uploadFilesRaw.map((item) => fileToHash(item))),
@@ -384,12 +382,6 @@ async function buildImageSubmissionPayload() {
     })),
   ];
 
-  if (imageItems.length < requiredImageCount.value) {
-    throw new Error(
-      `标准 ${selectedTaskStandard.value?.spec_code || ""} 至少需要 ${requiredImageCount.value} 张图片，当前仅提供 ${imageItems.length} 张`,
-    );
-  }
-
   return {
     imageUrls: [...urlEntries.map((item) => item.url), ...dataUrls],
     imageItems,
@@ -414,6 +406,9 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
+    if (!selectedTaskStandard.value?.has_quality_threshold || !selectedTaskStandard.value?.spec_code) {
+      throw new Error("所选检测标准未绑定有效质检门槛，请先到治理页完成配置");
+    }
     const { imageUrls, imageItems } = await buildImageSubmissionPayload();
     const metadata: Record<string, unknown> = {
       source: "task_list",
@@ -496,12 +491,12 @@ watch(
 
 watch(
   () => createForm.value.product_sku_id,
-  () => {
+  (skuId) => {
     if (!availableBatches.value.some((item) => item.id === createForm.value.batch_id)) {
-      createForm.value.batch_id = "";
+      createForm.value.batch_id = skuId ? firstBatchForSku(skuId) : "";
     }
     if (!availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)) {
-      createForm.value.inspection_standard_id = "";
+      createForm.value.inspection_standard_id = skuId ? firstStandardForSelection(createForm.value.product_line_id, skuId) : "";
     }
   },
 );
@@ -654,8 +649,11 @@ watch(
             <div class="task-spec-preview-title">{{ formatStandardLabel(selectedTaskStandard) }}</div>
             <div class="task-spec-preview-grid">
               <span>绑定规则</span><strong>{{ selectedTaskStandard.spec_name || selectedTaskStandard.spec_code }}</strong>
-              <span>至少图片</span><strong>{{ requiredImageCount }}</strong>
+              <span>质检图片门槛</span><strong>{{ requiredImageCount }}</strong>
               <span>要求视角</span><strong>{{ selectedTaskStandard.required_views?.join("、") || "未设置" }}</strong>
+              <span>置信门槛</span><strong>{{ selectedTaskStandard.ai_gate_confidence_threshold ?? "-" }}</strong>
+              <span>证据门槛</span><strong>{{ selectedTaskStandard.ai_gate_evidence_threshold ?? "-" }}</strong>
+              <span>可追溯门槛</span><strong>{{ selectedTaskStandard.ai_gate_traceability_threshold ?? "-" }}</strong>
               <span>自动放行</span><strong>{{ selectedTaskStandard.auto_pass_enabled ? "开启" : "关闭" }}</strong>
             </div>
           </div>
@@ -668,14 +666,15 @@ watch(
             resize="none"
             placeholder="每行一个 URL；批量标号加 #N 前缀，如：#1 https://a.jpg"
           />
-          <div class="task-form-hint">图片 URL 会直接参与检测，并和本地上传图片合并计算。当前 URL 数量：{{ parsedUrlEntries.length }}。</div>
+          <div class="task-form-hint">
+            图片 URL 会直接参与检测，并和本地上传图片合并计算；图片数量低于质检门槛时，结果会进入人工复核。当前 URL 数量：{{ parsedUrlEntries.length }}。
+          </div>
         </el-form-item>
         <el-form-item label="上传图片">
           <el-upload
             v-model:file-list="uploadFiles"
             :auto-upload="false"
             accept="image/*"
-            :limit="5"
             multiple
             list-type="text"
             @change="handleUploadChange"
@@ -683,13 +682,13 @@ watch(
           >
             <el-button type="primary" plain size="small">选择本地图片</el-button>
             <template #tip>
-              <div class="el-upload__tip">支持 JPG/PNG/WebP，可一次多选；URL 与上传合计最多 5 张。</div>
+              <div class="el-upload__tip">支持 JPG/PNG/WebP，可一次多选；URL 与上传图片将合并参与质检。</div>
             </template>
           </el-upload>
           <div class="task-selection-summary">
             <span>当前已选</span>
             <strong>{{ totalSelectedImageCount }}</strong>
-            <span>/ 需要至少</span>
+            <span>/ 质检门槛</span>
             <strong>{{ requiredImageCount }}</strong>
             <span>张</span>
           </div>

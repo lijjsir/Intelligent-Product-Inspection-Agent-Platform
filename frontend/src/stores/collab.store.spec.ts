@@ -138,6 +138,36 @@ describe("collab store stream handling", () => {
     expect(store.messagesByThread["thread-1"][0].receipts[0].read_at).toBe("2026-06-22T10:02:00Z");
   });
 
+  it("applies action receipts and moves the thread without adding unread by itself", () => {
+    const store = useCollabStore();
+    const actedReceipt = receipt({
+      recipient_id: "user-2",
+      action_status: "rejected",
+      acted_at: "2026-06-22T10:05:00Z",
+      read_at: "2026-06-22T10:05:00Z",
+    });
+    store.activeThreadId = "thread-other";
+    store.threads = [thread({ unread_count: 0, last_message_at: "2026-06-22T10:01:00Z" })];
+    store.messagesByThread = { "thread-1": [message({ sender_id: "user-1", receipts: [receipt({ recipient_id: "user-2" })] })] };
+
+    store.handleStreamEvent({
+      event: "collab_message_action_updated",
+      thread_id: "thread-1",
+      message_id: "message-1",
+      receipt: actedReceipt,
+    });
+
+    expect(store.threads[0]).toMatchObject({
+      id: "thread-1",
+      unread_count: 0,
+      last_message_at: "2026-06-22T10:05:00Z",
+    });
+    expect(store.messagesByThread["thread-1"][0].receipts[0]).toMatchObject({
+      action_status: "rejected",
+      acted_at: "2026-06-22T10:05:00Z",
+    });
+  });
+
   it("removes deleted collaboration records from the inbox", () => {
     const store = useCollabStore();
     store.activeThreadId = "thread-1";

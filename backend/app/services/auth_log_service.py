@@ -23,14 +23,16 @@ def _is_auth_logs_table_missing(exc: Exception) -> bool:
     return "auth_logs" in message
 
 
+async def _rollback_repo_session(repo) -> None:
+    session = getattr(repo, "_session", None)
+    rollback = getattr(session, "rollback", None)
+    if callable(rollback):
+        await rollback()
+
+
 class AuthLogService:
     def __init__(self, session: AsyncSession):
         self._repo = AuthLogRepository(session)
-
-    async def _rollback_if_available(self) -> None:
-        session = getattr(self._repo, "_session", None)
-        if session is not None:
-            await session.rollback()
 
     async def record_login(
         self,
@@ -56,7 +58,7 @@ class AuthLogService:
             return await self._repo.write(log)
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
-                await self._rollback_if_available()
+                await _rollback_repo_session(self._repo)
                 return log
             raise
 
@@ -84,7 +86,7 @@ class AuthLogService:
             )
         except Exception as exc:
             if _is_auth_logs_table_missing(exc):
-                await self._rollback_if_available()
+                await _rollback_repo_session(self._repo)
                 raise ServiceUnavailableError(AUTH_LOGS_MISSING_MESSAGE) from exc
             raise
 

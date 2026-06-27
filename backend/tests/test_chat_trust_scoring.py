@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -1129,6 +1129,48 @@ async def test_quality_report_estimates_unscored_chat_messages_locally():
     assert report["chat_scored_rate"] == 1.0
     assert report["chat_avg_trust_score"] > 0
     assert report["chat_trust_trend"]
+
+
+@pytest.mark.asyncio
+async def test_quality_report_filters_token_ledger_by_report_range():
+    class EmptyRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+        async def list_message_by_range(self, *_args, **_kwargs):
+            return []
+
+    class CapturingLedgerRepo:
+        def __init__(self):
+            self.calls = []
+
+        async def list_filtered(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return []
+
+    class EmptyChatScoreRepo:
+        async def list_by_range(self, *_args, **_kwargs):
+            return []
+
+    class EmptyChatMessageRepo:
+        async def list_assistant_for_org(self, *_args, **_kwargs):
+            return []
+
+    ledger_repo = CapturingLedgerRepo()
+    service = QualityReportService(session=object(), org_id="org-1")
+    service._result_repo = EmptyRepo()
+    service._feedback_repo = EmptyRepo()
+    service._stability_repo = EmptyRepo()
+    service._token_ledger_repo = ledger_repo
+    service._chat_score_repo = EmptyChatScoreRepo()
+    service._chat_message_repo = EmptyChatMessageRepo()
+
+    start = date(2026, 5, 1)
+    end = date(2026, 5, 7)
+    await service.build_report(start_date=start, end_date=end)
+
+    assert ledger_repo.calls
+    assert ledger_repo.calls[0][0] == ("org-1", start, end)
 
 
 @pytest.mark.asyncio

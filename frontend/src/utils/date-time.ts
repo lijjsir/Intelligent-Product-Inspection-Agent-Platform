@@ -16,14 +16,12 @@ export function parseServerDateTime(value?: string | null) {
 
 export function formatServerDateTime(
   value?: string | null,
-  options: { includeSeconds?: boolean; compactDate?: boolean } = {},
+  options: { includeSeconds?: boolean } = {},
 ) {
   if (!value) return "";
   const parsed = parseServerDateTime(value);
   if (!parsed) return value;
-  const base = options.compactDate
-    ? `${parsed.getMonth() + 1}/${parsed.getDate()}`
-    : `${parsed.getFullYear()}-${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
+  const base = `${parsed.getFullYear()}-${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
   const time = `${pad2(parsed.getHours())}:${pad2(parsed.getMinutes())}`;
   if (options.includeSeconds) {
     return `${base} ${time}:${pad2(parsed.getSeconds())}`;

@@ -42,7 +42,7 @@ class InspectionSpecBase(BaseModel):
     aggregation_rules: dict = Field(default_factory=dict)
     ai_gate_rules: dict = Field(default_factory=dict)
     manual_review_policies: dict = Field(default_factory=dict)
-    auto_pass_enabled: bool = False
+    auto_pass_enabled: bool = True
     is_active: bool = True
 
 

@@ -37,6 +37,9 @@ class KnowledgeIndexer:
     async def index(self, docs: list[dict[str, Any]]) -> dict[str, int]:
         points: list[dict[str, Any]] = []
         failed_embeddings = 0
+        if not docs:
+            return {"accepted": 0, "failed_embeddings": 0}
+        await self._embedder.pin_runtime()
         for doc in docs:
             text = str(doc.get("text") or "").strip()
             if not text:

@@ -447,13 +447,31 @@ export const useMeetingStore = defineStore("meeting", () => {
     }
   }
 
-  async function runGeneralAgent(mode: "auto" | MeetingAgentSubgraph = "auto", query = "", options?: { attachments?: MeetingAttachment[] }) {
+  type GeneralAgentRunOptions = {
+    attachments?: MeetingAttachment[];
+    parentMessageId?: string;
+    questionRevision?: string;
+    replaceMessageId?: string;
+  };
+
+  function agentQuestionLinkMetadata(options?: GeneralAgentRunOptions) {
+    const parentMessageId = String(options?.parentMessageId || "").trim();
+    const questionRevision = String(options?.questionRevision || "").trim();
+    return {
+      ...(parentMessageId ? { question_message_id: parentMessageId } : {}),
+      ...(questionRevision ? { question_revision: questionRevision } : {}),
+    };
+  }
+
+  async function runGeneralAgent(mode: "auto" | MeetingAgentSubgraph = "auto", query = "", options?: GeneralAgentRunOptions) {
     const room = activeRoom.value;
     if (!room || generalAgentRunning.value) return null;
     const roomId = room.id;
     const workflowRunId = `general-agent-${roomId}-${Date.now()}`;
-    const pendingMessageId = `pending-${workflowRunId}`;
+    const replaceMessageId = String(options?.replaceMessageId || "").trim();
+    const pendingMessageId = replaceMessageId || `pending-${workflowRunId}`;
     const attachments = options?.attachments || [];
+    const questionLinkMetadata = agentQuestionLinkMetadata(options);
     const controller = new AbortController();
     generalAgentController = controller;
     generalAgentWorkflowRunId.value = workflowRunId;
@@ -474,6 +492,7 @@ export const useMeetingStore = defineStore("meeting", () => {
         },
         attachments,
         workflow_run_id: workflowRunId,
+        replace_message_id: replaceMessageId || undefined,
       };
       upsertMessage({
         id: pendingMessageId,
@@ -491,6 +510,7 @@ export const useMeetingStore = defineStore("meeting", () => {
           visibility: "room",
           audience_scope_type: "meeting_room",
           audience_scope_id: roomId,
+          ...questionLinkMetadata,
           ...(attachments.length ? { attachment_echo: attachments } : {}),
         },
         created_at: new Date().toISOString(),
@@ -507,7 +527,13 @@ export const useMeetingStore = defineStore("meeting", () => {
       }
       if (activeRoomId.value === roomId) {
         removePendingAgentMessage("general_agent", pendingMessageId);
-        upsertMessage(result.message);
+        upsertMessage({
+          ...result.message,
+          metadata_json: {
+            ...(result.message?.metadata_json || {}),
+            ...questionLinkMetadata,
+          },
+        });
         await loadMeetingContext();
       }
       return result;

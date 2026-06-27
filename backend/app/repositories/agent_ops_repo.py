@@ -35,7 +35,10 @@ class AgentOpsRepository:
 
 class AgentDefinitionRepository(AgentOpsRepository):
     async def create(self, data: dict) -> AgentDefinition:
-        obj = AgentDefinition(**data, org_id=self._org_id)
+        # Only pass fields that exist on the AgentDefinition model
+        valid_fields = {c.key for c in AgentDefinition.__table__.columns}
+        filtered = {k: v for k, v in data.items() if k in valid_fields}
+        obj = AgentDefinition(**filtered, org_id=self._org_id)
         self._session.add(obj)
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
@@ -478,7 +481,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
         if existing:
             existing.agent_id = str(agent.id)
             existing.runtime_key = runtime_key
-            existing.subgraph_key = str(agent.subgraph_key or "quality_judgement")
+            existing.subgraph_key = str(agent.subgraph_key or "quality_analysis")
             existing.supports_start_stop = bool(agent.supports_start_stop)
             existing.metadata_json = {"entry_graph": agent.entry_graph, "graph_version": agent.graph_version}
             if not getattr(existing, "status", None):
@@ -491,7 +494,7 @@ class AgentRuntimeRepository(AgentOpsRepository):
             org_id=self._org_id,
             agent_id=str(agent.id),
             runtime_key=runtime_key,
-            subgraph_key=str(agent.subgraph_key or "quality_judgement"),
+            subgraph_key=str(agent.subgraph_key or "quality_analysis"),
             status="running" if agent.is_active else "stopped",
             runtime_status="running" if agent.is_active else "stopped",
             supports_start_stop=bool(agent.supports_start_stop),

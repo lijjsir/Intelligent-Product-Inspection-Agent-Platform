@@ -177,6 +177,8 @@ def _warm_vale() -> None:
 
 
 def _wait_for_languagetool() -> None:
+    from app.core.config import settings
+
     base_url = str(settings.paper_check_languagetool_url or "").strip().rstrip("/")
     if not base_url:
         print("[skip] languagetool probe skipped: paper_check_languagetool_url is empty")
@@ -205,16 +207,34 @@ def _wait_for_languagetool() -> None:
 
 
 def main() -> int:
-    _require_import("kenlm")
-    _ensure_macro_correct_models()
-    _ensure_pycorrector_language_model()
-    from agent.tools.paper_review_pycorrector import run_pycorrector
+    from app.core.config import settings as _init_settings
 
-    print("[run] warm pycorrector")
-    run_pycorrector("这是一个测试。")
-    print("[ok] pycorrector warmed")
+    if not getattr(_init_settings, "paper_review_enabled", True):
+        print("[skip] paper review disabled, nothing to init")
+        return 0
+
+    pycorrector_enabled = getattr(_init_settings, "paper_check_pycorrector_enabled", False)
+    macro_correct_enabled = getattr(_init_settings, "paper_check_macro_correct_enabled", False)
+
+    if not pycorrector_enabled and not macro_correct_enabled:
+        print("[skip] paper check pycorrector/macro-correct both disabled")
+
+    if pycorrector_enabled or macro_correct_enabled:
+        _require_import("kenlm")
+        if macro_correct_enabled:
+            _ensure_macro_correct_models()
+        if pycorrector_enabled:
+            _ensure_pycorrector_language_model()
+            from agent.tools.paper_review_pycorrector import run_pycorrector
+            print("[run] warm pycorrector")
+            run_pycorrector("这是一个测试。")
+            print("[ok] pycorrector warmed")
+
     _warm_vale()
-    _wait_for_languagetool()
+    try:
+        _wait_for_languagetool()
+    except Exception as exc:
+        print(f"[warn] languagetool init failed (non-fatal): {exc}")
 
     from app.services.paper_review_runtime_service import PaperReviewRuntimeService
 

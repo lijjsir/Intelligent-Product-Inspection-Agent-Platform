@@ -26,6 +26,4 @@ export interface AuthSession {
   roles: string[];
   plan_tier: string;
   capabilities: string[];
-  workspaces: string[];
-  default_workspace: string;
 }

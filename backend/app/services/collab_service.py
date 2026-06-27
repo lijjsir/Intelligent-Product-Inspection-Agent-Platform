@@ -232,11 +232,19 @@ class CollabService:
                 recipient_id=self._user_id,
                 delivered_at=utcnow(),
             )
+        await self._ensure_meeting_room_action_available(thread, message, receipt, request.action_status)
+        previous_action_status = str(getattr(receipt, "action_status", "") or "pending")
         updated = await self._repo.update_receipt_action(receipt, request.action_status)
         if message.message_type == "memory_card" and request.action_status == "done":
             await self._confirm_memory_card(thread, message)
+        status_message = None
+        if previous_action_status != request.action_status:
+            status_message = await self._create_action_status_message(thread, message, updated)
         await self._session.commit()
         response = self._serialize_receipt(updated)
+        if status_message is not None:
+            status_response = (await self._serialize_messages([status_message]))[0]
+            await self._publish_message_created(thread, status_response)
         await self._publish_receipt_updated("collab_message_action_updated", response)
         return response
 
@@ -454,6 +462,44 @@ class CollabService:
             raise ForbiddenError("not a participant of this collaboration thread")
         return thread
 
+    async def _ensure_meeting_room_action_available(
+        self,
+        thread: CollabThread,
+        message: CollabMessage,
+        receipt: CollabMessageReceipt,
+        requested_action_status: str,
+    ) -> None:
+        if thread.target_type != "meeting_room":
+            return
+        if message.message_type not in {"memory_card", "action_request"}:
+            return
+        await self._ensure_meeting_room_action_host(str(thread.target_id))
+        if receipt.action_status and receipt.action_status != "pending":
+            if receipt.action_status == requested_action_status:
+                return
+            raise ValidationError("this meeting room request has already been handled")
+        receipts = (await self._repo.list_receipts(self._org_id, [str(message.id)])).get(str(message.id), [])
+        for row in receipts:
+            if row.recipient_type != "user":
+                continue
+            if str(row.recipient_id) == self._user_id:
+                continue
+            if message.sender_type == "user" and str(row.recipient_id) == str(message.sender_id):
+                continue
+            if row.action_status and row.action_status != "pending":
+                raise ValidationError("this meeting room request has already been handled by another member")
+
+    async def _ensure_meeting_room_action_host(self, room_id: str) -> None:
+        member = await self._meetings.get_member(self._org_id, room_id, self._user_id)
+        if member is None:
+            raise ForbiddenError("not a member of target meeting room")
+        if str(getattr(member, "role", "") or "member") == "host":
+            return
+        room = await self._meetings.get_room(self._org_id, room_id)
+        if room is not None and str(getattr(room, "created_by", "") or "") == self._user_id:
+            return
+        raise ForbiddenError("only the meeting host can handle meeting room requests")
+
     async def _ensure_thread_participants(self, thread: CollabThread) -> None:
         await self._repo.add_participant(
             org_id=self._org_id,
@@ -477,7 +523,7 @@ class CollabService:
                     thread_id=str(thread.id),
                     participant_type="user",
                     participant_id=str(member.user_id),
-                    role="participant",
+                    role="host" if str(getattr(member, "role", "") or "") == "host" else "participant",
                 )
         if thread.source_type == "meeting_room":
             members = await self._meetings.list_members(self._org_id, str(thread.source_id))
@@ -487,7 +533,7 @@ class CollabService:
                     thread_id=str(thread.id),
                     participant_type="user",
                     participant_id=str(member.user_id),
-                    role="participant",
+                    role="host" if str(getattr(member, "role", "") or "") == "host" else "participant",
                 )
         if thread.source_type != "user" and thread.target_type != "user":
             await self._repo.add_participant(
@@ -519,6 +565,72 @@ class CollabService:
             participant_id=self._user_id,
             message_id=str(message.id),
         )
+
+    async def _create_action_status_message(
+        self,
+        thread: CollabThread,
+        source_message: CollabMessage,
+        receipt: CollabMessageReceipt,
+    ) -> CollabMessage:
+        action_status = str(receipt.action_status or "pending")
+        action_label = self._action_status_label(action_status)
+        message_type_label = "记忆卡片" if source_message.message_type == "memory_card" else "处理请求"
+        actor_label = await self._user_display_name(self._user_id)
+        status_message = await self._repo.create_message(
+            org_id=self._org_id,
+            thread_id=str(thread.id),
+            sender_type="system",
+            sender_id=self._user_id,
+            message_type="system",
+            content=f"{actor_label}已{action_label}这条{message_type_label}。",
+            reply_to_message_id=str(source_message.id),
+            metadata_json={
+                "event": "collab_action_status",
+                "source_message_id": str(source_message.id),
+                "actor_user_id": self._user_id,
+                "actor_label": actor_label,
+                "action_status": action_status,
+                "message_type": str(source_message.message_type or ""),
+            },
+        )
+        await self._create_action_status_message_receipts(thread, status_message)
+        return status_message
+
+    async def _create_action_status_message_receipts(self, thread: CollabThread, message: CollabMessage) -> None:
+        participants = (await self._repo.list_participants(self._org_id, [str(thread.id)])).get(str(thread.id), [])
+        now = utcnow()
+        for participant in participants:
+            is_actor = participant.participant_type == "user" and str(participant.participant_id) == self._user_id
+            await self._repo.create_receipt(
+                org_id=self._org_id,
+                message_id=str(message.id),
+                thread_id=str(thread.id),
+                recipient_type=participant.participant_type,
+                recipient_id=participant.participant_id,
+                delivered_at=now,
+                read_at=now if is_actor else None,
+            )
+        await self._repo.mark_participant_read(
+            org_id=self._org_id,
+            thread_id=str(thread.id),
+            participant_type="user",
+            participant_id=self._user_id,
+            message_id=str(message.id),
+        )
+
+    async def _user_display_name(self, user_id: str) -> str:
+        user = await self._users.get_by_id(self._org_id, user_id)
+        return str(getattr(user, "username", None) or getattr(user, "email", None) or user_id)
+
+    @staticmethod
+    def _action_status_label(action_status: str) -> str:
+        if action_status == "accepted":
+            return "接受"
+        if action_status == "rejected":
+            return "拒绝"
+        if action_status == "done":
+            return "确认/完成"
+        return "处理"
 
     async def _publish_message_created(self, thread: CollabThread, message: CollabMessageResponse) -> None:
         participants = (await self._repo.list_participants(self._org_id, [str(thread.id)])).get(str(thread.id), [])

@@ -16,7 +16,7 @@ Boundary:
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import json
 
 import logging
@@ -34,8 +34,6 @@ from app.services.chat_trust_scoring_service import combine_trust_scores, score_
 from app.services.langfuse_api_client import LangfuseApiClient, LangfuseApiError
 
 logger = logging.getLogger(__name__)
-
-QUALITY_REPORT_LOCAL_TRACE_LIMIT = 1000
 
 
 class QualityReportService(TenantAwareService):
@@ -275,7 +273,7 @@ class QualityReportService(TenantAwareService):
             end_date,
             target_type="chat",
         )
-        ledger_items = await self._token_ledger_repo.list_filtered(self._org_id)
+        ledger_items = await self._token_ledger_repo.list_filtered(self._org_id, start_date, end_date)
         chat_scores = await self._chat_score_repo.list_by_range(self._org_id, start_date, end_date, limit=limit)
         chat_messages = await self._chat_message_repo.list_assistant_for_org(
             self._org_id,
@@ -688,6 +686,9 @@ class QualityReportService(TenantAwareService):
         }
 
     async def build_report(self, start_date=None, end_date=None, source: str = "all", include_remote: bool = False):
+        if start_date is None and end_date is None:
+            end_date = datetime.utcnow().date()
+            start_date = end_date - timedelta(days=6)
         api_client = LangfuseApiClient()
         stabilities = await self._stability_repo.list_by_range(self._org_id, start_date, end_date)
         result_feedbacks = await self._feedback_repo.list_by_range(self._org_id, start_date, end_date)
@@ -705,7 +706,7 @@ class QualityReportService(TenantAwareService):
         result_feedbacks = self._normalize_result_feedbacks_for_quality(result_feedbacks)
 
         local_traces = await self._list_traces_from_mysql(
-            limit=QUALITY_REPORT_LOCAL_TRACE_LIMIT,
+            limit=None,
             source=source,
             api_client=api_client,
             langfuse_available=False,

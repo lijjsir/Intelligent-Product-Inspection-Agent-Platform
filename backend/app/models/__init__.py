@@ -1,6 +1,5 @@
 from app.models.base import Base
 from app.models.organization import Organization
-from app.models.product import ProductBatch, ProductLine, ProductSku
 from app.models.user import User
 from app.models.task import InspectionTask
 from app.models.task_execution_event import TaskExecutionEvent
@@ -26,8 +25,10 @@ from app.models.inspection_spec import (
     SpecAggregationRule,
     SpecChangeLog,
 )
-from app.models.inspection_standard_library import InspectionStandardLibrary
+from app.models.inspection_standard_library import InspectionStandardLibrary, StandardDocument, StandardDocumentChunk
+from app.models.product import ProductBatch, ProductLine, ProductSku
 from app.models.agent_ops import (
+    AgentArtifactRecord,
     AgentDefinition,
     AgentRouteLog,
     AgentRuntimeEvent,
@@ -38,14 +39,6 @@ from app.models.agent_ops import (
 )
 from app.models.agent_management import AgentConfigVersion, AgentExecutionMetrics
 from app.models.chat import ChatMessage, ChatMessageScore, ChatSession
-from app.models.collab import (
-    CollabMessage,
-    CollabMessageReceipt,
-    CollabThread,
-    CollabThreadParticipant,
-    FileAsset,
-    MessageAttachment,
-)
 from app.models.dataset import Dataset, DatasetAsyncJob, DatasetSample, DatasetUploadSession
 from app.models.export_job import ExportJob
 from app.models.algo_resources import (
@@ -65,35 +58,23 @@ from app.models.algo_resources import (
     Experiment,
     ModelDeployment,
 )
-from app.models.meeting import (
-    MeetingActionItem,
-    MeetingConflictEvent,
-    MeetingAgentQueryAudit,
-    MeetingMessage,
-    MeetingRoom,
-    MeetingRoomAgent,
-    MeetingRoomMember,
-    MemoryScopeBinding,
-    MemoryTransferLog,
-)
+from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
+    MemoryCandidateSupport,
     MemoryDependencyEdge,
     MemoryEvaluation,
     MemoryEvent,
     MemoryItem,
     MemoryPolicy,
     MemoryRollback,
-    MemoryTag,
+    MemorySyncOutbox,
 )
 
 __all__ = [
     "Base",
     "Organization",
-    "ProductLine",
-    "ProductSku",
-    "ProductBatch",
     "User",
     "InspectionTask",
     "TaskExecutionEvent",
@@ -121,12 +102,18 @@ __all__ = [
     "InspectionSpec",
     "InspectionSpecItem",
     "InspectionStandardLibrary",
+    "StandardDocument",
+    "StandardDocumentChunk",
+    "ProductBatch",
+    "ProductLine",
+    "ProductSku",
     "DefectTaxonomy",
     "ProductZoneMap",
     "SpecAggregationRule",
     "SpecChangeLog",
     "InspectionResultEvidence",
     "AgentDefinition",
+    "AgentArtifactRecord",
     "PromptVersion",
     "IntentRoute",
     "AgentRuntimeInstance",
@@ -137,12 +124,6 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     "ChatMessageScore",
-    "CollabThread",
-    "CollabThreadParticipant",
-    "CollabMessage",
-    "CollabMessageReceipt",
-    "FileAsset",
-    "MessageAttachment",
     "Dataset",
     "DatasetSample",
     "DatasetAsyncJob",
@@ -167,23 +148,19 @@ __all__ = [
     "MeetingRoomAgent",
     "MeetingRoomMember",
     "MeetingMessage",
-    "MemoryScopeBinding",
-    "MemoryTransferLog",
-    "MeetingConflictEvent",
-    "MeetingActionItem",
-    "MeetingAgentQueryAudit",
     "RagSpace",
     "RagNode",
     "RagDocument",
     "RagDocumentChunk",
     "RagIndexJob",
     "MemoryItem",
+    "MemoryCandidateSupport",
     "MemoryEvent",
     "MemoryDependencyEdge",
     "MemoryPolicy",
     "MemoryRollback",
+    "MemorySyncOutbox",
     "MemoryEvaluation",
-    "MemoryTag",
     "PromptDefinition",
     "PromptSyncEvent",
 ]

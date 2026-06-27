@@ -43,6 +43,19 @@ class DataAnalysisExecutor:
                         "failed_count": int(rows["failed_count"] or 0),
                     }
             except Exception as exc:
-                content["warning"] = str(exc)
-        art = artifact("data_analysis", "data_analysis", content, confidence=0.72)
+                from agent.router.contracts import AgentExecutionError
+                raise AgentExecutionError(
+                    code="DATA_ANALYSIS_FAILED",
+                    message="数据分析查询失败，无法完成当前统计分析。",
+                    detail={"raw_error": str(exc)},
+                    frontend_visible=True,
+                ) from exc
+        stats = content.get("inspection_task_stats", {})
+        art = artifact(
+            step,
+            "data_analysis",
+            content=content,
+            confidence=0.72,
+            metrics={"total_tasks": stats.get("task_count", 0), "done_tasks": stats.get("done_count", 0), "failed_tasks": stats.get("failed_count", 0)},
+        )
         return observation(step, status="success", summary="数据分析只读统计完成", artifact_ids=[art.artifact_id]), [art]

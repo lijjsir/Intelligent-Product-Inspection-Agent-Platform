@@ -1,17 +1,21 @@
-from __future__ import annotations
+__all__ = [
+    "QualityAnalysisGraph",
+    "VisionInspectionGraph",
+    "LabDetectionGraph",
+]
 
-from typing import Any
 
-__all__ = ["QualityChatGraph", "QualityJudgementSubgraph"]
+def __getattr__(name: str):
+    if name == "QualityAnalysisGraph":
+        from agent.subgraphs.quality_analysis import QualityAnalysisGraph
 
+        return QualityAnalysisGraph
+    if name == "VisionInspectionGraph":
+        from agent.subgraphs.vision_inspection import VisionInspectionGraph
 
-def __getattr__(name: str) -> Any:
-    if name == "QualityChatGraph":
-        from agent.subgraphs.quality_chat import QualityChatGraph
+        return VisionInspectionGraph
+    if name == "LabDetectionGraph":
+        from agent.subgraphs.lab_detection import LabDetectionGraph
 
-        return QualityChatGraph
-    if name == "QualityJudgementSubgraph":
-        from agent.subgraphs.quality_judgement import QualityJudgementSubgraph
-
-        return QualityJudgementSubgraph
+        return LabDetectionGraph
     raise AttributeError(name)

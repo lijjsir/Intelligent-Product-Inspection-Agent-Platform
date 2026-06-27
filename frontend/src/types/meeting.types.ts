@@ -306,6 +306,7 @@ export interface MeetingAgentRunRequest {
   memory_scope?: MeetingMemoryScope;
   attachments?: MeetingAttachment[];
   workflow_run_id?: string | null;
+  replace_message_id?: string | null;
 }
 
 export interface MeetingMemorySource {
