@@ -11,7 +11,7 @@
     <section class="status-strip">
       <div class="status-item">
         <span class="status-label">当前能力</span>
-        <strong>内置同步、OpenAPI 解析、MCP 发现</strong>
+        <strong>内置同步、OpenAPI 解析、MCP 发现与草稿导入</strong>
       </div>
       <div class="status-item">
         <span class="status-label">建议流程</span>
@@ -62,17 +62,17 @@
         <div class="entry-head">
           <div>
             <h2 class="entry-title">MCP Server 导入</h2>
-            <p class="entry-desc">连接 MCP Server，发现其暴露的工具列表，并为后续纳管准备候选清单。</p>
+            <p class="entry-desc">连接 MCP Server，发现其工具列表，选择所需工具并导入为可测试的工具草稿。</p>
           </div>
-          <el-tag size="small" type="warning" effect="plain">发现候选</el-tag>
+          <el-tag size="small" type="warning" effect="plain">发现并导入</el-tag>
         </div>
         <ul class="entry-points">
-          <li>适合先盘点远端 MCP 能力</li>
-          <li>按服务地址动态发现工具</li>
-          <li>结果会展示工具名称、描述和输入结构</li>
+          <li>支持 Streamable HTTP 与 SSE 传输协议</li>
+          <li>按服务地址发现并勾选需要纳管的工具</li>
+          <li>导入后进入工具库继续测试、绑定和发布</li>
         </ul>
         <div class="entry-actions">
-          <el-button type="primary" @click="activePanel = 'mcp'">发现工具</el-button>
+          <el-button type="primary" @click="activePanel = 'mcp'">发现并导入</el-button>
           <el-button text @click="resetMcp">重置</el-button>
         </div>
       </article>
@@ -348,7 +348,7 @@ const importingMcp = ref(false);
 
 const workspaceTitle = computed(() => {
   if (activePanel.value === "openapi") return "OpenAPI 导入工作台";
-  if (activePanel.value === "mcp") return "MCP 发现工作台";
+  if (activePanel.value === "mcp") return "MCP 导入工作台";
   return "内置同步结果";
 });
 
