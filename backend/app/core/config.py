@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     agent_quality_task_timeout_ms: int = 1200000
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
+    mcp_default_transport: str = "streamable_http"
+    mcp_timeout_seconds: int = 30
+    mcp_retries: int = 1
+    tool_output_max_chars: int = 100000
+    tool_sensitive_values_csv: str = ""
+    agent_context_history_max_chars: int = 8000
+    agent_context_message_max_chars: int = 1600
+    agent_context_keep_recent: int = 6
 
     s3_endpoint: str = "http://127.0.0.1:19000"
     s3_access_key: str = "piap"

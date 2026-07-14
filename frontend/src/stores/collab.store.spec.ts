@@ -189,7 +189,7 @@ describe("collab store stream handling", () => {
 
   it("does not keep the thread list loading while messages are still loading", async () => {
     const store = useCollabStore();
-    let resolveMessages = (_value: Awaited<ReturnType<typeof collabApi.listMessages>>) => {};
+    let resolveMessages!: (value: Awaited<ReturnType<typeof collabApi.listMessages>>) => void;
     vi.mocked(collabApi.listThreads).mockResolvedValueOnce(
       { data: { code: 0, message: "ok", data: [thread()] } } as unknown as Awaited<ReturnType<typeof collabApi.listThreads>>,
     );
@@ -212,7 +212,7 @@ describe("collab store stream handling", () => {
 
   it("does not keep messages loading while read receipts are still pending", async () => {
     const store = useCollabStore();
-    let resolveRead = (_value: Awaited<ReturnType<typeof collabApi.markRead>>) => {};
+    let resolveRead!: (value: Awaited<ReturnType<typeof collabApi.markRead>>) => void;
     vi.mocked(collabApi.listMessages).mockResolvedValueOnce(
       { data: { code: 0, message: "ok", data: [message()] } } as unknown as Awaited<ReturnType<typeof collabApi.listMessages>>,
     );

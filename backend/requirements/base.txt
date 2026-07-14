@@ -14,6 +14,8 @@ redis>=5.0.0
 volcengine-python-sdk[ark]>=1.0.0
 langfuse>=2.0.0
 langgraph>=0.2.50
+langchain-mcp-adapters==0.1.12
+mcp==1.25.0
 python-multipart>=0.0.9
 pypdf>=5.4.0
 PyMuPDF>=1.24.0

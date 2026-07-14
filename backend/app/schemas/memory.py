@@ -305,6 +305,38 @@ class MemorySearchResponse(BaseModel):
     conflict_info: dict | None = None
 
 
+class RetrievalGatewayScope(BaseModel):
+    task_id: str | None = None
+    product_id: str | None = None
+    product_line: str | None = None
+    rag_space_id: str | None = None
+    role: str | None = None
+    scope_node_ids: list[str] = Field(default_factory=list)
+
+
+class RetrievalGatewayRequest(BaseModel):
+    org_id: str = Field(..., min_length=1)
+    user_id: str | None = None
+    workspace: Workspace = Workspace.APP
+    query: str = Field(..., min_length=1)
+    scope: RetrievalGatewayScope = Field(default_factory=RetrievalGatewayScope)
+    memory_type: list[MemoryType] | None = None
+    include_documents: bool = True
+    include_memory: bool = True
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class RetrievalGatewayResponse(BaseModel):
+    query: str
+    document_evidence: list[dict] = Field(default_factory=list)
+    memory_evidence: list[MemorySearchItem] = Field(default_factory=list)
+    document_rag: dict | None = None
+    memory_context: MemoryContext = Field(default_factory=MemoryContext)
+    conflicts: list[dict] = Field(default_factory=list)
+    degraded: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
 class MemoryErrorDetail(BaseModel):
     error_code: str
     message: str

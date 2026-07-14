@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.schemas.common import PageParams
 
@@ -43,3 +43,11 @@ class ApprovalResponse(BaseModel):
     reviewed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("payload_json")
+    def serialize_payload(self, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        payload = dict(value)
+        payload.pop("arguments_encrypted", None)
+        return payload

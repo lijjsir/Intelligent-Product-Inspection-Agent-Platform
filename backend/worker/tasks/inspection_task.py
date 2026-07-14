@@ -17,6 +17,12 @@ def run_inspection(task_payload: dict) -> dict:
         raise ValueError("task_id and org_id are required")
     started_at = perf_counter()
     result = run_celery_async(run_inspection_pipeline(task_id=task_id, org_id=org_id))
+    if not isinstance(result, dict):
+        result = {
+            "task_id": task_id,
+            "status": "failed",
+            "error": "inspection pipeline returned no result",
+        }
     _record_metrics_sync(org_id, success=result.get("status") != "failed",
                          latency_ms=int(round((perf_counter() - started_at) * 1000)))
     return result

@@ -78,28 +78,18 @@ class RetrievalGatewayService:
                     MemorySearchRequest(
                         org_id=request.org_id,
                         user_id=request.user_id or self._user_id,
-                        workspace=request.workspace,
                         query=request.query,
                         scope_filter=ScopeFilter(
                             memory_type=request.memory_type,
-                            room_id=scope.room_id,
                             task_id=scope.task_id,
-                            product_id=scope.product_id,
-                            product_line=scope.product_line,
-                            spec_code=scope.spec_code,
-                            standard_id=scope.standard_id,
+                            product_line=scope.product_line or scope.product_id,
                             rag_space_id=scope.rag_space_id,
-                            user_id=scope.user_id,
-                            role=scope.role,
-                            workspace=scope.workspace or request.workspace.value,
-                            organization_id=scope.organization_id or request.org_id,
-                            batch_no=scope.batch_no,
                         ),
                         top_k=request.top_k,
                     )
                 )
-                degraded = degraded or memory_result.degraded
-                warnings.extend(memory_result.warnings)
+                degraded = degraded or bool(getattr(memory_result, "degraded", False))
+                warnings.extend(getattr(memory_result, "warnings", []) or [])
                 memory_context = memory_result.memory_context
                 memory_evidence = list(memory_result.items)
             except Exception:

@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 import uuid
 from time import perf_counter
 from typing import Any
 
+from agent.integrations.bk_aidev.approval_bridge import create_tool_approval
+from agent.integrations.bk_aidev.tool_safety import (
+    ToolSafetyPolicy,
+    configured_tool_safety_policy,
+    sanitize_tool_output,
+)
 from agent.tools.contracts import ToolContext, ToolResult
 from agent.tools.registry import ToolRegistry
 
 
+logger = logging.getLogger(__name__)
+
+
 class ToolBlockedError(Exception):
+    pass
+
+
+class ToolApprovalRequired(ToolBlockedError):
     pass
 
 
@@ -42,8 +55,17 @@ class ToolInvoker:
             self._validate_input_schema(spec, arguments)
             self._validate_confirmation(spec, context)
         except ToolBlockedError as exc:
+            approval = None
+            if isinstance(exc, ToolApprovalRequired):
+                approval = await create_tool_approval(
+                    db_session=self._db_session,
+                    spec=spec,
+                    arguments=arguments,
+                    context=context,
+                )
             return ToolResult(
                 tool_name=tool_name, status="blocked",
+                data={"approval": approval} if approval else None,
                 error=str(exc), latency_ms=None,
             )
 
@@ -53,6 +75,7 @@ class ToolInvoker:
                 handler(arguments, context),
                 timeout=spec.timeout_ms / 1000,
             )
+            data = sanitize_tool_output(data, self._safety_policy(context))
             status = "success"
             error = None
         except asyncio.TimeoutError:
@@ -107,7 +130,7 @@ class ToolInvoker:
     @staticmethod
     def _validate_confirmation(spec, context: ToolContext) -> None:
         if spec.requires_confirmation and spec.name not in context.confirmed_actions:
-            raise ToolBlockedError(
+            raise ToolApprovalRequired(
                 f"tool '{spec.name}' requires confirmation before execution"
             )
 
@@ -142,15 +165,23 @@ class ToolInvoker:
 
         try:
             from app.models.tool import ToolExecution
+            from app.repositories.tool_repo import ToolRepository
+
+            tool = await ToolRepository(self._db_session).get_by_tool_key(
+                context.org_id,
+                tool_name,
+            )
+            if tool is None:
+                return execution_id
+            input_redacted = sanitize_tool_output(arguments, self._safety_policy(context))
             obj = ToolExecution(
                 id=execution_id,
                 tool_name=tool_name,
-                agent_id="",
-                tool_id="",
-                agent_name=context.agent or "",
-                task_id=context.request_id or "",
+                agent_id=None,
+                tool_id=tool.id,
+                task_id=self._execution_task_id(context, execution_id),
                 call_index=0,
-                input_payload=arguments,
+                input_payload=input_redacted,
                 output_payload=data,
                 status=status,
                 error_message=error,
@@ -158,9 +189,27 @@ class ToolInvoker:
                 trace_id=context.trace_id,
                 execution_type="runtime",
                 org_id=context.org_id,
+                input_redacted=input_redacted,
+                output_redacted=data,
             )
             self._db_session.add(obj)
             await self._db_session.flush()
         except Exception:
-            pass
+            logger.exception("failed to record tool execution tool_name=%s", tool_name)
         return execution_id
+
+    @staticmethod
+    def _execution_task_id(context: ToolContext, execution_id: str) -> str:
+        value = str(context.request_id or context.workflow_run_id or "").strip()
+        try:
+            return str(uuid.UUID(value))
+        except (ValueError, AttributeError):
+            seed = f"{context.org_id}:{value or execution_id}"
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+
+    @staticmethod
+    def _safety_policy(context: ToolContext) -> ToolSafetyPolicy:
+        contextual = context.metadata.get("sensitive_values") or []
+        if isinstance(contextual, str):
+            contextual = [contextual]
+        return configured_tool_safety_policy(contextual)

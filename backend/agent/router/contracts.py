@@ -19,7 +19,6 @@ StepOwner = Literal[
     "vision",
     "lab_detection",
     "quality_analysis",
-    "inspection_task",
     "file",
 ]
 

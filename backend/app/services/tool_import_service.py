@@ -6,6 +6,8 @@ import httpx
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.integrations.bk_aidev.mcp_client import McpClientAdapter, McpClientError
+from app.core.config import settings
 from app.core.exceptions import ValidationError
 from app.core.ids import uuid7
 from app.models.tool import ToolDefinition, ToolVersion
@@ -67,7 +69,7 @@ class ToolImportService:
                 id=str(uuid7()),
                 org_id=self._org_id,
                 tool_key=str(candidate["tool_key"]),
-                display_name=str(candidate["display_name"]),
+                display_name=self._bounded_display_name(candidate),
                 description=str(candidate.get("description") or ""),
                 category="http_api",
                 tool_type="http",
@@ -116,28 +118,115 @@ class ToolImportService:
 
         return imported
 
-    async def preview_mcp_tools(self, server_url: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                server_url,
-                json={"jsonrpc": "2.0", "method": "tools/list", "id": 1},
+    async def preview_mcp_tools(
+        self,
+        server_url: str,
+        transport: str = "streamable_http",
+    ) -> list[dict[str, Any]]:
+        try:
+            descriptors = await self._build_mcp_client(server_url, transport).list_tools()
+        except McpClientError as exc:
+            raise ValidationError(str(exc)) from exc
+
+        return [
+            {
+                **descriptor.to_candidate(),
+                "endpoint": server_url,
+                "transport": transport,
+            }
+            for descriptor in descriptors
+        ]
+
+    async def import_mcp_tools(
+        self,
+        server_url: str,
+        selected_keys: list[str],
+        transport: str = "streamable_http",
+    ) -> list[dict[str, Any]]:
+        candidates = await self.preview_mcp_tools(server_url, transport)
+        imported: list[dict[str, Any]] = []
+
+        for candidate in candidates:
+            if candidate["tool_key"] not in selected_keys:
+                continue
+
+            existing = await self._repo.get_by_tool_key(self._org_id, candidate["tool_key"])
+            if existing:
+                raise ValidationError(f"tool {candidate['tool_key']} already exists")
+
+            tool = await self._repo.create(
+                ToolDefinition(
+                    id=str(uuid7()),
+                    org_id=self._org_id,
+                    tool_key=str(candidate["tool_key"]),
+                    display_name=self._bounded_display_name(candidate),
+                    description=str(candidate.get("description") or ""),
+                    category="MCP",
+                    tool_type="mcp",
+                    status="draft",
+                    risk_level="medium",
+                    is_readonly=False,
+                    source_type="mcp",
+                    source_ref=server_url,
+                    manifest_hash=None,
+                    health_status="unknown",
+                    created_by=None,
+                )
             )
-            resp.raise_for_status()
-            data = resp.json()
-            tools = data.get("result", {}).get("tools", [])
-            return [
+
+            version = await self._version_repo.create(
+                ToolVersion(
+                    id=str(uuid7()),
+                    org_id=self._org_id,
+                    tool_id=tool.id,
+                    version="1.0.0",
+                    display_name=tool.display_name,
+                    description=tool.description,
+                    endpoint=server_url,
+                    method="MCP",
+                    handler_path=None,
+                    parameters_schema=candidate.get("parameters_schema")
+                    or {"type": "object", "properties": {}},
+                    returns_schema=candidate.get("returns_schema")
+                    or {"type": "object", "properties": {}},
+                    auth_type="none",
+                    secret_ref=None,
+                    timeout_ms=settings.mcp_timeout_seconds * 1000,
+                    retry_policy={
+                        "transport": transport,
+                        "mcp_tool_name": candidate["mcp_tool_name"],
+                        "retries": settings.mcp_retries,
+                    },
+                    rate_limit_rpm=60,
+                    status="draft",
+                    created_by=None,
+                )
+            )
+            await self._repo.save(tool, {"active_version_id": version.id})
+            imported.append(
                 {
-                    "tool_key": f"mcp.{tool['name']}",
-                    "display_name": tool.get("description", tool["name"]),
-                    "description": tool.get("description", ""),
-                    "parameters_schema": tool.get("inputSchema", {"type": "object", "properties": {}}),
-                    "returns_schema": {"type": "object", "properties": {}},
-                    "tool_type": "mcp",
-                    "category": "MCP",
-                    "source_type": "mcp",
+                    "id": tool.id,
+                    "tool_key": tool.tool_key,
+                    "display_name": tool.display_name,
+                    "status": tool.status,
                 }
-                for tool in tools
-            ]
+            )
+
+        return imported
+
+    @staticmethod
+    def _build_mcp_client(server_url: str, transport: str) -> McpClientAdapter:
+        return McpClientAdapter(
+            server_url,
+            transport=transport,
+            timeout_seconds=settings.mcp_timeout_seconds,
+            retries=settings.mcp_retries,
+        )
+
+    @staticmethod
+    def _bounded_display_name(candidate: dict[str, Any]) -> str:
+        value = str(candidate.get("display_name") or candidate.get("tool_key") or "").strip()
+        return value[:256]
 
     async def _load_openapi_spec(self, source: str) -> dict[str, Any]:
         if source.startswith("http://") or source.startswith("https://"):

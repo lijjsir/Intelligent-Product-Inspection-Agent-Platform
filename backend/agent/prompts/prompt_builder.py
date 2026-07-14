@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agent.integrations.bk_aidev.context_compression import compress_history
+from app.core.config import settings
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -204,9 +206,15 @@ class PromptBuilder:
         if runtime_prompt_section:
             system_prompt = f"{system_prompt}\n\n{runtime_prompt_section}"
 
+        compressed_history, compression_stats = compress_history(
+            history,
+            max_chars=settings.agent_context_history_max_chars,
+            keep_recent=settings.agent_context_keep_recent,
+            per_message_chars=settings.agent_context_message_max_chars,
+        )
         history_lines = [
             f"{item.get('role', 'user')}: {item.get('content', '')}"
-            for item in (history or [])[-6:]
+            for item in compressed_history
             if item.get("content")
         ]
         history_text = "\n".join(history_lines) if history_lines else "无"
@@ -257,6 +265,9 @@ class PromptBuilder:
             "agent": agent,
             "sub_route": sub_route,
             "temperature": temperature,
+            "history_original_messages": compression_stats.original_messages,
+            "history_kept_messages": compression_stats.kept_messages,
+            "history_dropped_messages": compression_stats.dropped_messages,
             **shared_meta,
             **short_term_meta,
         }

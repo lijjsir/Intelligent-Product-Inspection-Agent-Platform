@@ -54,6 +54,9 @@ const canIngestTaskResult = computed(() =>
 );
 const canBrowseRagSpaces = computed(() => hasRole([ROLE_ADMIN, ROLE_USER, ROLE_EXPERT]));
 const canBrowseDatasets = computed(() => hasRole(ROLE_ALGORITHM_ENGINEER));
+const canViewInspectionResults = computed(() =>
+  hasRole([ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR]),
+);
 const canIngestDataset = computed(() => canBrowseDatasets.value);
 const requiresRagSpace = computed(() => ingestForm.value.target === "rag" || ingestForm.value.target === "both");
 const requiresDataset = computed(() => ingestForm.value.target === "dataset" || ingestForm.value.target === "both");
@@ -319,7 +322,7 @@ onUnmounted(() => {
           重新启动检测
         </el-button>
         <el-button
-          v-if="taskStore.current.has_result"
+          v-if="taskStore.current.has_result && canViewInspectionResults"
           type="success"
           plain
           @click="router.push(`/app/results/${taskStore.current.id}`)"
@@ -327,7 +330,7 @@ onUnmounted(() => {
           查看分析结果
         </el-button>
         <el-button
-          v-if="taskStore.current.has_stability"
+          v-if="taskStore.current.has_stability && canViewInspectionResults"
           type="warning"
           plain
           @click="router.push(`/app/stability/${taskStore.current.id}`)"

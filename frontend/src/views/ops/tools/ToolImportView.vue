@@ -190,6 +190,12 @@
           <el-form-item label="MCP Server 地址">
             <el-input v-model="mcpServerUrl" placeholder="http://localhost:8000/mcp" />
           </el-form-item>
+          <el-form-item label="传输协议">
+            <el-select v-model="mcpTransport" style="width: 100%">
+              <el-option label="Streamable HTTP（推荐）" value="streamable_http" />
+              <el-option label="SSE（兼容旧服务）" value="sse" />
+            </el-select>
+          </el-form-item>
           <div class="form-actions">
             <el-button type="primary" :loading="discoveringMcp" @click="discoverMcp">发现工具</el-button>
             <el-button @click="resetMcp">清空</el-button>
@@ -199,14 +205,32 @@
         <div v-if="mcpCandidates.length" class="result-block">
           <div class="result-summary">
             <strong>已发现 {{ mcpCandidates.length }} 个 MCP 工具</strong>
-            <span>当前页面先用于发现能力，建议后续结合工具库继续纳管。</span>
+            <span>勾选需要的工具后导入为草稿，再到工具库测试和发布。</span>
           </div>
-          <el-table :data="mcpCandidates" stripe size="small" max-height="360">
+          <el-table
+            :data="mcpCandidates"
+            stripe
+            size="small"
+            max-height="360"
+            @selection-change="onMcpSelect"
+          >
+            <el-table-column type="selection" width="48" />
             <el-table-column prop="tool_key" label="Tool Key" min-width="220" />
             <el-table-column prop="display_name" label="名称" min-width="180" />
             <el-table-column prop="description" label="描述" min-width="240" />
           </el-table>
+          <div class="result-actions">
+            <span>已选择 {{ mcpSelected.length }} 个工具</span>
+            <el-button type="primary" :loading="importingMcp" @click="importMcp">导入选中工具</el-button>
+          </div>
         </div>
+
+        <el-result
+          v-if="mcpImported.length"
+          icon="success"
+          title="导入完成"
+          :sub-title="`已导入 ${mcpImported.length} 个 MCP 工具，请到工具库继续测试和发布。`"
+        />
       </template>
     </section>
 
@@ -315,8 +339,12 @@ const previewing = ref(false);
 const importing = ref(false);
 
 const mcpServerUrl = ref("");
+const mcpTransport = ref<"streamable_http" | "sse">("streamable_http");
 const mcpCandidates = ref<ToolCandidate[]>([]);
+const mcpSelected = ref<ToolCandidate[]>([]);
+const mcpImported = ref<ToolCandidate[]>([]);
 const discoveringMcp = ref(false);
+const importingMcp = ref(false);
 
 const workspaceTitle = computed(() => {
   if (activePanel.value === "openapi") return "OpenAPI 导入工作台";
@@ -329,7 +357,7 @@ const workspaceSubtitle = computed(() => {
     return "先解析候选工具，再批量导入需要纳管的接口。";
   }
   if (activePanel.value === "mcp") {
-    return "先发现远端 MCP 工具，再决定后续纳管和绑定策略。";
+    return "发现远端 MCP 工具并导入为草稿，再进入工具库完成测试、绑定和发布。";
   }
   return "查看最近一次内置工具扫描结果。";
 });
@@ -413,12 +441,14 @@ async function discoverMcp() {
   }
 
   discoveringMcp.value = true;
+  mcpImported.value = [];
   try {
     const response = await http.post<{ candidates: ToolCandidate[] }>(
       "/v1/tools/import/mcp/preview",
-      { server_url: mcpServerUrl.value },
+      { server_url: mcpServerUrl.value, transport: mcpTransport.value },
     );
     mcpCandidates.value = response.data.data.candidates;
+    mcpSelected.value = [];
 
     if (!mcpCandidates.value.length) {
       ElMessage.info("当前服务没有返回可发现的工具。");
@@ -430,9 +460,41 @@ async function discoverMcp() {
   }
 }
 
+function onMcpSelect(selection: ToolCandidate[]) {
+  mcpSelected.value = selection;
+}
+
+async function importMcp() {
+  if (!mcpSelected.value.length) {
+    ElMessage.warning("请至少选择一个 MCP 工具。");
+    return;
+  }
+
+  importingMcp.value = true;
+  try {
+    const toolKeys = mcpSelected.value
+      .map((item) => String(item.tool_key || ""))
+      .filter(Boolean);
+    const response = await http.post<{ imported: ToolCandidate[] }>("/v1/tools/import/mcp", {
+      server_url: mcpServerUrl.value,
+      transport: mcpTransport.value,
+      tool_keys: toolKeys,
+    });
+    mcpImported.value = response.data.data.imported;
+    ElMessage.success(`已导入 ${mcpImported.value.length} 个 MCP 工具。`);
+  } catch {
+    ElMessage.error("导入失败，请检查工具是否已存在或服务是否可用。");
+  } finally {
+    importingMcp.value = false;
+  }
+}
+
 function resetMcp() {
   mcpServerUrl.value = "";
+  mcpTransport.value = "streamable_http";
   mcpCandidates.value = [];
+  mcpSelected.value = [];
+  mcpImported.value = [];
 }
 </script>
 
@@ -603,6 +665,15 @@ function resetMcp() {
 .result-summary strong {
   color: oklch(0.2 0.01 260);
   font-size: 14px;
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: oklch(0.45 0.01 260);
 }
 
 .result-stats {

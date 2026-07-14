@@ -637,7 +637,7 @@ def service(monkeypatch):
     monkeypatch.setattr(algo_mod, "TaskRepository", lambda session: task_repo)
     monkeypatch.setattr(algo_mod, "ResultRepository", lambda session: result_repo)
     monkeypatch.setattr(algo_mod, "build_object_storage", lambda: object_storage)
-    monkeypatch.setattr(algo_mod, "build_graph_store", lambda: graph_store)
+    monkeypatch.setattr(algo_mod, "build_graph_store", lambda **_kwargs: graph_store)
     monkeypatch.setattr(algo_mod, "has_active_celery_worker", lambda: False)
 
     svc = algo_mod.AlgoWorkspaceService(session, "org-1", "user-1")

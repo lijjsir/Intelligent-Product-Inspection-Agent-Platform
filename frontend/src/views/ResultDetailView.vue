@@ -113,7 +113,7 @@ const standardEvaluationText = computed(() => standardEvaluation.value ? JSON.st
 const defectEmptyDescription = computed(() => buildDefectEmptyDescription(currentResult.value));
 const defectImageNotice = computed(() => buildDefectImageNotice(currentResult.value));
 const visualPossibleDefects = computed(() => extractVisualPossibleDefects(currentResult.value));
-const showDefectImagePanel = computed(() => shouldShowDefectImagePanel(taskImages.value, currentResult.value));
+const showDefectImagePanel = computed(() => shouldShowDefectImagePanel(taskImages.value));
 const hasDefectImageIndex = computed(() => defects.value.some((item) => item.image_index != null));
 const imageDefectGroups = computed(() => {
   return taskImages.value.map((url, index) => {

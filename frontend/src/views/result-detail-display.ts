@@ -115,7 +115,6 @@ export function extractVisualPossibleDefects(result: InspectionResult | null | u
 
 export function shouldShowDefectImagePanel(
   imageUrls: Array<string | null | undefined>,
-  _result: InspectionResult | null | undefined,
 ): boolean {
   return imageUrls.some((item) => String(item || "").trim());
 }

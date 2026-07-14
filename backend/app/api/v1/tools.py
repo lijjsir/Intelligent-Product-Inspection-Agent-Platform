@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status as http_status
+from fastapi import APIRouter, Depends, Header, Query, status as http_status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -210,8 +210,27 @@ async def preview_mcp_import(
 ):
     require_role("tool", current.role)
     service = ToolImportService(db, current.org_id)
-    candidates = await service.preview_mcp_tools(payload.get("server_url", ""))
+    candidates = await service.preview_mcp_tools(
+        str(payload.get("server_url") or ""),
+        str(payload.get("transport") or "streamable_http"),
+    )
     return ResponseEnvelope(data={"candidates": candidates, "total": len(candidates)})
+
+
+@router.post("/import/mcp", response_model=ResponseEnvelope[object])
+async def import_mcp_tools(
+    payload: dict,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("tool", current.role)
+    service = ToolImportService(db, current.org_id)
+    imported = await service.import_mcp_tools(
+        str(payload.get("server_url") or ""),
+        [str(item) for item in (payload.get("tool_keys") or []) if str(item)],
+        str(payload.get("transport") or "streamable_http"),
+    )
+    return ResponseEnvelope(data={"imported": imported})
 
 
 def _get_current_user_for_sse(

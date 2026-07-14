@@ -2731,11 +2731,12 @@ onBeforeUnmount(() => {
               type="warning"
               size="small"
               class="room-delete-button"
-              aria-label="退出会议
-              title="退出会议
+              aria-label="退出会议"
+              title="退出会议"
               @click.stop="handleLeaveRoom(room)"
             >
-              退出            </el-button>
+              退出
+            </el-button>
           </span>
           <span class="room-meta">
             <span>{{ room.access_code }} · {{ room.member_count }} 位</span>

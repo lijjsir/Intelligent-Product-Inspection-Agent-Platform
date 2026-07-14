@@ -14,11 +14,11 @@ def select_subgraph(signals: RouteSignals) -> RouteDecision:
     if normalized_mode == "legacy_only":
         reason = "Legacy-only routing mode is enabled"
     elif signals.has_images or signals.has_file_attachments:
-        selected_agent = "inspection_task"
+        selected_agent = "quality_analysis"
         sub_route = "inspection_execute"
         reason = "Attachment detected; route to structured inspection workflow"
     elif signals.has_task_keyword:
-        selected_agent = "inspection_task"
+        selected_agent = "quality_analysis"
         sub_route = "task_create"
         reason = "Task creation intent detected; route to quality task draft flow"
     elif signals.request_kind == "chat":

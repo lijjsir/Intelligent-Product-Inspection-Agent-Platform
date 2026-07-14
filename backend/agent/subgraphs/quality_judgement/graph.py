@@ -203,7 +203,7 @@ async def _run_structured_inspection(request: NormalizedRequest) -> AgentOutput:
 
     graph = InspectionTaskGraph()
     decision = AgentRouteDecision(
-        selected_agent="inspection_task",
+        selected_agent="quality_analysis",
         sub_route="inspection_execute",
         intent="structured_inspection",
         reason="legacy quality_judgement compatibility wrapper",
@@ -234,7 +234,7 @@ class QualityJudgementSubgraph:
             output = await _run_structured_inspection(request)
             output.route_decision = RouteDecision(
                 mode="router_enabled",
-                selected_agent="inspection_task",
+                selected_agent="quality_analysis",
                 sub_route="inspection_execute",
                 intent="inspection_execute",
                 reason="quality_judgement internal structured inspection",
@@ -295,4 +295,3 @@ class QualityJudgementSubgraph:
             raw_state=dict(ao.get("raw_state") or {}),
         )
         return output
-

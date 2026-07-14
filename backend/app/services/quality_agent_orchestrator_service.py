@@ -454,14 +454,20 @@ class QualityAgentOrchestratorService:
                             "metadata_json": metadata,
                         }
                     )
-                    await self._write_rag_usage_candidate(
-                        session,
-                        request=request,
-                        trace_id=str(trace_id or request.workflow_run_id or request.request_id),
-                        query=str(item.query or ""),
-                        rag_space_id=str(item.rag_space_id or ""),
-                        hit_count=int(item.hit_count or 0),
-                    )
+                    try:
+                        await self._write_rag_usage_candidate(
+                            session,
+                            request=request,
+                            trace_id=str(trace_id or request.workflow_run_id or request.request_id),
+                            query=str(item.query or ""),
+                            rag_space_id=str(item.rag_space_id or ""),
+                            hit_count=int(item.hit_count or 0),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "RAG usage memory candidate write failed request_id=%s",
+                            request.request_id,
+                        )
                 await self._persist_rag_tool_executions(
                     session,
                     request=request,

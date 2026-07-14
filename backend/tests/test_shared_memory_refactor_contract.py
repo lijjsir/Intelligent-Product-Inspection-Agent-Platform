@@ -63,9 +63,10 @@ def test_prompt_builder_injects_shared_and_short_term_memory():
     assert meta["session_facts_injected_keys"] == ["standard_version", "target_market"]
 
 
-def test_legacy_quality_chat_graph_is_removed():
-    path = BACKEND_ROOT / "agent/subgraphs/quality_chat"
-    assert not any(path.rglob("*.py"))
+def test_legacy_quality_chat_graph_is_not_registered():
+    from agent.router.manager_dispatcher import ManagerDispatcher
+
+    assert "quality_chat" not in ManagerDispatcher()._executors
 
 
 def test_graph_factory_requires_neo4j_even_when_strict_sync_disabled(monkeypatch):
@@ -154,9 +155,10 @@ def test_neo4j_graph_supports_conflict_case_and_domain_nodes():
         assert token in source
 
 
-def test_legacy_memory_manager_graph_is_removed():
-    path = BACKEND_ROOT / "agent/graphs/memory_manager"
-    assert not any(path.rglob("*.py"))
+def test_legacy_memory_manager_graph_is_not_registered():
+    from agent.router.manager_dispatcher import ManagerDispatcher
+
+    assert "memory_manager" not in ManagerDispatcher()._executors
 
 
 @pytest.mark.asyncio

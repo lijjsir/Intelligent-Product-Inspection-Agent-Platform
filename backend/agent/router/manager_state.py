@@ -31,6 +31,7 @@ class ManagerState(BaseModel):
     selected_rag_space: dict[str, Any] | None = None
     rag_scope: dict[str, Any] | None = None
     shared_memory_context: dict[str, Any] | None = None
+    memory_sources: list[dict[str, Any]] = Field(default_factory=list)
     blackboard_context: dict[str, Any] | None = None
     blackboard_snapshot: dict[str, Any] | None = None
     agent_local_memory_context: list[dict[str, Any]] = Field(default_factory=list)

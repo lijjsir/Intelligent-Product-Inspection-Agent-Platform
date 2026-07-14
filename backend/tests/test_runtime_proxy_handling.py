@@ -324,7 +324,11 @@ async def test_knowledge_indexer_disables_env_proxy(monkeypatch):
     async def fake_embed(self, text: str):
         return [0.1, 0.2, 0.3]
 
+    async def fake_pin_runtime(self):
+        return None
+
     monkeypatch.setattr("agent.rag.knowledge_indexer.Embedder.embed", fake_embed)
+    monkeypatch.setattr("agent.rag.knowledge_indexer.Embedder.pin_runtime", fake_pin_runtime)
     monkeypatch.setattr("agent.rag.knowledge_indexer.httpx.AsyncClient", FakeClient)
 
     result = await KnowledgeIndexer(org_id="org-1").index(

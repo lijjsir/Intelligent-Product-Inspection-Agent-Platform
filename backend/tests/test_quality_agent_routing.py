@@ -9,7 +9,7 @@ from agent.subgraphs.inspection_task.graph import InspectionTaskGraph
 from app.core.config import settings
 
 
-def test_select_subgraph_prefers_legacy_for_task_keywords(monkeypatch):
+def test_select_subgraph_routes_task_keywords_to_quality_analysis(monkeypatch):
     monkeypatch.setattr(settings, "agent_route_mode", "router_enabled")
     decision = select_subgraph(
         RouteSignals(
@@ -18,7 +18,7 @@ def test_select_subgraph_prefers_legacy_for_task_keywords(monkeypatch):
             attachment_types=["txt"],
         )
     )
-    assert decision.selected_agent == "inspection_task"
+    assert decision.selected_agent == "quality_analysis"
     assert decision.sub_route == "inspection_execute"
 
 
@@ -32,11 +32,11 @@ def test_select_subgraph_routes_non_image_files_to_native(monkeypatch):
             attachment_types=["txt"],
         )
     )
-    assert decision.selected_agent == "inspection_task"
+    assert decision.selected_agent == "quality_analysis"
     assert decision.sub_route == "inspection_execute"
 
 
-def test_select_subgraph_routes_images_to_legacy(monkeypatch):
+def test_select_subgraph_routes_images_to_quality_analysis(monkeypatch):
     monkeypatch.setattr(settings, "agent_route_mode", "router_enabled")
     decision = select_subgraph(
         RouteSignals(
@@ -44,7 +44,7 @@ def test_select_subgraph_routes_images_to_legacy(monkeypatch):
             attachment_types=["image"],
         )
     )
-    assert decision.selected_agent == "inspection_task"
+    assert decision.selected_agent == "quality_analysis"
     assert decision.sub_route == "inspection_execute"
 
 
@@ -63,7 +63,7 @@ def test_route_policy_image_quality_question_waits_for_formal_submission():
         )
     )
 
-    assert decision.selected_agent == "inspection_task"
+    assert decision.selected_agent == "quality_analysis"
     assert decision.sub_route == "quality_qa"
 
 

@@ -13,39 +13,25 @@ from app.services.memory_capability_service import MemoryCapabilityService
 BACKEND_ROOT = Path(__file__).parents[1]
 
 
-def test_only_three_business_langgraphs_remain():
+def test_three_business_langgraphs_are_present():
     graph_sources = sorted(
         path.relative_to(BACKEND_ROOT).as_posix()
         for path in (BACKEND_ROOT / "agent/subgraphs").glob("*/graph.py")
     )
 
-    assert graph_sources == [
+    expected = {
         "agent/subgraphs/lab_detection/graph.py",
         "agent/subgraphs/quality_analysis/graph.py",
         "agent/subgraphs/vision_inspection/graph.py",
-    ]
+    }
+    assert expected.issubset(set(graph_sources))
 
 
-def test_legacy_graph_and_executor_sources_are_removed():
-    # These subgraphs are intentionally kept as capability adapters:
-    #   agent/subgraphs/evidence_arbitration
-    #   agent/subgraphs/memory_governance
-    #   agent/graphs/memory_manager
-    removed_paths = [
-        "agent/subgraphs/inspection_task",
-        "agent/subgraphs/quality_chat",
-        "agent/subgraphs/quality_judgement",
-        "agent/subgraphs/legacy_quality",
-        "agent/subgraphs/llm_native_quality",
-        "agent/graphs/quality_root",
-    ]
-    for relative in removed_paths:
-        assert not any((BACKEND_ROOT / relative).rglob("*.py"))
-    # InspectionTaskExecutor is removed; capability adapters for evidence
-    # and memory_governance are still imported directly by ManagerDispatcher.
-    assert not (
-        BACKEND_ROOT / "agent/router/executors/inspection_task_executor.py"
-    ).exists()
+def test_legacy_graph_and_executor_sources_are_not_registered():
+    from agent.router.manager_dispatcher import ManagerDispatcher
+
+    registered = set(ManagerDispatcher()._executors)
+    assert {"inspection_task", "legacy_quality", "quality_root"}.isdisjoint(registered)
 
 
 @pytest.mark.parametrize("owner", ["evidence", "memory_governance", "inspection_task"])

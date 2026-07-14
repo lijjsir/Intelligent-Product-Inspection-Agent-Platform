@@ -11,6 +11,13 @@ from typing import Any
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agent.integrations.bk_aidev.mcp_client import McpClientAdapter
+from agent.integrations.bk_aidev.tool_safety import (
+    ToolSafetyPolicy,
+    configured_tool_safety_policy,
+    sanitize_tool_output,
+)
+from app.core.config import settings
 from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.ids import uuid7
@@ -313,6 +320,8 @@ class ToolService:
         status = "success"
         output = None
         error = None
+        safety_policy = self._tool_safety_policy()
+        input_redacted = sanitize_tool_output(params, safety_policy)
 
         self._session.add(
             ToolRuntimeEvent(
@@ -334,6 +343,7 @@ class ToolService:
             if missing:
                 raise ValidationError(f"missing required parameters: {', '.join(missing)}")
             output = await self._execute_tool_for_test(tool, version, params)
+            output = sanitize_tool_output(output, safety_policy)
         except Exception as exc:
             status = "failed"
             error = str(exc)
@@ -347,14 +357,14 @@ class ToolService:
                 tool_id=tool.id,
                 tool_name=tool.display_name,
                 call_index=0,
-                input_payload=params,
+                input_payload=input_redacted,
                 output_payload=output if status == "success" else None,
                 status=status,
                 error_message=error,
                 latency_ms=duration_ms,
                 execution_type="test",
                 trace_id=trace_id,
-                input_redacted=params,
+                input_redacted=input_redacted,
                 output_redacted=output if status == "success" else None,
             )
         )
@@ -421,7 +431,24 @@ class ToolService:
                 return await result
             return result
 
-        if tool_type in {"http", "openapi", "mcp"}:
+        if tool_type == "mcp":
+            if not version.endpoint:
+                raise ValidationError("MCP server endpoint is not configured")
+            policy = dict(version.retry_policy or {})
+            tool_name = str(policy.get("mcp_tool_name") or "").strip()
+            if not tool_name:
+                tool_name = tool.tool_key.removeprefix("mcp.")
+            transport = str(policy.get("transport") or settings.mcp_default_transport)
+            retries = int(policy.get("retries", settings.mcp_retries))
+            client = McpClientAdapter(
+                version.endpoint,
+                transport=transport,
+                timeout_seconds=max(1, version.timeout_ms) / 1000,
+                retries=retries,
+            )
+            return await client.call_tool(tool_name, params)
+
+        if tool_type in {"http", "openapi"}:
             if not version.endpoint:
                 raise ValidationError("tool endpoint is not configured")
             method = (self._derive_method(version) or "POST").upper()
@@ -433,6 +460,10 @@ class ToolService:
                 return {"text": response.text}
 
         raise ValidationError(f"tool type {tool.tool_type} is not supported")
+
+    @staticmethod
+    def _tool_safety_policy() -> ToolSafetyPolicy:
+        return configured_tool_safety_policy()
 
     def _serialize_tool(
         self,

@@ -90,6 +90,8 @@ class ApprovalService:
                 await rollback_svc.apply_rollback(approval.source_id)
             except Exception:
                 pass
+        elif approval.source_module == "agent_tool":
+            await self._execute_agent_tool_approval(approval)
 
         await self._write_audit_log(approval, reviewer_id, "approve")
         return approval
@@ -101,6 +103,7 @@ class ApprovalService:
         approval.reviewer_id = reviewer_id
         approval.review_comment = (comment or "").strip() or None
         approval.reviewed_at = datetime.now(timezone.utc)
+        self._discard_agent_tool_arguments(approval)
         await self._repo.update(approval)
         await self._write_audit_log(approval, reviewer_id, "reject")
         return approval
@@ -112,8 +115,68 @@ class ApprovalService:
             raise ForbiddenError("only requester can cancel approval")
         approval.status = "cancelled"
         approval.reviewed_at = datetime.now(timezone.utc)
+        self._discard_agent_tool_arguments(approval)
         await self._repo.update(approval)
         return approval
+
+    async def _execute_agent_tool_approval(self, approval: Approval) -> None:
+        payload = dict(approval.payload_json or {})
+        execution: dict = {"status": "failed", "error": "tool approval payload is invalid"}
+
+        try:
+            from agent.integrations.bk_aidev.approval_bridge import decrypt_tool_arguments
+            from agent.tools import get_registry
+            from agent.tools.contracts import ToolContext
+            from agent.tools.invoker import ToolInvoker
+
+            tool_name = str(payload.get("tool_name") or "").strip()
+            encrypted_arguments = str(payload.get("arguments_encrypted") or "").strip()
+            if not tool_name or not encrypted_arguments:
+                raise ValidationError("tool approval payload is incomplete")
+
+            arguments = decrypt_tool_arguments(encrypted_arguments)
+            result = await ToolInvoker(get_registry(), db_session=self._session).invoke(
+                tool_name=tool_name,
+                arguments=arguments,
+                context=ToolContext(
+                    org_id=self._org_id,
+                    request_id=str(payload.get("request_id") or approval.source_id or approval.id),
+                    agent=str(payload.get("agent") or ""),
+                    surface=str(payload.get("surface") or ""),
+                    user_id=approval.requester_id,
+                    workflow_run_id=str(payload.get("workflow_run_id") or "") or None,
+                    session_id=str(payload.get("session_id") or "") or None,
+                    trace_id=str(payload.get("trace_id") or "") or None,
+                    allowed_modes=[str(item) for item in payload.get("allowed_modes") or []],
+                    confirmed_actions=[tool_name],
+                    metadata={
+                        "approval_id": approval.id,
+                        "requester_role": approval.requester_role,
+                    },
+                ),
+            )
+            execution = {
+                "status": result.status,
+                "data": result.data,
+                "error": result.error,
+                "execution_id": result.execution_id,
+                "latency_ms": result.latency_ms,
+            }
+        except Exception as exc:
+            execution = {"status": "failed", "error": str(exc)}
+
+        payload.pop("arguments_encrypted", None)
+        payload["execution"] = execution
+        approval.payload_json = payload
+        await self._repo.update(approval)
+
+    @staticmethod
+    def _discard_agent_tool_arguments(approval: Approval) -> None:
+        if approval.source_module != "agent_tool":
+            return
+        payload = dict(approval.payload_json or {})
+        payload.pop("arguments_encrypted", None)
+        approval.payload_json = payload
 
     def _ensure_pending(self, approval: Approval) -> None:
         if approval.status != "pending":

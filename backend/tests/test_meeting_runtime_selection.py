@@ -598,7 +598,7 @@ async def test_llm_agent_adapter_disables_env_proxy_for_streaming(monkeypatch):
 
     class FakeClient:
         def __init__(self, timeout=None, trust_env=None):
-            assert timeout == 120
+            assert timeout == 600
             assert trust_env is False
 
         async def __aenter__(self):

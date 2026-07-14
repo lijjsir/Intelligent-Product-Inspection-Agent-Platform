@@ -24,5 +24,5 @@ def test_task_event_payload_exposes_persisted_event_identity_and_status():
         "stage": "reasoning",
         "status": "running",
         "message": "reasoning started",
-        "ts": "2026-05-24T06:41:35.126000",
+        "ts": "2026-05-24T06:41:35.126000Z",
     }

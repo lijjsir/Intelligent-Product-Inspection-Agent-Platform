@@ -42,7 +42,7 @@ class FakeItemRepo:
         self.created.append(item)
         return item
 
-    async def list_active_by_scope(self, **kwargs):
+    async def list_retrievable_by_scope(self, **kwargs):
         self.calls.append(kwargs)
         return self.eligible
 
@@ -65,7 +65,6 @@ def memory_write_request(scope: MemoryScope | None) -> MemoryWriteRequest:
     return MemoryWriteRequest(
         org_id="org-1",
         user_id="user-1",
-        workspace=Workspace.APP,
         source=MemorySource(kind="tool", trace_id="trace-1"),
         memory_type=MemoryType.INSPECTION_PATTERN,
         scope=scope,
@@ -75,54 +74,20 @@ def memory_write_request(scope: MemoryScope | None) -> MemoryWriteRequest:
     )
 
 
-@pytest.mark.asyncio
-async def test_memory_write_normalizes_product_scope_and_indexes_payload():
-    fake_items = FakeItemRepo()
-    fake_events = FakeEventRepo()
-    fake_vector = FakeVector()
-    service = MemoryService(object(), "org-1", vector_service=fake_vector)
-    service._item_repo = fake_items
-    service._event_repo = fake_events
+def test_memory_write_accepts_product_line_scope():
+    request = memory_write_request(MemoryScope(product_line="P001"))
 
-    response = await service.write_candidate(memory_write_request(MemoryScope(product_id="P001")))
+    assert request.scope is not None
+    assert request.scope.product_line == "P001"
 
-    assert response.status.value == "active"
-    item = fake_items.created[0]
-    assert item.scope_json["scope_type"] == "product"
-    assert item.scope_json["scope_id"] == "P001"
-    assert item.scope_json["product_id"] == "P001"
-    assert fake_vector.upserts[0]["scope_type"] == "product"
-    assert fake_vector.upserts[0]["scope_id"] == "P001"
+
+def test_memory_write_rejects_missing_product_line_scope():
+    with pytest.raises(ValueError, match="requires product_line"):
+        memory_write_request(MemoryScope())
 
 
 @pytest.mark.asyncio
-async def test_memory_write_rejects_missing_normalized_scope():
-    fake_items = FakeItemRepo()
-    fake_events = FakeEventRepo()
-    service = MemoryService(object(), "org-1")
-    service._item_repo = fake_items
-    service._event_repo = fake_events
-
-    request = MemoryWriteRequest.model_construct(
-        org_id="org-1",
-        user_id="user-1",
-        workspace=Workspace.APP,
-        source=MemorySource(kind="tool", trace_id="trace-1"),
-        memory_type=MemoryType.INSPECTION_PATTERN,
-        scope=MemoryScope(),
-        content=MemoryContent(summary="P001 抽检风险在近期批次中上升"),
-        confidence=0.85,
-        trace_id="trace-1",
-    )
-    response = await service.write_candidate(request)
-
-    assert response.memory_id == ""
-    assert "missing scope" in response.warnings
-    assert fake_items.created == []
-
-
-@pytest.mark.asyncio
-async def test_memory_search_passes_expanded_scope_filters_to_repo_and_vector():
+async def test_memory_search_passes_current_scope_filters_to_repo_and_vector():
     memory = SimpleNamespace(
         memory_id="mem-1",
         memory_type="inspection_pattern",
@@ -134,17 +99,14 @@ async def test_memory_search_passes_expanded_scope_filters_to_repo_and_vector():
         confidence=0.8,
         usage_policy="context_only",
         scope_json={
-            "scope_type": "product",
-            "scope_id": "P001",
-            "product_id": "P001",
-            "batch_no": "B-01",
+            "product_line": "P001",
         },
         trace_id="trace-1",
     )
     fake_items = FakeItemRepo(eligible=[memory])
     fake_events = FakeEventRepo()
     fake_vector = FakeVector(results=[{"memory_id": "mem-1", "score": 0.77}])
-    service = MemoryService(object(), "org-1", vector_service=fake_vector)
+    service = MemoryService(None, "org-1", vector_service=fake_vector)
     service._item_repo = fake_items
     service._event_repo = fake_events
 
@@ -152,20 +114,17 @@ async def test_memory_search_passes_expanded_scope_filters_to_repo_and_vector():
         MemorySearchRequest(
             org_id="org-1",
             user_id="user-1",
-            workspace=Workspace.APP,
             query="P001 批次风险",
-            scope_filter=ScopeFilter(product_id="P001", batch_no="B-01"),
+            scope_filter=ScopeFilter(product_line="P001"),
             top_k=3,
         )
     )
 
     assert response.items[0].memory_id == "mem-1"
     repo_call = fake_items.calls[0]
-    assert repo_call["product_id"] == "P001"
-    assert repo_call["batch_no"] == "B-01"
+    assert repo_call["product_line"] == "P001"
     vector_call = fake_vector.search_calls[0]
-    assert {"scope_type": "product", "scope_id": "P001"} in vector_call["scope_filters"]
-    assert {"scope_type": "batch", "scope_id": "B-01"} in vector_call["scope_filters"]
+    assert vector_call["product_line"] == "P001"
 
 
 @pytest.mark.asyncio

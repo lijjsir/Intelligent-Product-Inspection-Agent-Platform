@@ -229,6 +229,11 @@ class ManagerPolicy:
             force_web_search=bool(ext.get("force_web_search")),
             template_id=str(ext.get("template_id") or "") or None,
             shared_memory_context=ext.get("shared_memory_context"),
+            memory_sources=[
+                dict(item)
+                for item in ext.get("memory_sources") or []
+                if isinstance(item, dict)
+            ],
             conversation_summary=ext.get("conversation_summary"),
             session_facts=dict(ext.get("session_facts") or {}),
             pending_action=ext.get("pending_action"),
