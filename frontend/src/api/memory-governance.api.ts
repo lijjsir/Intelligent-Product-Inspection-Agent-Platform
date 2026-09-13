@@ -4,6 +4,7 @@ import type {
   CandidateSupportPayload,
   MemoryEvaluationPayload,
   MemoryEvaluationResult,
+  MemoryEvidenceDetail,
   MemoryEventItem,
   MemoryPolicy,
   MemoryPolicyUpsertPayload,
@@ -12,6 +13,8 @@ import type {
   MemoryRollbackResult,
   MemorySearchQueryPayload,
   MemorySearchResult,
+  MemoryReadinessResult,
+  OrganizationGovernanceOverview,
   PromotionEvaluationResult,
 } from "@/types/governance.types";
 
@@ -19,7 +22,7 @@ export const memoryGovernanceApi = {
   search(payload: MemorySearchQueryPayload) {
     return http.post<MemorySearchResult>("/v1/memory/search", payload);
   },
-  listCandidates(params?: { status?: string; memory_type?: string; user_id?: string; limit?: number; offset?: number }) {
+  listCandidates(params?: { status?: string; memory_type?: string; user_id?: string; include_local?: boolean; limit?: number; offset?: number }) {
     return http.get<CandidateMemoryItem[]>("/v1/memory/candidates", { params });
   },
   supportCandidate(memoryId: string, payload: CandidateSupportPayload) {
@@ -44,6 +47,29 @@ export const memoryGovernanceApi = {
     return http.post<PromotionEvaluationResult[]>("/v1/memory/candidates/evaluate-batch", null, {
       params: { limit },
     });
+  },
+  organizationOverview(limit = 100) {
+    return http.get<OrganizationGovernanceOverview>("/v1/memory/governance/organization", {
+      params: { limit },
+    });
+  },
+  evidenceDetail(memoryId: string) {
+    return http.get<MemoryEvidenceDetail>(`/v1/memory/${memoryId}/evidence`);
+  },
+  evaluateReadiness(memoryId: string) {
+    return http.post<MemoryReadinessResult>(`/v1/memory/governance/${memoryId}/evaluate`);
+  },
+  submitOrganizationReview(memoryId: string, reason?: string | null) {
+    return http.post<{ memory_id: string; share_request_id: string; status: string }>(
+      `/v1/memory/governance/${memoryId}/submit-organization-review`,
+      { reason: reason || null },
+    );
+  },
+  revokeOrganizationBinding(memoryId: string, reason: string) {
+    return http.post<{ memory_id: string; revoked_bindings: number }>(
+      `/v1/memory/governance/${memoryId}/revoke-organization-binding`,
+      { reason },
+    );
   },
   listEvents(params: { memory_id?: string; event_type?: string; trace_id?: string; limit?: number }) {
     return http.get<MemoryEventItem[]>("/v1/memory/events", { params });

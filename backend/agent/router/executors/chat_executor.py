@@ -711,6 +711,15 @@ class ChatExecutor:
             )
             base = default_content
 
+        # Pipeline-backed meeting agents may provide an administrator-owned
+        # persona/instruction set. Keep the platform safety and evidence rules
+        # first, then append the scoped prompt as an explicit specialization.
+        pipeline_definition = (request.ext or {}).get("pipeline_agent_definition")
+        if isinstance(pipeline_definition, dict):
+            specialized_prompt = str(pipeline_definition.get("system_prompt") or "").strip()
+            if specialized_prompt:
+                base = f"{base}\n\n[会议 Pipeline Agent 专属规则]\n{specialized_prompt[:5000]}"
+
         short_term_text = self._short_term_context_text(state)
         memory_text = self._shared_memory_context_text(state)
         if short_term_text or memory_text:

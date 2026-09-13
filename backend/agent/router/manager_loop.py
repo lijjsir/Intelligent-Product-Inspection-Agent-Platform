@@ -24,6 +24,7 @@ from app.services.agent_local_memory_service import AgentLocalMemoryService
 from app.services.memory_candidate_extractor import MemoryCandidateExtractor
 from app.services.model_config_service import ModelConfigService
 from app.services.task_blackboard_service import TaskBlackboardService
+from agent.response.trust_protocol import build_trust_answer_protocol
 
 logger = logging.getLogger(__name__)
 
@@ -630,6 +631,31 @@ class ManagerLoop:
         citations = self._citations(state, answer=answer)
         rag_summary = self._rag_summary(state, answer=answer)
         raw_payload = self._payload(state, answer=answer, message_type=message_type, citations=citations, rag_summary=rag_summary)
+        protocol_trace = {
+            **dict(raw_payload.get("route_trace") or {}),
+            "reason": plan.reason if plan else "",
+            "rag_summary": rag_summary,
+        }
+        trust_protocol = build_trust_answer_protocol(
+            question=state.original_query,
+            answer=answer,
+            status=composed_status,
+            citations=citations,
+            route_trace=protocol_trace,
+            trace_id=state.trace_id,
+            route_confidence=plan.confidence if plan else None,
+            refusal_reason=(
+                self._latest_failure_message(state)
+                if composed_status in {"blocked", "failed"}
+                else None
+            ),
+            degrade_reasons=[
+                str(item.get("message") or item.get("code") or "")
+                for item in state.errors
+                if isinstance(item, dict) and str(item.get("message") or item.get("code") or "").strip()
+            ],
+        ).model_dump(mode="json")
+        raw_payload["trust_protocol"] = trust_protocol
         composed_persistable = composed.get("persistable_output") if isinstance(composed, dict) else None
         if hasattr(composed_persistable, "model_dump"):
             composed_persistable = composed_persistable.model_dump(mode="json")
@@ -649,6 +675,7 @@ class ManagerLoop:
             "task_draft": None,
             "created_task": None,
             "persistable_output": persistable_output,
+            "trust_protocol": trust_protocol,
             "raw_state": {"response_payload": raw_payload, "manager_state": self._state_dump(state)},
             **raw_payload,
         }

@@ -1,1709 +1,501 @@
 <script setup lang="ts">
-import { Bell, Check, Close, Delete, Paperclip, Plus, Promotion, Select } from "@element-plus/icons-vue";
+import { Check, Close, Document, Paperclip, Plus, Refresh, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { meetingApi } from "@/api/meeting.api";
-import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
-import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
-import { useAuthStore } from "@/stores/auth.store";
 import { useCollabStore } from "@/stores/collab.store";
 import type {
-  CollabMessage,
-  CollabMessageType,
-  CollabParticipantType,
+  CollabActionRequestCreatePayload,
   CollabTarget,
-  CollabThreadCreatePayload,
+  CollabWorkItem,
+  CollabWorkItemType,
+  CollabWorkItemView,
 } from "@/types/collab.types";
-import type { MeetingMemory, MeetingRoom } from "@/types/meeting.types";
-import { isImageAttachment } from "@/utils/attachments";
 import { formatServerDateTime } from "@/utils/date-time";
 
-const auth = useAuthStore();
+type CenterTab = CollabWorkItemView | "history";
+
 const store = useCollabStore();
 const route = useRoute();
+const activeTab = ref<CenterTab>("pending");
+const selectedWorkItemId = ref("");
+const selectedHistoryThreadId = ref("");
+const itemTypeFilter = ref<CollabWorkItemType | "">("");
+const scopeFilter = ref("");
+const roomFilter = ref("");
+const createVisible = ref(false);
+const decisionVisible = ref(false);
+const decisionAction = ref("");
+const decisionNote = ref("");
+const comment = ref("");
+const commentSending = ref(false);
+const fileInput = ref<HTMLInputElement | null>(null);
 
-const composer = ref("");
-const selectedMessageType = ref<CollabMessageType>("text");
-const fileInputRef = ref<HTMLInputElement | null>(null);
-const previewImage = ref({ url: "", name: "" });
-const imagePreviewVisible = ref(false);
-const createDialogVisible = ref(false);
-const creatingThread = ref(false);
-const lastAutoCreateTitle = ref("");
-const sourceMode = ref<"manual" | "meeting_memory">("manual");
-const sourceManualLabel = ref("");
-const sourceRoomId = ref("");
-const sourceMemoryId = ref("");
-const sourceRooms = ref<MeetingRoom[]>([]);
-const sourceMemories = ref<MeetingMemory[]>([]);
-const loadingSourceRooms = ref(false);
-const loadingSourceMemories = ref(false);
-
-const createForm = reactive<CollabThreadCreatePayload>({
+const createForm = reactive<CollabActionRequestCreatePayload>({
   target_type: "user",
   target_id: "",
   title: "",
+  description: "",
+  attachments: [],
+  source_link: "",
+  source_context: {},
+  idempotency_key: "",
 });
-const createSourceContext = reactive<Record<string, unknown>>({
-  source_type: "manual",
-  label: "手动说明",
-});
-const activeSourceContext = reactive<Record<string, unknown>>({
-  source_type: "manual",
-  label: "手动说明",
-});
-const draftMemoryCard = reactive<Record<string, unknown>>({});
 
-const messageTypeOptions: Array<{ label: string; value: CollabMessageType; hint: string }> = [
-  { label: "普通说明", value: "text", hint: "不携带处理动作的说明" },
-  { label: "图片/文件", value: "file", hint: "携带附件和说明" },
-  { label: "记忆卡片", value: "memory_card", hint: "请求对方确认沉淀" },
-  { label: "处理请求", value: "action_request", hint: "需要接受、拒绝或完成" },
+const tabs: Array<{ value: CenterTab; label: string }> = [
+  { value: "pending", label: "待我处理" },
+  { value: "initiated", label: "我发起的" },
+  { value: "processed", label: "已处理" },
+  { value: "history", label: "历史会话" },
 ];
 
-const targetTypeOptions: Array<{ label: string; value: CollabParticipantType; hint: string }> = [
-  { label: "成员", value: "user", hint: "发给具体用户" },
-  { label: "会议室", value: "meeting_room", hint: "发给会议室及其成员" },
-];
-
-const activeTitle = computed(() => (store.activeThread ? targetDisplayName(store.activeThread) : "选择一个协作通道"));
-const activeTarget = computed(() => {
-  const thread = store.activeThread;
-  if (!thread) return "";
-  return `${participantTypeLabel(thread.target_type)} · ${targetDisplayName(thread)}`;
-});
-const activeThreadSource = computed(() => store.activeThread ? threadSourceLabel(store.activeThread) : "");
-const activeThreadFlow = computed(() => {
-  const thread = store.activeThread;
-  if (!thread) return "选择目标后，会创建或复用一条协作通道。";
-  return `来源：${threadSourceLabel(thread)} · 目标：${participantTypeLabel(thread.target_type)} ${targetDisplayName(thread)}`;
-});
-const activeSourceLabel = computed(() => sourceLabelFromContext(activeSourceContext));
-const createSourceLabel = computed(() => sourceLabelFromContext(createSourceContext));
-const hasActiveSource = computed(() => activeSourceLabel.value !== "手动说明");
-const hasDraftMemoryCard = computed(() => Boolean(
-  cleanText(draftMemoryCard.memory_id || draftMemoryCard.id)
-    || cleanText(draftMemoryCard.title || draftMemoryCard.memory_title)
-    || cleanText(draftMemoryCard.summary || draftMemoryCard.content),
+const selectedWorkItem = computed(() => (
+  store.workItems.find((item) => item.id === selectedWorkItemId.value) || store.workItems[0] || null
 ));
-const targetOptions = computed(() => store.targets.filter((target) => target.target_type === createForm.target_type));
-const selectedTarget = computed(() => targetOptions.value.find((target) => target.target_id === createForm.target_id) || null);
-const selectedSourceRoom = computed(() => sourceRooms.value.find((room) => room.id === sourceRoomId.value) || null);
-const selectedSourceMemory = computed(() => sourceMemories.value.find((memory) => memory.memory_id === sourceMemoryId.value) || null);
-const sourceMemoryOptions = computed(() => sourceMemories.value.filter((memory) => memory.status !== "rejected"));
+const selectedHistoryThread = computed(() => (
+  store.threads.find((thread) => thread.id === selectedHistoryThreadId.value) || store.threads[0] || null
+));
+const selectedHistoryMessages = computed(() => (
+  selectedHistoryThread.value ? store.messagesByThread[selectedHistoryThread.value.id] || [] : []
+));
+const meetingTargets = computed(() => store.targets.filter((target) => target.target_type === "meeting_room"));
+const createTargets = computed(() => store.targets.filter((target) => target.target_type === createForm.target_type));
+const activeCount = computed(() => {
+  if (activeTab.value === "pending") return store.workItemSummary.pending_count;
+  if (activeTab.value === "initiated") return store.workItemSummary.initiated_count;
+  if (activeTab.value === "processed") return store.workItemSummary.processed_count;
+  return store.threads.length;
+});
+
+function unwrapRouteTab(): CenterTab {
+  const requested = String(route.query.view || "");
+  return tabs.some((tab) => tab.value === requested) ? requested as CenterTab : "pending";
+}
 
 function formatTime(value?: string | null) {
-  return formatServerDateTime(value, { compactDate: true, includeSeconds: false }) || "刚刚";
+  return formatServerDateTime(value, { compactDate: true, includeSeconds: false }) || "—";
 }
 
-function formatBytes(value?: number | null) {
-  const bytes = Number(value || 0);
-  if (bytes <= 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+function itemTypeLabel(type: string) {
+  return type === "memory_share" ? "记忆共享" : "处理请求";
 }
 
-function collabAttachmentName(file: { file_name?: string | null; name?: string | null }) {
-  return String(file.file_name || file.name || "附件");
+function statusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending_approval: "待审批",
+    pending: "待处理",
+    requested: "已发起",
+    executed: "已批准",
+    accepted: "已接受",
+    done: "已完成",
+    rejected: "已拒绝",
+    cancelled: "已撤销",
+  };
+  return labels[status] || status;
 }
 
-function openCollabImagePreview(file: { url?: string | null; file_name?: string | null; name?: string | null }) {
-  previewImage.value = { url: String(file.url || ""), name: collabAttachmentName(file) };
-  imagePreviewVisible.value = true;
-}
-
-function participantTypeLabel(type?: string | null) {
-  if (type === "user") return "成员";
-  if (type === "meeting_room") return "会议室";
-  if (type === "agent") return "Agent";
-  return type || "未知";
-}
-
-function targetOptionLabel(target: CollabTarget) {
-  return `${target.label} · ${participantTypeLabel(target.target_type)}`;
-}
-
-function targetDisplayName(thread: { title?: string | null; target_type?: string | null; target_id?: string | null }) {
-  const knownTarget = store.targets.find((target) => (
-    target.target_type === thread.target_type && target.target_id === thread.target_id
-  ));
-  return knownTarget?.label || cleanText(thread.title) || participantTypeLabel(thread.target_type);
-}
-
-function memoryStatusLabel(status?: string | null) {
-  if (status === "candidate") return "候选";
-  if (status === "confirmed" || status === "active") return "已确认";
-  if (status === "archived") return "已归档";
-  if (status === "disputed") return "有质疑";
-  if (status === "superseded") return "已修订";
-  return status || "记忆";
-}
-
-function memoryOptionLabel(memory: MeetingMemory) {
-  return `${memory.title || "会议记忆"} · ${memoryStatusLabel(memory.status)}`;
-}
-
-function memoryThreadTitle(memory: MeetingMemory | Record<string, unknown>) {
-  return `请确认：${cleanText((memory as MeetingMemory).title || (memory as Record<string, unknown>).memory_title) || "会议记忆"}`;
-}
-
-function messageTypeLabel(type?: string | null) {
-  if (type === "memory_card") return "记忆卡片";
-  if (type === "action_request") return "处理请求";
-  if (type === "image") return "图片";
-  if (type === "file") return "文件";
-  if (type === "system") return "系统";
-  return "普通说明";
-}
-
-function actionStatusLabel(status?: string | null) {
-  if (status === "accepted") return "已接受";
-  if (status === "rejected") return "已拒绝";
-  if (status === "done") return "已完成";
-  return "待处理";
-}
-
-function memoryCardActionStatusLabel(status?: string | null) {
-  if (status === "rejected") return "已拒绝";
-  if (status === "done") return "已确认";
-  if (status === "accepted") return "已接受";
-  return "待确认";
-}
-
-function actionStatusType(status?: string | null) {
-  if (status === "done") return "success";
-  if (status === "accepted") return "primary";
+function statusTone(status: string) {
+  if (["executed", "done", "accepted"].includes(status)) return "success";
   if (status === "rejected") return "danger";
+  if (status === "cancelled") return "info";
   return "warning";
 }
 
-function myReceipt(message: CollabMessage) {
-  const selfId = String(auth.userId || "");
-  return message.receipts.find((receipt) => receipt.recipient_type === "user" && receipt.recipient_id === selfId) || null;
-}
-
-function myActionStatus(message: CollabMessage) {
-  return myReceipt(message)?.action_status || "pending";
-}
-
-function activeThreadTargetsMeetingRoom() {
-  return store.activeThread?.target_type === "meeting_room";
-}
-
-function isCurrentUserMeetingRoomHost() {
-  if (!activeThreadTargetsMeetingRoom()) return false;
-  return Boolean(store.activeThread?.participants.some((participant) =>
-    participant.participant_type === "user"
-    && participant.participant_id === auth.userId
-    && participant.role === "host",
-  ));
-}
-
-function actionableReceipts(message: CollabMessage) {
-  return message.receipts.filter((receipt) => {
-    if (receipt.recipient_type !== "user") return false;
-    return !(message.sender_type === "user" && receipt.recipient_id === message.sender_id);
-  });
-}
-
-function handledActionReceipt(message: CollabMessage) {
-  return actionOutcomeReceipts(message)[0] || null;
-}
-
-function meetingRoomActionStatus(message: CollabMessage) {
-  if (!activeThreadTargetsMeetingRoom()) return myActionStatus(message);
-  return handledActionReceipt(message)?.action_status || "pending";
-}
-
-function canHandleMessageAction(message: CollabMessage) {
-  if (isOwnMessage(message)) return false;
-  if (activeThreadTargetsMeetingRoom()) {
-    return isCurrentUserMeetingRoomHost() && meetingRoomActionStatus(message) === "pending";
-  }
-  return !["done", "rejected"].includes(myActionStatus(message));
-}
-
-function meetingRoomHostHint(message: CollabMessage) {
-  if (!activeThreadTargetsMeetingRoom()) return "";
-  if (meetingRoomActionStatus(message) !== "pending") return "";
-  if (isOwnMessage(message) || isCurrentUserMeetingRoomHost()) return "";
-  return "等待会议室主持人处理";
-}
-
-function receiptDisplayName(recipientId: string) {
-  if (recipientId === auth.userId) return "我";
-  const target = store.targets.find((item) => item.target_type === "user" && item.target_id === recipientId);
-  return target?.label || `成员 ${recipientId.slice(0, 8)}`;
-}
-
-function actionOutcomeReceipts(message: CollabMessage) {
-  return actionableReceipts(message)
-    .filter((receipt) => receipt.action_status && receipt.action_status !== "pending")
-    .sort((a, b) => new Date(b.acted_at || b.read_at || 0).getTime() - new Date(a.acted_at || a.read_at || 0).getTime());
-}
-
-function actionReceiptSummary(message: CollabMessage) {
-  const receipts = actionableReceipts(message);
-  if (!receipts.length) return "暂无接收方回执";
-  if (activeThreadTargetsMeetingRoom()) {
-    const handled = handledActionReceipt(message);
-    if (!handled) return "会议室待处理";
-    return `会议室已处理：${receiptDisplayName(handled.recipient_id)}${actionStatusLabel(handled.action_status)}`;
-  }
-  const countByStatus = receipts.reduce<Record<string, number>>((acc, receipt) => {
-    const status = receipt.action_status || "pending";
-    acc[status] = (acc[status] || 0) + 1;
-    return acc;
-  }, {});
-  const parts = [
-    countByStatus.done ? `${countByStatus.done} 已确认/完成` : "",
-    countByStatus.accepted ? `${countByStatus.accepted} 已接受` : "",
-    countByStatus.rejected ? `${countByStatus.rejected} 已拒绝` : "",
-    countByStatus.pending ? `${countByStatus.pending} 待处理` : "",
-  ].filter(Boolean);
-  return `接收方：${parts.join("，")}`;
-}
-
-function memoryCardVisibleStatus(message: CollabMessage) {
-  if (activeThreadTargetsMeetingRoom()) return meetingRoomActionStatus(message);
-  if (!isOwnMessage(message)) return myActionStatus(message);
-  const receipts = actionableReceipts(message);
-  if (receipts.some((receipt) => receipt.action_status === "done")) return "done";
-  if (receipts.some((receipt) => receipt.action_status === "rejected")) return "rejected";
-  if (receipts.some((receipt) => receipt.action_status === "accepted")) return "accepted";
-  return "pending";
-}
-
-function isOwnMessage(message: CollabMessage) {
-  return message.sender_type === "user" && message.sender_id === auth.userId;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function cleanText(value: unknown) {
-  return String(value || "").trim();
-}
-
-function unwrap<T>(payload: unknown): T {
-  return ((payload as { data?: T }).data || payload) as T;
-}
-
-function sourceTypeLabel(type?: string | null) {
-  if (type === "meeting_room" || type === "meeting") return "会议室";
-  if (type === "memory") return "记忆";
-  if (type === "message" || type === "meeting_message") return "会议消息";
-  if (type === "agent") return "Agent";
-  if (type === "user") return "成员";
-  if (type === "manual") return "手动说明";
-  return cleanText(type) || "手动说明";
-}
-
-function sourceContextFromMetadata(metadata?: Record<string, unknown> | null) {
-  const root = asRecord(metadata);
-  const direct = asRecord(root.source_context || root.source || root.origin);
-  if (Object.keys(direct).length) return direct;
-  const memory = asRecord(root.memory || root.memory_card || root.memory_item);
-  if (Object.keys(memory).length) {
-    return {
-      source_type: "memory",
-      source_id: memory.memory_id || memory.id,
-      source_title: memory.title || memory.memory_title,
-      source_room_id: memory.source_room_id || memory.meeting_room_id || memory.room_id,
-      source_message_id: memory.source_message_id,
-    };
-  }
-  return {};
-}
-
-function defaultSourceContext() {
-  return {
-    source_type: "manual",
-    label: "手动说明",
+function actionLabel(action: string) {
+  const labels: Record<string, string> = {
+    approve: "批准",
+    reject: "拒绝",
+    cancel: "撤销",
+    accepted: "接受",
+    rejected: "拒绝",
+    done: "完成",
   };
+  return labels[action] || action;
 }
 
-function manualSourceContext() {
-  const label = cleanText(sourceManualLabel.value);
-  return label ? { source_type: "manual", label } : defaultSourceContext();
+function actionType(action: string) {
+  if (["approve", "accepted", "done"].includes(action)) return "primary";
+  if (["reject", "rejected"].includes(action)) return "danger";
+  return "default";
 }
 
-function memoryCardPayload(memory: MeetingMemory, room: MeetingRoom) {
-  return {
-    memory_id: memory.memory_id,
-    title: memory.title,
-    summary: memory.summary || memory.content,
-    content: memory.content,
-    memory_type: memory.memory_type,
-    memory_category: memory.memory_category,
-    status: memory.status,
-    recommended_scope: memory.recommended_scope,
-    recommended_scope_id: memory.recommended_scope_id,
-    source_room_id: room.id,
-    source_room_title: room.title,
-    source_message_id: memory.source_message_id || null,
-    affected_objects: memory.affected_objects || null,
-    tags: memory.tags || [],
-  };
+function targetLabel(target: CollabTarget) {
+  return `${target.label}${target.description ? ` · ${target.description}` : ""}`;
 }
 
-function replaceRecord(target: Record<string, unknown>, value: Record<string, unknown>) {
-  Object.keys(target).forEach((key) => delete target[key]);
-  Object.assign(target, value);
+function compactEvidence(value: Record<string, unknown>) {
+  return String(value.label || value.name || value.title || value.message_id || value.id || value.type || "来源证据");
 }
 
-function normalizeSourceContext(value?: Record<string, unknown> | null) {
-  const context = asRecord(value);
-  const sourceType = cleanText(context.source_type || context.type) || "manual";
-  const next: Record<string, unknown> = {
-    ...context,
-    source_type: sourceType,
-  };
-  const label = cleanText(context.label || context.source_label || context.source_title || context.title);
-  if (label) next.label = label;
-  if (sourceType === "manual" && !label) next.label = defaultSourceContext().label;
-  if (sourceType === "meeting_room" && cleanText(context.source_id) && !cleanText(context.source_room_id)) {
-    next.source_room_id = cleanText(context.source_id);
-  }
-  return next;
-}
-
-function applySourceContext(value?: Record<string, unknown> | null) {
-  const next = Object.keys(asRecord(value)).length
-    ? normalizeSourceContext(value)
-    : defaultSourceContext();
-  replaceRecord(activeSourceContext, next);
-  replaceRecord(createSourceContext, next);
-}
-
-function sourceLabelFromContext(context: Record<string, unknown>) {
-  const label = cleanText(context.label || context.source_label || context.title);
-  if (label) return label;
-  const title = cleanText(context.source_title || context.room_title || context.meeting_title || context.memory_title);
-  const sourceType = cleanText(context.source_type || context.type);
-  const sourceId = cleanText(context.source_id || context.id || context.memory_id || context.room_id || context.source_room_id);
-  if (title) return `${sourceTypeLabel(sourceType)} ${title}`;
-  if (sourceId) return `${sourceTypeLabel(sourceType)}已选择`;
-  const sourceMessageId = cleanText(context.source_message_id || context.message_id);
-  if (sourceMessageId) return "会议消息已选择";
-  return "手动说明";
-}
-
-function routeWantsCreateDialog() {
-  const intent = cleanText(
-    route.query.open_create
-      || route.query.create
-      || route.query.mode
-      || route.query.action
-      || route.query.open,
-  ).toLowerCase();
-  return ["1", "true", "yes", "create", "send", "share"].includes(intent);
-}
-
-function threadSourceLabel(thread: { source_type?: string | null; source_id?: string | null; metadata_json?: Record<string, unknown> | null }) {
-  const context = sourceContextFromMetadata(thread.metadata_json);
-  const fromMetadata = sourceLabelFromContext(context);
-  if (fromMetadata !== "手动说明") return fromMetadata;
-  if (thread.source_type === "user" && thread.source_id === auth.userId) return "我直接发起";
-  if (thread.source_type || thread.source_id) return `${sourceTypeLabel(thread.source_type)} ${thread.source_id || ""}`.trim();
-  return "手动说明";
-}
-
-function threadFlowLabel(thread: { target_type?: string | null; target_id?: string | null; metadata_json?: Record<string, unknown> | null; source_type?: string | null; source_id?: string | null }) {
-  return `${threadSourceLabel(thread)} → ${participantTypeLabel(thread.target_type)} ${targetDisplayName(thread)}`.trim();
-}
-
-function messageSourceLabel(message: CollabMessage) {
-  const context = sourceContextFromMetadata(message.metadata_json);
-  const fromMessage = sourceLabelFromContext(context);
-  if (fromMessage !== "手动说明") return fromMessage;
-  return store.activeThread ? threadSourceLabel(store.activeThread) : "手动说明";
-}
-
-function memorySourceRows(message: CollabMessage) {
-  const metadata = asRecord(message.metadata_json);
-  const memory = memoryPayload(message);
-  const context = sourceContextFromMetadata(metadata);
-  const rows: Array<{ label: string; value: string }> = [];
-  const roomId = cleanText(memory.source_room_id || memory.meeting_room_id || context.source_room_id || context.room_id);
-  const messageId = cleanText(memory.source_message_id || context.source_message_id || context.message_id);
-  const memoryId = cleanText(memory.memory_id || memory.id || context.source_id);
-  if (roomId) rows.push({ label: "来源会议室", value: sourceRoomName(roomId, memory, context) });
-  if (messageId) rows.push({ label: "来源消息", value: "来源消息已记录" });
-  if (memoryId) rows.push({ label: "来源记忆", value: cleanText(memory.title || memory.memory_title || context.source_title) || "会议记忆" });
-  if (!rows.length) rows.push({ label: "来源", value: messageSourceLabel(message) });
-  return rows;
-}
-
-function sourceRoomName(roomId: string, memory: Record<string, unknown>, context: Record<string, unknown>) {
-  return cleanText(memory.source_room_title || memory.meeting_room_title || context.source_room_title || context.room_title)
-    || sourceRooms.value.find((room) => room.id === roomId)?.title
-    || store.targets.find((target) => target.target_type === "meeting_room" && target.target_id === roomId)?.label
-    || "来源会议室";
-}
-
-function memoryPayload(message: CollabMessage) {
-  const metadata = asRecord(message.metadata_json);
-  return asRecord(metadata.memory || metadata.memory_card || metadata.memory_item);
-}
-
-function memoryTitle(message: CollabMessage) {
-  const memory = memoryPayload(message);
-  return String(memory.title || memory.memory_title || "待确认记忆");
-}
-
-function memorySummary(message: CollabMessage) {
-  const memory = memoryPayload(message);
-  return String(memory.summary || memory.content || message.content || "接收方确认后可进入对应作用域。");
-}
-
-function receiptSummary(message: CollabMessage) {
-  const unread = message.receipts.filter((receipt) => !receipt.read_at && receipt.recipient_type === "user").length;
-  if (unread > 0) return `${unread} 人未读`;
-  if (activeThreadTargetsMeetingRoom() && ["memory_card", "action_request"].includes(message.message_type)) {
-    const handled = handledActionReceipt(message);
-    if (handled) return `会议室已由${receiptDisplayName(handled.recipient_id)}处理`;
-  }
-  const pending = message.receipts.filter((receipt) => receipt.action_status === "pending").length;
-  if (message.message_type === "action_request" && pending > 0) return `${pending} 个待处理`;
-  if (message.message_type === "memory_card" && pending > 0) return `${pending} 个待确认`;
-  return "已送达";
-}
-
-function resetCreateForm() {
-  createForm.target_type = "user";
-  createForm.target_id = "";
-  createForm.title = "";
-  lastAutoCreateTitle.value = "";
-  createForm.metadata_json = null;
-  replaceRecord(createSourceContext, { ...activeSourceContext });
-  if (Object.keys(draftMemoryCard).length) {
-    sourceMode.value = "meeting_memory";
-  }
-}
-
-function clearActiveSource() {
-  applySourceContext(defaultSourceContext());
-  sourceMode.value = "manual";
-  sourceRoomId.value = "";
-  sourceMemoryId.value = "";
-  sourceMemories.value = [];
-  replaceRecord(draftMemoryCard, {});
-  if (selectedMessageType.value === "memory_card") selectedMessageType.value = "text";
-}
-
-async function loadSourceRooms() {
-  loadingSourceRooms.value = true;
+async function loadActiveWorkItems() {
+  if (activeTab.value === "history") return;
   try {
-    const { data } = await meetingApi.listRooms();
-    sourceRooms.value = ((data as { data?: MeetingRoom[] }).data || data) as MeetingRoom[];
-    return sourceRooms.value;
-  } finally {
-    loadingSourceRooms.value = false;
-  }
-}
-
-async function loadSourceMemories(roomId: string) {
-  if (!roomId) {
-    sourceMemories.value = [];
-    return [];
-  }
-  loadingSourceMemories.value = true;
-  try {
-    const { data } = await meetingApi.listMemories(roomId);
-    sourceMemories.value = ((data as { data?: MeetingMemory[] }).data || data) as MeetingMemory[];
-    return sourceMemories.value;
-  } finally {
-    loadingSourceMemories.value = false;
-  }
-}
-
-function applyManualSource() {
-  sourceMode.value = "manual";
-  sourceManualLabel.value = "";
-  sourceRoomId.value = "";
-  sourceMemoryId.value = "";
-  sourceMemories.value = [];
-  applySourceContext(defaultSourceContext());
-  replaceRecord(draftMemoryCard, {});
-  if (selectedMessageType.value === "memory_card") selectedMessageType.value = "text";
-}
-
-function syncManualSource() {
-  if (sourceMode.value !== "manual") return;
-  applySourceContext(manualSourceContext());
-}
-
-async function onSourceModeChange() {
-  if (sourceMode.value === "manual") {
-    applyManualSource();
-    return;
-  }
-  replaceRecord(draftMemoryCard, {});
-  selectedMessageType.value = "memory_card";
-  if (!sourceRooms.value.length) {
-    await loadSourceRooms().catch(() => {
-      ElMessage.warning("来源会议室加载失败，请稍后刷新。");
+    await store.loadWorkItems(activeTab.value, {
+      item_type: itemTypeFilter.value || null,
+      scope_type: scopeFilter.value || null,
+      room_id: roomFilter.value || null,
     });
-  }
-}
-
-async function onSourceRoomChange(roomId: string) {
-  sourceMemoryId.value = "";
-  replaceRecord(draftMemoryCard, {});
-  if (createForm.title === lastAutoCreateTitle.value) {
-    createForm.title = "";
-  }
-  lastAutoCreateTitle.value = "";
-  const room = sourceRooms.value.find((item) => item.id === roomId);
-  if (!room) {
-    applySourceContext(defaultSourceContext());
-    return;
-  }
-  applySourceContext({
-    source_type: "meeting_room",
-    source_id: room.id,
-    source_room_id: room.id,
-    source_title: room.title,
-    label: `会议室 ${room.title}`,
-  });
-  await loadSourceMemories(room.id).catch(() => {
-    ElMessage.warning("会议室记忆加载失败，请稍后刷新。");
-  });
-}
-
-function onSourceMemoryChange(memoryId: string) {
-  const memory = sourceMemories.value.find((item) => item.memory_id === memoryId);
-  const room = selectedSourceRoom.value;
-  if (!memory || !room) return;
-  const sourceContext = {
-    source_type: "memory",
-    source_id: memory.memory_id,
-    source_title: memory.title,
-    source_room_id: room.id,
-    source_message_id: memory.source_message_id || null,
-    label: `记忆 ${memory.title || memory.memory_id}`,
-  };
-  applySourceContext(sourceContext);
-  replaceRecord(draftMemoryCard, memoryCardPayload(memory, room));
-  selectedMessageType.value = "memory_card";
-  if (!composer.value.trim()) {
-    composer.value = "请确认这条会议记忆是否需要沉淀到你的作用域。";
-  }
-  const nextAutoTitle = memoryThreadTitle(memory);
-  if (!createForm.title.trim() || createForm.title === lastAutoCreateTitle.value) {
-    createForm.title = nextAutoTitle;
-  }
-  lastAutoCreateTitle.value = nextAutoTitle;
-}
-
-function prefillCreateFormFromRoute() {
-  const shouldOpenCreateDialog = routeWantsCreateDialog();
-  const targetType = cleanText(route.query.target_type);
-  const targetId = cleanText(route.query.target_id);
-  if (targetType === "user" || targetType === "meeting_room") {
-    createForm.target_type = targetType;
-  }
-  if (targetId) createForm.target_id = targetId;
-  createForm.title = cleanText(route.query.title);
-
-  const draft = readDraftFromRoute();
-  const sourceType = cleanText(route.query.source_type);
-  const sourceId = cleanText(route.query.source_id);
-  const sourceLabel = cleanText(route.query.source_label);
-  const routeSourceRoomId = cleanText(route.query.source_room_id);
-  const sourceMessageId = cleanText(route.query.source_message_id);
-  const sourceContext = normalizeSourceContext({
-    ...(asRecord(draft.source_context)),
-    ...(sourceType || sourceId || sourceLabel || routeSourceRoomId || sourceMessageId
-      ? {
-          source_type: sourceType || asRecord(draft.source_context).source_type || "manual",
-          source_id: sourceId || asRecord(draft.source_context).source_id,
-          source_title: sourceLabel || asRecord(draft.source_context).source_title,
-          source_room_id: routeSourceRoomId || asRecord(draft.source_context).source_room_id,
-          source_message_id: sourceMessageId || asRecord(draft.source_context).source_message_id,
-          label: sourceLabel || asRecord(draft.source_context).label,
-        }
-      : {}),
-  });
-  if (sourceContext.source_type !== "manual" || cleanText(sourceContext.label) !== "手动说明") {
-    applySourceContext(sourceContext);
-  }
-
-  const memory = asRecord(draft.memory || draft.memory_card);
-  if (Object.keys(memory).length) {
-    sourceMode.value = "meeting_memory";
-    sourceRoomId.value = cleanText(memory.source_room_id || memory.meeting_room_id || routeSourceRoomId);
-    sourceMemoryId.value = cleanText(memory.memory_id || memory.id);
-    if (sourceRoomId.value) {
-      void loadSourceMemories(sourceRoomId.value).catch(() => {
-        // 草稿已经携带了记忆卡片，加载完整列表失败也不阻塞发送。
-      });
-    }
-    replaceRecord(draftMemoryCard, memory);
-    selectedMessageType.value = "memory_card";
-    if (!composer.value.trim()) {
-      composer.value = cleanText(draft.content)
-        || "请确认这条会议记忆是否需要沉淀到你的作用域。";
-    }
-    const draftTitle = cleanText(draft.title);
-    const nextAutoTitle = memoryThreadTitle(memory);
-    if (!createForm.title) {
-      createForm.title = draftTitle || nextAutoTitle;
-      lastAutoCreateTitle.value = draftTitle ? "" : nextAutoTitle;
-    }
-  }
-  createDialogVisible.value = shouldOpenCreateDialog;
-}
-
-function readDraftFromRoute() {
-  const draftKey = cleanText(route.query.draft_key);
-  if (!draftKey || typeof window === "undefined") return {};
-  const storageKey = `collab:draft:${draftKey}`;
-  try {
-    const raw = window.sessionStorage.getItem(storageKey);
-    if (!raw) return {};
-    window.sessionStorage.removeItem(storageKey);
-    return asRecord(JSON.parse(raw));
+    const requestedId = String(route.query.work_item || "");
+    selectedWorkItemId.value = store.workItems.some((item) => item.id === requestedId)
+      ? requestedId
+      : store.workItems[0]?.id || "";
   } catch {
-    return {};
+    // The store exposes a recoverable error state in the page.
   }
 }
 
-async function createThread() {
-  if (!createForm.target_id.trim()) {
-    ElMessage.warning("请选择接收目标");
+async function loadHistory() {
+  await store.loadThreads(true);
+  selectedHistoryThreadId.value = store.activeThreadId || store.threads[0]?.id || "";
+  if (selectedHistoryThreadId.value) await store.openThread(selectedHistoryThreadId.value);
+}
+
+async function selectHistoryThread(threadId: string) {
+  selectedHistoryThreadId.value = threadId;
+  await store.openThread(threadId);
+}
+
+function openDecision(action: string) {
+  const item = selectedWorkItem.value;
+  if (!item) return;
+  if (action === "cancel") {
+    void cancelItem(item);
     return;
   }
-  if (sourceMode.value === "meeting_memory" && !selectedSourceMemory.value) {
-    ElMessage.warning("请选择要分享的具体记忆");
-    return;
-  }
-  creatingThread.value = true;
+  decisionAction.value = action;
+  decisionNote.value = "";
+  decisionVisible.value = true;
+}
+
+async function cancelItem(item: CollabWorkItem) {
   try {
-    await store.createThread({
-      target_type: createForm.target_type,
-      target_id: createForm.target_id.trim(),
-      title: createForm.title?.trim() || selectedTarget.value?.label || null,
-      metadata_json: {
-        source_context: { ...createSourceContext },
-      },
+    await ElMessageBox.confirm("撤销后目标范围将不会获得这条记忆，确定继续吗？", "撤销共享请求", {
+      confirmButtonText: "确认撤销",
+      cancelButtonText: "保留请求",
+      type: "warning",
     });
-    applySourceContext(createSourceContext);
-    createDialogVisible.value = false;
-    resetCreateForm();
-  } finally {
-    creatingThread.value = false;
+    await store.handleWorkItem(item, "cancel");
+    ElMessage.success("共享请求已撤销");
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") ElMessage.error("撤销失败，请刷新后重试");
   }
 }
 
-async function sendMessage() {
-  const content = composer.value.trim();
-  const isDraftMemoryMessage = selectedMessageType.value === "memory_card" && hasDraftMemoryCard.value;
-  if (!content && store.pendingAttachments.length === 0 && !isDraftMemoryMessage) {
-    ElMessage.warning("请输入内容或添加附件");
+async function submitDecision() {
+  const item = selectedWorkItem.value;
+  if (!item) return;
+  const isReject = ["reject", "rejected"].includes(decisionAction.value);
+  if (isReject && !decisionNote.value.trim()) {
+    ElMessage.warning("拒绝时必须填写理由");
     return;
   }
-  const attachmentType = store.pendingAttachments.some((item) => String(item.content_type || "").startsWith("image/"))
-    ? "image"
-    : "file";
-  const messageType = selectedMessageType.value === "file" && store.pendingAttachments.length ? attachmentType : selectedMessageType.value;
-  const threadSourceContext = sourceContextFromMetadata(store.activeThread?.metadata_json);
-  const sourceContext = hasActiveSource.value
-    ? { ...activeSourceContext }
-    : (threadSourceContext.source_type ? threadSourceContext : defaultSourceContext());
-  const metadata: Record<string, unknown> = {
-    source_context: sourceContext,
-  };
-  if (messageType === "memory_card" && hasDraftMemoryCard.value) {
-    metadata.memory = { ...draftMemoryCard };
+  try {
+    await store.handleWorkItem(item, decisionAction.value, decisionNote.value.trim() || null);
+    decisionVisible.value = false;
+    ElMessage.success(`${actionLabel(decisionAction.value)}成功`);
+  } catch {
+    ElMessage.error("处理失败，可能已由其他人处理，请刷新状态");
   }
-  await store.sendMessage(content, messageType, {
-    ...metadata,
-  });
-  composer.value = "";
-  selectedMessageType.value = "text";
-  replaceRecord(draftMemoryCard, {});
 }
 
-async function onFileChange(event: Event) {
+async function submitComment() {
+  const item = selectedWorkItem.value;
+  if (!item || !comment.value.trim()) return;
+  commentSending.value = true;
+  try {
+    await store.sendWorkItemComment(item, comment.value);
+    comment.value = "";
+    ElMessage.success("补充留言已发送");
+  } finally {
+    commentSending.value = false;
+  }
+}
+
+function openCreate() {
+  Object.assign(createForm, {
+    target_type: "user",
+    target_id: "",
+    title: "",
+    description: "",
+    attachments: [],
+    source_link: "",
+    source_context: {},
+    idempotency_key: `action-request:${Date.now()}:${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+  });
+  store.clearPendingAttachments();
+  createVisible.value = true;
+}
+
+async function pickFiles(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files || []);
-  if (!files.length) return;
-  await store.uploadAttachments(files);
   input.value = "";
-}
-
-async function updateAction(message: CollabMessage, status: "accepted" | "rejected" | "done") {
+  if (!files.length) return;
   try {
-    await store.updateAction(message.id, status);
-    if (message.message_type === "memory_card") {
-      ElMessage.success(status === "rejected" ? "记忆卡片已拒绝。" : "记忆已确认沉淀。");
-      return;
-    }
-    ElMessage.success(actionStatusLabel(status));
-  } catch (error) {
-    if (activeThreadTargetsMeetingRoom()) {
-      ElMessage.warning("这条会议室请求已由其他成员处理。");
-      return;
-    }
-    throw error;
-  }
-}
-
-async function deleteActiveThread() {
-  if (!store.activeThread) return;
-  try {
-    await ElMessageBox.confirm("删除后该协作记录会从协作消息列表中移除，相关后台审计痕迹仍会保留。", "删除协作记录", {
-      type: "warning",
-      confirmButtonText: "删除",
-      cancelButtonText: "取消",
-    });
-    await store.deleteThread(store.activeThread.id);
-    ElMessage.success("协作记录已删除。");
+    const items = await store.uploadAttachments(files);
+    createForm.attachments = items;
   } catch {
-    // cancelled
+    ElMessage.error("附件上传失败");
   }
 }
 
-async function deleteCollabMessage(message: CollabMessage) {
+async function submitCreate() {
+  if (!createForm.target_id || !createForm.title.trim() || !createForm.description.trim()) {
+    ElMessage.warning("请完整填写目标、标题和说明");
+    return;
+  }
   try {
-    await ElMessageBox.confirm("删除后该消息会从协作记录中隐藏，但后台仍保留审计痕迹。", "删除协作消息", {
-      type: "warning",
-      confirmButtonText: "删除",
-      cancelButtonText: "取消",
+    await store.createActionRequest({
+      ...createForm,
+      title: createForm.title.trim(),
+      description: createForm.description.trim(),
+      source_link: createForm.source_link?.trim() || null,
+      attachments: store.pendingAttachments,
     });
-    await store.deleteMessage(message.id);
-    ElMessage.success("消息已删除。");
+    createVisible.value = false;
+    activeTab.value = "initiated";
+    await loadActiveWorkItems();
+    ElMessage.success("处理请求已发起");
   } catch {
-    // cancelled
+    ElMessage.error("发起失败，请检查目标权限后重试");
   }
 }
 
-function onTargetTypeChange() {
-  createForm.target_id = "";
-}
-
-onMounted(() => {
-  prefillCreateFormFromRoute();
-  store.loadThreads(true).catch(() => {
-    ElMessage.warning("协作消息加载失败，请稍后刷新。");
-  });
-  store.loadTargets().catch(() => {
-    ElMessage.warning("目标列表加载失败，请稍后刷新。");
-  });
-  loadSourceRooms().catch(() => {
-    // 来源会议室只影响手动选择记忆，不阻塞协作消息主流程。
-  });
-  store.connectStream();
+watch(activeTab, async (tab) => {
+  if (tab === "history") await loadHistory();
+  else await loadActiveWorkItems();
 });
 
-onBeforeUnmount(() => {
-  store.disconnectStream();
+watch(() => createForm.target_type, () => {
+  createForm.target_id = "";
+});
+
+onMounted(async () => {
+  activeTab.value = unwrapRouteTab();
+  await Promise.all([store.loadSummary(), store.loadTargets()]);
+  if (activeTab.value === "history") await loadHistory();
+  else await loadActiveWorkItems();
 });
 </script>
 
 <template>
-  <main class="collab-page">
-    <aside class="thread-rail">
-      <div class="rail-hero">
-        <div>
-          <p class="eyebrow">Collaboration Inbox</p>
-          <h1>协作消息</h1>
-          <span class="rail-subtitle">成员与会议室的共享、确认及处理入口</span>
-        </div>
-        <el-badge :value="store.totalUnread" :hidden="store.totalUnread === 0" type="danger">
-          <el-button :icon="Plus" circle @click="createDialogVisible = true" />
-        </el-badge>
+  <section class="collab-center" aria-labelledby="collab-title">
+    <header class="center-header">
+      <div>
+        <p class="eyebrow">跨模块协作</p>
+        <h1 id="collab-title">协作中心</h1>
+        <p class="subtitle">统一处理记忆共享审批和轻量处理请求；旧协作会话仅作历史查阅。</p>
+      </div>
+      <el-button class="touch-button" type="primary" :icon="Plus" @click="openCreate">发起处理请求</el-button>
+    </header>
+
+    <nav class="center-tabs" aria-label="协作中心视图">
+      <button
+        v-for="tab in tabs"
+        :key="tab.value"
+        type="button"
+        class="center-tab"
+        :class="{ active: activeTab === tab.value }"
+        :aria-current="activeTab === tab.value ? 'page' : undefined"
+        @click="activeTab = tab.value"
+      >
+        {{ tab.label }}
+        <span v-if="tab.value === 'pending' && store.workItemSummary.pending_count" class="tab-count">{{ store.workItemSummary.pending_count }}</span>
+      </button>
+    </nav>
+
+    <template v-if="activeTab !== 'history'">
+      <div class="filter-bar">
+        <el-select v-model="itemTypeFilter" clearable placeholder="全部类型" @change="loadActiveWorkItems">
+          <el-option label="记忆共享" value="memory_share" /><el-option label="处理请求" value="action_request" />
+        </el-select>
+        <el-select v-model="scopeFilter" clearable placeholder="全部作用域" @change="loadActiveWorkItems">
+          <el-option label="会议室" value="meeting_room" /><el-option label="成员个人" value="user" /><el-option label="组织空间" value="org_space" />
+        </el-select>
+        <el-select v-model="roomFilter" clearable filterable placeholder="全部会议室" @change="loadActiveWorkItems">
+          <el-option v-for="target in meetingTargets" :key="target.target_id" :label="target.label" :value="target.target_id" />
+        </el-select>
+        <span class="result-count">{{ activeCount }} 项</span>
+        <el-button class="touch-button" :icon="Refresh" :loading="store.loadingWorkItems" @click="loadActiveWorkItems">刷新</el-button>
       </div>
 
-      <el-scrollbar class="thread-list" v-loading="store.loadingThreads">
-        <button
-          v-for="thread in store.threads"
-          :key="thread.id"
-          type="button"
-          class="thread-card"
-          :class="{ 'thread-card-active': thread.id === store.activeThreadId }"
-          @click="store.openThread(thread.id)"
-        >
-          <span class="thread-kind">{{ participantTypeLabel(thread.target_type) }}</span>
-          <strong>{{ targetDisplayName(thread) }}</strong>
-          <small class="thread-flow">{{ threadFlowLabel(thread) }}</small>
-          <small v-if="thread.status === 'archived'" class="thread-archived">已归档</small>
-          <small>{{ formatTime(thread.last_message_at || thread.updated_at || thread.created_at) }}</small>
-          <em v-if="thread.unread_count">{{ thread.unread_count }}</em>
-        </button>
-        <div v-if="!store.threads.length && !store.loadingThreads" class="empty-thread">
-          <Bell />
-          <p>还没有分享或请求</p>
-          <span>选择成员或会议室后即可发送共享、确认或处理请求。</span>
-        </div>
-      </el-scrollbar>
+      <div v-if="store.workItemError" class="error-state" role="alert">
+        <span>{{ store.workItemError }}</span><button type="button" @click="loadActiveWorkItems">重新加载</button>
+      </div>
 
-    </aside>
-
-    <section class="message-stage">
-      <header class="stage-header">
-        <div>
-          <p class="eyebrow">Channel</p>
-          <h2>{{ activeTitle }}</h2>
-          <span>{{ activeThreadFlow }}</span>
-          <small v-if="activeTarget" class="stage-source-line">当前来源：{{ activeThreadSource }}；接收方会在协作消息中看到提醒和回执。</small>
-        </div>
-        <div class="stage-actions">
-          <el-button v-if="store.activeThread" :icon="Delete" type="danger" plain @click="deleteActiveThread">删除</el-button>
-          <el-button :icon="Plus" type="primary" @click="createDialogVisible = true">发送给目标</el-button>
-        </div>
-      </header>
-
-      <el-scrollbar class="message-list" v-loading="store.loadingMessages">
-        <div v-if="!store.activeThread" class="empty-stage">
-          <Select />
-          <h3>选择左侧记录开始</h3>
-          <p>协作消息用于向成员或会议室发送说明、附件、记忆卡片和处理请求。</p>
-        </div>
-        <article
-          v-for="message in store.activeMessages"
-          :key="message.id"
-          class="message-bubble"
-          :class="{ 'message-bubble-own': isOwnMessage(message) }"
-        >
-          <div class="message-meta">
-            <span>{{ isOwnMessage(message) ? "我" : participantTypeLabel(message.sender_type) }}</span>
-            <el-tag size="small" effect="plain">{{ messageTypeLabel(message.message_type) }}</el-tag>
-            <small>{{ formatTime(message.created_at) }}</small>
-          </div>
-          <div class="message-source-line">
-            来源：{{ messageSourceLabel(message) }} · 目标：{{ activeTarget || "当前协作目标" }}
-          </div>
-
-          <div v-if="message.message_type === 'memory_card'" class="memory-card">
-            <strong>{{ memoryTitle(message) }}</strong>
-            <p>{{ memorySummary(message) }}</p>
-            <div class="memory-source-grid">
-              <span v-for="row in memorySourceRows(message)" :key="`${row.label}-${row.value}`">
-                {{ row.label }}：{{ row.value }}
-              </span>
-            </div>
-            <span>接收方确认后，会沉淀到这条协作记录的目标作用域。</span>
-            <div class="memory-card-actions">
-              <span class="memory-status-pill" :class="`memory-status-${memoryCardVisibleStatus(message) || 'pending'}`">
-                {{ memoryCardActionStatusLabel(memoryCardVisibleStatus(message)) }}
-              </span>
-              <template v-if="canHandleMessageAction(message)">
-                <el-button size="small" :icon="Close" @click="updateAction(message, 'rejected')">拒绝</el-button>
-                <el-button size="small" type="success" :icon="Check" @click="updateAction(message, 'done')">确认沉淀</el-button>
-              </template>
-              <small v-else-if="meetingRoomHostHint(message)" class="meeting-host-hint">{{ meetingRoomHostHint(message) }}</small>
-            </div>
-            <div v-if="isOwnMessage(message)" class="action-receipt-summary">{{ actionReceiptSummary(message) }}</div>
-          </div>
-
-          <p v-if="message.content" class="message-content">{{ message.content }}</p>
-
-          <div v-if="message.attachments.length" class="attachment-grid">
-            <template v-for="file in message.attachments" :key="file.id">
-              <ImageAttachmentCard
-                v-if="isImageAttachment(file)"
-                :src="file.url"
-                :name="collabAttachmentName(file)"
-                @preview="openCollabImagePreview(file)"
-              />
-              <a
-                v-else
-                class="attachment-chip"
-                :href="file.url"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Paperclip />
-                <span>{{ collabAttachmentName(file) }}</span>
-                <small>{{ formatBytes(file.size_bytes) }}</small>
-              </a>
-            </template>
-          </div>
-
-          <div class="message-footer">
-            <span>{{ receiptSummary(message) }}</span>
-            <template v-if="message.message_type === 'action_request'">
-              <el-tag size="small" :type="actionStatusType(meetingRoomActionStatus(message))" effect="light">
-                {{ actionStatusLabel(meetingRoomActionStatus(message)) }}
-              </el-tag>
-              <div v-if="canHandleMessageAction(message)" class="action-buttons">
-                <el-button size="small" :icon="Check" @click="updateAction(message, 'accepted')">接受</el-button>
-                <el-button size="small" :icon="Close" @click="updateAction(message, 'rejected')">拒绝</el-button>
-                <el-button size="small" type="success" @click="updateAction(message, 'done')">完成</el-button>
-              </div>
-              <small v-else-if="meetingRoomHostHint(message)" class="meeting-host-hint">{{ meetingRoomHostHint(message) }}</small>
-            </template>
-            <span v-if="isOwnMessage(message) && message.message_type === 'action_request'" class="action-receipt-summary">
-              {{ actionReceiptSummary(message) }}
-            </span>
-            <el-button v-if="isOwnMessage(message)" size="small" text :icon="Delete" @click="deleteCollabMessage(message)">
-              删除
-            </el-button>
-          </div>
-          <div v-if="isOwnMessage(message) && actionOutcomeReceipts(message).length" class="action-outcomes">
-            <span v-for="receipt in actionOutcomeReceipts(message)" :key="receipt.id">
-              {{ receiptDisplayName(receipt.recipient_id) }}：{{ actionStatusLabel(receipt.action_status) }}
-            </span>
-          </div>
-        </article>
-      </el-scrollbar>
-
-      <footer class="composer" :class="{ 'composer-disabled': !store.activeThread }">
-        <div v-if="hasActiveSource || hasDraftMemoryCard" class="source-context-card">
-          <div>
-            <span>本次分享来源</span>
-            <strong>{{ activeSourceLabel }}</strong>
-            <small v-if="hasDraftMemoryCard">将随消息携带记忆卡片，接收方可确认后沉淀到对应作用域。</small>
-            <small v-else>这次发送会保留该来源；复用旧通道时也不会丢失。</small>
-          </div>
-          <el-button text size="small" @click="clearActiveSource">改为手动来源</el-button>
-        </div>
-
-        <div v-if="hasDraftMemoryCard" class="draft-memory-card">
-          <span>待发送记忆卡片</span>
-          <strong>{{ cleanText(draftMemoryCard.title || draftMemoryCard.memory_title) || "会议记忆" }}</strong>
-          <p>{{ cleanText(draftMemoryCard.summary || draftMemoryCard.content) || "接收方确认后可沉淀到对应作用域。" }}</p>
-        </div>
-
-        <div class="composer-toolbar">
-          <el-select v-model="selectedMessageType" size="small" class="message-type-select">
-            <el-option
-              v-for="option in messageTypeOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            >
-              <span>{{ option.label }}</span>
-              <small>{{ option.hint }}</small>
-            </el-option>
-          </el-select>
-          <input ref="fileInputRef" class="hidden-file" type="file" multiple @change="onFileChange" />
-          <el-button :icon="Paperclip" :loading="store.uploading" @click="fileInputRef?.click()">附件</el-button>
-        </div>
-
-        <div v-if="store.pendingAttachments.length" class="pending-files">
+      <div class="workbench">
+        <aside class="work-list" aria-label="协作工作项列表">
+          <el-skeleton v-if="store.loadingWorkItems" :rows="6" animated class="p-5" />
+          <el-empty v-else-if="!store.workItems.length" description="当前视图暂无工作项" />
           <button
-            v-for="file in store.pendingAttachments"
-            :key="file.id"
+            v-for="item in store.workItems"
+            v-else
+            :key="item.id"
             type="button"
-            @click="store.removePendingAttachment(file.id)"
+            class="work-card"
+            :class="{ selected: selectedWorkItem?.id === item.id }"
+            @click="selectedWorkItemId = item.id"
           >
-            {{ file.name }} · {{ formatBytes(file.size_bytes) }}
+            <span class="card-topline"><span class="type-label">{{ itemTypeLabel(item.item_type) }}</span><el-tag size="small" :type="statusTone(item.status)" effect="plain">{{ statusLabel(item.status) }}</el-tag></span>
+            <strong>{{ item.title }}</strong>
+            <span class="scope-line">{{ item.source.label || "未知来源" }} → {{ item.target.label || "未知目标" }}</span>
+            <span class="card-meta">{{ item.requester_label || "未知发起人" }} · {{ formatTime(item.updated_at || item.created_at) }}</span>
           </button>
-        </div>
+        </aside>
 
-        <div class="composer-row">
-          <el-input
-            v-model="composer"
-            type="textarea"
-            :autosize="{ minRows: 2, maxRows: 6 }"
-            resize="none"
-            :disabled="!store.activeThread"
-            placeholder="输入协作说明。可发送图片、文件、记忆卡片或处理请求。"
-            @keydown.ctrl.enter.prevent="sendMessage"
-          />
-          <el-button
-            type="primary"
-            :icon="Promotion"
-            :loading="store.sending"
-            :disabled="!store.activeThread"
-            @click="sendMessage"
-          >
-            发送
-          </el-button>
-        </div>
-      </footer>
-    </section>
+        <main class="work-detail" aria-live="polite">
+          <el-empty v-if="!selectedWorkItem" description="选择一个工作项查看详情" />
+          <template v-else>
+            <div class="detail-heading">
+              <div><span class="type-label">{{ itemTypeLabel(selectedWorkItem.item_type) }}</span><h2>{{ selectedWorkItem.title }}</h2></div>
+              <el-tag :type="statusTone(selectedWorkItem.status)" effect="plain">{{ statusLabel(selectedWorkItem.status) }}</el-tag>
+            </div>
+            <p class="detail-description">{{ selectedWorkItem.description || "暂无补充说明" }}</p>
+            <dl class="metadata-grid">
+              <div><dt>来源</dt><dd>{{ selectedWorkItem.source.label || "—" }}</dd></div>
+              <div><dt>目标</dt><dd>{{ selectedWorkItem.target.label || "—" }}</dd></div>
+              <div><dt>发起人</dt><dd>{{ selectedWorkItem.requester_label || "—" }}</dd></div>
+              <div><dt>发起时间</dt><dd>{{ formatTime(selectedWorkItem.created_at) }}</dd></div>
+            </dl>
 
-    <el-dialog v-model="createDialogVisible" title="发送给目标" width="560px" @closed="resetCreateForm">
-      <el-form label-position="top">
-        <el-form-item label="分享来源">
-          <div class="source-picker">
-            <el-segmented
-              v-model="sourceMode"
-              :options="[
-                { label: '手动说明', value: 'manual' },
-                { label: '会议室记忆', value: 'meeting_memory' },
-              ]"
-              @change="onSourceModeChange"
-            />
-            <div v-if="sourceMode === 'manual'" class="dialog-source-card">
-              <strong>{{ createSourceLabel }}</strong>
-              <el-input
-                v-model="sourceManualLabel"
-                clearable
-                placeholder="可选，例如：线下评审、外部文件、临时说明"
-                @input="syncManualSource"
-              />
-              <span>用于临时说明、普通文件或处理请求；不会自动携带会议室记忆。</span>
-            </div>
-            <div v-else class="source-memory-picker">
-              <el-select
-                v-model="sourceRoomId"
-                class="target-select"
-                filterable
-                :loading="loadingSourceRooms"
-                placeholder="先选择来源会议室"
-                no-data-text="暂无可选会议室"
-                @change="onSourceRoomChange"
-              >
-                <el-option
-                  v-for="room in sourceRooms"
-                  :key="room.id"
-                  :label="room.title"
-                  :value="room.id"
-                >
-                  <div class="target-option">
-                    <strong>{{ room.title }}</strong>
-                    <span>{{ room.member_count || 0 }} 位成员 · {{ room.status }}</span>
-                  </div>
-                </el-option>
-              </el-select>
-              <el-select
-                v-model="sourceMemoryId"
-                class="target-select"
-                filterable
-                :disabled="!sourceRoomId"
-                :loading="loadingSourceMemories"
-                placeholder="再选择具体记忆"
-                no-data-text="该会议室暂无可分享记忆"
-                @change="onSourceMemoryChange"
-              >
-                <el-option
-                  v-for="memory in sourceMemoryOptions"
-                  :key="memory.memory_id"
-                  :label="memoryOptionLabel(memory)"
-                  :value="memory.memory_id"
-                >
-                  <div class="target-option memory-source-option">
-                    <strong>{{ memory.title || "会议记忆" }}</strong>
-                    <span>{{ memoryStatusLabel(memory.status) }} · {{ memory.summary || memory.content }}</span>
-                  </div>
-                </el-option>
-              </el-select>
-              <p class="target-helper">
-                选择会议室只是定位来源；真正分享的是下面选中的那一条记忆卡片。
-              </p>
-            </div>
-          </div>
-        </el-form-item>
-        <el-form-item label="目标类型">
-          <el-segmented
-            v-model="createForm.target_type"
-            :options="targetTypeOptions.map((item) => ({ label: item.label, value: item.value }))"
-            @change="onTargetTypeChange"
-          />
-        </el-form-item>
-        <el-form-item label="选择目标">
-          <el-select
-            v-model="createForm.target_id"
-            class="target-select"
-            filterable
-            :loading="store.loadingTargets"
-            :placeholder="`选择${participantTypeLabel(createForm.target_type)}`"
-            no-data-text="暂无可选目标"
-          >
-            <el-option
-              v-for="target in targetOptions"
-              :key="`${target.target_type}-${target.target_id}`"
-              :label="targetOptionLabel(target)"
-              :value="target.target_id"
-            >
-              <div class="target-option">
-                <strong>{{ target.label }}</strong>
-                <span>{{ target.description || participantTypeLabel(target.target_type) }}</span>
+            <section class="detail-section">
+              <div class="section-title">
+                <h3>来源证据</h3>
+                <RouterLink v-if="selectedWorkItem.source_link?.startsWith('/')" :to="selectedWorkItem.source_link">查看来源</RouterLink>
+                <a v-else-if="selectedWorkItem.source_link" :href="selectedWorkItem.source_link" target="_blank" rel="noreferrer">查看来源</a>
               </div>
-            </el-option>
-          </el-select>
-          <p class="target-helper">
-            不需要记 ID；成员来自组织用户，会议室来自你已加入的会议室。
-          </p>
-        </el-form-item>
-        <el-form-item label="协作标题">
-          <el-input v-model="createForm.title" placeholder="可选，例如：请确认这条会议记忆" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creatingThread" @click="createThread">发送给目标</el-button>
-      </template>
+              <div v-if="selectedWorkItem.evidence.length" class="evidence-list">
+                <div v-for="(evidence, index) in selectedWorkItem.evidence" :key="index" class="evidence-row">
+                  <Document /><a v-if="typeof evidence.url === 'string'" :href="evidence.url" target="_blank" rel="noreferrer">{{ compactEvidence(evidence) }}</a><span v-else>{{ compactEvidence(evidence) }}</span>
+                </div>
+              </div>
+              <p v-else class="muted">未附加独立证据，可从来源页面核对完整上下文。</p>
+            </section>
+
+            <section class="detail-section">
+              <h3>处理记录</h3>
+              <ol class="history-list">
+                <li v-for="(entry, index) in selectedWorkItem.history" :key="index">
+                  <span class="history-dot" /><div><strong>{{ statusLabel(String(entry.action || "")) }}</strong><p>{{ entry.actor_label || entry.actor_id || "系统" }} · {{ formatTime(entry.at as string) }}</p><p v-if="entry.note" class="history-note">{{ entry.note }}</p></div>
+                </li>
+              </ol>
+            </section>
+
+            <section v-if="selectedWorkItem.item_type === 'action_request'" class="comment-box">
+              <label for="work-item-comment">补充留言</label>
+              <el-input id="work-item-comment" v-model="comment" type="textarea" :rows="2" maxlength="1000" show-word-limit placeholder="补充与该工作项相关的信息" />
+              <el-button class="touch-button" :loading="commentSending" :disabled="!comment.trim()" @click="submitComment">发送留言</el-button>
+            </section>
+
+            <footer v-if="selectedWorkItem.allowed_actions.length" class="detail-actions">
+              <el-button
+                v-for="action in selectedWorkItem.allowed_actions"
+                :key="action"
+                class="touch-button"
+                :type="actionType(action)"
+                :plain="!['approve', 'accepted', 'done'].includes(action)"
+                :icon="['reject', 'rejected'].includes(action) ? Close : ['approve', 'accepted', 'done'].includes(action) ? Check : Select"
+                :loading="store.handlingWorkItem"
+                @click="openDecision(action)"
+              >{{ actionLabel(action) }}</el-button>
+            </footer>
+          </template>
+        </main>
+      </div>
+    </template>
+
+    <div v-else class="history-workbench">
+      <aside class="history-list-panel" aria-label="历史会话列表">
+        <div class="readonly-callout">历史会话为只读记录，不支持回复、创建或删除。</div>
+        <el-skeleton v-if="store.loadingThreads" :rows="5" animated class="p-5" />
+        <el-empty v-else-if="!store.threads.length" description="暂无历史会话" />
+        <button v-for="thread in store.threads" v-else :key="thread.id" type="button" class="history-thread" :class="{ selected: selectedHistoryThread?.id === thread.id }" @click="selectHistoryThread(thread.id)">
+          <strong>{{ thread.title || "历史协作会话" }}</strong><span>{{ formatTime(thread.last_message_at || thread.updated_at) }}</span>
+        </button>
+      </aside>
+      <main class="history-detail">
+        <el-empty v-if="!selectedHistoryThread" description="选择一条历史会话" />
+        <template v-else>
+          <header><div><h2>{{ selectedHistoryThread.title }}</h2><p>只读历史 · {{ selectedHistoryMessages.length }} 条记录</p></div><el-tag type="info" effect="plain">只读</el-tag></header>
+          <el-skeleton v-if="store.loadingMessages" :rows="6" animated />
+          <div v-else class="message-history">
+            <article v-for="message in selectedHistoryMessages" :key="message.id" class="history-message">
+              <div><strong>{{ message.sender_type === 'system' ? '系统' : message.sender_id }}</strong><time>{{ formatTime(message.created_at) }}</time></div>
+              <p>{{ message.content || "（无文字内容）" }}</p>
+              <div v-if="message.attachments.length" class="attachment-links"><a v-for="file in message.attachments" :key="file.id" :href="file.url" target="_blank" rel="noreferrer"><Paperclip />{{ file.file_name }}</a></div>
+            </article>
+          </div>
+        </template>
+      </main>
+    </div>
+
+    <el-dialog v-model="decisionVisible" :title="`${actionLabel(decisionAction)}工作项`" width="min(520px, 92vw)" destroy-on-close>
+      <label class="dialog-label" for="decision-note">{{ ['reject', 'rejected'].includes(decisionAction) ? '拒绝理由（必填）' : '处理说明（选填）' }}</label>
+      <el-input id="decision-note" v-model="decisionNote" type="textarea" :rows="4" maxlength="1000" show-word-limit autofocus />
+      <template #footer><el-button class="touch-button" @click="decisionVisible = false">取消</el-button><el-button class="touch-button" :type="actionType(decisionAction)" :loading="store.handlingWorkItem" @click="submitDecision">确认{{ actionLabel(decisionAction) }}</el-button></template>
     </el-dialog>
 
-    <ImagePreviewDialog v-model="imagePreviewVisible" :src="previewImage.url" :title="previewImage.name" />
-  </main>
+    <el-dialog v-model="createVisible" title="发起结构化处理请求" width="min(620px, 94vw)" destroy-on-close>
+      <el-form label-position="top" class="request-form" @submit.prevent="submitCreate">
+        <div class="form-grid">
+          <el-form-item label="目标类型" required><el-segmented v-model="createForm.target_type" :options="[{ label: '成员', value: 'user' }, { label: '会议室', value: 'meeting_room' }]" /></el-form-item>
+          <el-form-item label="协作目标" required><el-select v-model="createForm.target_id" filterable placeholder="选择目标"><el-option v-for="target in createTargets" :key="target.target_id" :label="targetLabel(target)" :value="target.target_id" /></el-select></el-form-item>
+        </div>
+        <el-form-item label="标题" required><el-input v-model="createForm.title" maxlength="200" show-word-limit placeholder="用一句话说明需要处理的事项" /></el-form-item>
+        <el-form-item label="说明" required><el-input v-model="createForm.description" type="textarea" :rows="5" maxlength="4000" show-word-limit placeholder="补充背景、期望结果和必要证据" /></el-form-item>
+        <el-form-item label="来源链接"><el-input v-model="createForm.source_link" placeholder="可填写会议室、检测结果或其他内部页面链接" /></el-form-item>
+        <el-form-item label="附件">
+          <input ref="fileInput" class="sr-only" type="file" multiple @change="pickFiles" /><el-button class="touch-button" :icon="Paperclip" :loading="store.uploading" @click="fileInput?.click()">选择附件</el-button>
+          <div v-if="store.pendingAttachments.length" class="pending-files"><span v-for="file in store.pendingAttachments" :key="file.id">{{ file.name }}<button type="button" :aria-label="`移除 ${file.name}`" @click="store.removePendingAttachment(file.id)">×</button></span></div>
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button class="touch-button" @click="createVisible = false">取消</el-button><el-button class="touch-button" type="primary" :loading="store.sending" @click="submitCreate">发起请求</el-button></template>
+    </el-dialog>
+  </section>
 </template>
 
 <style scoped>
-.collab-page {
-  display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-  gap: 18px;
-  min-height: calc(100vh - 96px);
-  padding: 20px;
-  background:
-    radial-gradient(circle at 12% 18%, rgba(44, 123, 229, 0.16), transparent 28%),
-    linear-gradient(135deg, #f7f3ea 0%, #eef5f0 48%, #f7fafc 100%);
-}
-
-.thread-rail,
-.message-stage {
-  border: 1px solid rgba(27, 42, 65, 0.08);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 24px 60px rgba(33, 45, 66, 0.12);
-  backdrop-filter: blur(18px);
-}
-
-.thread-rail {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.rail-hero,
-.stage-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px;
-  border-bottom: 1px solid rgba(27, 42, 65, 0.08);
-}
-
-.eyebrow {
-  margin: 0 0 6px;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-h1,
-h2,
-h3 {
-  margin: 0;
-  color: #172033;
-}
-
-.rail-hero span,
-.stage-header span,
-.empty-thread span,
-.empty-stage p {
-  color: #64748b;
-  font-size: 13px;
-}
-
-.rail-subtitle {
-  display: block;
-  max-width: 18em;
-  line-height: 1.7;
-  text-wrap: balance;
-}
-
-.stage-source-line {
-  display: block;
-  margin-top: 5px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.stage-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.thread-list {
-  min-height: 0;
-  flex: 1;
-  padding: 14px;
-}
-
-.thread-card {
-  position: relative;
-  display: grid;
-  width: 100%;
-  gap: 5px;
-  margin-bottom: 10px;
-  padding: 15px 16px;
-  border: 1px solid rgba(27, 42, 65, 0.08);
-  border-radius: 18px;
-  background: #fffaf0;
-  color: #172033;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-}
-
-.thread-card:hover,
-.thread-card-active {
-  transform: translateY(-1px);
-  border-color: rgba(24, 94, 112, 0.32);
-  box-shadow: 0 14px 32px rgba(24, 94, 112, 0.14);
-}
-
-.thread-card strong {
-  padding-right: 28px;
-}
-
-.thread-card small,
-.thread-kind {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.thread-flow {
-  display: block;
-  padding-right: 28px;
-}
-
-.thread-card em {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  min-width: 22px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #dc2626;
-  color: white;
-  font-size: 12px;
-  font-style: normal;
-  text-align: center;
-}
-
-.thread-archived {
-  width: fit-content;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(100, 116, 139, 0.12);
-  color: #475569;
-}
-
-.empty-thread,
-.empty-stage {
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  min-height: 260px;
-  color: #64748b;
-  text-align: center;
-}
-
-.empty-thread svg,
-.empty-stage svg {
-  width: 42px;
-  height: 42px;
-  color: #185e70;
-}
-
-.message-stage {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  overflow: hidden;
-}
-
-.message-list {
-  min-height: 0;
-  padding: 22px;
-}
-
-.message-bubble {
-  max-width: 760px;
-  margin: 0 0 14px;
-  padding: 16px;
-  border: 1px solid rgba(27, 42, 65, 0.08);
-  border-radius: 22px;
-  background: #ffffff;
-  box-shadow: 0 12px 30px rgba(30, 41, 59, 0.08);
-}
-
-.message-bubble-own {
-  margin-left: auto;
-  background: #eef8f3;
-  border-color: rgba(22, 101, 52, 0.14);
-}
-
-.message-meta,
-.message-footer,
-.composer-toolbar,
-.composer-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.message-meta {
-  margin-bottom: 10px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.message-meta span {
-  color: #172033;
-  font-weight: 700;
-}
-
-.message-source-line {
-  margin: -4px 0 10px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.message-content {
-  margin: 0;
-  white-space: pre-wrap;
-  line-height: 1.7;
-  color: #243044;
-}
-
-.memory-card {
-  margin-bottom: 12px;
-  padding: 14px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #102a43, #185e70);
-  color: white;
-}
-
-.memory-card p {
-  margin: 8px 0;
-  color: rgba(255, 255, 255, 0.88);
-}
-
-.memory-card span {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
-}
-
-.memory-card :deep(.el-button) {
-  margin-top: 8px;
-  color: #0f172a;
-  background: #ffffff;
-  border-color: rgba(255, 255, 255, 0.78);
-  font-weight: 700;
-}
-
-.memory-card :deep(.el-button:hover) {
-  color: #0f172a;
-  background: #f8fafc;
-  border-color: #ffffff;
-}
-
-.memory-card :deep(.el-button--success) {
-  color: #ffffff;
-  background: #16a34a;
-  border-color: #16a34a;
-}
-
-.memory-card :deep(.el-button--success:hover) {
-  color: #ffffff;
-  background: #15803d;
-  border-color: #15803d;
-}
-
-.memory-source-grid {
-  display: grid;
-  gap: 4px;
-  margin: 10px 0;
-}
-
-.memory-source-grid span {
-  color: rgba(255, 255, 255, 0.78);
-}
-
-.memory-card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.memory-status-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.38);
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.memory-status-pending,
-.memory-status-accepted {
-  background: #fef3c7;
-  border-color: #f59e0b;
-  color: #78350f;
-}
-
-.memory-status-done {
-  background: #dcfce7;
-  border-color: #22c55e;
-  color: #14532d;
-}
-
-.memory-status-rejected {
-  background: #fee2e2;
-  border-color: #ef4444;
-  color: #7f1d1d;
-}
-
-.memory-card .memory-status-pending,
-.memory-card .memory-status-accepted {
-  color: #78350f;
-}
-
-.memory-card .memory-status-done {
-  color: #14532d;
-}
-
-.memory-card .memory-status-rejected {
-  color: #7f1d1d;
-}
-
-.meeting-host-hint {
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.attachment-grid {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.attachment-chip,
-.pending-files button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid rgba(24, 94, 112, 0.18);
-  border-radius: 999px;
-  background: #f8fbfb;
-  color: #185e70;
-  text-decoration: none;
-}
-
-.attachment-chip {
-  justify-content: space-between;
-  padding: 9px 12px;
-}
-
-.attachment-chip svg {
-  width: 16px;
-}
-
-.message-footer {
-  justify-content: space-between;
-  margin-top: 12px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.action-receipt-summary {
-  color: #475569;
-  font-weight: 700;
-}
-
-.message-footer .meeting-host-hint {
-  color: #64748b;
-}
-
-.action-outcomes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.action-outcomes span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 9px;
-  border: 1px solid rgba(24, 94, 112, 0.18);
-  border-radius: 999px;
-  background: #f8fbfb;
-  color: #185e70;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.action-buttons {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.source-context-card,
-.draft-memory-card,
-.dialog-source-card {
-  border: 1px solid rgba(24, 94, 112, 0.14);
-  border-radius: 18px;
-  background: linear-gradient(135deg, rgba(24, 94, 112, 0.08), rgba(245, 247, 242, 0.9));
-}
-
-.source-picker,
-.source-memory-picker {
-  display: grid;
-  gap: 10px;
-}
-
-.source-context-card {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-}
-
-.source-context-card div,
-.dialog-source-card {
-  display: grid;
-  gap: 4px;
-}
-
-.source-context-card span,
-.draft-memory-card span,
-.dialog-source-card span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.source-context-card strong,
-.draft-memory-card strong,
-.dialog-source-card strong {
-  color: #172033;
-}
-
-.source-context-card small {
-  color: #64748b;
-}
-
-.draft-memory-card {
-  display: grid;
-  gap: 5px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  background: linear-gradient(135deg, #102a43, #185e70);
-}
-
-.draft-memory-card strong {
-  color: #ffffff;
-}
-
-.draft-memory-card p {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.82);
-  line-height: 1.6;
-}
-
-.composer {
-  padding: 16px;
-  border-top: 1px solid rgba(27, 42, 65, 0.08);
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.composer-disabled {
-  opacity: 0.78;
-}
-
-.composer-toolbar {
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.message-type-select {
-  width: 170px;
-}
-
-.target-select {
-  width: 100%;
-}
-
-.target-option {
-  display: grid;
-  gap: 2px;
-  padding: 3px 0;
-}
-
-.target-option strong {
-  color: #172033;
-  font-size: 13px;
-}
-
-.target-option span,
-.target-helper {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.memory-source-option span {
-  display: block;
-  max-width: 420px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.target-helper {
-  margin: 8px 0 0;
-  line-height: 1.5;
-}
-
-.hidden-file {
-  display: none;
-}
-
-.pending-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.pending-files button {
-  padding: 7px 10px;
-  cursor: pointer;
-}
-
-.composer-row {
-  align-items: stretch;
-}
-
-.composer-row .el-button {
-  min-width: 108px;
-}
-
-.dialog-source-card {
-  width: 100%;
-  padding: 12px 14px;
-}
-
-@media (max-width: 900px) {
-  .collab-page {
-    grid-template-columns: 1fr;
-    padding: 12px;
-  }
-
-  .thread-rail {
-    min-height: 360px;
-  }
-
-  .message-stage {
-    min-height: 620px;
-  }
-}
+.collab-center { min-height: calc(100vh - 80px); color: #18181b; }
+.center-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 18px 20px 20px; border: 1px solid #e4e4e7; border-radius: 16px 16px 0 0; background: #fff; }
+.eyebrow { margin: 0 0 6px; color: #3f7663; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin: 0; font-size: 26px; line-height: 1.2; }
+.subtitle { margin: 8px 0 0; color: #71717a; font-size: 14px; }
+.center-tabs { display: flex; min-height: 52px; overflow-x: auto; border: 1px solid #e4e4e7; border-top: 0; background: #fff; }
+.center-tab { position: relative; min-width: 112px; min-height: 52px; padding: 0 18px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #71717a; font-size: 14px; font-weight: 600; cursor: pointer; }
+.center-tab:hover, .center-tab:focus-visible { color: #18181b; background: #fafafa; }
+.center-tab.active { border-bottom-color: #18181b; color: #18181b; }
+.tab-count { display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; margin-left: 6px; padding: 0 5px; border-radius: 999px; background: #18181b; color: #fff; font-size: 11px; }
+.filter-bar { display: grid; grid-template-columns: minmax(140px, 190px) minmax(140px, 190px) minmax(160px, 240px) 1fr auto; align-items: center; gap: 10px; padding: 12px 16px; border: 1px solid #e4e4e7; border-top: 0; background: #fafafa; }
+.result-count { justify-self: end; color: #71717a; font-size: 13px; }
+.touch-button { min-height: 44px; }
+.error-state { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border: 1px solid #fecaca; border-top: 0; background: #fef2f2; color: #991b1b; font-size: 13px; }
+.error-state button { min-height: 44px; border: 0; background: transparent; color: inherit; font-weight: 700; cursor: pointer; }
+.workbench, .history-workbench { display: grid; grid-template-columns: minmax(280px, 36%) minmax(0, 1fr); min-height: 610px; border: 1px solid #e4e4e7; border-top: 0; border-radius: 0 0 16px 16px; overflow: hidden; background: #fff; }
+.work-list, .history-list-panel { max-height: calc(100vh - 260px); overflow-y: auto; border-right: 1px solid #e4e4e7; background: #fafafa; }
+.work-card, .history-thread { width: 100%; min-height: 118px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; padding: 16px 18px; border: 0; border-bottom: 1px solid #e4e4e7; background: transparent; text-align: left; cursor: pointer; }
+.work-card:hover, .work-card:focus-visible, .history-thread:hover, .history-thread:focus-visible { background: #f4f4f5; outline: 2px solid transparent; }
+.work-card.selected, .history-thread.selected { box-shadow: inset 4px 0 #18181b; background: #fff; }
+.card-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.type-label { color: #3f7663; font-size: 12px; font-weight: 700; }
+.work-card strong { overflow: hidden; color: #27272a; font-size: 15px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.scope-line, .card-meta { overflow: hidden; color: #71717a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.work-detail, .history-detail { min-width: 0; max-height: calc(100vh - 260px); overflow-y: auto; padding: 26px 28px; }
+.detail-heading, .section-title, .history-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.detail-heading h2, .history-detail h2 { margin: 6px 0 0; font-size: 22px; line-height: 1.35; }
+.detail-description { margin: 18px 0; color: #3f3f46; line-height: 1.75; white-space: pre-wrap; }
+.metadata-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border: 1px solid #e4e4e7; border-radius: 12px; overflow: hidden; }
+.metadata-grid div { min-height: 78px; padding: 14px 16px; border-right: 1px solid #e4e4e7; border-bottom: 1px solid #e4e4e7; }
+.metadata-grid div:nth-child(2n) { border-right: 0; }.metadata-grid div:nth-last-child(-n+2) { border-bottom: 0; }
+.metadata-grid dt { color: #a1a1aa; font-size: 12px; }.metadata-grid dd { margin: 7px 0 0; color: #27272a; font-size: 14px; font-weight: 600; }
+.detail-section { padding: 22px 0; border-bottom: 1px solid #e4e4e7; }.detail-section h3 { margin: 0 0 12px; font-size: 15px; }.section-title a { color: #3f7663; font-size: 13px; font-weight: 600; }
+.evidence-list { display: grid; gap: 8px; }.evidence-row { min-height: 44px; display: flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid #e4e4e7; border-radius: 9px; color: #52525b; font-size: 13px; }.evidence-row svg, .attachment-links svg { width: 16px; flex: none; }.evidence-row a { color: #3f7663; }.muted { color: #a1a1aa; font-size: 13px; }
+.history-list { margin: 0; padding: 0; list-style: none; }.history-list li { display: grid; grid-template-columns: 12px 1fr; gap: 10px; padding: 8px 0; }.history-dot { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: #3f7663; }.history-list strong { font-size: 13px; }.history-list p { margin: 3px 0 0; color: #71717a; font-size: 12px; }.history-note { color: #3f3f46 !important; }
+.comment-box { display: grid; gap: 10px; margin-top: 20px; padding: 16px; border-radius: 12px; background: #f4f7f5; }.comment-box label, .dialog-label { color: #3f3f46; font-size: 13px; font-weight: 700; }.comment-box .touch-button { justify-self: end; }
+.detail-actions { position: sticky; bottom: -26px; display: flex; justify-content: flex-end; gap: 10px; margin: 24px -28px -26px; padding: 16px 28px; border-top: 1px solid #e4e4e7; background: rgba(255,255,255,.96); backdrop-filter: blur(8px); }
+.readonly-callout { margin: 14px; padding: 12px; border: 1px solid #d4d4d8; border-radius: 10px; background: #fff; color: #71717a; font-size: 12px; line-height: 1.55; }.history-thread { min-height: 78px; }.history-thread span { color: #a1a1aa; font-size: 12px; }
+.history-detail > header { padding-bottom: 18px; border-bottom: 1px solid #e4e4e7; }.history-detail header p { margin: 5px 0 0; color: #71717a; font-size: 12px; }.message-history { display: grid; gap: 12px; padding-top: 18px; }.history-message { padding: 14px 16px; border: 1px solid #e4e4e7; border-radius: 10px; }.history-message > div:first-child { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }.history-message time { color: #a1a1aa; }.history-message p { margin: 10px 0 0; color: #3f3f46; line-height: 1.65; white-space: pre-wrap; }.attachment-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }.attachment-links a { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 7px; background: #f4f4f5; color: #3f7663; font-size: 12px; }
+.request-form { padding-top: 4px; }.form-grid { display: grid; grid-template-columns: 1fr 1.35fr; gap: 14px; }.pending-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }.pending-files span { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 7px; background: #f4f4f5; font-size: 12px; }.pending-files button { width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+:deep(.el-select) { width: 100%; }:deep(.el-input__wrapper), :deep(.el-select__wrapper) { min-height: 44px; }:deep(.el-dialog__footer .el-button) { min-width: 96px; }
+@media (max-width: 900px) { .filter-bar { grid-template-columns: 1fr 1fr; }.result-count { justify-self: start; }.workbench, .history-workbench { grid-template-columns: 1fr; }.work-list, .history-list-panel { max-height: 320px; border-right: 0; border-bottom: 1px solid #e4e4e7; }.work-detail, .history-detail { max-height: none; padding: 20px; }.detail-actions { bottom: -20px; margin: 20px -20px -20px; padding: 12px 20px; } }
+@media (max-width: 620px) { .center-header { align-items: stretch; flex-direction: column; }.center-tabs { display: grid; grid-template-columns: repeat(2, 1fr); }.center-tab { width: 100%; }.filter-bar, .form-grid, .metadata-grid { grid-template-columns: 1fr; }.metadata-grid div, .metadata-grid div:nth-child(2n), .metadata-grid div:nth-last-child(-n+2) { border-right: 0; border-bottom: 1px solid #e4e4e7; }.metadata-grid div:last-child { border-bottom: 0; }.detail-actions { flex-wrap: wrap; }.detail-actions .el-button { flex: 1 1 120px; margin: 0; } }
 </style>

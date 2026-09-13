@@ -49,12 +49,13 @@ class FakeSession:
 
 
 class CaptureSession:
-    def __init__(self):
+    def __init__(self, rows=None):
         self.statement = None
+        self.rows = list(rows or [])
 
     async def execute(self, stmt):
         self.statement = stmt
-        return FakeResult([])
+        return FakeResult(self.rows)
 
 
 @pytest.mark.asyncio
@@ -108,6 +109,60 @@ async def test_list_for_session_forces_compound_index_on_mysql():
 
     compiled = str(session.statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "FORCE INDEX (idx_chat_messages_org_session_seq)" in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_for_session_defaults_to_latest_page_and_returns_ascending_rows():
+    session = CaptureSession([
+        SimpleNamespace(seq_no=105),
+        SimpleNamespace(seq_no=104),
+    ])
+
+    rows = await ChatMessageRepository(session).list_for_session(
+        org_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        limit=2,
+    )
+
+    compiled = str(session.statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "chat_messages.seq_no DESC" in compiled
+    assert [row.seq_no for row in rows] == [104, 105]
+
+
+@pytest.mark.asyncio
+async def test_list_for_session_preserves_explicit_after_zero_incremental_mode():
+    session = CaptureSession()
+
+    await ChatMessageRepository(session).list_for_session(
+        org_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        after_seq=0,
+        limit=50,
+    )
+
+    compiled = str(session.statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "chat_messages.seq_no > 0" in compiled
+    assert "chat_messages.seq_no ASC" in compiled
+
+
+@pytest.mark.asyncio
+async def test_list_for_session_before_cursor_loads_previous_page_in_display_order():
+    session = CaptureSession([
+        SimpleNamespace(seq_no=99),
+        SimpleNamespace(seq_no=98),
+    ])
+
+    rows = await ChatMessageRepository(session).list_for_session(
+        org_id="11111111-1111-1111-1111-111111111111",
+        session_id="22222222-2222-2222-2222-222222222222",
+        before_seq=100,
+        limit=2,
+    )
+
+    compiled = str(session.statement.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "chat_messages.seq_no < 100" in compiled
+    assert "chat_messages.seq_no DESC" in compiled
+    assert [row.seq_no for row in rows] == [98, 99]
 
 
 def test_chat_message_declares_compound_indexes_for_session_pagination():

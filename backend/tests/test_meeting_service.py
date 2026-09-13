@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from agent.router.contracts import AgentRouteDecision, AgentRouterOutput
-from app.core.exceptions import ForbiddenError, ValidationError
+from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
 from app.api.v1 import meetings as meeting_api_mod
 from app.services import meeting_agent_service as meeting_agent_mod
 from app.services import meeting_service as meeting_service_mod
@@ -16,9 +16,13 @@ from app.repositories.meeting_repo import MeetingRepository
 from app.schemas.meeting import (
     MeetingActionItemCreateRequest,
     MeetingAgentRunRequest,
+    MeetingAgentShareRequest,
     MeetingMemoryScopeRequest,
     MeetingMemoryExtractRequest,
+    MeetingMemoryShareCreateRequest,
     MeetingMemoryUpdateRequest,
+    MeetingBusinessContext,
+    MeetingBusinessObjectCorrectionRequest,
 )
 
 
@@ -48,6 +52,8 @@ class FakeMeetingRepo:
         self.created_messages: list[dict] = []
         self.messages: list[SimpleNamespace] = []
         self.memory_tags: list[dict] = []
+        self.memory_origins: list[object] = []
+        self.memory_evidence: list[object] = []
         self.room = SimpleNamespace(
             id="room-1",
             org_id="org-1",
@@ -56,6 +62,34 @@ class FakeMeetingRepo:
             password_hash=None,
         )
 
+    async def create_memory_origin(self, origin):
+        existing = next(
+            (
+                row for row in self.memory_origins
+                if row.memory_id == origin.memory_id and row.dedupe_key == origin.dedupe_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        self.memory_origins.append(origin)
+        return origin
+
+    async def create_memory_evidence(self, evidence):
+        existing = next(
+            (
+                row for row in self.memory_evidence
+                if row.memory_id == evidence.memory_id
+                and row.evidence_role == evidence.evidence_role
+                and row.independence_key == evidence.independence_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        self.memory_evidence.append(evidence)
+        return evidence
+
     async def get_room(self, org_id: str, room_id: str):
         return SimpleNamespace(
             id=room_id,
@@ -63,6 +97,7 @@ class FakeMeetingRepo:
             created_by="user-1",
             status=getattr(self.room, "status", "active"),
             password_hash=getattr(self.room, "password_hash", None),
+            audit_policy=getattr(self.room, "audit_policy", None),
         )
 
     async def get_room_by_code(self, org_id: str, access_code: str):
@@ -172,6 +207,158 @@ def test_meeting_stream_public_event_is_visible_to_room_members():
     assert meeting_api_mod._can_see_meeting_stream_event(event, "user-3") is True
 
 
+def _agent_answer_message(
+    *,
+    user_id: str = "user-1",
+    visibility: str = "private",
+    recipient_id: str | None = "user-1",
+) -> SimpleNamespace:
+    metadata = {
+        "interaction_mode": "private_chat" if visibility == "private" else "public_mention",
+        "visibility": visibility,
+        "response_visibility": visibility,
+    }
+    if recipient_id:
+        metadata["private_recipient_user_id"] = recipient_id
+        metadata["audience_scope_id"] = recipient_id
+    return SimpleNamespace(
+        id="answer-1",
+        room_id="room-1",
+        user_id=user_id,
+        username="会议Agent",
+        seq_no=3,
+        content="完整私人回答中还有未选择的历史细节",
+        message_type="agent",
+        agent_id="general_agent",
+        mentions=None,
+        quote_message_id=None,
+        metadata_json=metadata,
+        private_recipient_user_id=recipient_id,
+        created_at=datetime.utcnow(),
+        updated_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_share_agent_answer_only_publishes_selected_content_and_public_sources():
+    fake_repo = FakeMeetingRepo()
+    answer = _agent_answer_message()
+    public_source = SimpleNamespace(
+        id="public-1",
+        room_id="room-1",
+        user_id="user-2",
+        username="bob",
+        seq_no=2,
+        content="公共依据",
+        message_type="user",
+        agent_id=None,
+        metadata_json={"visibility": "room"},
+        private_recipient_user_id=None,
+    )
+    messages = {answer.id: answer, public_source.id: public_source}
+
+    async def get_message(org_id: str, room_id: str, message_id: str):
+        assert org_id == "org-1"
+        assert room_id == "room-1"
+        return messages.get(message_id)
+
+    fake_repo.get_message = get_message
+    fake_session = FakeSession()
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+    published = []
+
+    async def publish(room_id: str, message):
+        published.append((room_id, message))
+
+    service._publish_message_event = publish
+    result = await service.share_agent_answer(
+        "room-1",
+        MeetingAgentShareRequest(
+            answer_message_id="answer-1",
+            content="只分享这段结论",
+            source_message_ids=["public-1", "public-1"],
+        ),
+    )
+
+    assert result.content == "只分享这段结论"
+    assert "未选择的历史细节" not in result.content
+    assert result.metadata_json["source_message_ids"] == ["public-1"]
+    assert result.metadata_json["visibility"] == "room"
+    assert result.metadata_json["confirmation_status"] == "unconfirmed_ai_suggestion"
+    assert fake_repo.created_messages[0]["content"] == "只分享这段结论"
+    assert fake_session.commits == 1
+    assert published == [("room-1", result)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        _agent_answer_message(user_id="user-2", recipient_id="user-2"),
+        _agent_answer_message(visibility="room", recipient_id=None),
+    ],
+)
+async def test_share_agent_answer_rejects_foreign_or_public_answers(answer):
+    fake_repo = FakeMeetingRepo()
+
+    async def get_message(org_id: str, room_id: str, message_id: str):
+        return answer if message_id == answer.id else None
+
+    fake_repo.get_message = get_message
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError):
+        await service.share_agent_answer(
+            "room-1",
+            MeetingAgentShareRequest(answer_message_id="answer-1", content="不应公开"),
+        )
+
+    assert fake_repo.created_messages == []
+
+
+@pytest.mark.asyncio
+async def test_share_agent_answer_rejects_private_source_ids():
+    fake_repo = FakeMeetingRepo()
+    answer = _agent_answer_message()
+    private_source = SimpleNamespace(
+        id="private-question-1",
+        room_id="room-1",
+        user_id="user-1",
+        username="alice",
+        seq_no=2,
+        content="未公开的私人追问",
+        message_type="user",
+        agent_id=None,
+        metadata_json={"visibility": "private", "private_recipient_user_id": "user-1"},
+        private_recipient_user_id="user-1",
+    )
+    messages = {answer.id: answer, private_source.id: private_source}
+
+    async def get_message(org_id: str, room_id: str, message_id: str):
+        return messages.get(message_id)
+
+    fake_repo.get_message = get_message
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ForbiddenError, match="private messages"):
+        await service.share_agent_answer(
+            "room-1",
+            MeetingAgentShareRequest(
+                answer_message_id="answer-1",
+                content="公开结论",
+                source_message_ids=["private-question-1"],
+            ),
+        )
+
+    assert fake_repo.created_messages == []
+
+
 @pytest.mark.asyncio
 async def test_send_message_triggers_mentions_only_not_autonomous(monkeypatch):
     fake_repo = FakeMeetingRepo()
@@ -210,6 +397,37 @@ async def test_send_message_triggers_mentions_only_not_autonomous(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_message_schedules_v1_auto_participation_only_in_enabled_room(monkeypatch):
+    fake_repo = FakeMeetingRepo()
+    fake_repo.room.audit_policy = {"auto_participation_mode": "live"}
+    fake_session = FakeSession()
+    scheduled_tasks: list[asyncio.Task] = []
+    calls: list[dict] = []
+    real_create_task = asyncio.create_task
+
+    def tracking_create_task(coro):
+        task = real_create_task(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    async def fake_evaluate_auto_participation(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(meeting_service_mod, "MeetingRepository", lambda session: fake_repo)
+    monkeypatch.setattr(meeting_service_mod.asyncio, "create_task", tracking_create_task)
+
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+    service._evaluate_auto_participation = fake_evaluate_auto_participation
+
+    await service.send_message("room-1", "这个质检结论还缺依据")
+    await asyncio.gather(*scheduled_tasks)
+
+    assert calls == [{"room_id": "room-1", "message_id": "msg-1", "mode": "live"}]
+
+
+@pytest.mark.asyncio
 async def test_send_message_routes_legacy_ai_alias_to_general_agent(monkeypatch):
     fake_repo = FakeMeetingRepo()
     fake_users = FakeUsersRepo()
@@ -222,8 +440,16 @@ async def test_send_message_routes_legacy_ai_alias_to_general_agent(monkeypatch)
         async def invoke_agent(self, **kwargs):
             raise AssertionError("room agent invocation should not run for built-in total agent alias")
 
-    async def fake_invoke_general_agent_reply(*, room_id: str, query: str):
+    async def fake_invoke_general_agent_reply(
+        *,
+        room_id: str,
+        query: str,
+        question_message_id: str,
+        question_revision: str,
+    ):
         invoked_queries.append((room_id, query))
+        assert question_message_id == "msg-1"
+        assert question_revision
 
     def tracking_create_task(coro):
         task = real_create_task(coro)
@@ -291,8 +517,16 @@ async def test_send_message_triggers_general_agent_special_mention(monkeypatch):
     invoked_queries: list[tuple[str, str]] = []
     real_create_task = asyncio.create_task
 
-    async def fake_invoke_general_agent_reply(*, room_id: str, query: str):
+    async def fake_invoke_general_agent_reply(
+        *,
+        room_id: str,
+        query: str,
+        question_message_id: str,
+        question_revision: str,
+    ):
         invoked_queries.append((room_id, query))
+        assert question_message_id == "msg-1"
+        assert question_revision
 
     def tracking_create_task(coro):
         task = real_create_task(coro)
@@ -1162,7 +1396,12 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
 
     result = await service.run_general_agent(
         "room-1",
-        MeetingAgentRunRequest(query="请总结本次会议并提取候选记忆", mode="meeting_summary"),
+        MeetingAgentRunRequest(
+            query="请总结本次会议并提取待确认知识",
+            mode="meeting_summary",
+            interaction_mode="public_mention",
+            question_message_id="msg-1",
+        ),
     )
 
     assert result.selected_subgraph == "meeting_summary"
@@ -1176,7 +1415,7 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
     assert fake_repo.created_messages[-1]["metadata_json"]["audience_scope_type"] == "meeting_room"
     assert "private_user_ids" not in published[-1]
     assert fake_repo.scope_bindings[0]["scope_type"] == "meeting_room"
-    assert fake_repo.transfer_logs[0]["status"] == "candidate"
+    assert fake_repo.transfer_logs == []
     assert published[-1]["event"] == "message_created"
 
 
@@ -1470,6 +1709,79 @@ async def test_extract_memories_preserves_full_candidate_detail_and_source_messa
     assert "\n" not in result[0].summary
     assert fake_repo.created_memory_items[0].content_json["content"] == result[0].content
     assert fake_repo.created_memory_items[0].content_json["source_message_id"] == "msg-summary-1"
+    stored = fake_repo.created_memory_items[0]
+    assert stored.idempotency_key.startswith("meeting-qdl:room-1:")
+    assert stored.candidate_key.startswith("meeting-qdl:")
+    assert stored.source_message_id == "msg-summary-1"
+    assert stored.source_trace_id == stored.trace_id
+    assert stored.canonical_claim["scope"] == {
+        "scope_type": "meeting_room",
+        "scope_id": "room-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_extract_memories_treats_matching_idempotency_race_as_duplicate():
+    class NestedTransaction:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class NestedSession(FakeSession):
+        def begin_nested(self):
+            return NestedTransaction()
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.create_attempts = 0
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def list_recent_messages(self, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="msg-race",
+                    content="会议决定：A17 批次必须完成二次复核后才能放行。",
+                    message_type="user",
+                )
+            ]
+
+        async def list_memory_items_for_room(self, **kwargs):
+            return []
+
+        async def create_memory_item(self, item):
+            self.create_attempts += 1
+            raise meeting_service_mod.IntegrityError(
+                "INSERT INTO memory_items",
+                {},
+                RuntimeError("duplicate idempotency key"),
+            )
+
+        async def get_memory_item_by_idempotency_key(self, org_id, idempotency_key):
+            assert org_id == "org-1"
+            assert idempotency_key.startswith("meeting-qdl:room-1:")
+            return SimpleNamespace(memory_id="mem-existing")
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(NestedSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.extract_memories("room-1", MeetingMemoryExtractRequest(max_items=1))
+
+    assert result == []
+    assert fake_repo.create_attempts == 1
+    assert fake_repo.scope_bindings == []
+    assert fake_repo.transfer_logs == []
 
 
 @pytest.mark.asyncio
@@ -2328,8 +2640,7 @@ async def test_confirm_memory_publishes_meeting_scope_binding():
     assert memory.scope_json["room_id"] == "room-1"
     assert fake_repo.scope_bindings[-1]["scope_type"] == "meeting_room"
     assert fake_repo.scope_bindings[-1]["scope_id"] == "room-1"
-    assert fake_repo.transfer_logs[-1]["status"] == "confirmed"
-    assert fake_repo.transfer_logs[-1]["to_scope_type"] == "meeting_room"
+    assert fake_repo.transfer_logs == []
     assert fake_repo.created_messages[-1]["message_type"] == "system"
 
 
@@ -2508,6 +2819,70 @@ def _meeting_memory(
     )
 
 
+@pytest.mark.asyncio
+async def test_reject_memory_survives_auxiliary_event_write_failure(monkeypatch):
+    memory = _meeting_memory()
+
+    class NestedTransaction:
+        def __init__(self, session):
+            self.session = session
+
+        async def __aenter__(self):
+            self.session.nested_entries += 1
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            self.session.nested_failures.append(exc_type)
+            return False
+
+    class NestedSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.nested_entries = 0
+            self.nested_failures = []
+
+        def begin_nested(self):
+            return NestedTransaction(self)
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.transfer_logs = []
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory if memory_id == memory.memory_id else None
+
+        async def update_memory_item(self, *, status=None, content_json=None, **kwargs):
+            if status is not None:
+                memory.status = status
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    async def fail_record_event(self, payload):
+        raise RuntimeError("event sink unavailable")
+
+    monkeypatch.setattr(meeting_service_mod.MemoryService, "record_event", fail_record_event)
+
+    session = NestedSession()
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.reject_memory(memory.memory_id)
+
+    assert result.status == "rejected"
+    assert session.nested_entries == 1
+    assert session.nested_failures == [RuntimeError]
+    assert fake_repo.transfer_logs == []
+    assert fake_repo.created_messages[-1]["content"] == "一条待确认知识已被拒绝。"
+
+
 class FakeTaskRepository:
     def __init__(self, session):
         self.session = session
@@ -2643,7 +3018,7 @@ async def test_confirm_memory_reclassifies_quality_fact_from_edited_content():
 
 
 @pytest.mark.asyncio
-async def test_business_memory_publishes_to_org_space_and_records_tags():
+async def test_business_memory_confirms_locally_then_requests_org_share_and_records_tags():
     memory = _meeting_memory(category="business_memory")
 
     class FakeRepo(FakeMeetingRepo):
@@ -2697,7 +3072,7 @@ async def test_business_memory_publishes_to_org_space_and_records_tags():
 
         async def create_memory_transfer_log(self, **kwargs):
             self.transfer_logs.append(kwargs)
-            return SimpleNamespace(**kwargs)
+            return SimpleNamespace(id=f"transfer-{len(self.transfer_logs)}", **kwargs)
 
     fake_repo = FakeRepo()
     service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
@@ -2706,16 +3081,96 @@ async def test_business_memory_publishes_to_org_space_and_records_tags():
 
     result = await service.confirm_memory(
         memory.memory_id,
-        MeetingMemoryUpdateRequest(scope="org_space", scope_id="current", is_business_memory=True),
+        MeetingMemoryUpdateRequest(scope="meeting_room", scope_id="current", is_business_memory=True),
+    )
+    shared = await service.transfer_memory(
+        memory.memory_id,
+        meeting_service_mod.MeetingMemoryTransferRequest(
+            to_scope_type="org_space",
+            to_scope_id="current",
+            transfer_reason="申请成为组织共享质量知识",
+        ),
     )
 
     assert result.status == "confirmed"
-    assert result.scope == "org_space"
-    assert result.scope_type == "org_space"
-    assert result.scope_id == "org-1"
-    assert fake_repo.scope_bindings[-1]["scope_type"] == "org_space"
+    assert result.scope == "meeting_room"
+    assert result.scope_type == "meeting_room"
+    assert result.scope_id == "room-1"
+    assert shared.scope_type == "meeting_room"
+    assert fake_repo.scope_bindings[-1]["scope_type"] == "meeting_room"
     assert fake_repo.transfer_logs[-1]["to_scope_type"] == "org_space"
+    assert fake_repo.transfer_logs[-1]["to_scope_id"] == "org-1"
+    assert fake_repo.transfer_logs[-1]["status"] == "pending_approval"
+    assert memory.content_json["pending_transfer_id"] == "transfer-1"
     assert {"org_id": "org-1", "memory_id": memory.memory_id, "tag_type": "product", "tag_value": "P001"} in fake_repo.memory_tags
+
+
+@pytest.mark.asyncio
+async def test_legacy_direct_org_confirmation_is_split_into_local_confirm_and_pending_share():
+    memory = _meeting_memory(status="candidate", category="business_memory")
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def update_memory_item(
+            self,
+            *,
+            org_id: str,
+            memory_id: str,
+            status=None,
+            content_summary=None,
+            content_json=None,
+            scope_json=None,
+        ):
+            if status is not None:
+                memory.status = status
+            if content_summary is not None:
+                memory.content_summary = content_summary
+            if content_json is not None:
+                memory.content_json = content_json
+            if scope_json is not None:
+                memory.scope_json = scope_json
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            self.transfer_logs.append(kwargs)
+            values = {
+                "created_at": None,
+                "updated_at": None,
+                "decided_by": None,
+                "decided_at": None,
+                "decision_note": None,
+                **kwargs,
+            }
+            return SimpleNamespace(id=f"transfer-{len(self.transfer_logs)}", **values)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.confirm_memory(
+        memory.memory_id,
+        MeetingMemoryUpdateRequest(scope="org_space", scope_id="current"),
+    )
+
+    assert result.status == "confirmed"
+    assert result.scope_type == "meeting_room"
+    assert result.scope_id == "room-1"
+    assert result.requested_scope_type == "org_space"
+    assert result.requested_scope_id == "org-1"
+    assert fake_repo.transfer_logs[-1]["status"] == "pending_approval"
+    assert fake_repo.transfer_logs[-1]["to_scope_type"] == "org_space"
 
 
 @pytest.mark.asyncio
@@ -2775,7 +3230,7 @@ async def test_calibrated_affected_product_becomes_memory_tag_without_scope_bind
     result = await service.confirm_memory(
         memory.memory_id,
         MeetingMemoryUpdateRequest(
-            scope="org_space",
+            scope="meeting_room",
             scope_id="current",
             is_business_memory=True,
             affected_objects={"product_ids": ["P900"]},
@@ -2783,8 +3238,8 @@ async def test_calibrated_affected_product_becomes_memory_tag_without_scope_bind
         ),
     )
 
-    assert result.scope == "org_space"
-    assert result.scope_id == "org-1"
+    assert result.scope == "meeting_room"
+    assert result.scope_id == "room-1"
     assert result.memory_category == "business_memory"
     assert result.affected_objects["product_ids"] == ["P900"]
     assert "org_space" in result.shareability["allowed_scopes"]
@@ -2906,7 +3361,7 @@ async def test_risk_insight_without_business_binding_stays_in_meeting():
 
 
 @pytest.mark.asyncio
-async def test_confirm_risk_insight_to_org_space_does_not_create_alert():
+async def test_risk_insight_confirms_locally_then_requests_org_share_without_alert():
     memory = _meeting_memory(category="business_memory", content="B001 批次连续出现复测不稳定，未来 7-14 天需要重点关注")
     memory.content_json.update(
         {
@@ -2975,7 +3430,7 @@ async def test_confirm_risk_insight_to_org_space_does_not_create_alert():
 
         async def create_memory_transfer_log(self, **kwargs):
             self.transfer_logs.append(kwargs)
-            return SimpleNamespace(**kwargs)
+            return SimpleNamespace(id=f"transfer-{len(self.transfer_logs)}", **kwargs)
 
     fake_repo = FakeRepo()
     service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
@@ -2984,14 +3439,23 @@ async def test_confirm_risk_insight_to_org_space_does_not_create_alert():
 
     result = await service.confirm_memory(
         memory.memory_id,
-        MeetingMemoryUpdateRequest(scope="org_space", scope_id="current", is_business_memory=True),
+        MeetingMemoryUpdateRequest(scope="meeting_room", scope_id="current", is_business_memory=True),
+    )
+    await service.transfer_memory(
+        memory.memory_id,
+        meeting_service_mod.MeetingMemoryTransferRequest(
+            to_scope_type="org_space",
+            to_scope_id="current",
+            transfer_reason="申请共享风险洞察",
+        ),
     )
 
-    assert result.scope == "org_space"
-    assert result.scope_type == "org_space"
-    assert result.scope_id == "org-1"
-    assert fake_repo.scope_bindings[-1]["scope_type"] == "org_space"
+    assert result.scope == "meeting_room"
+    assert result.scope_type == "meeting_room"
+    assert result.scope_id == "room-1"
+    assert fake_repo.scope_bindings[-1]["scope_type"] == "meeting_room"
     assert fake_repo.transfer_logs[-1]["to_scope_type"] == "org_space"
+    assert fake_repo.transfer_logs[-1]["status"] == "pending_approval"
     assert any("风险洞察是预测候选" in warning for warning in result.warnings)
     assert "alert_on_confirmed_publish" not in result.shareability
 
@@ -3082,7 +3546,13 @@ async def test_confirmed_memory_edit_creates_new_version(monkeypatch):
     assert memory.content_json["superseded_by"] == result.memory_id
     assert result.version_parent_id == "mem_meeting_1"
     assert fake_repo.created_memory_items[-1].version_parent_id == "mem_meeting_1"
-    assert fake_repo.transfer_logs[-1]["memory_id"] == result.memory_id
+    assert fake_repo.transfer_logs == []
+    assert any(
+        relation["target_memory_id"] == "mem_meeting_1"
+        and relation["relation_type"] == "revise"
+        and relation["status"] == "confirmed"
+        for relation in result.discussion_relations
+    )
 
 
 def test_agent_audit_memory_reads_are_serialized():
@@ -3168,6 +3638,73 @@ async def test_cross_room_share_creates_pending_approval_without_binding():
 
 
 @pytest.mark.asyncio
+async def test_cross_scope_share_persists_tunnel_plan_and_blocks_unmapped_approval():
+    memory = _meeting_memory(status="active")
+    memory.content_json["affected_objects"] = {"product_ids": ["P001"]}
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_logs = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="user-1", status="active")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id=f"member-{room_id}", org_id=org_id, room_id=room_id, user_id=user_id, role="host")
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def update_memory_item(self, *, org_id: str, memory_id: str, content_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def create_memory_transfer_log(self, **kwargs):
+            row = SimpleNamespace(id=f"transfer-{len(self.transfer_logs) + 1}", **kwargs, created_at=None, updated_at=None)
+            self.transfer_logs.append(row)
+            return row
+
+        async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+            return next((row for row in self.transfer_logs if row.id == transfer_id), None)
+
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.create_memory_share_request(
+        memory.memory_id,
+        MeetingMemoryShareCreateRequest(
+            target_scope_type="meeting_room",
+            target_scope_id="room-2",
+            share_reason="目标会议室复核产品映射",
+            idempotency_key="tunnel-review-1",
+            mapping_version="quality-room-v1",
+            interpolation_strategy="explicit",
+        ),
+    )
+
+    transfer = fake_repo.transfer_logs[0]
+    assert transfer.mapping_version == "quality-room-v1"
+    assert transfer.interpolation_strategy == "explicit"
+    assert transfer.mapping_plan_json["status"] == "needs_review"
+    assert "entities[0].entity_type" in transfer.mapping_plan_json["unmapped_fields"]
+    assert memory.content_json["knowledge_tunnel_plans"]["transfer-1"]["mapping_version"] == "quality-room-v1"
+    assert result.share_request.unmapped_fields
+
+    with pytest.raises(ValidationError, match="mapping requires review"):
+        await service.approve_memory_share("transfer-1")
+    assert fake_repo.scope_bindings == []
+
+
+@pytest.mark.asyncio
 async def test_approve_memory_share_writes_binding_and_executes_transfer():
     memory = _meeting_memory(status="active", category="meeting_memory", room_id="room-1")
     transfer = SimpleNamespace(
@@ -3213,7 +3750,7 @@ async def test_approve_memory_share_writes_binding_and_executes_transfer():
                 memory.scope_json = scope_json
             return memory
 
-        async def update_memory_transfer_log_status(self, *, org_id: str, transfer_id: str, status: str, operator_id: str):
+        async def update_memory_transfer_log_status(self, *, org_id: str, transfer_id: str, status: str, operator_id: str, **kwargs):
             transfer.status = status
             transfer.operator_id = operator_id
             self.transfer_statuses.append((transfer_id, status, operator_id))
@@ -3226,20 +3763,248 @@ async def test_approve_memory_share_writes_binding_and_executes_transfer():
 
     result = await service.approve_memory_share("transfer-1")
 
-    assert fake_repo.scope_bindings == [
-        {
-            "org_id": "org-1",
-            "memory_id": memory.memory_id,
-            "scope_type": "meeting_room",
-            "scope_id": "room-2",
-            "permission": "read",
-            "created_by": "user-2",
-        }
-    ]
-    assert fake_repo.transfer_statuses == [("transfer-1", "executed", "user-2")]
+    assert fake_repo.scope_bindings[0]["scope_type"] == "meeting_room"
+    assert fake_repo.scope_bindings[0]["scope_id"] == "room-2"
+    assert fake_repo.scope_bindings[0]["binding_kind"] == "shared"
+    assert fake_repo.scope_bindings[0]["binding_status"] == "active"
+    assert fake_repo.transfer_statuses == [("transfer-1", "approved", "user-2")]
     assert result.scope_type == "meeting_room"
-    assert result.scope_id == "room-2"
+    assert result.scope_id == "room-1"
+    assert {"scope_type": "meeting_room", "scope_id": "room-2", "transfer_id": "transfer-1"} in memory.content_json["shared_scopes"]
     assert memory.content_json["approved_transfer_id"] == "transfer-1"
+
+
+@pytest.mark.asyncio
+async def test_memory_share_first_decision_wins_and_preserves_source_scope():
+    memory = _meeting_memory(status="confirmed", category="meeting_memory", room_id="room-1")
+    original_scope = dict(memory.scope_json)
+    transfer = SimpleNamespace(
+        id="transfer-race-1",
+        memory_id=memory.memory_id,
+        from_scope_type="meeting_room",
+        from_scope_id="room-1",
+        to_scope_type="meeting_room",
+        to_scope_id="room-2",
+        transfer_reason="同步给目标会议室",
+        status="pending_approval",
+        operator_id="user-1",
+        requested_by="user-1",
+        decided_by=None,
+        decided_at=None,
+        decision_note=None,
+        created_at=None,
+        updated_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+
+        async def get_room(self, org_id: str, room_id: str):
+            return SimpleNamespace(id=room_id, org_id=org_id, created_by="host-1", status="active")
+
+        async def get_member(self, org_id: str, room_id: str, user_id: str):
+            return SimpleNamespace(id=f"member-{user_id}", role="host", user_id=user_id, room_id=room_id)
+
+        async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+            return transfer if transfer_id == transfer.id else None
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def get_memory_scope_binding(self, **kwargs):
+            return None
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def replace_memory_tags(self, **kwargs):
+            return []
+
+        async def update_memory_item(self, *, content_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def update_memory_transfer_log_status(self, *, status: str, operator_id: str, expected_status=None, decision_note=None, **kwargs):
+            if expected_status and transfer.status != expected_status:
+                return None
+            transfer.status = status
+            transfer.operator_id = operator_id
+            transfer.decided_by = operator_id
+            transfer.decision_note = decision_note
+            return transfer
+
+    repo = FakeRepo()
+    first = meeting_service_mod.MeetingService(FakeSession(), "org-1", "host-1")
+    first._repo = repo
+    first._users = FakeUsersRepo()
+    second = meeting_service_mod.MeetingService(FakeSession(), "org-1", "host-2")
+    second._repo = repo
+    second._users = FakeUsersRepo()
+
+    async def no_system_message(*args, **kwargs):
+        return None
+
+    async def no_work_item_event(*args, **kwargs):
+        return None
+
+    first._publish_system_message = no_system_message
+    first._publish_memory_share_work_item_event = no_work_item_event
+    second._publish_system_message = no_system_message
+    second._publish_memory_share_work_item_event = no_work_item_event
+
+    await first.approve_memory_share(transfer.id)
+    with pytest.raises(ConflictError, match="already been handled"):
+        await second.approve_memory_share(transfer.id)
+
+    assert len(repo.scope_bindings) == 1
+    assert memory.scope_json == original_scope
+    assert transfer.status == "approved"
+
+
+@pytest.mark.asyncio
+async def test_memory_share_requester_can_cancel_pending_request_only_once():
+    memory = _meeting_memory(status="confirmed", category="meeting_memory", room_id="room-1")
+    transfer = SimpleNamespace(
+        id="transfer-cancel-1",
+        memory_id=memory.memory_id,
+        from_scope_type="meeting_room",
+        from_scope_id="room-1",
+        to_scope_type="user",
+        to_scope_id="user-2",
+        transfer_reason="共享给目标成员",
+        status="pending_approval",
+        operator_id="user-1",
+        requested_by="user-1",
+        decided_by=None,
+        decided_at=None,
+        decision_note=None,
+        created_at=None,
+        updated_at=None,
+    )
+
+    class FakeRepo(FakeMeetingRepo):
+        async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+            return transfer if transfer_id == transfer.id else None
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def update_memory_item(self, *, content_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            return memory
+
+        async def update_memory_transfer_log_status(self, *, status: str, operator_id: str, expected_status=None, decision_note=None, **kwargs):
+            if expected_status and transfer.status != expected_status:
+                return None
+            transfer.status = status
+            transfer.operator_id = operator_id
+            transfer.decided_by = operator_id
+            transfer.decision_note = decision_note
+            return transfer
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeRepo()
+    service._users = FakeUsersRepo()
+
+    async def no_system_message(*args, **kwargs):
+        return None
+
+    async def no_work_item_event(*args, **kwargs):
+        return None
+
+    service._publish_system_message = no_system_message
+    service._publish_memory_share_work_item_event = no_work_item_event
+
+    result = await service.cancel_memory_share(transfer.id)
+    assert result.status == "cancelled"
+    with pytest.raises(ConflictError, match="already been handled"):
+        await service.cancel_memory_share(transfer.id)
+
+
+@pytest.mark.asyncio
+async def test_admin_approval_activates_org_memory_after_share_request(monkeypatch):
+    memory = _meeting_memory(status="confirmed", category="business_memory", room_id="room-1")
+    transfer = SimpleNamespace(
+        id="transfer-org-1",
+        memory_id=memory.memory_id,
+        from_scope_type="meeting_room",
+        from_scope_id="room-1",
+        to_scope_type="org_space",
+        to_scope_id="org-1",
+        transfer_reason="申请沉淀为组织质量知识",
+        status="pending_approval",
+        operator_id="user-1",
+        created_at=None,
+        updated_at=None,
+    )
+    approvals = []
+
+    class FakeRepo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.scope_bindings = []
+            self.transfer_statuses = []
+
+        async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+            return transfer if transfer_id == transfer.id else None
+
+        async def get_memory_item(self, org_id: str, memory_id: str):
+            return memory
+
+        async def create_memory_scope_binding(self, **kwargs):
+            self.scope_bindings.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        async def update_memory_item(self, *, org_id: str, memory_id: str, content_json=None, scope_json=None, **kwargs):
+            if content_json is not None:
+                memory.content_json = content_json
+            if scope_json is not None:
+                memory.scope_json = scope_json
+            return memory
+
+        async def update_memory_transfer_log_status(self, *, org_id: str, transfer_id: str, status: str, operator_id: str, **kwargs):
+            transfer.status = status
+            transfer.operator_id = operator_id
+            self.transfer_statuses.append((transfer_id, status, operator_id))
+            return transfer
+
+    class FakeMemoryService:
+        def __init__(self, session, org_id):
+            assert org_id == "org-1"
+
+        async def approve_organization_memory(self, memory_id: str, **kwargs):
+            approvals.append((memory_id, kwargs))
+            assert any(entry["scope_type"] == "org_space" for entry in memory.content_json["shared_scopes"])
+            memory.status = "active"
+
+    monkeypatch.setattr(meeting_service_mod, "MemoryService", FakeMemoryService)
+    fake_repo = FakeRepo()
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "admin-1", role="admin")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+
+    result = await service.approve_memory_share(transfer.id)
+
+    assert result.status == "active"
+    assert result.scope_type == "meeting_room"
+    assert result.scope_id == "room-1"
+    assert {"scope_type": "org_space", "scope_id": "org-1", "transfer_id": transfer.id} in memory.content_json["shared_scopes"]
+    assert fake_repo.transfer_statuses == [(transfer.id, "approved", "admin-1")]
+    assert approvals == [
+        (
+            memory.memory_id,
+            {
+                "reviewer_id": "admin-1",
+                "transfer_id": transfer.id,
+                "trace_id": f"memory-org-approve:{transfer.id}",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -3388,38 +4153,6 @@ async def test_next_message_seq_locks_room_before_allocating(monkeypatch):
     assert seq_no == 9
     assert len(executed) == 2
     assert getattr(executed[0], "_for_update_arg", None) is not None
-
-
-@pytest.mark.asyncio
-async def test_start_agent_discussion_persists_topic_and_calls_round(monkeypatch):
-    fake_repo = FakeMeetingRepo()
-    fake_users = FakeUsersRepo()
-    fake_session = FakeSession()
-    captured_round = {}
-
-    class FakeAgentService:
-        async def start_discussion_round(self, **kwargs):
-            captured_round.update(kwargs)
-            return 2
-
-    monkeypatch.setattr(meeting_service_mod, "MeetingRepository", lambda session: fake_repo)
-    monkeypatch.setattr(meeting_service_mod, "MeetingAgentService", FakeAgentService)
-
-    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
-    service._repo = fake_repo
-    service._users = fake_users
-
-    result = await service.start_agent_discussion("room-1", "讨论一下这个问题", 3)
-
-    assert result.started is True
-    assert result.participant_count == 2
-    assert result.topic_message is not None
-    assert result.topic_message.content == "讨论一下这个问题"
-    assert fake_session.commits == 1
-    assert fake_repo.created_messages[0]["content"] == "讨论一下这个问题"
-    assert captured_round["room_id"] == "room-1"
-    assert captured_round["query"] == "讨论一下这个问题"
-    assert captured_round["max_agents"] == 3
 
 
 @pytest.mark.asyncio
@@ -3647,3 +4380,381 @@ async def test_autonomous_participation_emits_failure_on_llm_error(monkeypatch):
     assert all(evt.get("private_user_ids") == ["user-1"] for evt in events)
     assert fake_repo.created_messages[-1]["metadata_json"]["private_recipient_user_id"] == "user-1"
     assert fake_repo.created_messages[-1]["content"].startswith("[Agent AI 助手] 响应失败:")
+
+
+@pytest.mark.asyncio
+async def test_meeting_message_cursors_are_mutually_exclusive():
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = FakeMeetingRepo()
+    service._users = FakeUsersRepo()
+
+    with pytest.raises(ValidationError, match="cannot be used together"):
+        await service.list_messages("room-1", after_seq=10, before_seq=20)
+
+
+def test_public_anchor_message_id_is_stable_per_source_revision():
+    request = MeetingAgentRunRequest(
+        query="请核对 A17 放行依据",
+        interaction_mode="public_mention",
+        question_message_id="msg-17",
+        question_revision="v1",
+    )
+    same_request = request.model_copy()
+    revised_request = request.model_copy(update={"question_revision": "v2"})
+
+    first = meeting_service_mod.MeetingService._agent_message_id_for_request("room-1", request)
+    repeated = meeting_service_mod.MeetingService._agent_message_id_for_request("room-1", same_request)
+    revised = meeting_service_mod.MeetingService._agent_message_id_for_request("room-1", revised_request)
+
+    assert first == repeated
+    assert revised != first
+
+
+@pytest.mark.asyncio
+async def test_private_agent_context_excludes_member_private_messages_and_other_users_ai():
+    rows = [
+        SimpleNamespace(
+            id="public-member",
+            seq_no=1,
+            user_id="user-2",
+            username="bob",
+            content="公开讨论",
+            message_type="user",
+            agent_id=None,
+            metadata_json={},
+            private_recipient_user_id=None,
+        ),
+        SimpleNamespace(
+            id="member-private",
+            seq_no=2,
+            user_id="user-1",
+            username="alice",
+            content="给 Bob 的成员私聊",
+            message_type="user",
+            agent_id=None,
+            metadata_json={"private_recipient_user_id": "user-2"},
+            private_recipient_user_id="user-2",
+        ),
+        SimpleNamespace(
+            id="other-ai-private",
+            seq_no=3,
+            user_id="user-2",
+            username="会议Agent",
+            content="Bob 的私人 AI 回答",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={
+                "visibility": "private",
+                "interaction_mode": "private_chat",
+                "private_recipient_user_id": "user-2",
+            },
+            private_recipient_user_id="user-2",
+        ),
+        SimpleNamespace(
+            id="own-ai-private",
+            seq_no=4,
+            user_id="user-1",
+            username="会议Agent",
+            content="Alice 的私人 AI 回答",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={
+                "visibility": "private",
+                "interaction_mode": "private_chat",
+                "private_recipient_user_id": "user-1",
+            },
+            private_recipient_user_id="user-1",
+        ),
+        SimpleNamespace(
+            id="public-agent",
+            seq_no=5,
+            user_id="user-2",
+            username="会议Agent",
+            content="公开锚定回复",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={"visibility": "room", "interaction_mode": "public_mention"},
+            private_recipient_user_id=None,
+        ),
+    ]
+
+    class Repo:
+        async def list_recent_messages(self, **kwargs):
+            return rows
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = Repo()
+
+    result = await service._list_private_agent_context_messages(room_id="room-1")
+
+    assert [message.id for message in result] == ["public-member", "own-ai-private", "public-agent"]
+
+
+@pytest.mark.asyncio
+async def test_public_context_and_summary_exclude_all_private_messages():
+    rows = [
+        SimpleNamespace(
+            id="public-member",
+            seq_no=1,
+            user_id="user-1",
+            username="alice",
+            content="公开讨论",
+            message_type="user",
+            agent_id=None,
+            metadata_json={},
+            private_recipient_user_id=None,
+        ),
+        SimpleNamespace(
+            id="private-agent",
+            seq_no=2,
+            user_id="user-1",
+            username="会议Agent",
+            content="私人回答",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={"visibility": "private", "private_recipient_user_id": "user-1"},
+            private_recipient_user_id="user-1",
+        ),
+        SimpleNamespace(
+            id="public-agent",
+            seq_no=3,
+            user_id="user-1",
+            username="会议Agent",
+            content="公开建议",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={"visibility": "room", "confirmation_status": "unconfirmed_ai_suggestion"},
+            private_recipient_user_id=None,
+        ),
+    ]
+    captured = {}
+
+    class Repo:
+        async def list_recent_messages(self, **kwargs):
+            return rows
+
+        async def get_context_summary(self, **kwargs):
+            return None
+
+        async def upsert_context_summary(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = Repo()
+
+    public_rows = await service._list_recent_public_messages(room_id="room-1")
+    await service._repo.upsert_context_summary(
+        org_id="org-1",
+        room_id="room-1",
+        context_scope="room",
+        user_key="public",
+        through_seq=3,
+        summary_json=service._build_rolling_summary(public_rows, {}),
+    )
+
+    assert [message.id for message in public_rows] == ["public-member", "public-agent"]
+    assert captured["summary_json"]["source_message_ids"] == ["public-member", "public-agent"]
+    assert captured["summary_json"]["discussion_summary"][-1]["is_ai_suggestion"] is True
+
+
+@pytest.mark.asyncio
+async def test_close_room_schedules_qdl_extraction_after_committing_public_summary():
+    scheduled: list[dict] = []
+
+    class Repo(FakeMeetingRepo):
+        def __init__(self):
+            super().__init__()
+            self.summary = None
+
+        async def update_room(self, org_id: str, room_id: str, **kwargs):
+            self.room.status = kwargs.get("status", self.room.status)
+            return self.room
+
+        async def list_recent_messages(self, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="public-decision",
+                    seq_no=1,
+                    user_id="user-1",
+                    username="alice",
+                    content="会议决定：B001 批次复测后才能放行。",
+                    message_type="user",
+                    agent_id=None,
+                    metadata_json={},
+                    private_recipient_user_id=None,
+                )
+            ]
+
+        async def get_context_summary(self, **kwargs):
+            return None
+
+        async def upsert_context_summary(self, **kwargs):
+            self.summary = kwargs
+            return SimpleNamespace(**kwargs)
+
+    fake_session = FakeSession()
+    fake_repo = Repo()
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service._repo = fake_repo
+    service._users = FakeUsersRepo()
+    service._schedule_public_knowledge_extraction = (
+        lambda room_id, **kwargs: scheduled.append({"room_id": room_id, **kwargs})
+    )
+
+    async def serialize_rooms(rows):
+        return rows
+
+    service._serialize_rooms = serialize_rooms
+
+    result = await service.close_room("room-1")
+
+    assert result.status == "closed"
+    assert fake_session.commits == 1
+    assert fake_repo.summary["through_seq"] == 1
+    assert scheduled == [
+        {
+            "room_id": "room-1",
+            "max_items": 5,
+            "topic": "会议结束自动整理公共知识",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_private_rolling_summary_is_scoped_to_current_user():
+    rows = [
+        SimpleNamespace(
+            id="public-1",
+            seq_no=1,
+            user_id="user-2",
+            username="bob",
+            content="公开内容",
+            message_type="user",
+            agent_id=None,
+            metadata_json={},
+            private_recipient_user_id=None,
+        ),
+        SimpleNamespace(
+            id="private-own",
+            seq_no=2,
+            user_id="user-1",
+            username="会议Agent",
+            content="本人的连续追问上下文",
+            message_type="agent",
+            agent_id="general_agent",
+            metadata_json={"visibility": "private", "interaction_mode": "private_chat"},
+            private_recipient_user_id="user-1",
+        ),
+    ]
+    captured = {}
+
+    class Repo:
+        async def list_private_agent_context_messages(self, **kwargs):
+            assert kwargs["user_id"] == "user-1"
+            return rows
+
+        async def get_context_summary(self, **kwargs):
+            return None
+
+        async def upsert_context_summary(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(**kwargs)
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = Repo()
+
+    await service._refresh_private_context_summary(room_id="room-1")
+
+    assert captured["context_scope"] == "private"
+    assert captured["user_key"] == "user-1"
+    assert captured["through_seq"] == 2
+    assert captured["summary_json"]["source_message_ids"] == ["public-1", "private-own"]
+
+
+@pytest.mark.asyncio
+async def test_business_object_natural_language_correction_verifies_and_adopts_unique_match():
+    candidate = SimpleNamespace(
+        id="candidate-1",
+        room_id="room-1",
+        object_type="batch",
+        object_value="A17",
+        resolved_value=None,
+        status="candidate",
+        confidence=0.72,
+        source_message_ids=["msg-1"],
+        evidence_json={},
+        created_by="user-1",
+        resolved_by=None,
+        created_at=None,
+        updated_at=None,
+    )
+    adopted = []
+
+    class Repo(FakeMeetingRepo):
+        async def list_business_object_candidates(self, **kwargs):
+            return [candidate]
+
+        async def update_business_object_candidate(self, **kwargs):
+            candidate.resolved_value = kwargs["resolved_value"]
+            candidate.status = kwargs["status"]
+            candidate.resolved_by = kwargs["resolved_by"]
+            candidate.evidence_json = {**candidate.evidence_json, **kwargs.get("evidence_json", {})}
+            return candidate
+
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service._repo = Repo()
+    service._users = FakeUsersRepo()
+
+    async def verify(object_type: str, value: str):
+        assert object_type == "batch"
+        assert value == "A18"
+        return "batch", "A18", MeetingBusinessContext(batch_nos=["A18"])
+
+    async def adopt(room_id: str, object_type: str, value: str, context: MeetingBusinessContext):
+        adopted.append((room_id, object_type, value, context.batch_nos))
+
+    service._verify_business_object = verify
+    service._adopt_verified_business_object = adopt
+
+    result = await service.correct_business_object(
+        "room-1",
+        MeetingBusinessObjectCorrectionRequest(correction="不是A17，是A18"),
+    )
+
+    assert result.status == "verified"
+    assert result.resolved_value == "A18"
+    assert result.evidence_json["system_verified"] is True
+    assert adopted == [("room-1", "batch", "A18", ["A18"])]
+
+
+@pytest.mark.asyncio
+async def test_business_object_verification_skips_task_lookup_for_non_uuid_value(monkeypatch):
+    class ProductRepo:
+        async def get_line_by_code(self, org_id: str, value: str):
+            return None
+
+        async def get_sku_by_code(self, org_id: str, value: str):
+            return None
+
+        async def list_batches(self, org_id: str, include_inactive: bool = False):
+            return []
+
+    class SpecRepo:
+        async def get_active_spec(self, org_id: str, value: str):
+            return None
+
+    class StandardLibraryRepo:
+        async def get_active_by_spec_code(self, org_id: str, value: str):
+            return None
+
+    monkeypatch.setattr(meeting_service_mod, "ProductMasterRepository", lambda session: ProductRepo())
+    monkeypatch.setattr(meeting_service_mod, "InspectionSpecRepository", lambda session: SpecRepo())
+    monkeypatch.setattr(
+        meeting_service_mod,
+        "InspectionStandardLibraryRepository",
+        lambda session: StandardLibraryRepo(),
+    )
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+
+    assert await service._verify_business_object("unknown", "A18") is None

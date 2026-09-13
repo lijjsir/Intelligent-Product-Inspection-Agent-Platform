@@ -8,6 +8,7 @@ from uuid import uuid4
 from agent.rag.embedder import Embedder
 from app.services.memory_vector_service import (
     AGENT_LOCAL_MEMORY_COLLECTION,
+    DEFAULT_MEMORY_VECTOR_SIZE,
     MemoryVectorService,
 )
 
@@ -52,7 +53,7 @@ class AgentLongTermMemoryService:
             trace_id=self._trace_id,
         )
 
-    async def ensure_collection(self, vector_size: int = 1536) -> None:
+    async def ensure_collection(self, vector_size: int = DEFAULT_MEMORY_VECTOR_SIZE) -> None:
         await self._vector.ensure_collection(vector_size=vector_size)
 
     async def write(

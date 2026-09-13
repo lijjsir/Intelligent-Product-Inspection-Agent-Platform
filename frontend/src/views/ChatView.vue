@@ -35,6 +35,9 @@ const inspectionSpecStore = useInspectionSpecStore();
 
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
+const chatWasNearBottom = ref(true);
+const chatNewMessageCount = ref(0);
+const loadingOlderMessages = ref(false);
 const attachmentInputRef = ref<HTMLInputElement | null>(null);
 const uiNow = ref(Date.now());
 const webSearchEnabled = ref(false);
@@ -760,6 +763,40 @@ async function scrollToBottom() {
   container.scrollTop = container.scrollHeight;
 }
 
+function isChatNearBottom(threshold = 72) {
+  const container = messageListRef.value;
+  if (!container) return true;
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+}
+
+function onChatScroll() {
+  chatWasNearBottom.value = isChatNearBottom();
+  if (chatWasNearBottom.value) chatNewMessageCount.value = 0;
+}
+
+async function jumpToLatestChatMessage() {
+  chatWasNearBottom.value = true;
+  chatNewMessageCount.value = 0;
+  await scrollToBottom();
+}
+
+async function loadOlderChatMessages() {
+  const container = messageListRef.value;
+  if (!container || loadingOlderMessages.value) return;
+  loadingOlderMessages.value = true;
+  const previousHeight = container.scrollHeight;
+  const previousTop = container.scrollTop;
+  try {
+    const rows = await chatStore.loadOlderMessages();
+    if (!rows.length) return;
+    await nextTick();
+    container.scrollTop = previousTop + container.scrollHeight - previousHeight;
+    chatWasNearBottom.value = false;
+  } finally {
+    loadingOlderMessages.value = false;
+  }
+}
+
 function taskState(taskId: string) { return taskStreamStates.value[taskId] || null; }
 
 function disposeTaskStreams() {
@@ -850,8 +887,24 @@ onBeforeUnmount(() => {
   }
 });
 
-watch(() => chatStore.messages.length, async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
-watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => { await scrollToBottom(); syncTaskStreamsFromMessages(); });
+watch(() => chatStore.messages.length, async (length, previousLength) => {
+  syncTaskStreamsFromMessages();
+  if (loadingOlderMessages.value || length <= previousLength) return;
+  if (chatWasNearBottom.value) {
+    await scrollToBottom();
+  } else {
+    chatNewMessageCount.value += length - previousLength;
+  }
+});
+watch(() => chatStore.messages.map((item) => `${item.id}:${item.content.length}`).join("|"), async () => {
+  syncTaskStreamsFromMessages();
+  if (chatWasNearBottom.value && !loadingOlderMessages.value) await scrollToBottom();
+});
+watch(() => chatStore.session?.id, async () => {
+  chatWasNearBottom.value = true;
+  chatNewMessageCount.value = 0;
+  await scrollToBottom();
+});
 watch(() => chatStore.messages.map((item) => item.id).join(","), loadMessageReactions);
 watch(latestTokenCountedMessageId, async (messageId) => {
   if (!messageId || messageId === syncedUsageMessageId.value) return;
@@ -919,7 +972,15 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
     <!-- Chat area -->
     <div class="chat-shell">
-      <div ref="messageListRef" class="message-list">
+      <div class="message-pane">
+        <div ref="messageListRef" class="message-list" @scroll.passive="onChatScroll">
+        <button
+          v-if="chatStore.hasOlderMessages"
+          type="button"
+          class="chat-load-older"
+          :disabled="loadingOlderMessages"
+          @click="loadOlderChatMessages"
+        >加载更早消息</button>
         <div v-if="chatStore.messages.length === 0" class="empty-state">
           <div class="empty-icon">&#x1F4AC;</div>
           <div class="empty-title">&#x5F00;&#x59CB;&#x5BF9;&#x8BDD;</div>
@@ -1226,6 +1287,14 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             />
           </article>
         </div>
+        </div>
+        <button
+          v-if="chatNewMessageCount"
+          type="button"
+          class="chat-new-message-jump"
+          :aria-label="`有 ${chatNewMessageCount} 条新消息，回到最新消息`"
+          @click="jumpToLatestChatMessage"
+        >有 {{ chatNewMessageCount }} 条新消息</button>
       </div>
 
       <!-- Composer -->
@@ -1364,10 +1433,49 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 }
 
 /* ── Message list ── */
+.message-pane {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
 .message-list {
+  height: 100%;
   overflow-y: auto;
   padding: 12px 20px;
-  scroll-behavior: smooth;
+  overflow-anchor: none;
+}
+.chat-load-older,
+.chat-new-message-jump {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+  padding: 0 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #374151;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.chat-load-older:hover,
+.chat-new-message-jump:hover { border-color: #166534; color: #166534; }
+.chat-load-older:focus-visible,
+.chat-new-message-jump:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.chat-load-older:disabled { cursor: wait; opacity: 0.55; }
+.chat-new-message-jump {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  bottom: 12px;
+  margin: 0;
+  transform: translateX(-50%);
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
 }
 .empty-state {
   display: flex;
@@ -1383,6 +1491,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 
 .message-group { display: flex; flex-direction: column; gap: 12px; }
 
+.message-row { content-visibility: auto; contain-intrinsic-size: auto 180px; }
 .message-row.user { display: flex; flex-direction: column; align-items: flex-end; }
 .message-row.assistant { display: flex; flex-direction: column; align-items: flex-start; }
 

@@ -14,6 +14,11 @@ class MemoryGraphNode:
     trust_score: float = 0.0
     confidence: float = 0.0
     scope_key: str = ""
+    review_status: str = "candidate"
+    origin_kind: str = "unknown"
+    scope_bindings_json: str = "[]"
+    applicability_json: str = "{}"
+    sync_version: int = 2
     created_at: str = ""
     updated_at: str = ""
 

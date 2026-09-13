@@ -37,6 +37,7 @@ from app.schemas.memory import (
     ConflictResolveRequest,
     MemoryEvaluationRequest,
     MemoryEvaluationResponse,
+    MemoryEvidenceDetailResponse,
     MemoryPolicyResponse,
     MemoryPolicyUpsert,
     MemoryPropagationRequest,
@@ -49,6 +50,12 @@ from app.schemas.memory import (
     MemoryWriteRequest,
     RollbackAction,
     MemoryWriteResponse,
+    MemoryReadinessResponse,
+    KnowledgeTunnelPreviewRequest,
+    KnowledgeTunnelPreviewResponse,
+    OrganizationBindingRevokeRequest,
+    OrganizationGovernanceResponse,
+    OrganizationReviewSubmitRequest,
     PromotionEvaluationResponse,
     SearchWithConflictGuardRequest,
     SearchWithConflictGuardResponse,
@@ -65,6 +72,8 @@ from app.services.memory_governance_service import (
 )
 from app.services.memory_state_transition_service import MemoryStateTransitionService
 from app.services.retrieval_conflict_guard import RetrievalConflictGuard
+from app.services.unified_memory_governance_service import UnifiedMemoryGovernanceService
+from app.services.knowledge_tunnel_service import KnowledgeTunnelService
 
 router = APIRouter()
 
@@ -119,6 +128,7 @@ async def list_candidates(
     status: str = Query(default=MemoryStatus.CANDIDATE.value),
     memory_type: str | None = Query(default=None),
     user_id: str | None = Query(default=None),
+    include_local: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current: CurrentUser = Depends(get_current_user),
@@ -131,10 +141,14 @@ async def list_candidates(
         status=status,
         memory_type=memory_type,
         user_id=user_id,
+        include_local=include_local,
         limit=limit,
         offset=offset,
     )
-    return ResponseEnvelope(data=resp)
+    return ResponseEnvelope(
+        data=resp,
+        warnings=["deprecated_governance_list: use GET /v1/memory/governance/organization"],
+    )
 
 
 @router.post("/candidates/{memory_id}/support", response_model=ResponseEnvelope[PromotionEvaluationResponse | None])
@@ -192,7 +206,10 @@ async def approve_candidate(
     except Exception as exc:
         raise memory_operation_error(exc, trace_id, "Candidate approval")
     await db.commit()
-    return ResponseEnvelope(data=resp)
+    return ResponseEnvelope(
+        data=resp,
+        warnings=["legacy_candidate_approval: approval applies only to the memory home scope"],
+    )
 
 
 @router.post("/candidates/{memory_id}/reject", response_model=ResponseEnvelope[PromotionEvaluationResponse])
@@ -314,6 +331,139 @@ async def evaluate_candidate_batch(
         raise memory_operation_error(exc, trace_id, "Candidate batch promotion evaluation")
     await db.commit()
     return ResponseEnvelope(data=resp)
+
+
+# ---------------------------------------------------------------
+# Unified organization governance
+# ---------------------------------------------------------------
+
+@router.get(
+    "/governance/organization",
+    response_model=ResponseEnvelope[OrganizationGovernanceResponse],
+)
+async def organization_governance_overview(
+    limit: int = Query(default=100, ge=1, le=500),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("memory_governance", current.role)
+    service = UnifiedMemoryGovernanceService(db, current.org_id)
+    try:
+        data = await service.organization_overview(limit=limit)
+    except Exception as exc:
+        raise memory_operation_error(exc, None, "Organization memory governance query")
+    return ResponseEnvelope(data=data)
+
+
+@router.get(
+    "/{memory_id}/evidence",
+    response_model=ResponseEnvelope[MemoryEvidenceDetailResponse],
+)
+async def memory_evidence_detail(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("memory_governance", current.role)
+    service = UnifiedMemoryGovernanceService(db, current.org_id)
+    try:
+        data = await service.evidence_detail(memory_id)
+    except Exception as exc:
+        raise memory_operation_error(exc, None, "Memory evidence detail")
+    return ResponseEnvelope(data=data)
+
+
+@router.post(
+    "/governance/{memory_id}/evaluate",
+    response_model=ResponseEnvelope[MemoryReadinessResponse],
+)
+async def evaluate_organization_readiness(
+    memory_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("memory_governance", current.role)
+    service = UnifiedMemoryGovernanceService(db, current.org_id)
+    try:
+        data = await service.evaluate_readiness(memory_id)
+    except Exception as exc:
+        raise memory_operation_error(exc, None, "Organization readiness evaluation")
+    await db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/governance/{memory_id}/submit-organization-review")
+async def submit_organization_review(
+    memory_id: str,
+    body: OrganizationReviewSubmitRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("memory_governance", current.role)
+    service = UnifiedMemoryGovernanceService(db, current.org_id)
+    try:
+        transfer_id = await service.submit_organization_review(
+            memory_id,
+            requester_id=current.user_id,
+            reason=body.reason,
+        )
+    except Exception as exc:
+        raise memory_operation_error(exc, None, "Submit organization review")
+    await db.commit()
+    return ResponseEnvelope(data={"memory_id": memory_id, "share_request_id": transfer_id, "status": "pending_approval"})
+
+
+@router.post("/governance/{memory_id}/revoke-organization-binding")
+async def revoke_organization_binding(
+    memory_id: str,
+    body: OrganizationBindingRevokeRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("memory_governance", current.role)
+    service = UnifiedMemoryGovernanceService(db, current.org_id)
+    try:
+        count = await service.revoke_organization_binding(
+            memory_id,
+            operator_id=current.user_id,
+            reason=body.reason,
+        )
+    except Exception as exc:
+        raise memory_operation_error(exc, None, "Revoke organization memory binding")
+    await db.commit()
+    return ResponseEnvelope(data={"memory_id": memory_id, "revoked_bindings": count})
+
+
+@router.post(
+    "/knowledge-tunnel/preview",
+    response_model=ResponseEnvelope[KnowledgeTunnelPreviewResponse],
+)
+async def preview_knowledge_tunnel(
+    body: KnowledgeTunnelPreviewRequest,
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Preview an auditable QDL projection from source scope Cs to target Ct."""
+    require_role("memory_governance", current.role)
+    if body.target_scope_type.strip().lower() in {"org_space", "organization", "workspace"} and body.target_scope_id not in {
+        current.org_id,
+        "org",
+        "organization",
+        "current",
+    }:
+        raise scope_forbidden_error(None)
+    result = KnowledgeTunnelService.transform_qdl(
+        body.qdl,
+        source_scope_type=body.source_scope_type,
+        source_scope_id=body.source_scope_id,
+        target_scope_type=body.target_scope_type,
+        target_scope_id=body.target_scope_id,
+        mapping_rules=body.mapping_rules,
+        mapping_version=body.mapping_version,
+        interpolation_strategy=body.interpolation_strategy,
+        transform_reason=body.transform_reason,
+        source_memory_id=body.source_memory_id,
+    )
+    return ResponseEnvelope(data=KnowledgeTunnelPreviewResponse(**result.as_dict()))
 
 
 # ---------------------------------------------------------------

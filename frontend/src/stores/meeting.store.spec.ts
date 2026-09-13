@@ -13,6 +13,8 @@ vi.mock("@/api/meeting.api", () => ({
     listMemories: vi.fn(),
     listConflicts: vi.fn(),
     listPendingMemoryShares: vi.fn(),
+    listBusinessObjects: vi.fn(),
+    cancelMemoryShare: vi.fn(),
     getContextPreview: vi.fn(),
     runGeneralAgent: vi.fn(),
     stream: vi.fn(),
@@ -30,6 +32,8 @@ describe("meeting store", () => {
     vi.mocked(meetingApi.listMemories).mockReset();
     vi.mocked(meetingApi.listConflicts).mockReset();
     vi.mocked(meetingApi.listPendingMemoryShares).mockReset();
+    vi.mocked(meetingApi.listBusinessObjects).mockReset();
+    vi.mocked(meetingApi.cancelMemoryShare).mockReset();
     vi.mocked(meetingApi.getContextPreview).mockReset();
     vi.mocked(meetingApi.runGeneralAgent).mockReset();
     vi.mocked(meetingApi.stream).mockReset();
@@ -39,6 +43,7 @@ describe("meeting store", () => {
     vi.mocked(meetingApi.listMemories).mockResolvedValue({ data: { data: [] } } as any);
     vi.mocked(meetingApi.listConflicts).mockResolvedValue({ data: { data: [] } } as any);
     vi.mocked(meetingApi.listPendingMemoryShares).mockResolvedValue({ data: { data: [] } } as any);
+    vi.mocked(meetingApi.listBusinessObjects).mockResolvedValue({ data: { data: [] } } as any);
     vi.mocked(meetingApi.getContextPreview).mockResolvedValue({ data: { data: null } } as any);
   });
 

@@ -173,10 +173,17 @@ class Settings(BaseSettings):
     qdrant_docker_url: str = "http://qdrant:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
+    # The active embedding provider currently returns 2048-dimensional vectors.
+    # Keep this explicit so derived Qdrant collections can be rebuilt when the
+    # provider changes instead of failing later with a dimension mismatch.
+    memory_vector_size: int = 2048
     paper_template_qdrant_collection: str = "paper_template_clauses"
     rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"
+    # Pipeline agents use the unified ManagerLoop and remain opt-in until
+    # model-backed meeting E2E verification is available in the deployment.
+    pipeline_agent_enabled: bool = False
     cors_allowed_origins: list[str] = [
         "http://127.0.0.1:5173",
         "http://localhost:5173",

@@ -34,6 +34,18 @@ from app.services import chat_service as chat_service_mod
 from app.services.chat_service import ChatService, get_current_user_for_stream
 
 
+@pytest.mark.asyncio
+async def test_chat_message_cursors_are_mutually_exclusive():
+    service = ChatService(
+        org_id="org-1",
+        user_id="user-1",
+        current=CurrentUser(user_id="user-1", org_id="org-1", role="user", roles=["user"]),
+    )
+
+    with pytest.raises(chat_service_mod.ValidationError, match="cannot be used together"):
+        await service.list_messages("session-1", after_seq=10, before_seq=20)
+
+
 def test_fallback_answer_uses_first_doc_excerpt():
     data = _fallback_answer(
         "What is a burr defect?",

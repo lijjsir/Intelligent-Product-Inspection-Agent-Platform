@@ -81,6 +81,7 @@ class RetrievalGatewayService:
                         query=request.query,
                         scope_filter=ScopeFilter(
                             memory_type=request.memory_type,
+                            meeting_room_id=scope.meeting_room_id,
                             task_id=scope.task_id,
                             product_line=scope.product_line or scope.product_id,
                             rag_space_id=scope.rag_space_id,

@@ -123,6 +123,23 @@ class FakeItemRepo:
             if getattr(item, "status", None) == "candidate"
         ]
 
+    async def list_by_org(
+        self,
+        *,
+        status=None,
+        memory_type=None,
+        user_id=None,
+        limit=50,
+        offset=0,
+    ):
+        rows = [
+            item for item in self.items.values()
+            if (status is None or getattr(item, "status", None) == status)
+            and (memory_type is None or getattr(item, "memory_type", None) == memory_type)
+            and (user_id is None or getattr(item, "user_id", None) == user_id)
+        ]
+        return rows[offset:offset + limit]
+
 
 class FakeSupportRepo:
     def __init__(self):
@@ -355,6 +372,50 @@ def _memory_service(vector_service, candidate_vector_service=None) -> tuple[Memo
     return service, item_repo, support_repo
 
 
+def _candidate_item(memory_id: str, *, source_type: str, scope_json: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        memory_id=memory_id,
+        memory_type="task_episode",
+        status="candidate",
+        content_summary=f"candidate {memory_id}",
+        content_json={"source_type": source_type, "source_id": scope_json.get("scope_id")},
+        evidence_pointers={"meeting_room_id": scope_json.get("scope_id")} if source_type == "meeting" else {},
+        scope_json=scope_json,
+        applicability_json={},
+        candidate_key=f"key-{memory_id}",
+        canonical_claim=None,
+        support_count=1,
+        origin_evidence_count=1,
+        independent_support_count=0,
+        negative_count=0,
+        conflict_count=0,
+        rag_evidence_count=0,
+        agent_verifier_count=0,
+        human_confirmation_count=0,
+        opposition_count=0,
+        human_approved=False,
+        promotion_score=None,
+        confidence=0.65,
+        trust_score=0.65,
+        user_id="user-1",
+        trace_id=f"trace-{memory_id}",
+        created_by_type="agent",
+        created_at=None,
+        updated_at=None,
+        last_supported_at=None,
+        last_evidence_at=None,
+        review_status="candidate",
+        readiness_status="collecting",
+        readiness_blockers=[],
+        migration_review_required=False,
+        expires_at=None,
+        product_line=None,
+        rag_space_id=None,
+        task_id=None,
+        source_task_id=None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_write_candidate_always_creates_candidate_and_initial_support():
     shared_vector = FakeVectorService()
@@ -373,6 +434,82 @@ async def test_write_candidate_always_creates_candidate_and_initial_support():
     assert shared_vector.upserts == []
     assert candidate_vector.upserts
     assert response.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_org_candidate_list_excludes_meeting_local_candidates():
+    service, item_repo, _ = _memory_service(FakeVectorService())
+    local = _candidate_item(
+        "mem_meeting_local",
+        source_type="meeting",
+        scope_json={"scope_type": "meeting_room", "scope_id": "room-1", "meeting_room_id": "room-1"},
+    )
+    system = _candidate_item(
+        "mem_task_system",
+        source_type="task",
+        scope_json={"scope_type": "org_space", "scope_id": "org-1", "task_id": "task-1"},
+    )
+    item_repo.items = {local.memory_id: local, system.memory_id: system}
+
+    rows = await service.list_candidates(include_local=False)
+
+    assert [row.memory_id for row in rows] == [system.memory_id]
+    assert rows[0].source_kind == "task"
+    assert rows[0].current_scope_type == "org_space"
+    assert rows[0].local_scope_only is False
+
+
+@pytest.mark.asyncio
+async def test_meeting_local_candidate_requires_share_application_and_is_skipped_by_batch():
+    service, item_repo, _ = _memory_service(FakeVectorService())
+    local = _candidate_item(
+        "mem_meeting_local",
+        source_type="meeting",
+        scope_json={"scope_type": "meeting_room", "scope_id": "room-1", "meeting_room_id": "room-1"},
+    )
+    item_repo.items = {local.memory_id: local}
+
+    evaluation = await service.evaluate_candidate_promotion(local.memory_id)
+    batch = await service.evaluate_batch_candidates()
+
+    assert evaluation.status == MemoryStatus.CANDIDATE
+    assert evaluation.promotion_score == pytest.approx(0.2)
+    assert evaluation.promoted is False
+    assert evaluation.blocked_reasons == []
+    assert local.status == "candidate"
+    assert batch == []
+
+
+@pytest.mark.asyncio
+async def test_org_share_approval_activates_confirmed_meeting_memory_without_changing_home_scope():
+    shared_vector = FakeVectorService()
+    service, item_repo, support_repo = _memory_service(shared_vector, FakeVectorService())
+    memory = _candidate_item(
+        "mem_meeting_shared",
+        source_type="meeting",
+        scope_json={"scope_type": "meeting_room", "scope_id": "room-1", "meeting_room_id": "room-1"},
+    )
+    memory.status = "confirmed"
+    memory.content_json["shared_scopes"] = [
+        {"scope_type": "org_space", "scope_id": "org-1", "transfer_id": "transfer-1"}
+    ]
+    item_repo.items[memory.memory_id] = memory
+
+    result = await service.approve_organization_memory(
+        memory.memory_id,
+        reviewer_id="admin-1",
+        transfer_id="transfer-1",
+        trace_id="trace-org-approval",
+    )
+
+    assert result.status == MemoryStatus.ACTIVE
+    assert result.promoted is True
+    assert memory.status == "active"
+    assert memory.scope_json["scope_type"] == "meeting_room"
+    assert memory.human_approved is True
+    assert support_repo.supports[-1].support_type == "human_approved"
+    assert shared_vector.upserts[-1]["status"] == "active"
+    assert MemoryService._is_local_meeting_memory(memory) is False
 
 
 def test_memory_idempotency_key_fits_database_column():
@@ -558,7 +695,7 @@ async def test_semantic_candidate_slot_conflict_marks_contested():
 
 
 @pytest.mark.asyncio
-async def test_rag_evidence_candidate_promotion_fails_when_vector_sync_fails():
+async def test_rag_evidence_only_marks_candidate_ready_without_auto_promotion():
     service, item_repo, support_repo = _memory_service(FakeVectorService(fail=True))
     request = MemoryWriteRequest(
         org_id="org-1",
@@ -572,13 +709,12 @@ async def test_rag_evidence_candidate_promotion_fails_when_vector_sync_fails():
         trace_id="trace-rag",
     )
 
-    with pytest.raises(MemoryVectorServiceError, match="Active memory vector sync failed"):
-        await service.write_candidate(request)
+    result = await service.write_candidate(request)
 
-    assert item_repo.index_updates
-    memory_id, status, error = item_repo.index_updates[-1]
-    assert status == "failed"
-    assert "qdrant unavailable" in error
+    assert result.status == MemoryStatus.CANDIDATE
+    assert item_repo.items[result.memory_id].status == "candidate"
+    assert item_repo.items[result.memory_id].readiness_status == "ready"
+    assert item_repo.index_updates == []
     assert support_repo.supports[0].support_type == "rag_evidence"
 
 

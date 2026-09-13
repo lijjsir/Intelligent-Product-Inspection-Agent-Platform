@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CopyDocument, Edit, RefreshRight, Share } from "@element-plus/icons-vue";
+import { CopyDocument, Edit, MagicStick, RefreshRight, Share } from "@element-plus/icons-vue";
 
 withDefaults(
   defineProps<{
@@ -8,6 +8,9 @@ withDefaults(
     showFeedback?: boolean;
     showRetry?: boolean;
     retryDisabled?: boolean;
+    showAskAgent?: boolean;
+    showShare?: boolean;
+    shareLabel?: string;
   }>(),
   {
     reaction: "",
@@ -15,6 +18,9 @@ withDefaults(
     showFeedback: false,
     showRetry: false,
     retryDisabled: false,
+    showAskAgent: false,
+    showShare: true,
+    shareLabel: "分享",
   },
 );
 
@@ -25,6 +31,7 @@ defineEmits<{
   dislike: [];
   share: [];
   retry: [];
+  askAgent: [];
 }>();
 </script>
 
@@ -35,6 +42,9 @@ defineEmits<{
     </el-tooltip>
     <el-tooltip v-if="showEdit" content="编辑" placement="bottom">
       <el-button text :icon="Edit" aria-label="编辑" @click="$emit('edit')" />
+    </el-tooltip>
+    <el-tooltip v-if="showAskAgent" content="问会议Agent" placement="bottom">
+      <el-button text :icon="MagicStick" aria-label="问会议Agent" @click="$emit('askAgent')" />
     </el-tooltip>
     <el-tooltip v-if="showFeedback" content="喜欢" placement="bottom">
       <el-button
@@ -62,8 +72,8 @@ defineEmits<{
         </svg>
       </el-button>
     </el-tooltip>
-    <el-tooltip content="分享" placement="bottom">
-      <el-button text :icon="Share" aria-label="分享" @click="$emit('share')" />
+    <el-tooltip v-if="showShare" :content="shareLabel" placement="bottom">
+      <el-button text :icon="Share" :aria-label="shareLabel" @click="$emit('share')" />
     </el-tooltip>
     <el-tooltip v-if="showRetry" content="重试" placement="bottom">
       <el-button text :icon="RefreshRight" aria-label="重试" :disabled="retryDisabled" @click="$emit('retry')" />
@@ -76,13 +86,13 @@ defineEmits<{
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  min-height: 28px;
+  min-height: 44px;
   margin-top: 4px;
 }
 
 .message-actions :deep(.el-button) {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   color: #6b7280;
   border-radius: 7px;

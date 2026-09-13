@@ -50,6 +50,9 @@ async def test_chat_general_returns_route_trace_and_no_action(mock_chat_model):
     assert payload["message_type"] == "quality_answer"
     assert payload["route_trace"]["capabilities_used"] == ["quality.final_analyze"]
     assert payload["route_trace"]["satisfied"] is True
+    assert payload["trust_protocol"]["protocol_version"] == "trust-answer-v1"
+    assert payload["trust_protocol"]["status"] == "trusted"
+    assert payload["trust_protocol"]["capability_boundary"] == "in_domain"
     assert [item["type"] for item in payload["artifacts"]] == [
         "quality_final_assessment",
         "composed_response",

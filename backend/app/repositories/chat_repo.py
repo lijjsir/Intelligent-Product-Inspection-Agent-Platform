@@ -172,22 +172,33 @@ class ChatMessageRepository:
         *,
         org_id: str,
         session_id: str,
-        after_seq: int = 0,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
         limit: int = 200,
     ) -> list[ChatMessage]:
+        clauses = [
+            ChatMessage.org_id == org_id,
+            ChatMessage.session_id == session_id,
+            ChatMessage.deleted_at.is_(None),
+        ]
+        descending = after_seq is None
+        if before_seq is not None:
+            clauses.append(ChatMessage.seq_no < before_seq)
+            descending = True
+        elif after_seq is not None:
+            clauses.append(ChatMessage.seq_no > after_seq)
+            descending = False
         result = await self._session.execute(
             select(ChatMessage)
             .with_hint(ChatMessage, "FORCE INDEX (idx_chat_messages_org_session_seq)", dialect_name="mysql")
-            .where(
-                ChatMessage.org_id == org_id,
-                ChatMessage.session_id == session_id,
-                ChatMessage.seq_no > after_seq,
-                ChatMessage.deleted_at.is_(None),
-            )
-            .order_by(ChatMessage.seq_no.asc())
+            .where(*clauses)
+            .order_by(ChatMessage.seq_no.desc() if descending else ChatMessage.seq_no.asc())
             .limit(limit)
         )
-        return list(result.scalars().all())
+        rows = list(result.scalars().all())
+        if descending:
+            rows.reverse()
+        return rows
 
     async def list_assistant_for_org(
         self,

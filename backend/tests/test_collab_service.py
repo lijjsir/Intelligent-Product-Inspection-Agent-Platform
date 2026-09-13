@@ -5,8 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.exceptions import ForbiddenError, ValidationError
-from app.schemas.collab import CollabAttachmentPayload, CollabMessageActionRequest, CollabMessageCreateRequest, CollabThreadCreateRequest
+from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
+from app.schemas.collab import (
+    CollabActionRequestCreateRequest,
+    CollabAttachmentPayload,
+    CollabMessageActionRequest,
+    CollabMessageCreateRequest,
+    CollabThreadCreateRequest,
+)
 from app.services import collab_service as collab_service_mod
 
 
@@ -33,10 +39,13 @@ class FakeUsersRepo:
     async def get_by_id(self, org_id: str, user_id: str):
         return self.users.get((org_id, user_id))
 
+    async def list_by_org_id(self, org_id: str):
+        return [user for (row_org_id, _), user in self.users.items() if row_org_id == org_id]
+
 
 class FakeMeetingRepo:
     def __init__(self):
-        self.rooms = {"room-1": SimpleNamespace(id="room-1", title="质量复盘室")}
+        self.rooms = {"room-1": SimpleNamespace(id="room-1", title="质量复盘室", created_by="user-1")}
         self.members = {
             "room-1": [
                 SimpleNamespace(user_id="user-1", role="host"),
@@ -48,7 +57,14 @@ class FakeMeetingRepo:
             "mem-1": SimpleNamespace(
                 memory_id="mem-1",
                 status="candidate",
+                content_summary="弱光下边缘识别不稳定。",
+                memory_type="task_episode",
                 content_json={"title": "边缘识别复盘", "content": "弱光下边缘识别不稳定。"},
+                scope_json={"scope_type": "meeting_room", "scope_id": "room-1", "source_room_id": "room-1"},
+                confidence=0.8,
+                created_by="user-1",
+                created_at=_now(),
+                updated_at=_now(),
             )
         }
         self.scope_bindings: list[dict] = []
@@ -62,6 +78,15 @@ class FakeMeetingRepo:
 
     async def list_members(self, org_id: str, room_id: str):
         return list(self.members.get(room_id, []))
+
+    async def list_joined_rooms(self, org_id: str, user_id: str, limit: int = 100):
+        return list(self.rooms.values())[:limit]
+
+    async def list_active_agent_definitions(self, org_id: str):
+        return []
+
+    async def list_memory_transfer_logs(self, **kwargs):
+        return [SimpleNamespace(**row) for row in self.transfer_logs]
 
     async def get_memory_item(self, org_id: str, memory_id: str):
         return self.memory_items.get(memory_id)
@@ -84,15 +109,75 @@ class FakeMeetingRepo:
         return SimpleNamespace(id=f"binding-{len(self.scope_bindings)}", **kwargs)
 
     async def create_memory_transfer_log(self, **kwargs):
-        self.transfer_logs.append(kwargs)
-        return SimpleNamespace(id=f"transfer-{len(self.transfer_logs)}", **kwargs)
+        row = {
+            "id": f"transfer-{len(self.transfer_logs) + 1}",
+            "created_at": _now(),
+            "updated_at": _now(),
+            "decided_by": None,
+            "decided_at": None,
+            "decision_note": None,
+            **kwargs,
+        }
+        self.transfer_logs.append(row)
+        return SimpleNamespace(**row)
 
-    async def update_memory_item(self, *, org_id: str, memory_id: str, status=None, content_json=None, **kwargs):
+    async def get_memory_transfer_log_by_idempotency_key(self, *, org_id: str, idempotency_key: str):
+        row = next((item for item in self.transfer_logs if item["org_id"] == org_id and item.get("idempotency_key") == idempotency_key), None)
+        return SimpleNamespace(**row) if row else None
+
+    async def get_memory_transfer_log(self, org_id: str, transfer_id: str):
+        row = next((item for item in self.transfer_logs if item["org_id"] == org_id and item["id"] == transfer_id), None)
+        return SimpleNamespace(**row) if row else None
+
+    async def update_memory_transfer_log_status(
+        self,
+        *,
+        org_id: str,
+        transfer_id: str,
+        status: str,
+        operator_id: str,
+        decision_note=None,
+        expected_status=None,
+    ):
+        row = next((item for item in self.transfer_logs if item["org_id"] == org_id and item["id"] == transfer_id), None)
+        if row is None or (expected_status and row["status"] != expected_status):
+            return None
+        row.update(
+            status=status,
+            operator_id=operator_id,
+            decided_by=operator_id,
+            decided_at=_now(),
+            decision_note=decision_note,
+            updated_at=_now(),
+        )
+        return SimpleNamespace(**row)
+
+    async def replace_memory_tags(self, **kwargs):
+        return []
+
+    async def create_message(self, **kwargs):
+        return SimpleNamespace(
+            id="meeting-system-1",
+            seq_no=1,
+            agent_id=None,
+            mentions=None,
+            quote_message_id=None,
+            metadata_json=None,
+            private_recipient_user_id=None,
+            created_at=_now(),
+            updated_at=_now(),
+            **kwargs,
+        )
+
+    async def update_memory_item(self, *, org_id: str, memory_id: str, status=None, content_json=None, scope_json=None, **kwargs):
         item = self.memory_items[memory_id]
         if status is not None:
             item.status = status
         if content_json is not None:
             item.content_json = content_json
+        if scope_json is not None:
+            item.scope_json = scope_json
+        item.updated_at = _now()
         return item
 
 
@@ -215,6 +300,21 @@ class FakeCollabRepo:
     async def get_message(self, org_id: str, message_id: str):
         row = self.messages.get(message_id)
         return row if row and row.org_id == org_id and row.deleted_at is None else None
+
+    async def list_action_requests_for_user(self, *, org_id: str, user_id: str, limit: int = 200):
+        rows = []
+        for message in self.messages.values():
+            if message.org_id != org_id or message.message_type != "action_request" or message.deleted_at is not None:
+                continue
+            receipt = await self.get_receipt_for_recipient(
+                org_id=org_id,
+                message_id=message.id,
+                recipient_type="user",
+                recipient_id=user_id,
+            )
+            if str(message.sender_id) == user_id or receipt is not None:
+                rows.append((message, receipt, self.threads[message.thread_id]))
+        return rows[:limit]
 
     async def create_receipt(self, *, org_id: str, message_id: str, thread_id: str, recipient_type: str, recipient_id: str, delivered_at=None, read_at=None):
         existing = await self.get_receipt_for_recipient(
@@ -500,6 +600,34 @@ async def test_recipient_can_mark_read_and_complete_action_request():
 
 
 @pytest.mark.asyncio
+async def test_structured_action_request_is_exposed_as_unified_work_item():
+    repo = FakeCollabRepo()
+    owner = _service(repo)
+
+    created = await owner.create_action_request(
+        CollabActionRequestCreateRequest(
+            target_type="user",
+            target_id="user-2",
+            title="复核弱光样本",
+            description="请核对附件对应的批次记录。",
+            source_link="/app/results/result-1",
+            source_context={"result_id": "result-1"},
+            idempotency_key="action-request-0001",
+        )
+    )
+    recipient = _service(repo, user_id="user-2")
+    recipient._meetings = owner._meetings
+    pending = await recipient.list_work_items(view="pending")
+
+    assert created.item_type == "action_request"
+    assert created.status == "pending"
+    assert created.payload["thread_id"]
+    assert [item.id for item in pending] == [created.id]
+    assert pending[0].allowed_actions == ["accepted", "rejected", "done"]
+    assert pending[0].source_link == "/app/results/result-1"
+
+
+@pytest.mark.asyncio
 async def test_recipient_confirms_memory_card_into_personal_scope_once():
     repo = FakeCollabRepo()
     session = FakeSession()
@@ -527,34 +655,45 @@ async def test_recipient_confirms_memory_card_into_personal_scope_once():
     recipient._meetings = owner._meetings
 
     done_receipt = await recipient.update_action(message.id, CollabMessageActionRequest(action_status="done"))
-    repeated_receipt = await recipient.update_action(message.id, CollabMessageActionRequest(action_status="done"))
+    with pytest.raises(ConflictError, match="already been handled"):
+        await recipient.update_action(message.id, CollabMessageActionRequest(action_status="done"))
 
     assert done_receipt.action_status == "done"
-    assert repeated_receipt.action_status == "done"
     assert owner._meetings.memory_items["mem-1"].status == "confirmed"
-    assert owner._meetings.scope_bindings == [
-        {
-            "org_id": "org-1",
-            "memory_id": "mem-1",
-            "scope_type": "user",
-            "scope_id": "user-2",
-            "permission": "read",
-            "created_by": "user-2",
-        }
-    ]
-    assert owner._meetings.transfer_logs == [
-        {
-            "org_id": "org-1",
-            "memory_id": "mem-1",
-            "from_scope_type": "meeting_room",
-            "from_scope_id": "room-1",
-            "to_scope_type": "user",
-            "to_scope_id": "user-2",
-            "transfer_reason": "协作消息接收方确认记忆卡片",
-            "status": "executed",
-            "operator_id": "user-2",
-        }
-    ]
+    assert len(owner._meetings.scope_bindings) == 2
+    assert owner._meetings.scope_bindings[0] == {
+        "org_id": "org-1",
+        "memory_id": "mem-1",
+        "scope_type": "meeting_room",
+        "scope_id": "room-1",
+        "permission": "read",
+        "created_by": "user-1",
+    }
+    personal_binding = owner._meetings.scope_bindings[1]
+    assert {
+        key: personal_binding[key]
+        for key in ("org_id", "memory_id", "scope_type", "scope_id", "permission", "created_by")
+    } == {
+        "org_id": "org-1",
+        "memory_id": "mem-1",
+        "scope_type": "user",
+        "scope_id": "user-2",
+        "permission": "read",
+        "created_by": "user-2",
+    }
+    assert personal_binding["binding_kind"] == "shared"
+    assert personal_binding["binding_status"] == "active"
+    assert personal_binding["approved_by"] == "user-2"
+    assert personal_binding["source_transfer_id"] == "transfer-1"
+    transfer = owner._meetings.transfer_logs[0]
+    assert transfer["from_scope_type"] == "meeting_room"
+    assert transfer["from_scope_id"] == "room-1"
+    assert transfer["to_scope_type"] == "user"
+    assert transfer["to_scope_id"] == "user-2"
+    assert transfer["requested_by"] == "user-1"
+    assert transfer["decided_by"] == "user-2"
+    assert transfer["status"] == "approved"
+    assert owner._meetings.memory_items["mem-1"].scope_json["scope_id"] == "room-1"
 
 
 @pytest.mark.asyncio
@@ -586,10 +725,10 @@ async def test_meeting_room_memory_card_can_only_be_handled_by_host_once():
         await non_host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
 
     host_receipt = await host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
-    repeated_receipt = await host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
+    with pytest.raises(ConflictError, match="already been handled"):
+        await host.update_action(message.id, CollabMessageActionRequest(action_status="done"))
 
     assert host_receipt.action_status == "done"
-    assert repeated_receipt.action_status == "done"
     with pytest.raises(ValidationError, match="already been handled"):
         await host.update_action(message.id, CollabMessageActionRequest(action_status="rejected"))
     assert len(sender._meetings.scope_bindings) == 1

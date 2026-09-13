@@ -21,9 +21,19 @@ export const chatApi = {
     return http.post<ChatSession>("/v1/chat/sessions", { title });
   },
 
-  listMessages(sessionId: string, afterSeq = 0, limit = 200) {
+  listMessages(
+    sessionId: string,
+    cursor?: number | { afterSeq?: number; beforeSeq?: number },
+    limit = 200,
+  ) {
+    const params: Record<string, number> = { limit };
+    if (typeof cursor === "number") params.after_seq = cursor;
+    if (cursor && typeof cursor === "object") {
+      if (cursor.afterSeq !== undefined) params.after_seq = cursor.afterSeq;
+      if (cursor.beforeSeq !== undefined) params.before_seq = cursor.beforeSeq;
+    }
     return http.get<ChatMessage[]>(`/v1/chat/sessions/${sessionId}/messages`, {
-      params: { after_seq: afterSeq, limit },
+      params,
     });
   },
 

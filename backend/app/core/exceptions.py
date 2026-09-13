@@ -73,6 +73,36 @@ class ServiceUnavailableError(AppError):
     message = "服务不可用"
 
 
+class AgentAdapterUnavailableError(ServiceUnavailableError):
+    """Raised when an Agent execution adapter is known but not ready to run."""
+
+    code = "AGENT_ADAPTER_UNAVAILABLE"
+    message = "Agent 执行适配器当前不可用"
+    module = "agent_runtime"
+
+    def __init__(self, adapter_type: str):
+        normalized = str(adapter_type or "").strip().lower() or "unknown"
+        is_pipeline = normalized == "pipeline"
+        super().__init__(
+            (
+                f"Agent 适配器「{normalized}」当前不可用，"
+                "Pipeline Agent 已实现但尚未启用，请联系管理员开启部署开关。"
+                if is_pipeline
+                else f"Agent 适配器「{normalized}」当前不可用，请使用已启用的 Agent 适配器。"
+            ),
+            detail={
+                "adapter_type": normalized,
+                "supported_adapter_types": ["llm"],
+                "implementation_status": "implemented_but_disabled" if is_pipeline else "unavailable",
+            },
+            suggestion=(
+                "将 Agent 类型改为 llm，或在完成真实模型验收后设置 PIAP_PIPELINE_AGENT_ENABLED=true。"
+                if is_pipeline
+                else "将 Agent 类型改为已启用的适配器。"
+            ),
+        )
+
+
 class MemoryError(AppError):
     code = "MEMORY_ERROR"
     status_code = 500

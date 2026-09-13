@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DECIMAL, Date, DateTime, Integer, String, Text, text
+from sqlalchemy import Boolean, DECIMAL, Date, DateTime, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,7 @@ class MemoryItem(Base):
     user_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     memory_type: Mapped[str] = mapped_column(String(64), nullable=False)
     scope_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    applicability_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     content_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     source_event_ids: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -48,14 +49,19 @@ class MemoryItem(Base):
     policy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     candidate_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     canonical_claim: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    origin_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    independent_support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     negative_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     conflict_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rag_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     agent_verifier_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    human_confirmation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    opposition_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     human_approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     promotion_score: Mapped[float | None] = mapped_column(DECIMAL(6, 4), nullable=True)
     last_supported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -65,6 +71,13 @@ class MemoryItem(Base):
     usage_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="context_only")
     ttl_policy: Mapped[str] = mapped_column(String(32), nullable=False, default="90d")
     privacy_level: Mapped[str] = mapped_column(String(32), nullable=False, default="tenant_private")
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    governance_target_scope_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    governance_target_scope_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    readiness_status: Mapped[str] = mapped_column(String(32), nullable=False, default="collecting")
+    readiness_blockers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    migration_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    migration_review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
     rollback_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
@@ -82,6 +95,70 @@ class MemoryItem(Base):
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+
+class MemoryOrigin(Base):
+    __tablename__ = "memory_origins"
+    __table_args__ = (
+        UniqueConstraint("org_id", "memory_id", "dedupe_key", name="uq_memory_origins_dedupe"),
+        Index("idx_memory_origins_memory", "org_id", "memory_id"),
+        Index("idx_memory_origins_source", "org_id", "origin_kind", "source_type", "source_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: None)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    origin_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_span: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class MemoryEvidence(Base):
+    __tablename__ = "memory_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "org_id",
+            "memory_id",
+            "evidence_role",
+            "independence_key",
+            name="uq_memory_evidence_independence",
+        ),
+        Index("idx_memory_evidence_memory", "org_id", "memory_id", "evidence_role"),
+        Index("idx_memory_evidence_source", "org_id", "source_kind", "source_type", "source_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: None)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    independence_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rag_space_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chunk_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    evidence_pointer: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    weight: Mapped[float | None] = mapped_column(DECIMAL(5, 4), nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[Any] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
 
 
 class MemoryCandidateSupport(Base):

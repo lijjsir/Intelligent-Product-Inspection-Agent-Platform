@@ -271,8 +271,9 @@ class QualityReportService(TenantAwareService):
             self._org_id,
             start_date,
             end_date,
-            target_type="chat",
+            target_type=None,
         )
+        message_feedbacks = self._filter_message_feedbacks_for_source(message_feedbacks, source)
         ledger_items = await self._token_ledger_repo.list_filtered(self._org_id, start_date, end_date)
         chat_scores = await self._chat_score_repo.list_by_range(self._org_id, start_date, end_date, limit=limit)
         chat_messages = await self._chat_message_repo.list_assistant_for_org(
@@ -696,11 +697,10 @@ class QualityReportService(TenantAwareService):
             self._org_id,
             start_date,
             end_date,
-            target_type="chat",
+            target_type=None,
         )
-        if source == "inspection":
-            message_feedbacks = []
-        elif source == "chat":
+        message_feedbacks = self._filter_message_feedbacks_for_source(message_feedbacks, source)
+        if source == "chat":
             stabilities = []
             result_feedbacks = []
         result_feedbacks = self._normalize_result_feedbacks_for_quality(result_feedbacks)
@@ -735,28 +735,18 @@ class QualityReportService(TenantAwareService):
                     sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
                     4,
                 ) if stabilities else 0.0
-                report.update(
-                    self._build_feedback_summary(
-                        result_feedbacks,
-                        message_feedbacks,
-                        fallback_up_count=int(report.get("thumbs_up_count") or 0),
-                        fallback_down_count=int(report.get("thumbs_down_count") or 0),
-                    )
+                self._apply_feedback_metrics(
+                    report,
+                    result_feedbacks,
+                    message_feedbacks,
+                    fallback_up_count=int(report.get("thumbs_up_count") or 0),
+                    fallback_down_count=int(report.get("thumbs_down_count") or 0),
                 )
-                report.update(self._build_feedback_rate_summary(
-                    total_results=int(report.get("total_results") or 0),
-                    thumbs_up_count=int(report.get("thumbs_up_count") or 0),
-                    thumbs_down_count=int(report.get("thumbs_down_count") or 0),
-                ))
                 report.update(
                     self._build_chat_coverage_summary(
                         chat_score_count=int(report.get("chat_score_count") or 0),
                         chat_message_count=max(local_chat_message_count, int(report.get("chat_message_count") or 0)),
                     )
-                )
-                report["feedback_distribution"] = self._build_feedback_distribution(
-                    result_feedbacks,
-                    message_feedbacks,
                 )
                 return report
             logger.warning("Langfuse report source unavailable, falling back to local report: %s", error)
@@ -766,28 +756,18 @@ class QualityReportService(TenantAwareService):
             sum(float(item.risk_score or 0.0) for item in stabilities) / len(stabilities),
             4,
         ) if stabilities else 0.0
-        report.update(
-            self._build_feedback_summary(
-                result_feedbacks,
-                message_feedbacks,
-                fallback_up_count=int(report.get("thumbs_up_count") or 0),
-                fallback_down_count=int(report.get("thumbs_down_count") or 0),
-            )
+        self._apply_feedback_metrics(
+            report,
+            result_feedbacks,
+            message_feedbacks,
+            fallback_up_count=int(report.get("thumbs_up_count") or 0),
+            fallback_down_count=int(report.get("thumbs_down_count") or 0),
         )
-        report.update(self._build_feedback_rate_summary(
-            total_results=int(report.get("total_results") or 0),
-            thumbs_up_count=int(report.get("thumbs_up_count") or 0),
-            thumbs_down_count=int(report.get("thumbs_down_count") or 0),
-        ))
         report.update(
             self._build_chat_coverage_summary(
                 chat_score_count=int(report.get("chat_score_count") or 0),
                 chat_message_count=max(local_chat_message_count, int(report.get("chat_message_count") or 0)),
             )
-        )
-        report["feedback_distribution"] = self._build_feedback_distribution(
-            result_feedbacks,
-            message_feedbacks,
         )
         return report
 
@@ -805,6 +785,29 @@ class QualityReportService(TenantAwareService):
             "thumbs_up_share": 0.0,
             "avg_risk_score": 0.0,
             "feedback_distribution": {},
+            "feedback_by_source": {
+                "inspection": {
+                    "total_count": 0,
+                    "thumbs_up_count": 0,
+                    "thumbs_down_count": 0,
+                    "thumbs_up_share": 0.0,
+                    "thumbs_down_share": 0.0,
+                },
+                "chat": {
+                    "total_count": 0,
+                    "thumbs_up_count": 0,
+                    "thumbs_down_count": 0,
+                    "thumbs_up_share": 0.0,
+                    "thumbs_down_share": 0.0,
+                },
+                "meeting": {
+                    "total_count": 0,
+                    "thumbs_up_count": 0,
+                    "thumbs_down_count": 0,
+                    "thumbs_up_share": 0.0,
+                    "thumbs_down_share": 0.0,
+                },
+            },
             "hallucination_trend": [],
             "thumbs_down_trend": [],
             "thumbs_up_trend": [],
@@ -1296,6 +1299,94 @@ class QualityReportService(TenantAwareService):
         )
         traces.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return traces if limit is None else traces[:limit]
+
+    @staticmethod
+    def _filter_message_feedbacks_for_source(message_feedbacks, source: str) -> list:
+        """Keep message feedback aligned with the report source contract.
+
+        A single query intentionally loads both chat and meeting feedback so the
+        ``all`` report has one consistent denominator.  Source-specific reports
+        then filter the rows here instead of silently dropping meeting feedback.
+        """
+        normalized_source = str(source or "all").strip().lower()
+        items = list(message_feedbacks or [])
+        if normalized_source == "inspection":
+            return []
+        if normalized_source == "chat":
+            return [
+                item
+                for item in items
+                if str(getattr(item, "target_type", "") or "chat").strip().lower() == "chat"
+            ]
+        return [
+            item
+            for item in items
+            if str(getattr(item, "target_type", "") or "chat").strip().lower() in {"chat", "meeting"}
+        ]
+
+    @staticmethod
+    def _feedback_bucket(items: list) -> dict[str, int | float]:
+        thumbs_up_count = sum(1 for item in items if getattr(item, "feedback_type", None) == "up")
+        thumbs_down_count = sum(1 for item in items if getattr(item, "feedback_type", None) == "down")
+        total_count = thumbs_up_count + thumbs_down_count
+        return {
+            "total_count": total_count,
+            "thumbs_up_count": thumbs_up_count,
+            "thumbs_down_count": thumbs_down_count,
+            "thumbs_up_share": round(thumbs_up_count / total_count, 4) if total_count else 0.0,
+            "thumbs_down_share": round(thumbs_down_count / total_count, 4) if total_count else 0.0,
+        }
+
+    @classmethod
+    def _build_feedback_source_summary(cls, result_feedbacks, message_feedbacks) -> dict[str, dict]:
+        groups: dict[str, list] = {"inspection": [], "chat": [], "meeting": []}
+        for item in list(result_feedbacks or []):
+            source_type = str(getattr(item, "source_type", "") or "").strip().lower()
+            groups[source_type if source_type in {"chat", "meeting"} else "inspection"].append(item)
+        for item in list(message_feedbacks or []):
+            target_type = str(getattr(item, "target_type", "") or "chat").strip().lower()
+            if target_type in groups:
+                groups[target_type].append(item)
+        return {source: cls._feedback_bucket(items) for source, items in groups.items()}
+
+    @classmethod
+    def _apply_feedback_metrics(
+        cls,
+        report: dict,
+        result_feedbacks,
+        message_feedbacks,
+        *,
+        fallback_up_count: int,
+        fallback_down_count: int,
+    ) -> None:
+        report.update(
+            cls._build_feedback_summary(
+                result_feedbacks,
+                message_feedbacks,
+                fallback_up_count=fallback_up_count,
+                fallback_down_count=fallback_down_count,
+            )
+        )
+        report.update(cls._build_feedback_rate_summary(
+            total_results=int(report.get("total_results") or 0),
+            thumbs_up_count=int(report.get("thumbs_up_count") or 0),
+            thumbs_down_count=int(report.get("thumbs_down_count") or 0),
+        ))
+        report["feedback_distribution"] = cls._build_feedback_distribution(
+            result_feedbacks,
+            message_feedbacks,
+        )
+        report["feedback_by_source"] = cls._build_feedback_source_summary(
+            result_feedbacks,
+            message_feedbacks,
+        )
+
+        # Local feedback is the authoritative business signal.  Rebuild the
+        # trends from it so meeting feedback participates in the same timeline.
+        if result_feedbacks or message_feedbacks:
+            all_feedbacks = list(result_feedbacks or []) + list(message_feedbacks or [])
+            report["thumbs_down_trend"] = cls._build_feedback_trend(all_feedbacks, "down")
+            report["thumbs_up_trend"] = cls._build_feedback_trend(all_feedbacks, "up")
 
     @staticmethod
     def _build_feedback_distribution(result_feedbacks, message_feedbacks) -> dict[str, int]:

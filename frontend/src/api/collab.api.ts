@@ -2,6 +2,7 @@ import { http } from "./http";
 import { streamApi } from "./stream.api";
 import type {
   CollabMessage,
+  CollabActionRequestCreatePayload,
   CollabMessageActionPayload,
   CollabMessageCreatePayload,
   CollabMessageReceipt,
@@ -10,6 +11,10 @@ import type {
   CollabThread,
   CollabThreadCreatePayload,
   CollabUploadResponse,
+  CollabWorkItem,
+  CollabWorkItemSummary,
+  CollabWorkItemType,
+  CollabWorkItemView,
 } from "@/types/collab.types";
 
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
@@ -21,6 +26,26 @@ export const collabApi = {
 
   listTargets(limit = 100) {
     return http.get<CollabTarget[]>("/v1/collab/targets", { params: { limit } });
+  },
+
+  listWorkItems(params: {
+    view?: CollabWorkItemView;
+    item_type?: CollabWorkItemType | null;
+    scope_type?: string | null;
+    room_id?: string | null;
+    limit?: number;
+  } = {}) {
+    return http.get<CollabWorkItem[]>("/v1/collab/work-items", { params });
+  },
+
+  getSummary() {
+    return http.get<CollabWorkItemSummary>("/v1/collab/summary", {
+      suppressErrorToast: true,
+    });
+  },
+
+  createActionRequest(payload: CollabActionRequestCreatePayload) {
+    return http.post<CollabWorkItem>("/v1/collab/action-requests", payload);
   },
 
   createThread(payload: CollabThreadCreatePayload) {

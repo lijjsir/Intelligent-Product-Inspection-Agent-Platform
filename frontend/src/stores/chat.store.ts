@@ -142,6 +142,7 @@ export const useChatStore = defineStore("chat", () => {
   const inspectionContext = ref<ChatInspectionContext>({ ...EMPTY_INSPECTION_CONTEXT });
   const inspectionContextError = ref("");
   const pendingAttachments = ref<ChatAttachment[]>([]);
+  const hasOlderMessages = ref(false);
   const nextClientSeq = ref(1);
   const STORAGE_CURRENT_SESSION = "chat_current_session_id";
   const STORAGE_SELECTED_RAG_SPACE = "chat_selected_rag_space_id";
@@ -533,6 +534,7 @@ export const useChatStore = defineStore("chat", () => {
     session.value = data.data;
     if (session.value?.id) saveCurrentSession(session.value.id);
     messages.value = [];
+    hasOlderMessages.value = false;
     await fetchSessions();
     return session.value;
   }
@@ -547,9 +549,11 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [];
     if (!session.value) return null;
     saveCurrentSession(session.value.id);
-    const rows = await chatApi.listMessages(session.value.id, 0, 500);
+    const pageSize = 100;
+    const rows = await chatApi.listMessages(session.value.id, undefined, pageSize);
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
+    hasOlderMessages.value = rows.data.data.length >= pageSize && Number(rows.data.data[0]?.seq_no || 0) > 1;
     const reviewing = messages.value.find((item) => item.payload?.trust_scoring?.status === "reviewing");
     if (reviewing) {
       startTrustScorePolling(session.value.id, reviewing.id);
@@ -559,15 +563,30 @@ export const useChatStore = defineStore("chat", () => {
 
   async function reloadCurrentSessionMessages() {
     if (!session.value) return [];
-    const rows = await chatApi.listMessages(session.value.id, 0, 500);
+    const pageSize = 100;
+    const rows = await chatApi.listMessages(session.value.id, undefined, pageSize);
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
+    hasOlderMessages.value = rows.data.data.length >= pageSize && Number(rows.data.data[0]?.seq_no || 0) > 1;
     const reviewing = messages.value.find((item) => item.payload?.trust_scoring?.status === "reviewing");
     if (reviewing) {
       startTrustScorePolling(session.value.id, reviewing.id);
     }
     await fetchSessions();
     return messages.value;
+  }
+
+  async function loadOlderMessages(limit = 100) {
+    if (!session.value || !hasOlderMessages.value || messages.value.length === 0) return [];
+    const firstSeq = Math.min(...messages.value.filter((item) => item.seq_no > 0).map((item) => item.seq_no));
+    if (!Number.isFinite(firstSeq) || firstSeq <= 1) {
+      hasOlderMessages.value = false;
+      return [];
+    }
+    const rows = await chatApi.listMessages(session.value.id, { beforeSeq: firstSeq }, limit);
+    appendMessages(rows.data.data.map((item) => ({ ...item, client_seq: item.seq_no })));
+    hasOlderMessages.value = rows.data.data.length >= limit && Number(rows.data.data[0]?.seq_no || 0) > 1;
+    return rows.data.data;
   }
 
   async function initForChatPage() {
@@ -987,6 +1006,7 @@ export const useChatStore = defineStore("chat", () => {
     sessions,
     session,
     messages,
+    hasOlderMessages,
     streamConnected,
     ragSpaces,
     ragSpacesError,
@@ -1008,6 +1028,7 @@ export const useChatStore = defineStore("chat", () => {
     clearSelectedRagSpace,
     createNewSession,
     selectSession,
+    loadOlderMessages,
     initForChatPage,
     sendMessage,
     cancelCurrentResponse,

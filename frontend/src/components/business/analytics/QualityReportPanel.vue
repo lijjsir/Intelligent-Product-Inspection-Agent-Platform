@@ -76,6 +76,22 @@ const feedbackCards = computed(() => {
   ]
 })
 
+const feedbackSourceCards = computed(() => {
+  const r = report.value
+  if (!r) return []
+  const labels: Record<string, string> = {
+    inspection: "质检结果",
+    chat: "AI 对话",
+    meeting: "会议室",
+  }
+  return Object.entries(r.feedback_by_source || {}).map(([source, summary]) => ({
+    label: labels[source] || source,
+    value: `${summary.total_count}`,
+    sub: `赞 ${summary.thumbs_up_count} · 踩 ${summary.thumbs_down_count}`,
+    tone: source === "meeting" && summary.total_count > 0 ? "success" : "default",
+  }))
+})
+
 const trustTrendEmptyDescription = computed(() => {
   const r = report.value
   if (!r) return "暂无趋势数据"
@@ -125,7 +141,7 @@ const metaType = computed(() => {
     />
 
     <el-alert
-      title="口径说明：文本可信度指标仅统计 AI 对话 chat 中的 assistant 回复，暂不包含 meeting；点赞和点踩汇总来自人工显式反馈，chat 消息与其关联 result 的重复记数已去重。"
+      title="口径说明：文本可信度指标仅统计 AI 对话 chat 中的 assistant 回复；点赞和点踩汇总统一包含质检结果、AI 对话和会议室反馈，chat 消息与其关联 result 的重复记数已去重。"
       type="info"
       :closable="false"
       show-icon
@@ -145,9 +161,16 @@ const metaType = computed(() => {
 
     <section>
       <h3 class="section-title">人工反馈汇总</h3>
-      <p class="section-desc">这里汇总 inspection 结果反馈和 AI 对话消息反馈，meeting 反馈暂不纳入。</p>
+      <p class="section-desc">这里汇总 inspection 结果、AI 对话和会议室消息的人工反馈。</p>
       <div class="feedback-grid">
         <div v-for="card in feedbackCards" :key="card.label" class="qr-card" :class="card.tone">
+          <span class="qr-card-label">{{ card.label }}</span>
+          <span class="qr-card-value">{{ card.value }}</span>
+          <span class="qr-card-sub">{{ card.sub }}</span>
+        </div>
+      </div>
+      <div v-if="feedbackSourceCards.length" class="feedback-source-grid">
+        <div v-for="card in feedbackSourceCards" :key="card.label" class="qr-card" :class="card.tone">
           <span class="qr-card-label">{{ card.label }}</span>
           <span class="qr-card-value">{{ card.value }}</span>
           <span class="qr-card-sub">{{ card.sub }}</span>
@@ -171,7 +194,7 @@ const metaType = computed(() => {
         <template #header>
           <div class="card-head">
             <strong>点赞覆盖率趋势</strong>
-            <span>按天统计人工点赞覆盖率；不含 meeting，chat 不重复计数</span>
+            <span>按天统计人工点赞覆盖率；包含会议室反馈，chat 不重复计数</span>
           </div>
         </template>
         <ThumbsUpTrendChart v-if="(report?.thumbs_up_trend || []).length" :points="report?.thumbs_up_trend || []" />
@@ -182,7 +205,7 @@ const metaType = computed(() => {
         <template #header>
           <div class="card-head">
             <strong>点踩覆盖率趋势</strong>
-            <span>按天统计人工点踩覆盖率；不含 meeting，chat 不重复计数</span>
+            <span>按天统计人工点踩覆盖率；包含会议室反馈，chat 不重复计数</span>
           </div>
         </template>
         <ThumbsDownTrendChart v-if="(report?.thumbs_down_trend || []).length" :points="report?.thumbs_down_trend || []" />
@@ -191,7 +214,7 @@ const metaType = computed(() => {
     </section>
 
     <el-empty
-      v-if="!report?.chat_score_count && !report?.total_results"
+      v-if="!report?.chat_score_count && !report?.total_results && !report?.feedback_total_count"
       description="暂无质量评估数据。执行质检任务或产生 AI 对话回复后，这里会显示结果。"
     />
   </div>
@@ -226,6 +249,13 @@ const metaType = computed(() => {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+}
+
+.feedback-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .qr-card {
@@ -299,6 +329,7 @@ const metaType = computed(() => {
   }
 
   .feedback-grid,
+  .feedback-source-grid,
   .trends-section {
     grid-template-columns: 1fr;
   }

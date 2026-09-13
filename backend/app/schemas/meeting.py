@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.qdl import QDLDocument
 
 
 class MeetingRoomCreateRequest(BaseModel):
@@ -11,6 +14,7 @@ class MeetingRoomCreateRequest(BaseModel):
     visibility: str = Field(default="private", pattern="^(private|team|org|restricted)$")
     allowed_data_domains: list[str] | None = None
     business_context: dict | None = None
+    auto_participation_mode: str = Field(default="off", pattern="^(off|live)$")
 
 
 class MeetingRoomJoinRequest(BaseModel):
@@ -36,6 +40,7 @@ class MeetingRoomUpdateRequest(BaseModel):
     visibility: str | None = Field(default=None, pattern="^(private|team|org|restricted)$")
     allowed_data_domains: list[str] | None = None
     business_context: dict | None = None
+    auto_participation_mode: str | None = Field(default=None, pattern="^(off|live)$")
 
 
 class MeetingBusinessContextTask(BaseModel):
@@ -170,6 +175,35 @@ class MeetingBusinessContextUpdateRequest(BaseModel):
     standard_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
+class MeetingBusinessObjectCandidateResponse(BaseModel):
+    id: str
+    room_id: str
+    object_type: str
+    object_value: str
+    resolved_value: str | None = None
+    status: str
+    confidence: float | None = None
+    source_message_ids: list[str] = []
+    evidence_json: dict | None = None
+    created_by: str | None = None
+    resolved_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class MeetingBusinessObjectCorrectionRequest(BaseModel):
+    correction: str = Field(..., min_length=1, max_length=500)
+    candidate_id: str | None = Field(default=None, max_length=64)
+    action: str = Field(default="correct", pattern="^(correct|reject)$")
+    object_type: str | None = Field(
+        default=None,
+        pattern="^(task|product|batch|standard|unknown)$",
+    )
+    corrected_value: str | None = Field(default=None, max_length=128)
+
+
 class MeetingAgentQueryAuditResponse(BaseModel):
     id: str
     room_id: str
@@ -210,6 +244,21 @@ class MeetingAgentRunRequest(BaseModel):
     attachments: list[dict] = Field(default_factory=list)
     workflow_run_id: str | None = None
     replace_message_id: str | None = None
+    interaction_mode: str = Field(
+        default="private_chat",
+        pattern="^(private_chat|public_mention|auto_participation)$",
+    )
+    question_message_id: str | None = Field(default=None, max_length=64)
+    trigger_message_id: str | None = Field(default=None, max_length=64)
+    question_revision: str | None = Field(default=None, max_length=128)
+    question_sources: list[dict] = Field(default_factory=list, max_length=20)
+    auto_participation: dict | None = Field(default=None, exclude=True)
+
+
+class MeetingAgentShareRequest(BaseModel):
+    answer_message_id: str = Field(..., min_length=1, max_length=64)
+    content: str = Field(..., min_length=1, max_length=4000)
+    source_message_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class MeetingMemorySourceResponse(BaseModel):
@@ -245,10 +294,17 @@ class MeetingCandidateMemoryResponse(BaseModel):
     value_score: float | None = None
     dedupe_key: str | None = None
     related_memory_ids: list[str] = []
+    discussion_relations: list[dict] = []
     extraction_reason: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
-    qdl_json: dict | None = None
+    qdl_json: QDLDocument | None = None
+    qdl_schema_version: str | None = None
+    qdl_validation_status: str = "missing"
+    qdl_validation_errors: list[str] = []
+    extraction_method: str | None = None
+    extraction_model_id: str | None = None
+    extraction_metrics: dict | None = None
     created_at: datetime | None = None
 
 
@@ -262,6 +318,7 @@ class MeetingAgentRunResponse(BaseModel):
     escalation_required: bool = False
     conflict_status: str | None = None
     conflict_ref_id: str | None = None
+    trust_protocol: dict = {}
 
 
 class MeetingMemoryExtractRequest(BaseModel):
@@ -276,9 +333,18 @@ class MeetingMemoryResponse(BaseModel):
     summary: str = ""
     memory_type: str
     status: str
+    review_status: str = "candidate"
+    readiness_status: str = "collecting"
     scope: str = "meeting_room"
     scope_type: str | None = None
     scope_id: str | None = None
+    requested_scope_type: str | None = None
+    requested_scope_id: str | None = None
+    pending_transfer_id: str | None = None
+    shared_scopes: list[dict] = []
+    pending_share_requests: list[dict] = []
+    applicability: dict = {}
+    evidence_summary: dict = {}
     memory_category: str = "meeting_memory"
     recommended_scope: str | None = None
     recommended_scope_id: str | None = None
@@ -298,12 +364,19 @@ class MeetingMemoryResponse(BaseModel):
     value_score: float | None = None
     dedupe_key: str | None = None
     related_memory_ids: list[str] = []
+    discussion_relations: list[dict] = []
     extraction_reason: str | None = None
     publish_reason: str | None = None
     version_parent_id: str | None = None
     confidence: float | None = None
     source_message_id: str | None = None
-    qdl_json: dict | None = None
+    qdl_json: QDLDocument | None = None
+    qdl_schema_version: str | None = None
+    qdl_validation_status: str = "missing"
+    qdl_validation_errors: list[str] = []
+    extraction_method: str | None = None
+    extraction_model_id: str | None = None
+    extraction_metrics: dict | None = None
     created_by: str | None = None
     confirmed_by: str | None = None
     confirmed_at: datetime | None = None
@@ -332,12 +405,33 @@ class MeetingMemoryTransferRequest(BaseModel):
     to_scope_type: str = Field(default="meeting_room", pattern="^(meeting|meeting_room|collab_thread|user|agent|org_space|workspace|organization)$")
     to_scope_id: str = Field(default="current", min_length=1, max_length=128)
     transfer_reason: str | None = Field(default=None, max_length=1000)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class MeetingMemoryShareRequest(BaseModel):
     target_scope_type: str = Field(default="meeting_room", pattern="^(meeting|meeting_room|collab_thread|user|agent|org_space|workspace|organization)$")
     target_scope_id: str = Field(default="current", min_length=1, max_length=128)
     share_reason: str | None = Field(default=None, max_length=1000)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class MeetingMemoryShareCreateRequest(MeetingMemoryShareRequest):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    affected_objects: dict | None = None
+    related_memory_ids: list[str] | None = None
+    idempotency_key: str = Field(..., min_length=8, max_length=128)
+    mapping_rules: dict = Field(default_factory=dict)
+    mapping_version: str = Field(default="manual-v1", min_length=1, max_length=128)
+    interpolation_strategy: Literal["explicit", "identity", "drop_unmapped"] = "explicit"
+
+
+class MeetingMemoryShareDecisionRequest(BaseModel):
+    decision_note: str | None = Field(default=None, max_length=1000)
+
+
+class MeetingMemoryShareRejectRequest(BaseModel):
+    decision_note: str = Field(..., min_length=1, max_length=1000)
 
 
 class MeetingConflictEventResponse(BaseModel):
@@ -372,10 +466,29 @@ class MeetingMemoryShareApprovalResponse(BaseModel):
     transfer_reason: str | None = None
     status: str
     operator_id: str | None = None
+    requested_by: str | None = None
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    decision_note: str | None = None
+    idempotency_key: str | None = None
+    mapping_plan: dict | None = None
+    mapping_version: str | None = None
+    interpolation_strategy: str | None = None
+    unmapped_fields: list[str] = []
     memory_title: str = ""
+    memory_content: str = ""
+    source_refs: list[dict] = []
+    affected_objects: dict | None = None
+    source_room_id: str | None = None
     can_approve: bool = False
+    can_cancel: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class MeetingMemoryShareCreateResponse(BaseModel):
+    memory: MeetingMemoryResponse
+    share_request: MeetingMemoryShareApprovalResponse
 
 
 class MeetingActionItemCreateRequest(BaseModel):
@@ -445,8 +558,21 @@ class AgentDefinitionCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     system_prompt: str = Field(..., min_length=1, max_length=5000)
     model: str = Field(default="deepseek-chat", max_length=64)
-    adapter_type: str = Field(default="llm", pattern="^(llm|pipeline)$")
+    adapter_type: str = Field(
+        default="llm",
+        description="llm 或已由部署开关启用的 pipeline。",
+    )
     participation_strategy: dict | None = None
+
+    @field_validator("adapter_type")
+    @classmethod
+    def validate_adapter_type(cls, value: str) -> str:
+        from agent.adapters.factory import AgentAdapterFactory
+
+        try:
+            return AgentAdapterFactory.ensure_supported(value)
+        except Exception as exc:
+            raise ValueError(str(getattr(exc, "message", None) or exc)) from exc
 
 
 class AgentDefinitionUpdateRequest(BaseModel):

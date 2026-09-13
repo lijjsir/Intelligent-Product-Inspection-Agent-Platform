@@ -168,12 +168,15 @@ export interface MeetingRoomDetail extends MeetingRoom {
   members: MeetingRoomMember[];
 }
 
+export type MeetingAutoParticipationMode = "off" | "live";
+
 export interface MeetingRoomCreate {
   title: string;
   password?: string | null;
   visibility?: "private" | "team" | "org" | "restricted";
   allowed_data_domains?: MeetingDataDomain[] | null;
   business_context?: Partial<MeetingBusinessContext> | null;
+  auto_participation_mode?: MeetingAutoParticipationMode;
 }
 
 export interface MeetingRoomUpdate {
@@ -181,6 +184,7 @@ export interface MeetingRoomUpdate {
   visibility?: "private" | "team" | "org" | "restricted" | null;
   allowed_data_domains?: MeetingDataDomain[] | null;
   business_context?: Partial<MeetingBusinessContext> | null;
+  auto_participation_mode?: MeetingAutoParticipationMode | null;
 }
 
 export interface MeetingRoomJoin {
@@ -307,6 +311,37 @@ export interface MeetingAgentRunRequest {
   attachments?: MeetingAttachment[];
   workflow_run_id?: string | null;
   replace_message_id?: string | null;
+  interaction_mode?: "private_chat" | "public_mention" | "auto_participation";
+  question_message_id?: string | null;
+  trigger_message_id?: string | null;
+  question_revision?: string | null;
+  question_sources?: MeetingQuestionSource[];
+}
+
+export interface MeetingQuestionSource {
+  message_id?: string;
+  id?: string;
+  seq_no?: number;
+  kind?: string;
+  author?: string;
+  selected_text?: string;
+  content?: string;
+}
+
+export interface MeetingBusinessObjectCandidate {
+  id: string;
+  room_id: string;
+  object_type: "task" | "product" | "batch" | "standard" | "unknown" | string;
+  object_value: string;
+  resolved_value?: string | null;
+  status: "candidate" | "verified" | "corrected" | "rejected" | string;
+  confidence?: number | null;
+  source_message_ids: string[];
+  evidence_json?: Record<string, unknown> | null;
+  created_by?: string | null;
+  resolved_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface MeetingMemorySource {
@@ -316,6 +351,90 @@ export interface MeetingMemorySource {
   summary: string;
 }
 
+export type QDLPropertyLevel = "low" | "medium" | "high" | "unknown";
+
+export interface QDLPropertyAssessment {
+  level: QDLPropertyLevel;
+  confidence?: number | null;
+  rationale?: string | null;
+}
+
+export interface QDLDocument {
+  version: "qdl-v2";
+  knowledge_level: "fact" | "decision" | "rule" | "pattern" | "concept" | "hypothesis";
+  claim: { title: string; text: string; type: string };
+  properties: {
+    abstraction: QDLPropertyAssessment;
+    environment: QDLPropertyAssessment;
+    boundary: QDLPropertyAssessment;
+    dynamic: QDLPropertyAssessment;
+    social: QDLPropertyAssessment;
+    tacit: QDLPropertyAssessment;
+    hierarchy: QDLPropertyAssessment;
+    stability: QDLPropertyAssessment;
+    extensions?: Record<string, QDLPropertyAssessment>;
+  };
+  entities: Array<{
+    entity_type: "product" | "batch" | "task" | "standard" | "role" | "other";
+    value: string;
+    entity_id?: string | null;
+    name?: string | null;
+    resolution_status: "resolved" | "ambiguous" | "unresolved";
+    confidence?: number | null;
+  }>;
+  applicability: {
+    scope_type: "meeting_room" | "user" | "agent" | "org_space" | "collab_thread";
+    scope_id?: string | null;
+    conditions: string[];
+    business_tags: Record<string, string[]>;
+  };
+  evidence: Array<{
+    source_type: string;
+    source_id?: string | null;
+    message_id?: string | null;
+    quote_text?: string | null;
+    span_start?: number | null;
+    span_end?: number | null;
+    occurred_at?: string | null;
+  }>;
+  relations: Array<{
+    relation_type: "supports" | "contradicts" | "supplements" | "refines" | "depends_on" | "derived_from";
+    target_id: string;
+    status?: string | null;
+    confidence?: number | null;
+    note?: string | null;
+  }>;
+  provenance: {
+    org_id?: string | null;
+    room_id: string;
+    message_ids: string[];
+    extraction_method: "llm" | "heuristic" | "mixed";
+    model_id?: string | null;
+    trace_id?: string | null;
+    source_hash?: string | null;
+    generated_at: string;
+  };
+  governance: {
+    status: string;
+    requires_human_confirmation: boolean;
+    confirmed_by?: string | null;
+    confirmed_at?: string | null;
+  };
+  consensus: {
+    status: string;
+    support_count: number;
+    oppose_count: number;
+    confirmed_by: string[];
+  };
+  lifecycle: {
+    revision: number;
+    parent_memory_id?: string | null;
+    effective_at?: string | null;
+    supersedes_memory_id?: string | null;
+    superseded_by_memory_id?: string | null;
+  };
+}
+
 export interface MeetingCandidateMemory {
   memory_id: string;
   title: string;
@@ -323,6 +442,8 @@ export interface MeetingCandidateMemory {
   summary: string;
   memory_type: MeetingMemoryType;
   status: string;
+  review_status?: string;
+  readiness_status?: string;
   memory_category: "business_memory" | "meeting_memory" | "rejected_noise" | string;
   recommended_scope: string;
   recommended_scope_id?: string | null;
@@ -349,11 +470,18 @@ export interface MeetingCandidateMemory {
   value_score?: number | null;
   dedupe_key?: string | null;
   related_memory_ids?: string[];
+  discussion_relations?: Array<Record<string, unknown>>;
   tags?: MemoryTag[];
   extraction_reason?: string | null;
   confidence?: number | null;
   source_message_id?: string | null;
-  qdl_json?: Record<string, unknown> | null;
+  qdl_json?: QDLDocument | null;
+  qdl_schema_version?: string | null;
+  qdl_validation_status?: "valid" | "legacy_mapped" | "invalid" | "missing" | string;
+  qdl_validation_errors?: string[];
+  extraction_method?: "llm" | "heuristic" | "mixed" | string | null;
+  extraction_model_id?: string | null;
+  extraction_metrics?: Record<string, unknown> | null;
   created_at?: string | null;
 }
 
@@ -376,9 +504,27 @@ export interface MeetingMemory {
   summary: string;
   memory_type: MeetingMemoryType;
   status: string;
+  review_status?: string;
+  readiness_status?: string;
   scope: string;
   scope_type?: string | null;
   scope_id?: string | null;
+  requested_scope_type?: string | null;
+  requested_scope_id?: string | null;
+  pending_transfer_id?: string | null;
+  shared_scopes?: Array<Record<string, unknown>>;
+  pending_share_requests?: Array<Record<string, unknown>>;
+  applicability?: Record<string, unknown>;
+  evidence_summary?: {
+    origin?: number;
+    independent_support?: number;
+    rag?: number;
+    agent_verification?: number;
+    human_confirmation?: number;
+    opposition?: number;
+    conflict?: number;
+    last_evidence_at?: string | null;
+  };
   memory_category: "business_memory" | "meeting_memory" | "rejected_noise" | string;
   recommended_scope?: string | null;
   recommended_scope_id?: string | null;
@@ -405,13 +551,20 @@ export interface MeetingMemory {
   value_score?: number | null;
   dedupe_key?: string | null;
   related_memory_ids?: string[];
+  discussion_relations?: Array<Record<string, unknown>>;
   tags?: MemoryTag[];
   extraction_reason?: string | null;
   publish_reason?: string | null;
   version_parent_id?: string | null;
   confidence?: number | null;
   source_message_id?: string | null;
-  qdl_json?: Record<string, unknown> | null;
+  qdl_json?: QDLDocument | null;
+  qdl_schema_version?: string | null;
+  qdl_validation_status?: "valid" | "legacy_mapped" | "invalid" | "missing" | string;
+  qdl_validation_errors?: string[];
+  extraction_method?: "llm" | "heuristic" | "mixed" | string | null;
+  extraction_model_id?: string | null;
+  extraction_metrics?: Record<string, unknown> | null;
   created_by?: string | null;
   confirmed_by?: string | null;
   confirmed_at?: string | null;
@@ -423,6 +576,35 @@ export interface MeetingMemorySharePayload {
   target_scope_type: MemoryScopeType | "meeting" | "workspace" | "organization";
   target_scope_id: string;
   share_reason?: string | null;
+  idempotency_key?: string | null;
+  title?: string | null;
+  content?: string | null;
+  affected_objects?: Record<string, unknown> | null;
+  related_memory_ids?: string[] | null;
+  mapping_rules?: Record<string, unknown>;
+  mapping_version?: string;
+  interpolation_strategy?: "explicit" | "identity" | "drop_unmapped";
+}
+
+export interface MeetingMemoryShareCreateResponse {
+  memory: MeetingMemory;
+  share_request: MeetingMemoryShareApproval;
+}
+
+export interface TrustAnswerProtocol {
+  protocol_version: "trust-answer-v1" | string;
+  question: string;
+  conclusion: string;
+  status: "trusted" | "degraded" | "blocked" | "failed" | "unavailable" | string;
+  confidence: number;
+  capability_boundary: "in_domain" | "boundary" | "out_of_domain" | "unknown" | string;
+  evidence_refs: Array<Record<string, unknown>>;
+  reasoning_steps: Array<Record<string, unknown>>;
+  citation_coverage: number;
+  semantic_metrics?: Record<string, number>;
+  refusal_reason?: string | null;
+  degrade_reasons?: string[];
+  trace_id?: string | null;
 }
 
 export interface MeetingMemoryShareApproval {
@@ -435,8 +617,22 @@ export interface MeetingMemoryShareApproval {
   transfer_reason?: string | null;
   status: string;
   operator_id?: string | null;
+  requested_by?: string | null;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  decision_note?: string | null;
+  idempotency_key?: string | null;
+  mapping_plan?: Record<string, unknown> | null;
+  mapping_version?: string | null;
+  interpolation_strategy?: string | null;
+  unmapped_fields?: string[];
   memory_title: string;
+  memory_content?: string;
+  source_refs?: Array<Record<string, unknown>>;
+  affected_objects?: Record<string, unknown> | null;
+  source_room_id?: string | null;
   can_approve: boolean;
+  can_cancel?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -494,10 +690,11 @@ export interface MeetingActionItemUpdate {
 
 export type MeetingStreamEvent =
   | { event: "message_created"; room_id: string; message: MeetingMessage; private_user_ids?: string[] }
-  | { event: "agent_run_started"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; query?: string | null; attachments?: MeetingAttachment[]; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility }
+  | { event: "agent_query_audit_created"; room_id: string; audit_id: string }
+  | { event: "agent_run_started"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; query?: string | null; attachments?: MeetingAttachment[]; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility; interaction_mode?: string; question_message_id?: string | null; trigger_message_id?: string | null }
   | { event: "message_delta"; room_id: string; message_id: string; agent_id: string; delta: string; workflow_run_id: string; private_user_ids?: string[] }
   | { event: "message_final"; room_id: string; message_id: string; agent_id: string; agent_name?: string; content: string; workflow_run_id: string; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility }
-  | { event: "agent_run_failed"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; error: string; private_user_ids?: string[] };
+  | { event: "agent_run_failed"; room_id: string; message_id: string; agent_id: string; agent_name: string; workflow_run_id: string; error: string; private_user_ids?: string[]; response_visibility?: MeetingResponseVisibility; interaction_mode?: string; question_message_id?: string | null; trigger_message_id?: string | null };
 
 // ── Admin Types ──────────────────────────────────────────────────
 

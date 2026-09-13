@@ -111,7 +111,48 @@ class CollabMessageResponse(BaseModel):
 
 class CollabMessageActionRequest(BaseModel):
     action_status: str = Field(..., pattern="^(accepted|rejected|done)$")
+    decision_note: str | None = Field(default=None, max_length=1000)
 
 
 class CollabAttachmentUploadResponse(BaseModel):
     items: list[CollabAttachmentPayload]
+
+
+class CollabActionRequestCreateRequest(BaseModel):
+    target_type: str = Field(..., pattern="^(user|meeting_room)$")
+    target_id: str = Field(..., min_length=1, max_length=128)
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1, max_length=4000)
+    attachments: list[CollabAttachmentPayload] = Field(default_factory=list)
+    source_link: str | None = Field(default=None, max_length=1000)
+    source_context: dict | None = None
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class CollabWorkItemResponse(BaseModel):
+    id: str
+    resource_id: str
+    item_type: str
+    title: str
+    description: str = ""
+    source: dict = Field(default_factory=dict)
+    target: dict = Field(default_factory=dict)
+    requested_by: str | None = None
+    requester_label: str | None = None
+    status: str
+    evidence: list[dict] = Field(default_factory=list)
+    source_link: str | None = None
+    allowed_actions: list[str] = Field(default_factory=list)
+    decision_note: str | None = None
+    decided_by: str | None = None
+    decided_at: datetime | None = None
+    history: list[dict] = Field(default_factory=list)
+    payload: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class CollabWorkItemSummaryResponse(BaseModel):
+    pending_count: int = 0
+    initiated_count: int = 0
+    processed_count: int = 0

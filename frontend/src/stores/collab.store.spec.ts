@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 import { collabApi } from "@/api/collab.api";
+import { meetingApi } from "@/api/meeting.api";
 import { useAuthStore } from "@/stores/auth.store";
 import { useCollabStore } from "@/stores/collab.store";
-import type { CollabMessage, CollabMessageReceipt, CollabThread } from "@/types/collab.types";
+import type { CollabMessage, CollabMessageReceipt, CollabThread, CollabWorkItem } from "@/types/collab.types";
 
 vi.mock("@/api/collab.api", () => ({
   collabApi: {
     listThreads: vi.fn(),
     listTargets: vi.fn(),
+    listWorkItems: vi.fn(),
+    getSummary: vi.fn(),
+    createActionRequest: vi.fn(),
     createThread: vi.fn(),
     listMessages: vi.fn(),
     sendMessage: vi.fn(),
@@ -20,6 +24,36 @@ vi.mock("@/api/collab.api", () => ({
     stream: vi.fn(),
   },
 }));
+
+vi.mock("@/api/meeting.api", () => ({
+  meetingApi: {
+    approveMemoryShare: vi.fn(),
+    rejectMemoryShare: vi.fn(),
+    cancelMemoryShare: vi.fn(),
+  },
+}));
+
+function workItem(overrides: Partial<CollabWorkItem> = {}): CollabWorkItem {
+  return {
+    id: "memory_share:transfer-1",
+    resource_id: "transfer-1",
+    item_type: "memory_share",
+    title: "边缘识别复盘",
+    description: "弱光环境下需人工复核",
+    source: { type: "meeting_room", id: "room-1", label: "来源会议室" },
+    target: { type: "meeting_room", id: "room-2", label: "目标会议室" },
+    requested_by: "user-2",
+    requester_label: "bob",
+    status: "pending_approval",
+    evidence: [],
+    allowed_actions: ["approve", "reject"],
+    history: [],
+    payload: { memory_id: "mem-1" },
+    created_at: "2026-06-22T10:00:00Z",
+    updated_at: "2026-06-22T10:00:00Z",
+    ...overrides,
+  };
+}
 
 function thread(overrides: Partial<CollabThread> = {}): CollabThread {
   return {
@@ -83,6 +117,8 @@ describe("collab store stream handling", () => {
     const auth = useAuthStore();
     auth.userId = "user-1";
     vi.mocked(collabApi.listThreads).mockReset();
+    vi.mocked(collabApi.listWorkItems).mockReset();
+    vi.mocked(collabApi.getSummary).mockReset();
     vi.mocked(collabApi.markRead).mockReset();
     vi.mocked(collabApi.listMessages).mockReset();
     vi.mocked(collabApi.listThreads).mockResolvedValue(
@@ -92,6 +128,15 @@ describe("collab store stream handling", () => {
       { data: { code: 0, message: "ok", data: [] } } as unknown as Awaited<ReturnType<typeof collabApi.listMessages>>,
     );
     vi.mocked(collabApi.stream).mockReset();
+    vi.mocked(collabApi.listWorkItems).mockResolvedValue(
+      { data: { code: 0, message: "ok", data: [] } } as unknown as Awaited<ReturnType<typeof collabApi.listWorkItems>>,
+    );
+    vi.mocked(collabApi.getSummary).mockResolvedValue(
+      { data: { code: 0, message: "ok", data: { pending_count: 0, initiated_count: 0, processed_count: 0 } } } as unknown as Awaited<ReturnType<typeof collabApi.getSummary>>,
+    );
+    vi.mocked(meetingApi.approveMemoryShare).mockReset();
+    vi.mocked(meetingApi.rejectMemoryShare).mockReset();
+    vi.mocked(meetingApi.cancelMemoryShare).mockReset();
   });
 
   it("adds incoming messages and increments unread for inactive threads", () => {
@@ -250,5 +295,33 @@ describe("collab store stream handling", () => {
     store.disconnectStream();
     expect(source.close).toHaveBeenCalled();
     expect(store.streamConnected).toBe(false);
+  });
+
+  it("loads unified work items and exposes only pending-work badge count", async () => {
+    const store = useCollabStore();
+    vi.mocked(collabApi.listWorkItems).mockResolvedValueOnce(
+      { data: { code: 0, message: "ok", data: [workItem()] } } as unknown as Awaited<ReturnType<typeof collabApi.listWorkItems>>,
+    );
+    vi.mocked(collabApi.getSummary).mockResolvedValueOnce(
+      { data: { code: 0, message: "ok", data: { pending_count: 3, initiated_count: 4, processed_count: 5 } } } as unknown as Awaited<ReturnType<typeof collabApi.getSummary>>,
+    );
+
+    await Promise.all([store.loadWorkItems("pending"), store.loadSummary()]);
+
+    expect(store.workItems).toHaveLength(1);
+    expect(store.activeWorkItemView).toBe("pending");
+    expect(store.pendingWorkItemCount).toBe(3);
+  });
+
+  it("approves a memory work item in place and refreshes shared state", async () => {
+    const store = useCollabStore();
+    const item = workItem();
+    vi.mocked(meetingApi.approveMemoryShare).mockResolvedValueOnce({} as never);
+
+    await store.handleWorkItem(item, "approve", "证据充分");
+
+    expect(meetingApi.approveMemoryShare).toHaveBeenCalledWith("transfer-1", "证据充分");
+    expect(collabApi.listWorkItems).toHaveBeenCalledWith(expect.objectContaining({ view: "pending" }));
+    expect(collabApi.getSummary).toHaveBeenCalled();
   });
 });

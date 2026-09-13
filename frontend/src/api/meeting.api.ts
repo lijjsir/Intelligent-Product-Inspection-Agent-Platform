@@ -10,12 +10,14 @@ import type {
   MeetingAgentRunResponse,
   MeetingAttachment,
   MeetingBusinessContext,
+  MeetingBusinessObjectCandidate,
   MeetingConflictEvent,
   MeetingContextPreview,
   MeetingMemory,
   MeetingMemoryConfirmPayload,
   MeetingMemoryDisputePayload,
   MeetingMemoryShareApproval,
+  MeetingMemoryShareCreateResponse,
   MeetingMemorySharePayload,
   MeetingMemberRoleUpdate,
   MeetingMessage,
@@ -61,9 +63,20 @@ export const meetingApi = {
     return http.post<MeetingRoom>(`/v1/meetings/rooms/${roomId}/close`);
   },
 
-  listMessages(roomId: string, afterSeq = 0, limit = 200) {
+  listMessages(
+    roomId: string,
+    cursor?: number | { afterSeq?: number; beforeSeq?: number; limit?: number },
+    legacyLimit = 200,
+  ) {
+    const params = typeof cursor === "number"
+      ? { after_seq: cursor, limit: legacyLimit }
+      : {
+          ...(cursor?.afterSeq !== undefined ? { after_seq: cursor.afterSeq } : {}),
+          ...(cursor?.beforeSeq !== undefined ? { before_seq: cursor.beforeSeq } : {}),
+          limit: cursor?.limit || 100,
+        };
     return http.get<MeetingMessage[]>(`/v1/meetings/rooms/${roomId}/messages`, {
-      params: { after_seq: afterSeq, limit },
+      params,
     });
   },
 
@@ -129,8 +142,15 @@ export const meetingApi = {
   runGeneralAgent(roomId: string, payload: MeetingAgentRunRequest, config?: { signal?: AbortSignal }) {
     return http.post<MeetingAgentRunResponse>(`/v1/meetings/rooms/${roomId}/agent/run`, payload, {
       ...config,
+      // Agent answers may include model/tool work and commonly exceed the
+      // default HTTP client timeout. The meeting SSE remains the live path.
+      timeout: 600000,
       suppressErrorToast: true,
     });
+  },
+
+  shareAgentAnswer(roomId: string, payload: { answer_message_id: string; content: string; source_message_ids?: string[] }) {
+    return http.post<MeetingMessage>(`/v1/meetings/rooms/${roomId}/agent/share`, payload);
   },
 
   cancelGeneralAgent(roomId: string, workflowRunId: string) {
@@ -143,6 +163,17 @@ export const meetingApi = {
 
   getContextPreview(roomId: string) {
     return http.get<MeetingContextPreview>(`/v1/meetings/rooms/${roomId}/context-preview`);
+  },
+
+  listBusinessObjects(roomId: string) {
+    return http.get<MeetingBusinessObjectCandidate[]>(`/v1/meetings/rooms/${roomId}/business-objects`);
+  },
+
+  correctBusinessObject(
+    roomId: string,
+    payload: { correction: string; candidate_id?: string; action?: "correct" | "reject"; object_type?: string; corrected_value?: string },
+  ) {
+    return http.post<MeetingBusinessObjectCandidate>(`/v1/meetings/rooms/${roomId}/business-objects/correct`, payload);
   },
 
   listAgentQueryAudits(roomId: string, limit = 50) {
@@ -189,6 +220,10 @@ export const meetingApi = {
     return http.post<MeetingMemory>(`/v1/meetings/memories/${memoryId}/share`, payload);
   },
 
+  createMemoryShareRequest(memoryId: string, payload: MeetingMemorySharePayload & { idempotency_key: string }) {
+    return http.post<MeetingMemoryShareCreateResponse>(`/v1/meetings/memories/${memoryId}/share-requests`, payload);
+  },
+
   listPendingMemoryShares(roomId?: string | null) {
     return http.get<MeetingMemoryShareApproval[]>("/v1/meetings/memory-shares/pending", {
       params: roomId ? { room_id: roomId } : {},
@@ -196,12 +231,20 @@ export const meetingApi = {
     });
   },
 
-  approveMemoryShare(transferId: string) {
-    return http.post<MeetingMemory>(`/v1/meetings/memory-shares/${transferId}/approve`);
+  approveMemoryShare(transferId: string, decisionNote?: string | null) {
+    return http.post<MeetingMemory>(`/v1/meetings/memory-shares/${transferId}/approve`, {
+      decision_note: decisionNote || null,
+    });
   },
 
-  rejectMemoryShare(transferId: string) {
-    return http.post<MeetingMemoryShareApproval>(`/v1/meetings/memory-shares/${transferId}/reject`);
+  rejectMemoryShare(transferId: string, decisionNote = "审批人未批准该共享申请") {
+    return http.post<MeetingMemoryShareApproval>(`/v1/meetings/memory-shares/${transferId}/reject`, {
+      decision_note: decisionNote,
+    });
+  },
+
+  cancelMemoryShare(transferId: string) {
+    return http.post<MeetingMemoryShareApproval>(`/v1/meetings/memory-shares/${transferId}/cancel`);
   },
 
   listActionItems(roomId: string) {

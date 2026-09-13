@@ -328,6 +328,7 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
     gateway = make_gateway()
     requests: list[dict] = []
     events: list[dict] = []
+    scheduled_extractions: list[dict] = []
 
     class FakeModelConfigService:
         def __init__(self, session, org_id: str):
@@ -371,6 +372,13 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
                 SimpleNamespace(message_type="user", username="alice", content="请看下这个会议"),
             ]
 
+        async def list_recent_messages(self, **kwargs):
+            return await self.list_messages(
+                kwargs["org_id"],
+                kwargs["room_id"],
+                limit=kwargs.get("limit", 20),
+            )
+
         async def create_message(self, **kwargs):
             return SimpleNamespace(
                 id=kwargs.get("message_id", "msg-1"),
@@ -395,8 +403,13 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
     monkeypatch.setattr(meeting_ai_mod, "LLMGateway", lambda: gateway)
     monkeypatch.setattr(meeting_ai_mod.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr("app.services.stream_service.meeting_stream_broker.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.meeting_service.MeetingService._schedule_public_knowledge_extraction",
+        lambda self, room_id, **kwargs: scheduled_extractions.append({"room_id": room_id, **kwargs}),
+    )
 
-    service = meeting_ai_mod.MeetingAiService(FakeSession(), "org-1", "user-1")
+    fake_session = FakeSession()
+    service = meeting_ai_mod.MeetingAiService(fake_session, "org-1", "user-1")
     service._repo = FakeRepo()
 
     message = await service.ai_respond("room-1")
@@ -413,9 +426,18 @@ async def test_meeting_ai_uses_model_config_runtime(monkeypatch):
     assert requests[1]["json"]["temperature"] == 0.2
     assert summary_message.agent_id == "meeting_summary"
     assert any(event["event"] == "message_created" for event in events)
-    assert all(event.get("private_user_ids") == ["user-1"] for event in events)
+    assert events[0].get("private_user_ids") == ["user-1"]
+    assert "private_user_ids" not in events[-1]
     assert message.private_recipient_user_id == "user-1"
-    assert summary_message.private_recipient_user_id == "user-1"
+    assert summary_message.private_recipient_user_id is None
+    assert fake_session.commits == 1
+    assert scheduled_extractions == [
+        {
+            "room_id": "room-1",
+            "max_items": 5,
+            "topic": "会议总结自动整理公共知识",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -122,6 +122,7 @@ def test_retrieval_requires_successful_vector_sync_and_structured_filters():
     assert "MemoryItem.task_id == task_id" in source
     assert "MemoryItem.product_line == product_line" in source
     assert "MemoryItem.rag_space_id == rag_space_id" in source
+    assert "MemoryScopeBinding.scope_type == \"meeting_room\"" in source
 
 
 def test_outbox_worker_supports_canonical_uppercase_actions():
@@ -159,6 +160,43 @@ def test_legacy_memory_manager_graph_is_not_registered():
     from agent.router.manager_dispatcher import ManagerDispatcher
 
     assert "memory_manager" not in ManagerDispatcher()._executors
+
+
+def test_readiness_thresholds_use_evidence_type_specific_confidence():
+    from app.services.memory_governance_domain import calculate_readiness
+
+    agent_ready = calculate_readiness(
+        {
+            "origin_evidence_count": 1,
+            "agent_verifier_count": 2,
+            "avg_confidence": 0.20,
+            "agent_avg_confidence": 0.80,
+        },
+        review_status="candidate",
+    )
+    assert agent_ready.status == "ready"
+    assert agent_ready.reason == "two_agent_verifications"
+
+    rag_collecting = calculate_readiness(
+        {
+            "origin_evidence_count": 1,
+            "rag_evidence_count": 1,
+            "avg_confidence": 0.95,
+            "rag_avg_confidence": 0.60,
+        },
+        review_status="candidate",
+    )
+    assert rag_collecting.status == "collecting"
+
+
+def test_ai_chat_source_defaults_to_current_user_home_scope():
+    from app.services.memory_governance_domain import default_home_scope
+
+    assert default_home_scope(
+        source_kind="user",
+        org_id="org-1",
+        user_id="user-1",
+    ) == ("user", "user-1")
 
 
 @pytest.mark.asyncio
@@ -225,3 +263,80 @@ async def test_state_transition_writes_status_event_and_sync_outbox(monkeypatch)
     assert "DELETE_CANDIDATE_VECTOR" in actions
     assert "UPDATE_MEMORY_NODE_STATUS" in actions
     assert "SOFT_DELETE_MEMORY_EDGES" in actions
+
+
+@pytest.mark.asyncio
+async def test_activation_outbox_contains_complete_vector_payload(monkeypatch):
+    from app.services import memory_state_transition_service as module
+
+    item = SimpleNamespace(
+        memory_id="mem-org-1",
+        status="confirmed",
+        user_id="user-1",
+        trace_id="trace-old",
+        memory_type="quality_pattern",
+        content_summary="螺钉边缘识别在弱光条件下容易失真",
+        scope_json={"scope_type": "org_space", "scope_id": "org-1"},
+        trust_score=0.65,
+        confidence=0.8,
+        expires_at=None,
+        product_line="fastener",
+        rag_space_id=None,
+        task_id=None,
+        source_task_id="task-1",
+    )
+    outbox_rows = []
+
+    class FakeItemRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def get_by_memory_id(self, memory_id):
+            return item if memory_id == item.memory_id else None
+
+        async def update_status(self, memory_id, status):
+            item.status = status
+
+    class FakeEventRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create(self, event):
+            return event
+
+    class FakeOutboxRepo:
+        def __init__(self, _session, _org_id):
+            pass
+
+        async def create_pending(self, **kwargs):
+            outbox_rows.append(kwargs)
+
+    monkeypatch.setattr(module, "MemoryItemRepository", FakeItemRepo)
+    monkeypatch.setattr(module, "MemoryEventRepository", FakeEventRepo)
+    monkeypatch.setattr(module, "MemorySyncOutboxRepository", FakeOutboxRepo)
+
+    service = module.MemoryStateTransitionService(object(), "org-1")
+    await service.transition(
+        item.memory_id,
+        action="activate",
+        target_status="active",
+        actor_id="admin-1",
+        trace_id="trace-approve",
+        reason="organization_share_approved",
+        payload={"trust_score": 0.9, "promotion_score": 1.4},
+    )
+
+    vector_row = next(row for row in outbox_rows if row["action"] == "UPSERT_ACTIVE_VECTOR")
+    payload = vector_row["payload"]
+    assert payload["memory_id"] == item.memory_id
+    assert payload["org_id"] == "org-1"
+    assert payload["user_id"] == "user-1"
+    assert payload["memory_type"] == "quality_pattern"
+    assert payload["status"] == "active"
+    assert payload["summary"] == item.content_summary
+    assert payload["trust_score"] == pytest.approx(0.9)
+    assert payload["confidence"] == pytest.approx(0.8)
+    assert payload["product_line"] == "fastener"
+    assert payload["task_id"] == "task-1"
+    assert payload["extra_payload"]["scope_type"] == "org_space"
+    assert payload["extra_payload"]["promotion_score"] == pytest.approx(1.4)

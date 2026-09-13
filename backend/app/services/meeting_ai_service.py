@@ -32,11 +32,12 @@ class MeetingAiService:
         self,
         room_id: str,
         agent_id: str = "ai_assistant",
-        agent_name: str = "AI 助手",
+        agent_name: str = "会议Agent",
     ) -> MeetingMessageResponse:
         await self._ensure_member(room_id)
 
-        messages = await self._list_recent_messages(room_id, limit=50)
+        messages = await self._list_recent_messages(room_id, limit=80)
+        private_summary = await self._context_summary(room_id, "private", self._user_id)
         llm_messages = [
             {
                 "role": "system",
@@ -47,22 +48,42 @@ class MeetingAiService:
                 ),
             }
         ]
+        if private_summary:
+            summary_lines = [
+                str(item.get("content") or "").strip()
+                for item in list(private_summary.get("discussion_summary") or [])[-24:]
+                if isinstance(item, dict) and str(item.get("content") or "").strip()
+            ]
+            if summary_lines:
+                llm_messages.append({
+                    "role": "system",
+                    "content": "当前用户此前在本会议中的可用滚动摘要：\n" + "\n".join(summary_lines),
+                })
         for msg in messages:
             role = "assistant" if msg.message_type in ("agent", "agent_streaming") else "user"
             llm_messages.append({"role": role, "content": f"{msg.username}: {msg.content}"})
 
         content = await self._call_llm(llm_messages, temperature=0.7, max_tokens=2000)
-        return await self._persist_agent_message(
+        response = await self._persist_agent_message(
             room_id=room_id,
             agent_id=agent_id,
             agent_name=agent_name,
             content=content,
+            visibility="private",
+            interaction_mode="private_chat",
         )
+        await self._refresh_context_summary(
+            room_id,
+            "private",
+            self._user_id,
+            [*messages, response],
+        )
+        return response
 
     async def summarize(self, room_id: str) -> MeetingMessageResponse:
         await self._ensure_member(room_id)
 
-        messages = await self._list_recent_messages(room_id, limit=120)
+        messages = await self._list_recent_public_messages(room_id, limit=120)
         if not messages:
             content = "当前会议还没有可总结的内容。"
         else:
@@ -76,7 +97,7 @@ class MeetingAiService:
                     "role": "system",
                     "content": (
                         "你是一个会议纪要助手。请压缩会议上下文，输出中文会议总结。"
-                        "结构包括：核心结论、待办事项、分歧或风险、后续建议。"
+                        "结构包括：讨论摘要、已确认结论、待办、分歧/风险、后续建议。"
                         "如果信息不足，请明确说明，不要编造。"
                     ),
                 },
@@ -84,14 +105,55 @@ class MeetingAiService:
             ]
             content = await self._call_llm(llm_messages, temperature=0.2, max_tokens=1600)
 
-        return await self._persist_agent_message(
+        response = await self._persist_agent_message(
             room_id=room_id,
             agent_id="meeting_summary",
             agent_name="会议总结",
             content=content,
+            visibility="room",
+            interaction_mode="public_mention",
+            message_type="summary",
         )
+        await self._refresh_context_summary(room_id, "room", "public", [*messages, response])
+        await self._session.commit()
+        from app.services.meeting_service import MeetingService
+
+        knowledge_service = MeetingService(self._session, self._org_id, self._user_id)
+        knowledge_service._schedule_public_knowledge_extraction(
+            room_id,
+            max_items=5,
+            topic="会议总结自动整理公共知识",
+        )
+        return response
+
+    async def _list_recent_public_messages(self, room_id: str, limit: int):
+        list_public = getattr(self._repo, "list_recent_public_messages", None)
+        if callable(list_public):
+            return await list_public(org_id=self._org_id, room_id=room_id, limit=limit)
+        try:
+            messages = await self._repo.list_recent_messages(
+                org_id=self._org_id,
+                room_id=room_id,
+                limit=limit,
+                visible_user_id=None,
+            )
+        except TypeError:
+            messages = await self._repo.list_recent_messages(
+                org_id=self._org_id,
+                room_id=room_id,
+                limit=limit,
+            )
+        return messages[-limit:]
 
     async def _list_recent_messages(self, room_id: str, limit: int):
+        list_private_context = getattr(self._repo, "list_private_agent_context_messages", None)
+        if callable(list_private_context):
+            return await list_private_context(
+                org_id=self._org_id,
+                room_id=room_id,
+                user_id=self._user_id,
+                limit=limit,
+            )
         list_recent = getattr(self._repo, "list_recent_messages", None)
         if list_recent:
             try:
@@ -119,6 +181,41 @@ class MeetingAiService:
                 limit=limit,
             )
         return messages[-limit:]
+
+    async def _context_summary(self, room_id: str, context_scope: str, user_key: str) -> dict[str, Any]:
+        get_summary = getattr(self._repo, "get_context_summary", None)
+        if not callable(get_summary):
+            return {}
+        row = await get_summary(
+            org_id=self._org_id,
+            room_id=room_id,
+            context_scope=context_scope,
+            user_key=user_key,
+        )
+        value = getattr(row, "summary_json", None) if row is not None else None
+        return dict(value) if isinstance(value, dict) else {}
+
+    async def _refresh_context_summary(
+        self,
+        room_id: str,
+        context_scope: str,
+        user_key: str,
+        messages: list[Any],
+    ) -> None:
+        upsert = getattr(self._repo, "upsert_context_summary", None)
+        if not callable(upsert) or not messages:
+            return
+        from app.services.meeting_service import MeetingService
+
+        previous = await self._context_summary(room_id, context_scope, user_key)
+        await upsert(
+            org_id=self._org_id,
+            room_id=room_id,
+            context_scope=context_scope,
+            user_key=user_key,
+            through_seq=max(int(getattr(item, "seq_no", 0) or 0) for item in messages),
+            summary_json=MeetingService._build_rolling_summary(messages, previous),
+        )
 
     async def _call_llm(
         self,
@@ -255,12 +352,20 @@ class MeetingAiService:
         agent_name: str,
         content: str,
         metadata_json: dict[str, Any] | None = None,
+        visibility: str = "private",
+        interaction_mode: str = "private_chat",
+        message_type: str = "agent",
     ) -> MeetingMessageResponse:
         display_content, response_metadata = normalize_ai_response_content(content)
         next_metadata = {
             **(metadata_json or {}),
             **response_metadata,
-            "private_recipient_user_id": self._user_id,
+            "visibility": visibility,
+            "interaction_mode": interaction_mode,
+            "audience_scope_type": "user" if visibility == "private" else "meeting_room",
+            "audience_scope_id": self._user_id if visibility == "private" else room_id,
+            "confirmation_status": "unconfirmed_ai_suggestion",
+            **({"private_recipient_user_id": self._user_id} if visibility == "private" else {}),
         }
         message = await self._repo.create_message(
             org_id=self._org_id,
@@ -268,7 +373,7 @@ class MeetingAiService:
             user_id=self._user_id,
             username=agent_name,
             content=display_content,
-            message_type="agent",
+            message_type=message_type,
             agent_id=agent_id,
             metadata_json=next_metadata,
         )
@@ -282,7 +387,7 @@ class MeetingAiService:
                 "event": "message_created",
                 "room_id": room_id,
                 "message": response.model_dump(),
-                "private_user_ids": [self._user_id],
+                **({"private_user_ids": [self._user_id]} if visibility == "private" else {}),
             },
         )
         return response

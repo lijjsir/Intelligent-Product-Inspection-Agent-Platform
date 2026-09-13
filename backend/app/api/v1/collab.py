@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.exceptions import ForbiddenError
+from app.core.exceptions import ForbiddenError, ValidationError
 from app.core.permissions import require_role
 from app.core.security import safe_decode_token
 from app.schemas.collab import (
     CollabAttachmentUploadResponse,
+    CollabActionRequestCreateRequest,
     CollabMessageActionRequest,
     CollabMessageCreateRequest,
     CollabMessageReceiptResponse,
@@ -18,6 +19,8 @@ from app.schemas.collab import (
     CollabTargetResponse,
     CollabThreadCreateRequest,
     CollabThreadResponse,
+    CollabWorkItemResponse,
+    CollabWorkItemSummaryResponse,
 )
 from app.schemas.common import ResponseEnvelope
 from app.schemas.user import CurrentUser
@@ -30,7 +33,7 @@ router = APIRouter(prefix="/collab", tags=["collab"])
 
 def _build_service(db, current: CurrentUser) -> CollabService:
     require_role("collab", current.role)
-    return CollabService(db, current.org_id, current.user_id)
+    return CollabService(db, current.org_id, current.user_id, role=current.role)
 
 
 def _get_user_for_stream(token: str = Query(default="")) -> CurrentUser:
@@ -85,8 +88,49 @@ async def create_thread(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    _build_service(db, current)
+    raise ValidationError("collaboration center only creates structured action requests")
+
+
+@router.get("/work-items", response_model=ResponseEnvelope[list[CollabWorkItemResponse]])
+async def list_work_items(
+    view: str = Query(default="pending", pattern="^(pending|initiated|processed)$"),
+    item_type: str | None = Query(default=None, pattern="^(memory_share|action_request)$"),
+    scope_type: str | None = Query(default=None),
+    room_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.create_thread(body))
+    return ResponseEnvelope(
+        data=await service.list_work_items(
+            view=view,
+            item_type=item_type,
+            scope_type=scope_type,
+            room_id=room_id,
+            limit=limit,
+        )
+    )
+
+
+@router.get("/summary", response_model=ResponseEnvelope[CollabWorkItemSummaryResponse])
+async def get_work_item_summary(
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.get_work_item_summary())
+
+
+@router.post("/action-requests", response_model=ResponseEnvelope[CollabWorkItemResponse])
+async def create_action_request(
+    body: CollabActionRequestCreateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.create_action_request(body))
 
 
 @router.get("/threads/{thread_id}/messages", response_model=ResponseEnvelope[list[CollabMessageResponse]])
@@ -108,7 +152,7 @@ async def send_message(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.send_message(thread_id, body))
+    return ResponseEnvelope(data=await service.send_work_item_comment(thread_id, body))
 
 
 @router.post("/messages/{message_id}/read", response_model=ResponseEnvelope[CollabMessageReceiptResponse])
@@ -148,8 +192,8 @@ async def delete_thread(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.delete_thread(thread_id))
+    _build_service(db, current)
+    raise ValidationError("collaboration history is read-only and cannot be deleted")
 
 
 @router.delete("/messages/{message_id}", response_model=ResponseEnvelope[dict])
@@ -158,8 +202,8 @@ async def delete_message(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.delete_message(message_id))
+    _build_service(db, current)
+    raise ValidationError("collaboration history is read-only and cannot be deleted")
 
 
 @router.get("/stream")

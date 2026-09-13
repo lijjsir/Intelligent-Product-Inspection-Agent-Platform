@@ -370,6 +370,9 @@ async def test_llm_client_local_openai_allows_missing_api_key(monkeypatch):
 
     monkeypatch.setattr("agent.llm.client.httpx.AsyncClient", FakeHttpClient)
     monkeypatch.setattr("agent.llm.client.LangfuseTracer", lambda: FakeTracer())
+    # This test asserts the explicit host-side endpoint contract. Container
+    # runtime remapping is covered separately in test_runtime_proxy_handling.
+    monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: False)
 
     client = LLMClient(provider="local_openai", base_url="http://localhost:11434/v1", model_id="qwen2.5:7b-instruct")
     data = await client.chat([{"role": "user", "content": "hi"}])

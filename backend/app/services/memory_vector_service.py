@@ -15,6 +15,7 @@ from app.core.config import settings
 MEMORY_COLLECTION = "piap_shared_memory"
 CANDIDATE_MEMORY_COLLECTION = "piap_candidate_memory"
 AGENT_LOCAL_MEMORY_COLLECTION = "piap_agent_local_memory"
+DEFAULT_MEMORY_VECTOR_SIZE = 2048
 
 EmbedderFactory = Callable[..., Awaitable[list[float]]]
 
@@ -73,7 +74,7 @@ class MemoryVectorService:
         org = str(org_id or "").strip()
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"piap-memory:{org}:{raw}"))
 
-    async def ensure_collection(self, vector_size: int = 1536) -> None:
+    async def ensure_collection(self, vector_size: int = DEFAULT_MEMORY_VECTOR_SIZE) -> None:
         """Create the shared memory collection if it does not exist."""
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(
@@ -81,6 +82,20 @@ class MemoryVectorService:
                 headers=self._headers,
             )
             if resp.status_code == 200:
+                try:
+                    current_size = int(
+                        ((resp.json().get("result") or {}).get("config") or {})
+                        .get("params", {})
+                        .get("vectors", {})
+                        .get("size", 0)
+                    )
+                except (TypeError, ValueError):
+                    current_size = 0
+                if current_size and current_size != int(vector_size):
+                    raise MemoryVectorServiceError(
+                        f"Qdrant collection {self._collection} has vector size {current_size}, "
+                        f"expected {vector_size}; run scripts/init_memory_qdrant.py to rebuild derived indexes."
+                    )
                 return
             if resp.status_code != 404:
                 try:

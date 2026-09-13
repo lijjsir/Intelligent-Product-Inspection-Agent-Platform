@@ -1,8 +1,17 @@
 <template>
-  <div class="flex h-screen overflow-hidden bg-zinc-50">
-    <aside v-if="showSidebar" class="flex h-screen w-56 shrink-0 flex-col border-r border-zinc-200 bg-white">
-      <div class="border-b border-zinc-100 px-5 py-5">
-        <div class="text-[2rem] font-bold tracking-[0.08em] text-zinc-950">PIAP</div>
+  <div class="app-shell flex h-screen overflow-hidden bg-zinc-50">
+    <aside
+      v-if="showSidebar"
+      class="app-sidebar flex h-screen w-56 shrink-0 flex-col border-r border-zinc-200 bg-white"
+      :class="{ 'mobile-nav-open': mobileNavOpen }"
+    >
+      <div class="app-brand border-b border-zinc-100 px-5 py-5">
+        <div class="flex items-center gap-3">
+          <div class="brand-mark" aria-label="PIAP 智能检测平台图标">
+            <img src="/piap-icon.svg?v=2" alt="" width="40" height="40" />
+          </div>
+          <div class="text-[1.75rem] font-bold tracking-[0.08em] text-zinc-950">PIAP</div>
+        </div>
         <div class="mt-1 text-[11px] tracking-[0.2em] text-zinc-400">智能检测平台</div>
       </div>
 
@@ -31,6 +40,13 @@
                     :class="['nav-link', { 'nav-link-active': isMenuItemActive(item) }]"
                   >
                     <span>{{ item.title }}</span>
+                    <span
+                      v-if="item.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
+                      class="nav-count-badge"
+                      :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
+                    >
+                      {{ collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount }}
+                    </span>
                   </RouterLink>
                   <span v-else class="nav-link cursor-not-allowed text-zinc-400">
                     <span>{{ item.title }}</span>
@@ -48,6 +64,13 @@
               :class="['nav-link', { 'nav-link-active': isMenuItemActive(entry) }]"
             >
               <span>{{ entry.title }}</span>
+              <span
+                v-if="entry.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
+                class="nav-count-badge"
+                :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
+              >
+                {{ collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount }}
+              </span>
             </RouterLink>
             <span v-else class="nav-link cursor-not-allowed text-zinc-400">
               <span>{{ entry.title }}</span>
@@ -58,11 +81,29 @@
       </nav>
     </aside>
 
-    <div class="flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
+    <button
+      v-if="showSidebar && mobileNavOpen"
+      type="button"
+      class="mobile-nav-backdrop"
+      aria-label="关闭导航"
+      @click="mobileNavOpen = false"
+    />
+
+    <div class="app-content flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
       <header
-        class="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-zinc-200 bg-white px-5"
+        class="app-header flex h-12 shrink-0 items-center justify-between gap-4 border-b border-zinc-200 bg-white px-5"
       >
         <div class="flex min-w-0 flex-wrap items-center gap-4">
+          <button
+            v-if="showSidebar"
+            type="button"
+            class="mobile-menu-button"
+            :aria-expanded="mobileNavOpen"
+            :aria-label="mobileNavOpen ? '关闭导航' : '打开导航'"
+            @click="mobileNavOpen = !mobileNavOpen"
+          >
+            <Menu />
+          </button>
           <span class="whitespace-nowrap text-sm font-semibold text-zinc-900">PIAP 控制台</span>
 
           <template v-if="showChatControls">
@@ -89,7 +130,7 @@
 
         <div class="flex shrink-0 flex-wrap items-center gap-3">
           <span
-            class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-600"
+            class="topbar-workspace rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-600"
           >
             {{ workspaceLabel }}
           </span>
@@ -98,13 +139,13 @@
             class="flex flex-col items-end leading-tight text-zinc-700 transition-colors hover:text-zinc-900"
           >
             <span class="text-[13px] font-medium">{{ profileName }}</span>
-            <span class="text-[11px] text-zinc-400">{{ roleLabel }}</span>
+            <span class="profile-role text-[11px] text-zinc-400">{{ roleLabel }}</span>
           </RouterLink>
           <button class="ghost-btn" @click="logout">退出登录</button>
         </div>
       </header>
 
-      <main class="flex-1 overflow-x-hidden overflow-y-auto p-4">
+      <main class="app-main flex-1 overflow-x-hidden overflow-y-auto p-4">
         <RouterView />
       </main>
     </div>
@@ -115,9 +156,10 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { Management, Monitor, Setting } from "@element-plus/icons-vue";
+import { Management, Menu, Monitor, Setting } from "@element-plus/icons-vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useChatStore } from "@/stores/chat.store";
+import { useCollabStore } from "@/stores/collab.store";
 import { useUserStore } from "@/stores/user.store";
 import {
   ROLE_ADMIN,
@@ -136,6 +178,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const userStore = useUserStore();
 const chatStore = useChatStore();
+const collabStore = useCollabStore();
 
 const { menu, primaryRole } = useMenu();
 
@@ -143,6 +186,7 @@ const showSidebar = computed(() => auth.isAuthed && menu.value.length > 0);
 
 const activeNames = ref<string[]>([]);
 const chatInitialized = ref(false);
+const mobileNavOpen = ref(false);
 
 const iconMap: Record<string, unknown> = {
   Monitor,
@@ -286,6 +330,7 @@ async function deleteChatSession() {
 watch(
   () => route.path,
   () => {
+    mobileNavOpen.value = false;
     syncActiveMenuGroups();
     if (!showChatControls.value) {
       chatStore.stopStream();
@@ -311,10 +356,15 @@ onMounted(() => {
   if (auth.isAuthed && !userStore.current) {
     userStore.fetchCurrentUser().catch(() => undefined);
   }
+  if (auth.isAuthed) {
+    void collabStore.loadSummary();
+    collabStore.connectStream();
+  }
 });
 
 function logout() {
   chatStore.stopStream();
+  collabStore.disconnectStream();
   auth.logout();
   router.push("/login");
 }
@@ -324,6 +374,43 @@ function logout() {
 .nav-link,
 .nav-sublink {
   @apply flex items-center gap-2 rounded-xl px-3 py-2 text-[14px] text-zinc-600 transition-colors duration-150;
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #18181b;
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mobile-menu-button,
+.mobile-nav-backdrop {
+  display: none;
+}
+
+.mobile-menu-button {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #e4e4e7;
+  border-radius: 7px;
+  background: #fff;
+  color: #27272a;
+  cursor: pointer;
+}
+
+.mobile-menu-button svg {
+  width: 17px;
+  height: 17px;
 }
 
 .nav-link:hover,
@@ -337,6 +424,27 @@ function logout() {
 
 .nav-link-active:hover {
   @apply bg-zinc-800 text-white;
+}
+
+.nav-count-badge {
+  margin-left: auto;
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #18181b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-link-active .nav-count-badge {
+  background: #fff;
+  color: #18181b;
 }
 
 .ghost-btn {
@@ -374,5 +482,64 @@ function logout() {
 
 .nav-group-link {
   @apply my-0;
+}
+
+@media (max-width: 700px) {
+  .app-sidebar {
+    position: fixed;
+    z-index: 50;
+    inset: 48px auto 0 0;
+    height: calc(100vh - 48px);
+    width: min(84vw, 300px);
+    max-width: 300px;
+    transform: translateX(-100%);
+    transition: transform 180ms ease;
+    box-shadow: 12px 0 32px rgba(24, 24, 27, 0.16);
+  }
+
+  .app-sidebar.mobile-nav-open {
+    transform: translateX(0);
+  }
+
+  .mobile-nav-backdrop {
+    position: fixed;
+    z-index: 40;
+    inset: 48px 0 0;
+    display: block;
+    border: 0;
+    background: rgba(24, 24, 27, 0.35);
+    cursor: pointer;
+  }
+
+  .mobile-menu-button {
+    display: inline-grid;
+  }
+
+  .app-header {
+    position: relative;
+    z-index: 60;
+    height: auto;
+    min-height: 48px;
+    gap: 8px;
+    padding: 7px 10px;
+  }
+
+  .app-header > div {
+    gap: 8px;
+  }
+
+  .topbar-workspace,
+  .profile-role {
+    display: none;
+  }
+
+  .ghost-btn {
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .app-main {
+    padding: 8px;
+  }
 }
 </style>

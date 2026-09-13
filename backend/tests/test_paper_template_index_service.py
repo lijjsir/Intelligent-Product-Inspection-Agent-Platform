@@ -24,6 +24,9 @@ async def test_paper_template_index_service_reports_actionable_qdrant_connect_er
     monkeypatch.setattr("app.services.paper_template_index_service.httpx.AsyncClient", FakeClient)
     monkeypatch.setattr("app.services.paper_template_index_service.settings.qdrant_url", "http://127.0.0.1:6333")
     monkeypatch.setattr("app.services.paper_template_index_service.settings.qdrant_docker_url", "http://qdrant:6333")
+    # Keep this assertion focused on the configured host endpoint. Container
+    # endpoint selection is covered by the runtime proxy tests.
+    monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: False)
 
     service = PaperTemplateIndexService(object())
 

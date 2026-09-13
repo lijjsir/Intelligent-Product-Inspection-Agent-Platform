@@ -249,6 +249,14 @@ export interface ModelQualityMetric {
   thumbs_up_rate: number;
 }
 
+export interface FeedbackSourceSummary {
+  total_count: number;
+  thumbs_up_count: number;
+  thumbs_down_count: number;
+  thumbs_up_share: number;
+  thumbs_down_share: number;
+}
+
 export interface QualityReport {
   total_results: number;
   hallucination_rate: number;
@@ -261,6 +269,7 @@ export interface QualityReport {
   thumbs_up_share: number;
   avg_risk_score: number;
   feedback_distribution: Record<string, number>;
+  feedback_by_source: Record<string, FeedbackSourceSummary>;
   hallucination_trend: TrendPoint[];
   thumbs_down_trend: TrendPoint[];
   thumbs_up_trend: TrendPoint[];
@@ -440,6 +449,7 @@ export interface MemorySearchQueryPayload {
   top_k?: number;
   scope_filter?: {
     memory_type?: string[];
+    meeting_room_id?: string | null;
     product_line?: string | null;
     rag_space_id?: string | null;
     task_id?: string | null;
@@ -484,6 +494,13 @@ export interface CandidateMemoryItem {
   promotion_score?: number | null;
   confidence?: number | null;
   trust_score?: number | null;
+  source_kind?: string | null;
+  source_id?: string | null;
+  current_scope_type?: string | null;
+  current_scope_id?: string | null;
+  requested_scope_type?: string | null;
+  requested_scope_id?: string | null;
+  local_scope_only: boolean;
   created_at?: string | null;
   updated_at?: string | null;
   last_supported_at?: string | null;
@@ -511,6 +528,119 @@ export interface PromotionEvaluationResult {
   promoted: boolean;
   reason?: string | null;
   blocked_reasons: string[];
+}
+
+export interface MemoryOriginItem {
+  id: string;
+  origin_kind: string;
+  source_type: string;
+  source_id: string;
+  trace_id?: string | null;
+  source_span?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  occurred_at?: string | null;
+}
+
+export interface MemoryEvidenceItem {
+  id: string;
+  evidence_role: string;
+  source_kind: string;
+  source_type: string;
+  source_id: string;
+  trace_id?: string | null;
+  task_id?: string | null;
+  rag_space_id?: string | null;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  evidence_pointer?: Record<string, unknown> | null;
+  confidence?: number | null;
+  weight?: number | null;
+  occurred_at?: string | null;
+}
+
+export interface MemoryEvidenceSummary {
+  origin: number;
+  independent_support: number;
+  rag: number;
+  agent_verification: number;
+  human_confirmation: number;
+  opposition: number;
+  conflict: number;
+  last_evidence_at?: string | null;
+}
+
+export interface MemoryScopeBindingItem {
+  id: string;
+  scope_type: string;
+  scope_id: string;
+  permission: string;
+  binding_kind: "home" | "shared" | string;
+  binding_status: "active" | "pending" | "revoked" | string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  source_transfer_id?: string | null;
+}
+
+export interface OrganizationGovernanceItem {
+  memory_id: string;
+  memory_type: string;
+  legacy_status: string;
+  review_status: string;
+  readiness_status: string;
+  readiness_score: number;
+  readiness_blockers: string[];
+  summary: string;
+  primary_origin?: MemoryOriginItem | null;
+  home_scope?: MemoryScopeBindingItem | null;
+  target_scope?: MemoryScopeBindingItem | null;
+  applicability: Record<string, unknown>;
+  evidence: MemoryEvidenceSummary;
+  sync: {
+    vector_status: string;
+    graph_status: string;
+    vector_error?: string | null;
+    graph_error?: string | null;
+  };
+  share_request_id?: string | null;
+  share_request_status?: string | null;
+  share_reason?: string | null;
+  requested_by?: string | null;
+  requested_at?: string | null;
+  mapping_plan?: Record<string, unknown> | null;
+  mapping_version?: string | null;
+  interpolation_strategy?: string | null;
+  unmapped_fields?: string[];
+  migration_review_required: boolean;
+  migration_review_reason?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OrganizationGovernanceOverview {
+  pending_approval: OrganizationGovernanceItem[];
+  promotion_candidates: OrganizationGovernanceItem[];
+  active: OrganizationGovernanceItem[];
+}
+
+export interface MemoryEvidenceDetail {
+  memory_id: string;
+  origins: MemoryOriginItem[];
+  evidence: MemoryEvidenceItem[];
+  scopes: MemoryScopeBindingItem[];
+  applicability: Record<string, unknown>;
+  review_status: string;
+  readiness_status: string;
+  readiness_score: number;
+  readiness_blockers: string[];
+}
+
+export interface MemoryReadinessResult {
+  memory_id: string;
+  review_status: string;
+  readiness_status: string;
+  readiness_score: number;
+  readiness_reason?: string | null;
+  blockers: string[];
 }
 
 export interface MemoryEventItem {

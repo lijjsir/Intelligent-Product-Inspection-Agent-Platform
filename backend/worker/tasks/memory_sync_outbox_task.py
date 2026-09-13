@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.rag.embedder import Embedder
 from app.core.config import settings
-from app.repositories.memory_repo import MemorySyncOutboxRepository
+from app.repositories.memory_repo import MemoryItemRepository, MemorySyncOutboxRepository
 from app.services.memory_graph_factory import build_memory_graph_store
 from app.services.memory_graph_store import MemoryGraphEdge, MemoryGraphNode
 from app.services.memory_vector_service import MEMORY_COLLECTION, MemoryVectorService
@@ -41,6 +41,7 @@ async def _process_memory_sync_outbox(org_id: str) -> dict:
     failed = 0
     async with get_session() as session:
         repo = MemorySyncOutboxRepository(session, org_id)
+        item_repo = MemoryItemRepository(session, org_id)
         rows = await repo.claim_pending(
             limit=settings.memory_sync_outbox_batch_size,
             max_retries=settings.memory_sync_outbox_max_retries,
@@ -49,9 +50,21 @@ async def _process_memory_sync_outbox(org_id: str) -> dict:
             try:
                 await _replay_outbox_row(session, org_id, row.target_backend, row.action, row.payload_json or {})
                 await repo.mark_success(row.id)
+                if str(row.target_backend).lower() == "qdrant":
+                    await item_repo.update_vector_status(row.memory_id, "success")
+                elif str(row.target_backend).lower() == "neo4j":
+                    await item_repo.update_graph_status(row.memory_id, "success")
                 processed += 1
             except Exception as exc:
-                await repo.mark_failed(row.id, str(exc))
+                await repo.mark_failed(
+                    row.id,
+                    str(exc),
+                    max_retries=settings.memory_sync_outbox_max_retries,
+                )
+                if str(row.target_backend).lower() == "qdrant":
+                    await item_repo.update_vector_status(row.memory_id, "failed", str(exc))
+                elif str(row.target_backend).lower() == "neo4j":
+                    await item_repo.update_graph_status(row.memory_id, "failed", str(exc))
                 failed += 1
         await session.commit()
     return {"processed": processed, "failed": failed}
@@ -89,6 +102,7 @@ async def _replay_qdrant(org_id: str, action: str, payload: dict) -> None:
     if normalized in {"UPSERT_ACTIVE_VECTOR", "UPSERT_CANDIDATE_VECTOR"} or action == "upsert_memory":
         kwargs = dict(payload)
         kwargs.pop("collection", None)
+        await vector.ensure_collection()
         await vector.upsert_memory(**kwargs)
         return
     if normalized in {"DELETE_ACTIVE_VECTOR", "DELETE_CANDIDATE_VECTOR"} or action == "delete_memory":

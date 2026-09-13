@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, JSON, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.ids import uuid7
@@ -100,6 +100,77 @@ class MeetingMessage(Base, TimestampMixin):
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
+class MeetingContextSummary(Base, TimestampMixin):
+    __tablename__ = "meeting_context_summaries"
+    __table_args__ = (
+        UniqueConstraint(
+            "room_id",
+            "context_scope",
+            "user_key",
+            name="uq_meeting_context_summaries_scope",
+        ),
+        Index("idx_meeting_context_summaries_room", "org_id", "room_id"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    context_scope: Mapped[str] = mapped_column(String(24), nullable=False, default="room")
+    user_key: Mapped[str] = mapped_column(String(64), nullable=False, default="public")
+    through_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    summary_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class MeetingBusinessObjectCandidate(Base, TimestampMixin):
+    __tablename__ = "meeting_business_object_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "room_id",
+            "object_type",
+            "object_value",
+            name="uq_meeting_business_object_candidate",
+        ),
+        Index(
+            "idx_meeting_business_object_candidates_room_status",
+            "org_id",
+            "room_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    room_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_value: Mapped[str] = mapped_column(String(128), nullable=False)
+    resolved_value: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_approval")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_message_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    resolved_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+
+
+class MemoryTag(Base):
+    __tablename__ = "memory_tags"
+    __table_args__ = (
+        Index("idx_memory_tags_memory", "org_id", "memory_id"),
+        Index("idx_memory_tags_lookup", "org_id", "tag_type", "tag_value"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    org_id: Mapped[str] = mapped_column(UUIDBinary, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tag_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tag_value: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
 class MemoryScopeBinding(Base, TimestampMixin):
     __tablename__ = "memory_scope_bindings"
     __table_args__ = (
@@ -113,14 +184,29 @@ class MemoryScopeBinding(Base, TimestampMixin):
     scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
     scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
     permission: Mapped[str] = mapped_column(String(32), nullable=False, default="read")
+    binding_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="home")
+    binding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    approved_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    source_transfer_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
 
 
 class MemoryTransferLog(Base, TimestampMixin):
     __tablename__ = "memory_transfer_logs"
     __table_args__ = (
+        UniqueConstraint("org_id", "idempotency_key", name="uq_memory_transfer_logs_idempotency"),
         Index("idx_memory_transfer_logs_memory", "org_id", "memory_id"),
         Index("idx_memory_transfer_logs_target", "org_id", "to_scope_type", "to_scope_id"),
+        Index("idx_memory_transfer_logs_status_created", "org_id", "status", "created_at"),
+        Index(
+            "idx_memory_transfer_logs_target_status",
+            "org_id",
+            "to_scope_type",
+            "to_scope_id",
+            "status",
+        ),
     )
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
@@ -131,8 +217,18 @@ class MemoryTransferLog(Base, TimestampMixin):
     to_scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
     to_scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
     transfer_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_approval")
     operator_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    requested_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    decided_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # The complete, deterministic Cs -> Ct conversion contract.  Keeping it
+    # on the transfer makes approval and later rollback independently auditable.
+    mapping_plan_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    mapping_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    interpolation_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class MeetingConflictEvent(Base, TimestampMixin):

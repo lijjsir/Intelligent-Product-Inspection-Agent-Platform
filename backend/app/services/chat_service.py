@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 from fastapi import Header, Query
 
 from app.core.datetime import utcnow, utcnow_iso
-from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
+from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from app.core.ids import uuid7
 from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER, require_role
 from app.core.security import create_stream_token, safe_decode_token
@@ -121,9 +121,12 @@ class ChatService:
     async def list_messages(
         self,
         session_id: str,
-        after_seq: int = 0,
+        after_seq: int | None = None,
+        before_seq: int | None = None,
         limit: int = 200,
     ) -> list[ChatMessageResponse]:
+        if after_seq is not None and before_seq is not None:
+            raise ValidationError("after_seq and before_seq cannot be used together")
         async with get_session() as session:
             session_repo = ChatSessionRepository(session)
             if not await session_repo.get(self._org_id, self._user_id, session_id):
@@ -133,6 +136,7 @@ class ChatService:
                 org_id=self._org_id,
                 session_id=session_id,
                 after_seq=after_seq,
+                before_seq=before_seq,
                 limit=limit,
             )
             return [ChatMessageResponse.model_validate(item) for item in rows]

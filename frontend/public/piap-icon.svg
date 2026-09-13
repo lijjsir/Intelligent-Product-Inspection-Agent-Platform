@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title description">
+  <title id="title">PIAP</title>
+  <desc id="description">A geometric letter P crossed by a cyan inspection scan line.</desc>
+  <rect width="64" height="64" rx="14" fill="#18181b"/>
+  <path
+    fill="#fafafa"
+    fill-rule="evenodd"
+    d="M15 12h21c11 0 18 6.7 18 16.5S47 45 36 45H25v7H15V12Zm10 10v14h10.5c5.4 0 8.5-2.6 8.5-7s-3.1-7-8.5-7H25Z"
+  />
+  <rect x="29" y="27" width="19" height="4" rx="2" fill="#2dd4bf"/>
+</svg>

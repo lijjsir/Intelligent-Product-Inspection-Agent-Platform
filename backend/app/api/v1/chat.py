@@ -59,12 +59,18 @@ async def create_session(
 @router.get("/sessions/{session_id}/messages", response_model=ResponseEnvelope[list[ChatMessageResponse]])
 async def list_messages(
     session_id: str,
-    after_seq: int = Query(default=0, ge=0),
+    after_seq: int | None = Query(default=None, ge=0),
+    before_seq: int | None = Query(default=None, ge=1),
     limit: int = Query(default=200, ge=1, le=500),
     current: CurrentUser = Depends(get_current_user),
 ):
     service = _build_service(current)
-    return ResponseEnvelope(data=await service.list_messages(session_id, after_seq=after_seq, limit=limit))
+    return ResponseEnvelope(data=await service.list_messages(
+        session_id,
+        after_seq=after_seq,
+        before_seq=before_seq,
+        limit=limit,
+    ))
 
 
 @router.get("/inspection-context", response_model=ResponseEnvelope[dict[str, Any]])

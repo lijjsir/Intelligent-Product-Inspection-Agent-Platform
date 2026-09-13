@@ -136,3 +136,64 @@ async def test_infrastructure_service_auto_creates_minio_bucket_on_health_check(
     assert result.status == "healthy"
     assert storage.ensured_buckets == ["piap"]
     assert "piap" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_service_includes_extended_dependencies_for_tenant(monkeypatch):
+    service = InfrastructureService(FakeSession(), "org-1")
+
+    async def fake_component(name, kind, status="healthy"):
+        return InfrastructureComponentStatus(name=name, kind=kind, status=status)
+
+    monkeypatch.setattr(service, "_check_mysql", lambda: fake_component("MySQL", "database"))
+    monkeypatch.setattr(service, "_check_redis", lambda: fake_component("Redis", "cache"))
+    monkeypatch.setattr(service, "_check_qdrant", lambda: fake_component("Qdrant", "vector_db"))
+    monkeypatch.setattr(service, "_check_object_storage", lambda: fake_component("MinIO", "storage"))
+    monkeypatch.setattr(service, "_check_chat_model", lambda: fake_component("Chat Model", "chat_model"))
+    monkeypatch.setattr(service, "_check_embedding_model", lambda: fake_component("Embedding Model", "embedding_model"))
+    monkeypatch.setattr(service, "_check_neo4j", lambda: fake_component("Neo4j", "graph_db"))
+    monkeypatch.setattr(service, "_check_celery", lambda: fake_component("Celery", "queue"))
+
+    result = await service.check_all()
+
+    assert [item.name for item in result.components] == [
+        "MySQL",
+        "Redis",
+        "Qdrant",
+        "MinIO",
+        "Chat Model",
+        "Embedding Model",
+        "Neo4j",
+        "Celery",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_health_status_is_unhealthy_when_no_model_is_configured(monkeypatch):
+    service = InfrastructureService(FakeSession(), "org-1")
+
+    class FakeRepo:
+        async def list_active(self, org_id):
+            return []
+
+    monkeypatch.setattr("app.services.infrastructure_service.ModelConfigRepository", lambda session: FakeRepo())
+    monkeypatch.setattr("app.services.infrastructure_service.settings.deepseek_api_key", "")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.volcengine_api_key", "")
+
+    result = await service._check_chat_model()
+
+    assert result.status == "unhealthy"
+    assert "没有可用" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_neo4j_disabled_is_degraded_when_graph_backend_does_not_require_it(monkeypatch):
+    service = InfrastructureService(FakeSession(), "org-1")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.neo4j_enabled", False)
+    monkeypatch.setattr("app.services.infrastructure_service.settings.memory_graph_read_backend", "mysql")
+    monkeypatch.setattr("app.services.infrastructure_service.settings.memory_graph_write_backend", "mysql")
+
+    result = await service._check_neo4j()
+
+    assert result.status == "degraded"
+    assert "不要求" in result.detail

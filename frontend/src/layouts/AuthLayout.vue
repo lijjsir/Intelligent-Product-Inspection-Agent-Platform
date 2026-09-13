@@ -1,6 +1,9 @@
 <template>
   <div class="min-h-screen grid grid-cols-[1.2fr_1fr] max-md:grid-cols-1 bg-zinc-950">
     <div class="flex flex-col justify-center px-20 max-md:px-8 py-20 text-white">
+      <div class="brand-mark brand-mark-auth mb-8" aria-label="PIAP 智能检测平台图标">
+        <img src="/piap-icon.svg?v=2" alt="" width="64" height="64" />
+      </div>
       <h1 class="text-[42px] font-bold leading-tight tracking-tight">PIAP 智能检测平台</h1>
       <p class="mt-4 text-lg text-zinc-400 max-w-md leading-relaxed">
         从任务到稳定性评估的一体化质检控制台
@@ -17,4 +20,24 @@
   </div>
 </template>
 
-<script setup lang="ts"></script>
+<style scoped>
+.brand-mark {
+  flex: none;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+.brand-mark-auth {
+  width: 64px;
+  height: 64px;
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  background: #18181b;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>

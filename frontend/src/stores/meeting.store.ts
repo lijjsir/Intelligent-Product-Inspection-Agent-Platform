@@ -13,6 +13,7 @@ import type {
   MeetingAgentSubgraph,
   MeetingAttachment,
   MeetingBusinessContext,
+  MeetingBusinessObjectCandidate,
   MeetingConflictEvent,
   MeetingContextPreview,
   MeetingDataDomain,
@@ -20,9 +21,11 @@ import type {
   MeetingMemoryConfirmPayload,
   MeetingMemoryDisputePayload,
   MeetingMemoryShareApproval,
+  MeetingMemoryShareCreateResponse,
   MeetingMemorySharePayload,
   MeetingMessage,
   MeetingQuoteSnapshot,
+  MeetingQuestionSource,
   MeetingRoom,
   MeetingRoomCreate,
   MeetingRoomAgent,
@@ -47,6 +50,9 @@ export const useMeetingStore = defineStore("meeting", () => {
   const agentQueryAudits = ref<MeetingAgentQueryAudit[]>([]);
   const conflictEvents = ref<MeetingConflictEvent[]>([]);
   const pendingMemoryShares = ref<MeetingMemoryShareApproval[]>([]);
+  const businessObjects = ref<MeetingBusinessObjectCandidate[]>([]);
+  const hasOlderMessages = ref(false);
+  const oldestLoadedMessageSeq = ref<number | null>(null);
   const activeRoomId = ref("");
   const eventSource = shallowRef<EventSource | null>(null);
   const streamConnected = ref(false);
@@ -62,6 +68,8 @@ export const useMeetingStore = defineStore("meeting", () => {
   const generalAgentRunningAttachments = ref<MeetingAttachment[]>([]);
   const cancelledGeneralAgentWorkflowIds = ref<Set<string>>(new Set());
   const memoryExtracting = ref(false);
+  const memoryExtractionStatus = ref<"idle" | "running" | "success" | "empty" | "error">("idle");
+  const memoryExtractionError = ref("");
   let memoryExtractionController: AbortController | null = null;
   let generalAgentController: AbortController | null = null;
   const loadingContext = ref(false);
@@ -146,6 +154,7 @@ export const useMeetingStore = defineStore("meeting", () => {
   function clearActiveRoomState() {
     pendingAttachments.value = [];
     messages.value = [];
+    oldestLoadedMessageSeq.value = null;
     agents.value = [];
     members.value = [];
     memories.value = [];
@@ -154,6 +163,8 @@ export const useMeetingStore = defineStore("meeting", () => {
     agentQueryAudits.value = [];
     conflictEvents.value = [];
     pendingMemoryShares.value = [];
+    businessObjects.value = [];
+    hasOlderMessages.value = false;
   }
 
   function isAgentReplyMessage(message: MeetingMessage) {
@@ -231,6 +242,28 @@ export const useMeetingStore = defineStore("meeting", () => {
   });
   const conversationMessages = computed(() => activeRoomMessages.value.filter(isPublicConversationMessage));
   const agentPanelMessages = computed(() => activeRoomMessages.value.filter((message) => isAgentReplyMessage(message) || isAgentSideQuestion(message)));
+  const privateAgentMessages = computed(() => agentPanelMessages.value.filter((message) => {
+    // Automatic participation is a room-level intervention even when an older
+    // event was missing its interaction_mode field.
+    if (message.metadata_json?.auto_participation) return false;
+    return Boolean(privateRecipientUserId(message))
+      || (
+        isAgentReplyMessage(message)
+        && (
+          String(message.metadata_json?.interaction_mode || "") === "private_chat"
+          || String(message.metadata_json?.visibility || message.metadata_json?.response_visibility || "") === "private"
+        )
+      );
+  }));
+  const publicAgentMessages = computed(() => agentPanelMessages.value.filter((message) => (
+    (!privateRecipientUserId(message) && message.message_type === "user" && hasAgentMention(message))
+    || Boolean(message.metadata_json?.auto_participation)
+    || ["public_mention", "auto_participation"].includes(String(message.metadata_json?.interaction_mode || ""))
+    || (
+      isAgentReplyMessage(message)
+      && String(message.metadata_json?.visibility || message.metadata_json?.response_visibility || "") === "room"
+    )
+  )));
   const systemPanelMessages = computed(() => activeRoomMessages.value.filter(isSystemPanelMessage));
   const candidateMemories = computed(() => memories.value.filter((item) => item.status === "candidate"));
   const confirmedMemories = computed(() => memories.value.filter((item) => ["confirmed", "active", "disputed", "superseded"].includes(item.status)));
@@ -272,6 +305,8 @@ export const useMeetingStore = defineStore("meeting", () => {
       password: password || null,
       visibility: options?.visibility || "private",
       allowed_data_domains: options?.allowed_data_domains || null,
+      business_context: options?.business_context || null,
+      auto_participation_mode: options?.auto_participation_mode || "off",
     });
     const room = unwrap<MeetingRoom>(data);
     rooms.value = [room, ...rooms.value.filter((r) => r.id !== room.id)];
@@ -328,16 +363,32 @@ export const useMeetingStore = defineStore("meeting", () => {
 
   // ── Message Actions ────────────────────────────────────────────
 
-  async function loadMessages(afterSeq = 0) {
+  async function loadMessages(cursor?: number | { beforeSeq?: number; afterSeq?: number; limit?: number }) {
     if (!activeRoom.value) {
       messages.value = [];
       return;
     }
-    loadingMessages.value = afterSeq === 0;
+    const beforeSeq = typeof cursor === "object" ? cursor.beforeSeq : undefined;
+    const afterSeq = typeof cursor === "number" ? (cursor > 0 ? cursor : undefined) : cursor?.afterSeq;
+    const isInitial = beforeSeq === undefined && afterSeq === undefined;
+    loadingMessages.value = isInitial;
     try {
-      const { data } = await meetingApi.listMessages(activeRoom.value.id, afterSeq);
+      const limit = typeof cursor === "object" ? cursor.limit || 100 : 100;
+      const { data } = await meetingApi.listMessages(activeRoom.value.id, {
+        ...(beforeSeq !== undefined ? { beforeSeq } : {}),
+        ...(afterSeq !== undefined ? { afterSeq } : {}),
+        limit,
+      });
       const list = unwrap<MeetingMessage[]>(data);
-      if (afterSeq > 0) {
+      if (beforeSeq !== undefined) {
+        const seen = new Set(messages.value.map((m) => m.id));
+        messages.value = [
+          ...list.filter((m) => !seen.has(m.id)).map((m) => normalizeMeetingMessage(m)),
+          ...messages.value,
+        ].sort((a, b) => a.seq_no - b.seq_no);
+        if (list.length) oldestLoadedMessageSeq.value = list[0].seq_no;
+        hasOlderMessages.value = list.length >= limit;
+      } else if (afterSeq !== undefined) {
         const seen = new Set(messages.value.map((m) => m.id));
         messages.value = [
           ...messages.value,
@@ -345,10 +396,20 @@ export const useMeetingStore = defineStore("meeting", () => {
         ];
       } else {
         messages.value = list.map((m) => normalizeMeetingMessage(m));
+        oldestLoadedMessageSeq.value = list[0]?.seq_no ?? null;
+        hasOlderMessages.value = list.length >= limit;
       }
     } finally {
       loadingMessages.value = false;
     }
+  }
+
+  async function loadOlderMessages(limit = 100) {
+    const beforeSeq = oldestLoadedMessageSeq.value;
+    if (beforeSeq === null || !hasOlderMessages.value || loadingMessages.value) return [];
+    const beforeIds = new Set(messages.value.map((message) => message.id));
+    await loadMessages({ beforeSeq, limit });
+    return messages.value.filter((message) => !beforeIds.has(message.id));
   }
 
   watch(activeRoomId, () => {
@@ -452,6 +513,8 @@ export const useMeetingStore = defineStore("meeting", () => {
     parentMessageId?: string;
     questionRevision?: string;
     replaceMessageId?: string;
+    interactionMode?: "private_chat" | "public_mention" | "auto_participation";
+    questionSources?: MeetingQuestionSource[];
   };
 
   function agentQuestionLinkMetadata(options?: GeneralAgentRunOptions) {
@@ -471,6 +534,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     const replaceMessageId = String(options?.replaceMessageId || "").trim();
     const pendingMessageId = replaceMessageId || `pending-${workflowRunId}`;
     const attachments = options?.attachments || [];
+    const interactionMode = options?.interactionMode || "private_chat";
     const questionLinkMetadata = agentQuestionLinkMetadata(options);
     const controller = new AbortController();
     generalAgentController = controller;
@@ -493,13 +557,20 @@ export const useMeetingStore = defineStore("meeting", () => {
         attachments,
         workflow_run_id: workflowRunId,
         replace_message_id: replaceMessageId || undefined,
+        interaction_mode: interactionMode,
+        question_message_id: options?.parentMessageId || undefined,
+        trigger_message_id: options?.parentMessageId || undefined,
+        question_revision: options?.questionRevision || undefined,
+        question_sources: options?.questionSources || [],
       };
       upsertMessage({
         id: pendingMessageId,
         room_id: roomId,
         user_id: "general_agent",
         username: "会议Agent",
-        seq_no: messages.value.length + 1,
+        // Local placeholders have no server cursor. Keeping seq_no at zero
+        // prevents reconnect reconciliation from skipping the persisted reply.
+        seq_no: 0,
         content: "",
         message_type: "agent_streaming",
         agent_id: "general_agent",
@@ -507,9 +578,11 @@ export const useMeetingStore = defineStore("meeting", () => {
           local_pending: true,
           query: payload.query,
           workflow_run_id: workflowRunId,
-          visibility: "room",
-          audience_scope_type: "meeting_room",
-          audience_scope_id: roomId,
+          interaction_mode: interactionMode,
+          visibility: interactionMode === "private_chat" ? "private" : "room",
+          audience_scope_type: interactionMode === "private_chat" ? "user" : "meeting_room",
+          audience_scope_id: interactionMode === "private_chat" ? currentUserId() : roomId,
+          ...(interactionMode === "private_chat" ? { private_recipient_user_id: currentUserId() } : {}),
           ...questionLinkMetadata,
           ...(attachments.length ? { attachment_echo: attachments } : {}),
         },
@@ -585,7 +658,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     const map: Record<string, string> = {
       auto: "请根据当前会议上下文判断需要调用的能力，并给出可追溯回答。",
       meeting_summary: "请总结本次会议，提取关键结论和可沉淀记忆。",
-      memory_transfer: "请从本次会议中提取候选记忆，等待人工确认后进入本会议的已确认记忆。",
+      memory_transfer: "请从本次公共会议内容中整理待确认知识，等待人工确认后进入本会议共享知识。",
       action_items: "请从本次会议中提取会议待办线索。",
       risk_forecast: "请基于会议上下文和已确认记忆，预测后续检测风险。",
       evidence_query: "请基于会议上下文查询或整理检测证据线索。",
@@ -603,16 +676,18 @@ export const useMeetingStore = defineStore("meeting", () => {
       agentQueryAudits.value = [];
       conflictEvents.value = [];
       pendingMemoryShares.value = [];
+      businessObjects.value = [];
       return;
     }
     loadingContext.value = true;
     try {
-      const [memoryResp, actionResp, previewResp, conflictsResp, sharesResp] = await Promise.all([
+      const [memoryResp, actionResp, previewResp, conflictsResp, sharesResp, objectsResp] = await Promise.all([
         meetingApi.listMemories(room.id),
         meetingApi.listActionItems(room.id),
         meetingApi.getContextPreview(room.id).catch(() => null),
         meetingApi.listConflicts(room.id).catch(() => null),
         meetingApi.listPendingMemoryShares(room.id).catch(() => null),
+        meetingApi.listBusinessObjects(room.id).catch(() => null),
       ]);
       if (activeRoomId.value !== room.id) return;
       memories.value = unwrap<MeetingMemory[]>(memoryResp.data);
@@ -620,6 +695,7 @@ export const useMeetingStore = defineStore("meeting", () => {
       contextPreview.value = previewResp ? unwrap<MeetingContextPreview>(previewResp.data) : null;
       conflictEvents.value = conflictsResp ? unwrap<MeetingConflictEvent[]>(conflictsResp.data) : [];
       pendingMemoryShares.value = sharesResp ? unwrap<MeetingMemoryShareApproval[]>(sharesResp.data) : [];
+      businessObjects.value = objectsResp ? unwrap<MeetingBusinessObjectCandidate[]>(objectsResp.data) : [];
       if (canViewAgentQueryAudits.value) {
         await loadAgentQueryAudits();
       } else {
@@ -643,6 +719,40 @@ export const useMeetingStore = defineStore("meeting", () => {
       contextPreview.value = null;
       return null;
     }
+  }
+
+  async function shareAgentAnswer(
+    message: MeetingMessage,
+    content: string,
+    sourceMessageIds: string[] = [],
+  ) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.shareAgentAnswer(activeRoom.value.id, {
+      answer_message_id: message.id,
+      content,
+      source_message_ids: sourceMessageIds,
+    });
+    const shared = unwrap<MeetingMessage>(data);
+    upsertMessage(shared);
+    return shared;
+  }
+
+  async function correctBusinessObject(
+    correction: string,
+    candidateId?: string,
+    correctedValue?: string,
+    action: "correct" | "reject" = "correct",
+  ) {
+    if (!activeRoom.value) return null;
+    const { data } = await meetingApi.correctBusinessObject(activeRoom.value.id, {
+      correction,
+      action,
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+      ...(correctedValue ? { corrected_value: correctedValue } : {}),
+    });
+    const object = unwrap<MeetingBusinessObjectCandidate>(data);
+    businessObjects.value = businessObjects.value.map((item) => item.id === object.id ? object : item);
+    return object;
   }
 
   async function loadAgentQueryAudits(limit = 20) {
@@ -714,8 +824,8 @@ export const useMeetingStore = defineStore("meeting", () => {
     return memory;
   }
 
-  async function rejectMemoryShare(transferId: string) {
-    const { data } = await meetingApi.rejectMemoryShare(transferId);
+  async function rejectMemoryShare(transferId: string, decisionNote?: string) {
+    const { data } = await meetingApi.rejectMemoryShare(transferId, decisionNote);
     const share = unwrap<MeetingMemoryShareApproval>(data);
     pendingMemoryShares.value = pendingMemoryShares.value
       .map((item) => (item.id === share.id ? share : item))
@@ -723,10 +833,19 @@ export const useMeetingStore = defineStore("meeting", () => {
     return share;
   }
 
+  async function cancelMemoryShare(transferId: string) {
+    const { data } = await meetingApi.cancelMemoryShare(transferId);
+    const share = unwrap<MeetingMemoryShareApproval>(data);
+    pendingMemoryShares.value = pendingMemoryShares.value.filter((item) => item.id !== transferId);
+    return share;
+  }
+
   async function extractMemories(topic = "") {
     if (!activeRoom.value || memoryExtracting.value) return [];
     memoryExtractionController = new AbortController();
     memoryExtracting.value = true;
+    memoryExtractionStatus.value = "running";
+    memoryExtractionError.value = "";
     try {
       const { data } = await meetingApi.extractMemories(
         activeRoom.value.id,
@@ -735,11 +854,15 @@ export const useMeetingStore = defineStore("meeting", () => {
       );
       const list = unwrap<MeetingMemory[]>(data);
       await loadMeetingContext();
+      memoryExtractionStatus.value = list.length ? "success" : "empty";
       return list;
     } catch (error) {
       if (axios.isCancel(error) || (error instanceof Error && error.name === "CanceledError")) {
+        memoryExtractionStatus.value = "idle";
         return [];
       }
+      memoryExtractionStatus.value = "error";
+      memoryExtractionError.value = error instanceof Error ? error.message : "知识整理失败";
       throw error;
     } finally {
       memoryExtractionController = null;
@@ -751,6 +874,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     memoryExtractionController?.abort();
     memoryExtractionController = null;
     memoryExtracting.value = false;
+    memoryExtractionStatus.value = "idle";
   }
 
   async function confirmMemory(memoryId: string, payload?: MeetingMemoryConfirmPayload) {
@@ -790,14 +914,25 @@ export const useMeetingStore = defineStore("meeting", () => {
   }
 
   async function shareMemory(memoryId: string, payload: MeetingMemorySharePayload) {
-    const { data } = await meetingApi.shareMemory(memoryId, payload);
-    const memory = unwrap<MeetingMemory>(data);
+    const idempotencyKey = payload.idempotency_key || `meeting-share:${memoryId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const { data } = await meetingApi.createMemoryShareRequest(memoryId, {
+      ...payload,
+      idempotency_key: idempotencyKey,
+    });
+    const result = unwrap<MeetingMemoryShareCreateResponse>(data);
+    const memory = result.memory;
     memories.value = memories.value.map((item) => (item.memory_id === memory.memory_id ? memory : item));
     if (!memories.value.some((item) => item.memory_id === memory.memory_id)) {
       memories.value = [memory, ...memories.value];
     }
     if (activeRoom.value) {
       await Promise.all([loadMeetingContext(), loadMessages(0)]);
+    }
+    if (result.share_request.status === "pending_approval") {
+      pendingMemoryShares.value = [
+        result.share_request,
+        ...pendingMemoryShares.value.filter((item) => item.id !== result.share_request.id),
+      ];
     }
     return memory;
   }
@@ -942,7 +1077,7 @@ export const useMeetingStore = defineStore("meeting", () => {
     meetingApi.stream(activeRoom.value.id, handleStreamEvent, (status) => {
       if (requestId !== streamRequestId) return;
       streamConnected.value = status === "open";
-      void loadMessages(lastMessageSeq.value);
+      void loadMessages(serverLastMessageSeq.value);
     }).then((source) => {
       if (requestId !== streamRequestId) {
         source.close();
@@ -970,6 +1105,10 @@ export const useMeetingStore = defineStore("meeting", () => {
       case "message_created": {
         const workflowRunId = String(evt.message.metadata_json?.workflow_run_id || "");
         if (workflowRunId && cancelledGeneralAgentWorkflowIds.value.has(workflowRunId)) break;
+        const isUnloadedHistory = oldestLoadedMessageSeq.value !== null
+          && evt.message.seq_no < oldestLoadedMessageSeq.value
+          && !messages.value.some((message) => message.id === evt.message.id);
+        if (isUnloadedHistory) break;
         if (evt.message.message_type === "agent" && evt.message.agent_id) {
           removePendingAgentMessage(evt.message.agent_id);
         }
@@ -977,6 +1116,12 @@ export const useMeetingStore = defineStore("meeting", () => {
         loadRooms();
         if (evt.message.agent_id === "general_agent" || evt.message.message_type === "system") {
           loadMeetingContext();
+        }
+        break;
+      }
+      case "agent_query_audit_created": {
+        if (canViewAgentQueryAudits.value) {
+          void loadAgentQueryAudits();
         }
         break;
       }
@@ -992,7 +1137,7 @@ export const useMeetingStore = defineStore("meeting", () => {
           room_id: activeRoomId.value,
           user_id: evt.agent_id,
           username: evt.agent_name,
-          seq_no: messages.value.length + 1,
+          seq_no: 0,
           content: "",
           message_type: "agent_streaming",
           agent_id: evt.agent_id,
@@ -1001,6 +1146,9 @@ export const useMeetingStore = defineStore("meeting", () => {
             local_pending: false,
             workflow_run_id: evt.workflow_run_id,
             query: evt.query || localPending?.metadata_json?.query,
+            interaction_mode: evt.interaction_mode || localPending?.metadata_json?.interaction_mode,
+            question_message_id: evt.question_message_id || localPending?.metadata_json?.question_message_id,
+            trigger_message_id: evt.trigger_message_id || localPending?.metadata_json?.trigger_message_id,
             ...agentVisibilityMetadata(evt, localPending),
           },
           created_at: new Date().toISOString(),
@@ -1039,7 +1187,7 @@ export const useMeetingStore = defineStore("meeting", () => {
             room_id: activeRoomId.value,
             user_id: evt.agent_id,
             username: (evt as { agent_name?: string }).agent_name || evt.agent_id.slice(-8),
-            seq_no: messages.value.length + 1,
+            seq_no: 0,
             content,
             message_type: "agent",
             agent_id: evt.agent_id,
@@ -1076,11 +1224,16 @@ export const useMeetingStore = defineStore("meeting", () => {
           room_id: activeRoomId.value,
           user_id: evt.agent_id,
           username: evt.agent_name,
-          seq_no: messages.value.length + 1,
+          seq_no: 0,
           content: errMsg,
           message_type: "agent",
           agent_id: evt.agent_id,
-          metadata_json: agentVisibilityMetadata(evt),
+          metadata_json: {
+            ...agentVisibilityMetadata(evt),
+            interaction_mode: evt.interaction_mode,
+            question_message_id: evt.question_message_id,
+            trigger_message_id: evt.trigger_message_id,
+          },
           created_at: new Date().toISOString(),
         } as MeetingMessage);
         break;
@@ -1105,19 +1258,25 @@ export const useMeetingStore = defineStore("meeting", () => {
     return last?.seq_no || 0;
   });
 
+  const serverLastMessageSeq = computed(() => activeRoomMessages.value.reduce(
+    (max, message) => Math.max(max, Number(message.seq_no) > 0 ? Number(message.seq_no) : 0),
+    0,
+  ));
+
   return {
     // state
     rooms, messages, agents, members, activeRoomId, eventSource, streamConnected,
     streamingContent, loadingRooms, loadingMessages, sending, messageReactions, aiThinking, summarizing,
-    generalAgentRunning, generalAgentWorkflowRunId, memoryExtracting, loadingContext, actionItemSaving, attachmentUploading,
+    generalAgentRunning, generalAgentWorkflowRunId, memoryExtracting, memoryExtractionStatus, memoryExtractionError, loadingContext, actionItemSaving, attachmentUploading,
     memories, actionItems, pendingAttachments, contextPreview, agentQueryAudits, conflictEvents, pendingMemoryShares,
+    businessObjects, hasOlderMessages,
     // computed
-    activeRoom, canSend, activeRoomMessages, conversationMessages, agentPanelMessages, systemPanelMessages, lastMessageSeq, candidateMemories, confirmedMemories, openActionItems, canViewAgentQueryAudits,
+    activeRoom, canSend, activeRoomMessages, conversationMessages, agentPanelMessages, privateAgentMessages, publicAgentMessages, systemPanelMessages, lastMessageSeq, candidateMemories, confirmedMemories, openActionItems, canViewAgentQueryAudits,
     // actions
     loadRooms, createRoom, joinRoom, updateRoomTitle, updateRoomSettings, updateBusinessContext, closeRoom,
-    loadMessages, sendMessage, updateMessage, recallMessage, uploadAttachments, uploadPendingAttachments, removePendingAttachment, clearPendingAttachments,
+    loadMessages, loadOlderMessages, sendMessage, updateMessage, recallMessage, uploadAttachments, uploadPendingAttachments, removePendingAttachment, clearPendingAttachments,
     requestAiReply, summarizeMeeting, runGeneralAgent, loadMeetingContext, loadContextPreview, loadAgentQueryAudits, extractMemories,
-    loadConflicts, resolveConflict, loadPendingMemoryShares, approveMemoryShare, rejectMemoryShare,
+    loadConflicts, resolveConflict, loadPendingMemoryShares, approveMemoryShare, rejectMemoryShare, cancelMemoryShare, shareAgentAnswer, correctBusinessObject,
     cancelMemoryExtraction, cancelGeneralAgentRun,
     confirmMemory, rejectMemory, disputeMemory, shareMemory,
     createActionItem, updateActionItem, completeActionItem,

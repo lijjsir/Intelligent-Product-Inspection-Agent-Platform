@@ -81,6 +81,16 @@ describe("useMenu", () => {
     }
   });
 
+  it("names the collaboration work queue as collaboration center", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_EXPERT;
+    auth.roles = [ROLE_EXPERT];
+
+    expect(flattenTitles()).toContain("协作中心");
+    expect(flattenTitles()).not.toContain("协作消息");
+    expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("协作中心");
+  });
+
   it("keeps collaboration entries at the top while chat stays first for app users", () => {
     const auth = useAuthStore();
 

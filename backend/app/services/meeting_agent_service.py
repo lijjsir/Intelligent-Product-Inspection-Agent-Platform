@@ -10,12 +10,12 @@ from agent.adapters.factory import AgentAdapterFactory
 from agent.llm.gateway import LLMGateway
 from app.core.data_domain_policy import (
     RESPONSE_VISIBILITY_PRIVATE,
-    RESPONSE_VISIBILITY_ROOM,
     authorize_meeting_query,
     infer_requested_domains_for_query,
     is_sensitive_authorization,
     normalize_domains,
 )
+from app.core.exceptions import AgentAdapterUnavailableError
 from app.core.ids import uuid7
 from app.core.permissions import ROLE_USER
 from app.repositories.meeting_repo import MeetingRepository
@@ -193,15 +193,52 @@ class MeetingAgentService:
                     "query": query,
                 }
             )
-            full_content = await adapter.invoke(
-                room_id=room_id,
-                agent_def=agent_def,
-                query=query,
-                context_messages=context_dicts,
-                emit=emit,
-                runtime_model=runtime_model,
-            )
+            adapter_kwargs = {
+                "room_id": room_id,
+                "agent_def": agent_def,
+                "query": query,
+                "context_messages": context_dicts,
+                "emit": emit,
+                "runtime_model": runtime_model,
+            }
+            if str(getattr(agent_def, "adapter_type", "llm") or "llm").lower() == "pipeline":
+                adapter_kwargs.update(
+                    {
+                        "request_context": {
+                            "request_id": str(uuid7()),
+                            "workflow_run_id": workflow_run_id,
+                            "assistant_message_id": agent_message_id,
+                            "org_id": org_id,
+                            "user_id": user_id,
+                            "agent_id": agent_def_id,
+                            "agent_name": agent_name,
+                            "session_id": f"meeting:{room_id}",
+                            "query": query,
+                            "metadata": {
+                                "source": "meeting_room",
+                                "room_id": room_id,
+                                "meeting_agent_id": agent_def_id,
+                                "allowed_data_domains": access.allowed_domains,
+                                "denied_data_domains": access.denied_domains,
+                            },
+                            "ext": {
+                                "surface": "chat",
+                                "allowed_modes": ["answer", "report"],
+                                "forbidden_modes": ["action"],
+                                "meeting_context": {
+                                    "room_id": room_id,
+                                    "allowed_data_domains": access.allowed_domains,
+                                    "denied_data_domains": access.denied_domains,
+                                },
+                            },
+                        }
+                    }
+                )
+            full_content = await adapter.invoke(**adapter_kwargs)
             display_content, response_metadata = normalize_ai_response_content(full_content)
+            adapter_metadata = getattr(full_content, "metadata", None)
+            if isinstance(adapter_metadata, dict):
+                response_metadata = {**response_metadata, **adapter_metadata}
 
             async with get_session() as session:
                 repo = MeetingRepository(session)
@@ -388,7 +425,6 @@ class MeetingAgentService:
                 if not agent_def or not agent_def.is_active:
                     continue
 
-                adapter = self._factory.get_for_agent(agent_def)
                 last_time = _last_agent_message.get((room_id, str(room_agent.agent_id)))
                 seconds_since = (datetime.utcnow() - last_time).total_seconds() if last_time else 999999
                 msg_count_since = (
@@ -396,19 +432,6 @@ class MeetingAgentService:
                     if last_time
                     else len(recent_msgs)
                 )
-
-                try:
-                    should_reply = await adapter.should_participate(
-                        agent_def=agent_def,
-                        messages_since_last=msg_count_since,
-                        seconds_since_last=seconds_since,
-                        recent_content=recent_content,
-                    )
-                except NotImplementedError:
-                    continue
-
-                if not should_reply:
-                    continue
 
                 workflow_run_id = str(uuid7())
                 agent_message_id = str(uuid7())
@@ -419,6 +442,52 @@ class MeetingAgentService:
                     event.setdefault("ts", datetime.utcnow().isoformat())
                     event.setdefault("private_user_ids", [user_id])
                     await meeting_stream_broker.publish(room_id, event)
+
+                try:
+                    adapter = self._factory.get_for_agent(agent_def)
+                except AgentAdapterUnavailableError as exc:
+                    unavailable_content = f"[Agent {agent_name}] 暂不可用: {exc.message}"
+                    await repo.create_message(
+                        org_id=org_id,
+                        room_id=room_id,
+                        user_id=user_id,
+                        username=agent_name,
+                        content=unavailable_content,
+                        message_type="agent",
+                        agent_id=str(room_agent.agent_id),
+                        metadata_json={
+                            "query": autonomous_query,
+                            "private_recipient_user_id": user_id,
+                            "status": "unavailable",
+                            "error_code": exc.code,
+                            "adapter_type": getattr(agent_def, "adapter_type", None),
+                        },
+                    )
+                    await session.commit()
+                    await emit(
+                        {
+                            "event": "agent_run_failed",
+                            "room_id": room_id,
+                            "message_id": agent_message_id,
+                            "agent_id": str(room_agent.agent_id),
+                            "agent_name": agent_name,
+                            "workflow_run_id": workflow_run_id,
+                            "status": "unavailable",
+                            "error_code": exc.code,
+                            "error": exc.message,
+                        }
+                    )
+                    continue
+
+                should_reply = await adapter.should_participate(
+                    agent_def=agent_def,
+                    messages_since_last=msg_count_since,
+                    seconds_since_last=seconds_since,
+                    recent_content=recent_content,
+                )
+
+                if not should_reply:
+                    continue
 
                 try:
                     await emit(
@@ -432,16 +501,38 @@ class MeetingAgentService:
                             "query": autonomous_query,
                         }
                     )
-                    content = await adapter.generate_autonomous_reply(
-                        room_id=room_id,
-                        agent_def=agent_def,
-                        recent_messages=recent_dicts,
-                        emit=emit,
-                        runtime_model=runtime_model,
-                    )
+                    autonomous_kwargs = {
+                        "room_id": room_id,
+                        "agent_def": agent_def,
+                        "recent_messages": recent_dicts,
+                        "emit": emit,
+                        "runtime_model": runtime_model,
+                    }
+                    if str(getattr(agent_def, "adapter_type", "llm") or "llm").lower() == "pipeline":
+                        autonomous_kwargs["request_context"] = {
+                            "request_id": str(uuid7()),
+                            "workflow_run_id": workflow_run_id,
+                            "assistant_message_id": agent_message_id,
+                            "org_id": org_id,
+                            "user_id": user_id,
+                            "agent_id": str(room_agent.agent_id),
+                            "agent_name": agent_name,
+                            "session_id": f"meeting:{room_id}",
+                            "metadata": {"source": "meeting_room", "room_id": room_id, "autonomous": True},
+                            "ext": {
+                                "surface": "chat",
+                                "allowed_modes": ["answer", "report"],
+                                "forbidden_modes": ["action"],
+                                "meeting_context": {"room_id": room_id},
+                            },
+                        }
+                    content = await adapter.generate_autonomous_reply(**autonomous_kwargs)
                     if not content:
                         continue
                     display_content, response_metadata = normalize_ai_response_content(content)
+                    adapter_metadata = getattr(content, "metadata", None)
+                    if isinstance(adapter_metadata, dict):
+                        response_metadata = {**response_metadata, **adapter_metadata}
 
                     await repo.create_message(
                         org_id=org_id,
@@ -471,8 +562,6 @@ class MeetingAgentService:
                             "content": display_content,
                         }
                     )
-                except NotImplementedError:
-                    continue
                 except Exception as exc:
                     logger.exception(
                         "autonomous participation failed room_id=%s agent_id=%s",

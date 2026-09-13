@@ -1,4 +1,5 @@
 from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDBinary
@@ -51,6 +52,10 @@ class MessageFeedback(Base):
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Governance metadata captured when feedback is submitted.  This keeps a
+    # stable link to the answer's evidence and version even if the message is
+    # later edited or recalled.
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=False),
         nullable=False,

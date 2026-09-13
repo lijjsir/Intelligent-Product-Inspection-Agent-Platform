@@ -44,6 +44,11 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             m.trust_score = $trust_score,
             m.confidence = $confidence,
             m.scope_key = $scope_key,
+            m.review_status = $review_status,
+            m.origin_kind = $origin_kind,
+            m.scope_bindings_json = $scope_bindings_json,
+            m.applicability_json = $applicability_json,
+            m.sync_version = $sync_version,
             m.created_at = coalesce(m.created_at, $created_at),
             m.updated_at = $updated_at
         """
@@ -55,6 +60,11 @@ class Neo4jMemoryGraphStore(MemoryGraphStore):
             "trust_score": node.trust_score,
             "confidence": node.confidence,
             "scope_key": node.scope_key,
+            "review_status": node.review_status,
+            "origin_kind": node.origin_kind,
+            "scope_bindings_json": node.scope_bindings_json,
+            "applicability_json": node.applicability_json,
+            "sync_version": node.sync_version,
             "created_at": node.created_at or "",
             "updated_at": node.updated_at or "",
         })

@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.services.memory_vector_service import (
     AGENT_LOCAL_MEMORY_COLLECTION,
     CANDIDATE_MEMORY_COLLECTION,
+    DEFAULT_MEMORY_VECTOR_SIZE,
     MEMORY_COLLECTION,
 )
 
@@ -33,6 +34,8 @@ PAYLOAD_INDEX_FIELDS = (
     "agent_id",
     "task_type",
     "shareable",
+    "review_status",
+    "source_kind",
 )
 
 
@@ -42,7 +45,24 @@ def _headers() -> dict[str, str]:
 
 async def _ensure_collection(client: httpx.AsyncClient, base_url: str, collection: str, vector_size: int) -> None:
     resp = await client.get(f"{base_url}/collections/{collection}", headers=_headers())
-    if resp.status_code == 404:
+    recreate = False
+    if resp.status_code == 200:
+        try:
+            current_size = int(
+                ((resp.json().get("result") or {}).get("config") or {})
+                .get("params", {})
+                .get("vectors", {})
+                .get("size", 0)
+            )
+            recreate = bool(current_size and current_size != int(vector_size))
+        except (TypeError, ValueError):
+            recreate = False
+    if resp.status_code == 404 or recreate:
+        if recreate:
+            # Qdrant is derived storage; MySQL remains authoritative and the
+            # outbox/backfill pipeline repopulates this collection.
+            delete = await client.delete(f"{base_url}/collections/{collection}", headers=_headers())
+            delete.raise_for_status()
         create = await client.put(
             f"{base_url}/collections/{collection}",
             json={"vectors": {"size": vector_size, "distance": "Cosine"}},
@@ -68,7 +88,7 @@ async def main() -> None:
         settings.qdrant_url,
         docker_base_url=settings.qdrant_docker_url,
     )
-    vector_size = 1536
+    vector_size = int(getattr(settings, "memory_vector_size", DEFAULT_MEMORY_VECTOR_SIZE))
     async with httpx.AsyncClient(timeout=30.0) as client:
         for collection in (
             MEMORY_COLLECTION,

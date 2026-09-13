@@ -58,15 +58,25 @@ from app.models.algo_resources import (
     Experiment,
     ModelDeployment,
 )
-from app.models.meeting import MeetingMessage, MeetingRoom, MeetingRoomAgent, MeetingRoomMember
+from app.models.meeting import (
+    MeetingBusinessObjectCandidate,
+    MeetingContextSummary,
+    MeetingMessage,
+    MeetingRoom,
+    MeetingRoomAgent,
+    MeetingRoomMember,
+    MemoryTag,
+)
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
 from app.models.prompt_admin import PromptDefinition, PromptSyncEvent
 from app.models.memory import (
     MemoryCandidateSupport,
     MemoryDependencyEdge,
     MemoryEvaluation,
+    MemoryEvidence,
     MemoryEvent,
     MemoryItem,
+    MemoryOrigin,
     MemoryPolicy,
     MemoryRollback,
     MemorySyncOutbox,
@@ -148,12 +158,17 @@ __all__ = [
     "MeetingRoomAgent",
     "MeetingRoomMember",
     "MeetingMessage",
+    "MeetingContextSummary",
+    "MeetingBusinessObjectCandidate",
+    "MemoryTag",
     "RagSpace",
     "RagNode",
     "RagDocument",
     "RagDocumentChunk",
     "RagIndexJob",
     "MemoryItem",
+    "MemoryOrigin",
+    "MemoryEvidence",
     "MemoryCandidateSupport",
     "MemoryEvent",
     "MemoryDependencyEdge",

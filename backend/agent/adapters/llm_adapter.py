@@ -24,6 +24,8 @@ class LLMAgentAdapter(BaseAgentAdapter):
         context_messages: list[dict[str, str]],
         emit: Callable,
         runtime_model: dict[str, Any] | None = None,
+        request_context: dict[str, Any] | None = None,
+        db_session: Any = None,
     ) -> str:
         llm_messages = self._build_messages(agent_def, context_messages, query)
         return await self._stream_llm(llm_messages, emit, runtime_model=runtime_model)
@@ -68,6 +70,8 @@ class LLMAgentAdapter(BaseAgentAdapter):
         recent_messages: list[dict[str, str]],
         emit: Callable,
         runtime_model: dict[str, Any] | None = None,
+        request_context: dict[str, Any] | None = None,
+        db_session: Any = None,
     ) -> str:
         system_prompt = getattr(agent_def, "system_prompt", "")
         name = getattr(agent_def, "name", "AI 助手")

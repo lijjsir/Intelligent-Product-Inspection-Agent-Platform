@@ -149,7 +149,7 @@ function getAlgorithmEngineerMenu(): MenuStructure {
 function getCollaborationMenuItems(): MenuItem[] {
   return [
     { title: "会议室", path: "/app/meetings" },
-    { title: "协作消息", path: "/app/collab" },
+    { title: "协作中心", path: "/app/collab" },
   ];
 }
 

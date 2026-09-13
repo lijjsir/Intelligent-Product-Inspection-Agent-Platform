@@ -1,9 +1,11 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
 import { collabApi } from "@/api/collab.api";
+import { meetingApi } from "@/api/meeting.api";
 import { useAuthStore } from "@/stores/auth.store";
 import type {
   CollabActionStatus,
+  CollabActionRequestCreatePayload,
   CollabAttachmentPayload,
   CollabMessage,
   CollabMessageCreatePayload,
@@ -13,6 +15,10 @@ import type {
   CollabTarget,
   CollabThread,
   CollabThreadCreatePayload,
+  CollabWorkItem,
+  CollabWorkItemSummary,
+  CollabWorkItemType,
+  CollabWorkItemView,
 } from "@/types/collab.types";
 
 export const useCollabStore = defineStore("collab", () => {
@@ -21,6 +27,14 @@ export const useCollabStore = defineStore("collab", () => {
   const targets = ref<CollabTarget[]>([]);
   const messagesByThread = ref<Record<string, CollabMessage[]>>({});
   const pendingAttachments = ref<CollabAttachmentPayload[]>([]);
+  const workItems = ref<CollabWorkItem[]>([]);
+  const workItemSummary = ref<CollabWorkItemSummary>({
+    pending_count: 0,
+    initiated_count: 0,
+    processed_count: 0,
+  });
+  const activeWorkItemView = ref<CollabWorkItemView>("pending");
+  const workItemError = ref("");
   const activeThreadId = ref("");
   const eventSource = shallowRef<EventSource | null>(null);
   const streamConnected = ref(false);
@@ -29,6 +43,8 @@ export const useCollabStore = defineStore("collab", () => {
   const loadingMessages = ref(false);
   const sending = ref(false);
   const uploading = ref(false);
+  const loadingWorkItems = ref(false);
+  const handlingWorkItem = ref(false);
   let streamRequestId = 0;
 
   function unwrap<T>(payload: unknown): T {
@@ -38,6 +54,7 @@ export const useCollabStore = defineStore("collab", () => {
   const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value) || null);
   const activeMessages = computed(() => messagesByThread.value[activeThreadId.value] || []);
   const totalUnread = computed(() => threads.value.reduce((sum, thread) => sum + Number(thread.unread_count || 0), 0));
+  const pendingWorkItemCount = computed(() => Number(workItemSummary.value.pending_count || 0));
   const canSend = computed(() => Boolean(activeThread.value && !sending.value && !uploading.value));
 
   function sortThreads(items: CollabThread[]) {
@@ -168,6 +185,91 @@ export const useCollabStore = defineStore("collab", () => {
     }
   }
 
+  async function loadWorkItems(
+    view: CollabWorkItemView = activeWorkItemView.value,
+    filters: { item_type?: CollabWorkItemType | null; scope_type?: string | null; room_id?: string | null } = {},
+  ) {
+    activeWorkItemView.value = view;
+    loadingWorkItems.value = true;
+    workItemError.value = "";
+    try {
+      const { data } = await collabApi.listWorkItems({ view, ...filters, limit: 200 });
+      workItems.value = unwrap<CollabWorkItem[]>(data);
+      return workItems.value;
+    } catch (error) {
+      workItemError.value = error instanceof Error ? error.message : "协作工作项加载失败";
+      throw error;
+    } finally {
+      loadingWorkItems.value = false;
+    }
+  }
+
+  async function loadSummary() {
+    try {
+      const { data } = await collabApi.getSummary();
+      workItemSummary.value = unwrap<CollabWorkItemSummary>(data);
+      return workItemSummary.value;
+    } catch {
+      return workItemSummary.value;
+    }
+  }
+
+  async function createActionRequest(payload: CollabActionRequestCreatePayload) {
+    sending.value = true;
+    try {
+      const { data } = await collabApi.createActionRequest(payload);
+      const workItem = unwrap<CollabWorkItem>(data);
+      if (activeWorkItemView.value === "initiated") {
+        workItems.value = [workItem, ...workItems.value.filter((item) => item.id !== workItem.id)];
+      }
+      clearPendingAttachments();
+      await Promise.all([loadSummary(), loadThreads(false)]);
+      return workItem;
+    } finally {
+      sending.value = false;
+    }
+  }
+
+  async function handleWorkItem(
+    item: CollabWorkItem,
+    action: string,
+    decisionNote?: string | null,
+  ) {
+    handlingWorkItem.value = true;
+    try {
+      if (item.item_type === "memory_share") {
+        if (action === "approve") {
+          await meetingApi.approveMemoryShare(item.resource_id, decisionNote);
+        } else if (action === "reject") {
+          await meetingApi.rejectMemoryShare(item.resource_id, String(decisionNote || "").trim());
+        } else if (action === "cancel") {
+          await meetingApi.cancelMemoryShare(item.resource_id);
+        }
+      } else {
+        const status = action as Exclude<CollabActionStatus, "pending">;
+        await collabApi.updateAction(item.resource_id, {
+          action_status: status,
+          decision_note: decisionNote || null,
+        });
+      }
+      await Promise.all([loadWorkItems(activeWorkItemView.value), loadSummary()]);
+    } finally {
+      handlingWorkItem.value = false;
+    }
+  }
+
+  async function sendWorkItemComment(item: CollabWorkItem, content: string) {
+    const threadId = String(item.payload.thread_id || "");
+    const messageId = String(item.payload.message_id || "");
+    if (!threadId || !messageId || !content.trim()) return null;
+    const { data } = await collabApi.sendMessage(threadId, {
+      content: content.trim(),
+      message_type: "text",
+      reply_to_message_id: messageId,
+    });
+    return unwrap<CollabMessage>(data);
+  }
+
   async function createThread(payload: CollabThreadCreatePayload) {
     const { data } = await collabApi.createThread(payload);
     const thread = unwrap<CollabThread>(data);
@@ -265,8 +367,15 @@ export const useCollabStore = defineStore("collab", () => {
     return receipt;
   }
 
-  async function updateAction(messageId: string, actionStatus: Exclude<CollabActionStatus, "pending">) {
-    const { data } = await collabApi.updateAction(messageId, { action_status: actionStatus });
+  async function updateAction(
+    messageId: string,
+    actionStatus: Exclude<CollabActionStatus, "pending">,
+    decisionNote?: string | null,
+  ) {
+    const { data } = await collabApi.updateAction(messageId, {
+      action_status: actionStatus,
+      decision_note: decisionNote || null,
+    });
     const receipt = unwrap<CollabMessageReceipt>(data);
     if (activeThreadId.value) {
       await loadMessages(activeThreadId.value);
@@ -353,6 +462,15 @@ export const useCollabStore = defineStore("collab", () => {
         }
         break;
       }
+      case "work_item_created":
+      case "work_item_updated":
+      case "work_item_completed": {
+        void Promise.all([
+          loadSummary(),
+          loadWorkItems(activeWorkItemView.value).catch(() => undefined),
+        ]);
+        break;
+      }
     }
   }
 
@@ -390,6 +508,10 @@ export const useCollabStore = defineStore("collab", () => {
     targets,
     messagesByThread,
     pendingAttachments,
+    workItems,
+    workItemSummary,
+    activeWorkItemView,
+    workItemError,
     activeThreadId,
     eventSource,
     streamConnected,
@@ -398,12 +520,20 @@ export const useCollabStore = defineStore("collab", () => {
     loadingMessages,
     sending,
     uploading,
+    loadingWorkItems,
+    handlingWorkItem,
     activeThread,
     activeMessages,
     totalUnread,
+    pendingWorkItemCount,
     canSend,
     loadThreads,
     loadTargets,
+    loadWorkItems,
+    loadSummary,
+    createActionRequest,
+    handleWorkItem,
+    sendWorkItemComment,
     createThread,
     openThread,
     loadMessages,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.datetime import utcnow_iso
+from app.core.exceptions import ForbiddenError
 from app.core.permissions import require_role
 from app.core.security import safe_decode_token
 from app.repositories.meeting_repo import MeetingRepository
@@ -21,13 +23,20 @@ from app.schemas.meeting import (
     MeetingAgentQueryAuditResponse,
     MeetingAgentRunRequest,
     MeetingAgentRunResponse,
+    MeetingAgentShareRequest,
     MeetingBusinessContext,
     MeetingBusinessContextUpdateRequest,
+    MeetingBusinessObjectCandidateResponse,
+    MeetingBusinessObjectCorrectionRequest,
     MeetingContextPreviewResponse,
     MeetingMemoryExtractRequest,
     MeetingMemoryDisputeRequest,
     MeetingMemoryResponse,
     MeetingMemoryShareApprovalResponse,
+    MeetingMemoryShareCreateRequest,
+    MeetingMemoryShareCreateResponse,
+    MeetingMemoryShareDecisionRequest,
+    MeetingMemoryShareRejectRequest,
     MeetingMemoryShareRequest,
     MeetingMemoryTransferRequest,
     MeetingMemoryUpdateRequest,
@@ -121,6 +130,7 @@ async def create_room(
             visibility=body.visibility,
             allowed_data_domains=body.allowed_data_domains,
             business_context=body.business_context,
+            auto_participation_mode=body.auto_participation_mode,
         )
     )
 
@@ -160,6 +170,7 @@ async def update_room(
             visibility=body.visibility,
             allowed_data_domains=body.allowed_data_domains,
             business_context=body.business_context,
+            auto_participation_mode=body.auto_participation_mode,
         )
     )
 
@@ -212,13 +223,21 @@ async def leave_room(
 @router.get("/rooms/{room_id}/messages", response_model=ResponseEnvelope[list[MeetingMessageResponse]])
 async def list_messages(
     room_id: str,
-    after_seq: int = Query(default=0, ge=0),
+    after_seq: int | None = Query(default=None, ge=0),
+    before_seq: int | None = Query(default=None, ge=1),
     limit: int = Query(default=200, ge=1, le=500),
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.list_messages(room_id, after_seq=after_seq, limit=limit))
+    return ResponseEnvelope(
+        data=await service.list_messages(
+            room_id,
+            after_seq=after_seq,
+            before_seq=before_seq,
+            limit=limit,
+        )
+    )
 
 
 @router.post("/rooms/{room_id}/messages", response_model=ResponseEnvelope[MeetingMessageResponse])
@@ -302,6 +321,17 @@ async def run_general_agent(
     return ResponseEnvelope(data=await service.run_general_agent(room_id, body))
 
 
+@router.post("/rooms/{room_id}/agent/share", response_model=ResponseEnvelope[MeetingMessageResponse])
+async def share_general_agent_answer(
+    room_id: str,
+    body: MeetingAgentShareRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.share_agent_answer(room_id, body))
+
+
 @router.post("/rooms/{room_id}/agent/runs/{workflow_run_id}/cancel", response_model=ResponseEnvelope[dict])
 async def cancel_general_agent_run(
     room_id: str,
@@ -321,6 +351,33 @@ async def get_context_preview(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.get_context_preview(room_id))
+
+
+@router.get(
+    "/rooms/{room_id}/business-objects",
+    response_model=ResponseEnvelope[list[MeetingBusinessObjectCandidateResponse]],
+)
+async def list_business_objects(
+    room_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.list_business_objects(room_id))
+
+
+@router.post(
+    "/rooms/{room_id}/business-objects/correct",
+    response_model=ResponseEnvelope[MeetingBusinessObjectCandidateResponse],
+)
+async def correct_business_object(
+    room_id: str,
+    body: MeetingBusinessObjectCorrectionRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.correct_business_object(room_id, body))
 
 
 @router.get("/rooms/{room_id}/agent-query-audits", response_model=ResponseEnvelope[list[MeetingAgentQueryAuditResponse]])
@@ -409,6 +466,12 @@ async def extract_room_memories(
             confidence=item.confidence,
             source_message_id=item.source_message_id,
             qdl_json=item.qdl_json,
+            qdl_schema_version=item.qdl_schema_version,
+            qdl_validation_status=item.qdl_validation_status,
+            qdl_validation_errors=item.qdl_validation_errors,
+            extraction_method=item.extraction_method,
+            extraction_model_id=item.extraction_model_id,
+            extraction_metrics=item.extraction_metrics,
             created_at=item.created_at,
         )
         for item in candidates
@@ -471,6 +534,20 @@ async def share_memory(
     return ResponseEnvelope(data=await service.share_memory(memory_id, body))
 
 
+@router.post(
+    "/memories/{memory_id}/share-requests",
+    response_model=ResponseEnvelope[MeetingMemoryShareCreateResponse],
+)
+async def create_memory_share_request(
+    memory_id: str,
+    body: MeetingMemoryShareCreateRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.create_memory_share_request(memory_id, body))
+
+
 @router.get("/memory-shares/pending", response_model=ResponseEnvelope[list[MeetingMemoryShareApprovalResponse]])
 async def list_pending_memory_shares(
     room_id: str | None = Query(default=None),
@@ -484,21 +561,33 @@ async def list_pending_memory_shares(
 @router.post("/memory-shares/{transfer_id}/approve", response_model=ResponseEnvelope[MeetingMemoryResponse])
 async def approve_memory_share(
     transfer_id: str,
+    body: MeetingMemoryShareDecisionRequest | None = None,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.approve_memory_share(transfer_id))
+    return ResponseEnvelope(data=await service.approve_memory_share(transfer_id, body))
 
 
 @router.post("/memory-shares/{transfer_id}/reject", response_model=ResponseEnvelope[MeetingMemoryShareApprovalResponse])
 async def reject_memory_share(
     transfer_id: str,
+    body: MeetingMemoryShareRejectRequest,
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.reject_memory_share(transfer_id))
+    return ResponseEnvelope(data=await service.reject_memory_share(transfer_id, body))
+
+
+@router.post("/memory-shares/{transfer_id}/cancel", response_model=ResponseEnvelope[MeetingMemoryShareApprovalResponse])
+async def cancel_memory_share(
+    transfer_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    service = _build_service(db, current)
+    return ResponseEnvelope(data=await service.cancel_memory_share(transfer_id))
 
 
 # ── Action items ──────────────────────────────────────────────────────
@@ -709,9 +798,39 @@ async def stream_meeting_events(
         raise ForbiddenError("you are not a member of this meeting room")
 
     async def event_generator():
-        async for event in meeting_stream_broker.subscribe(room_id):
-            if not _can_see_meeting_stream_event(event, current.user_id):
-                continue
-            yield f"data: {json.dumps(event, default=str)}\n\n"
+        stream = meeting_stream_broker.subscribe(room_id).__aiter__()
+        next_event = asyncio.create_task(stream.__anext__())
+        try:
+            while True:
+                done, _ = await asyncio.wait({next_event}, timeout=8.0)
+                if not done:
+                    heartbeat = {
+                        "event": "heartbeat",
+                        "room_id": room_id,
+                        "message": "会议实时连接保持中...",
+                        "ts": utcnow_iso(),
+                    }
+                    yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
+                    continue
+                try:
+                    event = next_event.result()
+                except StopAsyncIteration:
+                    break
+                next_event = asyncio.create_task(stream.__anext__())
+                if not _can_see_meeting_stream_event(event, current.user_id):
+                    continue
+                yield f"event: message\ndata: {json.dumps(event, default=str)}\n\n"
+        finally:
+            if not next_event.done():
+                next_event.cancel()
+                try:
+                    await next_event
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+            await stream.aclose()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

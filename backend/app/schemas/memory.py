@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -29,6 +30,15 @@ class MemoryStatus(str, Enum):
     DELETED = "deleted"
     EXPIRED = "expired"
     CONTESTED = "contested"
+
+
+class MemoryReviewStatus(str, Enum):
+    CANDIDATE = "candidate"
+    APPROVED = "approved"
+    DISPUTED = "disputed"
+    REJECTED = "rejected"
+    ISOLATED = "isolated"
+    SUPERSEDED = "superseded"
 
 
 class UsagePolicy(str, Enum):
@@ -144,6 +154,7 @@ class MemoryContent(BaseModel):
 
 
 class MemoryScope(BaseModel):
+    meeting_room_id: str | None = None
     task_id: str | None = None
     product_line: str | None = None
     rag_space_id: str | None = None
@@ -249,9 +260,139 @@ class CandidateListItem(BaseModel):
     promotion_score: float | None = None
     confidence: float | None = None
     trust_score: float | None = None
+    source_kind: str | None = None
+    source_id: str | None = None
+    current_scope_type: str | None = None
+    current_scope_id: str | None = None
+    requested_scope_type: str | None = None
+    requested_scope_id: str | None = None
+    local_scope_only: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
     last_supported_at: datetime | None = None
+
+
+class MemoryOriginItem(BaseModel):
+    id: str
+    origin_kind: str
+    source_type: str
+    source_id: str
+    trace_id: str | None = None
+    source_span: dict | None = None
+    metadata: dict | None = None
+    occurred_at: datetime | None = None
+
+
+class MemoryEvidenceItem(BaseModel):
+    id: str
+    evidence_role: str
+    source_kind: str
+    source_type: str
+    source_id: str
+    trace_id: str | None = None
+    task_id: str | None = None
+    rag_space_id: str | None = None
+    document_id: str | None = None
+    chunk_id: str | None = None
+    evidence_pointer: dict | None = None
+    confidence: float | None = None
+    weight: float | None = None
+    occurred_at: datetime | None = None
+
+
+class MemoryEvidenceSummary(BaseModel):
+    origin: int = 0
+    independent_support: int = 0
+    rag: int = 0
+    agent_verification: int = 0
+    human_confirmation: int = 0
+    opposition: int = 0
+    conflict: int = 0
+    last_evidence_at: datetime | None = None
+
+
+class MemoryScopeBindingItem(BaseModel):
+    id: str
+    scope_type: str
+    scope_id: str
+    permission: str
+    binding_kind: str
+    binding_status: str
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    source_transfer_id: str | None = None
+
+
+class MemorySyncState(BaseModel):
+    vector_status: str = "pending"
+    graph_status: str = "pending"
+    vector_error: str | None = None
+    graph_error: str | None = None
+
+
+class OrganizationGovernanceItem(BaseModel):
+    memory_id: str
+    memory_type: str
+    legacy_status: str
+    review_status: str
+    readiness_status: str
+    readiness_score: float = 0.0
+    readiness_blockers: list[str] = Field(default_factory=list)
+    summary: str
+    primary_origin: MemoryOriginItem | None = None
+    home_scope: MemoryScopeBindingItem | None = None
+    target_scope: MemoryScopeBindingItem | None = None
+    applicability: dict = Field(default_factory=dict)
+    evidence: MemoryEvidenceSummary = Field(default_factory=MemoryEvidenceSummary)
+    sync: MemorySyncState = Field(default_factory=MemorySyncState)
+    share_request_id: str | None = None
+    share_request_status: str | None = None
+    share_reason: str | None = None
+    requested_by: str | None = None
+    requested_at: datetime | None = None
+    mapping_plan: dict | None = None
+    mapping_version: str | None = None
+    interpolation_strategy: str | None = None
+    unmapped_fields: list[str] = Field(default_factory=list)
+    migration_review_required: bool = False
+    migration_review_reason: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class OrganizationGovernanceResponse(BaseModel):
+    pending_approval: list[OrganizationGovernanceItem] = Field(default_factory=list)
+    promotion_candidates: list[OrganizationGovernanceItem] = Field(default_factory=list)
+    active: list[OrganizationGovernanceItem] = Field(default_factory=list)
+
+
+class MemoryEvidenceDetailResponse(BaseModel):
+    memory_id: str
+    origins: list[MemoryOriginItem] = Field(default_factory=list)
+    evidence: list[MemoryEvidenceItem] = Field(default_factory=list)
+    scopes: list[MemoryScopeBindingItem] = Field(default_factory=list)
+    applicability: dict = Field(default_factory=dict)
+    review_status: str
+    readiness_status: str
+    readiness_score: float = 0.0
+    readiness_blockers: list[str] = Field(default_factory=list)
+
+
+class MemoryReadinessResponse(BaseModel):
+    memory_id: str
+    review_status: str
+    readiness_status: str
+    readiness_score: float
+    readiness_reason: str | None = None
+    blockers: list[str] = Field(default_factory=list)
+
+
+class OrganizationReviewSubmitRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class OrganizationBindingRevokeRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
 
 
 class PromotionEvaluationResponse(BaseModel):
@@ -263,10 +404,38 @@ class PromotionEvaluationResponse(BaseModel):
     blocked_reasons: list[str] = Field(default_factory=list)
 
 
+class KnowledgeTunnelPreviewRequest(BaseModel):
+    source_scope_type: str = Field(..., min_length=1, max_length=32)
+    source_scope_id: str = Field(..., min_length=1, max_length=128)
+    target_scope_type: str = Field(..., min_length=1, max_length=32)
+    target_scope_id: str = Field(..., min_length=1, max_length=128)
+    qdl: dict = Field(..., min_length=1)
+    mapping_rules: dict = Field(default_factory=dict)
+    mapping_version: str = Field(default="manual-v1", min_length=1, max_length=64)
+    interpolation_strategy: Literal["explicit", "identity", "drop_unmapped"] = "explicit"
+    transform_reason: str = Field(..., min_length=1, max_length=1000)
+    source_memory_id: str | None = Field(default=None, max_length=128)
+
+
+class KnowledgeTunnelPreviewResponse(BaseModel):
+    status: Literal["ready", "needs_review", "rejected"]
+    source_scope: dict[str, str]
+    target_scope: dict[str, str]
+    mapping_version: str
+    interpolation_strategy: str
+    transform_reason: str
+    transformed_qdl: dict | None = None
+    mapping_decisions: list[dict] = Field(default_factory=list)
+    unmapped_fields: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 # ---- Search / Retrieval ----
 
 class ScopeFilter(BaseModel):
     memory_type: list[MemoryType] | None = None
+    meeting_room_id: str | None = None
     product_line: str | None = None
     rag_space_id: str | None = None
     task_id: str | None = None
@@ -306,6 +475,7 @@ class MemorySearchResponse(BaseModel):
 
 
 class RetrievalGatewayScope(BaseModel):
+    meeting_room_id: str | None = None
     task_id: str | None = None
     product_id: str | None = None
     product_line: str | None = None

@@ -17,6 +17,8 @@ class BaseAgentAdapter(ABC):
         context_messages: list[dict[str, str]],
         emit: Callable,
         runtime_model: dict[str, Any] | None = None,
+        request_context: dict[str, Any] | None = None,
+        db_session: Any = None,
     ) -> str:
         """Called when this agent is @mentioned. Returns the agent's reply text."""
         ...
@@ -42,6 +44,8 @@ class BaseAgentAdapter(ABC):
         recent_messages: list[dict[str, str]],
         emit: Callable,
         runtime_model: dict[str, Any] | None = None,
+        request_context: dict[str, Any] | None = None,
+        db_session: Any = None,
     ) -> str:
         """Generate a reply when autonomous participation is triggered."""
         ...

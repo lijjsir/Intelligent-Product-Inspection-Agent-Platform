@@ -18,7 +18,7 @@ async def get_infrastructure_status(
     db=Depends(get_db),
 ):
     require_role("infrastructure", current.role)
-    service = InfrastructureService(db)
+    service = InfrastructureService(db, current.org_id)
     return ResponseEnvelope(data=await service.check_all())
 
 
@@ -28,5 +28,5 @@ async def check_all_infrastructure(
     db=Depends(get_db),
 ):
     require_role("infrastructure", current.role)
-    service = InfrastructureService(db)
+    service = InfrastructureService(db, current.org_id)
     return ResponseEnvelope(data=await service.check_all())

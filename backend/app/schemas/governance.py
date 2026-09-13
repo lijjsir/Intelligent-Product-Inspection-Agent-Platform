@@ -340,6 +340,7 @@ class MessageFeedbackResponse(BaseModel):
     rating: Optional[int] = None
     category: Optional[str] = None
     comment: Optional[str] = None
+    metadata_json: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
 
@@ -360,6 +361,14 @@ class ModelQualityMetric(BaseModel):
     thumbs_up_rate: float
 
 
+class FeedbackSourceSummary(BaseModel):
+    total_count: int = 0
+    thumbs_up_count: int = 0
+    thumbs_down_count: int = 0
+    thumbs_up_share: float = 0.0
+    thumbs_down_share: float = 0.0
+
+
 class QualityReportResponse(BaseModel):
     total_results: int
     hallucination_rate: float
@@ -372,6 +381,7 @@ class QualityReportResponse(BaseModel):
     thumbs_up_share: float = 0.0
     avg_risk_score: float
     feedback_distribution: dict[str, int]
+    feedback_by_source: dict[str, FeedbackSourceSummary] = {}
     hallucination_trend: list[TrendPoint]
     thumbs_down_trend: list[TrendPoint]
     thumbs_up_trend: list[TrendPoint]

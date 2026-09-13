@@ -116,10 +116,54 @@ export interface CollabMessageCreatePayload {
 
 export interface CollabMessageActionPayload {
   action_status: "accepted" | "rejected" | "done";
+  decision_note?: string | null;
 }
 
 export interface CollabUploadResponse {
   items: CollabAttachmentPayload[];
+}
+
+export type CollabWorkItemType = "memory_share" | "action_request";
+export type CollabWorkItemView = "pending" | "initiated" | "processed";
+
+export interface CollabActionRequestCreatePayload {
+  target_type: "user" | "meeting_room";
+  target_id: string;
+  title: string;
+  description: string;
+  attachments?: CollabAttachmentPayload[];
+  source_link?: string | null;
+  source_context?: Record<string, unknown> | null;
+  idempotency_key?: string | null;
+}
+
+export interface CollabWorkItem {
+  id: string;
+  resource_id: string;
+  item_type: CollabWorkItemType;
+  title: string;
+  description: string;
+  source: { type?: string; id?: string; label?: string; [key: string]: unknown };
+  target: { type?: string; id?: string; label?: string; [key: string]: unknown };
+  requested_by?: string | null;
+  requester_label?: string | null;
+  status: string;
+  evidence: Array<Record<string, unknown>>;
+  source_link?: string | null;
+  allowed_actions: string[];
+  decision_note?: string | null;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  history: Array<Record<string, unknown>>;
+  payload: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CollabWorkItemSummary {
+  pending_count: number;
+  initiated_count: number;
+  processed_count: number;
 }
 
 export type CollabStreamEvent =
@@ -143,4 +187,11 @@ export type CollabStreamEvent =
   | {
       event: "collab_thread_deleted";
       thread_id: string;
+    }
+  | {
+      event: "work_item_created" | "work_item_updated" | "work_item_completed";
+      work_item_id: string;
+      resource_id: string;
+      item_type: CollabWorkItemType;
+      status: string;
     };

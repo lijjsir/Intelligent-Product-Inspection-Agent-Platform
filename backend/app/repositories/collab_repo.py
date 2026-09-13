@@ -267,6 +267,50 @@ class CollabRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_action_requests_for_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int = 200,
+    ) -> list[tuple[CollabMessage, CollabMessageReceipt | None, CollabThread]]:
+        result = await self._session.execute(
+            select(CollabMessage, CollabMessageReceipt, CollabThread)
+            .join(
+                CollabThread,
+                and_(
+                    CollabThread.id == CollabMessage.thread_id,
+                    CollabThread.org_id == CollabMessage.org_id,
+                ),
+            )
+            .outerjoin(
+                CollabMessageReceipt,
+                and_(
+                    CollabMessageReceipt.message_id == CollabMessage.id,
+                    CollabMessageReceipt.org_id == org_id,
+                    CollabMessageReceipt.recipient_type == "user",
+                    CollabMessageReceipt.recipient_id == user_id,
+                    CollabMessageReceipt.deleted_at.is_(None),
+                ),
+            )
+            .where(
+                CollabMessage.org_id == org_id,
+                CollabMessage.message_type == "action_request",
+                CollabMessage.deleted_at.is_(None),
+                CollabThread.deleted_at.is_(None),
+                or_(
+                    and_(
+                        CollabMessage.sender_type == "user",
+                        CollabMessage.sender_id == user_id,
+                    ),
+                    CollabMessageReceipt.id.is_not(None),
+                ),
+            )
+            .order_by(CollabMessage.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     async def create_receipt(
         self,
         *,
