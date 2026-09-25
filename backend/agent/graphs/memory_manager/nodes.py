@@ -2,8 +2,6 @@
 
 Node topology:
   request_intake -> memory_context_loader -> manager_route_policy
-  -> [market_monitor, public_opinion, trend_evolution,
-      supervision_sampling, lab_detection, quality_judgement]
   -> candidate_memory_builder -> write_gate_node -> contamination_monitor_node
   -> {no alert: result_synthesizer}
   -> {alert: provenance_node -> propagation_graph_node -> rollback_planner_node
@@ -83,78 +81,9 @@ async def manager_route_policy(state: MemoryAgentState) -> dict[str, Any]:
     ctx = state.get("task_context", {})
     agent_outputs = state.get("agent_outputs", {})
     agent_outputs["manager"] = {
-        "decision": "route",
-        "routed_agents": [
-            "market_monitor",
-            "quality_judgement",
-        ],
+        "decision": "memory_governance",
+        "routed_agents": [],
         "trace_id": ctx.get("trace_id"),
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-# ---------------------------------------------------------------------------
-# Professional Agent Nodes
-# Each produces structured output that enters candidate_memory_builder.
-# ---------------------------------------------------------------------------
-
-async def market_monitor_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["market_monitor"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def public_opinion_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["public_opinion"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def trend_evolution_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["trend_evolution"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def supervision_sampling_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["supervision_sampling"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def lab_detection_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["lab_detection"] = {
-        "status": "completed",
-        "findings": [],
-        "candidate_memories": [],
-    }
-    return {"agent_outputs": agent_outputs}
-
-
-async def quality_judgement_agent(state: MemoryAgentState) -> dict[str, Any]:
-    agent_outputs = state.get("agent_outputs", {})
-    agent_outputs["quality_judgement"] = {
-        "status": "completed",
-        "findings": [],
-        "evidence_chain": [],
-        "candidate_memories": [],
     }
     return {"agent_outputs": agent_outputs}
 

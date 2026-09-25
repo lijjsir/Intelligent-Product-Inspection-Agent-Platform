@@ -109,7 +109,7 @@ class MemoryService:
         return MemoryPolicyContract.defaults(policy_type)
 
 
-    async def write_candidate(self, request: MemoryWriteRequest) -> MemoryWriteResponse:
+    async def write_candidate(self, request: MemoryWriteRequest, *, allow_automatic_promotion: bool = True) -> MemoryWriteResponse:
         """Submit a memory through the candidate gate.
 
         All reusable long-term memories first land as candidate memories. The
@@ -416,6 +416,10 @@ class MemoryService:
                 policy_version=str(policy.get("version", "default:v1")),
             )
 
+        if not allow_automatic_promotion:
+            return MemoryWriteResponse(memory_id=memory_id,status=MemoryStatus.CANDIDATE,trust_score=trust_score,
+                confidence=request.confidence,warnings=[*warnings,*candidate_warnings],policy_key="write_gate",
+                policy_version=str(policy.get("version","default:v1")))
         evaluation = await self.evaluate_candidate_promotion(memory_id)
         memory = await self._item_repo.get_by_memory_id(memory_id)
         warnings.extend(evaluation.blocked_reasons if evaluation.status == MemoryStatus.CONTESTED else [])

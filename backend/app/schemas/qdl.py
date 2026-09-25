@@ -100,15 +100,27 @@ class QDLRelation(QDLStrictModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class QDLSourceContext(QDLStrictModel):
+    source_type: Literal["risk_case", "task", "standard", "device", "inspection_session"]
+    source_id: str = Field(min_length=1, max_length=128)
+
+
 class QDLProvenance(QDLStrictModel):
     org_id: str | None = Field(default=None, max_length=128)
-    room_id: str = Field(min_length=1, max_length=128)
+    room_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_context: QDLSourceContext | None = None
     message_ids: list[str] = Field(default_factory=list, max_length=100)
     extraction_method: ExtractionMethod
     model_id: str | None = Field(default=None, max_length=256)
     trace_id: str | None = Field(default=None, max_length=256)
     source_hash: str | None = Field(default=None, max_length=128)
     generated_at: datetime
+
+    @model_validator(mode="after")
+    def require_source(self):
+        if not self.room_id and not self.source_context:
+            raise ValueError("provenance requires meeting room or explicit business source")
+        return self
 
 
 class QDLGovernance(QDLStrictModel):

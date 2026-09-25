@@ -236,6 +236,7 @@ async def test_quality_task_plan_models_parallel_professional_branches():
     assert set(by_capability["quality.inspection.execute"].depends_on) == {
         "s1",
         "s2",
+        "s3",
     }
 
 
