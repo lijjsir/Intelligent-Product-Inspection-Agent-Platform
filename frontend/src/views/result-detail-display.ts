@@ -89,6 +89,47 @@ export function extractVisualInspectionResult(result: InspectionResult | null | 
   return asRecord(reasoning?.visual_inspection_result);
 }
 
+export interface ResultCitationView {
+  id: string;
+  title: string;
+  source: string;
+  quote: string;
+  score: number | null;
+}
+
+export function extractResultCitations(result: InspectionResult | null | undefined): ResultCitationView[] {
+  const payload = asRecord(result?.citations);
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  return items.flatMap((value, index) => {
+    const item = asRecord(value);
+    if (!item) return [];
+    const kind = String(item.kind || "").toLowerCase();
+    if (kind !== "rag") return [];
+    const quote = String(item.quote || item.excerpt || "").trim();
+    const source = String(item.source || item.full_path || "").trim();
+    const id = String(item.id || item.source_id || item.chunk_id || "").trim();
+    if (!quote || (!source && !id)) return [];
+    const rawScore = item.score ?? item.relevance;
+    const score = typeof rawScore === "number" && Number.isFinite(rawScore) ? rawScore : null;
+    return [{
+      id: id || `citation-${index + 1}`,
+      title: String(item.title || item.document_name || `知识库来源 ${index + 1}`),
+      source: source || id,
+      quote,
+      score,
+    }];
+  });
+}
+
+export function extractRagSummary(result: InspectionResult | null | undefined): Record<string, unknown> {
+  const reasoning = asRecord(result?.reasoning_chain);
+  return asRecord(reasoning?.rag_summary) || {};
+}
+
+export function isCalibratedScore(result: InspectionResult | null | undefined): boolean {
+  return result?.score_status === "calibrated";
+}
+
 function stringifyPossibleDefect(value: unknown): string {
   if (typeof value === "string") return value.trim();
   const record = asRecord(value);

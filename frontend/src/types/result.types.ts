@@ -11,6 +11,7 @@ export interface Defect {
 }
 
 export interface InspectionResult {
+  score_status?: string;
   id: string;
   task_id: string;
   org_id: string;
@@ -30,6 +31,7 @@ export interface InspectionResult {
 }
 
 export interface ResultListItem {
+  score_status?: string;
   id: string;
   task_id: string;
   org_id: string;

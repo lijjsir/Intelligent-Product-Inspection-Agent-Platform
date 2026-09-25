@@ -68,6 +68,13 @@ class QualityResultMaterializationService:
         image_items = list(final_state.get("image_items") or ext.get("image_items") or metadata.get("image_items") or [])
         image_count = max(len(image_urls), len(image_items))
         visual_result = final_state.get("visual_inspection_result")
+        citations = [
+            dict(item) for item in list(final_state.get("citations") or [])
+            if isinstance(item, dict)
+        ]
+        if not citations:
+            from agent.subgraphs.quality_analysis.nodes import _evidence_citations
+            citations = _evidence_citations(evidence_packet)
         defects = extract_defects(visual_result, image_count=image_count)
         visual_model_key = ""
         if isinstance(visual_result, dict):
@@ -91,9 +98,11 @@ class QualityResultMaterializationService:
             verdict=assessment.get("final_verdict", "uncertain"),
             overall_score=assessment.get("overall_score"),
             llm_model=model_key,
-            citations=final_state.get("citations") or {},
+            citations={"items": citations},
             reasoning_chain={
+                "score_status": assessment.get("score_status", "not_calibrated"),
                 "standard_evaluation": standard_evaluation,
+                "rag_summary": assessment.get("rag_summary") or {},
                 "report": report,
                 "llm_prompt": llm_prompt,
                 "evidence_packet": final_state.get("evidence_packet"),
@@ -106,7 +115,7 @@ class QualityResultMaterializationService:
         stability = StabilityAggregate(
             risk_score=assessment.get("risk_score"),
             risk_level=assessment.get("risk_level", "low"),
-            evidence_score=float(len(evidence_packet.get("sources", {})) if evidence_packet else 0),
+            evidence_score=min(1.0, len(citations) / 2) if citations else 0.0,
             confidence_score=assessment.get("confidence"),
             traceability_score=assessment.get("traceability_score"),
             faithfulness_score=assessment.get("faithfulness_score"),
@@ -118,7 +127,7 @@ class QualityResultMaterializationService:
             workflow_version=QUALITY_ANALYSIS_WORKFLOW_VERSION,
             prompt_version=QUALITY_ANALYSIS_PROMPT_VERSION,
             route_subgraph="quality_analysis",
-            has_citation=bool(final_state.get("citations")),
+            has_citation=bool(citations),
         )
 
         rag_queries = []

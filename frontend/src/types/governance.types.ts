@@ -762,6 +762,7 @@ export interface ProductLine {
 }
 
 export interface ProductSku {
+  supervision_data?: Record<string, any> | null;
   id: string;
   org_id: string;
   product_line_id: string;
@@ -776,6 +777,7 @@ export interface ProductSku {
 }
 
 export interface ProductBatch {
+  quantity?: number | null;
   id: string;
   org_id: string;
   product_sku_id: string;
@@ -801,6 +803,7 @@ export interface ProductLinePayload {
 }
 
 export interface ProductSkuPayload {
+  supervision_data?: Record<string, any> | null;
   product_line_id: string;
   code: string;
   name: string;
@@ -809,6 +812,7 @@ export interface ProductSkuPayload {
 }
 
 export interface ProductBatchPayload {
+  quantity?: number | null;
   product_sku_id: string;
   batch_no: string;
   name?: string | null;
@@ -831,6 +835,7 @@ export interface InspectionStandardRagSpace {
 }
 
 export interface InspectionStandardLibraryItem {
+  applicability?: Record<string, any> | null;
   id: string;
   org_id: string | null;
   name: string;
@@ -871,6 +876,7 @@ export interface InspectionStandardLibraryItem {
 }
 
 export interface InspectionStandardPayload {
+  applicability?: Record<string, any> | null;
   name: string;
   product_family?: string | null;
   inspection_spec_id?: string | null;

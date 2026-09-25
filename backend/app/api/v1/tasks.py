@@ -65,6 +65,11 @@ async def create_task(
     """校验检测标准后创建待执行的质检任务。"""
     require_role("task", current.role)
     service = TaskService(db, current.org_id)
+    from app.models.organization import Organization
+    organization = await db.get(Organization, current.org_id)
+    supervision_enabled = bool(organization and (organization.settings or {}).get("quality_supervision_enabled"))
+    if supervision_enabled and current.role not in {"user","expert"}:
+        raise ForbiddenError("当前角色只能查看质监任务")
     task = await service.create_task(
         created_by=current.user_id,
         product_id=payload.product_id or "",
@@ -75,10 +80,11 @@ async def create_task(
         image_urls=payload.image_urls,
         image_items=payload.image_items,
         priority=payload.priority,
-        metadata=payload.metadata,
+        metadata={**(payload.metadata or {}), "input_mode": payload.input_mode, "supervision": supervision_enabled},
     )
     await db.commit()
-    await launch_task_execution(task_id=str(task.id), org_id=current.org_id)
+    if payload.input_mode == "image":
+        await launch_task_execution(task_id=str(task.id), org_id=current.org_id)
     task = await service.get_task(str(task.id)) or task
 
     return ResponseEnvelope(data=TaskResponse.model_validate(task))

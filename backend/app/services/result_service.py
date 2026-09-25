@@ -3,17 +3,39 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
-from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.repositories.result_repo import ResultRepository
 from app.repositories.task_repo import TaskRepository
 from app.services.result_trace_utils import (
+    build_rag_summary_from_reasoning,
     build_trace_metrics,
     derive_latency_ms,
     extract_citation_items,
+    is_verified_rag_citation,
 )
 
 REVIEW_ROLES = {"expert", "platform_operator"}
 MANUAL_REVIEW_VERDICTS = {"pass", "fail"}
+
+
+def result_score_status(result) -> str:
+    reasoning = dict(getattr(result, "reasoning_chain", None) or {})
+    explicit = str(reasoning.get("score_status") or "").strip()
+    if explicit:
+        return explicit
+    if str(getattr(result, "prompt_version", "") or "").startswith(("quality_analysis_", "agent_manager_")):
+        return "not_calibrated"
+    return "legacy_heuristic"
+
+
+def result_effective_verdict(result) -> str:
+    verdict = str(getattr(result, "verdict", "") or "uncertain")
+    if verdict != "pass" or getattr(result, "reviewed_by", None):
+        return verdict
+    citations = extract_citation_items(getattr(result, "citations", None))
+    if result_score_status(result) != "calibrated" and not any(is_verified_rag_citation(item) for item in citations):
+        return "manual_required"
+    return verdict
 
 
 class ResultService:
@@ -40,6 +62,9 @@ class ResultService:
         citations = result.citations
         citation_items = extract_citation_items(citations)
         reasoning_chain = dict(result.reasoning_chain or {})
+        rag_summary = build_rag_summary_from_reasoning(reasoning_chain, citation_items)
+        if rag_summary:
+            reasoning_chain["rag_summary"] = rag_summary
         trace = dict(reasoning_chain.get("trace") or {})
         standard_evaluation = reasoning_chain.get("standard_evaluation")
         output_text = ""
@@ -60,8 +85,9 @@ class ResultService:
             "id": result.id,
             "task_id": result.task_id,
             "org_id": result.org_id,
-            "verdict": result.verdict,
+            "verdict": result_effective_verdict(result),
             "overall_score": float(result.overall_score or 0.0),
+            "score_status": result_score_status(result),
             "defects": result.defects,
             "citations": citations,
             "reasoning_chain": reasoning_chain,
@@ -95,6 +121,8 @@ class ResultService:
         result = await self._repo.get_by_id(self._org_id, result_id)
         if not result:
             raise NotFoundError("Result not found")
+        if (result.reasoning_chain or {}).get("supervision_signed"):
+            raise ConflictError("已签发结果不可覆盖，请建立新检测任务并重新签发")
         await self._repo.upsert_by_task({
             "org_id": self._org_id,
             "task_id": result.task_id,

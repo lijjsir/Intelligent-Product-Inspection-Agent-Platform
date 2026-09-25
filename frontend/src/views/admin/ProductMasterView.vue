@@ -2,6 +2,11 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { productMasterApi } from "@/api/product-master.api";
+import { supervisionApi } from "@/api/supervision.api";
+import SupervisionFields from "@/components/business/supervision/SupervisionFields.vue";
+const productDetails=ref<Record<string,any>>({});
+const detailOptions=ref<Record<string,{value:string;label:string}[]>>({});
+const detailSpecs=[{key:"product_category",label:"产品类别"},{key:"brand",label:"品牌"},{key:"model",label:"型号"},{key:"enterprise_id",label:"生产企业",type:"select",options:"enterprises"},{key:"production_region_id",label:"生产地",type:"select",options:"regions"},{key:"sales_region_ids",label:"销售地",type:"select",options:"regions",multiple:true}];
 import { formatCodeName } from "@/utils/master-data-labels";
 import type {
   ProductBatch,
@@ -55,6 +60,8 @@ const dialogTitle = computed(() => {
 });
 
 function resetForms() {
+  productDetails.value={};
+  batchForm.quantity=null;
   editingId.value = "";
   Object.assign(lineForm, { code: "", name: "", description: "", is_active: true });
   Object.assign(skuForm, { product_line_id: activeLines.value[0]?.id || "", code: "", name: "", description: "", is_active: true });
@@ -75,6 +82,7 @@ async function loadCatalog() {
     productLines.value = data.data.product_lines;
     productSkus.value = data.data.product_skus;
     productBatches.value = data.data.product_batches;
+    if((await supervisionApi.settings()).data.data.enabled){for(const kind of ["enterprises","regions"] as const){const rows=(await supervisionApi.list(kind,{size:200})).data.data.items;detailOptions.value[kind]=rows.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name}));}}
   } finally {
     loading.value = false;
   }
@@ -103,6 +111,7 @@ function openEditSku(item: ProductSku) {
   resetForms();
   dialogMode.value = "sku";
   editingId.value = item.id;
+  productDetails.value={...(item.supervision_data||{})};
   Object.assign(skuForm, {
     product_line_id: item.product_line_id,
     code: item.code,
@@ -118,6 +127,7 @@ function openEditBatch(item: ProductBatch) {
   dialogMode.value = "batch";
   editingId.value = item.id;
   Object.assign(batchForm, {
+    quantity:item.quantity,
     product_sku_id: item.product_sku_id,
     batch_no: item.batch_no,
     name: item.name,
@@ -153,6 +163,7 @@ async function submit() {
       if (editingId.value) await productMasterApi.updateLine(editingId.value, lineForm);
       else await productMasterApi.createLine(lineForm);
     } else if (dialogMode.value === "sku") {
+      skuForm.supervision_data=productDetails.value;
       if (editingId.value) await productMasterApi.updateSku(editingId.value, skuForm);
       else await productMasterApi.createSku(skuForm);
     } else if (editingId.value) {
@@ -322,6 +333,7 @@ onMounted(loadCatalog);
       </el-form>
 
       <el-form v-else-if="dialogMode === 'sku'" label-position="top">
+        <SupervisionFields v-model="productDetails" :specs="detailSpecs" :options="detailOptions" />
         <el-form-item label="产品线">
           <el-select v-model="skuForm.product_line_id" filterable placeholder="选择产品线" class="!w-full">
             <el-option v-for="line in productLines" :key="line.id" :label="formatCodeName(line)" :value="line.id" />
@@ -356,6 +368,7 @@ onMounted(loadCatalog);
         <el-form-item label="生产日期">
           <el-date-picker v-model="batchForm.production_date" type="date" value-format="YYYY-MM-DD" class="!w-full" />
         </el-form-item>
+        <el-form-item label="批次数量"><el-input-number v-model="batchForm.quantity" :min="0" :controls="false" /></el-form-item>
         <el-form-item label="描述">
           <el-input v-model="batchForm.description" type="textarea" :rows="4" />
         </el-form-item>

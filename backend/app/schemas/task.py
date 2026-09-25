@@ -41,12 +41,13 @@ class TaskListQuery(PageParams):
 
 
 class TaskCreate(BaseModel):
+    input_mode: Literal["image", "measurement", "mixed"] = "image"
     product_sku_id: str
     batch_id: str
     inspection_standard_id: str
     product_id: str | None = None
     spec_code: str | None = None
-    image_urls: List[str]
+    image_urls: List[str] = Field(default_factory=list)
     image_items: Optional[List[ImageItem]] = None
     priority: int = Field(default=5, ge=1, le=10)
     metadata: Optional[dict] = None
@@ -78,6 +79,7 @@ class TaskCreate(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    supervision: bool = False
     id: str
     org_id: str
     org_slug: str | None = None
@@ -110,6 +112,7 @@ class TaskResponse(BaseModel):
 
 
 class TaskListItemResponse(BaseModel):
+    supervision: bool = False
     id: str
     org_id: str
     org_slug: str | None = None

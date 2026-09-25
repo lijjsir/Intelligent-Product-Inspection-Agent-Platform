@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -41,7 +41,7 @@ class TaskRepository:
         if org_id:
             stmt = stmt.where(InspectionTask.org_id == org_id)
         if owner_user_id:
-            stmt = stmt.where(InspectionTask.created_by == owner_user_id)
+            stmt = stmt.where(or_(InspectionTask.created_by == owner_user_id,InspectionTask.meta_data["supervision"].as_boolean().is_(True)))
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -100,7 +100,9 @@ class TaskRepository:
         if org_id:
             base = base.where(InspectionTask.org_id == org_id)
         if owner_user_id:
-            base = base.where(InspectionTask.created_by == owner_user_id)
+            base = base.where(or_(InspectionTask.created_by == owner_user_id,InspectionTask.meta_data["supervision"].as_boolean().is_(True)))
+        if filters.get("exclude_supervision"):
+            base = base.where(func.coalesce(InspectionTask.meta_data["supervision"].as_boolean(),False).is_(False))
         base = base.where(
             InspectionTask.product_id != "chat_quality",
             InspectionTask.spec_code != "CHAT-QUALITY-QA",

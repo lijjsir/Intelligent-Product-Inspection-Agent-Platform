@@ -12,7 +12,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.core.dataset_modality import dataset_supports_sample_type
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import ROLE_ADMIN, ROLE_USER
 from app.repositories.dataset_repo import DatasetAsyncJobRepository, DatasetRepository, DatasetSampleRepository
 from app.repositories.result_repo import ResultRepository
@@ -62,6 +62,18 @@ class TaskResultIngestService:
         )
         if task is None:
             raise NotFoundError(f"Task {task_id} not found")
+        if (getattr(task,"meta_data",None) or {}).get("supervision") and self._actor_role=="algorithm_engineer":
+            from sqlalchemy import select
+            from app.models.supervision import SupervisionRecord
+            enrolled=await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.org_id==self._org_id,
+                SupervisionRecord.kind=="dataset-enrollments",SupervisionRecord.status=="authorized",
+                SupervisionRecord.code==f"enroll:{task_id}:{payload.dataset_id}"))
+            if not enrolled or enrolled.data["dataset_owner_id"]!=self._actor_user_id or payload.target!="dataset":
+                raise ForbiddenError("此质监样本尚未由业务人员明确授权到该数据集")
+            session=await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.id==enrolled.data["session_id"],
+                SupervisionRecord.org_id==self._org_id))
+            if not session or session.version!=enrolled.data["session_version"] or session.data.get("knowledge_status")=="needs_reassessment":
+                raise ForbiddenError("样本来源版本已变化，需要重新授权")
         if str(getattr(task, "status", "") or "") != "done":
             raise ValidationError("only completed tasks can be ingested")
 
@@ -184,6 +196,21 @@ class TaskResultIngestService:
             raise NotFoundError("dataset not found")
         if str(getattr(dataset, "status", "") or "") != "active":
             raise ValidationError("dataset must be active")
+        if (getattr(task,"meta_data",None) or {}).get("input_mode")=="measurement":
+            if not dataset_supports_sample_type(dataset.modality,"text"):
+                raise ValidationError("测量结果需要支持文本的数据集")
+            key=f"result_import:{task.id}:structured"
+            existing=await self._dataset_samples.list_for_dataset_all(org_id=self._org_id,dataset_id=dataset_id,owner_user_id=self._actor_user_id)
+            if any((r.source_metadata or {}).get("ingest_key")==key for r in existing):
+                return 0,1,[]
+            text=json.dumps({"task_id":task.id,"verdict":result.verdict,"findings":(result.reasoning_chain or {}).get("findings",[]),
+                "citations":result.citations,"score_status":"not_calibrated"},ensure_ascii=False)
+            await self._dataset_samples.create({"org_id":self._org_id,"dataset_id":dataset_id,"created_by":self._actor_user_id,
+                "sample_type":"text","sample_name":f"task-{task.id}-measurements.json","text_content":text,"preview_text":text[:500],
+                "content_type":"application/json","checksum_sha256":hashlib.sha256(text.encode()).hexdigest(),"size_bytes":len(text.encode()),
+                "annotation_data":{"label":result.verdict,"review_status":"pending_review"},"quality_score":None,
+                "source_metadata":{"source":"result_import","ingest_key":key,"task_id":task.id,"result_id":result.id,"review_status":"pending_review"}})
+            return 1,0,["已作为结构化文本候选样本，仍需数据集审核"]
         if not dataset_supports_sample_type(getattr(dataset, "modality", None), "image"):
             raise ValidationError(f"dataset modality {dataset.modality} does not support image samples")
 

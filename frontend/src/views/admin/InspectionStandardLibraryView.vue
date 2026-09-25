@@ -1,8 +1,31 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentChecked, FolderOpened, MoreFilled, Plus, RefreshRight, Search, UploadFilled } from "@element-plus/icons-vue";
+import {
+  DocumentChecked,
+  FolderOpened,
+  MoreFilled,
+  Plus,
+  RefreshRight,
+  Search,
+  UploadFilled,
+} from "@element-plus/icons-vue";
 import { productMasterApi } from "@/api/product-master.api";
+import SupervisionFields from "@/components/business/supervision/SupervisionFields.vue";
+import { cleanFields } from "@/components/business/supervision/form-fields";
+import { supervisionApi } from "@/api/supervision.api";
+const applicability = ref<Record<string, any>>({});
+const applicabilityOptions = ref<Record<string, { value: string; label: string }[]>>({});
+const applicabilitySpecs = [
+  { key: "effective_from", label: "生效时间", type: "date" },
+  { key: "effective_to", label: "失效时间", type: "date" },
+  { key: "transition_until", label: "过渡期截止", type: "date" },
+  { key: "region_ids", label: "适用地区", type: "select", options: "regions", multiple: true },
+  { key: "production_from", label: "适用生产日期开始", type: "date" },
+  { key: "production_to", label: "适用生产日期截止", type: "date" },
+  { key: "clause_version", label: "条款版本" },
+  { key: "notes", label: "适用说明", type: "textarea" },
+];
 import { useInspectionStandardStore } from "@/stores/inspection_standard.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { formatCodeName } from "@/utils/master-data-labels";
@@ -87,14 +110,21 @@ const filteredItems = computed(() =>
   }),
 );
 
-const domains = computed(() => Array.from(new Set(store.items.map((item) => item.domain).filter(Boolean))).sort());
+const domains = computed(() =>
+  Array.from(new Set(store.items.map((item) => item.domain).filter(Boolean))).sort(),
+);
 const availableSpecs = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
 const availableSkusForForm = computed(() =>
-  productSkus.value.filter((item) => (form.applicable_product_line_ids || []).includes(item.product_line_id)),
+  productSkus.value.filter((item) =>
+    (form.applicable_product_line_ids || []).includes(item.product_line_id),
+  ),
 );
-const selectedSpec = computed(() => availableSpecs.value.find((item) => item.id === form.inspection_spec_id) || null);
+const selectedSpec = computed(
+  () => availableSpecs.value.find((item) => item.id === form.inspection_spec_id) || null,
+);
 
 function resetForm() {
+  applicability.value = {};
   editingId.value = "";
   Object.assign(form, {
     name: "",
@@ -119,7 +149,9 @@ function statusLabel(status: string) {
       completed: "已完成",
       partial_failed: "部分失败",
       failed: "失败",
-    }[status] || status || "未扫描"
+    }[status] ||
+    status ||
+    "未扫描"
   );
 }
 
@@ -134,14 +166,16 @@ async function loadProductMasterOptions() {
   const { data } = await productMasterApi.catalog(false);
   productLines.value = data.data.product_lines;
   productSkus.value = data.data.product_skus;
+  if ((await supervisionApi.settings()).data.data.enabled) {
+    const regions = (await supervisionApi.list("regions", { size: 200 })).data.data.items;
+    applicabilityOptions.value.regions = regions
+      .filter((x) => x.status === "active")
+      .map((x) => ({ value: x.id, label: x.name }));
+  }
 }
 
 async function loadAll() {
-  await Promise.all([
-    store.fetchAll(),
-    inspectionSpecStore.fetchAll(),
-    loadProductMasterOptions(),
-  ]);
+  await Promise.all([store.fetchAll(), inspectionSpecStore.fetchAll(), loadProductMasterOptions()]);
 }
 
 function openCreate() {
@@ -150,6 +184,7 @@ function openCreate() {
 }
 
 function openEdit(item: InspectionStandardLibraryItem) {
+  applicability.value = { ...(item.applicability || {}) };
   editingId.value = item.id;
   Object.assign(form, {
     name: item.name,
@@ -171,7 +206,7 @@ async function submit() {
     return;
   }
   if (!String(form.inspection_spec_id || "").trim()) {
-    ElMessage.warning("请先绑定质检门槛");
+    ElMessage.warning("请先绑定自动判定规则");
     return;
   }
   if (!String(form.product_family || "").trim()) {
@@ -183,6 +218,7 @@ async function submit() {
   try {
     const payload = {
       ...form,
+      applicability: cleanFields(applicability.value, applicabilitySpecs),
       spec_code: selectedSpec.value?.spec_code || form.spec_code || null,
     };
     if (editingId.value) {
@@ -233,9 +269,12 @@ async function doUpload() {
   uploading.value = true;
   try {
     const result = await store.uploadOne(uploadTargetId.value, uploadFiles.value);
-    ElMessage.success(`已上传 ${result.uploaded_count} 个文件，成功索引 ${result.indexed_count} 个`);
+    ElMessage.success(
+      `已上传 ${result.uploaded_count} 个文件，成功索引 ${result.indexed_count} 个`,
+    );
     uploadDialogOpen.value = false;
-    if (currentLibrary.value?.id === uploadTargetId.value) await store.fetchDocuments(uploadTargetId.value);
+    if (currentLibrary.value?.id === uploadTargetId.value)
+      await store.fetchDocuments(uploadTargetId.value);
   } finally {
     uploading.value = false;
   }
@@ -331,7 +370,9 @@ watch(
         .filter((item) => (lineIds || []).includes(item.product_line_id))
         .map((item) => item.id),
     );
-    form.applicable_product_sku_ids = (form.applicable_product_sku_ids || []).filter((item) => allowedSkuIds.has(item));
+    form.applicable_product_sku_ids = (form.applicable_product_sku_ids || []).filter((item) =>
+      allowedSkuIds.has(item),
+    );
   },
 );
 
@@ -351,7 +392,7 @@ onMounted(loadAll);
       <div>
         <p class="eyebrow">Standards Library</p>
         <h2>检测标准库</h2>
-        <p>管理标准文档、适用范围和质检门槛绑定。任务创建时只选检测标准，门槛在这里维护。</p>
+        <p>管理标准文档、适用范围和自动判定规则绑定。任务创建时只选检测标准，门槛在这里维护。</p>
       </div>
       <div class="heading-actions">
         <el-button :icon="RefreshRight" @click="loadAll">刷新</el-button>
@@ -379,11 +420,22 @@ onMounted(loadAll);
     </section>
 
     <section class="toolbar">
-      <el-input v-model="filters.keyword" :prefix-icon="Search" clearable placeholder="搜索名称、门槛编码、说明" class="keyword" />
+      <el-input
+        v-model="filters.keyword"
+        :prefix-icon="Search"
+        clearable
+        placeholder="搜索名称、规则编码、说明"
+        class="keyword"
+      />
       <el-select v-model="filters.domain" clearable placeholder="领域" class="filter-select">
         <el-option v-for="domain in domains" :key="domain" :label="domain" :value="domain" />
       </el-select>
-      <el-select v-model="filters.importStatus" clearable placeholder="导入状态" class="filter-select">
+      <el-select
+        v-model="filters.importStatus"
+        clearable
+        placeholder="导入状态"
+        class="filter-select"
+      >
         <el-option label="未扫描" value="not_scanned" />
         <el-option label="已扫描" value="scanned" />
         <el-option label="待导入" value="pending" />
@@ -404,10 +456,14 @@ onMounted(loadAll);
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="质检门槛" min-width="180">
+        <el-table-column label="自动判定规则" min-width="180">
           <template #default="{ row }">
             <el-tag :type="row.has_quality_threshold ? 'success' : 'warning'" effect="plain">
-              {{ row.has_quality_threshold ? (row.spec_code || row.spec_name || "已绑定") : "未绑定门槛" }}
+              {{
+                row.has_quality_threshold
+                  ? row.spec_code || row.spec_name || "已绑定"
+                  : "未绑定规则"
+              }}
             </el-tag>
           </template>
         </el-table-column>
@@ -415,30 +471,42 @@ onMounted(loadAll);
         <el-table-column label="RAG 空间" min-width="190">
           <template #default="{ row }">
             <div class="tag-line">
-              <el-tag v-for="space in row.rag_spaces" :key="space.id" effect="plain">{{ space.name }}</el-tag>
+              <el-tag v-for="space in row.rag_spaces" :key="space.id" effect="plain">{{
+                space.name
+              }}</el-tag>
             </div>
           </template>
         </el-table-column>
         <el-table-column label="PDF / 文档 / Chunk" width="160">
-          <template #default="{ row }">{{ row.pdf_count }} / {{ row.document_count }} / {{ row.chunk_count }}</template>
+          <template #default="{ row }"
+            >{{ row.pdf_count }} / {{ row.document_count }} / {{ row.chunk_count }}</template
+          >
         </el-table-column>
         <el-table-column label="导入状态" width="120">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.import_status)">{{ statusLabel(row.import_status) }}</el-tag>
+            <el-tag :type="statusType(row.import_status)">{{
+              statusLabel(row.import_status)
+            }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="启用" width="90">
           <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'info'">{{ row.is_active ? "启用" : "停用" }}</el-tag>
+            <el-tag :type="row.is_active ? 'success' : 'info'">{{
+              row.is_active ? "启用" : "停用"
+            }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="最近索引" width="180">
-          <template #default="{ row }">{{ row.last_indexed_at || row.last_scanned_at || "未执行" }}</template>
+          <template #default="{ row }">{{
+            row.last_indexed_at || row.last_scanned_at || "未执行"
+          }}</template>
         </el-table-column>
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link :icon="FolderOpened" @click="openDocuments(row)">文档</el-button>
-            <el-button link type="primary" :icon="UploadFilled" @click="openUploadDialog(row)">上传</el-button>
+            <el-button link type="primary" :icon="UploadFilled" @click="openUploadDialog(row)"
+              >上传</el-button
+            >
             <el-dropdown
               trigger="click"
               @command="
@@ -454,7 +522,9 @@ onMounted(loadAll);
                 <el-dropdown-menu>
                   <el-dropdown-item command="reindex">重建索引</el-dropdown-item>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                  <el-dropdown-item command="delete" style="color: var(--el-color-danger)">删除</el-dropdown-item>
+                  <el-dropdown-item command="delete" style="color: var(--el-color-danger)"
+                    >删除</el-dropdown-item
+                  >
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -474,15 +544,31 @@ onMounted(loadAll);
       </div>
     </section>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑检测标准' : '新建检测标准'" size="560px">
+    <el-drawer
+      v-model="drawerOpen"
+      :title="editingId ? '编辑检测标准' : '新建检测标准'"
+      size="560px"
+    >
       <el-form label-position="top" class="drawer-form">
+        <el-collapse
+          ><el-collapse-item title="标准适用时间与地区"
+            ><SupervisionFields
+              v-model="applicability"
+              :specs="applicabilitySpecs"
+              :options="applicabilityOptions" /></el-collapse-item
+        ></el-collapse>
         <el-form-item label="检测标准名称" required>
           <el-input v-model="form.name" placeholder="如：陶瓷产品检测标准" />
           <div class="form-hint">会自动创建同名 RAG 空间。任务创建时用户只选择检测标准。</div>
         </el-form-item>
         <div class="form-grid">
-          <el-form-item label="绑定质检门槛" required>
-            <el-select v-model="form.inspection_spec_id" filterable clearable placeholder="选择质检门槛">
+          <el-form-item label="绑定自动判定规则" required>
+            <el-select
+              v-model="form.inspection_spec_id"
+              filterable
+              clearable
+              placeholder="选择自动判定规则"
+            >
               <el-option
                 v-for="spec in availableSpecs"
                 :key="spec.id"
@@ -504,7 +590,14 @@ onMounted(loadAll);
             <el-input v-model="form.product_family" placeholder="如：screw / bottle / tile" />
           </el-form-item>
           <el-form-item label="领域">
-            <el-select v-model="form.domain" allow-create filterable clearable default-first-option placeholder="选择或输入领域">
+            <el-select
+              v-model="form.domain"
+              allow-create
+              filterable
+              clearable
+              default-first-option
+              placeholder="选择或输入领域"
+            >
               <el-option label="日用陶瓷" value="日用陶瓷" />
               <el-option label="包装印刷" value="包装印刷" />
               <el-option label="包装材料" value="包装材料" />
@@ -524,13 +617,35 @@ onMounted(loadAll);
         </div>
         <div class="form-grid">
           <el-form-item label="适用产品线">
-            <el-select v-model="form.applicable_product_line_ids" multiple filterable clearable placeholder="不选则默认不限">
-              <el-option v-for="line in productLines" :key="line.id" :label="formatCodeName(line)" :value="line.id" />
+            <el-select
+              v-model="form.applicable_product_line_ids"
+              multiple
+              filterable
+              clearable
+              placeholder="不选则默认不限"
+            >
+              <el-option
+                v-for="line in productLines"
+                :key="line.id"
+                :label="formatCodeName(line)"
+                :value="line.id"
+              />
             </el-select>
           </el-form-item>
           <el-form-item label="适用 SKU">
-            <el-select v-model="form.applicable_product_sku_ids" multiple filterable clearable placeholder="优先按 SKU 精确适配">
-              <el-option v-for="sku in availableSkusForForm" :key="sku.id" :label="formatCodeName(sku)" :value="sku.id" />
+            <el-select
+              v-model="form.applicable_product_sku_ids"
+              multiple
+              filterable
+              clearable
+              placeholder="优先按 SKU 精确适配"
+            >
+              <el-option
+                v-for="sku in availableSkusForForm"
+                :key="sku.id"
+                :label="formatCodeName(sku)"
+                :value="sku.id"
+              />
             </el-select>
           </el-form-item>
         </div>
@@ -591,11 +706,22 @@ onMounted(loadAll);
     <el-drawer v-model="detailOpen" :title="currentLibrary?.name || '标准库文档'" size="760px">
       <div class="detail-stack">
         <section class="detail-toolbar">
-          <el-button :icon="RefreshRight" @click="currentLibrary && store.fetchDocuments(currentLibrary.id)">刷新文档</el-button>
-          <el-button :icon="UploadFilled" type="primary" @click="openUploadForCurrent">上传 PDF</el-button>
+          <el-button
+            :icon="RefreshRight"
+            @click="currentLibrary && store.fetchDocuments(currentLibrary.id)"
+            >刷新文档</el-button
+          >
+          <el-button :icon="UploadFilled" type="primary" @click="openUploadForCurrent"
+            >上传 PDF</el-button
+          >
         </section>
 
-        <el-table :data="store.documents" v-loading="store.documentLoading" row-key="id" max-height="320">
+        <el-table
+          :data="store.documents"
+          v-loading="store.documentLoading"
+          row-key="id"
+          max-height="320"
+        >
           <el-table-column label="标准文档" min-width="220">
             <template #default="{ row }">
               <div class="primary-cell">
@@ -606,7 +732,9 @@ onMounted(loadAll);
           </el-table-column>
           <el-table-column prop="file_name" label="文件名" min-width="180" />
           <el-table-column label="页 / Chunk" width="110">
-            <template #default="{ row }">{{ row.page_count || 0 }} / {{ row.chunk_count }}</template>
+            <template #default="{ row }"
+              >{{ row.page_count || 0 }} / {{ row.chunk_count }}</template
+            >
           </el-table-column>
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
@@ -654,7 +782,11 @@ onMounted(loadAll);
           </el-form>
           <div class="inline-edit-actions">
             <el-button @click="cancelEditDocument">取消</el-button>
-            <el-button type="primary" @click="currentDocumentForChunks && saveDocument(currentDocumentForChunks)">保存</el-button>
+            <el-button
+              type="primary"
+              @click="currentDocumentForChunks && saveDocument(currentDocumentForChunks)"
+              >保存</el-button
+            >
           </div>
         </div>
 
@@ -671,11 +803,26 @@ onMounted(loadAll);
 
         <section class="retrieve-panel">
           <div class="retrieve-grid">
-            <el-input v-model="retrieveForm.query" :prefix-icon="Search" placeholder="输入标准检索问题" />
+            <el-input
+              v-model="retrieveForm.query"
+              :prefix-icon="Search"
+              placeholder="输入标准检索问题"
+            />
             <el-input v-model="retrieveForm.domain" placeholder="领域" />
             <el-input v-model="retrieveForm.productCategory" placeholder="产品类别" />
-            <el-input-number v-model="retrieveForm.topK" :min="1" :max="20" controls-position="right" />
-            <el-button type="primary" :icon="DocumentChecked" :loading="retrieveLoading" @click="retrieveStandards">测试检索</el-button>
+            <el-input-number
+              v-model="retrieveForm.topK"
+              :min="1"
+              :max="20"
+              controls-position="right"
+            />
+            <el-button
+              type="primary"
+              :icon="DocumentChecked"
+              :loading="retrieveLoading"
+              @click="retrieveStandards"
+              >测试检索</el-button
+            >
           </div>
           <div v-if="retrieveHits.length" class="hit-list">
             <article v-for="hit in retrieveHits" :key="hit.id" class="hit-item">
@@ -684,18 +831,29 @@ onMounted(loadAll);
                 <el-tag effect="plain">score {{ hit.score.toFixed(3) }}</el-tag>
               </header>
               <p>{{ hit.quote }}</p>
-              <footer>{{ hit.standard_name }} · 第{{ hit.page_number || "-" }}页 · 第{{ hit.chunk_index || "-" }}段</footer>
+              <footer>
+                {{ hit.standard_name }} · 第{{ hit.page_number || "-" }}页 · 第{{
+                  hit.chunk_index || "-"
+                }}段
+              </footer>
             </article>
           </div>
         </section>
       </div>
     </el-drawer>
 
-    <el-drawer v-model="chunkDrawerOpen" :title="`${currentDocumentForChunks?.standard_no || ''} Chunks`" size="800px">
+    <el-drawer
+      v-model="chunkDrawerOpen"
+      :title="`${currentDocumentForChunks?.standard_no || ''} Chunks`"
+      size="800px"
+    >
       <div class="detail-stack">
         <div v-if="currentDocumentForChunks" class="primary-cell" style="margin-bottom: 12px">
           <strong>{{ currentDocumentForChunks.standard_no }}</strong>
-          <span>{{ currentDocumentForChunks.standard_name }} · {{ currentDocumentForChunks.file_name }}</span>
+          <span
+            >{{ currentDocumentForChunks.standard_name }} ·
+            {{ currentDocumentForChunks.file_name }}</span
+          >
         </div>
         <el-table :data="store.chunks" v-loading="store.chunkLoading" row-key="id" max-height="520">
           <el-table-column label="#" width="60">
@@ -706,7 +864,10 @@ onMounted(loadAll);
             <template #default="{ row }">{{ row.page_from || "-" }}</template>
           </el-table-column>
           <el-table-column label="文本预览" min-width="300">
-            <template #default="{ row }">{{ (row.chunk_text || "").slice(0, 200) }}{{ (row.chunk_text || "").length > 200 ? "..." : "" }}</template>
+            <template #default="{ row }"
+              >{{ (row.chunk_text || "").slice(0, 200)
+              }}{{ (row.chunk_text || "").length > 200 ? "..." : "" }}</template
+            >
           </el-table-column>
           <el-table-column label="Token" width="80">
             <template #default="{ row }">{{ row.token_count || 0 }}</template>

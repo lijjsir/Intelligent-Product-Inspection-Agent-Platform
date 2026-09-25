@@ -7,6 +7,7 @@ from app.schemas.common import PageParams
 
 
 class ResultResponse(BaseModel):
+    score_status: str = "legacy_heuristic"
     id: str
     task_id: str
     org_id: str
@@ -15,6 +16,9 @@ class ResultResponse(BaseModel):
     defects: Optional[list[dict]] = None
     citations: Optional[dict] = None
     reasoning_chain: Optional[dict] = None
+    inspection_session_id: Optional[str] = None
+    stop_decision_id: Optional[str] = None
+    result_status: Optional[str] = None
     llm_model: str
     prompt_version: str
     tokens_used: Optional[int] = None
@@ -22,6 +26,8 @@ class ResultResponse(BaseModel):
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     review_note: Optional[str] = None
+    signed_by: Optional[str] = None
+    signed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
@@ -40,6 +46,7 @@ class ResultListQuery(PageParams):
 
 
 class ResultListItemResponse(BaseModel):
+    score_status: str = "legacy_heuristic"
     id: str
     task_id: str
     org_id: str

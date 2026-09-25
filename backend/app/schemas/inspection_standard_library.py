@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 class InspectionStandardCreate(BaseModel):
+    applicability: dict | None = None
     name: str = Field(..., min_length=1, max_length=128)
     product_family: str | None = Field(default=None, max_length=128)
     inspection_spec_id: str | None = None
@@ -19,6 +20,7 @@ class InspectionStandardCreate(BaseModel):
 
 
 class InspectionStandardUpdate(BaseModel):
+    applicability: dict | None = None
     name: str | None = Field(default=None, min_length=1, max_length=128)
     product_family: str | None = Field(default=None, max_length=128)
     inspection_spec_id: str | None = None
@@ -39,6 +41,7 @@ class InspectionStandardRagSpaceSummary(BaseModel):
 
 
 class InspectionStandardResponse(BaseModel):
+    applicability: dict | None = None
     id: str
     org_id: str | None = None
     name: str

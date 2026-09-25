@@ -6,7 +6,7 @@ from app.core.permissions import require_role
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.result import ResultListItemResponse, ResultListQuery, ResultResponse, ReviewSubmit
 from app.schemas.user import CurrentUser
-from app.services.result_service import ResultService
+from app.services.result_service import ResultService, result_effective_verdict, result_score_status
 
 
 router = APIRouter()
@@ -27,8 +27,9 @@ async def list_results(
             task_id=result.task_id,
             org_id=result.org_id,
             product_id=product_id,
-            verdict=result.verdict,
+            verdict=result_effective_verdict(result),
             overall_score=float(result.overall_score or 0.0),
+            score_status=result_score_status(result),
             llm_model=result.llm_model,
             prompt_version=result.prompt_version,
             created_at=result.created_at,

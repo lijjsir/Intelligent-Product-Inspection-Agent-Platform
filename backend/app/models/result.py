@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import String, Integer, DECIMAL, Text, DateTime
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
@@ -16,6 +18,9 @@ class InspectionResult(Base, TimestampMixin):
     defects: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     citations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     reasoning_chain: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    inspection_session_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    stop_decision_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    result_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     llm_model: Mapped[str] = mapped_column(String(64))
     prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -23,3 +28,5 @@ class InspectionResult(Base, TimestampMixin):
     reviewed_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     reviewed_at: Mapped[str | None] = mapped_column(DateTime(timezone=False), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    signed_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)

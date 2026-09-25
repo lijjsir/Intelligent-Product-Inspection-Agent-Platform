@@ -230,6 +230,21 @@ class ProductMasterService:
 
     async def _normalize_sku_payload(self, payload: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
         data: dict[str, Any] = {}
+        if "supervision_data" in payload:
+            from app.schemas.supervision import ProductDetails
+            from sqlalchemy import select
+            from app.models.supervision import SupervisionRecord
+            details = ProductDetails.model_validate(payload["supervision_data"] or {}).model_dump(mode="json")
+            for key, kind in (("enterprise_id", "enterprises"), ("production_region_id", "regions")):
+                if details.get(key) and not await self._session.scalar(select(SupervisionRecord.id).where(
+                    SupervisionRecord.id == details[key], SupervisionRecord.org_id == self._org_id,
+                    SupervisionRecord.kind == kind, SupervisionRecord.status == "active")):
+                    raise ValidationError("企业或地区不属于当前组织或未启用")
+            for rid in details.get("sales_region_ids", []):
+                if not await self._session.scalar(select(SupervisionRecord.id).where(SupervisionRecord.id == rid,
+                    SupervisionRecord.org_id == self._org_id, SupervisionRecord.kind == "regions", SupervisionRecord.status == "active")):
+                    raise ValidationError("销售地区未启用")
+            data["supervision_data"] = details
         if "product_line_id" in payload or not partial:
             line_id = _clean_text(payload.get("product_line_id"))
             if not line_id:
@@ -258,6 +273,8 @@ class ProductMasterService:
 
     async def _normalize_batch_payload(self, payload: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
         data: dict[str, Any] = {}
+        if "quantity" in payload:
+            data["quantity"] = payload["quantity"]
         if "product_sku_id" in payload or not partial:
             sku_id = _clean_text(payload.get("product_sku_id"))
             if not sku_id:
@@ -302,6 +319,7 @@ class ProductMasterService:
     @classmethod
     def _serialize_sku(cls, item: ProductSku, line: ProductLine | None) -> dict[str, Any]:
         return {
+            "supervision_data": getattr(item, "supervision_data", None),
             "id": item.id,
             "org_id": item.org_id,
             "product_line_id": item.product_line_id,
@@ -328,6 +346,7 @@ class ProductMasterService:
             "org_id": item.org_id,
             "product_sku_id": item.product_sku_id,
             "product_sku_code": sku.code if sku else None,
+            "quantity": getattr(item, "quantity", None),
             "product_sku_name": sku.name if sku else None,
             "product_line_id": line.id if line else None,
             "product_line_code": line.code if line else None,

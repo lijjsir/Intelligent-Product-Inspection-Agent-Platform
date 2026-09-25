@@ -218,6 +218,41 @@ async def _persist_task_agent_artifacts(session, *, task: InspectionTask, output
         )
 
 
+async def _save_supervision_image_draft(session, task, output):
+    from sqlalchemy import select
+    from app.models.supervision import SupervisionRecord, SupervisionRevision
+    persisted = output.persistable_output
+    result = persisted.result if persisted else None
+    verdict = str(result.verdict if result else (output.result_card or {}).get("verdict") or "manual_required")
+    record = await session.scalar(select(SupervisionRecord).where(SupervisionRecord.org_id == task.org_id,
+        SupervisionRecord.kind == "inspection-sessions", SupervisionRecord.code == f"image-task:{task.id}").with_for_update())
+    if record and record.status == "signed":
+        raise RuntimeError("此任务已签发，请创建新任务重新检测")
+    assessment = {"input_mode": "image", "status": "awaiting_review" if verdict in {"pass", "fail"} else "insufficient_evidence",
+        "summary": output.answer or output.summary or "图片分析草稿", "suggested_verdict": verdict,
+        "probability": None, "confidence": None, "findings": list((result.reasoning_chain or {}).get("defects") or []) if result else [],
+        "citations": list(output.citations or []), "consumed_event_ids": [],
+        "missing_inputs": [] if verdict in {"pass", "fail"} and output.citations else ["图片判定或标准证据不足"],
+        "limitations": ["此结论仅针对本次图片可观察内容，未经校准，不提供失效概率"],
+        "can_make_final_verdict": False}
+    if not record:
+        record = SupervisionRecord(org_id=task.org_id,kind="inspection-sessions",code=f"image-task:{task.id}",
+            name=f"图片检测草稿 · {task.product_id}",created_by=task.created_by, data={},status="awaiting_review")
+        session.add(record)
+        await session.flush()
+    else:
+        record.version += 1
+    record.status = "awaiting_review" if not assessment["missing_inputs"] else "awaiting_evidence"
+    record.data = {"task_id":task.id,"input_mode":"image","sample_ids":[],"device_ids":[],"test_items":[],
+        "image_assessment":assessment,"analysis":assessment,"knowledge_status":"current"}
+    record.updated_at = datetime.utcnow()
+    from app.services.supervision_service import serialize
+    session.add(SupervisionRevision(org_id=task.org_id,record_id=record.id,version=record.version,
+        actor_id=task.created_by,action="image_analysis_draft",snapshot=serialize(record)))
+    await session.flush()
+    return record
+
+
 async def _materialize_manager_task_output(
     *,
     session,
@@ -276,6 +311,7 @@ async def _materialize_manager_task_output(
     stability_data = persistable.stability
     quality_trace = persistable.quality_trace
     reasoning_chain = dict(result_data.reasoning_chain or {})
+    reasoning_chain.setdefault("score_status", "not_calibrated")
     if quality_trace:
         reasoning_chain.setdefault("trace", quality_trace.model_dump(exclude_none=True))
     result = await result_repo.upsert_by_task(
@@ -294,6 +330,21 @@ async def _materialize_manager_task_output(
             "latency_ms": max(1, int(pipeline_latency_ms)),
         }
     )
+    citation_items = list((result_data.citations or {}).get("items") or []) if isinstance(result_data.citations, dict) else []
+    standard_evaluation = dict(reasoning_chain.get("standard_evaluation") or {})
+    rag_summary = dict(reasoning_chain.get("rag_summary") or {})
+    root_reasons: list[str] = []
+    if not citation_items:
+        root_reasons.append("知识库检索未命中可核验的标准原文，本次结论缺少外部标准引证")
+    if result_data.verdict == "manual_required":
+        root_reasons.append(str(standard_evaluation.get("summary") or "自动判定条件不足，需要人工复核"))
+    if reasoning_chain.get("defects"):
+        defect_types = list(dict.fromkeys(str(item.get("type") or "未知缺陷") for item in reasoning_chain["defects"] if isinstance(item, dict)))
+        if defect_types:
+            root_reasons.append(f"视觉检测发现：{'、'.join(defect_types[:4])}")
+    if not root_reasons:
+        root_reasons.append("未发现高风险项；本报告仅评估单次结果的证据充分性，未执行重复采样，不能据此证明模型长期稳定")
+    confidence_status = str(reasoning_chain.get("score_status") or "not_calibrated")
     stability = await stability_repo.upsert_by_task(
         {
             "id": str(uuid7()),
@@ -307,9 +358,16 @@ async def _materialize_manager_task_output(
             "anomaly_score": float(stability_data.physical_hallucination_score or 0.0),
             "risk_score": float(stability_data.risk_score or 0.0),
             "risk_level": stability_data.risk_level or "medium",
-            "dimension_detail": {},
+            "dimension_detail": {
+                "purpose": "评估单次检测结论是否有足够证据、规则依据和异常风险，用于决定能否自动放行或应转人工复核",
+                "evidence": {"status": "measured", "citation_count": len(citation_items)},
+                "consistency": {"status": "not_measured", "reason": "本次任务没有重复采样结果"},
+                "confidence": {"status": confidence_status, "reason": "模型自评分未经业务样本校准，不作为概率展示"},
+                "traceability": {"status": "measured" if citation_items else "missing"},
+                "rag": rag_summary,
+            },
             "sampling_results": {"route_trace": (output.raw_state or {}).get("response_payload", {}).get("route_trace")},
-            "root_cause": None,
+            "root_cause": "；".join(root_reasons),
             "hallucination_risk": stability_data.physical_hallucination_score,
             "overconfidence": None,
             "created_at": utcnow(),
@@ -638,6 +696,12 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             "payload": obs,
                         }
                     )
+            if (task.meta_data or {}).get("supervision"):
+                draft = await _save_supervision_image_draft(session, task, agent_output)
+                await task_repo.update_status(org_id, task_id, "awaiting_review")
+                await session.commit()
+                await emit({"type": "status", "status": "awaiting_review", "message": "分析草稿已生成，等待业务复核与签发", "session_id": draft.id})
+                return {"task_id": task_id, "status": "awaiting_review", "inspection_session_id": draft.id}
             result, stability_obj = await _materialize_manager_task_output(
                 session=session,
                 task=task,

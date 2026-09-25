@@ -2,7 +2,11 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
-import type { InspectionSpec, InspectionSpecItemPayload, InspectionSpecPayload } from "@/types/governance.types";
+import type {
+  InspectionSpec,
+  InspectionSpecItemPayload,
+  InspectionSpecPayload,
+} from "@/types/governance.types";
 import { ROLE_ADMIN, ROLE_PLATFORM_OPERATOR } from "@/constants/roles";
 import { severityLabel, defectTypeLabel, dispositionLabel } from "@/constants/spec";
 import { useAuthStore } from "@/stores/auth.store";
@@ -54,14 +58,16 @@ const isReadonly = computed(() => {
   const allRoles = [...auth.roles, auth.role].filter(Boolean);
   return allRoles.includes(ROLE_PLATFORM_OPERATOR) && !allRoles.includes(ROLE_ADMIN);
 });
-const pageTitle = computed(() => (isReadonly.value ? "质检门槛查看" : "质检门槛配置"));
+const pageTitle = computed(() => (isReadonly.value ? "自动判定规则查看" : "自动判定规则配置"));
 const pageSubtitle = computed(() =>
   isReadonly.value
     ? "平台运营仅查看门槛、规则、AI 阈值和自动放行策略；新增、编辑、复制、删除仍归管理员治理。"
-    : "维护缺陷判定标准、AI 门槛阈值和自动放行策略，支撑 `inspection_specs` 主链路。",
+    : "维护缺陷判定标准、AI 判定阈值和自动放行策略，支撑 `inspection_specs` 主链路。",
 );
 const productOptions = computed(() =>
-  Array.from(new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[])).sort(),
+  Array.from(
+    new Set(store.items.map((item) => item.product_id).filter(Boolean) as string[]),
+  ).sort(),
 );
 const filteredItems = computed(() =>
   store.items.filter((item) => {
@@ -73,9 +79,13 @@ const filteredItems = computed(() =>
     return matchesProduct && matchesScope;
   }),
 );
-const totalRules = computed(() => filteredItems.value.reduce((sum, item) => sum + item.items.length, 0));
+const totalRules = computed(() =>
+  filteredItems.value.reduce((sum, item) => sum + item.items.length, 0),
+);
 const activeCount = computed(() => filteredItems.value.filter((item) => item.is_active).length);
-const autopassCount = computed(() => filteredItems.value.filter((item) => item.auto_pass_enabled).length);
+const autopassCount = computed(
+  () => filteredItems.value.filter((item) => item.auto_pass_enabled).length,
+);
 
 function buildDefaultRule(): RuleForm {
   return {
@@ -109,7 +119,7 @@ function resetForm() {
 
 function openCreate() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
     return;
   }
   resetForm();
@@ -123,7 +133,7 @@ function openPreview(row: InspectionSpec) {
 
 function openEdit(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
     return;
   }
   editingId.value = row.id;
@@ -162,7 +172,7 @@ function buildDuplicateCode(row: InspectionSpec) {
 
 async function duplicateSpec(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
     return;
   }
   const payload: InspectionSpecPayload = {
@@ -191,7 +201,7 @@ async function duplicateSpec(row: InspectionSpec) {
     })),
   };
   await store.createOne(payload);
-  ElMessage.success("质检门槛已复制为草稿副本");
+  ElMessage.success("自动判定规则已复制为草稿副本");
 }
 
 function addRule() {
@@ -220,14 +230,24 @@ function buildPayload(): InspectionSpecPayload {
   }));
 
   return {
-    org_id: canManageGlobal.value && scopeMode.value === "global" ? null : (auth.orgId || ""),
+    org_id: canManageGlobal.value && scopeMode.value === "global" ? null : auth.orgId || "",
     spec_code: form.spec_code.trim(),
     name: form.name.trim(),
     version: form.version.trim() || "v1",
     product_id: form.product_id.trim() || null,
     product_family: form.product_family.trim() || null,
-    applicable_skus: form.applicable_skus ? form.applicable_skus.split(",").map((s) => s.trim()).filter(Boolean) : null,
-    required_views: form.required_views ? form.required_views.split(",").map((s) => s.trim()).filter(Boolean) : null,
+    applicable_skus: form.applicable_skus
+      ? form.applicable_skus
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : null,
+    required_views: form.required_views
+      ? form.required_views
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : null,
     required_image_count: Number(form.required_image_count),
     ai_gate_confidence_threshold: Number(form.ai_gate_confidence_threshold),
     ai_gate_evidence_threshold: Number(form.ai_gate_evidence_threshold),
@@ -240,7 +260,7 @@ function buildPayload(): InspectionSpecPayload {
 
 function validatePayload(payload: InspectionSpecPayload) {
   if (!payload.spec_code || !payload.name) {
-    throw new Error("请填写门槛编码和门槛名称");
+    throw new Error("请填写规则编码和规则名称");
   }
   if (payload.items.some((item) => !item.defect_type)) {
     throw new Error("每条规则都需要填写缺陷类型");
@@ -249,7 +269,7 @@ function validatePayload(payload: InspectionSpecPayload) {
 
 async function submit() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
     return;
   }
   const payload = buildPayload();
@@ -257,26 +277,26 @@ async function submit() {
 
   if (editingId.value) {
     await store.updateOne(editingId.value, payload);
-    ElMessage.success("质检门槛已更新");
+    ElMessage.success("自动判定规则已更新");
   } else {
     await store.createOne(payload);
-    ElMessage.success("质检门槛已创建");
+    ElMessage.success("自动判定规则已创建");
   }
   drawerOpen.value = false;
 }
 
 async function remove(id: string) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看质检门槛，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
     return;
   }
-  await ElMessageBox.confirm("删除后将移除该门槛及其规则项，是否继续？", "删除质检门槛", {
+  await ElMessageBox.confirm("删除后将移除该规则及其规则项，是否继续？", "删除自动判定规则", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
     type: "warning",
   });
   await store.removeOne(id);
-  ElMessage.success("质检门槛已删除");
+  ElMessage.success("自动判定规则已删除");
 }
 
 function formatScope(row: InspectionSpec) {
@@ -302,16 +322,16 @@ onMounted(() => {
         <h2>{{ pageTitle }}</h2>
         <p>{{ pageSubtitle }}</p>
       </div>
-      <el-button v-if="!isReadonly" type="primary" @click="openCreate">新增门槛</el-button>
+      <el-button v-if="!isReadonly" type="primary" @click="openCreate">新增规则</el-button>
     </section>
 
     <section class="metrics">
       <el-card shadow="never" class="metric-card">
-        <span class="metric-label">筛选后门槛</span>
+        <span class="metric-label">筛选后规则</span>
         <strong class="metric-value">{{ filteredItems.length }}</strong>
       </el-card>
       <el-card shadow="never" class="metric-card">
-        <span class="metric-label">启用门槛</span>
+        <span class="metric-label">启用规则</span>
         <strong class="metric-value">{{ activeCount }}</strong>
       </el-card>
       <el-card shadow="never" class="metric-card">
@@ -328,8 +348,8 @@ onMounted(() => {
       <template #header>
         <div class="card-header">
           <div>
-            <h3>门槛列表</h3>
-            <p>支持全局门槛与组织门槛共存，默认按当前治理视角展示。</p>
+            <h3>规则列表</h3>
+            <p>支持全局规则与组织规则共存，默认按当前治理视角展示。</p>
           </div>
         </div>
       </template>
@@ -344,8 +364,18 @@ onMounted(() => {
       />
 
       <div class="filters">
-        <el-select v-model="filters.productId" clearable placeholder="按产品线筛选" style="width: 220px">
-          <el-option v-for="product in productOptions" :key="product" :label="product" :value="product" />
+        <el-select
+          v-model="filters.productId"
+          clearable
+          placeholder="按产品线筛选"
+          style="width: 220px"
+        >
+          <el-option
+            v-for="product in productOptions"
+            :key="product"
+            :label="product"
+            :value="product"
+          />
         </el-select>
         <el-segmented
           v-model="filters.scope"
@@ -359,8 +389,8 @@ onMounted(() => {
       </div>
 
       <el-table :data="filteredItems" v-loading="store.loading">
-        <el-table-column prop="spec_code" label="门槛编码" min-width="160" />
-        <el-table-column prop="name" label="门槛名称" min-width="180" />
+        <el-table-column prop="spec_code" label="规则编码" min-width="160" />
+        <el-table-column prop="name" label="规则名称" min-width="180" />
         <el-table-column prop="version" label="版本" width="100" />
         <el-table-column label="范围" width="100">
           <template #default="{ row }">
@@ -403,7 +433,7 @@ onMounted(() => {
       </el-table>
     </el-card>
 
-    <el-drawer v-model="previewOpen" title="门槛详情预览" size="680px">
+    <el-drawer v-model="previewOpen" title="规则详情预览" size="680px">
       <template v-if="previewing">
         <div class="preview-panel">
           <section class="preview-hero">
@@ -411,11 +441,14 @@ onMounted(() => {
               <p class="preview-code">{{ previewing.spec_code }}</p>
               <h3>{{ previewing.name }}</h3>
               <p class="preview-meta">
-                {{ previewing.version }} · {{ formatScope(previewing) }} · {{ previewing.product_family || "未指定产品线" }}
+                {{ previewing.version }} · {{ formatScope(previewing) }} ·
+                {{ previewing.product_family || "未指定产品线" }}
               </p>
             </div>
             <div class="preview-tags">
-              <el-tag :type="previewing.is_active ? 'success' : 'info'">{{ previewing.is_active ? "启用" : "停用" }}</el-tag>
+              <el-tag :type="previewing.is_active ? 'success' : 'info'">{{
+                previewing.is_active ? "启用" : "停用"
+              }}</el-tag>
               <el-tag :type="previewing.auto_pass_enabled ? 'success' : 'warning'">
                 {{ previewing.auto_pass_enabled ? "自动放行开启" : "自动放行关闭" }}
               </el-tag>
@@ -475,25 +508,27 @@ onMounted(() => {
         <el-button
           v-if="!isReadonly"
           type="primary"
-          @click="
-            previewing && (previewOpen = false, openEdit(previewing))
-          "
+          @click="previewing && ((previewOpen = false), openEdit(previewing))"
         >
           转到编辑
         </el-button>
       </template>
     </el-drawer>
 
-    <el-drawer v-model="drawerOpen" :title="editingId ? '编辑质检门槛' : '新增质检门槛'" size="760px">
+    <el-drawer
+      v-model="drawerOpen"
+      :title="editingId ? '编辑自动判定规则' : '新增自动判定规则'"
+      size="760px"
+    >
       <div class="drawer-body">
         <el-card shadow="never" class="drawer-section">
-          <template #header>门槛主信息</template>
+          <template #header>规则主信息</template>
           <el-form label-position="top" class="grid-form">
-            <el-form-item label="门槛编码">
+            <el-form-item label="规则编码">
               <el-input v-model="form.spec_code" placeholder="如 SCREW-A-2026-V1" />
             </el-form-item>
-            <el-form-item label="门槛名称">
-              <el-input v-model="form.name" placeholder="请输入门槛名称" />
+            <el-form-item label="规则名称">
+              <el-input v-model="form.name" placeholder="请输入规则名称" />
             </el-form-item>
             <el-form-item label="版本">
               <el-input v-model="form.version" placeholder="v1" />
@@ -508,14 +543,17 @@ onMounted(() => {
               <el-input v-model="form.applicable_skus" placeholder="多个SKU用逗号分隔" />
             </el-form-item>
             <el-form-item label="必需视角">
-              <el-input v-model="form.required_views" placeholder="逗号分隔，如 front, rear, detail" />
+              <el-input
+                v-model="form.required_views"
+                placeholder="逗号分隔，如 front, rear, detail"
+              />
             </el-form-item>
-            <el-form-item label="门槛范围">
+            <el-form-item label="规则范围">
               <el-segmented
                 v-model="scopeMode"
                 :options="[
-                  { label: '组织门槛', value: 'org' },
-                  { label: '全局门槛', value: 'global', disabled: !canManageGlobal },
+                  { label: '组织规则', value: 'org' },
+                  { label: '全局规则', value: 'global', disabled: !canManageGlobal },
                 ]"
               />
             </el-form-item>
@@ -523,13 +561,31 @@ onMounted(() => {
               <el-input-number v-model="form.required_image_count" :min="1" :max="20" />
             </el-form-item>
             <el-form-item label="置信度阈值">
-              <el-input-number v-model="form.ai_gate_confidence_threshold" :min="0" :max="1" :step="0.01" :precision="4" />
+              <el-input-number
+                v-model="form.ai_gate_confidence_threshold"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                :precision="4"
+              />
             </el-form-item>
             <el-form-item label="证据阈值">
-              <el-input-number v-model="form.ai_gate_evidence_threshold" :min="0" :max="1" :step="0.01" :precision="4" />
+              <el-input-number
+                v-model="form.ai_gate_evidence_threshold"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                :precision="4"
+              />
             </el-form-item>
             <el-form-item label="溯源阈值">
-              <el-input-number v-model="form.ai_gate_traceability_threshold" :min="0" :max="1" :step="0.01" :precision="4" />
+              <el-input-number
+                v-model="form.ai_gate_traceability_threshold"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                :precision="4"
+              />
             </el-form-item>
             <el-form-item label="自动放行">
               <el-switch v-model="form.auto_pass_enabled" active-text="开启" inactive-text="关闭" />
@@ -570,10 +626,20 @@ onMounted(() => {
                   <el-option label="pass" value="pass" />
                   <el-option label="uncertain" value="uncertain" />
                 </el-select>
-                <el-input-number v-model="item.confidence_threshold" :min="0" :max="1" :step="0.01" :precision="4" />
+                <el-input-number
+                  v-model="item.confidence_threshold"
+                  :min="0"
+                  :max="1"
+                  :step="0.01"
+                  :precision="4"
+                />
                 <el-input v-model="item.zone_name" placeholder="区域名称，可选" />
                 <el-input-number v-model="item.max_count" :min="1" :max="999" />
-                <el-input v-model="item.description" class="rule-desc" placeholder="规则说明，可选" />
+                <el-input
+                  v-model="item.description"
+                  class="rule-desc"
+                  placeholder="规则说明，可选"
+                />
               </div>
             </div>
           </div>
@@ -607,7 +673,7 @@ onMounted(() => {
   align-items: end;
   gap: 16px;
   padding: 20px 24px;
- border-radius: 24px;
+  border-radius: 24px;
   background:
     radial-gradient(circle at 86% 18%, rgba(94, 234, 212, 0.24), transparent 30%),
     linear-gradient(135deg, #042f2e 0%, #115e59 52%, #0f766e 100%);
@@ -641,7 +707,7 @@ onMounted(() => {
 }
 
 .metric-card {
- border-radius: 18px;
+  border-radius: 18px;
 }
 
 .metric-card.accent {
@@ -706,7 +772,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 20px;
- border-radius: 20px;
+  border-radius: 20px;
   background: linear-gradient(135deg, #ccfbf1 0%, #ecfeff 100%);
 }
 
@@ -736,7 +802,7 @@ onMounted(() => {
 }
 
 .preview-section {
- border-radius: 18px;
+  border-radius: 18px;
 }
 
 .preview-grid {
@@ -747,7 +813,7 @@ onMounted(() => {
 
 .preview-stat {
   padding: 14px;
- border-radius: 16px;
+  border-radius: 16px;
   background: #f8fafc;
 }
 
@@ -765,7 +831,7 @@ onMounted(() => {
 }
 
 .drawer-section {
- border-radius: 18px;
+  border-radius: 18px;
 }
 
 .grid-form {
@@ -788,8 +854,8 @@ onMounted(() => {
 
 .rule-card {
   padding: 16px;
- border: 1px solid #dbe2ea;
- border-radius: 16px;
+  border: 1px solid #dbe2ea;
+  border-radius: 16px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
 }
 

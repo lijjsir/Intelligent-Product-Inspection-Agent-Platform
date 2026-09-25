@@ -11,7 +11,12 @@ const router = useRouter();
 const store = useResultStore();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
-const filters = ref<{ verdict: Verdict | ""; product_id: string; model_key: string; task_id: string }>({
+const filters = ref<{
+  verdict: Verdict | "";
+  product_id: string;
+  model_key: string;
+  task_id: string;
+}>({
   verdict: "",
   product_id: "",
   model_key: "",
@@ -23,10 +28,13 @@ onMounted(() => {
   fetchData();
 });
 
-watch(() => route.query, () => {
-  syncFromRoute();
-  fetchData();
-});
+watch(
+  () => route.query,
+  () => {
+    syncFromRoute();
+    fetchData();
+  },
+);
 
 function syncFromRoute() {
   filters.value = {
@@ -119,7 +127,9 @@ const VERDICT_LABELS: Record<string, string> = {
   <div class="flex flex-col gap-5">
     <div>
       <h2 class="text-2xl font-bold text-zinc-900">检测结果列表</h2>
-      <p class="mt-2 text-sm text-zinc-500">支持按产品线、模型和结论筛选。专家角色可在此进行人工复核裁定。</p>
+      <p class="mt-2 text-sm text-zinc-500">
+        支持按产品线、模型和结论筛选。专家角色可在此进行人工复核裁定。
+      </p>
     </div>
 
     <!-- 快捷筛选 -->
@@ -147,7 +157,12 @@ const VERDICT_LABELS: Record<string, string> = {
           </el-select>
         </el-form-item>
         <el-form-item label="产品线">
-          <el-input v-model="filters.product_id" placeholder="产品线 / 产品编号" clearable size="small" />
+          <el-input
+            v-model="filters.product_id"
+            placeholder="产品线 / 产品编号"
+            clearable
+            size="small"
+          />
         </el-form-item>
         <el-form-item label="模型">
           <el-input v-model="filters.model_key" placeholder="模型标识" clearable size="small" />
@@ -170,19 +185,39 @@ const VERDICT_LABELS: Record<string, string> = {
         <el-table-column prop="llm_model" label="模型" min-width="180" show-overflow-tooltip />
         <el-table-column prop="verdict" label="结论" width="120">
           <template #default="scope">
-            <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{ VERDICT_LABELS[scope.row.verdict] || scope.row.verdict }}</el-tag>
+            <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{
+              VERDICT_LABELS[scope.row.verdict] || scope.row.verdict
+            }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="overall_score" label="置信分" width="100">
-          <template #default="scope">{{ (scope.row.overall_score * 100).toFixed(1) }}</template>
+        <el-table-column prop="overall_score" label="模型置信分" width="120">
+          <template #default="scope">{{
+            scope.row.score_status === "calibrated"
+              ? (scope.row.overall_score * 100).toFixed(1)
+              : "未校准"
+          }}</template>
         </el-table-column>
         <el-table-column prop="created_at" label="时间" min-width="180">
-          <template #default="scope">{{ scope.row.created_at ? new Date(scope.row.created_at).toLocaleString() : '-' }}</template>
+          <template #default="scope">{{
+            scope.row.created_at ? new Date(scope.row.created_at).toLocaleString() : "-"
+          }}</template>
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
-            <el-button link type="primary" size="small" @click="router.push(`/app/results/${scope.row.task_id}`)">详情</el-button>
-            <el-button link type="primary" size="small" @click="router.push(`/app/results/${scope.row.task_id}/evidence`)">证据溯源</el-button>
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="router.push(`/app/results/${scope.row.task_id}`)"
+              >详情</el-button
+            >
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="router.push(`/app/results/${scope.row.task_id}/evidence`)"
+              >证据溯源</el-button
+            >
           </template>
         </el-table-column>
       </el-table>

@@ -1,6 +1,7 @@
 import { createApp, defineComponent, h, nextTick, type App, type Slots } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/components/business/supervision/MeasurementPanel.vue",()=>({default:{name:"MeasurementPanel",render(){return null;}}}));
 
 import { taskApi } from "@/api/task.api";
 import { ragSpaceApi } from "@/api/rag-space.api";

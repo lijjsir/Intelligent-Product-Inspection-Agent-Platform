@@ -33,6 +33,10 @@ async def has_active_celery_worker() -> bool:
 
 
 async def launch_task_execution(task_id: str, org_id: str) -> dict[str, Any]:
+    async with get_session() as session:
+        task = await TaskRepository(session).get(org_id, task_id)
+        if task and (task.meta_data or {}).get("input_mode") in {"measurement", "mixed"}:
+            return {"status": "collecting", "mode": "supervision", "job_id": None}
     payload = {"task_id": task_id, "org_id": org_id}
     use_celery = await has_active_celery_worker()
     mode = "celery" if use_celery else "local_background"

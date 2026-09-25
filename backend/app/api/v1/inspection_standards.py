@@ -69,7 +69,10 @@ async def update_inspection_standard(
 ):
     require_role("inspection_standard_library", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
-    return ResponseEnvelope(data=await service.update_item(library_id, payload.model_dump(exclude_unset=True)))
+    result = await service.update_item(library_id, payload.model_dump(exclude_unset=True))
+    from app.services.supervision_service import SupervisionService
+    await SupervisionService(db,current).invalidate_external(library_id)
+    return ResponseEnvelope(data=result)
 
 
 @router.delete("/{library_id}", response_model=ResponseEnvelope[dict[str, bool]])

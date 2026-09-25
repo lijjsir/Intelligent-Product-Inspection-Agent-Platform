@@ -230,8 +230,8 @@ class InspectionStandardService:
         overall_score: float,
     ) -> dict[str, Any]:
         """根据证据覆盖度、可追溯性和模型分数构造 AI 门禁结果。"""
-        evidence_score = 1.0 if not defects else min(1.0, len(citations) / max(len(defects), 1))
-        traceability_score = 1.0 if reasoning_chain and citations else 0.6 if reasoning_chain else 0.0
+        evidence_score = min(1.0, len(citations) / max(len(defects), 1)) if citations else 0.0
+        traceability_score = 1.0 if reasoning_chain and citations else 0.25 if reasoning_chain else 0.0
         confidence_threshold = float(spec.ai_gate_confidence_threshold) if spec else 0.72
         evidence_threshold = float(spec.ai_gate_evidence_threshold) if spec else 0.5
         traceability_threshold = float(spec.ai_gate_traceability_threshold) if spec else 0.5

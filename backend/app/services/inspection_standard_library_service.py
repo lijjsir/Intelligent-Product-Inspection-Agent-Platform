@@ -474,6 +474,9 @@ class InspectionStandardLibraryService:
 
     async def _normalize_payload(self, payload: dict[str, Any], partial: bool = False) -> dict[str, Any]:
         normalized: dict[str, Any] = {}
+        if "applicability" in payload:
+            from app.schemas.supervision import StandardApplicability
+            normalized["applicability"] = StandardApplicability.model_validate(payload["applicability"] or {}).model_dump(mode="json")
         if "name" in payload or not partial:
             name = str(payload.get("name") or "").strip()
             if not name:
@@ -610,6 +613,7 @@ class InspectionStandardLibraryService:
             "org_id": item.org_id,
             "name": item.name,
             "product_family": item.product_family,
+            "applicability": getattr(item, "applicability", None),
             "inspection_spec_id": getattr(item, "inspection_spec_id", None),
             "spec_code": getattr(item, "spec_code", None) or (str(spec.spec_code) if spec else None),
             "spec_name": str(spec.name) if spec else None,

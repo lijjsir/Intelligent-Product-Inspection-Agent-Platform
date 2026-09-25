@@ -1,6 +1,6 @@
 import type { PageParams } from "./common.types";
 
-export type TaskStatus = "pending" | "queued" | "running" | "done" | "failed" | "reviewing" | "archived";
+export type TaskStatus = "pending" | "queued" | "running" | "done" | "failed" | "reviewing" | "archived" | "collecting" | "awaiting_review";
 
 export interface ImageItem {
   index: number;
@@ -19,6 +19,7 @@ export interface DefectItem {
 }
 
 export interface InspectionTask {
+  supervision?: boolean;
   id: string;
   org_id: string;
   org_slug?: string | null;
@@ -49,6 +50,7 @@ export interface InspectionTask {
 }
 
 export interface TaskCreate {
+  input_mode?: "image" | "measurement" | "mixed";
   product_sku_id: string;
   batch_id: string;
   inspection_standard_id: string;

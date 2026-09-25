@@ -317,7 +317,7 @@ class EvidenceArbitrationService:
             *[
                 {"source": "rag", "content": item}
                 for item in rag_hits
-                if item
+                if item and (item.get("hits") or int(item.get("hit_count") or 0) > 0)
             ],
             *[
                 {"source": "memory", "content": item}
@@ -394,8 +394,15 @@ class EvidenceArbitrationService:
         conflicts: list[dict[str, Any]],
     ) -> dict[str, Any]:
         sources: dict[str, Any] = {}
-        if rag_hits:
-            sources["rag"] = {"hit_count": len(rag_hits), "items": rag_hits}
+        effective_rag_hits = [
+            item for item in rag_hits
+            if item.get("hits") or int(item.get("hit_count") or 0) > 0
+        ]
+        if effective_rag_hits:
+            sources["rag"] = {
+                "hit_count": sum(int(item.get("hit_count") or len(item.get("hits") or [])) for item in effective_rag_hits),
+                "items": effective_rag_hits,
+            }
         if memory_hits:
             sources["memory"] = {"items": memory_hits}
         if kg_hits:
@@ -410,11 +417,33 @@ class EvidenceArbitrationService:
             "rag_space_id": first_rag.get("rag_space_id"),
             "rag_space_name": first_rag.get("rag_space_name"),
             "top_k": int(first_rag.get("top_k") or 0),
+            "rag_retrieval": {
+                "attempted": bool(rag_hits),
+                "hit_count": sum(int(item.get("hit_count") or len(item.get("hits") or [])) for item in rag_hits),
+                "candidate_count": sum(int(item.get("candidate_count") or 0) for item in rag_hits),
+                "rejected_count": sum(int(item.get("rejected_count") or 0) for item in rag_hits),
+                "rag_space_ids": list(dict.fromkeys(
+                    str(space_id)
+                    for item in rag_hits
+                    for space_id in list(item.get("rag_space_ids") or [])
+                    if space_id
+                )),
+                "rag_space_names": list(dict.fromkeys(
+                    str(name)
+                    for item in rag_hits
+                    for name in list(item.get("rag_space_names") or [])
+                    if name
+                )),
+                "standard_binding_name": first_rag.get("standard_binding_name"),
+            },
         }
         return {
             "evidence_packet": packet,
             "rag_hits": rag_hits,
             "status": "success" if sources else "empty",
-            "summary": f"证据检索完成，共 {len(sources)} 个来源",
+            "summary": (
+                f"证据检索完成，共 {len(sources)} 个有效来源"
+                if sources else "已执行证据检索，但没有命中可用于判定的来源"
+            ),
             "confidence": 0.82 if sources else 0.0,
         }

@@ -14,7 +14,11 @@ import { productMasterApi } from "@/api/product-master.api";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { useTaskStore } from "@/stores/task.store";
-import { formatBatchLabel, formatCodeName, formatTaskEntityLabel } from "@/utils/master-data-labels";
+import {
+  formatBatchLabel,
+  formatCodeName,
+  formatTaskEntityLabel,
+} from "@/utils/master-data-labels";
 import type {
   InspectionStandardLibraryItem,
   ProductBatch,
@@ -44,6 +48,7 @@ const productSkus = ref<ProductSku[]>([]);
 const productBatches = ref<ProductBatch[]>([]);
 const inspectionStandards = ref<InspectionStandardLibraryItem[]>([]);
 const createForm = ref({
+  input_mode: "image" as "image" | "measurement" | "mixed",
   product_line_id: "",
   product_sku_id: "",
   batch_id: "",
@@ -60,26 +65,43 @@ const pageTitle = computed(() => (isOpsView.value ? "任务查看" : "任务管�
 const pageDescription = computed(() =>
   isOpsView.value
     ? "这里查看平台侧已经物化的任务和执行状态，筛选、排查和跳转都保持在运维入口。"
-    : "新任务必须绑定产品线、SKU、批次和检测标准，标准会统一带出知识库与判定门槛。",
+    : "统一管理图片、测量和混合检测任务；任务完成后形成可追溯的正式检测结果。",
 );
 
 const activeProductLines = computed(() => productLines.value.filter((item) => item.is_active));
 const activeProductSkus = computed(() => productSkus.value.filter((item) => item.is_active));
 const activeProductBatches = computed(() => productBatches.value.filter((item) => item.is_active));
 const activeDatasetBatches = computed(() =>
-  activeProductBatches.value.filter((item) => String(item.batch_no || "").trim().toUpperCase() === "UNSPECIFIED"),
+  activeProductBatches.value.filter(
+    (item) =>
+      String(item.batch_no || "")
+        .trim()
+        .toUpperCase() === "UNSPECIFIED",
+  ),
 );
 const availableSkus = computed(() =>
-  activeProductSkus.value.filter((item) => item.product_line_id === createForm.value.product_line_id),
+  activeProductSkus.value.filter(
+    (item) => item.product_line_id === createForm.value.product_line_id,
+  ),
 );
 const availableBatches = computed(() =>
-  activeDatasetBatches.value.filter((item) => item.product_sku_id === createForm.value.product_sku_id),
+  activeProductBatches.value.filter(
+    (item) => item.product_sku_id === createForm.value.product_sku_id,
+  ),
 );
-const selectedLine = computed(() => productLines.value.find((item) => item.id === createForm.value.product_line_id) || null);
-const selectedSku = computed(() => productSkus.value.find((item) => item.id === createForm.value.product_sku_id) || null);
-const selectedBatch = computed(() => productBatches.value.find((item) => item.id === createForm.value.batch_id) || null);
+const selectedLine = computed(
+  () => productLines.value.find((item) => item.id === createForm.value.product_line_id) || null,
+);
+const selectedSku = computed(
+  () => productSkus.value.find((item) => item.id === createForm.value.product_sku_id) || null,
+);
+const selectedBatch = computed(
+  () => productBatches.value.find((item) => item.id === createForm.value.batch_id) || null,
+);
 const activeStandards = computed(() =>
-  inspectionStandards.value.filter((item) => item.is_active && Boolean(item.spec_code) && Boolean(item.has_quality_threshold)),
+  inspectionStandards.value.filter(
+    (item) => item.is_active && Boolean(item.spec_code) && Boolean(item.has_quality_threshold),
+  ),
 );
 const availableStandards = computed(() => {
   const skuId = createForm.value.product_sku_id;
@@ -94,10 +116,14 @@ const availableStandards = computed(() => {
   });
 });
 const selectedTaskStandard = computed(
-  () => activeStandards.value.find((item) => item.id === createForm.value.inspection_standard_id) || null,
+  () =>
+    activeStandards.value.find((item) => item.id === createForm.value.inspection_standard_id) ||
+    null,
 );
 const parsedUrlEntries = computed(() => parseImageUrlLines(createForm.value.image_urls_input));
-const totalSelectedImageCount = computed(() => parsedUrlEntries.value.length + uploadFiles.value.length);
+const totalSelectedImageCount = computed(
+  () => parsedUrlEntries.value.length + uploadFiles.value.length,
+);
 const requiredImageCount = computed(() => selectedTaskStandard.value?.required_image_count || 1);
 
 const rules: FormRules = {
@@ -108,6 +134,10 @@ const rules: FormRules = {
   image_urls_input: [
     {
       validator: (_rule, value: string, callback) => {
+        if (createForm.value.input_mode === "measurement") {
+          callback();
+          return;
+        }
         const hasUrl = Boolean(value?.trim());
         const hasUpload = uploadFiles.value.length > 0;
         if (!hasUrl && !hasUpload) {
@@ -214,6 +244,7 @@ function handleReset() {
 
 function resetCreateForm() {
   createForm.value = {
+    input_mode: "image",
     product_line_id: "",
     product_sku_id: "",
     batch_id: "",
@@ -225,7 +256,7 @@ function resetCreateForm() {
 }
 
 function firstBatchForSku(skuId: string) {
-  return activeDatasetBatches.value.find((item) => item.product_sku_id === skuId)?.id || "";
+  return activeProductBatches.value.find((item) => item.product_sku_id === skuId)?.id || "";
 }
 
 function firstStandardForSelection(lineId: string, skuId: string) {
@@ -272,22 +303,32 @@ async function handleOpenCreateFromDraft() {
     );
     let matchedSku =
       activeProductSkus.value.find((item) => item.id === draft.product_sku_id) ||
-      activeProductSkus.value.find((item) => item.code === draft.product_id || item.name === draft.product_id) ||
+      activeProductSkus.value.find(
+        (item) => item.code === draft.product_id || item.name === draft.product_id,
+      ) ||
       null;
     if (!matchedSku && matchedStandard?.applicable_product_sku_ids?.length) {
-      matchedSku = activeProductSkus.value.find((item) => matchedStandard.applicable_product_sku_ids?.includes(item.id)) || null;
+      matchedSku =
+        activeProductSkus.value.find((item) =>
+          matchedStandard.applicable_product_sku_ids?.includes(item.id),
+        ) || null;
     }
     if (matchedSku) {
       createForm.value.product_line_id = matchedSku.product_line_id;
       createForm.value.product_sku_id = matchedSku.id;
       createForm.value.batch_id =
-        activeProductBatches.value.find((item) => item.id === draft.batch_id && item.product_sku_id === matchedSku?.id)?.id ||
-        firstBatchForSku(matchedSku.id);
+        activeProductBatches.value.find(
+          (item) => item.id === draft.batch_id && item.product_sku_id === matchedSku?.id,
+        )?.id || firstBatchForSku(matchedSku.id);
     } else if (matchedStandard?.applicable_product_line_ids?.length) {
       createForm.value.product_line_id = matchedStandard.applicable_product_line_ids[0];
     }
-    createForm.value.inspection_standard_id = matchedStandard?.id || firstStandardForSelection(createForm.value.product_line_id, createForm.value.product_sku_id);
-    createForm.value.image_urls_input = Array.isArray(draft.image_urls) ? draft.image_urls.filter(Boolean).join("\n") : "";
+    createForm.value.inspection_standard_id =
+      matchedStandard?.id ||
+      firstStandardForSelection(createForm.value.product_line_id, createForm.value.product_sku_id);
+    createForm.value.image_urls_input = Array.isArray(draft.image_urls)
+      ? draft.image_urls.filter(Boolean).join("\n")
+      : "";
     createForm.value.priority = Number(draft.priority || 5);
     showCreateDialog.value = true;
   } catch (error) {
@@ -406,8 +447,11 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    if (!selectedTaskStandard.value?.has_quality_threshold || !selectedTaskStandard.value?.spec_code) {
-      throw new Error("所选检测标准未绑定有效质检门槛，请先到治理页完成配置");
+    if (
+      !selectedTaskStandard.value?.has_quality_threshold ||
+      !selectedTaskStandard.value?.spec_code
+    ) {
+      throw new Error("所选检测标准未绑定有效自动判定规则，请先到治理页完成配置");
     }
     const { imageUrls, imageItems } = await buildImageSubmissionPayload();
     const metadata: Record<string, unknown> = {
@@ -418,19 +462,27 @@ async function handleSubmitCreate() {
       inspection_standard_name: selectedTaskStandard.value?.name,
     };
 
-    const createdTask = await taskStore.createTask({
-      product_sku_id: createForm.value.product_sku_id,
-      batch_id: createForm.value.batch_id,
-      inspection_standard_id: createForm.value.inspection_standard_id,
-      product_id: selectedSku.value?.code || undefined,
-      spec_code: selectedTaskStandard.value?.spec_code || undefined,
-      image_urls: imageUrls,
-      image_items: imageItems,
-      priority: createForm.value.priority,
-      metadata,
-    }, { suppressErrorToast: true });
+    const createdTask = await taskStore.createTask(
+      {
+        input_mode: createForm.value.input_mode,
+        product_sku_id: createForm.value.product_sku_id,
+        batch_id: createForm.value.batch_id,
+        inspection_standard_id: createForm.value.inspection_standard_id,
+        product_id: selectedSku.value?.code || undefined,
+        spec_code: selectedTaskStandard.value?.spec_code || undefined,
+        image_urls: imageUrls,
+        image_items: imageItems,
+        priority: createForm.value.priority,
+        metadata,
+      },
+      { suppressErrorToast: true },
+    );
     showCreateDialog.value = false;
-    ElMessage.success("任务已创建并开始检测");
+    ElMessage.success(
+      createForm.value.input_mode === "image"
+        ? "任务已创建并开始检测"
+        : "任务已建立，请登记样品、测量及检测会话",
+    );
     await router.push(`${listBasePath.value}/${createdTask.id}`);
   } catch (error) {
     console.error(error);
@@ -483,7 +535,9 @@ watch(
       createForm.value.product_sku_id = "";
       createForm.value.batch_id = "";
     }
-    if (!availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)) {
+    if (
+      !availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)
+    ) {
       createForm.value.inspection_standard_id = "";
     }
   },
@@ -495,8 +549,12 @@ watch(
     if (!availableBatches.value.some((item) => item.id === createForm.value.batch_id)) {
       createForm.value.batch_id = skuId ? firstBatchForSku(skuId) : "";
     }
-    if (!availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)) {
-      createForm.value.inspection_standard_id = skuId ? firstStandardForSelection(createForm.value.product_line_id, skuId) : "";
+    if (
+      !availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)
+    ) {
+      createForm.value.inspection_standard_id = skuId
+        ? firstStandardForSelection(createForm.value.product_line_id, skuId)
+        : "";
     }
   },
 );
@@ -533,13 +591,21 @@ watch(
         <h2>{{ pageTitle }}</h2>
         <p>{{ pageDescription }}</p>
       </div>
-      <el-button v-if="canCreateTask" class="hero-action" plain @click="handleOpenCreate">新建任务</el-button>
+      <el-button v-if="canCreateTask" class="hero-action" plain @click="handleOpenCreate"
+        >新建任务</el-button
+      >
     </section>
 
     <div class="card-surface p-4">
       <el-form :model="filters" inline class="flex flex-wrap gap-x-4 gap-y-2 items-end">
         <el-form-item label="任务状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable class="!w-[160px]" size="small">
+          <el-select
+            v-model="filters.status"
+            placeholder="全部状态"
+            clearable
+            class="!w-[160px]"
+            size="small"
+          >
             <el-option label="待执行" value="pending" />
             <el-option label="执行中" value="running" />
             <el-option label="已完成" value="done" />
@@ -547,7 +613,13 @@ watch(
           </el-select>
         </el-form-item>
         <el-form-item label="产品编号">
-          <el-input v-model="filters.product_id" placeholder="输入 SKU 编码" clearable size="small" @keyup.enter="handleSearch" />
+          <el-input
+            v-model="filters.product_id"
+            placeholder="输入 SKU 编码"
+            clearable
+            size="small"
+            @keyup.enter="handleSearch"
+          />
         </el-form-item>
         <el-form-item v-if="filters.ids" label="任务集合">
           <el-input v-model="filters.ids" readonly size="small" />
@@ -560,14 +632,23 @@ watch(
     </div>
 
     <div class="card-surface">
-      <el-table :data="taskStore.items" v-loading="taskStore.loading" size="small" class="list-table">
+      <el-table
+        :data="taskStore.items"
+        v-loading="taskStore.loading"
+        size="small"
+        class="list-table"
+      >
         <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
         <el-table-column label="产品线" width="150">
-          <template #default="{ row }">{{ formatTaskEntityLabel(row.product_line_name, row.product_line_code || row.product_id) }}</template>
+          <template #default="{ row }">{{
+            formatTaskEntityLabel(row.product_line_name, row.product_line_code || row.product_id)
+          }}</template>
         </el-table-column>
         <el-table-column label="SKU" min-width="160">
-          <template #default="{ row }">{{ formatTaskEntityLabel(row.product_name, row.product_sku_code || row.product_id) }}</template>
+          <template #default="{ row }">{{
+            formatTaskEntityLabel(row.product_name, row.product_sku_code || row.product_id)
+          }}</template>
         </el-table-column>
         <el-table-column label="批次" width="140">
           <template #default="{ row }">{{ row.batch_no || "-" }}</template>
@@ -577,7 +658,9 @@ watch(
         </el-table-column>
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">{{ row.status.toUpperCase() }}</el-tag>
+            <el-tag :type="getStatusType(row.status)" size="small">{{
+              row.status.toUpperCase()
+            }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="source_kind" label="来源" width="140" />
@@ -587,9 +670,15 @@ watch(
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="router.push(`${listBasePath}/${row.id}`)">查看详情</el-button>
             <el-button
-              v-if="canCreateTask"
+              link
+              type="primary"
+              size="small"
+              @click="router.push(`${listBasePath}/${row.id}`)"
+              >查看详情</el-button
+            >
+            <el-button
+              v-if="canCreateTask && !(row.supervision && row.status === 'done')"
               link
               type="danger"
               size="small"
@@ -617,24 +706,72 @@ watch(
     </div>
 
     <el-dialog v-model="showCreateDialog" title="新建检测任务" width="680px">
-      <el-form ref="formRef" :model="createForm" :rules="rules" label-width="112px" v-loading="loadingCreateOptions">
+      <el-form
+        ref="formRef"
+        :model="createForm"
+        :rules="rules"
+        label-width="112px"
+        v-loading="loadingCreateOptions"
+      >
         <el-form-item label="产品线" prop="product_line_id">
-          <el-select v-model="createForm.product_line_id" filterable clearable placeholder="先选择产品线" class="!w-full">
-            <el-option v-for="line in activeProductLines" :key="line.id" :label="formatCodeName(line)" :value="line.id" />
+          <el-select
+            v-model="createForm.product_line_id"
+            filterable
+            clearable
+            placeholder="先选择产品线"
+            class="!w-full"
+          >
+            <el-option
+              v-for="line in activeProductLines"
+              :key="line.id"
+              :label="formatCodeName(line)"
+              :value="line.id"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="SKU" prop="product_sku_id">
-          <el-select v-model="createForm.product_sku_id" filterable clearable placeholder="选择 SKU" class="!w-full" :disabled="!createForm.product_line_id">
-            <el-option v-for="sku in availableSkus" :key="sku.id" :label="formatCodeName(sku)" :value="sku.id" />
+          <el-select
+            v-model="createForm.product_sku_id"
+            filterable
+            clearable
+            placeholder="选择 SKU"
+            class="!w-full"
+            :disabled="!createForm.product_line_id"
+          >
+            <el-option
+              v-for="sku in availableSkus"
+              :key="sku.id"
+              :label="formatCodeName(sku)"
+              :value="sku.id"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="批次" prop="batch_id">
-          <el-select v-model="createForm.batch_id" filterable clearable placeholder="选择批次" class="!w-full" :disabled="!createForm.product_sku_id">
-            <el-option v-for="batch in availableBatches" :key="batch.id" :label="formatBatchLabel(batch)" :value="batch.id" />
+          <el-select
+            v-model="createForm.batch_id"
+            filterable
+            clearable
+            placeholder="选择批次"
+            class="!w-full"
+            :disabled="!createForm.product_sku_id"
+          >
+            <el-option
+              v-for="batch in availableBatches"
+              :key="batch.id"
+              :label="formatBatchLabel(batch)"
+              :value="batch.id"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="检测标准" prop="inspection_standard_id">
-          <el-select v-model="createForm.inspection_standard_id" filterable clearable placeholder="选择适用检测标准" class="!w-full" :disabled="!createForm.product_sku_id">
+          <el-select
+            v-model="createForm.inspection_standard_id"
+            filterable
+            clearable
+            placeholder="选择适用检测标准"
+            class="!w-full"
+            :disabled="!createForm.product_sku_id"
+          >
             <el-option
               v-for="standard in availableStandards"
               :key="standard.id"
@@ -642,22 +779,42 @@ watch(
               :value="standard.id"
             />
           </el-select>
-          <div v-if="createForm.product_sku_id && availableStandards.length === 0" class="task-form-hint warning">
+          <div
+            v-if="createForm.product_sku_id && availableStandards.length === 0"
+            class="task-form-hint warning"
+          >
             当前 SKU 暂无可用检测标准，请先到治理页配置标准适用范围和规则门槛。
           </div>
           <div v-if="selectedTaskStandard" class="task-spec-preview">
-            <div class="task-spec-preview-title">{{ formatStandardLabel(selectedTaskStandard) }}</div>
+            <div class="task-spec-preview-title">
+              {{ formatStandardLabel(selectedTaskStandard) }}
+            </div>
             <div class="task-spec-preview-grid">
-              <span>绑定规则</span><strong>{{ selectedTaskStandard.spec_name || selectedTaskStandard.spec_code }}</strong>
+              <span>绑定规则</span
+              ><strong>{{
+                selectedTaskStandard.spec_name || selectedTaskStandard.spec_code
+              }}</strong>
               <span>质检图片门槛</span><strong>{{ requiredImageCount }}</strong>
-              <span>要求视角</span><strong>{{ selectedTaskStandard.required_views?.join("、") || "未设置" }}</strong>
-              <span>置信门槛</span><strong>{{ selectedTaskStandard.ai_gate_confidence_threshold ?? "-" }}</strong>
-              <span>证据门槛</span><strong>{{ selectedTaskStandard.ai_gate_evidence_threshold ?? "-" }}</strong>
-              <span>可追溯门槛</span><strong>{{ selectedTaskStandard.ai_gate_traceability_threshold ?? "-" }}</strong>
-              <span>自动放行</span><strong>{{ selectedTaskStandard.auto_pass_enabled ? "开启" : "关闭" }}</strong>
+              <span>要求视角</span
+              ><strong>{{ selectedTaskStandard.required_views?.join("、") || "未设置" }}</strong>
+              <span>置信门槛</span
+              ><strong>{{ selectedTaskStandard.ai_gate_confidence_threshold ?? "-" }}</strong>
+              <span>证据门槛</span
+              ><strong>{{ selectedTaskStandard.ai_gate_evidence_threshold ?? "-" }}</strong>
+              <span>可追溯门槛</span
+              ><strong>{{ selectedTaskStandard.ai_gate_traceability_threshold ?? "-" }}</strong>
+              <span>自动放行</span
+              ><strong>{{ selectedTaskStandard.auto_pass_enabled ? "开启" : "关闭" }}</strong>
             </div>
           </div>
         </el-form-item>
+        <el-form-item label="检测输入"
+          ><el-radio-group v-model="createForm.input_mode"
+            ><el-radio label="image">图片检测</el-radio
+            ><el-radio label="measurement">测量检测</el-radio
+            ><el-radio label="mixed">图片与测量</el-radio></el-radio-group
+          ></el-form-item
+        >
         <el-form-item label="图片 URL" prop="image_urls_input">
           <el-input
             v-model="createForm.image_urls_input"
@@ -667,7 +824,9 @@ watch(
             placeholder="每行一个 URL；批量标号加 #N 前缀，如：#1 https://a.jpg"
           />
           <div class="task-form-hint">
-            图片 URL 会直接参与检测，并和本地上传图片合并计算；图片数量低于质检门槛时，结果会进入人工复核。当前 URL 数量：{{ parsedUrlEntries.length }}。
+            图片 URL
+            会直接参与检测，并和本地上传图片合并计算；图片数量不满足自动判定规则时，结果会进入人工复核。当前
+            URL 数量：{{ parsedUrlEntries.length }}。
           </div>
         </el-form-item>
         <el-form-item label="上传图片">
@@ -682,13 +841,15 @@ watch(
           >
             <el-button type="primary" plain size="small">选择本地图片</el-button>
             <template #tip>
-              <div class="el-upload__tip">支持 JPG/PNG/WebP，可一次多选；URL 与上传图片将合并参与质检。</div>
+              <div class="el-upload__tip">
+                支持 JPG/PNG/WebP，可一次多选；URL 与上传图片将合并参与质检。
+              </div>
             </template>
           </el-upload>
           <div class="task-selection-summary">
             <span>当前已选</span>
             <strong>{{ totalSelectedImageCount }}</strong>
-            <span>/ 质检门槛</span>
+            <span>/ 自动判定规则</span>
             <strong>{{ requiredImageCount }}</strong>
             <span>张</span>
           </div>
@@ -700,7 +861,9 @@ watch(
       <template #footer>
         <div class="flex justify-end gap-2">
           <el-button @click="showCreateDialog = false">取消</el-button>
-          <el-button type="primary" :loading="creating" @click="handleSubmitCreate">确认创建</el-button>
+          <el-button type="primary" :loading="creating" @click="handleSubmitCreate"
+            >确认创建</el-button
+          >
         </div>
       </template>
     </el-dialog>
@@ -713,11 +876,15 @@ watch(
       destroy-on-close
       :close-on-click-modal="false"
     >
-      <p class="leading-relaxed text-zinc-700">删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？</p>
+      <p class="leading-relaxed text-zinc-700">
+        删除后该任务不会再参与任务列表、仪表盘、稳定性和分析统计，是否继续？
+      </p>
       <template #footer>
         <div class="flex justify-end gap-2">
           <el-button @click="cancelDeleteTask">取消</el-button>
-          <el-button type="danger" :loading="Boolean(deletingTaskId)" @click="confirmDeleteTask">删除</el-button>
+          <el-button type="danger" :loading="Boolean(deletingTaskId)" @click="confirmDeleteTask"
+            >删除</el-button
+          >
         </div>
       </template>
     </el-dialog>

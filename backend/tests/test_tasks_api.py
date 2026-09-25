@@ -31,6 +31,9 @@ class FakeTaskCreateSession:
     async def commit(self) -> None:
         self.commit_calls += 1
 
+    async def get(self, model, record_id):
+        return None
+
 
 def build_current_user(role: str = "algorithm_engineer") -> CurrentUser:
     return CurrentUser(

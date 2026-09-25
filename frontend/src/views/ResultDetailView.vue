@@ -13,7 +13,10 @@ import {
   buildDefectImageNotice,
   extractVisualPossibleDefects,
   extractResultReport,
+  extractResultCitations,
+  extractRagSummary,
   extractStandardEvaluation,
+  isCalibratedScore,
   shouldShowDefectImagePanel,
 } from "@/views/result-detail-display";
 
@@ -26,15 +29,21 @@ const { hasRole } = usePermission();
 const loading = ref(true);
 const reviewing = ref(false);
 const reviewForm = ref<ReviewSubmit>({ verdict: "", note: "" });
-const canReview = computed(() => hasRole(["expert"]));
+const canReview = computed(() => hasRole(["expert"]) && !store.current?.reasoning_chain?.supervision_signed);
 const currentTaskId = computed(() => String(route.params.id || ""));
 const currentResult = computed(() => store.current?.task_id === currentTaskId.value ? store.current : null);
 const currentTask = computed(() => taskStore.current?.id === currentTaskId.value ? taskStore.current : null);
 
 const verdictOptions = [
-  { label: "产品合格 (Pass)", value: "pass" },
-  { label: "产品不合格 (Fail)", value: "fail" },
+  { label: "产品合格", value: "pass" },
+  { label: "产品不合格", value: "fail" },
 ];
+const verdictLabels: Record<string, string> = {
+  pass: "产品合格",
+  fail: "产品不合格",
+  uncertain: "暂未判定",
+  manual_required: "需人工复核",
+};
 
 function resolveTaskImageUrl(value?: string | null) {
   const url = String(value || "").trim();
@@ -110,6 +119,12 @@ const defects = computed(() => currentResult.value?.defects || []);
 const analysisReport = computed(() => extractResultReport(currentResult.value));
 const standardEvaluation = computed(() => extractStandardEvaluation(currentResult.value));
 const standardEvaluationText = computed(() => standardEvaluation.value ? JSON.stringify(standardEvaluation.value, null, 2) : "");
+const citationItems = computed(() => extractResultCitations(currentResult.value));
+const ragSummary = computed(() => extractRagSummary(currentResult.value));
+const ragAttempted = computed(() => Boolean(ragSummary.value.attempted));
+const ragHitCount = computed(() => Number(ragSummary.value.hit_count || citationItems.value.length || 0));
+const ragSpaceNames = computed(() => Array.isArray(ragSummary.value.rag_space_names) ? ragSummary.value.rag_space_names.map(String) : []);
+const calibratedScore = computed(() => isCalibratedScore(currentResult.value));
 const defectEmptyDescription = computed(() => buildDefectEmptyDescription(currentResult.value));
 const defectImageNotice = computed(() => buildDefectImageNotice(currentResult.value));
 const visualPossibleDefects = computed(() => extractVisualPossibleDefects(currentResult.value));
@@ -181,7 +196,7 @@ async function submitReview() {
       <div v-if="currentResult" class="title-area">
         <h2 class="text-2xl font-bold text-zinc-900">分析结果大盘</h2>
         <el-tag :type="getVerdictType(store.current.verdict)" size="large" class="ml-4">
-          判定结论: {{ store.current.verdict.toUpperCase() }}
+          判定结论：{{ verdictLabels[store.current.verdict] || "暂未判定" }}
         </el-tag>
       </div>
     </div>
@@ -194,13 +209,13 @@ async function submitReview() {
             <template #header>结论摘要</template>
             <el-descriptions :column="1" size="large">
               <el-descriptions-item label="任务编号">{{ store.current.task_id }}</el-descriptions-item>
-              <el-descriptions-item label="综合置信分">
-                <span class="text-xl font-bold">{{ (store.current.overall_score * 100).toFixed(1) }}</span> 分
+              <el-descriptions-item label="模型置信分">
+                <span v-if="!calibratedScore" class="text-zinc-500">未校准，不作为概率展示</span><template v-else><span class="text-xl font-bold">{{ (store.current.overall_score * 100).toFixed(1) }}</span> 分</template>
               </el-descriptions-item>
               <el-descriptions-item label="模型引擎">{{ store.current.llm_model }}</el-descriptions-item>
-              <el-descriptions-item label="Prompt">{{ store.current.prompt_version }}</el-descriptions-item>
+              <el-descriptions-item label="提示词版本">{{ store.current.prompt_version }}</el-descriptions-item>
               <el-descriptions-item label="检测耗费时间">{{ store.current.latency_ms || '-' }} ms</el-descriptions-item>
-              <el-descriptions-item label="Tokens">消耗 {{ store.current.tokens_used || '-' }} Token</el-descriptions-item>
+              <el-descriptions-item label="令牌用量">{{ store.current.tokens_used || '-' }}</el-descriptions-item>
             </el-descriptions>
           </el-card>
         </div>
@@ -273,7 +288,7 @@ async function submitReview() {
           <el-card shadow="never" class="mb-4">
             <template #header>缺陷与推理明细</template>
             <el-tabs type="border-card">
-              <el-tab-pane label="缺陷坐标清单 (Defects)">
+              <el-tab-pane label="缺陷坐标清单">
                 <el-empty v-if="!store.current.defects || store.current.defects.length === 0" :description="defectEmptyDescription" />
                 <div v-else>
                   <div v-if="erroredImageGroups.length > 0" class="error-image-summary">
@@ -310,7 +325,7 @@ async function submitReview() {
                         </el-tag>
                       </template>
                     </el-table-column>
-                    <el-table-column prop="bbox" label="坐标框 (x, y, w, h)" width="200">
+                    <el-table-column prop="bbox" label="坐标框（横坐标、纵坐标、宽度、高度）" min-width="260">
                       <template #default="{ row }">
                         <code>[{{ row.bbox.map((v: number) => v.toFixed(3)).join(', ') }}]</code>
                       </template>
@@ -319,13 +334,36 @@ async function submitReview() {
                   </el-table>
                 </div>
               </el-tab-pane>
-              <el-tab-pane label="推理还原链路 (Reasoning)">
+              <el-tab-pane label="推理还原链路">
                 <el-empty v-if="!store.current.reasoning_chain" description="模型未输出推理链路" />
                 <pre v-else class="json-viewer">{{ JSON.stringify(store.current.reasoning_chain, null, 2) }}</pre>
               </el-tab-pane>
-              <el-tab-pane label="原文引证来源 (Citations)">
-                <el-empty v-if="!store.current.citations" description="未使用知识库引证" />
-                <pre v-else class="json-viewer">{{ JSON.stringify(store.current.citations, null, 2) }}</pre>
+              <el-tab-pane label="知识库引证">
+                <div class="rag-status-panel">
+                  <div>
+                    <strong>知识库检索</strong>
+                    <p v-if="ragAttempted && ragHitCount > 0">已执行检索，命中 {{ ragHitCount }} 条可核验原文。</p>
+                    <p v-else-if="ragAttempted">已执行检索，但没有命中可核验的标准原文；本次结论不应视为由知识库支持。</p>
+                    <p v-else>该历史结果没有记录知识库检索过程，无法证明知识库参与了判定。</p>
+                  </div>
+                  <el-tag :type="ragHitCount > 0 ? 'success' : 'warning'">{{ ragHitCount > 0 ? `命中 ${ragHitCount} 条` : "未命中" }}</el-tag>
+                </div>
+                <el-descriptions v-if="ragAttempted" :column="1" size="small" border class="mb-3">
+                  <el-descriptions-item label="检索范围">{{ ragSpaceNames.length ? ragSpaceNames.join("、") : "系统知识库与绑定标准库" }}</el-descriptions-item>
+                  <el-descriptions-item label="检索问题">{{ ragSummary.query || "-" }}</el-descriptions-item>
+                  <el-descriptions-item label="是否影响判定">{{ ragSummary.affected_verdict ? "是，已进入标准门禁评估" : "否，没有可用引证进入判定" }}</el-descriptions-item>
+                </el-descriptions>
+                <el-empty v-if="citationItems.length === 0" description="没有可核验的知识库原文引证" />
+                <div v-else class="citation-list">
+                  <article v-for="item in citationItems" :key="item.id" class="citation-item">
+                    <div class="citation-title">
+                      <strong>{{ item.title }}</strong>
+                      <el-tag v-if="item.score != null" size="small" effect="plain">相关度 {{ (item.score * 100).toFixed(1) }}%</el-tag>
+                    </div>
+                    <div class="citation-source">来源：{{ item.source }}</div>
+                    <blockquote>{{ item.quote }}</blockquote>
+                  </article>
+                </div>
               </el-tab-pane>
             </el-tabs>
           </el-card>
@@ -334,9 +372,9 @@ async function submitReview() {
           <el-card shadow="never">
             <template #header>人工判定记录</template>
             <div v-if="store.current.reviewed_by">
-              <p>专家 ({{ store.current.reviewed_by }}) 于 {{ new Date(store.current.reviewed_at!).toLocaleString() }} 提交了人工判定。</p>
-              <p>产品判定: <el-tag :type="getVerdictType(store.current.verdict)" size="small">{{ store.current.verdict.toUpperCase() }}</el-tag></p>
-              <p v-if="store.current.review_note">判定依据: {{ store.current.review_note }}</p>
+              <p>专家 {{ store.current.reviewed_by }} 于 {{ new Date(store.current.reviewed_at!).toLocaleString() }} 提交了人工判定。</p>
+              <p>产品判定：<el-tag :type="getVerdictType(store.current.verdict)" size="small">{{ verdictLabels[store.current.verdict] || "暂未判定" }}</el-tag></p>
+              <p v-if="store.current.review_note">判定依据：{{ store.current.review_note }}</p>
             </div>
             <div v-else-if="canReview && store.current" class="review-form">
               <el-form label-position="top">
@@ -500,4 +538,12 @@ async function submitReview() {
   max-height: 500px;
   font-family: Consolas, Monaco, monospace;
 }
+
+.rag-status-panel { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; padding: 16px; border: 1px solid #e4e4e7; border-radius: 10px; background: #fafafa; }
+.rag-status-panel p { margin-top: 5px; color: #71717a; font-size: 13px; line-height: 1.6; }
+.citation-list { display: grid; gap: 12px; }
+.citation-item { padding: 16px; border: 1px solid #e4e4e7; border-radius: 10px; background: #fff; }
+.citation-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.citation-source { margin-top: 6px; color: #71717a; font-size: 12px; }
+.citation-item blockquote { margin-top: 12px; padding: 10px 12px; border-left: 3px solid #a1a1aa; background: #fafafa; color: #3f3f46; line-height: 1.7; }
 </style>

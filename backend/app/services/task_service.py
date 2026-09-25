@@ -2,8 +2,8 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
-from app.core.permissions import ROLE_ADMIN, ROLE_EXPERT, ROLE_USER
+from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
+from app.core.permissions import ROLE_ADMIN, ROLE_USER
 from app.models.task import InspectionTask
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.inspection_standard_library_repo import InspectionStandardLibraryRepository
@@ -120,7 +120,16 @@ class TaskService:
             raise ValidationError(f"检测标准 {normalized_spec_code} 不存在或未启用")
 
         normalized_items = list(image_items or [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)])
-        if not normalized_items:
+        input_mode = (metadata or {}).get("input_mode", "image")
+        if input_mode not in {"image", "measurement", "mixed"}:
+            raise ValidationError("未知检测输入模式")
+        if input_mode != "image":
+            from app.models.organization import Organization
+            from sqlalchemy import select
+            organization = await self._session.scalar(select(Organization).where(Organization.id == self._org_id))
+            if not organization or not (organization.settings or {}).get("quality_supervision_enabled"):
+                raise ValidationError("组织尚未启用测量检测流程")
+        if not normalized_items and input_mode in {"image", "mixed"}:
             raise ValidationError("请至少提供一张图片")
 
         duplicate_groups = _duplicate_image_item_groups(normalized_items)
@@ -195,7 +204,7 @@ class TaskService:
             image_items=[item.model_dump() for item in normalized_items],
             priority=priority,
             meta_data=task_metadata,
-            status="pending",
+            status="collecting" if input_mode in {"measurement", "mixed"} else "pending",
         )
         task = await self._repo.create(task)
         audit = AuditService(self._session)
@@ -241,13 +250,18 @@ class TaskService:
             task_id,
             owner_user_id=self._owner_user_id,
         )
+        if task and self._actor_role == "algorithm_engineer" and (task.meta_data or {}).get("supervision"):
+            raise ForbiddenError("质监业务样本需经明确纳入数据集后访问")
         await self._annotate_tasks([task] if task else [])
         return task
 
     async def list_tasks(self, query) -> tuple[list[InspectionTask], int]:
+        filters = query.to_filters()
+        if self._actor_role == "algorithm_engineer":
+            filters["exclude_supervision"] = True
         items, total = await self._repo.list_paged(
             org_id=self._task_scope_org_id,
-            filters=query.to_filters(),
+            filters=filters,
             page=query.page,
             size=query.size,
             owner_user_id=self._owner_user_id,
@@ -263,6 +277,13 @@ class TaskService:
         )
         if task is None:
             return None
+        if (task.meta_data or {}).get("supervision"):
+            if self._actor_role not in {"user","expert"}:
+                raise ForbiddenError("当前角色只能查看质监任务")
+            if self._actor_role == "user" and task.created_by != self._actor_user_id:
+                raise ForbiddenError("仅创建人可删除未确认的任务")
+            if task.status == "done":
+                raise ConflictError("已签发任务与结果需保留，请使用新任务进行重评估")
         if str(task.status) == "running":
             event_repo = TaskExecutionEventRepository(self._session)
             if not await event_repo.has_failed_event(self._task_scope_org_id, task_id):
@@ -324,6 +345,7 @@ class TaskService:
             }
         for task in valid_tasks:
             meta = dict(getattr(task, "meta_data", None) or {})
+            setattr(task,"supervision",bool(meta.get("supervision")))
             org = org_map.get(str(task.org_id))
             setattr(task, "org_slug", getattr(org, "slug", None))
             setattr(task, "source_kind", str(meta.get("source") or "unknown"))

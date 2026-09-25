@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
+import MeasurementPanel from "@/components/business/supervision/MeasurementPanel.vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
@@ -79,6 +80,8 @@ function getStatusType(status: string) {
     done: "success",
     failed: "danger",
     reviewing: "warning",
+    collecting: "info",
+    awaiting_review: "warning",
   };
   return map[status] || "info";
 }
@@ -347,7 +350,7 @@ onUnmounted(() => {
           导入检测结果
         </el-button>
         <el-button
-          v-if="taskStore.current.status !== 'running'"
+          v-if="taskStore.current.status !== 'running' && !(taskStore.current.supervision && taskStore.current.status==='done')"
           type="danger"
           plain
           :loading="deleting"
@@ -359,6 +362,7 @@ onUnmounted(() => {
     </div>
 
     <div v-if="currentTask" class="content">
+      <MeasurementPanel v-if="hasRole([ROLE_USER,ROLE_EXPERT,ROLE_PLATFORM_OPERATOR])" :key="taskId" :task-id="taskId" :product-sku-id="currentTask.product_sku_id" :batch-id="currentTask.batch_id" />
       <el-card shadow="never">
         <template #header>基本信息</template>
         <el-descriptions :column="2">

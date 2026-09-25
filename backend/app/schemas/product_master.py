@@ -20,6 +20,7 @@ class ProductLineUpdate(BaseModel):
 
 
 class ProductSkuCreate(BaseModel):
+    supervision_data: dict | None = None
     product_line_id: str
     code: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)
@@ -28,6 +29,7 @@ class ProductSkuCreate(BaseModel):
 
 
 class ProductSkuUpdate(BaseModel):
+    supervision_data: dict | None = None
     product_line_id: str | None = None
     code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=128)
@@ -36,6 +38,7 @@ class ProductSkuUpdate(BaseModel):
 
 
 class ProductBatchCreate(BaseModel):
+    quantity: int | None = Field(default=None, ge=0)
     product_sku_id: str
     batch_no: str = Field(..., min_length=1, max_length=64)
     name: str | None = Field(default=None, max_length=128)
@@ -45,6 +48,7 @@ class ProductBatchCreate(BaseModel):
 
 
 class ProductBatchUpdate(BaseModel):
+    quantity: int | None = Field(default=None, ge=0)
     product_sku_id: str | None = None
     batch_no: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, max_length=128)
@@ -67,6 +71,7 @@ class ProductLineResponse(BaseModel):
 
 
 class ProductSkuResponse(BaseModel):
+    supervision_data: dict | None = None
     id: str
     org_id: str
     product_line_id: str
@@ -83,6 +88,7 @@ class ProductSkuResponse(BaseModel):
 
 
 class ProductBatchResponse(BaseModel):
+    quantity: int | None = None
     id: str
     org_id: str
     product_sku_id: str

@@ -24,6 +24,44 @@ def extract_citation_items(citations: Any) -> list[dict[str, Any]]:
     return []
 
 
+def is_verified_rag_citation(item: dict[str, Any]) -> bool:
+    return (
+        str(item.get("kind") or "").lower() == "rag"
+        and bool(str(item.get("quote") or item.get("excerpt") or "").strip())
+        and bool(str(item.get("source") or item.get("id") or item.get("source_id") or "").strip())
+    )
+
+
+def build_rag_summary_from_reasoning(
+    reasoning_chain: dict[str, Any],
+    citations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    existing = reasoning_chain.get("rag_summary")
+    if isinstance(existing, dict) and existing:
+        return dict(existing)
+    packet = reasoning_chain.get("evidence_packet")
+    if not isinstance(packet, dict):
+        return {}
+    retrieval = dict(packet.get("rag_retrieval") or {})
+    rag_source = (packet.get("sources") or {}).get("rag") if isinstance(packet.get("sources"), dict) else None
+    containers = list((rag_source or {}).get("items") or []) if isinstance(rag_source, dict) else []
+    hits = [
+        hit
+        for container in containers
+        if isinstance(container, dict)
+        for hit in list(container.get("hits") or [])
+        if isinstance(hit, dict)
+    ]
+    return {
+        **retrieval,
+        "attempted": bool(retrieval.get("attempted") or rag_source is not None),
+        "hit_count": int(retrieval.get("hit_count") or len(hits)),
+        "query": packet.get("query"),
+        "used_citation_count": len(citations),
+        "affected_verdict": bool(citations),
+    }
+
+
 def trust_score_from_rule_scores(scores: dict[str, Any]) -> float | None:
     if scores.get("trust_score") is not None:
         return float(scores["trust_score"])
