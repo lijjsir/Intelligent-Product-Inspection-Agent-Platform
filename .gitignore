@@ -65,6 +65,12 @@ logs/
 
 # Codex
 .codex/
+.codex_tmp/
+.tmp_grant.txt
+
+# Locally generated verification artifacts
+frontend/tests/artifacts/
+tmp_pdf_images/
 
 # Celery Beat runtime
 backend/celerybeat-schedule
