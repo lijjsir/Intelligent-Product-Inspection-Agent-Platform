@@ -24,19 +24,29 @@ const overview = computed(() => analyticsStore.overview);
 const alerts = computed(() => alertStore.items);
 const recentTasks = computed(() => taskStore.items);
 const openAlerts = computed(() => alerts.value.filter((item) => item.status === "open"));
-const criticalAlerts = computed(() => openAlerts.value.filter((item) => item.severity === "critical" || item.severity === "error"));
-const runningTasks = computed(() => recentTasks.value.filter((item) => ["queued", "running", "reviewing"].includes(item.status)));
+const criticalAlerts = computed(() =>
+  openAlerts.value.filter((item) => item.severity === "critical" || item.severity === "error"),
+);
+const runningTasks = computed(() =>
+  recentTasks.value.filter((item) => ["queued", "running", "reviewing"].includes(item.status)),
+);
 const failedTasks = computed(() => recentTasks.value.filter((item) => item.status === "failed"));
-const completedWithoutResult = computed(() => recentTasks.value.filter((item) => item.status === "done" && !item.has_result));
-const passRate = computed(() => overview.value ? `${(overview.value.pass_rate * 100).toFixed(1)}%` : "-");
+const completedWithoutResult = computed(() =>
+  recentTasks.value.filter((item) => item.status === "done" && !item.has_result),
+);
+const passRate = computed(() =>
+  overview.value ? `${(overview.value.pass_rate * 100).toFixed(1)}%` : "-",
+);
 const riskSummary = computed(() => {
   const items: string[] = [];
   if (criticalAlerts.value.length) items.push(`${criticalAlerts.value.length} 条高优先告警`);
   if (failedTasks.value.length) items.push(`${failedTasks.value.length} 个失败任务`);
   if (pendingReviewCount.value) items.push(`${pendingReviewCount.value} 条待专家审核`);
-  if (completedWithoutResult.value.length) items.push(`${completedWithoutResult.value.length} 个结果未落库任务`);
+  if (completedWithoutResult.value.length)
+    items.push(`${completedWithoutResult.value.length} 个结果未落库任务`);
   if (items.length) return `待响应：${items.join(" / ")}`;
-  if (runningTasks.value.length) return `${runningTasks.value.length} 个任务正在执行，重点盯队列状态`;
+  if (runningTasks.value.length)
+    return `${runningTasks.value.length} 个任务正在执行，重点盯队列状态`;
   return "今天的队列状态稳定，可以转去分析中心看趋势";
 });
 const healthTone = computed(() => {
@@ -52,12 +62,16 @@ const healthLabel = computed(() => {
 
 const primaryAction = computed<DashboardAction>(() => {
   if (criticalAlerts.value.length) {
-    const severity = criticalAlerts.value.some((item) => item.severity === "critical") ? "critical" : "error";
+    const severity = criticalAlerts.value.some((item) => item.severity === "critical")
+      ? "critical"
+      : "error";
     return { label: "查看高优先告警", path: `/ops/alerts?status=open&severity=${severity}` };
   }
   if (failedTasks.value.length) return { label: "查看失败任务", path: "/ops/tasks?status=failed" };
-  if (pendingReviewCount.value) return { label: "查看人工审核", path: "/app/results?verdict=manual_required" };
-  if (completedWithoutResult.value.length) return { label: "查看结果未落库", path: "/ops/tasks?status=done" };
+  if (pendingReviewCount.value)
+    return { label: "查看人工审核", path: "/app/results?verdict=manual_required" };
+  if (completedWithoutResult.value.length)
+    return { label: "查看结果未落库", path: "/ops/tasks?status=done" };
   return { label: "查看分析中心", path: "/ops/analytics" };
 });
 
@@ -67,7 +81,7 @@ const dashboardActions: DashboardAction[] = [
   { label: "告警管理", path: "/ops/alerts" },
   { label: "模型观测", path: "/ops/calls" },
   { label: "Agent 查看", path: "/ops/agents" },
-  { label: "质检门槛查看", path: "/ops/inspection-specs" },
+  { label: "自动判定规则", path: "/ops/inspection-specs" },
   { label: "个人设置", path: "/app/profile" },
 ];
 
@@ -148,11 +162,17 @@ onMounted(fetchData);
       </div>
 
       <div class="hero-side">
-        <el-tag :type="healthTone" effect="dark" size="large" class="health-tag">{{ healthLabel }}</el-tag>
+        <el-tag :type="healthTone" effect="dark" size="large" class="health-tag">{{
+          healthLabel
+        }}</el-tag>
         <p class="hero-note">{{ riskSummary }}</p>
         <div class="hero-actions">
-          <el-button class="hero-primary" plain @click="go(primaryAction.path)">{{ primaryAction.label }}</el-button>
-          <el-button class="hero-refresh" plain :loading="loading" @click="fetchData">刷新数据</el-button>
+          <el-button class="hero-primary" plain @click="go(primaryAction.path)">{{
+            primaryAction.label
+          }}</el-button>
+          <el-button class="hero-refresh" plain :loading="loading" @click="fetchData"
+            >刷新数据</el-button
+          >
         </div>
       </div>
     </section>
@@ -197,7 +217,9 @@ onMounted(fetchData);
             <h3>最近任务</h3>
             <p>把上面的大盘数字落到具体任务，方便直接点进详情。</p>
           </div>
-          <el-button size="small" type="primary" plain @click="go('/ops/tasks')">全部任务</el-button>
+          <el-button size="small" type="primary" plain @click="go('/ops/tasks')"
+            >全部任务</el-button
+          >
         </div>
 
         <el-table :data="recentTasks" size="small" class="task-table" @row-click="goTask">
@@ -252,13 +274,26 @@ onMounted(fetchData);
             <span>重点核对结果入库和后续链路</span>
           </button>
 
-          <button v-for="alert in openAlerts.slice(0, 5)" :key="alert.id" class="queue-item" @click="go(alertTarget(alert))">
+          <button
+            v-for="alert in openAlerts.slice(0, 5)"
+            :key="alert.id"
+            class="queue-item"
+            @click="go(alertTarget(alert))"
+          >
             <strong>{{ alert.title }}</strong>
-            <span>跳到告警管理筛选结果 · {{ alert.severity }} · {{ formatTime(alert.created_at) }}</span>
+            <span
+              >跳到告警管理筛选结果 · {{ alert.severity }} ·
+              {{ formatTime(alert.created_at) }}</span
+            >
           </button>
 
           <el-empty
-            v-if="!pendingReviewCount && !failedTasks.length && !completedWithoutResult.length && !openAlerts.length"
+            v-if="
+              !pendingReviewCount &&
+              !failedTasks.length &&
+              !completedWithoutResult.length &&
+              !openAlerts.length
+            "
             description="当前没有待响应事项"
             :image-size="56"
           />
@@ -267,12 +302,7 @@ onMounted(fetchData);
     </section>
 
     <section class="support-row" aria-label="平台运营工作台快捷入口">
-      <el-button
-        v-for="item in dashboardActions"
-        :key="item.label"
-        plain
-        @click="go(item.path)"
-      >
+      <el-button v-for="item in dashboardActions" :key="item.label" plain @click="go(item.path)">
         {{ item.label }}
       </el-button>
     </section>
@@ -406,7 +436,10 @@ onMounted(fetchData);
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
   text-align: left;
   cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
 }
 
 .metric-card:hover {
@@ -504,7 +537,9 @@ onMounted(fetchData);
   background: #f8fafc;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
 }
 
 .queue-item:hover {

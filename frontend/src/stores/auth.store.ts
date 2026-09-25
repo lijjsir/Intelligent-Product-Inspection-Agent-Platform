@@ -138,7 +138,7 @@ export const useAuthStore = defineStore("auth", () => {
     if (r === ROLE_PLATFORM_OPERATOR) {
       return "/ops/dashboard";
     }
-    return "/app/dashboard";
+    return "/app/profile";
   }
 
   return {

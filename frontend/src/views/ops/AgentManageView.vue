@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SupervisionAgentConfig from "@/components/business/supervision/SupervisionAgentConfig.vue";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { Connection, RefreshRight, VideoPause, VideoPlay } from "@element-plus/icons-vue";
@@ -258,6 +259,7 @@ onUnmounted(() => {
 
 <template>
   <div class="agent-manage-page">
+    <SupervisionAgentConfig />
     <section class="page-head">
       <div>
         <h1>{{ pageTitle }}</h1>

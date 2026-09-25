@@ -406,7 +406,8 @@ export interface QDLDocument {
   }>;
   provenance: {
     org_id?: string | null;
-    room_id: string;
+    room_id?: string | null;
+    source_context?: {source_type: "risk_case" | "task" | "standard" | "device" | "inspection_session";source_id:string} | null;
     message_ids: string[];
     extraction_method: "llm" | "heuristic" | "mixed";
     model_id?: string | null;

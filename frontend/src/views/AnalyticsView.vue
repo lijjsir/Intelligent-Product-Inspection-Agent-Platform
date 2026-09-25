@@ -18,7 +18,9 @@ type TabName = "overview" | "quality" | "tracing";
 const activeTab = ref<TabName>((route.query.tab as TabName) || "overview");
 const dateRange = ref<[Date, Date] | null>(null);
 const loaded = ref<Record<TabName, boolean>>({ overview: false, quality: false, tracing: false });
-const scopeLabel = computed(() => (analyticsStore.overview?.scope_kind === "global" ? "全部组织" : "当前组织"));
+const scopeLabel = computed(() =>
+  analyticsStore.overview?.scope_kind === "global" ? "全部组织" : "当前组织",
+);
 
 watch(activeTab, (tab) => {
   if (route.query.tab === tab) return;
@@ -28,7 +30,11 @@ watch(activeTab, (tab) => {
 watch(
   () => route.query.tab,
   (tab) => {
-    if (tab && (tab === "overview" || tab === "quality" || tab === "tracing") && activeTab.value !== tab) {
+    if (
+      tab &&
+      (tab === "overview" || tab === "quality" || tab === "tracing") &&
+      activeTab.value !== tab
+    ) {
       activeTab.value = tab;
     }
   },
@@ -99,7 +105,9 @@ function markOverviewLoaded() {
       <div>
         <p class="eyebrow">PIAP Intelligence Desk</p>
         <h2>分析中心</h2>
-        <p class="subtitle">这里统一查看通过率、幻觉率、业务风险演化与质量追踪，并明确区分业务判定、引用证据和文本可信度口径。</p>
+        <p class="subtitle">
+          这里统一查看通过率、幻觉率、业务风险演化与质量追踪，并明确区分业务判定、引用证据和文本可信度口径。
+        </p>
         <div class="scope-row">
           <el-tag type="success" effect="dark">{{ scopeLabel }}</el-tag>
           <el-tag v-if="dateRange" type="info" effect="plain">
@@ -135,7 +143,11 @@ function markOverviewLoaded() {
       </div>
     </el-card>
 
-    <AnalyticsOverviewPanel v-show="activeTab === 'overview'" :date-range="dateRange" @loaded="markOverviewLoaded" />
+    <AnalyticsOverviewPanel
+      v-show="activeTab === 'overview'"
+      :date-range="dateRange"
+      @loaded="markOverviewLoaded"
+    />
     <QualityReportPanel v-show="activeTab === 'quality'" />
     <QualityTracingPanel v-if="loaded.tracing" v-show="activeTab === 'tracing'" />
   </div>
@@ -180,17 +192,60 @@ function markOverviewLoaded() {
   color: #fff;
 }
 
-.eyebrow { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.76; }
-.hero-panel h2 { margin: 0; font-size: 40px; }
-.subtitle { margin: 12px 0 0; max-width: 780px; color: rgba(248, 250, 252, 0.82); }
-.scope-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
-.hero-actions { display: flex; align-items: flex-start; gap: 12px; }
-.filter-card { border-radius: 20px; border: 1px solid rgba(16, 36, 61, 0.08); box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05); }
-.filter-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.filter-title { font-size: 16px; font-weight: 700; color: #172033; }
-.filter-meta { margin-top: 4px; color: #64748b; font-size: 13px; }
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.76;
+}
+.hero-panel h2 {
+  margin: 0;
+  font-size: 40px;
+}
+.subtitle {
+  margin: 12px 0 0;
+  max-width: 780px;
+  color: rgba(248, 250, 252, 0.82);
+}
+.scope-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.hero-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.filter-card {
+  border-radius: 20px;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.05);
+}
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.filter-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #172033;
+}
+.filter-meta {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
 
 @media (max-width: 960px) {
-  .hero-panel, .filter-row { flex-direction: column; align-items: stretch; }
+  .hero-panel,
+  .filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 </style>

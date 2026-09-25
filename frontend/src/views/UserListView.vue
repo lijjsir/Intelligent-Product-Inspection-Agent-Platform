@@ -49,14 +49,15 @@ const resetPasswordForm = reactive({
   password: "",
 });
 
-const roleMeta: Record<string, { label: string; tag: "danger" | "success" | "warning" | "info" }> = {
-  [ROLE_ADMIN]: { label: "管理员", tag: "danger" },
-  [ROLE_PLATFORM_OPERATOR]: { label: "平台运营", tag: "warning" },
-  [ROLE_ALGORITHM_ENGINEER]: { label: "算法工程师", tag: "success" },
-  [ROLE_APP_DEVELOPER]: { label: "应用开发者", tag: "warning" },
-  [ROLE_EXPERT]: { label: "专家", tag: "info" },
-  [ROLE_USER]: { label: "普通用户", tag: "info" },
-};
+const roleMeta: Record<string, { label: string; tag: "danger" | "success" | "warning" | "info" }> =
+  {
+    [ROLE_ADMIN]: { label: "管理员", tag: "danger" },
+    [ROLE_PLATFORM_OPERATOR]: { label: "平台运营", tag: "warning" },
+    [ROLE_ALGORITHM_ENGINEER]: { label: "算法工程师", tag: "success" },
+    [ROLE_APP_DEVELOPER]: { label: "应用开发者", tag: "warning" },
+    [ROLE_EXPERT]: { label: "专家", tag: "info" },
+    [ROLE_USER]: { label: "普通用户", tag: "info" },
+  };
 
 const roleOptions = computed(() =>
   store.assignableRoles.map((role) => ({
@@ -213,11 +214,15 @@ function getRoleTag(role: string) {
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <h2 class="text-2xl font-bold text-zinc-900">用户管理</h2>
-        <p class="mt-2 text-sm text-zinc-500">补齐筛选、密码重置和角色策略接口化后的用户治理闭环。</p>
+        <p class="mt-2 text-sm text-zinc-500">
+          补齐筛选、密码重置和角色策略接口化后的用户治理闭环。
+        </p>
       </div>
       <div class="flex gap-3">
         <el-button size="small" @click="goProfile">个人资料</el-button>
-        <el-button type="primary" size="small" @click="openCreateDialog" v-if="canManageUsers">新建用户</el-button>
+        <el-button type="primary" size="small" @click="openCreateDialog" v-if="canManageUsers"
+          >新建用户</el-button
+        >
       </div>
     </div>
 
@@ -234,7 +239,13 @@ function getRoleTag(role: string) {
           />
         </el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="filters.role" placeholder="全部" clearable class="!w-[180px]" size="small">
+          <el-select
+            v-model="filters.role"
+            placeholder="全部"
+            clearable
+            class="!w-[180px]"
+            size="small"
+          >
             <el-option
               v-for="option in roleOptions"
               :key="option.value"
@@ -244,7 +255,13 @@ function getRoleTag(role: string) {
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部" clearable class="!w-[140px]" size="small">
+          <el-select
+            v-model="filters.status"
+            placeholder="全部"
+            clearable
+            class="!w-[140px]"
+            size="small"
+          >
             <el-option label="启用中" value="active" />
             <el-option label="已停用" value="inactive" />
           </el-select>
@@ -290,7 +307,9 @@ function getRoleTag(role: string) {
         </el-table-column>
         <el-table-column label="当前标识" width="150">
           <template #default="{ row }">
-            <el-tag :type="getRoleTag(row.role)" effect="plain" size="small">{{ getRoleLabel(row.role) }}</el-tag>
+            <el-tag :type="getRoleTag(row.role)" effect="plain" size="small">{{
+              getRoleLabel(row.role)
+            }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180">
@@ -300,7 +319,13 @@ function getRoleTag(role: string) {
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openResetPasswordDialog(row)" :disabled="row.id === authStore.userId">
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="openResetPasswordDialog(row)"
+              :disabled="row.id === authStore.userId"
+            >
               重置密码
             </el-button>
           </template>
@@ -326,7 +351,13 @@ function getRoleTag(role: string) {
     </div>
 
     <el-dialog v-model="showCreateDialog" title="新建用户" width="480px" destroy-on-close>
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="88px" size="small">
+      <el-form
+        ref="createFormRef"
+        :model="createForm"
+        :rules="createRules"
+        label-width="88px"
+        size="small"
+      >
         <el-form-item label="用户名" prop="username">
           <el-input v-model="createForm.username" placeholder="例如 inspector_wang" />
         </el-form-item>
@@ -334,7 +365,12 @@ function getRoleTag(role: string) {
           <el-input v-model="createForm.email" placeholder="example@company.com" />
         </el-form-item>
         <el-form-item label="初始密码" prop="password">
-          <el-input v-model="createForm.password" type="password" show-password placeholder="不少于 6 位" />
+          <el-input
+            v-model="createForm.password"
+            type="password"
+            show-password
+            placeholder="不少于 6 位"
+          />
         </el-form-item>
         <el-form-item label="角色" prop="role">
           <el-radio-group v-model="createForm.role">
@@ -353,18 +389,31 @@ function getRoleTag(role: string) {
     </el-dialog>
 
     <el-dialog v-model="showResetPasswordDialog" title="重置密码" width="420px" destroy-on-close>
-      <el-form ref="resetPasswordFormRef" :model="resetPasswordForm" :rules="resetPasswordRules" label-width="88px" size="small">
+      <el-form
+        ref="resetPasswordFormRef"
+        :model="resetPasswordForm"
+        :rules="resetPasswordRules"
+        label-width="88px"
+        size="small"
+      >
         <el-form-item label="用户">
           <el-input :model-value="resetPasswordForm.username" disabled />
         </el-form-item>
         <el-form-item label="新密码" prop="password">
-          <el-input v-model="resetPasswordForm.password" type="password" show-password placeholder="不少于 6 位" />
+          <el-input
+            v-model="resetPasswordForm.password"
+            type="password"
+            show-password
+            placeholder="不少于 6 位"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
         <div class="flex justify-end gap-2">
           <el-button @click="showResetPasswordDialog = false">取消</el-button>
-          <el-button type="primary" :loading="resettingPassword" @click="handleResetPassword">确认重置</el-button>
+          <el-button type="primary" :loading="resettingPassword" @click="handleResetPassword"
+            >确认重置</el-button
+          >
         </div>
       </template>
     </el-dialog>

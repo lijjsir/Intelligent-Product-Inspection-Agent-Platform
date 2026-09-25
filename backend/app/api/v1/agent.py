@@ -81,6 +81,11 @@ async def run_task_pipeline(
     task = await TaskRepository(db).get_for_user(org_scope, task_id, owner_user_id=owner_user_id)
     if not task:
         raise NotFoundError("task not found")
+    if (getattr(task,"meta_data",None) or {}).get("supervision"):
+        if current.role not in {"user","expert"}:
+            raise ForbiddenError("当前角色只能查看质监任务")
+        if current.role == "user" and current.user_id not in {task.created_by,(task.meta_data or {}).get("assigned_to")}:
+            raise ForbiddenError("仅任务创建人或指定负责人可重新执行")
 
     data = await launch_task_execution(task_id=task_id, org_id=current.org_id)
     return ResponseEnvelope(data=data)
@@ -104,6 +109,8 @@ async def stream_task_events(
     if not task:
         raise NotFoundError("task not found")
 
+    if (task.meta_data or {}).get("supervision") and current.role == "algorithm_engineer":
+        raise ForbiddenError("质监样本需经明确纳入数据集后访问")
     async def event_iter() -> AsyncIterator[str]:
         """按 SSE 协议格式输出历史事件和后续实时事件。"""
         ready = {
