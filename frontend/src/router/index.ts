@@ -76,6 +76,10 @@ router.beforeEach((to) => {
     return { path: "/login" };
   }
 
+  if (auth.isAuthed && ["/app", "/ops", "/governance", "/app/dashboard"].includes(to.path)) {
+    return { path: auth.resolveDefaultRoute() };
+  }
+
   // 登录/注册页始终可访问，不自动跳走（方便切换账号或重启后重新登录）
 
   // Check route meta role restrictions

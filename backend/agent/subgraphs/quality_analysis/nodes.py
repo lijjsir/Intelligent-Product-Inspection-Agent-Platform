@@ -149,11 +149,12 @@ async def validate_required_inputs(state: dict[str, Any]) -> dict[str, Any]:
 
         if ext.get("evidence_packet_required"):
             source_count = int(evidence.get("source_count") or 0)
-            if source_count <= 0:
+            retrieval_attempted = bool((evidence.get("rag_retrieval") or {}).get("attempted"))
+            if source_count <= 0 and not retrieval_attempted:
                 return {
                     "needs_user_input": True,
                     "status": "blocked",
-                    "summary": "empty evidence packet for formal inspection",
+                    "summary": "formal inspection did not execute required evidence retrieval",
                 }
 
         if _collect_image_urls(state) and not state.get("visual_inspection_result"):
@@ -241,14 +242,39 @@ def _evidence_citations(evidence_packet: Any) -> list[dict[str, Any]]:
         citations.extend([dict(item) for item in direct if isinstance(item, dict)])
     sources = evidence_packet.get("sources")
     if isinstance(sources, dict):
-        for source in sources.values():
+        for source_name, source in sources.items():
             if not isinstance(source, dict):
                 continue
-            for key in ("items", "hits", "paths"):
-                values = source.get(key)
-                if isinstance(values, list):
-                    citations.extend([dict(item) for item in values if isinstance(item, dict)])
-    return citations
+            if source_name == "rag":
+                for container in list(source.get("items") or []):
+                    if not isinstance(container, dict):
+                        continue
+                    for hit in list(container.get("hits") or []):
+                        if not isinstance(hit, dict):
+                            continue
+                        citations.append({
+                            "id": str(hit.get("chunk_id") or hit.get("id") or ""),
+                            "title": str(hit.get("title") or hit.get("document_name") or "知识库文档"),
+                            "source": str(hit.get("source") or hit.get("full_path") or ""),
+                            "quote": str(hit.get("quote") or hit.get("text") or hit.get("content") or "")[:500],
+                            "score": hit.get("score"),
+                            "kind": "rag",
+                            "rag_space_id": hit.get("rag_space_id") or container.get("rag_space_id"),
+                        })
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in citations:
+        source = str(item.get("source") or "").strip()
+        quote = str(item.get("quote") or item.get("excerpt") or "").strip()
+        identifier = str(item.get("id") or item.get("source_id") or "").strip()
+        if not quote or not (source or identifier):
+            continue
+        key = (identifier, source, quote)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def _visual_confidence(visual_result: dict[str, Any], *, defects: list[dict[str, Any]]) -> float:
@@ -415,6 +441,7 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
     standard_evaluation = state.get("standard_evaluation") or {}
     consumed_artifact_ids = list(state.get("consumed_artifact_ids") or [])
 
+    citations = _evidence_citations(evidence_packet)
     source_count = int(evidence_packet.get("source_count") or 0)
     defects = extract_defects(visual_result, image_count=len(_collect_image_urls(state)))
     confidence = 0.5
@@ -422,9 +449,7 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
         confidence += 0.2
     if visual_result:
         confidence = max(confidence + 0.15, _visual_confidence(visual_result, defects=defects))
-    if lab_result:
-        confidence += 0.15
-    confidence = min(confidence, 0.95)
+    confidence = min(confidence, 0.98)
 
     candidate_extractable = (
         response_mode in {"quality_qa", "inspection_execute"}
@@ -434,6 +459,8 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
     request = state.get("request") or {}
     request_ext = request.get("ext") or {}
     request_metadata = request.get("metadata") or {}
+    if request_ext.get("supervision") or request_metadata.get("supervision"):
+        candidate_extractable = False
     product_line = (
         request_ext.get("product_line")
         or request_metadata.get("product_line")
@@ -469,7 +496,10 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
             (standard_evaluation.get("ai_gate") or {}).get("traceability_score")
             or (min(1.0, source_count / 3) if source_count else (0.6 if visual_result else 0.0))
         ),
-        "faithfulness_score": confidence,
+        "faithfulness_score": 0.0,
+        "faithfulness_status": "not_measured",
+        "confidence_status": "heuristic_not_calibrated",
+        "score_status": "not_calibrated",
         "physical_hallucination_score": 0.0 if source_count or visual_result or lab_result else 0.5,
         "candidate_extractable": candidate_extractable,
         "candidate_type": "inspection_pattern",
@@ -486,6 +516,12 @@ async def build_final_assessment(state: dict[str, Any]) -> dict[str, Any]:
         "share_value_score": round(confidence, 4) if candidate_extractable else 0.0,
         "target_agents": ["vision", "lab_detection", "quality_analysis"],
         "product_line": product_line,
+        "rag_summary": {
+            **dict(evidence_packet.get("rag_retrieval") or {}),
+            "query": evidence_packet.get("query"),
+            "used_citation_count": len(citations),
+            "affected_verdict": bool(citations and standard_evaluation.get("ai_gate")),
+        },
     }
     return {
         "final_assessment": assessment,

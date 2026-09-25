@@ -6,7 +6,6 @@ from agent.router.contracts import (
     AgentPlanStep,
     AgentRouteDecision,
     AgentRouterOutput,
-    Capability,
     AgentArtifact,
     AgentObservation,
     AgentRuntimeError,
@@ -15,7 +14,7 @@ from agent.router.contracts import (
     AgentExecutionError,
     AgentValidationError,
 )
-from agent.router.capability_registry import CAPABILITIES, capability_allowed, capabilities_for_surface
+from agent.router.capability_registry import CAPABILITIES, capability_allowed
 from agent.router.manager_dispatcher import ManagerDispatcher
 
 
@@ -35,7 +34,7 @@ class TestCapabilityModel:
             assert not overlap, f"{key}: owner_agents contains forbidden values: {overlap}"
 
     def test_owner_agents_only_business_agents_or_orchestrator(self):
-        allowed = {"orchestrator", "vision", "lab_detection", "quality_analysis", "file"}
+        allowed = {"orchestrator", "vision", "lab_detection", "quality_analysis", "file", "market_monitoring", "public_opinion_monitoring", "supervision_sampling", "laboratory_testing"}
         for key, cap in CAPABILITIES.items():
             invalid = set(cap.owner_agents) - allowed
             assert not invalid, f"{key}: owner_agents contains non-business agents: {invalid}"
@@ -126,10 +125,15 @@ class TestManagerDispatcher:
             "lab_detection",
             "quality_analysis",
             "file",
+            "market_monitoring",
+            "public_opinion_monitoring",
+            "supervision_sampling",
+            "laboratory_testing",
         }
         assert set(dispatcher._capability_executors.keys()) == {
             "evidence.arbitrate",
             "memory.governance",
+            "trust.review",
         }
 
     def test_rag_not_registered_as_executor(self):

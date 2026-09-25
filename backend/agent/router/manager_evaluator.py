@@ -57,6 +57,21 @@ class ManagerEvaluator:
             a.type == "memory_governance_result"
             and a.status == "success"
         ),
+        "risk_case.assess": lambda a: (
+            a.type == "risk_case_assessment" and a.status == "success"
+        ),
+        "risk_situation.analyze": lambda a: (
+            a.type == "risk_situation_report" and a.status == "success"
+        ),
+        "sampling_plan.optimize": lambda a: (
+            a.type == "sampling_plan" and a.status == "success"
+        ),
+        "inspection_process.assess": lambda a: (
+            a.type == "inspection_process_assessment" and a.status == "success"
+        ),
+        "trust.review": lambda a: (
+            a.type == "supervision_trust_review" and a.status == "success"
+        ),
     }
 
     async def evaluate(

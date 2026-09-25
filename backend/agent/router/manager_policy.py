@@ -254,6 +254,50 @@ class ManagerPolicy:
             query, state.surface, attachment_kinds, len(state.attachments),
         )
 
+        if state.surface == "supervision":
+            operation = str(state.request_ext.get("supervision_operation") or "").strip()
+            operation_plan = {
+                "risk_case.assess": (
+                    "形成可追溯的风险案件评估并执行可信复核",
+                    "risk_case_assess",
+                    ["risk_case.assess", "trust.review"],
+                ),
+                "risk_situation.analyze": (
+                    "分析冻结风险案件版本的质监态势",
+                    "risk_situation_analyze",
+                    ["risk_situation.analyze"],
+                ),
+                "sampling_plan.optimize": (
+                    "生成受约束且可批准的监督抽查计划",
+                    "sampling_plan_optimize",
+                    ["sampling_plan.optimize"],
+                ),
+                "inspection_process.assess": (
+                    "核验样品、设备、测量、标准与补测需求",
+                    "inspection_process_assess",
+                    ["inspection_process.assess"],
+                ),
+            }
+            selected = operation_plan.get(operation)
+            if selected is None:
+                return Understanding(
+                    goal="质监业务运行缺少有效操作类型",
+                    intent="error",
+                    needs=[],
+                    missing_inputs=["supervision_operation"],
+                    entities={},
+                    risk="high",
+                )
+            goal, intent, needs = selected
+            return Understanding(
+                goal=goal,
+                intent=intent,
+                needs=needs,
+                missing_inputs=[] if state.request_ext.get("supervision_snapshot") else ["supervision_snapshot"],
+                entities={},
+                risk="high",
+            )
+
         if self._matches(query, RAG_INGEST_PATTERNS):
             return Understanding(
                 goal="请求把文件写入 RAG 空间，需要显式确认且不能在聊天页直接执行",
@@ -394,6 +438,11 @@ class ManagerPolicy:
         "quality.report.query": ["readonly quality report artifact is present"],
         "quality.task.status": ["readonly task status artifact is present"],
         "memory.governance": ["memory governance result is present"],
+        "risk_case.assess": ["risk_case_assessment is present"],
+        "risk_situation.analyze": ["risk_situation_report is present"],
+        "sampling_plan.optimize": ["sampling_plan is present"],
+        "inspection_process.assess": ["inspection_process_assessment is present"],
+        "trust.review": ["supervision_trust_review is present"],
     }
     _EXPECTED_ARTIFACTS: dict[str, str] = {
         "evidence.arbitrate": "evidence_packet",
@@ -408,6 +457,11 @@ class ManagerPolicy:
         "quality.report.query": "quality_report",
         "quality.task.status": "task_status",
         "memory.governance": "memory_governance_result",
+        "risk_case.assess": "risk_case_assessment",
+        "risk_situation.analyze": "risk_situation_report",
+        "sampling_plan.optimize": "sampling_plan",
+        "inspection_process.assess": "inspection_process_assessment",
+        "trust.review": "supervision_trust_review",
     }
 
     async def plan(self, state: ManagerState, understanding: Understanding) -> AgentRoutePlan:
@@ -497,6 +551,9 @@ class ManagerPolicy:
                 deps.append(evidence_step)
             if vision_step and vision_step not in deps:
                 deps.append(vision_step)
+            lab_step = step_ids_by_capability.get("lab.early_risk.assess")
+            if lab_step and lab_step not in deps:
+                deps.append(lab_step)
             return deps
         return [previous_step_id] if previous_step_id else []
 
@@ -554,6 +611,13 @@ class ManagerPolicy:
 
     @staticmethod
     def _budget_for_surface(surface: str) -> dict[str, int]:
+        if surface == "supervision":
+            return {
+                "max_iterations": 2,
+                "max_tool_calls": 4,
+                "max_llm_calls": 3,
+                "timeout_ms": 600000,
+            }
         if surface == "quality_task":
             # Formal inspection includes visual understanding plus a second
             # database-configured quality-analysis model call. One minute is
@@ -699,7 +763,7 @@ class ManagerPolicy:
         ext = dict(state.request_ext or {})
         metadata = dict(state.request_metadata or {})
         return any(
-            key in ext or key in metadata
+            bool(ext.get(key) or metadata.get(key))
             for key in ("lab_context", "equipment_data", "environment")
         )
 

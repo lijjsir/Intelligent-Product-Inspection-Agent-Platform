@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 
 
 AgentName = Literal[
+    "market_monitoring",
+    "public_opinion_monitoring",
+    "supervision_sampling",
+    "laboratory_testing",
     "chat",
     "vision",
     "lab_detection",
@@ -15,6 +19,10 @@ AgentName = Literal[
 ]
 
 StepOwner = Literal[
+    "market_monitoring",
+    "public_opinion_monitoring",
+    "supervision_sampling",
+    "laboratory_testing",
     "orchestrator",
     "vision",
     "lab_detection",
@@ -45,6 +53,10 @@ class AgentRouteDecision(BaseModel):
         "memory_governance",
         "action_blocked",
         "data_analysis",
+        "risk_case_assess",
+        "risk_situation_analyze",
+        "sampling_plan_optimize",
+        "inspection_process_assess",
         "rag_ingest",
         "error",  # Added for architecture refactor error propagation
     ] = "general_chat"
@@ -149,6 +161,51 @@ class AgentArtifact(BaseModel):
     created_at: str | None = None
 
 
+BusinessStatus = Literal[
+    "queued",
+    "running",
+    "completed",
+    "insufficient_evidence",
+    "awaiting_review",
+    "awaiting_approval",
+    "awaiting_retest",
+    "manual_review_required",
+    "stale",
+    "cancelled",
+    "failed",
+]
+
+
+class BusinessObjectRef(BaseModel):
+    kind: str
+    id: str
+    version: int
+
+
+class BusinessAgentEnvelope(BaseModel):
+    """Stable hand-off contract shared by the four supervision agents."""
+
+    workflow_run_id: str
+    source_agent: Literal[
+        "market_monitoring",
+        "public_opinion_monitoring",
+        "supervision_sampling",
+        "laboratory_testing",
+    ]
+    business_object: BusinessObjectRef
+    status: BusinessStatus
+    evidence_ids: list[str] = Field(default_factory=list)
+    consumed_versions: dict[str, int] = Field(default_factory=dict)
+    knowledge_snapshot_id: str | None = None
+    result: dict[str, Any] = Field(default_factory=dict)
+    missing_inputs: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    model_versions: dict[str, Any] = Field(default_factory=dict)
+    rule_versions: dict[str, str] = Field(default_factory=dict)
+    trace: dict[str, Any] = Field(default_factory=dict)
+
+
 class NodeSpec(BaseModel):
     node_key: str
     accepted_input_kinds: list[str] = Field(default_factory=list)
@@ -166,7 +223,7 @@ class CapabilityContext(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
-from agent.router.errors import (
+from agent.router.errors import (  # noqa: E402, F401 - compatibility re-exports
     AgentBlockedError,
     AgentCapabilityError,
     AgentDataError,

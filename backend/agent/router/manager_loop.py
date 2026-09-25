@@ -563,7 +563,7 @@ class ManagerLoop:
                 model_types={"chat", "llm", "text_generation"},
                 reserve=False,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception(
                 "Manager model resolve failed "
                 "org_id=%s request_id=%s workflow_run_id=%s",
@@ -849,6 +849,11 @@ class ManagerLoop:
                 "visual_inspection_result",
                 "lab_detection_result",
                 "quality_final_assessment",
+                "risk_case_assessment",
+                "risk_situation_report",
+                "sampling_plan",
+                "inspection_process_assessment",
+                "supervision_trust_review",
             }:
                 payload[artifact.type] = artifact.content
         return payload
@@ -857,7 +862,16 @@ class ManagerLoop:
     def _selected_agent(state: ManagerState) -> str:
         if state.route_plan and state.route_plan.steps:
             owners = [step.owner_agent for step in state.route_plan.steps]
-            for owner in ("quality_analysis", "file", "vision", "lab_detection"):
+            for owner in (
+                "public_opinion_monitoring",
+                "market_monitoring",
+                "supervision_sampling",
+                "laboratory_testing",
+                "quality_analysis",
+                "file",
+                "vision",
+                "lab_detection",
+            ):
                 if owner in owners:
                     return owner
         return "quality_analysis"
@@ -898,6 +912,10 @@ class ManagerLoop:
                 "inspection_execute": "inspection_execute",
                 "action_blocked": "action_blocked",
                 "data_analysis": "data_analysis",
+                "risk_case_assess": "risk_case_assess",
+                "risk_situation_analyze": "risk_situation_analyze",
+                "sampling_plan_optimize": "sampling_plan_optimize",
+                "inspection_process_assess": "inspection_process_assess",
             }
             return mapping.get(reason, reason or "general_chat")
         return "general_chat"
@@ -934,6 +952,13 @@ class ManagerLoop:
             return "report_answer"
         if sub_route == "inspection_execute":
             return "task_result"
+        if sub_route in {
+            "risk_case_assess",
+            "risk_situation_analyze",
+            "sampling_plan_optimize",
+            "inspection_process_assess",
+        }:
+            return "supervision_result"
         return "quality_answer"
 
     @staticmethod
@@ -1010,6 +1035,21 @@ class ManagerLoop:
                 if observation.summary:
                     return observation.summary
             return "正式质量检测任务已提交处理。"
+        if state.route_plan and state.surface == "supervision":
+            artifact = ManagerLoop._latest_artifact(
+                state,
+                {
+                    "risk_case_assessment",
+                    "risk_situation_report",
+                    "sampling_plan",
+                    "inspection_process_assessment",
+                },
+            )
+            if artifact:
+                content = dict(artifact.content or {})
+                result = dict(content.get("result") or {})
+                return str(result.get("summary") or artifact.summary or "质监业务步骤已完成")
+            return "质监业务步骤已完成。"
         if state.route_plan and state.route_plan.reason == "data_analysis":
             return "已完成当前可用的只读数据分析。"
         for observation in reversed(state.observations):

@@ -9,18 +9,23 @@ import {
   ROLE_APP_DEVELOPER,
   ROLE_EXPERT,
   ROLE_PLATFORM_OPERATOR,
+  ROLE_USER,
 } from "@/constants/roles";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 
 function flattenTitles() {
   const { menu } = useMenu();
-  return menu.value.flatMap((item) => ("items" in item ? item.items.map((child) => child.title) : [item.title]));
+  return menu.value.flatMap((item) =>
+    "items" in item ? item.items.map((child) => child.title) : [item.title],
+  );
 }
 
 function flattenPaths() {
   const { menu } = useMenu();
-  return menu.value.flatMap((item) => ("items" in item ? item.items.map((child) => child.path) : [item.path]));
+  return menu.value.flatMap((item) =>
+    "items" in item ? item.items.map((child) => child.path) : [item.path],
+  );
 }
 
 describe("useMenu", () => {
@@ -70,7 +75,12 @@ describe("useMenu", () => {
   it("shows collaboration entry points to non-expert workbench roles", () => {
     const auth = useAuthStore();
 
-    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]) {
+    for (const role of [
+      ROLE_ADMIN,
+      ROLE_APP_DEVELOPER,
+      ROLE_PLATFORM_OPERATOR,
+      ROLE_ALGORITHM_ENGINEER,
+    ]) {
       auth.role = role;
       auth.roles = [role];
 
@@ -91,14 +101,23 @@ describe("useMenu", () => {
     expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("协作中心");
   });
 
-  it("keeps collaboration entries at the top while chat stays first for app users", () => {
+  it("puts the quality-supervision workbench before business flow for experts", () => {
     const auth = useAuthStore();
 
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
-    expect(flattenPaths().slice(0, 3)).toEqual(["/app/chat", "/app/meetings", "/app/collab"]);
+    expect(flattenPaths().slice(0, 3)).toEqual([
+      "/app/chat",
+      "/app/workbench",
+      "/app/quality-analytics",
+    ]);
 
-    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]) {
+    for (const role of [
+      ROLE_ADMIN,
+      ROLE_APP_DEVELOPER,
+      ROLE_PLATFORM_OPERATOR,
+      ROLE_ALGORITHM_ENGINEER,
+    ]) {
       auth.role = role;
       auth.roles = [role];
 
@@ -106,11 +125,35 @@ describe("useMenu", () => {
     }
   });
 
+  it("exposes task management and results as one discoverable business entry", () => {
+    const auth = useAuthStore();
+    for (const role of [ROLE_USER, ROLE_EXPERT]) {
+      auth.role = role;
+      auth.roles = [role];
+      expect(flattenTitles()).toContain("实验室检测");
+      expect(flattenTitles()).toContain("任务管理");
+      expect(flattenTitles()).toContain("检测结果");
+
+      const { menu } = useMenu();
+      const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
+      expect(taskResult && "items" in taskResult ? taskResult.items : []).toEqual([
+        { title: "任务管理", path: "/app/tasks" },
+        { title: "检测结果", path: "/app/results" },
+      ]);
+    }
+  });
+
   it("allows every first-class role into meeting rooms and collaboration messages", () => {
     const meetingRoute = appRoutes.find((route) => route.name === "app-meetings");
     const collabRoute = appRoutes.find((route) => route.name === "app-collab");
 
-    for (const role of [ROLE_ADMIN, ROLE_APP_DEVELOPER, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT]) {
+    for (const role of [
+      ROLE_ADMIN,
+      ROLE_APP_DEVELOPER,
+      ROLE_PLATFORM_OPERATOR,
+      ROLE_ALGORITHM_ENGINEER,
+      ROLE_EXPERT,
+    ]) {
       expect(meetingRoute?.meta?.roles).toContain(role);
       expect(collabRoute?.meta?.roles).toContain(role);
     }
@@ -130,7 +173,7 @@ describe("useMenu", () => {
     expect(groupTitles).not.toContain("只读巡检");
     expect(titles).toContain("告警管理");
     expect(titles).toContain("Agent 查看");
-    expect(titles).toContain("质检门槛查看");
+    expect(titles).toContain("自动判定规则");
     expect(titles).toContain("模型观测");
     expect(titles).not.toContain("数据质量");
     expect(titles).not.toContain("业务报表");
@@ -150,13 +193,9 @@ describe("useMenu", () => {
     const toolGroup = menu.value.find((item) => "items" in item && item.title === "工具管理");
 
     expect(toolGroup).toBeTruthy();
-    expect(toolGroup && "items" in toolGroup ? toolGroup.items.map((item) => item.title) : []).toEqual([
-      "工具总览",
-      "工具库",
-      "外部导入",
-      "Agent 绑定",
-      "执行监控",
-    ]);
+    expect(
+      toolGroup && "items" in toolGroup ? toolGroup.items.map((item) => item.title) : [],
+    ).toEqual(["工具总览", "工具库", "外部导入", "Agent 绑定", "执行监控"]);
   });
 
   it("surfaces alert rule governance for admins instead of the ops alert page", () => {

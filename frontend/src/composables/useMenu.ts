@@ -29,7 +29,9 @@ export function isMenuGroup(entry: MenuItem | MenuGroup): entry is MenuGroup {
 }
 
 export function toggleActiveMenuGroupTitle(activeTitles: string[], title: string) {
-  return activeTitles.includes(title) ? activeTitles.filter((item) => item !== title) : [...activeTitles, title];
+  return activeTitles.includes(title)
+    ? activeTitles.filter((item) => item !== title)
+    : [...activeTitles, title];
 }
 
 export function resolveMenuGroupLandingPath(group: MenuGroup) {
@@ -72,19 +74,38 @@ function getAdminMenu(): MenuStructure {
   return [
     ...getCollaborationMenuItems(),
     {
-      title: "系统治理",
+      title: "组织与人员",
       icon: "Management",
       items: [
         { title: "用户管理", path: "/governance/admin/users" },
         { title: "权限与组织", path: "/governance/admin/roles-orgs" },
-        { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
-        { title: "产品主数据", path: "/governance/admin/product-master" },
+      ],
+    },
+    {
+      title: "质监基础",
+      icon: "Files",
+      items: [
+        { title: "监管对象", path: "/governance/admin/enterprises" },
+        { title: "产品与批次", path: "/governance/admin/product-master" },
+        { title: "设备资源", path: "/governance/admin/devices" },
+      ],
+    },
+    {
+      title: "标准与知识",
+      items: [
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
-        { title: "质检门槛", path: "/governance/admin/inspection-specs" },
+        { title: "自动判定规则", path: "/governance/admin/inspection-specs" },
+        { title: "记忆治理", path: "/governance/memory" },
+      ],
+    },
+    {
+      title: "系统治理",
+      icon: "Management",
+      items: [
+        { title: "存储/基础设施", path: "/governance/admin/infrastructure" },
         { title: "告警规则", path: "/governance/admin/alert-rules" },
         { title: "计费管理", path: "/ops/billing" },
         { title: "分析中心", path: "/governance/quality/analysis-center" },
-        { title: "记忆治理", path: "/governance/memory" },
         { title: "日志中心", path: "/governance/admin/logs" },
         { title: "高风险审批", path: "/governance/admin/approvals" },
       ],
@@ -97,6 +118,7 @@ function getAppDeveloperMenu(): MenuStructure {
   return [
     ...getCollaborationMenuItems(),
     { title: "Agent 管理", path: "/ops/agents" },
+    { title: "设备连接", path: "/ops/devices" },
     { title: "路由策略", path: "/ops/agents/intent-routes" },
     { title: "Prompt 管理", path: "/ops/prompts" },
     { title: "RAG 分析", path: "/ops/rag" },
@@ -119,11 +141,13 @@ function getPlatformOperatorMenu(): MenuStructure {
     ...getCollaborationMenuItems(),
     { title: "平台运营工作台", path: "/ops/dashboard" },
     { title: "任务查看", path: "/ops/tasks" },
+    { title: "设备管理", path: "/ops/devices" },
+    { title: "市场监控", path: "/app/quality-analytics" },
     { title: "分析中心", path: "/ops/analytics" },
     { title: "告警管理", path: "/ops/alerts" },
     { title: "模型观测", path: "/ops/calls" },
     { title: "Agent 查看", path: "/ops/agents" },
-    { title: "质检门槛查看", path: "/ops/inspection-specs" },
+    { title: "自动判定规则", path: "/ops/inspection-specs" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
@@ -133,10 +157,13 @@ function getAlgorithmEngineerMenu(): MenuStructure {
     ...getCollaborationMenuItems(),
     { title: "任务管理", path: "/app/tasks" },
     { title: "数据接入", path: "/ops/data/import" },
+    { title: "已授权业务样本", path: "/ops/data/business-samples" },
+    { title: "正常响应基线", path: "/ops/data/baselines" },
     { title: "测试集管理", path: "/ops/data/eval-sets" },
     { title: "训练任务", path: "/ops/training/jobs" },
     { title: "微调管理", path: "/ops/training/fine-tune" },
     { title: "离线评测", path: "/ops/eval/offline" },
+    { title: "概率校准评测", path: "/ops/eval/calibration" },
     { title: "在线验证", path: "/ops/eval/online" },
     { title: "实验追踪", path: "/ops/experiments" },
     { title: "部署记录", path: "/ops/deployments" },
@@ -153,13 +180,41 @@ function getCollaborationMenuItems(): MenuItem[] {
   ];
 }
 
+function getQualitySupervisionGroup(): MenuGroup {
+  return {
+    title: "质量监督",
+    icon: "Operation",
+    items: [
+      { title: "质监工作台", path: "/app/workbench" },
+      { title: "市场监控", path: "/app/quality-analytics" },
+      { title: "舆情监测", path: "/app/risk-cases" },
+      { title: "监督抽查", path: "/app/sampling-plans" },
+      {
+        title: "实验室检测",
+        path: "/app/laboratory",
+        activeMatchPaths: ["/app/inspection-sessions", "/app/samples"],
+      },
+    ],
+  };
+}
+
+function getTaskResultGroup(): MenuGroup {
+  return {
+    title: "任务与结果",
+    icon: "List",
+    items: [
+      { title: "任务管理", path: "/app/tasks" },
+      { title: "检测结果", path: "/app/results" },
+    ],
+  };
+}
+
 function getUserMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
+    getQualitySupervisionGroup(),
+    getTaskResultGroup(),
     ...getCollaborationMenuItems(),
-    { title: "任务管理", path: "/app/tasks" },
-    { title: "检测结果", path: "/app/results" },
-    { title: "异常反馈", path: "/app/feedbacks" },
     { title: "报告导出", path: "/app/export" },
     { title: "个人设置", path: "/app/profile" },
   ];
@@ -168,11 +223,10 @@ function getUserMenu(): MenuStructure {
 function getExpertMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
+    getQualitySupervisionGroup(),
+    getTaskResultGroup(),
     ...getCollaborationMenuItems(),
     { title: "RAG 空间", path: "/app/rag-spaces" },
-    { title: "任务管理", path: "/app/tasks" },
-    { title: "检测结果", path: "/app/results" },
-    { title: "异常反馈", path: "/app/feedbacks" },
     { title: "报告导出", path: "/app/export" },
     { title: "个人设置", path: "/app/profile" },
   ];

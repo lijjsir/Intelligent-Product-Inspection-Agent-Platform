@@ -11,6 +11,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AdaptiveInspectionPanel: typeof import('./src/components/business/supervision/AdaptiveInspectionPanel.vue')['default']
     AgentErrorAlert: typeof import('./src/components/chat/AgentErrorAlert.vue')['default']
     AgentPickerDialog: typeof import('./src/components/meeting/AgentPickerDialog.vue')['default']
     AgentTraceTimeline: typeof import('./src/components/chat/AgentTraceTimeline.vue')['default']
@@ -21,6 +22,8 @@ declare module 'vue' {
     AnalyticsDrilldownDrawer: typeof import('./src/components/business/analytics/AnalyticsDrilldownDrawer.vue')['default']
     AnalyticsOverviewPanel: typeof import('./src/components/business/analytics/AnalyticsOverviewPanel.vue')['default']
     AnalyticsTabNav: typeof import('./src/components/business/analytics/AnalyticsTabNav.vue')['default']
+    BulkImportDialog: typeof import('./src/components/business/supervision/BulkImportDialog.vue')['default']
+    BusinessTodoPanel: typeof import('./src/components/business/supervision/BusinessTodoPanel.vue')['default']
     ChatInspectionContextPanel: typeof import('./src/components/chat/ChatInspectionContextPanel.vue')['default']
     ChatTrustTrendChart: typeof import('./src/components/business/analytics/ChatTrustTrendChart.vue')['default']
     DefectImageViewer: typeof import('./src/components/business/result/DefectImageViewer.vue')['default']
@@ -88,6 +91,7 @@ declare module 'vue' {
     ImageAttachmentCard: typeof import('./src/components/common/ImageAttachmentCard.vue')['default']
     ImagePreviewDialog: typeof import('./src/components/common/ImagePreviewDialog.vue')['default']
     LabDetectionCard: typeof import('./src/components/chat/LabDetectionCard.vue')['default']
+    MeasurementPanel: typeof import('./src/components/business/supervision/MeasurementPanel.vue')['default']
     MessageActionBar: typeof import('./src/components/common/MessageActionBar.vue')['default']
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
@@ -102,6 +106,12 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StabilityAlertTab: typeof import('./src/components/business/stability/StabilityAlertTab.vue')['default']
+    SupervisionAgentConfig: typeof import('./src/components/business/supervision/SupervisionAgentConfig.vue')['default']
+    SupervisionAgentRail: typeof import('./src/components/business/supervision/SupervisionAgentRail.vue')['default']
+    SupervisionAnalytics: typeof import('./src/components/business/supervision/SupervisionAnalytics.vue')['default']
+    SupervisionAssessment: typeof import('./src/components/business/supervision/SupervisionAssessment.vue')['default']
+    SupervisionFields: typeof import('./src/components/business/supervision/SupervisionFields.vue')['default']
+    SupervisionModuleHeader: typeof import('./src/components/business/supervision/SupervisionModuleHeader.vue')['default']
     ThumbsDownTrendChart: typeof import('./src/components/business/analytics/ThumbsDownTrendChart.vue')['default']
     ThumbsUpTrendChart: typeof import('./src/components/business/analytics/ThumbsUpTrendChart.vue')['default']
     VisualInspectionCard: typeof import('./src/components/chat/VisualInspectionCard.vue')['default']

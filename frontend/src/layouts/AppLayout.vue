@@ -1,5 +1,6 @@
 <template>
   <div class="app-shell flex h-screen overflow-hidden bg-zinc-50">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <aside
       v-if="showSidebar"
       class="app-sidebar flex h-screen w-56 shrink-0 flex-col border-r border-zinc-200 bg-white"
@@ -17,45 +18,51 @@
 
       <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
         <template v-for="entry in menu" :key="entry.title">
-          <el-collapse
-            v-if="isMenuGroup(entry)"
-            v-model="activeNames"
-            class="nav-collapse"
-            @change="handleGroupCollapseChange(entry, $event)"
-          >
-            <el-collapse-item :name="entry.title">
-              <template #title>
-                <div class="nav-link nav-group-link w-full">
-                  <el-icon v-if="entry.icon" class="text-[15px] text-zinc-400">
-                    <component :is="iconMap[entry.icon || '']" />
-                  </el-icon>
-                  <span>{{ entry.title }}</span>
-                </div>
-              </template>
-              <div class="flex flex-col gap-1 pl-2">
-                <template v-for="item in entry.items" :key="item.path">
-                  <RouterLink
-                    v-if="!item.placeholder"
-                    :to="item.path"
-                    :class="['nav-link', { 'nav-link-active': isMenuItemActive(item) }]"
+          <div v-if="isMenuGroup(entry)" class="nav-group">
+            <button
+              type="button"
+              class="nav-link nav-group-link w-full"
+              :aria-expanded="navigation.expandedGroups.includes(entry.title)"
+              :aria-controls="`nav-group-${entry.title}`"
+              @click="toggleMenuGroup(entry)"
+            >
+              <span>{{ entry.title }}</span>
+              <ArrowRight
+                class="nav-group-arrow"
+                :class="{ 'is-expanded': navigation.expandedGroups.includes(entry.title) }"
+              />
+            </button>
+            <div
+              v-show="navigation.expandedGroups.includes(entry.title)"
+              :id="`nav-group-${entry.title}`"
+              class="flex flex-col gap-1 pb-1 pl-2"
+            >
+              <template v-for="item in entry.items" :key="item.path">
+                <RouterLink
+                  v-if="!item.placeholder"
+                  :to="item.path"
+                  :class="['nav-link', { 'nav-link-active': isMenuItemActive(item) }]"
+                >
+                  <span>{{ item.title }}</span>
+                  <span
+                    v-if="item.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
+                    class="nav-count-badge"
+                    :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
                   >
-                    <span>{{ item.title }}</span>
-                    <span
-                      v-if="item.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
-                      class="nav-count-badge"
-                      :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
-                    >
-                      {{ collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount }}
-                    </span>
-                  </RouterLink>
-                  <span v-else class="nav-link cursor-not-allowed text-zinc-400">
-                    <span>{{ item.title }}</span>
-                    <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
+                    {{
+                      collabStore.pendingWorkItemCount > 99
+                        ? "99+"
+                        : collabStore.pendingWorkItemCount
+                    }}
                   </span>
-                </template>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
+                </RouterLink>
+                <span v-else class="nav-link cursor-not-allowed text-zinc-400">
+                  <span>{{ item.title }}</span>
+                  <span class="ml-1 text-[11px] text-zinc-300">开发中</span>
+                </span>
+              </template>
+            </div>
+          </div>
 
           <template v-else>
             <RouterLink
@@ -69,7 +76,9 @@
                 class="nav-count-badge"
                 :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
               >
-                {{ collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount }}
+                {{
+                  collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount
+                }}
               </span>
             </RouterLink>
             <span v-else class="nav-link cursor-not-allowed text-zinc-400">
@@ -123,8 +132,12 @@
               />
             </el-select>
             <el-button size="small" @click="createChatSession">新建会话</el-button>
-            <el-button size="small" type="danger" plain @click="deleteChatSession">删除会话</el-button>
-            <el-tag size="small" type="info" effect="plain">会话数：{{ chatStore.sessions.length }}</el-tag>
+            <el-button size="small" type="danger" plain @click="deleteChatSession"
+              >删除会话</el-button
+            >
+            <el-tag size="small" type="info" effect="plain"
+              >会话数：{{ chatStore.sessions.length }}</el-tag
+            >
           </template>
         </div>
 
@@ -145,7 +158,11 @@
         </div>
       </header>
 
-      <main class="app-main flex-1 overflow-x-hidden overflow-y-auto p-4">
+      <main
+        id="main-content"
+        class="app-main flex-1 overflow-x-hidden overflow-y-auto p-4"
+        tabindex="-1"
+      >
         <RouterView />
       </main>
     </div>
@@ -156,11 +173,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { Management, Menu, Monitor, Setting } from "@element-plus/icons-vue";
+import { ArrowRight, Menu } from "@element-plus/icons-vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useCollabStore } from "@/stores/collab.store";
 import { useUserStore } from "@/stores/user.store";
+import { useNavigationStore } from "@/stores/navigation.store";
 import {
   ROLE_ADMIN,
   ROLE_ALGORITHM_ENGINEER,
@@ -169,7 +187,13 @@ import {
   ROLE_EXPERT,
   ROLE_USER,
 } from "@/constants/roles";
-import { isMenuGroup, resolveMenuGroupLandingPath, useMenu, type MenuGroup, type MenuItem } from "@/composables/useMenu";
+import {
+  isMenuGroup,
+  resolveMenuGroupLandingPath,
+  useMenu,
+  type MenuGroup,
+  type MenuItem,
+} from "@/composables/useMenu";
 import type { ChatSession } from "@/types/chat.types";
 import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 
@@ -179,21 +203,14 @@ const auth = useAuthStore();
 const userStore = useUserStore();
 const chatStore = useChatStore();
 const collabStore = useCollabStore();
+const navigation = useNavigationStore();
 
 const { menu, primaryRole } = useMenu();
 
 const showSidebar = computed(() => auth.isAuthed && menu.value.length > 0);
 
-const activeNames = ref<string[]>([]);
 const chatInitialized = ref(false);
 const mobileNavOpen = ref(false);
-
-const iconMap: Record<string, unknown> = {
-  Monitor,
-  Setting,
-  Management,
-  View: Monitor,
-};
 
 const canChat = computed(() => {
   const role = primaryRole.value;
@@ -232,8 +249,10 @@ const roleLabel = computed(() => {
 const sessionOptions = computed(() => {
   const rows = [...chatStore.sessions];
   rows.sort((a, b) => {
-    const ta = parseServerDateTime(a.updated_at || a.last_message_at || a.created_at)?.getTime() ?? 0;
-    const tb = parseServerDateTime(b.updated_at || b.last_message_at || b.created_at)?.getTime() ?? 0;
+    const ta =
+      parseServerDateTime(a.updated_at || a.last_message_at || a.created_at)?.getTime() ?? 0;
+    const tb =
+      parseServerDateTime(b.updated_at || b.last_message_at || b.created_at)?.getTime() ?? 0;
     return tb - ta;
   });
   return rows;
@@ -244,7 +263,11 @@ const AUTO_SESSION_TITLE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 function sessionDisplayLabel(item: ChatSession) {
   const rawTitle = String(item.title || "").trim();
   if (rawTitle && !AUTO_SESSION_TITLE_RE.test(rawTitle)) return rawTitle;
-  return formatServerDateTime(item.created_at || item.last_message_at || item.updated_at) || rawTitle || "无";
+  return (
+    formatServerDateTime(item.created_at || item.last_message_at || item.updated_at) ||
+    rawTitle ||
+    "无"
+  );
 }
 
 function sessionLabel(sessionId: string) {
@@ -254,10 +277,6 @@ function sessionLabel(sessionId: string) {
     return sessionId;
   }
   return sessionDisplayLabel(found);
-}
-
-function normalizeActiveNames(value: string | string[]) {
-  return Array.isArray(value) ? value : [value].filter(Boolean);
 }
 
 function isPathActive(targetPath: string) {
@@ -270,16 +289,17 @@ function isMenuItemActive(item: MenuItem) {
 }
 
 function syncActiveMenuGroups() {
-  activeNames.value = menu.value
+  const matchingGroups = menu.value
     .filter((entry): entry is MenuGroup => isMenuGroup(entry))
     .filter((group) => group.items.some((item) => isMenuItemActive(item)))
     .map((group) => group.title);
+  navigation.revealGroups(matchingGroups);
 }
 
-function handleGroupCollapseChange(group: MenuGroup, value: string | string[]) {
-  const nextNames = normalizeActiveNames(value);
+function toggleMenuGroup(group: MenuGroup) {
+  const expanded = navigation.toggleGroup(group.title);
   const landingPath = resolveMenuGroupLandingPath(group);
-  if (nextNames.includes(group.title) && landingPath && route.path !== landingPath) {
+  if (expanded && landingPath && !group.items.some(isMenuItemActive)) {
     router.push(landingPath);
   }
 }
@@ -371,6 +391,25 @@ function logout() {
 </script>
 
 <style scoped>
+.skip-link {
+  position: fixed;
+  z-index: 1000;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  transform: translateY(-160%);
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
 .nav-link,
 .nav-sublink {
   @apply flex items-center gap-2 rounded-xl px-3 py-2 text-[14px] text-zinc-600 transition-colors duration-150;
@@ -455,33 +494,28 @@ function logout() {
   @apply border-zinc-300 bg-zinc-50 text-zinc-700;
 }
 
-.nav-collapse {
-  background: transparent;
-  border: none;
-}
-
-.nav-collapse :deep(.el-collapse-item__header) {
-  @apply h-auto border-none bg-transparent px-0 leading-normal;
-}
-
-.nav-collapse :deep(.el-collapse-item__header.is-active) {
-  @apply text-zinc-900;
-}
-
-.nav-collapse :deep(.el-collapse-item__arrow) {
-  @apply mr-2 text-zinc-400;
-}
-
-.nav-collapse :deep(.el-collapse-item__wrap) {
-  @apply border-none bg-transparent;
-}
-
-.nav-collapse :deep(.el-collapse-item__content) {
-  @apply p-0 pb-1;
-}
-
 .nav-group-link {
-  @apply my-0;
+  @apply my-0 cursor-pointer border-0 bg-transparent text-left;
+  font: inherit;
+  font-size: 14px;
+}
+
+.nav-group-link:focus-visible {
+  outline: 2px solid #a1a1aa;
+  outline-offset: -2px;
+}
+
+.nav-group-arrow {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  flex: none;
+  color: #a1a1aa;
+  transition: transform 150ms ease;
+}
+
+.nav-group-arrow.is-expanded {
+  transform: rotate(90deg);
 }
 
 @media (max-width: 700px) {

@@ -8,6 +8,7 @@ celery_app.conf.result_backend = settings.celery_result_backend
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.imports = (
+    "worker.tasks.supervision_task",
     "worker.tasks.alert_dispatch_task",
     "worker.tasks.health_check_task",
     "worker.tasks.chat_trust_scoring_task",
@@ -21,6 +22,7 @@ celery_app.conf.imports = (
 )
 
 celery_app.conf.beat_schedule = {
+    "supervision-run-dispatch": {"task": "worker.tasks.supervision_task.dispatch_supervision_runs", "schedule": 30.0},
     "model-health-check": {
         "task": "worker.tasks.health_check_task.run_model_health_check",
         "schedule": 300.0,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanStep, AgentRoutePlan
@@ -14,6 +15,10 @@ from agent.router.executors import (
 from agent.router.executors.base import observation
 from agent.router.executors.evidence_arbitration_executor import EvidenceArbitrationExecutor
 from agent.router.executors.memory_governance_executor import MemoryGovernanceExecutor
+from agent.router.executors.supervision_executor import (
+    SupervisionExecutor,
+    SupervisionTrustReviewExecutor,
+)
 from agent.router.manager_state import ManagerState
 from agent.tools import get_registry
 from agent.tools.invoker import ToolInvoker
@@ -22,7 +27,16 @@ from app.services.task_blackboard_service import TaskBlackboardService
 
 
 class ManagerDispatcher:
-    _BUSINESS_AGENTS = {"vision", "lab_detection", "quality_analysis", "file"}
+    _BUSINESS_AGENTS = {
+        "vision",
+        "lab_detection",
+        "quality_analysis",
+        "file",
+        "market_monitoring",
+        "public_opinion_monitoring",
+        "supervision_sampling",
+        "laboratory_testing",
+    }
 
     def __init__(
         self,
@@ -34,10 +48,15 @@ class ManagerDispatcher:
             "lab_detection": LabDetectionExecutor(),
             "quality_analysis": QualityAnalysisExecutor(),
             "file": FileExecutor(),
+            "market_monitoring": SupervisionExecutor(),
+            "public_opinion_monitoring": SupervisionExecutor(),
+            "supervision_sampling": SupervisionExecutor(),
+            "laboratory_testing": SupervisionExecutor(),
         }
         self._capability_executors = {
             "evidence.arbitrate": EvidenceArbitrationExecutor(),
             "memory.governance": MemoryGovernanceExecutor(),
+            "trust.review": SupervisionTrustReviewExecutor(),
         }
         self._blackboard = blackboard or TaskBlackboardService()
         self._local_memory = local_memory or AgentLocalMemoryService()
@@ -90,6 +109,53 @@ class ManagerDispatcher:
                     },
                     source="manager.dispatcher",
                 )
+            # Fan out explicitly independent professional steps with private ManagerState and DB sessions.
+            group = [s for s in ready if s.parallel_group and s.parallel_group == ready[0].parallel_group]
+            if len(group) > 1:
+                from agent.router.capability_registry import CAPABILITIES
+                group = [s for s in group if not CAPABILITIES.get(s.capability) or CAPABILITIES[s.capability].allow_parallel]
+            if len(group) > 1:
+                baseline_tool_calls, baseline_llm_calls = state.used_tool_calls, state.used_llm_calls
+                await self._blackboard.update_global_state(state.org_id,state.workflow_run_id,{"active_step_ids":[s.step_id for s in group]})
+                async def execute_branch(step):
+                    branch = state.model_copy(update={"tool_invoker": None, "available_tools": []}).model_copy(deep=True)
+                    branch.tool_invoker = None
+                    branch.current_step_id = None
+                    branch.current_owner_agent = None
+                    branch.available_tools = []
+                    isolated_step = step.model_copy(update={"dependencies": [], "depends_on": [], "parallel_group": None})
+                    isolated_plan = plan.model_copy(update={"steps": [isolated_step]})
+                    if db_session is not None:
+                        from infra.database.session import get_session
+                        async with get_session() as private_session:
+                            output = await self.dispatch(isolated_plan, branch, request, db_session=private_session)
+                            await private_session.commit()
+                    else:
+                        output = await self.dispatch(isolated_plan, branch, request, db_session=None)
+                    return step, branch, output
+
+                results = await asyncio.gather(*(execute_branch(s) for s in group), return_exceptions=True)
+                failure = None
+                for result in results:
+                    if isinstance(result, BaseException):
+                        failure = result
+                        continue
+                    step, branch, (branch_observations, branch_artifacts) = result
+                    observations.extend(branch_observations)
+                    artifacts.extend(branch_artifacts)
+                    state.observations.extend(branch_observations)
+                    state.artifacts.extend(branch_artifacts)
+                    state.used_tool_calls += max(0, branch.used_tool_calls - baseline_tool_calls)
+                    state.used_llm_calls += max(0, branch.used_llm_calls - baseline_llm_calls)
+                    state.used_plan_steps += 1
+                    state.executed_step_hashes.update(branch.executed_step_hashes)
+                    completed.add(step.step_id)
+                    remaining.remove(step)
+                await self._blackboard.update_global_state(state.org_id, state.workflow_run_id,
+                    {"completed_steps": sorted(completed), "current_step_id": None, "current_agent": None,"active_step_ids":[]})
+                if failure:
+                    raise failure
+                continue
             for step in ready:
                 step_hash = self._step_hash(step)
                 if step_hash in state.executed_step_hashes:
@@ -124,7 +190,7 @@ class ManagerDispatcher:
 
                     raise make_agent_error(
                         "UNKNOWN_OWNER_AGENT",
-                        message=f"未知执行所有者：{owner}。可用业务 Agent 为 vision/lab_detection/quality_analysis/file。",
+                        message=f"未知执行所有者：{owner}。该 Agent 尚未注册到统一调度器。",
                         detail={"owner_agent": owner},
                         source="manager.dispatcher",
                     )
@@ -171,10 +237,12 @@ class ManagerDispatcher:
                         db_session=db_session,
                     )
                 except AgentRuntimeError:
+                    state.executed_step_hashes.discard(step_hash)
                     await self._mark_step_failed(state, step)
                     # Re-raise AgentRuntimeError so ManagerLoop can catch and convert to output
                     raise
                 except Exception as exc:
+                    state.executed_step_hashes.discard(step_hash)
                     await self._mark_step_failed(state, step)
                     from agent.router.errors import make_agent_error
 

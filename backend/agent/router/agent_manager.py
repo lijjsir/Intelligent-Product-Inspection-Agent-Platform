@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import logging
-from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
 from agent.router.contracts import AgentRouterOutput

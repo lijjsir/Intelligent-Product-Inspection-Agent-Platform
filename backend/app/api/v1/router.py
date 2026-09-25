@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.v1 import supervision
 
 from app.api.v1 import (
     admin_meetings,
@@ -46,6 +47,7 @@ from app.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(supervision.router, tags=["quality-supervision"])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(roles.router, prefix="/roles", tags=["roles"])
 router.include_router(organizations.router, prefix="/organizations", tags=["organizations"])

@@ -119,6 +119,19 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
 ]
 
 
+for _key, _name, _entry in (
+    ("market_monitoring", "市场监控 Agent", "MarketMonitoringAgent"),
+    ("public_opinion_monitoring", "舆情监测 Agent", "PublicOpinionMonitoringAgent"),
+    ("supervision_sampling", "监督抽查 Agent", "SupervisionSamplingAgent"),
+    ("laboratory_testing", "实验室检测 Agent", "LaboratoryTestingAgent"),
+):
+    REGISTERED_SUBGRAPHS.append({"name": _name, "description": "质监业务按需执行，产出版本化业务结果。",
+        "workflow_binding": f"{_key}_v1", "subgraph_key": _key, "entry_graph": _entry,
+        "supports_start_stop": False, "graph_version": "v1", "is_active": True,
+        "lifecycle_status": "active", "group_key": "core", "route_enabled": True,
+        "supports_route_toggle": False, "type": "agent", "customer_visible_description": _name})
+
+
 ROOT_NODES: list[dict[str, Any]] = [
     {"id": "request_intake", "label": "Request Intake", "kind": "orchestrator"},
     {"id": "global_plan", "label": "Global Plan", "kind": "orchestrator"},

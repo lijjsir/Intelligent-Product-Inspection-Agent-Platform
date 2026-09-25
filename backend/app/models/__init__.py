@@ -1,4 +1,19 @@
 from app.models.base import Base
+from app.models.supervision import (
+    BusinessReview,
+    DeviceCommand,
+    DeviceConnection,
+    InspectionDecision,
+    InspectionEvidenceState,
+    InspectionGoal,
+    MeasurementBatch,
+    MeasurementRecord,
+    SupervisionDependency,
+    SupervisionEvent,
+    SupervisionRecord,
+    SupervisionRevision,
+    SupervisionRun,
+)
 from app.models.organization import Organization
 from app.models.user import User
 from app.models.task import InspectionTask
@@ -89,6 +104,19 @@ __all__ = [
     "InspectionTask",
     "TaskExecutionEvent",
     "InspectionResult",
+    "SupervisionRecord",
+    "SupervisionRevision",
+    "DeviceConnection",
+    "MeasurementBatch",
+    "MeasurementRecord",
+    "SupervisionRun",
+    "BusinessReview",
+    "SupervisionDependency",
+    "InspectionGoal",
+    "InspectionEvidenceState",
+    "InspectionDecision",
+    "DeviceCommand",
+    "SupervisionEvent",
     "StabilityReport",
     "AlertEvent",
     "AlertRule",
@@ -124,6 +152,7 @@ __all__ = [
     "InspectionResultEvidence",
     "AgentDefinition",
     "AgentArtifactRecord",
+    "AgentRouteLog",
     "PromptVersion",
     "IntentRoute",
     "AgentRuntimeInstance",

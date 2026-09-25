@@ -4,6 +4,17 @@ from agent.router.contracts import Capability
 
 
 SURFACE_MODE_POLICY = {
+    "supervision": {
+        "allowed_modes": ["report", "action"],
+        "forbidden_modes": [],
+        "allowed_agents": [
+            "orchestrator",
+            "market_monitoring",
+            "public_opinion_monitoring",
+            "supervision_sampling",
+            "laboratory_testing",
+        ],
+    },
     "chat": {
         "allowed_modes": ["answer", "report"],
         "forbidden_modes": ["action"],
@@ -149,6 +160,41 @@ CAPABILITIES: dict[str, Capability] = {
         description="记忆候选、污染传播和回滚治理 —— 仅限后台与管理页面。",
     ),
 }
+
+
+for _key, _owner, _description in (
+    (
+        "risk_case.assess",
+        "public_opinion_monitoring",
+        "将投诉、舆情、图片与附件整理为证据约束的风险案件评估",
+    ),
+    (
+        "risk_situation.analyze",
+        "market_monitoring",
+        "基于冻结案件版本分析时间、区域、企业、产品和覆盖态势",
+    ),
+    (
+        "sampling_plan.optimize",
+        "supervision_sampling",
+        "受预算、人员、设备和类别约束的监督抽查方案",
+    ),
+    (
+        "inspection_process.assess",
+        "laboratory_testing",
+        "实验室样品、设备、测量、基线和补测协同",
+    ),
+    ("trust.review", "orchestrator", "结论、证据支持关系与业务门禁复核"),
+):
+    CAPABILITIES[_key] = Capability(
+        key=_key,
+        owner_agents=[_owner],
+        handler=_key,
+        operation=_key.rsplit(".", 1)[-1],
+        mode="report",
+        surfaces=["supervision"],
+        cost_level="medium",
+        description=_description,
+    )
 
 
 def surface_policy(surface: str) -> dict:
