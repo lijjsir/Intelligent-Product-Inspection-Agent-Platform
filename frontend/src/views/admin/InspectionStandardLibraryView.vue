@@ -766,9 +766,14 @@ onMounted(loadAll);
             </el-form-item>
             <el-form-item label="标准级别">
               <el-select v-model="docForm.standard_level">
-                <el-option label="GB" value="GB" />
-                <el-option label="GB/T" value="GB/T" />
-                <el-option label="GB/Z" value="GB/Z" />
+                <el-option label="国家强制性标准（GB）" value="GB" />
+                <el-option label="国家推荐性标准（GB/T）" value="GB/T" />
+                <el-option label="国家标准化指导性技术文件（GB/Z）" value="GB/Z" />
+                <el-option label="行业标准" value="行业标准" />
+                <el-option label="地方标准" value="地方标准" />
+                <el-option label="团体标准" value="团体标准" />
+                <el-option label="企业标准" value="企业标准" />
+                <el-option label="待核实" value="待核实" />
               </el-select>
             </el-form-item>
             <el-form-item label="标准状态">

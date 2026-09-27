@@ -207,7 +207,7 @@ class InspectionStandardLibraryService:
                     "product_category": meta.get("product_category") or item.product_category,
                     "standard_no": meta.get("standard_no") or file_name.replace(".pdf", ""),
                     "standard_name": meta.get("standard_name") or file_name.replace(".pdf", ""),
-                    "standard_level": meta.get("standard_level") or "GB/T",
+                    "standard_level": meta.get("standard_level") or "待核实",
                     "standard_status": meta.get("standard_status") or item.standard_status or "现行",
                     "file_name": file_name,
                     "file_path": object_key,

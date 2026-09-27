@@ -74,6 +74,7 @@ async function saveManual() {
   await load();
 }
 const rows = ref<SupervisionRecord[]>([]),
+  similarRecords = ref<SupervisionRecord[]>([]),
   selected = ref<SupervisionRecord | null>(null),
   run = ref<SupervisionRun | null>(null);
 const page = ref(1),
@@ -218,8 +219,18 @@ function openCreate() {
   editing.value = false;
   name.value = "";
   code.value = "";
+  similarRecords.value = [];
   form.value = structuredClone(defaults[kind.value]);
   dialog.value = true;
+}
+async function checkSimilarNames() {
+  const query = name.value.trim();
+  if (editing.value || query.length < 2) {
+    similarRecords.value = [];
+    return;
+  }
+  const result = await supervisionApi.list(kind.value, { keyword: query, size: 10 });
+  if (name.value.trim() === query) similarRecords.value = result.data.data.items;
 }
 function openEdit() {
   if (!selected.value) return;
@@ -230,8 +241,8 @@ function openEdit() {
   dialog.value = true;
 }
 async function save() {
-  if (!code.value.trim() || !name.value.trim()) {
-    ElMessage.warning("请填写编号和名称");
+  if (!name.value.trim()) {
+    ElMessage.warning("请填写名称");
     return;
   }
   saving.value = true;
@@ -248,7 +259,6 @@ async function save() {
           });
     else
       result = await supervisionApi.create(kind.value, {
-        code: code.value,
         name: name.value,
         data,
       });
@@ -378,7 +388,7 @@ onUnmounted(() => {
           >文件导入</el-button
         >
         <el-button v-if="enabled && canCreate" type="primary" @click="openCreate"
-          >新增{{ title }}</el-button
+          >{{ kind === 'risk-cases' ? '登记投诉或舆情线索' : `新增${title}` }}</el-button
         >
       </template>
     </SupervisionModuleHeader>
@@ -393,8 +403,10 @@ onUnmounted(() => {
           @click="importDialog = true"
           >文件导入</el-button
         ><el-button v-if="enabled && canCreate" type="primary" @click="openCreate"
-          >新增{{
-            title === "地区字典" ? "地区" : title === "设备资源" ? "设备" : title
+          >{{
+            kind === "risk-cases"
+              ? "登记投诉或舆情线索"
+              : `新增${title === "地区字典" ? "地区" : title === "设备资源" ? "设备" : title}`
           }}</el-button
         >
       </div>
@@ -628,22 +640,34 @@ onUnmounted(() => {
     </template>
     <el-dialog
       v-model="dialog"
-      :title="(editing ? '编辑' : '新增') + title"
+      :title="kind === 'risk-cases' ? (editing ? '编辑风险线索' : '登记投诉或舆情线索') : (editing ? '编辑' : '新增') + title"
       width="min(860px, 94vw)"
+      top="3vh"
+      class="supervision-record-dialog"
       :close-on-click-modal="false"
       ><el-form label-position="top"
         ><div class="identity-fields">
-          <el-form-item label="编号" required
-            ><el-input v-model="code" :disabled="editing" /></el-form-item
-          ><el-form-item label="名称" required><el-input v-model="name" /></el-form-item>
+          <el-form-item v-if="editing" label="系统编号"
+            ><el-input v-model="code" disabled /></el-form-item
+          ><el-form-item label="名称" required><el-input v-model="name" @blur="checkSimilarNames" /></el-form-item>
         </div>
+        <p v-if="!editing" class="form-hint">系统保存后自动生成编号；请先按名称或已有记录检查是否重复。</p>
+        <el-alert v-if="similarRecords.length && !editing" type="warning" :closable="false" class="similar-records">
+          <template #title>找到名称相近的已有记录</template>
+          <div v-for="item in similarRecords" :key="item.id">
+            <el-button link @click="dialog = false; select(item)">{{ item.name }} · {{ item.code }}</el-button>
+          </div>
+        </el-alert>
+        <p v-if="inputSpecs.some((f) => f.options === 'regions') && !options.regions?.length" class="form-hint">
+          地区字典暂无选项。<router-link v-if="auth.role === 'admin'" to="/governance/admin/regions" @click="dialog = false">先登记地区</router-link><span v-else>请联系管理员登记地区。</span>
+        </p>
         <SupervisionFields v-model="form" :specs="inputSpecs" :options="options" /></el-form
       ><template #footer
         ><el-button @click="dialog = false">取消</el-button
         ><el-button type="primary" :loading="saving" @click="save">保存</el-button></template
       ></el-dialog
     >
-    <el-dialog v-model="manualDialog" title="人工舆情风险研判" width="min(560px,94vw)"
+    <el-dialog v-model="manualDialog" title="人工舆情风险研判" width="min(560px,94vw)" top="3vh"
       ><el-form label-position="top"
         ><el-form-item label="风险等级"
           ><el-select v-model="manualLevel"
@@ -781,6 +805,16 @@ h3 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
+}
+.form-hint {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.form-hint a {
+  color: var(--el-color-primary);
+  text-decoration: underline;
 }
 .evidence-block {
   padding: 12px 14px;

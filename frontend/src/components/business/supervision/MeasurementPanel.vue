@@ -101,7 +101,6 @@ async function createSession() {
   try {
     session.value = (
       await supervisionApi.create("inspection-sessions", {
-        code: `检测-${props.taskId.slice(-6)}-${Date.now()}`,
         name: "检测会话",
         data: cleanFields(form.value, fields["inspection-sessions"]),
       })
@@ -119,8 +118,8 @@ async function registerSample() {
   }
   const created = (
     await supervisionApi.create("samples", {
-      code: sampleCode.value,
-      name: sampleCode.value,
+      code: sampleCode.value.trim() || undefined,
+      name: sampleCode.value.trim() || "实物样品",
       data: {
         task_id: props.taskId,
         product_sku_id: props.productSkuId,
@@ -316,7 +315,7 @@ onMounted(load);
           min-width="170" /><el-table-column prop="quality_flag" label="质量标记"
       /></el-table>
     </template>
-    <el-dialog v-model="dialog" title="配置检测批次" width="min(850px,94vw)"
+    <el-dialog v-model="dialog" title="配置检测批次" width="min(850px,94vw)" top="3vh"
       ><el-form label-position="top"
         ><SupervisionFields
           v-model="form"
@@ -327,9 +326,9 @@ onMounted(load);
         ><el-button type="primary" @click="createSession">开始检测</el-button></template
       ></el-dialog
     >
-    <el-dialog v-model="sampleDialog" title="登记实物样品" width="min(480px,94vw)"
+    <el-dialog v-model="sampleDialog" title="登记实物样品" width="min(480px,94vw)" top="3vh"
       ><el-form label-position="top"
-        ><el-form-item label="样品编号" required><el-input v-model="sampleCode" /></el-form-item
+        ><el-form-item label="实物标签或外部样品号（选填）"><el-input v-model="sampleCode" placeholder="留空时由系统生成编号" /></el-form-item
         ><el-form-item label="抽样地"
           ><el-select v-model="sampleRegion" clearable
             ><el-option
@@ -339,7 +338,7 @@ onMounted(load);
               :label="o.label" /></el-select></el-form-item></el-form
       ><template #footer
         ><el-button @click="sampleDialog = false">取消</el-button
-        ><el-button type="primary" :disabled="!sampleCode.trim()" @click="registerSample"
+        ><el-button type="primary" @click="registerSample"
           >登记</el-button
         ></template
       ></el-dialog
@@ -347,7 +346,7 @@ onMounted(load);
     <el-button v-if="canWrite && session?.status === 'signed'" @click="enrollmentDialog = true"
       >授权数据集样本</el-button
     >
-    <el-dialog v-model="enrollmentDialog" title="授权已签发版本到数据集" width="min(520px,94vw)"
+    <el-dialog v-model="enrollmentDialog" title="授权已签发版本到数据集" width="min(520px,94vw)" top="3vh"
       ><el-select v-model="enrollmentDataset" filterable placeholder="选择接收数据集"
         ><el-option
           v-for="d in options.datasets"

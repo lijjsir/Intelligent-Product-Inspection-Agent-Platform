@@ -378,19 +378,22 @@ class SupervisionService:
         if kind == "sampling-plans":
             self.require_role({"expert"})
         data = await self.validate_data(kind, payload.data)
+        record_id = str(uuid7())
+        code = payload.code or f"{kind.upper()}-{record_id[-12:].upper()}"
         existing = await self.db.scalar(
             select(SupervisionRecord.id).where(
                 SupervisionRecord.org_id == self.org_id,
                 SupervisionRecord.kind == kind,
-                SupervisionRecord.code == payload.code,
+                SupervisionRecord.code == code,
             )
         )
         if existing:
             raise ConflictError("此编号已有记录")
         record = SupervisionRecord(
+            id=record_id,
             org_id=self.org_id,
             kind=kind,
-            code=payload.code,
+            code=code,
             name=payload.name,
             created_by=self.actor,
             assigned_to=data.get("assigned_to"),

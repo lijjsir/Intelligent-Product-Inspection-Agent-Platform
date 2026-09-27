@@ -41,6 +41,8 @@ function add(f: FieldSpec) {
   const row: Record<string, any> = {};
   for (const field of f.fields || [])
     if (field.type === "array" || field.multiple) row[field.key] = [];
+  if (f.key === "evidence")
+    row.evidence_id = `EV-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
   set(f.key, [...(props.modelValue[f.key] || []), row]);
 }
 </script>
@@ -85,6 +87,7 @@ function add(f: FieldSpec) {
           :disabled="isDisabled(f)"
           filterable
           clearable
+          :no-data-text="f.options === 'regions' ? '暂无地区，请管理员先维护地区字典' : '暂无可选记录'"
           :placeholder="isDisabled(f) ? dependencyLabel(f) : '请选择'"
           @update:model-value="set(f.key, $event)"
         >
@@ -132,6 +135,7 @@ function add(f: FieldSpec) {
         <el-input
           v-else
           :model-value="modelValue[f.key]"
+          :readonly="f.readonly"
           :type="f.type === 'textarea' ? 'textarea' : 'text'"
           :rows="3"
           @update:model-value="set(f.key, $event)"

@@ -259,7 +259,6 @@ onUnmounted(() => {
 
 <template>
   <div class="agent-manage-page">
-    <SupervisionAgentConfig />
     <section class="page-head">
       <div>
         <h1>{{ pageTitle }}</h1>
@@ -267,6 +266,7 @@ onUnmounted(() => {
       </div>
       <el-button :icon="RefreshRight" @click="refreshAll">刷新数据</el-button>
     </section>
+    <SupervisionAgentConfig />
 
     <el-tabs v-model="activeTab" class="agent-tabs">
       <el-tab-pane label="定义" name="definitions">
@@ -295,8 +295,8 @@ onUnmounted(() => {
           <template #header>
             <div class="panel-head">
               <div>
-                <div class="panel-title">Agent 列表</div>
-                <div class="panel-note">已废弃的 Agent 已从列表移除，保留当前仍有运营意义的定义数据。</div>
+                <div class="panel-title">平台 Agent 列表</div>
+                <div class="panel-note">这里列出平台已注册的 Agent 定义和运行态，范围不限于上方四类质监业务 Agent。</div>
               </div>
               <el-tag type="info" size="small">系统自动注册</el-tag>
             </div>

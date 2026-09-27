@@ -211,6 +211,20 @@ async def create(svc, kind, code, data):
     return await svc.create(kind, RecordCreate(code=code, name=code, data=data))
 
 
+@pytest.mark.asyncio
+async def test_supervision_record_code_is_generated_when_not_provided(domain):
+    db, service, _ = domain
+    first = await service("admin").create(
+        "regions", RecordCreate(name="重庆市", data={"dictionary_version": "2026"})
+    )
+    second = await service("admin").create(
+        "regions", RecordCreate(name="渝中区", data={"dictionary_version": "2026"})
+    )
+    assert first["code"].startswith("REGIONS-")
+    assert first["code"] != second["code"]
+    assert (await db.get(SupervisionRecord, first["id"])).code == first["code"]
+
+
 async def session_setup(domain):
     db, svc, ids = domain
     device = await create(

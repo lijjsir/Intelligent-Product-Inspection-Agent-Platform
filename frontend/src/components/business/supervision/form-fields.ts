@@ -8,6 +8,7 @@ export interface FieldSpec {
   multiple?: boolean;
   dependsOn?: string;
   fields?: FieldSpec[];
+  readonly?: boolean;
 }
 export interface FieldOption {
   value: string;
@@ -67,7 +68,6 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
     ref("role", "企业角色", "enterpriseRoles", true),
     { key: "address", label: "地址" },
     ref("region_id", "所在地区", "regions"),
-    ref("product_sku_ids", "关联产品", "products", false, true),
   ],
   devices: [
     { key: "device_type", label: "设备类型", required: true },
@@ -82,7 +82,7 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
     { key: "baseline_version", label: "基线版本" },
   ],
   "risk-cases": [
-    ref("product_sku_id", "产品", "products"),
+    ref("product_sku_id", "产品型号 / SKU", "products"),
     ref("batch_id", "批次", "batches", false, false, "product_sku_id"),
     ref("enterprise_id", "被监管企业", "enterprises"),
     { key: "product_category", label: "产品类别" },
@@ -99,12 +99,12 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
       label: "来源证据",
       type: "array",
       fields: [
-        { key: "evidence_id", label: "证据编号", required: true },
+        { key: "evidence_id", label: "证据编号（自动生成）", required: true, readonly: true },
         ref("source_type", "来源类型", "sources", true),
-        { key: "source_id", label: "来源记录编号", required: true },
+        { key: "source_id", label: "来源记录编号或链接", required: true },
         { key: "occurred_at", label: "发生时间", type: "date", required: true },
         { key: "text", label: "证据内容", type: "textarea", required: true },
-        { key: "attachment_url", label: "原始附件地址" },
+        { key: "attachment_url", label: "原始附件链接" },
         ref("nature", "证据性质", "natures", true),
       ],
     },
@@ -158,7 +158,7 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
   ],
   samples: [
     ref("task_id", "检测任务", "tasks", true),
-    ref("product_sku_id", "产品", "products", true),
+    ref("product_sku_id", "产品型号 / SKU", "products", true),
     ref("batch_id", "批次", "batches", true, false, "product_sku_id"),
     { key: "sampled_at", label: "抽样时间", type: "date", required: true },
     ref("sampling_region_id", "抽样地", "regions"),

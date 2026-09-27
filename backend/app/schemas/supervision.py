@@ -359,7 +359,7 @@ DATA_SCHEMAS = {
 
 
 class RecordCreate(Strict):
-    code: str = Field(min_length=1, max_length=128)
+    code: str | None = Field(default=None, min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=255)
     data: dict = Field(default_factory=dict)
 

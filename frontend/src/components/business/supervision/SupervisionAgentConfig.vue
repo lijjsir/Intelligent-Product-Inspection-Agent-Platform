@@ -27,22 +27,16 @@ onMounted(load);
 <template>
   <el-collapse class="supervision-config"
     ><el-collapse-item title="四类质监 Agent 的运行设置"
+      ><p class="config-note">组织启用质监业务后，此处可分别暂停某一类 Agent 接收新的分析请求。已登记的设备和业务记录不受影响；执行次数包含首次运行与失败重试。</p
       ><el-table :data="rows"
         ><el-table-column label="业务角色"
           ><template #default="{ row }">{{ labels[row.id] }}</template></el-table-column
-        ><el-table-column label="受理新分析" width="150"
+        ><el-table-column label="接收新的分析请求" width="170"
           ><template #default="{ row }"
             ><el-switch
               v-model="row.enabled"
               :disabled="auth.role === 'platform_operator'" /></template></el-table-column
-        ><el-table-column label="超时（秒）" width="180"
-          ><template #default="{ row }"
-            ><el-input-number
-              v-model="row.timeout_seconds"
-              :min="30"
-              :max="600"
-              :disabled="auth.role === 'platform_operator'" /></template></el-table-column
-        ><el-table-column label="最多轮次" width="160"
+        ><el-table-column label="最多执行次数（含重试）" width="210"
           ><template #default="{ row }"
             ><el-input-number
               v-model="row.max_rounds"
@@ -63,5 +57,11 @@ onMounted(load);
 }
 .el-button {
   margin-top: 12px;
+}
+.config-note {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.6;
 }
 </style>

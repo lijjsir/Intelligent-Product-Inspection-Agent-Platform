@@ -75,7 +75,7 @@
 
 ## 数据字典与来源
 
-新业务档案采用 `supervision_records` 保存，按 `org_id + kind + code` 唯一，具体 `data` 使用严格 Pydantic 模型验证。`supervision_revisions` 保存每次输入/分析版本，`supervision_runs` 保存冻结输入与输出，`business_reviews` 保存针对具体版本的复核与确认；另有连接凭据、接收批次、测量和依赖表。
+新业务档案采用 `supervision_records` 保存，按 `org_id + kind + code` 唯一；页面新增档案时由服务端生成编号，外部导入可保留来源编号，具体 `data` 使用严格 Pydantic 模型验证。`supervision_revisions` 保存每次输入/分析版本，`supervision_runs` 保存冻结输入与输出，`business_reviews` 保存针对具体版本的复核与确认；另有连接凭据、接收批次、测量和依赖表。
 
 | 类型 | 必要信息 |
 |---|---|

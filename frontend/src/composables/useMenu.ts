@@ -85,6 +85,7 @@ function getAdminMenu(): MenuStructure {
       title: "质监基础",
       icon: "Files",
       items: [
+        { title: "地区字典", path: "/governance/admin/regions" },
         { title: "监管对象", path: "/governance/admin/enterprises" },
         { title: "产品与批次", path: "/governance/admin/product-master" },
         { title: "设备资源", path: "/governance/admin/devices" },

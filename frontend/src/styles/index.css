@@ -68,6 +68,17 @@
     text-decoration: none;
   }
 
+  .supervision-record-dialog {
+    display: flex;
+    max-height: 94dvh;
+    flex-direction: column;
+  }
+
+  .supervision-record-dialog .el-dialog__body {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   /* Scrollbar */
   ::-webkit-scrollbar {
     width: 4px;

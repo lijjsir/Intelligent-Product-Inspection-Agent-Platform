@@ -238,7 +238,7 @@ watch(() => props.session.id, load, { immediate: true });
       </div>
     </template>
 
-    <el-dialog v-model="dialog" title="建立设备闭环目标" width="min(620px, 94vw)">
+    <el-dialog v-model="dialog" title="建立设备闭环目标" width="min(620px, 94vw)" top="3vh">
       <el-form label-position="top">
         <el-form-item label="待确认或排除的风险假设">
           <el-input

@@ -101,6 +101,7 @@ function template() {
     :model-value="modelValue"
     :title="kind === 'regions' ? '导入地区字典' : '导入风险线索'"
     width="min(850px,94vw)"
+    top="3vh"
     @update:model-value="emit('update:modelValue', $event)"
     ><div class="actions">
       <el-upload :auto-upload="false" :limit="1" accept=".csv,.xlsx" :on-change="changed"
