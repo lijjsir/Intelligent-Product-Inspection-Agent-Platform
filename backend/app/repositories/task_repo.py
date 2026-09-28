@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from sqlalchemy import func, select, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
@@ -88,6 +86,8 @@ class TaskRepository:
                     InspectionTask.product_sku_id,
                     InspectionTask.batch_id,
                     InspectionTask.inspection_standard_id,
+                    InspectionTask.product_category_id,
+                    InspectionTask.quality_product_id,
                     InspectionTask.status,
                     InspectionTask.priority,
                     InspectionTask.meta_data,
