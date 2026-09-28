@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { CircleCheck, DataAnalysis, Plus, RefreshRight } from "@element-plus/icons-vue";
 import { qualityRiskApi } from "@/api/quality-risk.api";
@@ -8,6 +8,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { RECORD_TYPE_LABELS, type QualityRecordType, type QualitySourceRecord, type RiskAssessmentV4, type RiskCaseV4 } from "@/types/quality-risk.types";
 
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 const rows = ref<RiskCaseV4[]>([]);
 const sourceRecords = ref<QualitySourceRecord[]>([]);
@@ -40,7 +41,12 @@ async function load() {
     const response = await qualityRiskApi.riskCases({ page: page.value, size: 20, keyword: keyword.value || undefined, status: status.value || undefined });
     rows.value = response.data.data.items;
     total.value = response.data.data.total;
-    if (selected.value) selected.value = rows.value.find((item) => item.id === selected.value?.id) || selected.value;
+    const requestedCaseId = String(route.query.case_id || "");
+    if (requestedCaseId) {
+      selected.value = rows.value.find((item) => item.id === requestedCaseId) || selected.value;
+    } else if (selected.value) {
+      selected.value = rows.value.find((item) => item.id === selected.value?.id) || selected.value;
+    }
   } finally {
     listLoading.value = false;
   }
@@ -120,7 +126,6 @@ onMounted(load);
 <template>
   <main class="risk-page">
     <header class="risk-hero">
-      <div class="hero-number">R</div>
       <div class="hero-copy">
         <p>SHARED RISK ASSESSMENT</p>
         <h1>风险研判</h1>
@@ -185,5 +190,5 @@ onMounted(load);
 </template>
 
 <style scoped>
-.risk-page{max-width:1520px;margin:0 auto;padding:18px 20px 44px;color:#172b3a}.risk-hero{display:grid;grid-template-columns:82px minmax(0,1fr) auto;align-items:center;gap:26px;padding:28px 32px;border:1px solid #add9d5;border-radius:18px;background:linear-gradient(125deg,#e9f8f6,#fbfdfd 65%,#fff7e9)}.hero-number{display:grid;width:74px;height:74px;place-items:center;border-radius:18px;background:#087f8c;color:#fff;font:700 34px Georgia,serif}.hero-copy p,.case-list header p{margin:0 0 7px;color:#087f8c;font:700 11px ui-monospace,monospace;letter-spacing:.13em}.hero-copy h1{margin:0;font-size:42px;letter-spacing:-.04em}.hero-copy span{display:block;margin-top:9px;color:#52697a;line-height:1.6}.hero-actions{display:flex;gap:8px}.principles{display:grid;grid-template-columns:repeat(4,1fr);margin:18px 0;border:1px solid #dae6e5;border-radius:14px;background:#fff;overflow:hidden}.principles div{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;padding:18px 20px;border-right:1px solid #e6eeee}.principles div:last-child{border-right:0}.principles b{grid-row:1/3;color:#c16a12;font:700 12px ui-monospace,monospace}.principles strong{font-size:14px}.principles span{color:#718391;font-size:12px}.risk-layout{display:grid;gap:18px}.risk-layout.detailed{grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr)}.case-list,.case-detail{border:1px solid #dbe5ea;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(29,62,82,.06)}.case-list{padding:20px}.case-list>header,.detail-head{display:flex;align-items:center;justify-content:space-between}.case-list h2,.detail-head h2{margin:0;font-size:22px}.filters{display:grid;grid-template-columns:1fr 190px;gap:10px;margin:16px 0}.el-pagination{margin-top:18px}.case-detail{padding:22px;border-top:4px solid #087f8c}.detail-head small{color:#758a99;font:700 11px ui-monospace,monospace}.scope-card{display:grid;gap:5px;margin:18px 0;padding:16px;border-radius:12px;background:#eef8f7}.scope-card span,.scope-card small{color:#627b7c;font-size:12px}.scope-card strong{font-size:18px}.action-row{margin-bottom:16px}.assessment-card{padding:18px;border:1px solid #dfE9e8;border-radius:12px}.assessment-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.assessment-title span{font-weight:700}.assessment-card dl{display:grid;grid-template-columns:90px 1fr;gap:10px;margin:0}.assessment-card dt{color:#718391}.assessment-card dd{margin:0}.assessment-card h3{margin:16px 0 5px;font-size:13px}.assessment-card p{margin:0;line-height:1.6}.expert-confirm{display:grid;grid-template-columns:1fr 130px;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid #e3eceb}.expert-confirm h3{grid-column:1/-1;margin:0}.review-actions{display:flex;gap:8px;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.el-select{width:100%}@media(max-width:1000px){.risk-layout.detailed{grid-template-columns:1fr}.principles{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.risk-page{padding:12px}.risk-hero{grid-template-columns:56px 1fr;padding:20px 16px}.risk-hero>.hero-actions{grid-column:1/-1}.hero-number{width:52px;height:52px;font-size:24px}.hero-copy h1{font-size:30px}.principles{grid-template-columns:1fr}.principles div{border-right:0;border-bottom:1px solid #e6eeee}.filters,.form-grid,.expert-confirm{grid-template-columns:1fr}}
+.risk-page{max-width:1520px;margin:0 auto;padding:18px 20px 44px;color:#172b3a}.risk-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:26px;padding:28px 32px;border:1px solid #add9d5;border-radius:18px;background:linear-gradient(125deg,#e9f8f6,#fbfdfd 65%,#fff7e9)}.hero-copy p,.case-list header p{margin:0 0 7px;color:#087f8c;font:700 11px ui-monospace,monospace;letter-spacing:.13em}.hero-copy h1{margin:0;font-size:42px;letter-spacing:-.04em}.hero-copy span{display:block;margin-top:9px;color:#52697a;line-height:1.6}.hero-actions{display:flex;gap:8px}.principles{display:grid;grid-template-columns:repeat(4,1fr);margin:18px 0;border:1px solid #dae6e5;border-radius:14px;background:#fff;overflow:hidden}.principles div{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;padding:18px 20px;border-right:1px solid #e6eeee}.principles div:last-child{border-right:0}.principles b{grid-row:1/3;color:#c16a12;font:700 12px ui-monospace,monospace}.principles strong{font-size:14px}.principles span{color:#718391;font-size:12px}.risk-layout{display:grid;gap:18px}.risk-layout.detailed{grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr)}.case-list,.case-detail{border:1px solid #dbe5ea;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(29,62,82,.06)}.case-list{padding:20px}.case-list>header,.detail-head{display:flex;align-items:center;justify-content:space-between}.case-list h2,.detail-head h2{margin:0;font-size:22px}.filters{display:grid;grid-template-columns:1fr 190px;gap:10px;margin:16px 0}.el-pagination{margin-top:18px}.case-detail{padding:22px;border-top:4px solid #087f8c}.detail-head small{color:#758a99;font:700 11px ui-monospace,monospace}.scope-card{display:grid;gap:5px;margin:18px 0;padding:16px;border-radius:12px;background:#eef8f7}.scope-card span,.scope-card small{color:#627b7c;font-size:12px}.scope-card strong{font-size:18px}.action-row{margin-bottom:16px}.assessment-card{padding:18px;border:1px solid #dfE9e8;border-radius:12px}.assessment-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.assessment-title span{font-weight:700}.assessment-card dl{display:grid;grid-template-columns:90px 1fr;gap:10px;margin:0}.assessment-card dt{color:#718391}.assessment-card dd{margin:0}.assessment-card h3{margin:16px 0 5px;font-size:13px}.assessment-card p{margin:0;line-height:1.6}.expert-confirm{display:grid;grid-template-columns:1fr 130px;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid #e3eceb}.expert-confirm h3{grid-column:1/-1;margin:0}.review-actions{display:flex;gap:8px;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.el-select{width:100%}@media(max-width:1000px){.risk-layout.detailed{grid-template-columns:1fr}.principles{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.risk-page{padding:12px}.risk-hero{grid-template-columns:1fr;padding:20px 16px}.risk-hero>.hero-actions{grid-column:1}.hero-copy h1{font-size:30px}.principles{grid-template-columns:1fr}.principles div{border-right:0;border-bottom:1px solid #e6eeee}.filters,.form-grid,.expert-confirm{grid-template-columns:1fr}}
 </style>

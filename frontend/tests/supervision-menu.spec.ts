@@ -9,6 +9,8 @@ import { useAuthStore } from "@/stores/auth.store";
 describe("supervision role boundaries and business form submission", () => {
   it("keeps risk cases away from technical roles and exposes granted-sample intake to engineers", () => {
     const cases = appRoutes.find((r) => r.name === "app-risk-cases");
+    expect(cases?.redirect).toBeUndefined();
+    expect(cases?.component).toBeTypeOf("function");
     expect(cases?.meta.roles).toContain("user");
     expect(cases?.meta.roles).toContain("expert");
     expect(cases?.meta.roles).not.toContain("algorithm_engineer");

@@ -95,7 +95,7 @@ export const appRoutes = [
   {
     path: "risk-cases",
     name: "app-risk-cases",
-    redirect: { name: "app-quality-data", query: { record_type: "consumer_complaint" } },
+    component: () => import("@/views/quality-risk/PublicOpinionMonitoringView.vue"),
     meta: { title: "舆情监测", roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] },
   },
   {
