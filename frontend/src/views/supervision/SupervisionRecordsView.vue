@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useAuthStore } from "@/stores/auth.store";
 import { supervisionApi } from "@/api/supervision.api";
-import { productMasterApi } from "@/api/product-master.api";
+import { qualityRiskApi } from "@/api/quality-risk.api";
 import { taskApi } from "@/api/task.api";
 import { http } from "@/api/http";
 import { formatServerDateTime } from "@/utils/date-time";
@@ -177,8 +177,8 @@ async function loadOptions() {
     options.value.assignees = (await supervisionApi.assignees()).data.data;
   const allowed: SupervisionKind[] = ["regions", "devices"];
   if (["admin", "user", "expert", "platform_operator"].includes(auth.role))
-    allowed.push("enterprises", "risk-cases", "sampling-plans", "samples");
-  const keys: Record<string, string> = { "risk-cases": "cases", "sampling-plans": "plans" };
+    allowed.push("enterprises", "sampling-plans", "samples");
+  const keys: Record<string, string> = { "sampling-plans": "plans" };
   await Promise.allSettled(
     allowed.map(async (k) => {
       const result = await supervisionApi.list(k, { size: 200 });
@@ -188,17 +188,21 @@ async function loadOptions() {
     }),
   );
   if (["admin", "user", "expert", "platform_operator"].includes(auth.role)) {
-    const catalog = (await productMasterApi.catalog(true)).data.data;
-    options.value.products = catalog.product_skus
-      .filter((x) => x.is_active)
-      .map((x) => ({ value: x.id, label: `${x.code} · ${x.name}` }));
-    options.value.batches = catalog.product_batches
+    const riskCases = (await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" })).data.data.items;
+    options.value.cases = riskCases.map((item) => ({
+      value: item.id,
+      label: `${item.code} · ${item.title}`,
+    }));
+  }
+  if (["admin", "user", "expert", "platform_operator"].includes(auth.role)) {
+    const catalog = (await qualityRiskApi.productCatalog(true)).data.data;
+    options.value.products = catalog.products
       .filter((x) => x.is_active)
       .map((x) => ({
         value: x.id,
-        label: x.name && x.name !== x.batch_no ? `${x.batch_no} · ${x.name}` : x.batch_no,
-        product_sku_id: x.product_sku_id,
+        label: [x.category_name, x.brand, x.name, x.model].filter(Boolean).join(" · "),
       }));
+    options.value.batches = [];
     const standards = await http.get<any>("/v1/inspection-standards", {
       params: { size: 200 },
       suppressErrorToast: true,
@@ -383,7 +387,7 @@ onUnmounted(() => {
     >
       <template #actions>
         <el-button
-          v-if="enabled && canCreate && ['regions', 'risk-cases'].includes(kind)"
+          v-if="enabled && canCreate && kind === 'risk-cases'"
           @click="importDialog = true"
           >文件导入</el-button
         >
@@ -406,7 +410,7 @@ onUnmounted(() => {
           >{{
             kind === "risk-cases"
               ? "登记投诉或舆情线索"
-              : `新增${title === "地区字典" ? "地区" : title === "设备资源" ? "设备" : title}`
+              : `新增${title === "地区" ? "地点" : title === "设备资源" ? "设备" : title}`
           }}</el-button
         >
       </div>
@@ -659,7 +663,7 @@ onUnmounted(() => {
           </div>
         </el-alert>
         <p v-if="inputSpecs.some((f) => f.options === 'regions') && !options.regions?.length" class="form-hint">
-          地区字典暂无选项。<router-link v-if="auth.role === 'admin'" to="/governance/admin/regions" @click="dialog = false">先登记地区</router-link><span v-else>请联系管理员登记地区。</span>
+          暂无匹配地区，请使用内置地点选择或填写详细地址。
         </p>
         <SupervisionFields v-model="form" :specs="inputSpecs" :options="options" /></el-form
       ><template #footer

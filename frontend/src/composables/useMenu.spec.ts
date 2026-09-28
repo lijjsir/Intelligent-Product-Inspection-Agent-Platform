@@ -109,7 +109,7 @@ describe("useMenu", () => {
     expect(flattenPaths().slice(0, 3)).toEqual([
       "/app/chat",
       "/app/workbench",
-      "/app/quality-analytics",
+      "/app/quality-data",
     ]);
 
     for (const role of [
@@ -130,15 +130,17 @@ describe("useMenu", () => {
     for (const role of [ROLE_USER, ROLE_EXPERT]) {
       auth.role = role;
       auth.roles = [role];
-      expect(flattenTitles()).toContain("实验室检测");
-      expect(flattenTitles()).toContain("任务管理");
-      expect(flattenTitles()).toContain("检测结果");
+      expect(flattenTitles()).toContain("数据接入");
+      expect(flattenTitles()).toContain("风险研判");
+      expect(flattenTitles()).not.toContain("实验室检测");
+      expect(flattenTitles()).toContain("通用任务");
+      expect(flattenTitles()).toContain("通用结果");
 
       const { menu } = useMenu();
       const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
       expect(taskResult && "items" in taskResult ? taskResult.items : []).toEqual([
-        { title: "任务管理", path: "/app/tasks" },
-        { title: "检测结果", path: "/app/results" },
+        { title: "通用任务", path: "/app/tasks" },
+        { title: "通用结果", path: "/app/results" },
       ]);
     }
   });
@@ -173,7 +175,7 @@ describe("useMenu", () => {
     expect(groupTitles).not.toContain("只读巡检");
     expect(titles).toContain("告警管理");
     expect(titles).toContain("Agent 查看");
-    expect(titles).toContain("自动判定规则");
+    expect(titles).toContain("标准执行规则");
     expect(titles).toContain("模型观测");
     expect(titles).not.toContain("数据质量");
     expect(titles).not.toContain("业务报表");
@@ -208,7 +210,7 @@ describe("useMenu", () => {
 
     expect(titles).toContain("告警规则");
     expect(titles).not.toContain("告警管理");
-    expect(paths).toContain("/governance/admin/product-master");
+    expect(paths).toContain("/governance/admin/quality-products");
     expect(paths).toContain("/governance/admin/alert-rules");
   });
 

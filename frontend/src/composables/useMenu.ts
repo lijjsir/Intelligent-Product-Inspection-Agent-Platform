@@ -85,17 +85,17 @@ function getAdminMenu(): MenuStructure {
       title: "质监基础",
       icon: "Files",
       items: [
-        { title: "地区字典", path: "/governance/admin/regions" },
         { title: "监管对象", path: "/governance/admin/enterprises" },
-        { title: "产品与批次", path: "/governance/admin/product-master" },
-        { title: "设备资源", path: "/governance/admin/devices" },
+        { title: "产品类别与产品", path: "/governance/admin/quality-products" },
+        { title: "数据来源", path: "/app/quality-data" },
       ],
     },
     {
       title: "标准与知识",
       items: [
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
-        { title: "自动判定规则", path: "/governance/admin/inspection-specs" },
+        { title: "标准执行规则", path: "/governance/admin/inspection-specs" },
+        { title: "风险分级政策", path: "/governance/admin/risk-policies" },
         { title: "记忆治理", path: "/governance/memory" },
       ],
     },
@@ -119,7 +119,6 @@ function getAppDeveloperMenu(): MenuStructure {
   return [
     ...getCollaborationMenuItems(),
     { title: "Agent 管理", path: "/ops/agents" },
-    { title: "设备连接", path: "/ops/devices" },
     { title: "路由策略", path: "/ops/agents/intent-routes" },
     { title: "Prompt 管理", path: "/ops/prompts" },
     { title: "RAG 分析", path: "/ops/rag" },
@@ -142,13 +141,12 @@ function getPlatformOperatorMenu(): MenuStructure {
     ...getCollaborationMenuItems(),
     { title: "平台运营工作台", path: "/ops/dashboard" },
     { title: "任务查看", path: "/ops/tasks" },
-    { title: "设备管理", path: "/ops/devices" },
     { title: "市场监控", path: "/app/quality-analytics" },
     { title: "分析中心", path: "/ops/analytics" },
     { title: "告警管理", path: "/ops/alerts" },
     { title: "模型观测", path: "/ops/calls" },
     { title: "Agent 查看", path: "/ops/agents" },
-    { title: "自动判定规则", path: "/ops/inspection-specs" },
+    { title: "标准执行规则", path: "/ops/inspection-specs" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
@@ -187,14 +185,11 @@ function getQualitySupervisionGroup(): MenuGroup {
     icon: "Operation",
     items: [
       { title: "质监工作台", path: "/app/workbench" },
+      { title: "数据接入", path: "/app/quality-data" },
       { title: "市场监控", path: "/app/quality-analytics" },
       { title: "舆情监测", path: "/app/risk-cases" },
+      { title: "风险研判", path: "/app/risk-assessments" },
       { title: "监督抽查", path: "/app/sampling-plans" },
-      {
-        title: "实验室检测",
-        path: "/app/laboratory",
-        activeMatchPaths: ["/app/inspection-sessions", "/app/samples"],
-      },
     ],
   };
 }
@@ -204,8 +199,8 @@ function getTaskResultGroup(): MenuGroup {
     title: "任务与结果",
     icon: "List",
     items: [
-      { title: "任务管理", path: "/app/tasks" },
-      { title: "检测结果", path: "/app/results" },
+      { title: "通用任务", path: "/app/tasks" },
+      { title: "通用结果", path: "/app/results" },
     ],
   };
 }

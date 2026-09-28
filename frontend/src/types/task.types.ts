@@ -28,6 +28,8 @@ export interface InspectionTask {
   product_sku_id?: string | null;
   batch_id?: string | null;
   inspection_standard_id?: string | null;
+  product_category_id?: string | null;
+  quality_product_id?: string | null;
   product_line_code?: string | null;
   product_line_name?: string | null;
   product_sku_code?: string | null;
@@ -51,9 +53,11 @@ export interface InspectionTask {
 
 export interface TaskCreate {
   input_mode?: "image" | "measurement" | "mixed";
-  product_sku_id: string;
-  batch_id: string;
-  inspection_standard_id: string;
+  product_category_id?: string | null;
+  quality_product_id?: string | null;
+  product_sku_id?: string | null;
+  batch_id?: string | null;
+  inspection_standard_id?: string | null;
   product_id?: string | null;
   spec_code?: string | null;
   image_urls: string[];

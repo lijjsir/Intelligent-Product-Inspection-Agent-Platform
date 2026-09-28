@@ -10,27 +10,19 @@ import {
 } from "element-plus";
 
 import { inspectionStandardApi } from "@/api/inspection-standard.api";
-import { productMasterApi } from "@/api/product-master.api";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { useTaskStore } from "@/stores/task.store";
-import {
-  formatBatchLabel,
-  formatCodeName,
-  formatTaskEntityLabel,
-} from "@/utils/master-data-labels";
-import type {
-  InspectionStandardLibraryItem,
-  ProductBatch,
-  ProductLine,
-  ProductSku,
-} from "@/types/governance.types";
+import { useQualityReferenceStore } from "@/stores/quality-reference.store";
+import { formatCodeName, formatTaskEntityLabel } from "@/utils/master-data-labels";
+import type { InspectionStandardLibraryItem } from "@/types/governance.types";
 import type { TaskStatus } from "@/types/task.types";
 import { formatServerDateTime } from "@/utils/date-time";
 
 const router = useRouter();
 const route = useRoute();
 const taskStore = useTaskStore();
+const qualityRefs = useQualityReferenceStore();
 const { hasRole } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
@@ -43,15 +35,11 @@ const deleteDialogVisible = ref(false);
 const pendingDeleteTaskId = ref("");
 const formRef = ref<FormInstance>();
 const uploadFiles = ref<UploadFile[]>([]);
-const productLines = ref<ProductLine[]>([]);
-const productSkus = ref<ProductSku[]>([]);
-const productBatches = ref<ProductBatch[]>([]);
 const inspectionStandards = ref<InspectionStandardLibraryItem[]>([]);
 const createForm = ref({
   input_mode: "image" as "image" | "measurement" | "mixed",
-  product_line_id: "",
-  product_sku_id: "",
-  batch_id: "",
+  product_category_id: "",
+  quality_product_id: "",
   inspection_standard_id: "",
   image_urls_input: "",
   priority: 5,
@@ -68,52 +56,18 @@ const pageDescription = computed(() =>
     : "统一管理图片、测量和混合检测任务；任务完成后形成可追溯的正式检测结果。",
 );
 
-const activeProductLines = computed(() => productLines.value.filter((item) => item.is_active));
-const activeProductSkus = computed(() => productSkus.value.filter((item) => item.is_active));
-const activeProductBatches = computed(() => productBatches.value.filter((item) => item.is_active));
-const activeDatasetBatches = computed(() =>
-  activeProductBatches.value.filter(
-    (item) =>
-      String(item.batch_no || "")
-        .trim()
-        .toUpperCase() === "UNSPECIFIED",
+const availableProducts = computed(() =>
+  qualityRefs.products.filter(
+    (item) => !createForm.value.product_category_id || item.category_id === createForm.value.product_category_id,
   ),
 );
-const availableSkus = computed(() =>
-  activeProductSkus.value.filter(
-    (item) => item.product_line_id === createForm.value.product_line_id,
-  ),
-);
-const availableBatches = computed(() =>
-  activeProductBatches.value.filter(
-    (item) => item.product_sku_id === createForm.value.product_sku_id,
-  ),
-);
-const selectedLine = computed(
-  () => productLines.value.find((item) => item.id === createForm.value.product_line_id) || null,
-);
-const selectedSku = computed(
-  () => productSkus.value.find((item) => item.id === createForm.value.product_sku_id) || null,
-);
-const selectedBatch = computed(
-  () => productBatches.value.find((item) => item.id === createForm.value.batch_id) || null,
-);
+const selectedCategory = computed(() => qualityRefs.categories.find((item) => item.id === createForm.value.product_category_id) || null);
+const selectedProduct = computed(() => qualityRefs.products.find((item) => item.id === createForm.value.quality_product_id) || null);
 const activeStandards = computed(() =>
-  inspectionStandards.value.filter(
-    (item) => item.is_active && Boolean(item.spec_code) && Boolean(item.has_quality_threshold),
-  ),
+  inspectionStandards.value.filter((item) => item.is_active),
 );
 const availableStandards = computed(() => {
-  const skuId = createForm.value.product_sku_id;
-  const lineId = createForm.value.product_line_id;
-  if (!skuId) return [];
-  return activeStandards.value.filter((item) => {
-    const skuIds = item.applicable_product_sku_ids || [];
-    const lineIds = item.applicable_product_line_ids || [];
-    if (skuIds.length > 0) return skuIds.includes(skuId);
-    if (lineIds.length > 0) return lineIds.includes(lineId);
-    return true;
-  });
+  return activeStandards.value;
 });
 const selectedTaskStandard = computed(
   () =>
@@ -127,9 +81,7 @@ const totalSelectedImageCount = computed(
 const requiredImageCount = computed(() => selectedTaskStandard.value?.required_image_count || 1);
 
 const rules: FormRules = {
-  product_line_id: [{ required: true, message: "请选择产品线", trigger: "change" }],
-  product_sku_id: [{ required: true, message: "请选择 SKU", trigger: "change" }],
-  batch_id: [{ required: true, message: "请选择批次", trigger: "change" }],
+  product_category_id: [{ required: true, message: "请选择产品类别", trigger: "change" }],
   inspection_standard_id: [{ required: true, message: "请选择检测标准", trigger: "change" }],
   image_urls_input: [
     {
@@ -207,17 +159,14 @@ async function fetchCreateOptions() {
   if (loadingCreateOptions.value) return;
   loadingCreateOptions.value = true;
   try {
-    const [{ data: catalog }, { data: standards }] = await Promise.all([
-      productMasterApi.catalog(false),
+    const [, { data: standards }] = await Promise.all([
+      qualityRefs.loadProducts(),
       inspectionStandardApi.list(),
     ]);
-    productLines.value = catalog.data.product_lines;
-    productSkus.value = catalog.data.product_skus;
-    productBatches.value = catalog.data.product_batches;
     inspectionStandards.value = standards.data.items;
   } catch (error) {
     console.error(error);
-    ElMessage.warning("产品、批次或检测标准加载失败，请稍后重试。");
+    ElMessage.warning("产品类别、具体产品或检测标准加载失败，请稍后重试。");
   } finally {
     loadingCreateOptions.value = false;
   }
@@ -245,30 +194,13 @@ function handleReset() {
 function resetCreateForm() {
   createForm.value = {
     input_mode: "image",
-    product_line_id: "",
-    product_sku_id: "",
-    batch_id: "",
+    product_category_id: "",
+    quality_product_id: "",
     inspection_standard_id: "",
     image_urls_input: "",
     priority: 5,
   };
   uploadFiles.value = [];
-}
-
-function firstBatchForSku(skuId: string) {
-  return activeProductBatches.value.find((item) => item.product_sku_id === skuId)?.id || "";
-}
-
-function firstStandardForSelection(lineId: string, skuId: string) {
-  if (!skuId) return "";
-  const standard = activeStandards.value.find((item) => {
-    const skuIds = item.applicable_product_sku_ids || [];
-    const lineIds = item.applicable_product_line_ids || [];
-    if (skuIds.length > 0) return skuIds.includes(skuId);
-    if (lineIds.length > 0) return lineIds.includes(lineId);
-    return true;
-  });
-  return standard?.id || "";
 }
 
 async function handleOpenCreate() {
@@ -290,8 +222,8 @@ async function handleOpenCreateFromDraft() {
   try {
     const draft = JSON.parse(raw) as {
       product_id?: string;
-      product_sku_id?: string;
-      batch_id?: string;
+      product_category_id?: string;
+      quality_product_id?: string;
       spec_code?: string;
       inspection_standard_id?: string;
       image_urls?: string[];
@@ -301,31 +233,14 @@ async function handleOpenCreateFromDraft() {
     const matchedStandard = activeStandards.value.find(
       (item) => item.id === draft.inspection_standard_id || item.spec_code === draft.spec_code,
     );
-    let matchedSku =
-      activeProductSkus.value.find((item) => item.id === draft.product_sku_id) ||
-      activeProductSkus.value.find(
-        (item) => item.code === draft.product_id || item.name === draft.product_id,
-      ) ||
+    const matchedProduct =
+      qualityRefs.products.find((item) => item.id === draft.quality_product_id) ||
+      qualityRefs.products.find((item) => item.name === draft.product_id || item.model === draft.product_id) ||
       null;
-    if (!matchedSku && matchedStandard?.applicable_product_sku_ids?.length) {
-      matchedSku =
-        activeProductSkus.value.find((item) =>
-          matchedStandard.applicable_product_sku_ids?.includes(item.id),
-        ) || null;
-    }
-    if (matchedSku) {
-      createForm.value.product_line_id = matchedSku.product_line_id;
-      createForm.value.product_sku_id = matchedSku.id;
-      createForm.value.batch_id =
-        activeProductBatches.value.find(
-          (item) => item.id === draft.batch_id && item.product_sku_id === matchedSku?.id,
-        )?.id || firstBatchForSku(matchedSku.id);
-    } else if (matchedStandard?.applicable_product_line_ids?.length) {
-      createForm.value.product_line_id = matchedStandard.applicable_product_line_ids[0];
-    }
-    createForm.value.inspection_standard_id =
-      matchedStandard?.id ||
-      firstStandardForSelection(createForm.value.product_line_id, createForm.value.product_sku_id);
+    createForm.value.product_category_id =
+      draft.product_category_id || matchedProduct?.category_id || "";
+    createForm.value.quality_product_id = matchedProduct?.id || "";
+    createForm.value.inspection_standard_id = matchedStandard?.id || activeStandards.value[0]?.id || "";
     createForm.value.image_urls_input = Array.isArray(draft.image_urls)
       ? draft.image_urls.filter(Boolean).join("\n")
       : "";
@@ -447,28 +362,24 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    if (
-      !selectedTaskStandard.value?.has_quality_threshold ||
-      !selectedTaskStandard.value?.spec_code
-    ) {
-      throw new Error("所选检测标准未绑定有效自动判定规则，请先到治理页完成配置");
-    }
-    const { imageUrls, imageItems } = await buildImageSubmissionPayload();
+    const { imageUrls, imageItems } =
+      createForm.value.input_mode === "measurement"
+        ? { imageUrls: [], imageItems: [] }
+        : await buildImageSubmissionPayload();
     const metadata: Record<string, unknown> = {
       source: "task_list",
-      product_line_name: selectedLine.value?.name,
-      product_sku_name: selectedSku.value?.name,
-      batch_no: selectedBatch.value?.batch_no,
+      product_category_name: selectedCategory.value?.name,
+      quality_product_name: selectedProduct.value?.name,
       inspection_standard_name: selectedTaskStandard.value?.name,
     };
 
     const createdTask = await taskStore.createTask(
       {
         input_mode: createForm.value.input_mode,
-        product_sku_id: createForm.value.product_sku_id,
-        batch_id: createForm.value.batch_id,
+        product_category_id: createForm.value.product_category_id,
+        quality_product_id: createForm.value.quality_product_id || null,
         inspection_standard_id: createForm.value.inspection_standard_id,
-        product_id: selectedSku.value?.code || undefined,
+        product_id: selectedProduct.value?.model || selectedProduct.value?.name || selectedCategory.value?.code,
         spec_code: selectedTaskStandard.value?.spec_code || undefined,
         image_urls: imageUrls,
         image_items: imageItems,
@@ -529,32 +440,10 @@ function handleCurrentChange(current: number) {
 }
 
 watch(
-  () => createForm.value.product_line_id,
+  () => createForm.value.product_category_id,
   () => {
-    if (!availableSkus.value.some((item) => item.id === createForm.value.product_sku_id)) {
-      createForm.value.product_sku_id = "";
-      createForm.value.batch_id = "";
-    }
-    if (
-      !availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)
-    ) {
-      createForm.value.inspection_standard_id = "";
-    }
-  },
-);
-
-watch(
-  () => createForm.value.product_sku_id,
-  (skuId) => {
-    if (!availableBatches.value.some((item) => item.id === createForm.value.batch_id)) {
-      createForm.value.batch_id = skuId ? firstBatchForSku(skuId) : "";
-    }
-    if (
-      !availableStandards.value.some((item) => item.id === createForm.value.inspection_standard_id)
-    ) {
-      createForm.value.inspection_standard_id = skuId
-        ? firstStandardForSelection(createForm.value.product_line_id, skuId)
-        : "";
+    if (!availableProducts.value.some((item) => item.id === createForm.value.quality_product_id)) {
+      createForm.value.quality_product_id = "";
     }
   },
 );
@@ -705,7 +594,7 @@ watch(
       </div>
     </div>
 
-    <el-dialog v-model="showCreateDialog" title="新建检测任务" width="680px">
+    <el-dialog v-model="showCreateDialog" title="新建通用检测任务" width="680px" top="3vh">
       <el-form
         ref="formRef"
         :model="createForm"
@@ -713,53 +602,36 @@ watch(
         label-width="112px"
         v-loading="loadingCreateOptions"
       >
-        <el-form-item label="产品线" prop="product_line_id">
+        <el-form-item label="产品类别" prop="product_category_id">
           <el-select
-            v-model="createForm.product_line_id"
+            v-model="createForm.product_category_id"
             filterable
             clearable
-            placeholder="先选择产品线"
+            placeholder="选择产品类别"
             class="!w-full"
           >
             <el-option
-              v-for="line in activeProductLines"
-              :key="line.id"
-              :label="formatCodeName(line)"
-              :value="line.id"
+              v-for="category in qualityRefs.categories"
+              :key="category.id"
+              :label="formatCodeName(category)"
+              :value="category.id"
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="SKU" prop="product_sku_id">
+        <el-form-item label="具体产品 / 型号">
           <el-select
-            v-model="createForm.product_sku_id"
+            v-model="createForm.quality_product_id"
             filterable
             clearable
-            placeholder="选择 SKU"
+            placeholder="来源明确时选择，无法确认可留空"
             class="!w-full"
-            :disabled="!createForm.product_line_id"
+            :disabled="!createForm.product_category_id"
           >
             <el-option
-              v-for="sku in availableSkus"
-              :key="sku.id"
-              :label="formatCodeName(sku)"
-              :value="sku.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="批次" prop="batch_id">
-          <el-select
-            v-model="createForm.batch_id"
-            filterable
-            clearable
-            placeholder="选择批次"
-            class="!w-full"
-            :disabled="!createForm.product_sku_id"
-          >
-            <el-option
-              v-for="batch in availableBatches"
-              :key="batch.id"
-              :label="formatBatchLabel(batch)"
-              :value="batch.id"
+              v-for="product in availableProducts"
+              :key="product.id"
+              :label="[product.brand, product.name, product.model].filter(Boolean).join(' · ')"
+              :value="product.id"
             />
           </el-select>
         </el-form-item>
@@ -770,7 +642,6 @@ watch(
             clearable
             placeholder="选择适用检测标准"
             class="!w-full"
-            :disabled="!createForm.product_sku_id"
           >
             <el-option
               v-for="standard in availableStandards"
@@ -780,10 +651,10 @@ watch(
             />
           </el-select>
           <div
-            v-if="createForm.product_sku_id && availableStandards.length === 0"
+            v-if="createForm.product_category_id && availableStandards.length === 0"
             class="task-form-hint warning"
           >
-            当前 SKU 暂无可用检测标准，请先到治理页配置标准适用范围和规则门槛。
+            当前暂无可用检测标准，请先到治理页配置标准和执行规则。
           </div>
           <div v-if="selectedTaskStandard" class="task-spec-preview">
             <div class="task-spec-preview-title">
@@ -825,7 +696,7 @@ watch(
           />
           <div class="task-form-hint">
             图片 URL
-            会直接参与检测，并和本地上传图片合并计算；图片数量不满足自动判定规则时，结果会进入人工复核。当前
+            会直接参与检测，并和本地上传图片合并计算；证据不足或标准规则不完整时，结果会进入人工复核。当前
             URL 数量：{{ parsedUrlEntries.length }}。
           </div>
         </el-form-item>
@@ -849,7 +720,7 @@ watch(
           <div class="task-selection-summary">
             <span>当前已选</span>
             <strong>{{ totalSelectedImageCount }}</strong>
-            <span>/ 自动判定规则</span>
+            <span>/ 当前标准参考</span>
             <strong>{{ requiredImageCount }}</strong>
             <span>张</span>
           </div>

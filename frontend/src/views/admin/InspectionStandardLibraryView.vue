@@ -10,36 +10,30 @@ import {
   Search,
   UploadFilled,
 } from "@element-plus/icons-vue";
-import { productMasterApi } from "@/api/product-master.api";
+import { useQualityReferenceStore } from "@/stores/quality-reference.store";
 import SupervisionFields from "@/components/business/supervision/SupervisionFields.vue";
 import { cleanFields } from "@/components/business/supervision/form-fields";
-import { supervisionApi } from "@/api/supervision.api";
 const applicability = ref<Record<string, any>>({});
 const applicabilityOptions = ref<Record<string, { value: string; label: string }[]>>({});
 const applicabilitySpecs = [
   { key: "effective_from", label: "生效时间", type: "date" },
   { key: "effective_to", label: "失效时间", type: "date" },
   { key: "transition_until", label: "过渡期截止", type: "date" },
-  { key: "region_ids", label: "适用地区", type: "select", options: "regions", multiple: true },
   { key: "production_from", label: "适用生产日期开始", type: "date" },
   { key: "production_to", label: "适用生产日期截止", type: "date" },
   { key: "clause_version", label: "条款版本" },
   { key: "notes", label: "适用说明", type: "textarea" },
 ];
 import { useInspectionStandardStore } from "@/stores/inspection_standard.store";
-import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
-import { formatCodeName } from "@/utils/master-data-labels";
 import type {
   InspectionStandardLibraryItem,
   InspectionStandardPayload,
-  ProductLine,
-  ProductSku,
   StandardDocumentItem,
   StandardRetrieveHit,
 } from "@/types/governance.types";
 
 const store = useInspectionStandardStore();
-const inspectionSpecStore = useInspectionSpecStore();
+const qualityRefs = useQualityReferenceStore();
 
 const drawerOpen = ref(false);
 const detailOpen = ref(false);
@@ -56,8 +50,6 @@ const uploadTargetId = ref("");
 
 const chunkDrawerOpen = ref(false);
 const currentDocumentForChunks = ref<StandardDocumentItem | null>(null);
-const productLines = ref<ProductLine[]>([]);
-const productSkus = ref<ProductSku[]>([]);
 
 const editingDocumentId = ref("");
 const docForm = reactive({
@@ -78,9 +70,8 @@ const filters = reactive({
 const form = reactive<InspectionStandardPayload>({
   name: "",
   product_family: "",
-  inspection_spec_id: "",
-  applicable_product_line_ids: [],
-  applicable_product_sku_ids: [],
+  applicable_category_ids: [],
+  applicable_product_ids: [],
   domain: "",
   standard_status: "现行",
   chunk_strategy: "heading_then_size",
@@ -113,14 +104,11 @@ const filteredItems = computed(() =>
 const domains = computed(() =>
   Array.from(new Set(store.items.map((item) => item.domain).filter(Boolean))).sort(),
 );
-const availableSpecs = computed(() => inspectionSpecStore.items.filter((item) => item.is_active));
-const availableSkusForForm = computed(() =>
-  productSkus.value.filter((item) =>
-    (form.applicable_product_line_ids || []).includes(item.product_line_id),
+const availableProductsForForm = computed(() =>
+  qualityRefs.products.filter((item) =>
+    !(form.applicable_category_ids || []).length ||
+    (form.applicable_category_ids || []).includes(item.category_id),
   ),
-);
-const selectedSpec = computed(
-  () => availableSpecs.value.find((item) => item.id === form.inspection_spec_id) || null,
 );
 
 function resetForm() {
@@ -129,9 +117,8 @@ function resetForm() {
   Object.assign(form, {
     name: "",
     product_family: "",
-    inspection_spec_id: "",
-    applicable_product_line_ids: [],
-    applicable_product_sku_ids: [],
+    applicable_category_ids: [],
+    applicable_product_ids: [],
     domain: "",
     standard_status: "现行",
     chunk_strategy: "heading_then_size",
@@ -163,19 +150,11 @@ function statusType(status: string) {
 }
 
 async function loadProductMasterOptions() {
-  const { data } = await productMasterApi.catalog(false);
-  productLines.value = data.data.product_lines;
-  productSkus.value = data.data.product_skus;
-  if ((await supervisionApi.settings()).data.data.enabled) {
-    const regions = (await supervisionApi.list("regions", { size: 200 })).data.data.items;
-    applicabilityOptions.value.regions = regions
-      .filter((x) => x.status === "active")
-      .map((x) => ({ value: x.id, label: x.name }));
-  }
+  await qualityRefs.loadProducts();
 }
 
 async function loadAll() {
-  await Promise.all([store.fetchAll(), inspectionSpecStore.fetchAll(), loadProductMasterOptions()]);
+  await Promise.all([store.fetchAll(), loadProductMasterOptions()]);
 }
 
 function openCreate() {
@@ -189,9 +168,8 @@ function openEdit(item: InspectionStandardLibraryItem) {
   Object.assign(form, {
     name: item.name,
     product_family: item.product_family || "",
-    inspection_spec_id: item.inspection_spec_id || "",
-    applicable_product_line_ids: [...(item.applicable_product_line_ids || [])],
-    applicable_product_sku_ids: [...(item.applicable_product_sku_ids || [])],
+    applicable_category_ids: [...(item.applicable_category_ids || [])],
+    applicable_product_ids: [...(item.applicable_product_ids || [])],
     domain: item.domain || "",
     standard_status: item.standard_status || "现行",
     chunk_strategy: item.chunk_strategy || "heading_then_size",
@@ -205,21 +183,16 @@ async function submit() {
     ElMessage.warning("请填写检测标准名称");
     return;
   }
-  if (!String(form.inspection_spec_id || "").trim()) {
-    ElMessage.warning("请先绑定自动判定规则");
-    return;
-  }
-  if (!String(form.product_family || "").trim()) {
-    ElMessage.warning("请填写产品族");
-    return;
-  }
-
   saving.value = true;
   try {
     const payload = {
       ...form,
       applicability: cleanFields(applicability.value, applicabilitySpecs),
-      spec_code: selectedSpec.value?.spec_code || form.spec_code || null,
+      product_family:
+        qualityRefs.categories.find((item) => form.applicable_category_ids?.includes(item.id))
+          ?.name || "通用工业产品",
+      inspection_spec_id: null,
+      spec_code: null,
     };
     if (editingId.value) {
       await store.updateOne(editingId.value, payload);
@@ -363,23 +336,12 @@ function onDocPageChange(newPage: number) {
 }
 
 watch(
-  () => form.applicable_product_line_ids,
-  (lineIds) => {
-    const allowedSkuIds = new Set(
-      productSkus.value
-        .filter((item) => (lineIds || []).includes(item.product_line_id))
-        .map((item) => item.id),
-    );
-    form.applicable_product_sku_ids = (form.applicable_product_sku_ids || []).filter((item) =>
-      allowedSkuIds.has(item),
-    );
-  },
-);
-
-watch(
-  () => form.inspection_spec_id,
+  () => form.applicable_category_ids,
   () => {
-    form.spec_code = selectedSpec.value?.spec_code || null;
+    const allowed = new Set(availableProductsForForm.value.map((item) => item.id));
+    form.applicable_product_ids = (form.applicable_product_ids || []).filter((item) =>
+      allowed.has(item),
+    );
   },
 );
 
@@ -392,7 +354,7 @@ onMounted(loadAll);
       <div>
         <p class="eyebrow">Standards Library</p>
         <h2>检测标准库</h2>
-        <p>管理标准文档、适用范围和自动判定规则绑定。任务创建时只选检测标准，门槛在这里维护。</p>
+        <p>管理权威标准文档、版本和产品适用范围；可执行阈值在“标准执行规则”中按条款维护。</p>
       </div>
       <div class="heading-actions">
         <el-button :icon="RefreshRight" @click="loadAll">刷新</el-button>
@@ -562,33 +524,6 @@ onMounted(loadAll);
           <div class="form-hint">会自动创建同名 RAG 空间。任务创建时用户只选择检测标准。</div>
         </el-form-item>
         <div class="form-grid">
-          <el-form-item label="绑定自动判定规则" required>
-            <el-select
-              v-model="form.inspection_spec_id"
-              filterable
-              clearable
-              placeholder="选择自动判定规则"
-            >
-              <el-option
-                v-for="spec in availableSpecs"
-                :key="spec.id"
-                :label="`${spec.spec_code} · ${spec.name}`"
-                :value="spec.id"
-              />
-            </el-select>
-            <div v-if="selectedSpec" class="threshold-summary">
-              <span>编码 {{ selectedSpec.spec_code }}</span>
-              <span>图片 {{ selectedSpec.required_image_count }}</span>
-              <span>视角 {{ selectedSpec.required_views?.join("、") || "未设置" }}</span>
-              <span>置信 {{ selectedSpec.ai_gate_confidence_threshold }}</span>
-              <span>证据 {{ selectedSpec.ai_gate_evidence_threshold }}</span>
-              <span>追溯 {{ selectedSpec.ai_gate_traceability_threshold }}</span>
-              <span>{{ selectedSpec.auto_pass_enabled ? "自动放行开启" : "自动放行关闭" }}</span>
-            </div>
-          </el-form-item>
-          <el-form-item label="产品族" required>
-            <el-input v-model="form.product_family" placeholder="如：screw / bottle / tile" />
-          </el-form-item>
           <el-form-item label="领域">
             <el-select
               v-model="form.domain"
@@ -616,35 +551,35 @@ onMounted(loadAll);
           </el-form-item>
         </div>
         <div class="form-grid">
-          <el-form-item label="适用产品线">
+          <el-form-item label="适用产品类别">
             <el-select
-              v-model="form.applicable_product_line_ids"
+              v-model="form.applicable_category_ids"
               multiple
               filterable
               clearable
               placeholder="不选则默认不限"
             >
               <el-option
-                v-for="line in productLines"
-                :key="line.id"
-                :label="formatCodeName(line)"
-                :value="line.id"
+                v-for="category in qualityRefs.categories"
+                :key="category.id"
+                :label="category.name"
+                :value="category.id"
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="适用 SKU">
+          <el-form-item label="适用具体产品 / 型号">
             <el-select
-              v-model="form.applicable_product_sku_ids"
+              v-model="form.applicable_product_ids"
               multiple
               filterable
               clearable
-              placeholder="优先按 SKU 精确适配"
+              placeholder="不选则对所选类别内全部产品适用"
             >
               <el-option
-                v-for="sku in availableSkusForForm"
-                :key="sku.id"
-                :label="formatCodeName(sku)"
-                :value="sku.id"
+                v-for="product in availableProductsForForm"
+                :key="product.id"
+                :label="[product.brand, product.name, product.model].filter(Boolean).join(' · ')"
+                :value="product.id"
               />
             </el-select>
           </el-form-item>

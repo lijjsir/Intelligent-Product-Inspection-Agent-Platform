@@ -69,15 +69,15 @@ export const supervisionApi = {
     http.post(`/v1/inspection-sessions/${id}/dataset-enrollments`, { dataset_id }),
   enrollments: () => http.get<SupervisionRecord[]>("/v1/quality-supervision/dataset-enrollments"),
   settings: () =>
-    http.get<{ enabled: boolean; permissions: string[] }>("/v1/quality-supervision/settings", {
+    http.get<{ enabled: boolean; laboratory_validation_enabled: boolean; permissions: string[] }>("/v1/quality-supervision/settings", {
       suppressErrorToast: true,
     }),
   assignees: () =>
     http.get<{ value: string; label: string }[]>("/v1/quality-supervision/assignees"),
   manualAssessment: (id: string, payload: Record<string, any>) =>
-    http.post<SupervisionRecord>(`/v1/risk-cases/${id}/manual-assessment`, payload),
+    http.post<SupervisionRecord>(`/v1/legacy-risk-cases/${id}/manual-assessment`, payload),
   reassessment: (id: string) =>
-    http.post<SupervisionRecord>(`/v1/risk-cases/${id}/reassessment`, {}),
+    http.post<SupervisionRecord>(`/v1/legacy-risk-cases/${id}/reassessment`, {}),
   enable: (enabled: boolean) =>
     http.patch("/v1/quality-supervision/settings", {}, { params: { enabled } }),
   list: (kind: SupervisionKind, params: Record<string, any> = {}) =>

@@ -45,7 +45,7 @@ export interface BusinessTodo {
 }
 export const KIND_LABELS: Record<SupervisionKind, string> = {
   enterprises: "监管对象",
-  regions: "地区字典",
+  regions: "地区",
   devices: "设备管理",
   "risk-cases": "舆情监测",
   "market-monitoring-reports": "市场监控报告",

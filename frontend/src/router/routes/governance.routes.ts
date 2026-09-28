@@ -1,13 +1,13 @@
 import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
 
 export const governanceRoutes = [
-  ...["enterprises", "regions", "devices"].map((kind) => ({
+  ...["enterprises", "devices"].map((kind) => ({
     path: `admin/${kind}`,
     name: `governance-admin-${kind}`,
     component: () => import("@/views/supervision/SupervisionRecordsView.vue"),
     meta: {
       title: (
-        { enterprises: "监管对象", regions: "地区字典", devices: "设备资源" } as Record<
+        { enterprises: "监管对象", devices: "设备资源" } as Record<
           string,
           string
         >
@@ -50,8 +50,14 @@ export const governanceRoutes = [
   {
     path: "admin/product-master",
     name: "governance-admin-product-master",
-    component: () => import("@/views/admin/ProductMasterView.vue"),
-    meta: { title: "产品主数据", roles: [ROLE_ADMIN] },
+    redirect: { name: "governance-admin-quality-products" },
+    meta: { title: "产品类别与产品", roles: [ROLE_ADMIN], hiddenInMenu: true },
+  },
+  {
+    path: "admin/quality-products",
+    name: "governance-admin-quality-products",
+    component: () => import("@/views/admin/QualityProductView.vue"),
+    meta: { title: "产品类别与产品", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/inspection-standards",
@@ -62,8 +68,14 @@ export const governanceRoutes = [
   {
     path: "admin/inspection-specs",
     name: "governance-admin-inspection-specs",
-    component: () => import("@/views/admin/InspectionSpecView.vue"),
-    meta: { title: "自动判定规则", roles: [ROLE_ADMIN] },
+    component: () => import("@/views/admin/StandardExecutionRuleView.vue"),
+    meta: { title: "标准执行规则", roles: [ROLE_ADMIN] },
+  },
+  {
+    path: "admin/risk-policies",
+    name: "governance-admin-risk-policies",
+    component: () => import("@/views/admin/RiskPolicyView.vue"),
+    meta: { title: "风险分级政策", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/alert-rules",

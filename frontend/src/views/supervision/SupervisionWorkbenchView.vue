@@ -4,10 +4,12 @@ import { useRouter } from "vue-router";
 import { ArrowRight, Plus, RefreshRight } from "@element-plus/icons-vue";
 import BusinessTodoPanel from "@/components/business/supervision/BusinessTodoPanel.vue";
 import { supervisionApi } from "@/api/supervision.api";
+import { qualityRiskApi } from "@/api/quality-risk.api";
 
 const router = useRouter();
 const loading = ref(false);
-const stats = reactive({ todos: 0, cases: 0, plans: 0, sessions: 0 });
+const labEnabled = ref(false);
+const stats = reactive({ todos: 0, sources: 0, cases: 0, plans: 0 });
 
 const agents = [
   {
@@ -42,7 +44,7 @@ const agents = [
     code: "LAB",
     name: "实验室检测 Agent",
     action: "设备闭环取证",
-    description: "校验设备与测量，持续补足证据，提出下一检测、补测或停止建议",
+    description: "仅在抽查需要实物验证时校验设备与测量，提出下一检测、补测或停止建议",
     path: "/app/laboratory",
     color: "#6d4bc3",
   },
@@ -64,16 +66,18 @@ async function loadOverview() {
   loading.value = true;
   const results = await Promise.allSettled([
     supervisionApi.todos(),
-    supervisionApi.list("risk-cases", { page: 1, size: 1 }),
+    qualityRiskApi.records({ page: 1, size: 1 }),
+    qualityRiskApi.riskCases({ page: 1, size: 1 }),
     supervisionApi.list("sampling-plans", { page: 1, size: 1 }),
-    supervisionApi.list("inspection-sessions", { page: 1, size: 1 }),
+    supervisionApi.settings(),
   ]);
   const value = (index: number) =>
     results[index].status === "fulfilled" ? results[index].value.data.data : null;
   stats.todos = value(0)?.length || 0;
-  stats.cases = value(1)?.total || 0;
-  stats.plans = value(2)?.total || 0;
-  stats.sessions = value(3)?.total || 0;
+  stats.sources = value(1)?.total || 0;
+  stats.cases = value(2)?.total || 0;
+  stats.plans = value(3)?.total || 0;
+  labEnabled.value = Boolean(value(4)?.laboratory_validation_enabled);
   loading.value = false;
 }
 
@@ -90,10 +94,10 @@ onMounted(loadOverview);
           市场监控、舆情监测、监督抽查和实验室检测共享质量知识与可信能力，在统一风险决策中心形成闭环。
         </p>
         <div class="hero-actions">
-          <el-button type="primary" :icon="Plus" @click="router.push('/app/risk-cases')">
-            登记风险线索
+          <el-button type="primary" :icon="Plus" @click="router.push('/app/quality-data')">
+            接入质量数据
           </el-button>
-          <el-button @click="router.push('/app/quality-analytics')">查看市场监控</el-button>
+          <el-button @click="router.push('/app/risk-assessments')">进入风险研判</el-button>
         </div>
       </div>
 
@@ -110,16 +114,16 @@ onMounted(loadOverview);
             ><span>待我处理</span>
           </div>
           <div>
+            <strong>{{ stats.sources }}</strong
+            ><span>原始资料</span>
+          </div>
+          <div>
             <strong>{{ stats.cases }}</strong
             ><span>风险线索</span>
           </div>
           <div>
             <strong>{{ stats.plans }}</strong
             ><span>抽查方案</span>
-          </div>
-          <div>
-            <strong>{{ stats.sessions }}</strong
-            ><span>检测批次</span>
           </div>
         </div>
       </div>
@@ -148,7 +152,12 @@ onMounted(loadOverview);
 
       <ol class="agent-line">
         <li v-for="agent in agents" :key="agent.code" :style="{ '--agent-color': agent.color }">
-          <router-link :to="agent.path" class="agent-step">
+          <router-link
+            :to="agent.code === 'LAB' && !labEnabled ? '/app/workbench' : agent.path"
+            class="agent-step"
+            :class="{ disabled: agent.code === 'LAB' && !labEnabled }"
+            :aria-disabled="agent.code === 'LAB' && !labEnabled"
+          >
             <div class="step-rail">
               <span>{{ agent.order }}</span>
             </div>
@@ -159,7 +168,7 @@ onMounted(loadOverview);
               </div>
               <h3>{{ agent.name }}</h3>
               <p>{{ agent.description }}</p>
-              <span class="step-link">进入对应模块 <ArrowRight /></span>
+              <span class="step-link">{{ agent.code === 'LAB' && !labEnabled ? '抽查需要实物验证时启用' : '进入对应模块' }} <ArrowRight v-if="agent.code !== 'LAB' || labEnabled" /></span>
             </div>
           </router-link>
         </li>
@@ -530,6 +539,10 @@ onMounted(loadOverview);
   color: #27272a;
   font-size: 12px;
   font-weight: 700;
+}
+.agent-step.disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .step-link svg {

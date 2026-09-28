@@ -750,83 +750,6 @@ export interface ApprovalListQuery {
   requester_id?: string;
 }
 
-export interface ProductLine {
-  id: string;
-  org_id: string;
-  code: string;
-  name: string;
-  description?: string | null;
-  is_active: boolean;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface ProductSku {
-  supervision_data?: Record<string, any> | null;
-  id: string;
-  org_id: string;
-  product_line_id: string;
-  product_line_code?: string | null;
-  product_line_name?: string | null;
-  code: string;
-  name: string;
-  description?: string | null;
-  is_active: boolean;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface ProductBatch {
-  quantity?: number | null;
-  id: string;
-  org_id: string;
-  product_sku_id: string;
-  product_sku_code?: string | null;
-  product_sku_name?: string | null;
-  product_line_id?: string | null;
-  product_line_code?: string | null;
-  product_line_name?: string | null;
-  batch_no: string;
-  name: string;
-  production_date?: string | null;
-  description?: string | null;
-  is_active: boolean;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
-export interface ProductLinePayload {
-  code: string;
-  name: string;
-  description?: string | null;
-  is_active?: boolean;
-}
-
-export interface ProductSkuPayload {
-  supervision_data?: Record<string, any> | null;
-  product_line_id: string;
-  code: string;
-  name: string;
-  description?: string | null;
-  is_active?: boolean;
-}
-
-export interface ProductBatchPayload {
-  quantity?: number | null;
-  product_sku_id: string;
-  batch_no: string;
-  name?: string | null;
-  production_date?: string | null;
-  description?: string | null;
-  is_active?: boolean;
-}
-
-export interface ProductMasterCatalog {
-  product_lines: ProductLine[];
-  product_skus: ProductSku[];
-  product_batches: ProductBatch[];
-}
-
 export interface InspectionStandardRagSpace {
   id: string;
   name: string;
@@ -846,6 +769,8 @@ export interface InspectionStandardLibraryItem {
   has_quality_threshold?: boolean;
   applicable_product_line_ids?: string[];
   applicable_product_sku_ids?: string[];
+  applicable_category_ids?: string[];
+  applicable_product_ids?: string[];
   required_image_count?: number | null;
   required_views?: string[];
   auto_pass_enabled?: boolean | null;
@@ -883,6 +808,8 @@ export interface InspectionStandardPayload {
   spec_code?: string | null;
   applicable_product_line_ids?: string[];
   applicable_product_sku_ids?: string[];
+  applicable_category_ids?: string[];
+  applicable_product_ids?: string[];
   domain?: string | null;
   standard_status?: string;
   chunk_strategy?: string;

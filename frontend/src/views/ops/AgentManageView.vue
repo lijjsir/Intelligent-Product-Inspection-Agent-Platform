@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SupervisionAgentConfig from "@/components/business/supervision/SupervisionAgentConfig.vue";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { Connection, RefreshRight, VideoPause, VideoPlay } from "@element-plus/icons-vue";
@@ -266,8 +265,6 @@ onUnmounted(() => {
       </div>
       <el-button :icon="RefreshRight" @click="refreshAll">刷新数据</el-button>
     </section>
-    <SupervisionAgentConfig />
-
     <el-tabs v-model="activeTab" class="agent-tabs">
       <el-tab-pane label="定义" name="definitions">
         <section class="metric-grid">

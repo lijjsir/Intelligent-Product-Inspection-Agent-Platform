@@ -87,7 +87,7 @@ function add(f: FieldSpec) {
           :disabled="isDisabled(f)"
           filterable
           clearable
-          :no-data-text="f.options === 'regions' ? '暂无地区，请管理员先维护地区字典' : '暂无可选记录'"
+          :no-data-text="f.options === 'regions' ? '暂无匹配地区' : '暂无可选记录'"
           :placeholder="isDisabled(f) ? dependencyLabel(f) : '请选择'"
           @update:model-value="set(f.key, $event)"
         >

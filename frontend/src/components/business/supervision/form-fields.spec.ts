@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { clearInvalidDependencies, fieldOptions, fields, type FieldOption } from "./form-fields";
 
 const batches: FieldOption[] = [
-  { value: "batch-a", label: "UNSPECIFIED", product_sku_id: "sku-a" },
-  { value: "batch-b", label: "UNSPECIFIED", product_sku_id: "sku-b" },
+  { value: "batch-a", label: "BATCH-A", product_sku_id: "sku-a" },
+  { value: "batch-b", label: "BATCH-B", product_sku_id: "sku-b" },
 ];
 
 describe("supervision product/batch dependencies", () => {

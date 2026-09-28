@@ -114,8 +114,8 @@ export const opsRoutes = [
   {
     path: "inspection-specs",
     name: "ops-inspection-specs",
-    component: () => import("@/views/admin/InspectionSpecView.vue"),
-    meta: { title: "自动判定规则", roles: [ROLE_PLATFORM_OPERATOR] },
+    component: () => import("@/views/admin/StandardExecutionRuleView.vue"),
+    meta: { title: "标准执行规则", roles: [ROLE_PLATFORM_OPERATOR] },
   },
   {
     path: "tasks",

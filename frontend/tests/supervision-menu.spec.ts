@@ -21,7 +21,7 @@ describe("supervision role boundaries and business form submission", () => {
     const workbench = appRoutes.find((r) => r.name === "app-supervision-workbench");
     expect(workbench?.meta.roles).toEqual(["user", "expert"]);
   });
-  it("keeps the v2 business chain concise and groups tasks with results", () => {
+  it("keeps the risk-first business chain concise and groups general tasks with results", () => {
     setActivePinia(createPinia());
     const auth = useAuthStore();
     auth.role = "expert";
@@ -30,15 +30,16 @@ describe("supervision role boundaries and business form submission", () => {
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
       "质监工作台",
+      "数据接入",
       "市场监控",
       "舆情监测",
+      "风险研判",
       "监督抽查",
-      "实验室检测",
     ]);
     const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
     expect(
       taskResult && "items" in taskResult ? taskResult.items.map((item) => item.title) : [],
-    ).toEqual(["任务管理", "检测结果"]);
+    ).toEqual(["通用任务", "通用结果"]);
   });
   it("submits only editable case inputs and retains nested real-source evidence", () => {
     const result = cleanFields(

@@ -91,7 +91,7 @@ function template() {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = props.kind === "regions" ? "地区字典模板.csv" : "风险线索模板.csv";
+  anchor.download = props.kind === "regions" ? "地区数据模板.csv" : "风险线索模板.csv";
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -99,7 +99,7 @@ function template() {
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="kind === 'regions' ? '导入地区字典' : '导入风险线索'"
+    :title="kind === 'regions' ? '导入地区数据' : '导入风险线索'"
     width="min(850px,94vw)"
     top="3vh"
     @update:model-value="emit('update:modelValue', $event)"

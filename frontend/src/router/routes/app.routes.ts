@@ -13,6 +13,30 @@ const COLLAB_APP_ROLES = [...COLLABORATION_ROLES];
 
 export const appRoutes = [
   {
+    path: "quality-data",
+    name: "app-quality-data",
+    component: () => import("@/views/quality-risk/QualityDataIntakeView.vue"),
+    meta: {
+      title: "质量数据接入",
+      roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
+    },
+  },
+  {
+    path: "risk-assessments",
+    name: "app-risk-assessments",
+    component: () => import("@/views/quality-risk/RiskAssessmentView.vue"),
+    meta: {
+      title: "风险研判",
+      roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
+    },
+  },
+  {
+    path: "risk-policies",
+    name: "app-risk-policies",
+    component: () => import("@/views/admin/RiskPolicyView.vue"),
+    meta: { title: "风险分级政策", roles: [ROLE_ADMIN, ROLE_EXPERT] },
+  },
+  {
     path: "workbench",
     name: "app-supervision-workbench",
     component: () => import("@/views/supervision/SupervisionWorkbenchView.vue"),
@@ -35,7 +59,6 @@ export const appRoutes = [
     },
   },
   ...[
-    "risk-cases",
     "sampling-plans",
     "inspection-sessions",
     "samples",
@@ -48,7 +71,6 @@ export const appRoutes = [
     meta: {
       title: (
         {
-          "risk-cases": "舆情监测",
           "sampling-plans": "监督抽查",
           "inspection-sessions": "检测会话",
           samples: "样品登记",
@@ -70,6 +92,12 @@ export const appRoutes = [
           : [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
     },
   })),
+  {
+    path: "risk-cases",
+    name: "app-risk-cases",
+    redirect: { name: "app-quality-data", query: { record_type: "consumer_complaint" } },
+    meta: { title: "舆情监测", roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] },
+  },
   {
     path: "quality-analytics",
     name: "app-quality-analytics",

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, type UploadFile } from "element-plus";
 import { supervisionApi } from "@/api/supervision.api";
+import { qualityRiskApi } from "@/api/quality-risk.api";
 import SupervisionFields from "./SupervisionFields.vue";
 import SupervisionAssessment from "./SupervisionAssessment.vue";
 import AdaptiveInspectionPanel from "./AdaptiveInspectionPanel.vue";
@@ -71,16 +72,19 @@ async function load() {
     else session.value = sessions.value[0] || null;
     if (session.value)
       measurements.value = (await supervisionApi.measurements(session.value.id)).data.data;
-    for (const kind of ["devices", "samples", "regions", "sampling-plans", "risk-cases"] as const) {
+    for (const kind of ["devices", "samples", "regions", "sampling-plans"] as const) {
       const result = (await supervisionApi.list(kind, { size: 200 })).data.data.items;
       if (kind === "samples")
         taskSamples.value = result.filter((item) => item.data.task_id === props.taskId);
-      const key = kind === "sampling-plans" ? "plans" : kind === "risk-cases" ? "cases" : kind;
+      const key = kind === "sampling-plans" ? "plans" : kind;
       options.value[key] = result
         .filter((x) => kind !== "samples" || x.data.task_id === props.taskId)
         .filter((x) => !["inactive", "archived"].includes(x.status))
         .map((x) => ({ value: x.id, label: x.name + " · " + x.code }));
     }
+    options.value.cases = (await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" })).data.data.items.map(
+      (item) => ({ value: item.id, label: item.title + " · " + item.code }),
+    );
   } catch {
     if (enabled.value) ElMessage.error("无法读取测量资料，请检查服务连接后刷新");
   }
