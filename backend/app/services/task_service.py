@@ -1,5 +1,6 @@
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
@@ -78,13 +79,47 @@ class TaskService:
         product_sku_id: str | None = None,
         batch_id: str | None = None,
         inspection_standard_id: str | None = None,
+        product_category_id: str | None = None,
+        quality_product_id: str | None = None,
     ) -> InspectionTask:
         standard = None
         line = sku = batch = None
         normalized_product_id = str(product_id or "").strip()
         normalized_spec_code = str(spec_code or "").strip()
 
-        if product_sku_id or batch_id or inspection_standard_id:
+        category_v4 = product_v4 = None
+        if product_category_id or quality_product_id:
+            from app.models.quality_risk import ProductCategory, QualityProduct
+
+            if product_category_id:
+                category_v4 = await self._session.scalar(
+                    select(ProductCategory).where(
+                        ProductCategory.id == product_category_id,
+                        ProductCategory.org_id == self._org_id,
+                        ProductCategory.is_active.is_(True),
+                        ProductCategory.deleted_at.is_(None),
+                    )
+                )
+                if not category_v4:
+                    raise ValidationError("产品类别不存在或未启用")
+            if quality_product_id:
+                product_v4 = await self._session.scalar(
+                    select(QualityProduct).where(
+                        QualityProduct.id == quality_product_id,
+                        QualityProduct.org_id == self._org_id,
+                        QualityProduct.is_active.is_(True),
+                        QualityProduct.deleted_at.is_(None),
+                    )
+                )
+                if not product_v4:
+                    raise ValidationError("产品不存在或未启用")
+                if category_v4 and product_v4.category_id != category_v4.id:
+                    raise ValidationError("产品不属于所选产品类别")
+                if not category_v4:
+                    category_v4 = await self._session.get(ProductCategory, product_v4.category_id)
+            normalized_product_id = str(product_v4.id if product_v4 else category_v4.code)
+
+        if product_sku_id or batch_id:
             if not product_sku_id or not batch_id or not inspection_standard_id:
                 raise ValidationError("product_sku_id, batch_id and inspection_standard_id are required")
             line, sku, batch = await self._product_service.require_active_sku_and_batch(
@@ -98,25 +133,26 @@ class TaskService:
             normalized_product_id = str(sku.code)
             normalized_spec_code = str(getattr(standard, "spec_code", None) or normalized_spec_code or "").strip()
         else:
-            # Legacy internal materialization path: keep chat/result backfills alive while
-            # public task creation moves to the master-data closure.
-            if not normalized_product_id:
-                normalized_product_id = "unknown-product"
-            line, sku, batch = await self._product_service.ensure_legacy_defaults(normalized_product_id)
-            if normalized_spec_code:
+            if inspection_standard_id:
+                standard = await self._standard_repo.get_active(self._org_id, str(inspection_standard_id))
+                if not standard:
+                    raise ValidationError("检测标准不存在或未启用")
+            elif normalized_spec_code:
                 standard = await self._standard_repo.get_active_by_spec_code(self._org_id, normalized_spec_code)
             if standard is not None:
                 inspection_standard_id = str(standard.id)
                 normalized_spec_code = str(getattr(standard, "spec_code", None) or normalized_spec_code).strip()
+            if not normalized_product_id:
+                normalized_product_id = "unclassified"
 
         spec = await self._resolve_spec_from_standard(standard, normalized_spec_code)
-        if standard is not None and not spec:
-            raise ValidationError("selected inspection standard is missing a valid quality threshold binding")
         if spec and not normalized_spec_code:
             normalized_spec_code = str(spec.spec_code)
+        if standard is not None and not normalized_spec_code:
+            normalized_spec_code = f"STANDARD-{str(standard.id)[-8:].upper()}"
         if not normalized_spec_code:
             raise ValidationError("检测标准编码不能为空")
-        if not spec:
+        if standard is None and spec is None:
             raise ValidationError(f"检测标准 {normalized_spec_code} 不存在或未启用")
 
         normalized_items = list(image_items or [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)])
@@ -125,7 +161,7 @@ class TaskService:
             raise ValidationError("未知检测输入模式")
         if input_mode != "image":
             from app.models.organization import Organization
-            from sqlalchemy import select
+
             organization = await self._session.scalar(select(Organization).where(Organization.id == self._org_id))
             if not organization or not (organization.settings or {}).get("quality_supervision_enabled"):
                 raise ValidationError("组织尚未启用测量检测流程")
@@ -186,6 +222,10 @@ class TaskService:
                 "inspection_standard_id": str(standard.id) if standard else str(inspection_standard_id or "") or None,
                 "inspection_standard_name": str(standard.name) if standard else None,
                 "product_family": str(getattr(standard, "product_family", "") or getattr(spec, "product_family", "") or ""),
+                "product_category_id": str(category_v4.id) if category_v4 else None,
+                "product_category_name": str(category_v4.name) if category_v4 else None,
+                "quality_product_id": str(product_v4.id) if product_v4 else None,
+                "quality_product_name": str(product_v4.name) if product_v4 else None,
                 "standard_rag_space_ids": list(getattr(standard, "rag_space_ids", None) or []),
                 "system_rag_space_ids": list(getattr(standard, "rag_space_ids", None) or []),
                 "spec_code": normalized_spec_code,
@@ -200,6 +240,8 @@ class TaskService:
             product_sku_id=str(sku.id) if sku else product_sku_id,
             batch_id=str(batch.id) if batch else batch_id,
             inspection_standard_id=str(standard.id) if standard else inspection_standard_id,
+            product_category_id=str(category_v4.id) if category_v4 else product_category_id,
+            quality_product_id=str(product_v4.id) if product_v4 else quality_product_id,
             image_urls=normalized_urls,
             image_items=[item.model_dump() for item in normalized_items],
             priority=priority,

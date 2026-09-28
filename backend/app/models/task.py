@@ -17,6 +17,8 @@ class InspectionTask(Base, TimestampMixin):
     product_sku_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     batch_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     inspection_standard_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    product_category_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
+    quality_product_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     strategy_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     image_urls: Mapped[list] = mapped_column(JSON)
     image_items: Mapped[list | None] = mapped_column("image_items", JSON, nullable=True)

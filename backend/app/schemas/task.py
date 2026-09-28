@@ -42,9 +42,11 @@ class TaskListQuery(PageParams):
 
 class TaskCreate(BaseModel):
     input_mode: Literal["image", "measurement", "mixed"] = "image"
-    product_sku_id: str
-    batch_id: str
-    inspection_standard_id: str
+    product_category_id: str | None = None
+    quality_product_id: str | None = None
+    product_sku_id: str | None = None
+    batch_id: str | None = None
+    inspection_standard_id: str | None = None
     product_id: str | None = None
     spec_code: str | None = None
     image_urls: List[str] = Field(default_factory=list)
@@ -88,6 +90,8 @@ class TaskResponse(BaseModel):
     product_sku_id: str | None = None
     batch_id: str | None = None
     inspection_standard_id: str | None = None
+    product_category_id: str | None = None
+    quality_product_id: str | None = None
     product_line_code: str | None = None
     product_line_name: str | None = None
     product_sku_code: str | None = None
@@ -121,6 +125,8 @@ class TaskListItemResponse(BaseModel):
     product_sku_id: str | None = None
     batch_id: str | None = None
     inspection_standard_id: str | None = None
+    product_category_id: str | None = None
+    quality_product_id: str | None = None
     product_line_code: str | None = None
     product_line_name: str | None = None
     product_sku_code: str | None = None

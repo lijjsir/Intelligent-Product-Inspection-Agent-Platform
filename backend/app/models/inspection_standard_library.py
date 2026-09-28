@@ -18,6 +18,8 @@ class InspectionStandardLibrary(Base, TimestampMixin):
     applicability: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     applicable_product_line_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     applicable_product_sku_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    applicable_category_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    applicable_product_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     rag_space_ids: Mapped[list] = mapped_column(JSON, nullable=False)
     domain: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)

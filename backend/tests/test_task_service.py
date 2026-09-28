@@ -451,7 +451,7 @@ async def test_create_task_rejects_missing_active_spec(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_task_rejects_standard_without_quality_threshold(monkeypatch):
+async def test_create_task_accepts_standard_without_legacy_image_threshold(monkeypatch):
     standard_repo = FakeStandardRepo(None)
     standard_repo.standard = FakeStandard(spec_code=None, inspection_spec_id=None)
 
@@ -464,18 +464,19 @@ async def test_create_task_rejects_standard_without_quality_threshold(monkeypatc
 
     service = TaskService(session=FakeSession(), org_id="org-1")
 
-    with pytest.raises(ValidationError, match="missing a valid quality threshold binding"):
-        await service.create_task(
-            created_by="user-1",
-            product_id="product-1",
-            spec_code="",
-            image_urls=["https://example.com/a.png"],
-            priority=5,
-            metadata=None,
-            product_sku_id="sku-1",
-            batch_id="batch-1",
-            inspection_standard_id="standard-1",
-        )
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="",
+        image_urls=["https://example.com/a.png"],
+        priority=5,
+        metadata=None,
+        product_sku_id="sku-1",
+        batch_id="batch-1",
+        inspection_standard_id="standard-1",
+    )
+    assert task.inspection_standard_id == "standard-1"
+    assert task.spec_code.startswith("STANDARD-")
 
 
 @pytest.mark.asyncio

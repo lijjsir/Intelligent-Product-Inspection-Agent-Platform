@@ -64,8 +64,18 @@ async def service(current=Depends(get_current_user), db=Depends(get_db)):
 
 @router.get("/quality-supervision/settings")
 async def settings(svc=Depends(service)):
+    from app.models.organization import Organization
+
+    org = await svc.db.get(Organization, svc.org_id)
+    org_settings = dict(getattr(org, "settings", None) or {})
     return ResponseEnvelope(
-        data={"enabled": await svc.enabled(), "permissions": await svc.permissions()}
+        data={
+            "enabled": await svc.enabled(),
+            "laboratory_validation_enabled": bool(
+                org_settings.get("laboratory_validation_enabled", False)
+            ),
+            "permissions": await svc.permissions(),
+        }
     )
 
 
@@ -109,7 +119,7 @@ async def update_agent_config(payload: AgentConfigUpdate, svc=Depends(service)):
     return ResponseEnvelope(data=settings["supervision_agent_options"])
 
 
-@router.post("/risk-cases/{record_id}/manual-assessment")
+@router.post("/legacy-risk-cases/{record_id}/manual-assessment")
 async def manual_assessment(record_id: UUID, payload: ManualAssessment, svc=Depends(service)):
     await svc.require_enabled()
     return ResponseEnvelope(
@@ -123,7 +133,7 @@ async def manual_assessment(record_id: UUID, payload: ManualAssessment, svc=Depe
     )
 
 
-@router.post("/risk-cases/{record_id}/reassessment")
+@router.post("/legacy-risk-cases/{record_id}/reassessment")
 async def reassessment(record_id: UUID, svc=Depends(service)):
     await svc.require_enabled()
     return ResponseEnvelope(data=await svc.reassessment("risk-cases", str(record_id)))
@@ -239,16 +249,32 @@ async def review_stop_decision(
 
 
 @router.patch("/quality-supervision/settings")
-async def change_settings(enabled: bool, svc=Depends(service)):
+async def change_settings(
+    enabled: bool | None = None,
+    laboratory_validation_enabled: bool | None = None,
+    svc=Depends(service),
+):
     from app.models.organization import Organization
 
     svc.require_role({"admin"})
     org = await svc.db.get(Organization, svc.org_id)
     if not org:
         raise NotFoundError("组织不存在")
-    org.settings = {**(org.settings or {}), "quality_supervision_enabled": enabled}
+    values = dict(org.settings or {})
+    if enabled is not None:
+        values["quality_supervision_enabled"] = enabled
+    if laboratory_validation_enabled is not None:
+        values["laboratory_validation_enabled"] = laboratory_validation_enabled
+    org.settings = values
     await svc.db.flush()
-    return ResponseEnvelope(data={"enabled": enabled})
+    return ResponseEnvelope(
+        data={
+            "enabled": bool(values.get("quality_supervision_enabled")),
+            "laboratory_validation_enabled": bool(
+                values.get("laboratory_validation_enabled")
+            ),
+        }
+    )
 
 
 def register_records(kind):
@@ -347,7 +373,8 @@ def register_records(kind):
 
 
 for _kind in DATA_SCHEMAS:
-    register_records(_kind)
+    if _kind not in {"risk-cases", "regions"}:
+        register_records(_kind)
 
 
 @router.get("/supervision-runs/{run_id}")
@@ -510,7 +537,7 @@ async def analytics(svc=Depends(service)):
     svc.require_role({"admin", "user", "expert", "platform_operator"})
     await svc.require_enabled()
 
-    rows = list(
+    legacy_rows = list(
         await svc.db.scalars(
             select(SupervisionRecord).where(
                 SupervisionRecord.org_id == svc.org_id,
@@ -519,6 +546,85 @@ async def analytics(svc=Depends(service)):
             )
         )
     )
+    from app.models.quality_risk import (
+        QualityRiskAssessment,
+        QualityRiskCase,
+        QualitySourceRecord,
+    )
+
+    risk_cases_v4 = list(
+        await svc.db.scalars(
+            select(QualityRiskCase).where(
+                QualityRiskCase.org_id == svc.org_id,
+                QualityRiskCase.status == "risk_assessed",
+                QualityRiskCase.deleted_at.is_(None),
+            )
+        )
+    )
+    adapted_cases = [serialize(r) for r in legacy_rows]
+    for case in risk_cases_v4:
+        assessment = await svc.db.scalar(
+            select(QualityRiskAssessment)
+            .where(
+                QualityRiskAssessment.org_id == svc.org_id,
+                QualityRiskAssessment.risk_case_id == case.id,
+                QualityRiskAssessment.status == "accepted",
+                QualityRiskAssessment.deleted_at.is_(None),
+            )
+            .order_by(QualityRiskAssessment.version.desc())
+            .limit(1)
+        )
+        source = await svc.db.scalar(
+            select(QualitySourceRecord)
+            .where(
+                QualitySourceRecord.org_id == svc.org_id,
+                QualitySourceRecord.id.in_(case.source_record_ids),
+                QualitySourceRecord.deleted_at.is_(None),
+            )
+            .order_by(QualitySourceRecord.occurred_at.desc())
+            .limit(1)
+        )
+        adapted_cases.append(
+            {
+                "id": case.id,
+                "status": case.status,
+                "data": {
+                    "occurred_at": (
+                        source.occurred_at.isoformat()
+                        if source
+                        else case.created_at.isoformat()
+                    ),
+                    "complaint_region_id": (
+                        (source.location or {}).get("district_code") if source else None
+                    ),
+                    "sampling_region_id": None,
+                    "enterprise_id": (
+                        (source.enterprise_ref or {}).get("name")
+                        or (source.enterprise_ref or {}).get("enterprise_id")
+                        if source
+                        else None
+                    ),
+                    "product_category": (
+                        case.scope.get("name")
+                        if case.scope_type == "category"
+                        else (source.product_ref or {}).get("category_name")
+                        if source
+                        else None
+                    ),
+                    "evidence": [
+                        {
+                            "source_type": source.record_type,
+                            "nature": source.data_nature,
+                        }
+                    ]
+                    if source
+                    else [],
+                    "analysis": {
+                        "risk_level": assessment.risk_level if assessment else "unknown"
+                    },
+                },
+            }
+        )
     exposures = list(
         await svc.db.scalars(
             select(SupervisionRecord).where(
@@ -533,7 +639,7 @@ async def analytics(svc=Depends(service)):
             "version": 1,
             "as_of": __import__("datetime").datetime.utcnow().isoformat(),
             "knowledge_snapshot_id": f"situation:{svc.org_id}",
-            "cases": [serialize(r) for r in rows],
+            "cases": adapted_cases,
             "exposures": [serialize(r) for r in exposures],
         },
         "market_monitoring",
@@ -558,9 +664,9 @@ async def analytics(svc=Depends(service)):
         sessions=[serialize(s) for s in sessions],
         confirmed_categories=sorted(
             {
-                c.data.get("product_category")
-                for c in rows
-                if c.status == "risk_assessed" and c.data.get("product_category")
+                c["data"].get("product_category")
+                for c in adapted_cases
+                if c["status"] == "risk_assessed" and c["data"].get("product_category")
             }
         ),
         metric_status="正式查验类别和响应压缩指标需以已签发任务及同口径人工基线统计",
@@ -605,42 +711,3 @@ async def calibration(payload: CalibrationEvaluation, svc=Depends(service)):
         raise ValidationError(str(exc)) from exc
     report["dataset_id"] = str(payload.dataset_id)
     return ResponseEnvelope(data=report)
-
-
-def register_import(kind):
-    async def import_preview(
-        file: UploadFile = File(...), mapping: str = Form("{}"), svc=Depends(service)
-    ):
-        from app.services.supervision_imports import preview
-
-        try:
-            fields = json.loads(mapping)
-            if not isinstance(fields, dict) or not all(
-                isinstance(k, str) and isinstance(v, str) for k, v in fields.items()
-            ):
-                raise ValueError()
-            fields = {k: v.strip() for k, v in fields.items() if v.strip()}
-        except ValueError:
-            raise ValidationError("字段映射必须为对象")
-        return ResponseEnvelope(
-            data=await preview(
-                svc, kind, file.filename or "", await file.read(10 * 1024 * 1024 + 1), fields
-            )
-        )
-
-    async def import_confirm(preview_id: UUID, svc=Depends(service)):
-        from app.services.supervision_imports import confirm
-
-        await svc.require_enabled()
-        return ResponseEnvelope(data=await confirm(svc, kind, str(preview_id)))
-
-    router.add_api_route(
-        f"/{kind}/imports/preview", import_preview, methods=["POST"], name=f"import_{kind}_preview"
-    )
-    router.add_api_route(
-        f"/{kind}/imports/confirm", import_confirm, methods=["POST"], name=f"import_{kind}_confirm"
-    )
-
-
-for _import_kind in ("regions", "risk-cases"):
-    register_import(_import_kind)

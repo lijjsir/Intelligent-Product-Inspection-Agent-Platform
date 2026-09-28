@@ -616,6 +616,7 @@ async def test_public_api_authorization_and_device_token_rotation(domain):
     from fastapi import FastAPI
     from httpx import AsyncClient, ASGITransport
     from app.api.v1 import supervision as api
+    from app.api.v1 import quality_risk as risk_api
     from app.api.v1.deps import get_db, get_current_user
 
     db, svc, ids = domain
@@ -625,6 +626,7 @@ async def test_public_api_authorization_and_device_token_rotation(domain):
 
     register_error_handlers(app)
     app.include_router(api.router, prefix="/api/v1")
+    app.include_router(risk_api.router, prefix="/api/v1")
 
     async def session():
         try:
@@ -640,15 +642,21 @@ async def test_public_api_authorization_and_device_token_rotation(domain):
     app.dependency_overrides[get_db] = session
     app.dependency_overrides[get_current_user] = current
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        region = (
-            await client.post("/api/v1/regions", json={"code": "重庆", "name": "重庆", "data": {}})
+        enterprise = (
+            await client.post(
+                "/api/v1/enterprises",
+                json={"code": "企业-1", "name": "测试企业", "data": {"role": "manufacturer"}},
+            )
         ).json()["data"]
-        assert region["name"] == "重庆"
+        assert enterprise["name"] == "测试企业"
         role["value"] = "user"
         assert (
-            await client.post("/api/v1/regions", json={"code": "越权", "name": "越权", "data": {}})
+            await client.post(
+                "/api/v1/enterprises",
+                json={"code": "越权", "name": "越权", "data": {"role": "manufacturer"}},
+            )
         ).status_code == 403
-        assert (await client.get("/api/v1/regions/not-a-uuid")).status_code == 422
+        assert (await client.get("/api/v1/enterprises/not-a-uuid")).status_code == 422
         d, s, session_record, m = await session_setup(domain)
         await db.commit()
         role["value"] = "app_developer"

@@ -126,7 +126,8 @@ class Candidate(Strict):
     sample_count: int = Field(default=1, ge=1, le=10000)
     unit_cost: float = Field(default=0, ge=0, allow_inf_nan=False)
     device_id: UUID | None = None
-    region_id: UUID | None = None
+    region_id: str | None = None
+    laboratory_validation: bool = False
     test_items: list[TestItem] = Field(default_factory=list)
     required_items: list[TestItem] = Field(default_factory=list)
     candidate_items: list[TestItem] = Field(default_factory=list)

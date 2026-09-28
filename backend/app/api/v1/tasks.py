@@ -77,6 +77,8 @@ async def create_task(
         product_sku_id=payload.product_sku_id,
         batch_id=payload.batch_id,
         inspection_standard_id=payload.inspection_standard_id,
+        product_category_id=payload.product_category_id,
+        quality_product_id=payload.quality_product_id,
         image_urls=payload.image_urls,
         image_items=payload.image_items,
         priority=payload.priority,

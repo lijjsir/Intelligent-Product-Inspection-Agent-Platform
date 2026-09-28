@@ -1,9 +1,9 @@
 from pathlib import Path
 
 from scripts.seed_mvtec_product_master import (
+    PRODUCT_META,
     discover_categories,
 )
-from app.services.product_master_service import UNSPECIFIED_BATCH_NAME, UNSPECIFIED_BATCH_NO
 
 
 def test_discover_mvtec_categories(tmp_path: Path):
@@ -15,6 +15,8 @@ def test_discover_mvtec_categories(tmp_path: Path):
     assert discover_categories(tmp_path) == ["bottle"]
 
 
-def test_dataset_batches_use_unspecified_default():
-    assert UNSPECIFIED_BATCH_NO == "UNSPECIFIED"
-    assert UNSPECIFIED_BATCH_NAME == "未指定批次"
+def test_mvtec_metadata_maps_dataset_category_to_product_category_and_product():
+    category_code, category_name, product_name = PRODUCT_META["bottle"]
+    assert category_code == "packaging"
+    assert category_name == "包装容器"
+    assert product_name == "瓶子"

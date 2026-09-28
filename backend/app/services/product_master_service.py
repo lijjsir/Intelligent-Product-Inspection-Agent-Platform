@@ -6,12 +6,8 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.product import ProductBatch, ProductLine, ProductSku
 from app.repositories.product_master_repo import ProductMasterRepository
 
-UNSPECIFIED_BATCH_NO = "UNSPECIFIED"
-UNSPECIFIED_BATCH_NAME = "未指定批次"
 LEGACY_DESCRIPTION = "Auto-created from legacy inspection task product_id."
 LEGACY_DESCRIPTION_ZH = "由历史检测任务的产品编号自动创建。"
-LEGACY_BATCH_DESCRIPTION = "Auto-created compatibility batch for tasks without batch_no."
-LEGACY_BATCH_DESCRIPTION_ZH = "为没有批次号的历史任务自动创建的兼容批次。"
 
 
 def _clean_text(value: Any) -> str:
@@ -22,15 +18,11 @@ def _localized_description(value: Any) -> str | None:
     text = _clean_text(value)
     if text == LEGACY_DESCRIPTION:
         return LEGACY_DESCRIPTION_ZH
-    if text == LEGACY_BATCH_DESCRIPTION:
-        return LEGACY_BATCH_DESCRIPTION_ZH
     return text or None
 
 
 def _localized_batch_name(name: Any, batch_no: Any) -> str:
     text = _clean_text(name)
-    if _clean_text(batch_no) == UNSPECIFIED_BATCH_NO and text.lower() == "unspecified batch":
-        return UNSPECIFIED_BATCH_NAME
     return text or _clean_text(batch_no)
 
 
@@ -135,45 +127,6 @@ class ProductMasterService:
             raise ValidationError("batch does not belong to selected product SKU")
         if not batch.is_active:
             raise ValidationError("batch is inactive")
-        return line, sku, batch
-
-    async def ensure_legacy_defaults(self, product_code: str) -> tuple[ProductLine, ProductSku, ProductBatch]:
-        code = _clean_text(product_code) or "unknown-product"
-        line = await self._repo.get_line_by_code(self._org_id, code)
-        if line is None:
-            line = await self._repo.create_line(
-                ProductLine(
-                    org_id=self._org_id,
-                    code=code,
-                    name=code,
-                    description=LEGACY_DESCRIPTION_ZH,
-                    is_active=True,
-                )
-            )
-        sku = await self._repo.get_sku_by_code(self._org_id, code)
-        if sku is None:
-            sku = await self._repo.create_sku(
-                ProductSku(
-                    org_id=self._org_id,
-                    product_line_id=str(line.id),
-                    code=code,
-                    name=code,
-                    description=LEGACY_DESCRIPTION_ZH,
-                    is_active=True,
-                )
-            )
-        batch = await self._repo.get_batch_by_sku_and_no(self._org_id, str(sku.id), UNSPECIFIED_BATCH_NO)
-        if batch is None:
-            batch = await self._repo.create_batch(
-                ProductBatch(
-                    org_id=self._org_id,
-                    product_sku_id=str(sku.id),
-                    batch_no=UNSPECIFIED_BATCH_NO,
-                    name=UNSPECIFIED_BATCH_NAME,
-                    description=LEGACY_BATCH_DESCRIPTION_ZH,
-                    is_active=True,
-                )
-            )
         return line, sku, batch
 
     async def _require_line(self, line_id: str) -> ProductLine:

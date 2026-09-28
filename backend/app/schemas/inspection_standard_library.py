@@ -13,6 +13,8 @@ class InspectionStandardCreate(BaseModel):
     spec_code: str | None = Field(default=None, max_length=64)
     applicable_product_line_ids: list[str] = Field(default_factory=list)
     applicable_product_sku_ids: list[str] = Field(default_factory=list)
+    applicable_category_ids: list[str] = Field(default_factory=list)
+    applicable_product_ids: list[str] = Field(default_factory=list)
     domain: str | None = Field(default=None, max_length=100)
     standard_status: str = Field(default="现行", max_length=32)
     chunk_strategy: str = Field(default="heading_then_size", max_length=32)
@@ -27,6 +29,8 @@ class InspectionStandardUpdate(BaseModel):
     spec_code: str | None = Field(default=None, max_length=64)
     applicable_product_line_ids: list[str] | None = None
     applicable_product_sku_ids: list[str] | None = None
+    applicable_category_ids: list[str] | None = None
+    applicable_product_ids: list[str] | None = None
     domain: str | None = Field(default=None, max_length=100)
     standard_status: str | None = Field(default=None, max_length=32)
     chunk_strategy: str | None = Field(default=None, max_length=32)
@@ -52,6 +56,8 @@ class InspectionStandardResponse(BaseModel):
     has_quality_threshold: bool = False
     applicable_product_line_ids: list[str] = Field(default_factory=list)
     applicable_product_sku_ids: list[str] = Field(default_factory=list)
+    applicable_category_ids: list[str] = Field(default_factory=list)
+    applicable_product_ids: list[str] = Field(default_factory=list)
     required_image_count: int | None = None
     required_views: list[str] = Field(default_factory=list)
     auto_pass_enabled: bool | None = None

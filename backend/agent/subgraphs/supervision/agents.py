@@ -98,12 +98,9 @@ class PublicOpinionMonitoringAgent:
                 for e in evidence
                 if e.get("source_type") in {"complaint", "public_opinion", "image"}
             ]
-            missing = [
-                k
-                for k in ("enterprise_id", "product_sku_id", "inspection_standard_id")
-                if not data.get(k)
-            ]
-            missing.extend(standard_applicability(state["snapshot"]))
+            missing = []
+            if state["snapshot"].get("standard"):
+                missing.extend(standard_applicability(state["snapshot"]))
             if not evidence:
                 missing.append("真实来源证据")
             if not public_sources:
@@ -303,17 +300,18 @@ class SupervisionSamplingAgent:
                 reason = None
                 if cases.get(c["case_id"], {}).get("status") != "risk_assessed":
                     reason = "风险评估尚未确认"
-                elif not c.get("test_items") or any(
-                    not t.get("standard_ref") for t in c["test_items"]
+                elif c.get("laboratory_validation") and (
+                    not c.get("test_items")
+                    or any(not t.get("standard_ref") for t in c["test_items"])
                 ):
                     reason = "缺少检测项目或标准依据"
-                elif c.get("device_id") and (
+                elif c.get("laboratory_validation") and c.get("device_id") and (
                     not dc
                     or dc["status"] != "active"
                     or used[c["device_id"]] + n > dc["data"].get("capacity", 0)
                 ):
                     reason = "设备未启用或容量不足"
-                elif c.get("device_id") and any(
+                elif c.get("laboratory_validation") and c.get("device_id") and any(
                     t["item"] not in dc["data"].get("capabilities", [])
                     for t in c.get("test_items", [])
                 ):

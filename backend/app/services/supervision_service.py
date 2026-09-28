@@ -334,11 +334,20 @@ class SupervisionService:
         for did in clean.get("device_ids", []):
             await self.get("devices", did)
         for candidate in clean.get("candidates", []):
-            await self.get("risk-cases", candidate["case_id"])
+            from app.models.quality_risk import QualityRiskCase
+
+            risk_case = await self.db.scalar(
+                select(QualityRiskCase).where(
+                    QualityRiskCase.id == candidate["case_id"],
+                    QualityRiskCase.org_id == self.org_id,
+                    QualityRiskCase.status == "risk_assessed",
+                    QualityRiskCase.deleted_at.is_(None),
+                )
+            )
+            if not risk_case:
+                raise ValidationError("监督抽查候选必须来自已复核风险研判")
             if candidate.get("device_id"):
                 await self.get("devices", candidate["device_id"])
-            if candidate.get("region_id"):
-                await self.get("regions", candidate["region_id"])
         for item in clean.get("test_items", []):
             if (
                 item.get("lower_limit") is not None
@@ -835,15 +844,48 @@ class SupervisionService:
         snap["as_of"] = datetime.utcnow().isoformat()
         snap["knowledge_snapshot_id"] = digest(snap)
         if record.kind == "sampling-plans" or operation == "risk_monitoring":
-            snap["cases"] = [
-                serialize(x)
-                for x in await self.db.scalars(
-                    select(SupervisionRecord).where(
-                        SupervisionRecord.org_id == self.org_id,
-                        SupervisionRecord.kind == "risk-cases",
+            from app.models.quality_risk import QualityRiskAssessment, QualityRiskCase
+
+            risk_rows = list(
+                await self.db.scalars(
+                    select(QualityRiskCase).where(
+                        QualityRiskCase.org_id == self.org_id,
+                        QualityRiskCase.deleted_at.is_(None),
                     )
                 )
-            ]
+            )
+            snap["cases"] = []
+            for item in risk_rows:
+                assessment = await self.db.scalar(
+                    select(QualityRiskAssessment)
+                    .where(
+                        QualityRiskAssessment.org_id == self.org_id,
+                        QualityRiskAssessment.risk_case_id == item.id,
+                        QualityRiskAssessment.status == "accepted",
+                        QualityRiskAssessment.deleted_at.is_(None),
+                    )
+                    .order_by(QualityRiskAssessment.version.desc())
+                    .limit(1)
+                )
+                snap["cases"].append(
+                    {
+                        "id": item.id,
+                        "status": item.status,
+                        "created_by": item.created_by,
+                        "assigned_to": item.assigned_to,
+                        "data": {
+                            "product_category": item.scope.get("name")
+                            if item.scope_type == "category"
+                            else item.scope.get("product_category"),
+                            "analysis": {
+                                "risk_level": assessment.risk_level
+                                if assessment
+                                else "unknown"
+                            },
+                            **item.scope,
+                        },
+                    }
+                )
             if record.kind == "sampling-plans":
                 source_ids = {c["case_id"] for c in record.data.get("candidates", [])}
                 snap["cases"] = [c for c in snap["cases"] if c["id"] in source_ids]
@@ -1620,22 +1662,52 @@ class SupervisionService:
         return self.review_response(review)
 
     async def create_plan_tasks(self, plan):
+        from app.models.organization import Organization
+        from app.models.quality_risk import PhysicalSample, QualityRiskCase
         from app.services.task_service import TaskService
 
         created = []
+        sampling_batches = []
+        organization = await self.db.get(Organization, self.org_id)
+        lab_enabled = bool(
+            organization
+            and (organization.settings or {}).get("laboratory_validation_enabled", False)
+        )
         for candidate in plan.data["analysis"]["selected"]:
-            case = await self.get("risk-cases", candidate["case_id"])
-            data = case.data
-            if not all(
-                data.get(k) for k in ("product_sku_id", "batch_id", "inspection_standard_id")
-            ):
-                raise ValidationError("抽查对象缺少产品、批次或检测标准")
+            case = await self.db.scalar(
+                select(QualityRiskCase).where(
+                    QualityRiskCase.id == candidate["case_id"],
+                    QualityRiskCase.org_id == self.org_id,
+                    QualityRiskCase.status == "risk_assessed",
+                    QualityRiskCase.deleted_at.is_(None),
+                )
+            )
+            if not case:
+                raise ValidationError("抽查对象未通过风险复核")
+            data = dict(case.scope or {})
+            sampling_batch_code = (
+                f"SAMPLE-{datetime.utcnow().strftime('%Y%m%d')}-{len(sampling_batches) + 1:03d}"
+            )
+            sampling_batches.append(
+                {
+                    "case_id": case.id,
+                    "code": sampling_batch_code,
+                    "sample_count": candidate["sample_count"],
+                    "location": candidate.get("region_id"),
+                }
+            )
+            if not candidate.get("laboratory_validation"):
+                continue
+            if not lab_enabled:
+                raise ValidationError("当前组织尚未启用实验室验证")
+            if not data.get("inspection_standard_id"):
+                raise ValidationError("实验室验证需要明确适用检测标准")
             task = await TaskService(self.db, self.org_id).create_task(
                 created_by=case.created_by,
-                product_id="",
+                product_id=data.get("product_name") or data.get("name") or "risk-validation",
                 spec_code="",
-                product_sku_id=data["product_sku_id"],
-                batch_id=data["batch_id"],
+                product_category_id=data.get("category_id"),
+                quality_product_id=data.get("product_id"),
                 inspection_standard_id=data["inspection_standard_id"],
                 image_urls=[],
                 image_items=None,
@@ -1648,57 +1720,33 @@ class SupervisionService:
                     "case_id": case.id,
                     "sample_count": candidate["sample_count"],
                     "test_items": candidate["test_items"],
-                    "sampling_region_id": candidate.get("region_id"),
+                    "sampling_location": candidate.get("region_id"),
                     "device_id": candidate.get("device_id"),
                 },
             )
             created.append(task.id)
             sample_ids = []
-            for number in range(candidate["sample_count"]):
-                sample = SupervisionRecord(
+            for _ in range(candidate["sample_count"]):
+                sample = PhysicalSample(
                     org_id=self.org_id,
-                    kind="samples",
-                    code=f"{task.id}-S{number + 1}",
-                    name=f"待抽查样品{number + 1}",
-                    status="planned",
-                    created_by=task.created_by,
-                    assigned_to=case.assigned_to,
-                    data={
-                        "task_id": task.id,
-                        "product_sku_id": data["product_sku_id"],
-                        "batch_id": data["batch_id"],
-                        "sampled_at": None,
-                        "sampling_region_id": candidate.get("region_id"),
-                    },
+                    sampling_plan_id=plan.id,
+                    product_id=data.get("product_id"),
+                    production_batch_ref=data.get("production_batch_ref"),
+                    external_sample_code=None,
+                    unit_serial_ref=None,
+                    sampled_at=None,
+                    sampling_location={"region_code": candidate.get("region_id")},
+                    custody_status="planned",
                 )
                 self.db.add(sample)
                 await self.db.flush()
-                await self.journal(sample, "allocate_sample", increment=False)
                 sample_ids.append(sample.id)
-            # The approved plan itself is the source; session waits for real measurements.
-            session_record = SupervisionRecord(
-                org_id=self.org_id,
-                kind="inspection-sessions",
-                code=f"plan-task:{task.id}",
-                name=f"计划检测 · {case.name}",
-                status="collecting",
-                created_by=task.created_by,
-                assigned_to=case.assigned_to,
-                data={
-                    "task_id": task.id,
-                    "case_id": case.id,
-                    "plan_id": plan.id,
-                    "input_mode": "measurement",
-                    "sample_ids": sample_ids,
-                    "device_ids": [candidate["device_id"]] if candidate.get("device_id") else [],
-                    "test_items": candidate["test_items"],
-                    "baseline_version": None,
-                },
-            )
-            self.db.add(session_record)
-            await self.db.flush()
-            await self.journal(session_record, "approved_plan_session", increment=False)
-        plan.data = {**plan.data, "task_ids": created}
+            task.meta_data = {**(task.meta_data or {}), "physical_sample_ids": sample_ids}
+        plan.data = {
+            **plan.data,
+            "task_ids": created,
+            "sampling_batches": sampling_batches,
+        }
 
     async def sign_result(self, session, comment):
         from app.models.result import InspectionResult

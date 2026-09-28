@@ -1,5 +1,7 @@
 """Isolated SQLite QA server; uses production routes/services and test fixtures."""
 
+# ruff: noqa: E402 - this QA entrypoint configures import/session state before app startup.
+
 import sys
 from pathlib import Path
 
@@ -22,6 +24,9 @@ from app.models import (
     InspectionStandardLibrary,
     StandardDocument,
     StandardDocumentChunk,
+    ProductCategory,
+    QualityDataSource,
+    QualityProduct,
 )
 from app.models.supervision import SupervisionRun
 from app.core.security import create_access_token, hash_password
@@ -77,7 +82,9 @@ async def lifespan(app):
         await c.run_sync(metadata.drop_all)
         await c.run_sync(metadata.create_all)
     now = datetime.utcnow()
-    org, sku, batch, line, spec, standard, task, doc, chunk = [uid() for _ in range(9)]
+    org, sku, batch, line, spec, standard, task, doc, chunk, category, product, source = [
+        uid() for _ in range(12)
+    ]
     roles = {
         r: uid()
         for r in [
@@ -97,7 +104,10 @@ async def lifespan(app):
                 name="质监验证组织（测试）",
                 slug="quality-qa",
                 is_active=True,
-                settings={"quality_supervision_enabled": True},
+                settings={
+                    "quality_supervision_enabled": True,
+                    "laboratory_validation_enabled": False,
+                },
                 created_at=now,
                 updated_at=now,
             )
@@ -116,6 +126,46 @@ async def lifespan(app):
                     updated_at=now,
                 )
             )
+        db.add(
+            ProductCategory(
+                id=category,
+                org_id=org,
+                code="EBIKE",
+                name="电动自行车",
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            QualityProduct(
+                id=product,
+                org_id=org,
+                category_id=category,
+                name="通勤型电动自行车",
+                model="QA-TDT-001",
+                brand="测试品牌",
+                attributes={},
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            QualityDataSource(
+                id=source,
+                org_id=org,
+                code="QA-COMPLAINT",
+                name="投诉资料（测试）",
+                source_type="consumer_complaint",
+                connector_type="manual",
+                config={},
+                status="active",
+                created_by=roles["expert"],
+                created_at=now,
+                updated_at=now,
+            )
+        )
         db.add(
             ProductLine(
                 id=line,
@@ -231,6 +281,9 @@ async def lifespan(app):
         sku_id=sku,
         batch_id=batch,
         standard_id=standard,
+        category_id=category,
+        product_id=product,
+        source_id=source,
         task_id=task,
         roles={
             r: {

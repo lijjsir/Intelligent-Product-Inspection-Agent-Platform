@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import supervision
+from app.api.v1 import quality_risk, supervision
 
 from app.api.v1 import (
     admin_meetings,
@@ -32,7 +32,6 @@ from app.api.v1 import (
     memory,
     meetings,
     model_configs,
-    product_master,
     prompt_admin,
     quality,
     quality_kg,
@@ -47,6 +46,7 @@ from app.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(quality_risk.router, tags=["quality-risk-v4"])
 router.include_router(supervision.router, tags=["quality-supervision"])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(roles.router, prefix="/roles", tags=["roles"])
@@ -72,7 +72,6 @@ router.include_router(admin_meetings.router, tags=["admin-meetings"])
 router.include_router(rag_spaces.router, tags=["rag-spaces"])
 router.include_router(streams.router, tags=["streams"])
 router.include_router(model_configs.router, prefix="/model-configs", tags=["model-configs"])
-router.include_router(product_master.router, prefix="/product-master", tags=["product-master"])
 router.include_router(inspection_standards.router, prefix="/inspection-standards", tags=["inspection-standards"])
 router.include_router(inspection_standards.router, prefix="/standard-libraries", tags=["standard-libraries"])
 router.include_router(inspection_standards.standard_documents_router, prefix="/standard-documents", tags=["standard-documents"])

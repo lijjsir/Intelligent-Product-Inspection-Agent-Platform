@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from app.core.datetime import utcnow
@@ -524,6 +525,14 @@ class InspectionStandardLibraryService:
             sku_ids = _normalize_id_list(payload.get("applicable_product_sku_ids"))
             await self._ensure_product_skus_exist(sku_ids)
             normalized["applicable_product_sku_ids"] = sku_ids
+        if "applicable_category_ids" in payload or not partial:
+            category_ids = _normalize_id_list(payload.get("applicable_category_ids"))
+            await self._ensure_product_categories_exist(category_ids)
+            normalized["applicable_category_ids"] = category_ids
+        if "applicable_product_ids" in payload or not partial:
+            product_ids = _normalize_id_list(payload.get("applicable_product_ids"))
+            await self._ensure_quality_products_exist(product_ids)
+            normalized["applicable_product_ids"] = product_ids
         for key in ("domain", "product_category", "qdrant_collection", "pdf_root_dir", "file_glob", "chunk_strategy", "standard_status"):
             if key in payload:
                 value = str(payload.get(key) or "").strip()
@@ -582,6 +591,34 @@ class InspectionStandardLibraryService:
             if not await self._product_repo.get_sku(self._org_id, sku_id):
                 raise ValidationError(f"product SKU not found: {sku_id}")
 
+    async def _ensure_product_categories_exist(self, category_ids: list[str]) -> None:
+        from app.models.quality_risk import ProductCategory
+
+        for category_id in category_ids:
+            row = await self._session.scalar(
+                select(ProductCategory.id).where(
+                    ProductCategory.id == category_id,
+                    ProductCategory.org_id == self._org_id,
+                    ProductCategory.deleted_at.is_(None),
+                )
+            )
+            if not row:
+                raise ValidationError(f"product category not found: {category_id}")
+
+    async def _ensure_quality_products_exist(self, product_ids: list[str]) -> None:
+        from app.models.quality_risk import QualityProduct
+
+        for product_id in product_ids:
+            row = await self._session.scalar(
+                select(QualityProduct.id).where(
+                    QualityProduct.id == product_id,
+                    QualityProduct.org_id == self._org_id,
+                    QualityProduct.deleted_at.is_(None),
+                )
+            )
+            if not row:
+                raise ValidationError(f"product not found: {product_id}")
+
     async def _serialize(self, item: InspectionStandardLibrary) -> dict[str, Any]:
         rows = await self._rag_repo.list_for_org(org_id=self._org_id, owner_user_id=None, limit=500)
         space_map = {str(row.id): row for row in rows}
@@ -620,6 +657,8 @@ class InspectionStandardLibraryService:
             "has_quality_threshold": spec is not None,
             "applicable_product_line_ids": list(getattr(item, "applicable_product_line_ids", None) or []),
             "applicable_product_sku_ids": list(getattr(item, "applicable_product_sku_ids", None) or []),
+            "applicable_category_ids": list(getattr(item, "applicable_category_ids", None) or []),
+            "applicable_product_ids": list(getattr(item, "applicable_product_ids", None) or []),
             "required_image_count": int(spec.required_image_count or 1) if spec else None,
             "required_views": list(getattr(spec, "required_views", None) or []) if spec else [],
             "auto_pass_enabled": bool(spec.auto_pass_enabled) if spec else None,
