@@ -278,6 +278,12 @@ async function openEdit() {
   name.value = selected.value.name;
   code.value = selected.value.code;
   form.value = cleanFields(selected.value.data, inputSpecs.value);
+  if (kind.value === "enterprises" && !form.value.location) {
+    form.value.location = {
+      formatted_address: selected.value.data.address || "",
+      location_method: selected.value.data.address ? "source" : "unknown",
+    };
+  }
   dialog.value = true;
   await loadOptions();
 }
@@ -390,6 +396,13 @@ async function reassess() {
 }
 function display(f: any, value: any): string {
   if (value == null || value === "") return "未登记";
+  if (f.type === "location") {
+    return (
+      value.formatted_address ||
+      [value.province_code, value.city_code, value.district_code].filter(Boolean).join(" / ") ||
+      "未登记"
+    );
+  }
   if (f.type === "date") return formatServerDateTime(String(value));
   if (f.type === "select")
     return (Array.isArray(value) ? value : [value])

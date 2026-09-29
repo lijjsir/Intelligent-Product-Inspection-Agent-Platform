@@ -7,6 +7,11 @@ const batches: FieldOption[] = [
 ];
 
 describe("supervision product/batch dependencies", () => {
+  it("uses the built-in location component for enterprise addresses", () => {
+    expect(fields.enterprises.find((field) => field.key === "location")?.type).toBe("location");
+    expect(fields.enterprises.some((field) => field.key === "region_id")).toBe(false);
+  });
+
   it("filters duplicate batch labels by the selected product", () => {
     const batchField = fields["risk-cases"].find((field) => field.key === "batch_id");
     expect(batchField).toBeDefined();

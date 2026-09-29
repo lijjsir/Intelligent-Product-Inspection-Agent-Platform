@@ -5,6 +5,7 @@ import {
   type FieldOption,
   type FieldSpec,
 } from "./form-fields";
+import LocationPicker from "@/components/business/quality-risk/LocationPicker.vue";
 defineOptions({ name: "SupervisionFields" });
 const props = defineProps<{
   modelValue: Record<string, any>;
@@ -79,9 +80,14 @@ function add(f: FieldSpec) {
           />
         </div>
       </section>
-      <el-form-item v-else :label="f.label" :required="f.required">
+      <el-form-item v-else :label="f.label" :required="f.required" :class="{ 'wide-field': f.type === 'location' }">
+        <LocationPicker
+          v-if="f.type === 'location'"
+          :model-value="modelValue[f.key] || { location_method: 'unknown' }"
+          @update:model-value="set(f.key, $event)"
+        />
         <el-select
-          v-if="f.type === 'select'"
+          v-else-if="f.type === 'select'"
           :model-value="modelValue[f.key]"
           :multiple="f.multiple"
           :disabled="isDisabled(f)"
@@ -159,6 +165,9 @@ function add(f: FieldSpec) {
   grid-column: 1 / -1;
   border-top: 1px solid var(--el-border-color-light);
   padding: 14px 0;
+}
+.wide-field {
+  grid-column: 1 / -1;
 }
 .repeat-heading {
   display: flex;
