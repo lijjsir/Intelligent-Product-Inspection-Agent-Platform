@@ -61,6 +61,11 @@ class QualityRiskService:
         if self.current.role not in allowed:
             raise ForbiddenError("当前角色无权执行此操作")
 
+    async def flush_and_refresh(self, row) -> None:
+        """Flush writes and load database-generated timestamps before serialization."""
+        await self.db.flush()
+        await self.db.refresh(row)
+
     async def product_catalog(self, *, include_inactive: bool = False) -> dict:
         self.require_role(BUSINESS_READ | {"algorithm_engineer"})
         category_stmt = select(ProductCategory).where(ProductCategory.org_id == self.org_id, ProductCategory.deleted_at.is_(None))
@@ -99,7 +104,7 @@ class QualityRiskService:
             await self.category(payload.parent_id)
         row = ProductCategory(org_id=self.org_id, **payload.model_dump())
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.category_response(row)
 
     async def update_category(self, category_id: str, payload) -> dict:
@@ -110,7 +115,7 @@ class QualityRiskService:
             raise ValidationError("产品类别不能成为自己的上级")
         for key, value in data.items():
             setattr(row, key, value)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.category_response(row)
 
     async def category(self, category_id: str) -> ProductCategory:
@@ -127,6 +132,7 @@ class QualityRiskService:
         self.db.add(row)
         await self.db.flush()
         identifiers = await self.replace_identifiers(row.id, payload.identifiers)
+        await self.db.refresh(row)
         return self.product_response(row, category.name, identifiers)
 
     async def update_product(self, product_id: str, payload) -> dict:
@@ -146,7 +152,7 @@ class QualityRiskService:
                 for x in await self.db.scalars(select(ProductIdentifier).where(ProductIdentifier.product_id == row.id, ProductIdentifier.org_id == self.org_id, ProductIdentifier.deleted_at.is_(None)))
             ]
         category = await self.category(row.category_id)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.product_response(row, category.name, identifiers)
 
     async def product(self, product_id: str) -> QualityProduct:
@@ -181,7 +187,7 @@ class QualityRiskService:
             raise ConflictError("数据来源编码已存在")
         row = QualityDataSource(org_id=self.org_id, created_by=self.actor, **payload.model_dump())
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.source_response(row)
 
     async def update_source(self, source_id: str, payload) -> dict:
@@ -189,7 +195,7 @@ class QualityRiskService:
         row = await self.source(source_id)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(row, key, value)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.source_response(row)
 
     async def source(self, source_id: str) -> QualityDataSource:
@@ -236,7 +242,7 @@ class QualityRiskService:
             created_by=self.actor,
         )
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         await self.materialize_evidence(row)
         return self.record_response(row)
 
@@ -302,7 +308,7 @@ class QualityRiskService:
         stored = self.storage.put_bytes(bucket="quality-data", object_key=object_key, data=data, content_type=file.content_type)
         row = QualityAttachment(org_id=self.org_id, file_name=name, mime_type=file.content_type or "application/octet-stream", size_bytes=len(data), sha256=checksum, bucket=str(stored.get("bucket") or "quality-data"), object_key=str(stored.get("object_key") or object_key), uploaded_by=self.actor)
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.attachment_response(row)
 
     async def validate_attachments(self, ids: list[str]) -> None:
@@ -332,7 +338,7 @@ class QualityRiskService:
         batch_code = await self.next_import_batch_code()
         job = QualityIngestionJob(org_id=self.org_id, source_id=source_id, request_key=request_key, import_batch_code=batch_code, status="preview", file_name=file.filename, mapping=mapping, raw_payload={"rows": normalized[:5000]}, total_count=len(rows), valid_count=len(normalized), error_count=len(errors), errors=errors[:1000], created_by=self.actor)
         self.db.add(job)
-        await self.db.flush()
+        await self.flush_and_refresh(job)
         return self.ingestion_response(job)
 
     async def confirm_import(self, job_id: str) -> dict:
@@ -349,7 +355,7 @@ class QualityRiskService:
             accepted += 1
         job.status = "confirmed"
         job.valid_count = accepted
-        await self.db.flush()
+        await self.flush_and_refresh(job)
         return self.ingestion_response(job)
 
     async def cancel_import(self, job_id: str) -> dict:
@@ -358,7 +364,7 @@ class QualityRiskService:
         if job.status == "confirmed":
             raise ConflictError("已确认导入不能取消")
         job.status = "cancelled"
-        await self.db.flush()
+        await self.flush_and_refresh(job)
         return self.ingestion_response(job)
 
     async def ingestion_job(self, job_id: str, *, lock: bool = False) -> QualityIngestionJob:
@@ -380,7 +386,7 @@ class QualityRiskService:
             evidence_ids = list(await self.db.scalars(select(QualityEvidenceItem.id).where(QualityEvidenceItem.org_id == self.org_id, QualityEvidenceItem.source_record_id.in_(payload.source_record_ids), QualityEvidenceItem.deleted_at.is_(None))))
         row = QualityRiskCase(org_id=self.org_id, code=f"RISK-{str(uuid7())[-12:].upper()}", title=payload.title, scope_type=payload.scope_type, scope=payload.scope, status="collecting", evidence_ids=evidence_ids, source_record_ids=payload.source_record_ids, assigned_to=payload.assigned_to, created_by=self.actor)
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.risk_case_response(row)
 
     async def list_risk_cases(self, *, page: int, size: int, status: str | None, keyword: str | None) -> dict:
@@ -485,7 +491,7 @@ class QualityRiskService:
         assessment = QualityRiskAssessment(org_id=self.org_id, risk_case_id=case.id, version=int(latest or 0) + 1, risk_type=types[0] if types else None, risk_level=level, scope=case.scope, evidence_ids=[x.id for x in observed], standard_matches=[], conflicts=[], missing_inputs=missing, possible_causes=list(dict.fromkeys(causes)), recommendations=list(dict.fromkeys(recommendations)), trust_status="needs_review", probability=None, model_versions=model_versions, policy_version=policy.version if policy else None, knowledge_snapshot_id=stable_hash({"records": [(x.id, x.updated_at) for x in records], "evidence": [x.content_hash for x in evidence]}), status="awaiting_evidence" if missing else "awaiting_review", submitted_by=self.actor)
         self.db.add(assessment)
         case.status = assessment.status
-        await self.db.flush()
+        await self.flush_and_refresh(assessment)
         return self.assessment_response(assessment)
 
     async def review_risk(self, risk_case_id: str, payload) -> dict:
@@ -511,7 +517,7 @@ class QualityRiskService:
         assessment.trust_status = "verified" if payload.decision == "accept" else "needs_evidence"
         assessment.status = "accepted" if payload.decision == "accept" else payload.decision
         case.status = "risk_assessed" if payload.decision == "accept" else "awaiting_evidence"
-        await self.db.flush()
+        await self.flush_and_refresh(assessment)
         return self.assessment_response(assessment)
 
     async def get_assessment(self, assessment_id: str) -> dict:
@@ -549,7 +555,7 @@ class QualityRiskService:
             raise ConflictError("相同政策编码和版本已存在")
         row = RiskPolicy(org_id=self.org_id, code=payload.code, name=payload.name, version=payload.version, rules=payload.rules, status="draft", created_by=self.actor)
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.policy_response(row)
 
     async def publish_policy(self, policy_id: str) -> dict:
@@ -573,7 +579,7 @@ class QualityRiskService:
         row.status = "published"
         row.published_by = self.actor
         row.published_at = utcnow()
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.policy_response(row)
 
     async def list_standard_rules(self) -> list[dict]:
@@ -628,7 +634,7 @@ class QualityRiskService:
             **payload.model_dump(),
         )
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.standard_rule_response(row)
 
     async def publish_standard_rule(self, rule_id: str) -> dict:
@@ -663,7 +669,7 @@ class QualityRiskService:
         row.reviewed_by = row.reviewed_by or self.actor
         row.published_by = self.actor
         row.published_at = utcnow()
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.standard_rule_response(row)
 
     async def list_physical_samples(self, sampling_plan_id: str | None = None) -> list[dict]:
@@ -713,7 +719,7 @@ class QualityRiskService:
             custody_status="collected" if payload.sampled_at else "planned",
         )
         self.db.add(row)
-        await self.db.flush()
+        await self.flush_and_refresh(row)
         return self.physical_sample_response(row)
 
     def parse_rows(self, name: str, content: bytes) -> list[dict]:

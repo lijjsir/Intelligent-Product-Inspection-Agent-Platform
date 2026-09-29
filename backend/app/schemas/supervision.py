@@ -23,6 +23,17 @@ class RegionData(Strict):
     dictionary_version: str = "2026"
 
 
+class BusinessLocation(Strict):
+    province_code: str | None = Field(default=None, max_length=12)
+    city_code: str | None = Field(default=None, max_length=12)
+    district_code: str | None = Field(default=None, max_length=12)
+    formatted_address: str | None = Field(default=None, max_length=500)
+    longitude: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+    latitude: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    location_method: Literal["manual", "browser", "imported", "source", "unknown"] = "unknown"
+    accuracy_meters: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 class ProductDetails(Strict):
     product_category: str | None = None
     brand: str | None = None
@@ -48,6 +59,7 @@ class EnterpriseData(Strict):
     role: Literal["manufacturer", "seller", "both"] = "manufacturer"
     address: str | None = Field(default=None, max_length=500)
     region_id: UUID | None = None
+    location: BusinessLocation = Field(default_factory=BusinessLocation)
     product_sku_ids: list[UUID] = Field(default_factory=list)
 
 

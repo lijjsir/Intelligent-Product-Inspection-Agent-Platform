@@ -29,6 +29,7 @@ from app.models.supervision import (
 )
 from app.schemas.user import CurrentUser
 from app.schemas.supervision import (
+    EnterpriseData,
     MeasurementIngest,
     RecordCreate,
     RecordUpdate,
@@ -42,6 +43,23 @@ from agent.subgraphs.supervision.agents import AGENTS
 
 def uid():
     return str(uuid4())
+
+
+def test_enterprise_accepts_builtin_location_without_region_record():
+    data = EnterpriseData.model_validate(
+        {
+            "role": "manufacturer",
+            "location": {
+                "province_code": "500000",
+                "city_code": "500100",
+                "district_code": "500106",
+                "formatted_address": "重庆市沙坪坝区",
+                "location_method": "manual",
+            },
+        }
+    )
+    assert data.region_id is None
+    assert data.location.district_code == "500106"
 
 
 @pytest_asyncio.fixture
