@@ -3,8 +3,6 @@ import { computed } from "vue";
 
 const props = withDefaults(
   defineProps<{
-    index: string;
-    code: string;
     title: string;
     agentName: string;
     description: string;
@@ -34,10 +32,6 @@ const palette = computed(
       '--module-glow': palette.glow,
     }"
   >
-    <div class="module-index" aria-hidden="true">
-      <span>{{ index }}</span>
-      <strong>{{ code }}</strong>
-    </div>
     <div class="module-copy">
       <p class="module-kicker">QUALITY SUPERVISION · {{ agentName }}</p>
       <h1>{{ title }}</h1>
@@ -57,7 +51,7 @@ const palette = computed(
 .module-header {
   position: relative;
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 24px;
   min-height: 184px;
@@ -80,39 +74,6 @@ const palette = computed(
   border: 1px solid color-mix(in srgb, var(--module-accent) 16%, transparent);
   border-radius: 50%;
   content: "";
-}
-
-.module-index {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  width: 82px;
-  height: 104px;
-  place-items: center;
-  align-content: center;
-  gap: 9px;
-  border-radius: 16px;
-  background: var(--module-accent);
-  color: #fff;
-  box-shadow: 0 14px 28px var(--module-glow);
-}
-
-.module-index span {
-  font:
-    750 28px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-}
-
-.module-index strong {
-  font:
-    700 11px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  letter-spacing: 0.15em;
-  opacity: 0.82;
 }
 
 .module-copy {
@@ -188,16 +149,11 @@ const palette = computed(
 
 @media (max-width: 880px) {
   .module-header {
-    grid-template-columns: 72px minmax(0, 1fr);
-  }
-
-  .module-index {
-    width: 66px;
-    height: 90px;
+    grid-template-columns: 1fr;
   }
 
   .module-actions {
-    grid-column: 1 / -1;
+    grid-column: 1;
     max-width: none;
     justify-content: flex-start;
   }
@@ -210,18 +166,6 @@ const palette = computed(
     min-height: 0;
     padding: 22px 18px;
     border-radius: 15px;
-  }
-
-  .module-index {
-    width: auto;
-    height: 42px;
-    grid-template-columns: auto auto;
-    justify-content: start;
-    padding: 0 14px;
-  }
-
-  .module-index span {
-    font-size: 18px;
   }
 
   .module-actions {

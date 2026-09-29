@@ -109,7 +109,7 @@ describe("useMenu", () => {
     expect(flattenPaths().slice(0, 3)).toEqual([
       "/app/chat",
       "/app/workbench",
-      "/app/quality-data",
+      "/app/quality-analytics",
     ]);
 
     for (const role of [
@@ -130,7 +130,8 @@ describe("useMenu", () => {
     for (const role of [ROLE_USER, ROLE_EXPERT]) {
       auth.role = role;
       auth.roles = [role];
-      expect(flattenTitles()).toContain("数据接入");
+      if (role === ROLE_USER) expect(flattenTitles()).toContain("数据接入");
+      else expect(flattenTitles()).not.toContain("数据接入");
       expect(flattenTitles()).toContain("风险研判");
       expect(flattenTitles()).not.toContain("实验室检测");
       expect(flattenTitles()).toContain("通用任务");
@@ -175,7 +176,8 @@ describe("useMenu", () => {
     expect(groupTitles).not.toContain("只读巡检");
     expect(titles).toContain("告警管理");
     expect(titles).toContain("Agent 查看");
-    expect(titles).toContain("标准执行规则");
+    expect(titles).toContain("标准条款判定条件");
+    expect(titles).toContain("AI结果复核门槛");
     expect(titles).toContain("模型观测");
     expect(titles).not.toContain("数据质量");
     expect(titles).not.toContain("业务报表");

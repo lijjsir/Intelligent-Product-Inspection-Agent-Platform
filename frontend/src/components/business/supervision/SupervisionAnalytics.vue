@@ -25,11 +25,11 @@ onMounted(load);
 </script>
 <template>
   <section v-if="enabled && report" class="supervision-analytics">
-    <header>
-      <div>
+    <header class="analytics-head">
+      <div class="analytics-title">
         <p class="eyebrow">MARKET SIGNALS</p>
         <h2>态势概览</h2>
-        <p>基于已确认风险案件查看地区、企业、产品和抽查覆盖变化；案件增长不等同产品失效率。</p>
+        <p>从已确认风险中观察地区、企业、产品类别和抽查覆盖变化。</p>
       </div>
       <div class="header-actions">
         <el-button v-if="auth.role === 'expert'" @click="router.push('/app/exposures')"
@@ -38,7 +38,16 @@ onMounted(load);
         <el-button @click="load">刷新</el-button>
       </div>
     </header>
-    <p>{{ report.summary }}</p>
+    <div class="summary-banner">
+      <div><span>当前观察</span><strong>{{ report.summary }}</strong></div>
+      <small>数量变化只表示线索变化；没有销量、在用量或抽查量等分母时，不计算产品失效率。</small>
+    </div>
+    <div class="coverage-cards">
+      <article><span>已确认产品类别</span><strong>{{ report.confirmed_categories.length }}</strong></article>
+      <article><span>抽查计划</span><strong>{{ report.plans.length }}</strong></article>
+      <article><span>检测会话</span><strong>{{ report.sessions.length }}</strong></article>
+      <article><span>已签发验证</span><strong>{{ report.sessions.filter((x: any) => x.status === "signed").length }}</strong></article>
+    </div>
     <el-tabs
       ><el-tab-pane label="地区与类别"
         ><div class="dimensions">
@@ -80,10 +89,11 @@ onMounted(load);
   background: #fff;
   box-shadow: 0 10px 28px rgba(16, 42, 67, 0.05);
 }
-header {
+.analytics-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
+  gap: 24px;
 }
 h2 {
   margin: 0;
@@ -98,6 +108,11 @@ h2 {
   font-weight: 700;
   letter-spacing: 0.12em;
 }
+.analytics-title > p:last-child {
+  margin: 8px 0 0;
+  color: #5e7282;
+  line-height: 1.6;
+}
 h3 {
   color: #334e68;
   font-size: 14px;
@@ -105,6 +120,57 @@ h3 {
 .header-actions {
   display: flex;
   gap: 10px;
+}
+.summary-banner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.65fr);
+  gap: 24px;
+  align-items: center;
+  margin: 20px 0 12px;
+  padding: 18px 20px;
+  border-left: 4px solid #0b63ce;
+  border-radius: 10px;
+  background: #f3f7fc;
+}
+.summary-banner div {
+  display: grid;
+  gap: 5px;
+}
+.summary-banner span,
+.coverage-cards span {
+  color: #65798a;
+  font-size: 12px;
+}
+.summary-banner strong {
+  color: #173a57;
+  font-size: 16px;
+  line-height: 1.55;
+}
+.summary-banner small {
+  color: #627383;
+  line-height: 1.6;
+}
+.coverage-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 18px;
+  overflow: hidden;
+  border: 1px solid #e1e9f0;
+  border-radius: 11px;
+}
+.coverage-cards article {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border-right: 1px solid #e6edf3;
+}
+.coverage-cards article:last-child {
+  border-right: 0;
+}
+.coverage-cards strong {
+  color: #123a5d;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
 }
 .dimensions {
   display: grid;
@@ -126,7 +192,7 @@ h3 {
   margin-top: 14px;
 }
 @media (max-width: 640px) {
-  header {
+  .analytics-head {
     align-items: flex-start;
     flex-direction: column;
     gap: 16px;
@@ -140,6 +206,26 @@ h3 {
   }
   .dimensions {
     grid-template-columns: 1fr;
+  }
+  .summary-banner,
+  .coverage-cards {
+    grid-template-columns: 1fr 1fr;
+  }
+  .summary-banner {
+    gap: 10px;
+  }
+  .coverage-cards article:nth-child(2) {
+    border-right: 0;
+  }
+}
+@media (max-width: 440px) {
+  .summary-banner,
+  .coverage-cards {
+    grid-template-columns: 1fr;
+  }
+  .coverage-cards article {
+    border-right: 0;
+    border-bottom: 1px solid #e6edf3;
   }
 }
 </style>

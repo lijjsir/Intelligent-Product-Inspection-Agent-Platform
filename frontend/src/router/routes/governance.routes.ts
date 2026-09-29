@@ -60,6 +60,12 @@ export const governanceRoutes = [
     meta: { title: "产品类别与产品", roles: [ROLE_ADMIN] },
   },
   {
+    path: "admin/quality-data-sources",
+    name: "governance-admin-quality-data-sources",
+    component: () => import("@/views/admin/QualityDataSourceView.vue"),
+    meta: { title: "数据来源", roles: [ROLE_ADMIN] },
+  },
+  {
     path: "admin/inspection-standards",
     name: "governance-admin-inspection-standards",
     component: () => import("@/views/admin/InspectionStandardLibraryView.vue"),
@@ -69,7 +75,13 @@ export const governanceRoutes = [
     path: "admin/inspection-specs",
     name: "governance-admin-inspection-specs",
     component: () => import("@/views/admin/StandardExecutionRuleView.vue"),
-    meta: { title: "标准执行规则", roles: [ROLE_ADMIN] },
+    meta: { title: "标准条款判定条件", roles: [ROLE_ADMIN] },
+  },
+  {
+    path: "admin/ai-review-gates",
+    name: "governance-admin-ai-review-gates",
+    component: () => import("@/views/admin/InspectionSpecView.vue"),
+    meta: { title: "AI结果复核门槛", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/risk-policies",

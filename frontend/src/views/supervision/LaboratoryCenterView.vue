@@ -68,8 +68,6 @@ onMounted(load);
 <template>
   <main class="laboratory-page" v-loading="loading">
     <SupervisionModuleHeader
-      index="04"
-      code="LAB"
       title="实验室检测"
       agent-name="实验室检测 Agent"
       tone="violet"

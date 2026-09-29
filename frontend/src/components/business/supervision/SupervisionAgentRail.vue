@@ -5,32 +5,24 @@ const route = useRoute();
 
 const agents = [
   {
-    order: "01",
-    code: "MKT",
     title: "市场监控",
     action: "持续发现变化",
     path: "/app/quality-analytics",
     color: "#0b63ce",
   },
   {
-    order: "02",
-    code: "VOC",
     title: "舆情监测",
     action: "核实风险线索",
     path: "/app/risk-cases",
     color: "#087f8c",
   },
   {
-    order: "03",
-    code: "SAM",
     title: "监督抽查",
     action: "制定约束计划",
     path: "/app/sampling-plans",
     color: "#c96a0a",
   },
   {
-    order: "04",
-    code: "LAB",
     title: "实验室检测",
     action: "设备闭环取证",
     path: "/app/laboratory",
@@ -52,19 +44,17 @@ function active(path: string) {
   <nav class="agent-rail" aria-label="四类质量监督 Agent">
     <RouterLink
       v-for="agent in agents"
-      :key="agent.code"
+      :key="agent.path"
       :to="agent.path"
       class="agent-rail-item"
       :class="{ active: active(agent.path) }"
       :style="{ '--agent-color': agent.color }"
       :aria-current="active(agent.path) ? 'page' : undefined"
     >
-      <span class="agent-order">{{ agent.order }}</span>
       <span class="agent-name"
         ><strong>{{ agent.title }}</strong
         ><small>{{ agent.action }}</small></span
       >
-      <span class="agent-code">{{ agent.code }}</span>
     </RouterLink>
   </nav>
 </template>
@@ -83,7 +73,7 @@ function active(path: string) {
 .agent-rail-item {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 76px;
   align-items: center;
   gap: 10px;
@@ -132,25 +122,6 @@ function active(path: string) {
   outline-offset: -3px;
 }
 
-.agent-order,
-.agent-code {
-  color: var(--agent-color);
-  font:
-    700 10px/1 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-}
-
-.agent-order {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--agent-color) 10%, white);
-}
-
 .agent-name {
   min-width: 0;
 }
@@ -171,10 +142,6 @@ function active(path: string) {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agent-code {
-  opacity: 0.55;
 }
 
 @media (max-width: 980px) {

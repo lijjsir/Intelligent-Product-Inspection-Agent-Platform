@@ -418,13 +418,13 @@ onMounted(loadAll);
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="自动判定规则" min-width="180">
+        <el-table-column label="AI结果复核门槛" min-width="180">
           <template #default="{ row }">
             <el-tag :type="row.has_quality_threshold ? 'success' : 'warning'" effect="plain">
               {{
                 row.has_quality_threshold
-                  ? row.spec_code || row.spec_name || "已绑定"
-                  : "未绑定规则"
+                  ? row.spec_code || row.spec_name || "已配置"
+                  : "未配置"
               }}
             </el-tag>
           </template>

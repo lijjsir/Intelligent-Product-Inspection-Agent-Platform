@@ -32,8 +32,6 @@ const title = computed(() => KIND_LABELS[kind.value]);
 const moduleMeta = computed(() => {
   if (kind.value === "risk-cases") {
     return {
-      index: "02",
-      code: "VOC",
       agentName: "舆情监测 Agent",
       tone: "cyan" as const,
       description: "从投诉、舆情、图片与附件中分离事实、情绪和推测，形成可定位、可补证的风险线索。",
@@ -42,8 +40,6 @@ const moduleMeta = computed(() => {
   }
   if (kind.value === "sampling-plans") {
     return {
-      index: "03",
-      code: "SAM",
       agentName: "监督抽查 Agent",
       tone: "amber" as const,
       description: "依据已复核风险、产品覆盖和资源约束，制定可批准、可解释、可执行的监督抽查方案。",
@@ -54,6 +50,7 @@ const moduleMeta = computed(() => {
 });
 const enabled = ref(false),
   loading = ref(false),
+  optionsLoading = ref(false),
   saving = ref(false),
   dialog = ref(false);
 const manualDialog = ref(false),
@@ -80,7 +77,6 @@ const rows = ref<SupervisionRecord[]>([]),
 const page = ref(1),
   total = ref(0),
   keyword = ref(""),
-  region = ref(""),
   form = ref<Record<string, any>>({}),
   name = ref(""),
   code = ref(""),
@@ -157,75 +153,115 @@ async function load() {
       page: page.value,
       size: 20,
       keyword: keyword.value || undefined,
-      region_id: region.value || undefined,
     });
     rows.value = result.data.data.items;
     total.value = result.data.data.total;
-    if (route.query.record)
+    if (route.query.record) {
       selected.value = (await supervisionApi.get(kind.value, String(route.query.record))).data.data;
-    else if (selected.value)
+      void loadOptions();
+    } else if (selected.value)
       selected.value = rows.value.find((x) => x.id === selected.value?.id) || null;
-    await loadOptions();
   } catch {
     /* API reports errors; disabled organizations show the setup state. */
   } finally {
     loading.value = false;
   }
 }
-async function loadOptions() {
-  if (["admin", "user", "expert"].includes(auth.role))
-    options.value.assignees = (await supervisionApi.assignees()).data.data;
-  const allowed: SupervisionKind[] = ["regions", "devices"];
-  if (["admin", "user", "expert", "platform_operator"].includes(auth.role))
-    allowed.push("enterprises", "sampling-plans", "samples");
-  const keys: Record<string, string> = { "sampling-plans": "plans" };
-  await Promise.allSettled(
-    allowed.map(async (k) => {
-      const result = await supervisionApi.list(k, { size: 200 });
-      options.value[keys[k] || k] = result.data.data.items
-        .filter((x) => !["inactive", "archived"].includes(x.status))
-        .map((x) => ({ value: x.id, label: `${x.code} · ${x.name}` }));
-    }),
+const optionLoadedAt = new Map<string, number>();
+const optionTtlMs = 5 * 60 * 1000;
+function requiredOptionKeys(specs: any[] = inputSpecs.value, target = new Set<string>()) {
+  for (const spec of specs || []) {
+    if (spec.options) target.add(spec.options);
+    if (spec.fields) requiredOptionKeys(spec.fields, target);
+  }
+  return target;
+}
+async function loadOptions(force = false) {
+  const staticKeys = new Set(["enterpriseRoles", "calibration", "online", "sources", "natures"]);
+  const keys = [...requiredOptionKeys()].filter(
+    (key) => staticKeys.has(key) || force || Date.now() - (optionLoadedAt.get(key) || 0) >= optionTtlMs,
   );
-  if (["admin", "user", "expert", "platform_operator"].includes(auth.role)) {
-    const riskCases = (await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" })).data.data.items;
-    options.value.cases = riskCases.map((item) => ({
-      value: item.id,
-      label: `${item.code} · ${item.title}`,
-    }));
-  }
-  if (["admin", "user", "expert", "platform_operator"].includes(auth.role)) {
-    const catalog = (await qualityRiskApi.productCatalog(true)).data.data;
-    options.value.products = catalog.products
-      .filter((x) => x.is_active)
-      .map((x) => ({
-        value: x.id,
-        label: [x.category_name, x.brand, x.name, x.model].filter(Boolean).join(" · "),
+  const pendingKeys = keys.filter((key) => !staticKeys.has(key));
+  if (!pendingKeys.length) return;
+  optionsLoading.value = true;
+  const genericKinds: Record<string, SupervisionKind> = {
+    regions: "regions",
+    devices: "devices",
+    enterprises: "enterprises",
+    plans: "sampling-plans",
+    samples: "samples",
+  };
+  const loaders: Record<string, () => Promise<void>> = {
+    assignees: async () => {
+      options.value.assignees = (await supervisionApi.assignees()).data.data;
+    },
+    cases: async () => {
+      const result = await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" });
+      options.value.cases = result.data.data.items.map((item) => ({
+        value: item.id,
+        label: `${item.code} · ${item.title}`,
       }));
-    options.value.batches = [];
-    const standards = await http.get<any>("/v1/inspection-standards", {
-      params: { size: 200 },
-      suppressErrorToast: true,
-    });
-    options.value.standards = (standards.data.data.items || [])
-      .filter((x: any) => x.is_active)
-      .map((x: any) => ({ value: x.id, label: x.name }));
+    },
+    products: async () => {
+      const catalog = (await qualityRiskApi.productCatalog(true)).data.data;
+      options.value.products = catalog.products
+        .filter((item) => item.is_active)
+        .map((item) => ({
+          value: item.id,
+          label: [item.category_name, item.brand, item.name, item.model].filter(Boolean).join(" · "),
+        }));
+      options.value.batches = [];
+      optionLoadedAt.set("batches", Date.now());
+    },
+    batches: async () => {
+      options.value.batches = [];
+    },
+    standards: async () => {
+      const result = await http.get<any>("/v1/inspection-standards", {
+        params: { size: 200 },
+        suppressErrorToast: true,
+      });
+      options.value.standards = (result.data.data.items || [])
+        .filter((item: any) => item.is_active)
+        .map((item: any) => ({ value: item.id, label: item.name }));
+    },
+    tasks: async () => {
+      const result = (await taskApi.list({ page: 1, size: 200 })).data.data;
+      options.value.tasks = result.items.map((item) => ({
+        value: item.id,
+        label: `${item.product_name || item.product_id} · ${item.id.slice(-8)}`,
+      }));
+    },
+  };
+  for (const [key, optionKind] of Object.entries(genericKinds)) {
+    loaders[key] = async () => {
+      const result = await supervisionApi.list(optionKind, { size: 200 });
+      options.value[key] = result.data.data.items
+        .filter((item) => !["inactive", "archived"].includes(item.status))
+        .map((item) => ({ value: item.id, label: `${item.code} · ${item.name}` }));
+    };
   }
-  if (["user", "expert", "platform_operator"].includes(auth.role)) {
-    const result = (await taskApi.list({ page: 1, size: 200 })).data.data;
-    options.value.tasks = result.items.map((x) => ({
-      value: x.id,
-      label: `${x.product_name || x.product_id} · ${x.id.slice(-8)}`,
-    }));
+  try {
+    await Promise.allSettled(
+      pendingKeys.map(async (key) => {
+        const loader = loaders[key];
+        if (!loader) return;
+        await loader();
+        optionLoadedAt.set(key, Date.now());
+      }),
+    );
+  } finally {
+    optionsLoading.value = false;
   }
 }
-function openCreate() {
+async function openCreate() {
   editing.value = false;
   name.value = "";
   code.value = "";
   similarRecords.value = [];
   form.value = structuredClone(defaults[kind.value]);
   dialog.value = true;
+  await loadOptions();
 }
 async function checkSimilarNames() {
   const query = name.value.trim();
@@ -236,13 +272,14 @@ async function checkSimilarNames() {
   const result = await supervisionApi.list(kind.value, { keyword: query, size: 10 });
   if (name.value.trim() === query) similarRecords.value = result.data.data.items;
 }
-function openEdit() {
+async function openEdit() {
   if (!selected.value) return;
   editing.value = true;
   name.value = selected.value.name;
   code.value = selected.value.code;
   form.value = cleanFields(selected.value.data, inputSpecs.value);
   dialog.value = true;
+  await loadOptions();
 }
 async function save() {
   if (!name.value.trim()) {
@@ -377,8 +414,6 @@ onUnmounted(() => {
   <main class="supervision-page" v-loading="loading">
     <SupervisionModuleHeader
       v-if="moduleMeta"
-      :index="moduleMeta.index"
-      :code="moduleMeta.code"
       :title="title"
       :agent-name="moduleMeta.agentName"
       :tone="moduleMeta.tone"
@@ -437,13 +472,7 @@ onUnmounted(() => {
             page = 1;
             load();
           "
-        /><el-select v-model="region" placeholder="全部地区" clearable filterable
-          ><el-option
-            v-for="o in options.regions"
-            :key="o.value"
-            :label="o.label"
-            :value="o.value" /></el-select
-        ><el-button
+        /><el-button
           @click="
             page = 1;
             load();
@@ -649,7 +678,7 @@ onUnmounted(() => {
       top="3vh"
       class="supervision-record-dialog"
       :close-on-click-modal="false"
-      ><el-form label-position="top"
+      ><el-form v-loading="optionsLoading" label-position="top"
         ><div class="identity-fields">
           <el-form-item v-if="editing" label="系统编号"
             ><el-input v-model="code" disabled /></el-form-item

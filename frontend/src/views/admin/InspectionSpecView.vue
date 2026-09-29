@@ -58,11 +58,11 @@ const isReadonly = computed(() => {
   const allRoles = [...auth.roles, auth.role].filter(Boolean);
   return allRoles.includes(ROLE_PLATFORM_OPERATOR) && !allRoles.includes(ROLE_ADMIN);
 });
-const pageTitle = computed(() => (isReadonly.value ? "自动判定规则查看" : "自动判定规则配置"));
+const pageTitle = computed(() => (isReadonly.value ? "AI结果复核门槛查看" : "AI结果复核门槛配置"));
 const pageSubtitle = computed(() =>
   isReadonly.value
-    ? "平台运营仅查看门槛、规则、AI 阈值和自动放行策略；新增、编辑、复制、删除仍归管理员治理。"
-    : "维护缺陷判定标准、AI 判定阈值和自动放行策略，支撑 `inspection_specs` 主链路。",
+    ? "平台运营只查看模型置信度、证据充分度、可追溯性和自动放行门槛；维护操作归管理员。"
+    : "维护视觉检测模型的置信度、证据充分度和可追溯性门槛。这里控制 AI 结果能否进入复核，不代替产品检测标准。",
 );
 const productOptions = computed(() =>
   Array.from(
@@ -119,7 +119,7 @@ function resetForm() {
 
 function openCreate() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看 AI 结果复核门槛，请到管理员治理中维护配置");
     return;
   }
   resetForm();
@@ -133,7 +133,7 @@ function openPreview(row: InspectionSpec) {
 
 function openEdit(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看 AI 结果复核门槛，请到管理员治理中维护配置");
     return;
   }
   editingId.value = row.id;
@@ -172,7 +172,7 @@ function buildDuplicateCode(row: InspectionSpec) {
 
 async function duplicateSpec(row: InspectionSpec) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看 AI 结果复核门槛，请到管理员治理中维护配置");
     return;
   }
   const payload: InspectionSpecPayload = {
@@ -201,7 +201,7 @@ async function duplicateSpec(row: InspectionSpec) {
     })),
   };
   await store.createOne(payload);
-  ElMessage.success("自动判定规则已复制为草稿副本");
+  ElMessage.success("AI 结果复核门槛已复制为草稿副本");
 }
 
 function addRule() {
@@ -269,7 +269,7 @@ function validatePayload(payload: InspectionSpecPayload) {
 
 async function submit() {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看 AI 结果复核门槛，请到管理员治理中维护配置");
     return;
   }
   const payload = buildPayload();
@@ -277,26 +277,26 @@ async function submit() {
 
   if (editingId.value) {
     await store.updateOne(editingId.value, payload);
-    ElMessage.success("自动判定规则已更新");
+    ElMessage.success("AI 结果复核门槛已更新");
   } else {
     await store.createOne(payload);
-    ElMessage.success("自动判定规则已创建");
+    ElMessage.success("AI 结果复核门槛已创建");
   }
   drawerOpen.value = false;
 }
 
 async function remove(id: string) {
   if (isReadonly.value) {
-    ElMessage.warning("平台运营仅可查看自动判定规则，请到管理员治理中维护配置");
+    ElMessage.warning("平台运营仅可查看 AI 结果复核门槛，请到管理员治理中维护配置");
     return;
   }
-  await ElMessageBox.confirm("删除后将移除该规则及其规则项，是否继续？", "删除自动判定规则", {
+  await ElMessageBox.confirm("删除后将移除该门槛及其缺陷项，是否继续？", "删除 AI 结果复核门槛", {
     confirmButtonText: "删除",
     cancelButtonText: "取消",
     type: "warning",
   });
   await store.removeOne(id);
-  ElMessage.success("自动判定规则已删除");
+  ElMessage.success("AI 结果复核门槛已删除");
 }
 
 function formatScope(row: InspectionSpec) {
@@ -517,7 +517,7 @@ onMounted(() => {
 
     <el-drawer
       v-model="drawerOpen"
-      :title="editingId ? '编辑自动判定规则' : '新增自动判定规则'"
+      :title="editingId ? '编辑 AI 结果复核门槛' : '新增 AI 结果复核门槛'"
       size="760px"
     >
       <div class="drawer-body">

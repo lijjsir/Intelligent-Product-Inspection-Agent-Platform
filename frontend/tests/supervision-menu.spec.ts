@@ -32,7 +32,6 @@ describe("supervision role boundaries and business form submission", () => {
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
       "质监工作台",
-      "数据接入",
       "市场监控",
       "舆情监测",
       "风险研判",

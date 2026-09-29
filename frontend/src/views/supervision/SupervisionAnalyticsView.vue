@@ -6,8 +6,6 @@ import SupervisionModuleHeader from "@/components/business/supervision/Supervisi
 <template>
   <main class="supervision-analytics-page">
     <SupervisionModuleHeader
-      index="01"
-      code="MKT"
       title="市场监控"
       agent-name="市场监控 Agent"
       tone="blue"

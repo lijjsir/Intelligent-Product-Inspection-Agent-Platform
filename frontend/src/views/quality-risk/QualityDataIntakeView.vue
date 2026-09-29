@@ -35,7 +35,7 @@ const recordType = ref<QualityRecordType | "">(
   (route.query.record_type as QualityRecordType | undefined) || "",
 );
 
-const canManageSources = computed(() => ["admin", "expert"].includes(auth.role));
+const canManageSources = computed(() => auth.role === "admin");
 const canCreate = computed(() => ["admin", "user", "expert"].includes(auth.role));
 
 const sourceForm = reactive({

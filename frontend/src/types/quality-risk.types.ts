@@ -124,6 +124,7 @@ export interface RiskAssessmentV4 {
   recommendations: string[];
   trust_status: string;
   probability?: number | null;
+  policy_version?: string | null;
   status: string;
   review_comment?: string | null;
 }

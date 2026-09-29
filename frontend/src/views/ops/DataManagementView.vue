@@ -27,10 +27,10 @@ const modules = [
     color: "#d97706",
   },
   {
-    title: "自动判定规则",
-    description: "维护缺陷判定规则、AI 门槛阈值和自动放行策略，作为质检门禁配置基线。",
+    title: "AI结果复核门槛",
+    description: "查看模型置信度、证据充分度、可追溯性和自动放行门槛。",
     icon: DocumentChecked,
-    route: "governance-inspection-specs",
+    route: "ops-ai-review-gates",
     color: "#dc2626",
   },
 ];
@@ -45,7 +45,7 @@ function navigateTo(routeName: string) {
     <div class="page-header">
       <h1>治理工作台</h1>
       <p class="mt-2 text-sm text-zinc-500">
-        围绕 Agent、Prompt、路由策略和自动判定规则的统一治理入口。
+        围绕 Agent、Prompt、路由策略和 AI 结果复核门槛的统一治理入口。
       </p>
     </div>
 

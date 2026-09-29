@@ -28,7 +28,7 @@ def api(role, method, path, body=None, expected=200):
     assert status == expected, (method, path, status, result.get("message"))
     return result.get("data")
 
-source = api("expert", "POST", "/quality-data/sources", {
+source = api("admin", "POST", "/quality-data/sources", {
     "code": "QA-INSPECTION-E2E", "name": "监督抽查报告（测试）",
     "source_type": "supervision_inspection", "connector_type": "api", "config": {},
 }, expected=201)

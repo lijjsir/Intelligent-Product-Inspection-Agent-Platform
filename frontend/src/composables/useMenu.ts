@@ -87,14 +87,15 @@ function getAdminMenu(): MenuStructure {
       items: [
         { title: "监管对象", path: "/governance/admin/enterprises" },
         { title: "产品类别与产品", path: "/governance/admin/quality-products" },
-        { title: "数据来源", path: "/app/quality-data" },
+        { title: "数据来源", path: "/governance/admin/quality-data-sources" },
       ],
     },
     {
       title: "标准与知识",
       items: [
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
-        { title: "标准执行规则", path: "/governance/admin/inspection-specs" },
+        { title: "标准条款判定条件", path: "/governance/admin/inspection-specs" },
+        { title: "AI结果复核门槛", path: "/governance/admin/ai-review-gates" },
         { title: "风险分级政策", path: "/governance/admin/risk-policies" },
         { title: "记忆治理", path: "/governance/memory" },
       ],
@@ -146,7 +147,8 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "告警管理", path: "/ops/alerts" },
     { title: "模型观测", path: "/ops/calls" },
     { title: "Agent 查看", path: "/ops/agents" },
-    { title: "标准执行规则", path: "/ops/inspection-specs" },
+    { title: "标准条款判定条件", path: "/ops/inspection-specs" },
+    { title: "AI结果复核门槛", path: "/ops/ai-review-gates" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
@@ -179,13 +181,13 @@ function getCollaborationMenuItems(): MenuItem[] {
   ];
 }
 
-function getQualitySupervisionGroup(): MenuGroup {
+function getQualitySupervisionGroup(includeDataIntake: boolean): MenuGroup {
   return {
     title: "质量监督",
     icon: "Operation",
     items: [
       { title: "质监工作台", path: "/app/workbench" },
-      { title: "数据接入", path: "/app/quality-data" },
+      ...(includeDataIntake ? [{ title: "数据接入", path: "/app/quality-data" }] : []),
       { title: "市场监控", path: "/app/quality-analytics" },
       { title: "舆情监测", path: "/app/risk-cases" },
       { title: "风险研判", path: "/app/risk-assessments" },
@@ -208,7 +210,7 @@ function getTaskResultGroup(): MenuGroup {
 function getUserMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
-    getQualitySupervisionGroup(),
+    getQualitySupervisionGroup(true),
     getTaskResultGroup(),
     ...getCollaborationMenuItems(),
     { title: "报告导出", path: "/app/export" },
@@ -219,7 +221,7 @@ function getUserMenu(): MenuStructure {
 function getExpertMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
-    getQualitySupervisionGroup(),
+    getQualitySupervisionGroup(false),
     getTaskResultGroup(),
     ...getCollaborationMenuItems(),
     { title: "RAG 空间", path: "/app/rag-spaces" },
