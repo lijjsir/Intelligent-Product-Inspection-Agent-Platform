@@ -6,7 +6,7 @@ import pytest_asyncio
 from sqlalchemy import DateTime, DefaultClause, MetaData, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.exceptions import ForbiddenError, ValidationError
+from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
 from app.models import Base, Organization, User
 from app.schemas.quality_risk import (
     DataSourceCreate,
@@ -15,6 +15,7 @@ from app.schemas.quality_risk import (
     QualityEventCreate,
     RiskAnalyzeRequest,
     RiskCaseCreate,
+    RiskPolicyCreate,
     RiskReviewRequest,
 )
 from app.schemas.user import CurrentUser
@@ -89,7 +90,16 @@ async def test_category_product_and_optional_identifiers(domain):
 @pytest.mark.asyncio
 async def test_source_event_is_idempotent_and_does_not_require_batch_or_serial(domain):
     _, service = domain
-    source = await service("expert").create_source(DataSourceCreate(code="COMPLAINT", name="投诉导入", source_type="consumer_complaint", connector_type="manual"))
+    with pytest.raises(ForbiddenError):
+        await service("expert").create_source(
+            DataSourceCreate(
+                code="EXPERT-SOURCE",
+                name="专家无权创建的来源",
+                source_type="consumer_complaint",
+                connector_type="manual",
+            )
+        )
+    source = await service("admin").create_source(DataSourceCreate(code="COMPLAINT", name="投诉导入", source_type="consumer_complaint", connector_type="manual"))
     payload = QualityEventCreate(source_id=source["id"], record_type="consumer_complaint", occurred_at=datetime.now(timezone.utc), content={"text": "电动自行车充电时发热"}, product_ref={})
     first = await service("user").create_event(payload)
     second = await service("user").create_event(payload)
@@ -102,7 +112,7 @@ async def test_source_event_is_idempotent_and_does_not_require_batch_or_serial(d
 @pytest.mark.asyncio
 async def test_risk_draft_preserves_unknown_probability_and_requires_independent_review(domain):
     _, service = domain
-    source = await service("expert").create_source(DataSourceCreate(code="INSPECTION", name="抽检数据", source_type="supervision_inspection", connector_type="api"))
+    source = await service("admin").create_source(DataSourceCreate(code="INSPECTION", name="抽检数据", source_type="supervision_inspection", connector_type="api"))
     record = await service("user").create_event(QualityEventCreate(source_id=source["id"], record_type="supervision_inspection", occurred_at=datetime.now(timezone.utc), content={"text": "温升超过标准限值", "risk_type": "过热", "risk_level": "high"}))
     case = await service("user").create_risk_case(RiskCaseCreate(title="电动自行车温升风险", scope_type="category", scope={"category_name": "电动自行车"}, source_record_ids=[record["id"]]))
     assessment = await service("user").analyze_risk(case["id"], RiskAnalyzeRequest())
@@ -117,7 +127,7 @@ async def test_risk_draft_preserves_unknown_probability_and_requires_independent
 @pytest.mark.asyncio
 async def test_expert_must_resolve_unknown_level_before_accepting(domain):
     _, service = domain
-    source = await service("expert").create_source(
+    source = await service("admin").create_source(
         DataSourceCreate(
             code="OPINION",
             name="舆情数据",
@@ -160,6 +170,86 @@ async def test_expert_must_resolve_unknown_level_before_accepting(domain):
 
 
 @pytest.mark.asyncio
+async def test_risk_policy_versions_are_unique_and_new_publish_supersedes_old(domain):
+    _, service = domain
+    rules = {
+        "severity": {"low": 1, "medium": 2, "high": 3, "critical": 4},
+        "likelihood": {"rare": 1, "possible": 2, "likely": 3},
+        "exposure": {"limited": 1, "regional": 2, "widespread": 3},
+        "evidence_sufficiency": {"minimum": 0.8},
+        "level_mapping": {
+            "low": [0, 2],
+            "medium": [3, 4],
+            "high": [5, 7],
+            "critical": [8, 12],
+        },
+    }
+    v1 = await service("expert").create_policy(
+        RiskPolicyCreate(code="RISK-GENERAL", name="通用风险政策", version="v1", rules=rules)
+    )
+    await service("admin").publish_policy(v1["id"])
+    with pytest.raises(ConflictError):
+        await service("expert").create_policy(
+            RiskPolicyCreate(code="RISK-GENERAL", name="重复版本", version="v1", rules=rules)
+        )
+    v2 = await service("expert").create_policy(
+        RiskPolicyCreate(code="RISK-GENERAL", name="通用风险政策", version="v2", rules=rules)
+    )
+    await service("admin").publish_policy(v2["id"])
+    policies = await service("expert").list_policies()
+    assert {item["version"]: item["status"] for item in policies} == {
+        "v1": "superseded",
+        "v2": "published",
+    }
+
+
+@pytest.mark.asyncio
+async def test_selected_policy_applies_evidence_gate_to_risk_draft(domain):
+    _, service = domain
+    rules = {
+        "severity": {"low": 1},
+        "likelihood": {"rare": 1},
+        "exposure": {"limited": 1},
+        "evidence_sufficiency": {"minimum": 0.8},
+        "level_mapping": {"low": [0, 2]},
+    }
+    policy = await service("expert").create_policy(
+        RiskPolicyCreate(code="EVIDENCE-GATE", name="证据门槛", version="v1", rules=rules)
+    )
+    await service("admin").publish_policy(policy["id"])
+    source = await service("admin").create_source(
+        DataSourceCreate(
+            code="INFERRED-SOURCE",
+            name="推断线索",
+            source_type="public_opinion",
+            connector_type="manual",
+        )
+    )
+    record = await service("user").create_event(
+        QualityEventCreate(
+            source_id=source["id"],
+            record_type="public_opinion",
+            occurred_at=datetime.now(timezone.utc),
+            content={"text": "尚未核实的网络传言"},
+            data_nature="inferred",
+        )
+    )
+    case = await service("user").create_risk_case(
+        RiskCaseCreate(
+            title="待核实线索",
+            scope_type="category",
+            scope={"name": "电动自行车"},
+            source_record_ids=[record["id"]],
+        )
+    )
+    assessment = await service("user").analyze_risk(
+        case["id"], RiskAnalyzeRequest(policy_id=policy["id"])
+    )
+    assert assessment["policy_version"] == "v1"
+    assert any("证据充分度未达到政策门槛" in item for item in assessment["missing_inputs"])
+
+
+@pytest.mark.asyncio
 async def test_quality_risk_public_api_contract(domain):
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient
@@ -169,7 +259,7 @@ async def test_quality_risk_public_api_contract(domain):
     from app.core.error_handlers import register_error_handlers
 
     db, service = domain
-    role = {"value": "expert"}
+    role = {"value": "admin"}
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(api.router, prefix="/api/v1")
@@ -200,6 +290,7 @@ async def test_quality_risk_public_api_contract(domain):
                 },
             )
         ).json()["data"]
+        role["value"] = "user"
         event = (
             await client.post(
                 "/api/v1/quality-data/events",

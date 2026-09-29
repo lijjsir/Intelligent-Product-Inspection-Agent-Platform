@@ -176,7 +176,7 @@ class QualityRiskService:
         return [self.source_response(x) for x in rows]
 
     async def create_source(self, payload) -> dict:
-        self.require_role({"admin", "expert"})
+        self.require_role({"admin"})
         if await self.db.scalar(select(QualityDataSource.id).where(QualityDataSource.org_id == self.org_id, QualityDataSource.code == payload.code, QualityDataSource.deleted_at.is_(None))):
             raise ConflictError("数据来源编码已存在")
         row = QualityDataSource(org_id=self.org_id, created_by=self.actor, **payload.model_dump())
@@ -185,7 +185,7 @@ class QualityRiskService:
         return self.source_response(row)
 
     async def update_source(self, source_id: str, payload) -> dict:
-        self.require_role({"admin", "expert"})
+        self.require_role({"admin"})
         row = await self.source(source_id)
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(row, key, value)
@@ -474,6 +474,11 @@ class QualityRiskService:
             except Exception:  # noqa: BLE001 - model/provider failures must degrade to review
                 model_versions = {"status": "unavailable_or_manual_review_required"}
         missing = [] if observed else ["真实来源证据"]
+        if policy:
+            minimum = float((policy.rules.get("evidence_sufficiency") or {}).get("minimum") or 0)
+            sufficiency = len(observed) / len(evidence) if evidence else 0.0
+            if sufficiency < minimum:
+                missing.append(f"证据充分度未达到政策门槛（当前{sufficiency:.0%}，要求{minimum:.0%}）")
         if level == "unknown":
             missing.append("经规则或专家确认的风险等级")
         latest = await self.db.scalar(select(func.max(QualityRiskAssessment.version)).where(QualityRiskAssessment.org_id == self.org_id, QualityRiskAssessment.risk_case_id == case.id))
@@ -532,6 +537,16 @@ class QualityRiskService:
 
     async def create_policy(self, payload) -> dict:
         self.require_role({"admin", "expert"})
+        duplicate = await self.db.scalar(
+            select(RiskPolicy.id).where(
+                RiskPolicy.org_id == self.org_id,
+                RiskPolicy.code == payload.code,
+                RiskPolicy.version == payload.version,
+                RiskPolicy.deleted_at.is_(None),
+            )
+        )
+        if duplicate:
+            raise ConflictError("相同政策编码和版本已存在")
         row = RiskPolicy(org_id=self.org_id, code=payload.code, name=payload.name, version=payload.version, rules=payload.rules, status="draft", created_by=self.actor)
         self.db.add(row)
         await self.db.flush()
@@ -542,6 +557,19 @@ class QualityRiskService:
         row = await self.db.scalar(select(RiskPolicy).where(RiskPolicy.id == policy_id, RiskPolicy.org_id == self.org_id, RiskPolicy.deleted_at.is_(None)).with_for_update())
         if not row:
             raise NotFoundError("风险政策不存在")
+        previous = list(
+            await self.db.scalars(
+                select(RiskPolicy).where(
+                    RiskPolicy.org_id == self.org_id,
+                    RiskPolicy.code == row.code,
+                    RiskPolicy.status == "published",
+                    RiskPolicy.id != row.id,
+                    RiskPolicy.deleted_at.is_(None),
+                )
+            )
+        )
+        for item in previous:
+            item.status = "superseded"
         row.status = "published"
         row.published_by = self.actor
         row.published_at = utcnow()
@@ -577,6 +605,16 @@ class QualityRiskService:
         )
         if not standard:
             raise ValidationError("检测标准不存在或未启用")
+        duplicate = await self.db.scalar(
+            select(StandardExecutionRule.id).where(
+                StandardExecutionRule.org_id == self.org_id,
+                StandardExecutionRule.code == payload.code,
+                StandardExecutionRule.version == payload.version,
+                StandardExecutionRule.deleted_at.is_(None),
+            )
+        )
+        if duplicate:
+            raise ConflictError("相同判定条件编码和版本已存在")
         if payload.category_id:
             await self.category(payload.category_id)
         if payload.product_id:
@@ -608,6 +646,19 @@ class QualityRiskService:
             raise NotFoundError("标准执行规则不存在")
         if not row.clause_ref or not row.condition:
             raise ValidationError("规则缺少标准条款或执行条件")
+        previous = list(
+            await self.db.scalars(
+                select(StandardExecutionRule).where(
+                    StandardExecutionRule.org_id == self.org_id,
+                    StandardExecutionRule.code == row.code,
+                    StandardExecutionRule.status == "published",
+                    StandardExecutionRule.id != row.id,
+                    StandardExecutionRule.deleted_at.is_(None),
+                )
+            )
+        )
+        for item in previous:
+            item.status = "superseded"
         row.status = "published"
         row.reviewed_by = row.reviewed_by or self.actor
         row.published_by = self.actor
