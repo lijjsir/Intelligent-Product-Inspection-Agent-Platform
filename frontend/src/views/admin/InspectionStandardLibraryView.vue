@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   DocumentChecked,
@@ -34,6 +35,7 @@ import type {
 
 const store = useInspectionStandardStore();
 const qualityRefs = useQualityReferenceStore();
+const router = useRouter();
 
 const drawerOpen = ref(false);
 const detailOpen = ref(false);
@@ -354,7 +356,7 @@ onMounted(loadAll);
       <div>
         <p class="eyebrow">Standards Library</p>
         <h2>检测标准库</h2>
-        <p>管理权威标准文档、版本和产品适用范围；可执行阈值在“标准执行规则”中按条款维护。</p>
+        <p>管理权威标准文档、版本和产品适用范围；需要结构化的条款条件时从具体标准进入维护。</p>
       </div>
       <div class="heading-actions">
         <el-button :icon="RefreshRight" @click="loadAll">刷新</el-button>
@@ -418,7 +420,7 @@ onMounted(loadAll);
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="AI结果复核门槛" min-width="180">
+        <el-table-column label="质检门槛" min-width="180">
           <template #default="{ row }">
             <el-tag :type="row.has_quality_threshold ? 'success' : 'warning'" effect="plain">
               {{
@@ -475,6 +477,7 @@ onMounted(loadAll);
                 (cmd: string) => {
                   if (cmd === 'reindex') indexLibrary(row, true);
                   else if (cmd === 'edit') openEdit(row);
+                  else if (cmd === 'conditions') router.push({ name: 'governance-admin-inspection-specs', query: { standard: row.id } });
                   else if (cmd === 'delete') removeItem(row);
                 }
               "
@@ -483,6 +486,7 @@ onMounted(loadAll);
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="reindex">重建索引</el-dropdown-item>
+                  <el-dropdown-item command="conditions">维护该标准的条款条件（高级）</el-dropdown-item>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
                   <el-dropdown-item command="delete" style="color: var(--el-color-danger)"
                     >删除</el-dropdown-item

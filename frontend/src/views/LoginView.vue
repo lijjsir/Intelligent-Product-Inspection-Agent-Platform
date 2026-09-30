@@ -1,8 +1,8 @@
 <template>
-  <div class="w-full max-w-[360px]">
+  <div class="auth-form-card w-full max-w-[420px]">
     <div class="mb-8">
       <h2 class="text-2xl font-bold text-zinc-900">欢迎回来</h2>
-      <p class="mt-2 text-sm text-zinc-500">请输入组织标识和账号密码进行登录</p>
+      <p class="mt-2 text-sm text-zinc-500">登录 PIAP 智能检测平台，继续处理你的质量任务。</p>
     </div>
 
     <form class="flex flex-col gap-5" @submit.prevent="submit">
@@ -43,7 +43,7 @@
         size="large"
         native-type="submit"
         :loading="loading"
-        class="!w-full !mt-2"
+        class="!w-full !mt-2 auth-submit"
         @click="submit"
       >
         {{ loading ? "登录中..." : "登录" }}

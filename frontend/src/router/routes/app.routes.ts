@@ -34,7 +34,7 @@ export const appRoutes = [
     path: "risk-policies",
     name: "app-risk-policies",
     component: () => import("@/views/admin/RiskPolicyView.vue"),
-    meta: { title: "风险分级政策", roles: [ROLE_ADMIN, ROLE_EXPERT] },
+    meta: { title: "风险等级规则", roles: [ROLE_ADMIN, ROLE_EXPERT] },
   },
   {
     path: "workbench",

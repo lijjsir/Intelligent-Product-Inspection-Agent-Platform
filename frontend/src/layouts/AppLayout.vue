@@ -465,6 +465,41 @@ function logout() {
   @apply bg-zinc-800 text-white;
 }
 
+/* Shared shell skin: the navigation is the dark anchor, content stays bright and calm. */
+.app-shell { background: #f3f7fc !important; }
+.app-sidebar {
+  width: 248px !important;
+  border-right: 1px solid rgba(125, 159, 202, 0.18) !important;
+  background: linear-gradient(180deg, #0b1930 0%, #0d2442 100%) !important;
+  color: #d8e6fb;
+  box-shadow: 14px 0 36px rgba(13, 36, 66, 0.08);
+}
+.app-brand { border-bottom-color: rgba(159, 190, 229, 0.14) !important; }
+.app-brand .text-zinc-950 { color: #f4f8ff !important; }
+.app-brand .text-zinc-400 { color: #8ea8c8 !important; }
+.brand-mark { background: rgba(14, 51, 85, 0.9); border: 1px solid rgba(93, 206, 230, 0.24); }
+.app-sidebar nav { padding: 18px 14px; }
+.nav-link, .nav-sublink { color: #9db1cf; border-radius: 10px; min-height: 42px; }
+.nav-link:hover, .nav-sublink:hover { background: rgba(113, 165, 237, 0.13); color: #eef6ff; }
+.nav-link-active { background: linear-gradient(100deg, #1d67d8, #2787e8) !important; color: #fff !important; box-shadow: 0 8px 20px rgba(19, 103, 216, 0.24); }
+.nav-link-active:hover { background: linear-gradient(100deg, #1d67d8, #2787e8) !important; }
+.nav-group-link { color: #afc2de; }
+.nav-group-arrow { color: #7894b9; }
+.nav-count-badge { background: #35c9d3; color: #08223b; }
+.nav-link-active .nav-count-badge { background: #fff; color: #1d67d8; }
+.app-header {
+  height: 64px !important;
+  border-bottom-color: #dbe5f2 !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  padding-inline: 28px !important;
+  box-shadow: 0 4px 18px rgba(40, 75, 122, 0.04);
+}
+.app-header .text-zinc-900 { color: #13213a !important; font-size: 15px; }
+.app-main { padding: 24px !important; background: #f3f7fc; }
+.topbar-workspace { background: #eaf2ff !important; color: #2b5eae !important; }
+.ghost-btn { border-color: #dbe5f2; color: #56708f; }
+.ghost-btn:hover { border-color: #a8c1e1; background: #f3f7ff; color: #1e4f93; }
+
 .nav-count-badge {
   margin-left: auto;
   min-width: 22px;
@@ -522,8 +557,8 @@ function logout() {
   .app-sidebar {
     position: fixed;
     z-index: 50;
-    inset: 48px auto 0 0;
-    height: calc(100vh - 48px);
+    inset: 64px auto 0 0;
+    height: calc(100vh - 64px);
     width: min(84vw, 300px);
     max-width: 300px;
     transform: translateX(-100%);
@@ -538,7 +573,7 @@ function logout() {
   .mobile-nav-backdrop {
     position: fixed;
     z-index: 40;
-    inset: 48px 0 0;
+    inset: 64px 0 0;
     display: block;
     border: 0;
     background: rgba(24, 24, 27, 0.35);
@@ -553,7 +588,7 @@ function logout() {
     position: relative;
     z-index: 60;
     height: auto;
-    min-height: 48px;
+    min-height: 64px;
     gap: 8px;
     padding: 7px 10px;
   }

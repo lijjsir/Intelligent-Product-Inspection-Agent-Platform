@@ -81,13 +81,13 @@ export const governanceRoutes = [
     path: "admin/ai-review-gates",
     name: "governance-admin-ai-review-gates",
     component: () => import("@/views/admin/InspectionSpecView.vue"),
-    meta: { title: "AI结果复核门槛", roles: [ROLE_ADMIN] },
+    meta: { title: "质检门槛", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/risk-policies",
     name: "governance-admin-risk-policies",
     component: () => import("@/views/admin/RiskPolicyView.vue"),
-    meta: { title: "风险分级政策", roles: [ROLE_ADMIN] },
+    meta: { title: "风险等级规则", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/alert-rules",

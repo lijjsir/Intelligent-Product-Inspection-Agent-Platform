@@ -86,7 +86,7 @@ function renderCharts() {
     trendChart ??= init(trendRef.value);
     trendChart.setOption({
       animationDuration: 500,
-      color: ["#18181b"],
+      color: ["#2563eb"],
       tooltip: {
         trigger: "axis",
         valueFormatter: (value: number) => `${(value * 100).toFixed(1)}%`,
@@ -115,12 +115,12 @@ function renderCharts() {
           smooth: true,
           symbolSize: 6,
           data: overview.value.pass_rate_trend.map((item) => item.value),
-          lineStyle: { width: 2, color: "#18181b" },
-          itemStyle: { color: "#18181b" },
+          lineStyle: { width: 3, color: "#2563eb" },
+          itemStyle: { color: "#2563eb" },
           areaStyle: {
             color: new graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: "rgba(24,24,27,0.08)" },
-              { offset: 1, color: "rgba(24,24,27,0.01)" },
+              { offset: 0, color: "rgba(37,99,235,0.2)" },
+              { offset: 1, color: "rgba(37,99,235,0.01)" },
             ]),
           },
         },
@@ -140,7 +140,7 @@ function renderCharts() {
           radius: ["44%", "72%"],
           center: ["50%", "42%"],
           label: { color: "#3f3f46" },
-          color: ["#18181b", "#52525b", "#a1a1aa", "#d4d4d8"],
+          color: ["#2563eb", "#19b6c9", "#7c8fe8", "#b9c8dc"],
           data: overview.value.risk_distribution.map((item) => ({
             name: item.name,
             value: item.value,
@@ -153,9 +153,9 @@ function renderCharts() {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5">
+  <div class="dashboard-view flex flex-col gap-5">
     <!-- Hero -->
-    <section class="px-7 py-8 rounded-2xl bg-zinc-900 text-white">
+    <section class="dashboard-hero px-7 py-8 rounded-2xl text-white">
       <p class="text-2xs tracking-[0.16em] uppercase text-zinc-400 mb-2">PIAP Operations</p>
       <h2 class="text-[38px] font-bold leading-tight">数据与统计看板</h2>
       <p class="mt-3 max-w-2xl text-zinc-400 text-sm leading-relaxed">
@@ -267,14 +267,46 @@ function renderCharts() {
 </template>
 
 <style scoped>
+.dashboard-hero {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at 82% 18%, rgba(70, 170, 245, 0.3), transparent 34%), linear-gradient(120deg, #0b1930 0%, #12396e 62%, #155b81 100%);
+  box-shadow: 0 16px 32px rgba(24, 67, 124, 0.14);
+}
+.dashboard-hero::after {
+  position: absolute;
+  right: -5%;
+  bottom: -90px;
+  width: 360px;
+  height: 220px;
+  border: 1px solid rgba(127, 227, 237, 0.2);
+  border-radius: 50%;
+  box-shadow: 0 0 0 22px rgba(127, 227, 237, 0.05), 0 0 0 44px rgba(127, 227, 237, 0.035);
+  content: "";
+  transform: rotate(-12deg);
+}
+.dashboard-view .card-surface {
+  border-color: #dbe5f2;
+  box-shadow: 0 8px 24px rgba(35, 71, 122, 0.06);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+.dashboard-view .card-surface.cursor-pointer:hover {
+  transform: translateY(-2px);
+  border-color: #b8d0ef;
+  box-shadow: 0 14px 30px rgba(35, 91, 164, 0.12);
+}
+.dashboard-view .text-zinc-900 { color: #13213a; }
+.dashboard-view .text-zinc-500 { color: #5e7390; }
+.dashboard-view .text-zinc-400 { color: #8296b0; }
 .dashboard-table :deep(.el-table__header th) {
-  @apply text-zinc-500 font-medium text-[13px] bg-transparent;
+  @apply font-medium text-[13px] bg-transparent;
+  color: #5e7390;
 }
 .dashboard-table :deep(.el-table__body tr:hover > td) {
-  @apply bg-zinc-50;
+  background: #f4f8ff;
 }
 .dashboard-table :deep(.el-table td) {
-  @apply border-zinc-100;
+  border-color: #e8eef6;
 }
 
 /* Fix Element Plus tag colors in dark hero */

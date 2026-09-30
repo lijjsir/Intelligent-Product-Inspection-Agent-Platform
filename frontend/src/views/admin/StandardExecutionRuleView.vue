@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRoute } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Plus, RefreshRight, Search } from "@element-plus/icons-vue";
 import { http } from "@/api/http";
@@ -10,6 +11,7 @@ import { useQualityReferenceStore } from "@/stores/quality-reference.store";
 import type { StandardRetrieveHit } from "@/types/governance.types";
 
 const auth = useAuthStore();
+const route = useRoute();
 const references = useQualityReferenceStore();
 const rows = ref<any[]>([]);
 const standards = ref<any[]>([]);
@@ -77,7 +79,7 @@ function open() {
     code: generatedCode(),
     name: "",
     version: "v1",
-    standard_id: standards.value[0]?.id || "",
+    standard_id: String(route.query.standard || standards.value[0]?.id || ""),
     clause_ref: "",
     page_ref: "",
     category_id: "",

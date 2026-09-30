@@ -175,7 +175,7 @@ onMounted(load);
         <h1>风险研判</h1>
         <span>汇合市场与舆情证据，形成可复核的风险类型、影响范围、依据和监管建议。这是四类 Agent 共享的业务对象。</span>
       </div>
-      <div class="hero-actions"><el-button v-if="isExpert" @click="router.push('/app/risk-policies')">风险政策</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">建立风险线索</el-button></div>
+      <div class="hero-actions"><el-button v-if="isExpert" @click="router.push('/app/risk-policies')">风险等级规则</el-button><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">建立风险线索</el-button></div>
     </header>
 
     <section class="principles">
@@ -202,7 +202,7 @@ onMounted(load);
       <aside v-if="selected" class="case-detail">
         <div class="detail-head"><div><small>{{ selected.code }}</small><h2>{{ selected.title }}</h2></div><el-button text @click="selected = null; assessment = null">收起</el-button></div>
         <div class="scope-card"><span>当前研判范围</span><strong>{{ selected.scope.name || selected.scope_type }}</strong><small>来源记录 {{ selected.source_record_ids.length }} 条 · 可引用证据 {{ selected.evidence_ids.length }} 项</small></div>
-        <div class="action-row"><el-select v-model="policyId" clearable placeholder="选择已发布风险政策（可选）"><el-option v-for="item in policies" :key="item.id" :label="`${item.name} · ${item.version}`" :value="item.id" /></el-select><el-button type="primary" :icon="DataAnalysis" @click="analyze">生成风险研判草稿</el-button></div>
+        <div class="action-row"><el-select v-model="policyId" clearable placeholder="选择已发布风险等级规则（可选）"><el-option v-for="item in policies" :key="item.id" :label="`${item.name} · ${item.version}`" :value="item.id" /></el-select><el-button type="primary" :icon="DataAnalysis" @click="analyze">生成风险研判草稿</el-button></div>
         <template v-if="assessment">
           <section class="assessment-card">
             <div class="assessment-title"><span>风险等级</span><el-tag :type="assessment.risk_level === 'high' || assessment.risk_level === 'critical' ? 'danger' : assessment.risk_level === 'unknown' ? 'info' : 'warning'">{{ riskLabels[assessment.risk_level] }}</el-tag></div>

@@ -4,43 +4,53 @@
 
 @layer base {
   :root {
-    /* Element Plus theme bridge — map to zinc monochrome palette */
-    --el-color-primary: #18181b;
-    --el-color-primary-light-3: #3f3f46;
-    --el-color-primary-light-5: #52525b;
-    --el-color-primary-light-7: #a1a1aa;
-    --el-color-primary-light-8: #d4d4d8;
-    --el-color-primary-light-9: #e4e4e7;
-    --el-color-primary-dark-2: #09090b;
+    /* PIAP design tokens: deep ocean workspace with an electric blue action color. */
+    --piap-ink: #13213a;
+    --piap-muted: #64748b;
+    --piap-subtle: #94a3b8;
+    --piap-line: #dbe5f2;
+    --piap-surface: #ffffff;
+    --piap-canvas: #f3f7fc;
+    --piap-navy: #0b1930;
+    --piap-blue: #2563eb;
+    --piap-cyan: #19b6c9;
+
+    --el-color-primary: #2563eb;
+    --el-color-primary-light-3: #5b8def;
+    --el-color-primary-light-5: #8eb0f5;
+    --el-color-primary-light-7: #bfd2fa;
+    --el-color-primary-light-8: #d9e4fc;
+    --el-color-primary-light-9: #edf3ff;
+    --el-color-primary-dark-2: #1d4ed8;
     --el-color-success: #22c55e;
     --el-color-warning: #f59e0b;
     --el-color-danger: #ef4444;
-    --el-color-info: #71717a;
+    --el-color-info: #64748b;
 
-    --el-border-radius-base: 8px;
-    --el-border-radius-small: 6px;
+    --el-border-radius-base: 10px;
+    --el-border-radius-small: 8px;
     --el-border-radius-round: 9999px;
 
     --el-bg-color: #ffffff;
-    --el-bg-color-page: #fafafa;
+    --el-bg-color-page: #f3f7fc;
     --el-bg-color-overlay: #ffffff;
 
-    --el-text-color-primary: #09090b;
-    --el-text-color-regular: #3f3f46;
-    --el-text-color-secondary: #71717a;
-    --el-text-color-placeholder: #a1a1aa;
+    --el-text-color-primary: #13213a;
+    --el-text-color-regular: #334155;
+    --el-text-color-secondary: #64748b;
+    --el-text-color-placeholder: #94a3b8;
 
-    --el-border-color: #e4e4e7;
-    --el-border-color-light: #f4f4f5;
-    --el-border-color-lighter: #fafafa;
+    --el-border-color: #dbe5f2;
+    --el-border-color-light: #e9eff7;
+    --el-border-color-lighter: #f2f6fb;
 
-    --el-fill-color: #f4f4f5;
-    --el-fill-color-light: #fafafa;
+    --el-fill-color: #eef3fa;
+    --el-fill-color-light: #f5f8fc;
     --el-fill-color-blank: #ffffff;
 
-    --el-box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    --el-box-shadow-light: 0 4px 12px rgba(0, 0, 0, 0.06);
-    --el-box-shadow-lighter: 0 12px 24px rgba(0, 0, 0, 0.08);
+    --el-box-shadow: 0 1px 2px rgba(19, 33, 58, 0.04);
+    --el-box-shadow-light: 0 8px 24px rgba(35, 71, 122, 0.08);
+    --el-box-shadow-lighter: 0 18px 44px rgba(35, 71, 122, 0.12);
     --el-box-shadow-dark: 0 1px 2px rgba(0, 0, 0, 0.04);
   }
 
@@ -60,7 +70,8 @@
 
   body {
     min-height: 100vh;
-    @apply bg-zinc-50 text-zinc-950;
+    background: var(--piap-canvas);
+    color: var(--piap-ink);
   }
 
   a {
@@ -92,23 +103,95 @@
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #a1a1aa;
+    background: #8ca4c1;
   }
 }
 
 @layer components {
   /* Thin utility for common patterns */
   .page-shell {
-    @apply min-h-[calc(100vh-48px)] p-6 flex flex-col gap-5;
+    @apply min-h-[calc(100vh-64px)] p-6 flex flex-col gap-5;
   }
 
   .card-surface {
-    @apply bg-white rounded-card border border-zinc-200 shadow-surface-sm;
+    @apply bg-white rounded-card border shadow-surface-sm;
+    border-color: var(--piap-line);
   }
 
   .card-surface-hover {
-    @apply card-surface hover:shadow-surface-md hover:border-zinc-300 transition-shadow duration-200;
+    @apply card-surface hover:shadow-surface-md transition-all duration-200;
   }
+
+  .page-heading {
+    color: var(--piap-ink);
+    font-size: clamp(1.45rem, 1.7vw, 2rem);
+    font-weight: 750;
+    letter-spacing: -0.02em;
+  }
+
+  .page-subtitle {
+    color: var(--piap-muted);
+    font-size: 0.875rem;
+    line-height: 1.65;
+  }
+}
+
+/* Element Plus gets the same quiet, high contrast treatment on every route. */
+.el-button {
+  font-weight: 650;
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.el-button--primary {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+}
+.el-button--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+}
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  box-shadow: 0 0 0 1px var(--piap-line) inset;
+  background: #fbfdff;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--piap-blue) inset, 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+.el-card {
+  border-color: var(--piap-line);
+  box-shadow: 0 8px 24px rgba(35, 71, 122, 0.06);
+}
+.el-table {
+  --el-table-border-color: #e8eef6;
+  --el-table-header-bg-color: #f7faff;
+  --el-table-row-hover-bg-color: #f4f8ff;
+  color: var(--piap-ink);
+}
+
+.auth-form-card {
+  padding: clamp(24px, 4vw, 44px);
+  border: 1px solid rgba(219, 229, 242, 0.92);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 22px 55px rgba(46, 85, 138, 0.12);
+  backdrop-filter: blur(14px);
+}
+.auth-form-card h2 {
+  color: var(--piap-ink);
+  letter-spacing: -0.03em;
+  font-size: 1.8rem;
+}
+.auth-form-card .el-form-item__label,
+.auth-form-card label {
+  color: #38506f;
+  font-weight: 650;
+}
+.auth-submit.el-button {
+  min-height: 48px;
+  border-radius: 12px;
+  font-size: 15px;
 }
 
 @media (prefers-reduced-motion: reduce) {

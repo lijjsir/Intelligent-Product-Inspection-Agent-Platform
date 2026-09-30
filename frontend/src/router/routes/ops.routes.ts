@@ -121,7 +121,7 @@ export const opsRoutes = [
     path: "ai-review-gates",
     name: "ops-ai-review-gates",
     component: () => import("@/views/admin/InspectionSpecView.vue"),
-    meta: { title: "AI结果复核门槛", roles: [ROLE_PLATFORM_OPERATOR] },
+    meta: { title: "质检门槛", roles: [ROLE_PLATFORM_OPERATOR] },
   },
   {
     path: "tasks",

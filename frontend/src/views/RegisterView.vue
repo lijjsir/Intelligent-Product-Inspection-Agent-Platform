@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full max-w-[380px]">
+  <div class="auth-form-card w-full max-w-[420px]">
     <div class="mb-8">
       <h2 class="text-2xl font-bold text-zinc-900">注册账号</h2>
       <p class="mt-2 text-sm text-zinc-500">{{ createOrg ? "创建新组织并注册首个账号" : "加入已有组织" }}</p>
@@ -97,7 +97,7 @@
         size="large"
         native-type="submit"
         :loading="loading"
-        class="!w-full !mt-2"
+        class="!w-full !mt-2 auth-submit"
         @click="submit"
       >
         {{ loading ? "注册中..." : (createOrg ? "创建并登录" : "注册并登录") }}

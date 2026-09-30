@@ -94,9 +94,7 @@ function getAdminMenu(): MenuStructure {
       title: "标准与知识",
       items: [
         { title: "检测标准", path: "/governance/admin/inspection-standards" },
-        { title: "标准条款判定条件", path: "/governance/admin/inspection-specs" },
-        { title: "AI结果复核门槛", path: "/governance/admin/ai-review-gates" },
-        { title: "风险分级政策", path: "/governance/admin/risk-policies" },
+        { title: "质检门槛", path: "/governance/admin/ai-review-gates" },
         { title: "记忆治理", path: "/governance/memory" },
       ],
     },
@@ -147,8 +145,7 @@ function getPlatformOperatorMenu(): MenuStructure {
     { title: "告警管理", path: "/ops/alerts" },
     { title: "模型观测", path: "/ops/calls" },
     { title: "Agent 查看", path: "/ops/agents" },
-    { title: "标准条款判定条件", path: "/ops/inspection-specs" },
-    { title: "AI结果复核门槛", path: "/ops/ai-review-gates" },
+    { title: "质检门槛", path: "/ops/ai-review-gates" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
