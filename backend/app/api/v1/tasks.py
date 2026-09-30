@@ -82,7 +82,14 @@ async def create_task(
         image_urls=payload.image_urls,
         image_items=payload.image_items,
         priority=payload.priority,
-        metadata={**(payload.metadata or {}), "input_mode": payload.input_mode, "supervision": supervision_enabled},
+        # A normal task-management task must remain a normal inspection task
+        # even when the organization has enabled the separate quality loop.
+        # Supervision tasks are created explicitly by the sampling/lab flow.
+        metadata={
+            **(payload.metadata or {}),
+            "input_mode": payload.input_mode,
+            "supervision": bool((payload.metadata or {}).get("supervision") is True),
+        },
     )
     await db.commit()
     if payload.input_mode == "image":

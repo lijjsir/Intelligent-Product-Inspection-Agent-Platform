@@ -237,3 +237,37 @@ async def test_create_task_triggers_launch_and_returns_refreshed_task(monkeypatc
     assert result.data.id == "task-1"
     assert result.data.status == "queued"
     assert result.data.execution == {"mode": "local_background"}
+
+
+@pytest.mark.asyncio
+async def test_create_task_does_not_inherit_organization_supervision_switch(monkeypatch):
+    launched: list[dict] = []
+
+    async def fake_launch(*, task_id: str, org_id: str):
+        launched.append({"task_id": task_id, "org_id": org_id})
+        return {"mode": "local_background", "job_id": None, "status": "queued"}
+
+    class SupervisionEnabledSession(FakeTaskCreateSession):
+        async def get(self, model, record_id):
+            return SimpleNamespace(settings={"quality_supervision_enabled": True})
+
+    monkeypatch.setattr(task_api, "TaskService", FakeTaskService)
+    monkeypatch.setattr(task_api, "launch_task_execution", fake_launch)
+
+    payload = task_api.TaskCreate(
+        product_category_id="category-1",
+        inspection_standard_id="standard-1",
+        product_id="P-1",
+        spec_code="STD-1",
+        image_urls=["https://example.com/a.png"],
+        metadata={"source": "task_list"},
+    )
+
+    result = await task_api.create_task(
+        payload,
+        current=build_current_user(role="user"),
+        db=SupervisionEnabledSession(),
+    )
+
+    assert launched == [{"task_id": "task-1", "org_id": "org-1"}]
+    assert result.data.supervision is False

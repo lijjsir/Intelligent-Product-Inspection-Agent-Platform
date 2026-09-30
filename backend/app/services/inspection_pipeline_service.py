@@ -31,7 +31,6 @@ from app.repositories.task_execution_event_repo import TaskExecutionEventReposit
 from app.repositories.token_ledger_repo import TokenLedgerRepository
 from app.repositories.user_token_usage_repo import UserTokenUsageSummaryRepository
 from app.services.file_storage_service import FileStorageService
-from app.services.result_trace_utils import build_trace_metrics
 from app.services.stream_service import chat_stream_broker, stream_broker
 from infra.database.session import get_session
 
@@ -696,7 +695,12 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
                             "payload": obs,
                         }
                     )
-            if (task.meta_data or {}).get("supervision"):
+            metadata = dict(task.meta_data or {})
+            # Older task-management records were incorrectly marked as
+            # supervision tasks when the organization-wide switch was enabled.
+            # Their explicit source identifies them as ordinary inspections.
+            is_supervision_task = bool(metadata.get("supervision") is True) and metadata.get("source") != "task_list"
+            if is_supervision_task:
                 draft = await _save_supervision_image_draft(session, task, agent_output)
                 await task_repo.update_status(org_id, task_id, "awaiting_review")
                 await session.commit()

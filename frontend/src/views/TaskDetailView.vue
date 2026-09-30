@@ -65,6 +65,14 @@ const resolvedRagSpaceId = computed(() => ingestForm.value.rag_space_id_manual.t
 const datasetNameOptions = computed(() => datasetStore.nameOptions);
 const resolvedDatasetName = computed(() => ingestForm.value.dataset_name.trim());
 const canOpenIngest = computed(() => currentTask.value?.status === "done" && currentTask.value?.has_result);
+const canRerunTask = computed(() => {
+  const task = currentTask.value;
+  if (!task) return false;
+  if (task.status === "failed") return true;
+  // Repair legacy task-management records that were incorrectly routed to the
+  // supervision draft branch before the routing fix.
+  return task.status === "awaiting_review" && !task.has_result && task.source_kind === "task_list";
+});
 const ingestStatusText = computed(() => {
   if (!currentTask.value) return "";
   if (currentTask.value.status !== "done") return "任务完成后才可手动导入。";
@@ -317,12 +325,12 @@ onUnmounted(() => {
           {{ taskStore.current.status.toUpperCase() }}
         </el-tag>
         <el-button
-          v-if="taskStore.current.status === 'failed'"
+          v-if="canRerunTask"
           type="primary"
           :loading="running"
           @click="startPipeline"
         >
-          重新启动检测
+          重新执行检测
         </el-button>
         <el-button
           v-if="taskStore.current.has_result && canViewInspectionResults"
