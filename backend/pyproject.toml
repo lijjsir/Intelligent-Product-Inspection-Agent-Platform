@@ -35,7 +35,7 @@ dependencies = [
     "kenlm>=0.3.0",
     "reportlab>=4.2.0",
     "minio>=7.2.7",
-    "neo4j>=5.25.0",
+    "neo4j>=5.25.0,<6",
     "paramiko>=3.4.0",
 ]
 

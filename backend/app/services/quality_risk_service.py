@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import io
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+import httpx
 from sqlalchemy import String, func, select
 
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from app.core.config import settings
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
 from app.core.ids import uuid7
 from app.models.quality_risk import (
     PhysicalSample,
@@ -33,6 +37,9 @@ from app.services.object_storage import build_object_storage
 
 BUSINESS_READ = {"admin", "user", "expert", "platform_operator"}
 BUSINESS_WRITE = {"admin", "user", "expert"}
+_GEOCODE_CACHE: dict[tuple[float, float], dict] = {}
+_GEOCODE_LOCK = asyncio.Lock()
+_GEOCODE_LAST_REQUEST_AT = 0.0
 
 
 def stable_hash(value: Any) -> str:
@@ -65,6 +72,65 @@ class QualityRiskService:
         """Flush writes and load database-generated timestamps before serialization."""
         await self.db.flush()
         await self.db.refresh(row)
+
+    async def reverse_geocode(self, latitude: float, longitude: float) -> dict:
+        self.require_role(BUSINESS_READ)
+        key = (round(latitude, 5), round(longitude, 5))
+        cached = _GEOCODE_CACHE.get(key)
+        if cached:
+            return cached
+        if not settings.reverse_geocode_url:
+            raise ServiceUnavailableError("地址解析服务尚未配置")
+        global _GEOCODE_LAST_REQUEST_AT
+        async with _GEOCODE_LOCK:
+            cached = _GEOCODE_CACHE.get(key)
+            if cached:
+                return cached
+            remaining = 1.0 - (time.monotonic() - _GEOCODE_LAST_REQUEST_AT)
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+            try:
+                async with httpx.AsyncClient(timeout=settings.reverse_geocode_timeout_sec) as client:
+                    response = await client.get(
+                        settings.reverse_geocode_url,
+                        params={
+                            "lat": latitude,
+                            "lon": longitude,
+                            "format": "jsonv2",
+                            "addressdetails": 1,
+                            "accept-language": "zh-CN,zh",
+                            "zoom": 18,
+                        },
+                        headers={"User-Agent": settings.reverse_geocode_user_agent},
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise ServiceUnavailableError("当前位置已取得，但地址解析暂时不可用，请手动选择地区") from exc
+            finally:
+                _GEOCODE_LAST_REQUEST_AT = time.monotonic()
+            address = dict(payload.get("address") or {})
+            result = {
+                "formatted_address": str(payload.get("display_name") or ""),
+                "province": str(address.get("state") or address.get("province") or ""),
+                "city": str(
+                    address.get("city")
+                    or address.get("municipality")
+                    or address.get("town")
+                    or address.get("county")
+                    or ""
+                ),
+                "district": str(
+                    address.get("city_district")
+                    or address.get("district")
+                    or address.get("county")
+                    or address.get("suburb")
+                    or ""
+                ),
+                "provider": "OpenStreetMap Nominatim",
+            }
+            _GEOCODE_CACHE[key] = result
+            return result
 
     async def product_catalog(self, *, include_inactive: bool = False) -> dict:
         self.require_role(BUSINESS_READ | {"algorithm_engineer"})

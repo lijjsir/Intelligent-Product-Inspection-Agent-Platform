@@ -31,6 +31,17 @@ export const qualityRiskApi = {
     http.patch<QualityDataSource>(`/v1/quality-data/sources/${id}`, payload),
   records: (params: Record<string, unknown> = {}) =>
     http.get<PagedResponse<QualitySourceRecord>>("/v1/quality-data/records", { params }),
+  reverseGeocode: (latitude: number, longitude: number) =>
+    http.get<{
+      formatted_address: string;
+      province: string;
+      city: string;
+      district: string;
+      provider: string;
+    }>("/v1/quality-data/locations/reverse-geocode", {
+      params: { latitude, longitude },
+      suppressErrorToast: true,
+    }),
   record: (id: string) => http.get<QualitySourceRecord>(`/v1/quality-data/records/${id}`),
   evidence: (id: string) => http.get<any[]>(`/v1/quality-data/records/${id}/evidence`),
   createEvent: (payload: Record<string, unknown>) =>

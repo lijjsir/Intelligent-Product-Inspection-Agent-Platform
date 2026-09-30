@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     report_export_bucket: str = "report-exports"
     local_upload_dir: str = "runtime_uploads"
     local_upload_url_prefix: str = "/uploads"
+    reverse_geocode_url: str = "https://nominatim.openstreetmap.org/reverse"
+    reverse_geocode_user_agent: str = "PIAP-Quality-Supervision/1.0 (+https://github.com/lijjsir/Intelligent-Product-Inspection-Agent-Platform)"
+    reverse_geocode_timeout_sec: float = 8.0
     neo4j_enabled: bool = True
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_username: str = "neo4j"

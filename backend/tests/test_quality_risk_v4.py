@@ -250,6 +250,49 @@ async def test_selected_policy_applies_evidence_gate_to_risk_draft(domain):
 
 
 @pytest.mark.asyncio
+async def test_reverse_geocode_returns_address_and_caches_result(domain, monkeypatch):
+    from app.services import quality_risk_service as module
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "display_name": "重庆市沙坪坝区崇文路",
+                "address": {
+                    "state": "重庆市",
+                    "city": "重庆市",
+                    "city_district": "沙坪坝区",
+                },
+            }
+
+    class FakeClient:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            FakeClient.calls += 1
+            return FakeResponse()
+
+    module._GEOCODE_CACHE.clear()
+    module._GEOCODE_LAST_REQUEST_AT = 0.0
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    _, service = domain
+    first = await service("user").reverse_geocode(29.531, 106.603)
+    second = await service("user").reverse_geocode(29.531, 106.603)
+    assert first["formatted_address"] == "重庆市沙坪坝区崇文路"
+    assert first["district"] == "沙坪坝区"
+    assert second == first
+    assert FakeClient.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_quality_risk_public_api_contract(domain):
     from fastapi import FastAPI
     from httpx import ASGITransport, AsyncClient

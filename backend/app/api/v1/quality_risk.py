@@ -46,6 +46,15 @@ def service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)
     return QualityRiskService(db, current)
 
 
+@router.get("/quality-data/locations/reverse-geocode", response_model=ResponseEnvelope[dict])
+async def reverse_geocode(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    svc=Depends(service),
+):
+    return ResponseEnvelope(data=await svc.reverse_geocode(latitude, longitude))
+
+
 @router.get("/quality-products/catalog", response_model=ResponseEnvelope[ProductCatalogResponse])
 async def product_catalog(include_inactive: bool = False, svc=Depends(service)):
     return ResponseEnvelope(data=await svc.product_catalog(include_inactive=include_inactive))

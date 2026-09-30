@@ -3,6 +3,8 @@ import { computed, ref } from "vue";
 import areaData from "china-area-data";
 import { Aim } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { qualityRiskApi } from "@/api/quality-risk.api";
+import { extractApiErrorMessage } from "@/api/http";
 import type { LocationRef } from "@/types/quality-risk.types";
 
 const props = defineProps<{ modelValue: LocationRef }>();
@@ -42,6 +44,41 @@ function regionChanged(value: string[]) {
   });
 }
 
+function normalized(value: string) {
+  return String(value || "")
+    .replace(/特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|省|市|区|县/g, "")
+    .replace(/\s+/g, "");
+}
+
+function findCode(parentCode: string, name: string) {
+  const target = normalized(name);
+  if (!target) return "";
+  return (
+    Object.entries(areaData[parentCode] || {}).find(([, label]) => {
+      const candidate = normalized(label);
+      return candidate === target || candidate.includes(target) || target.includes(candidate);
+    })?.[0] || ""
+  );
+}
+
+function resolveRegionCodes(province: string, city: string, district: string) {
+  const provinceCode = findCode("86", province);
+  if (!provinceCode) return {};
+  const municipality = ["北京", "天津", "上海", "重庆"].includes(normalized(province));
+  let cityCode = municipality ? "" : findCode(provinceCode, city);
+  if (!cityCode && (municipality || normalized(city) === normalized(province))) {
+    cityCode = Object.keys(areaData[provinceCode] || {})[0] || "";
+  }
+  const districtCode = cityCode
+    ? findCode(cityCode, municipality ? city || district : district)
+    : "";
+  return {
+    province_code: provinceCode,
+    city_code: cityCode || undefined,
+    district_code: districtCode || undefined,
+  };
+}
+
 function locate() {
   if (!navigator.geolocation) {
     ElMessage.warning("当前浏览器不支持定位，请手动选择地区");
@@ -49,15 +86,33 @@ function locate() {
   }
   locating.value = true;
   navigator.geolocation.getCurrentPosition(
-    (position) => {
-      update({
+    async (position) => {
+      const coordinates = {
         longitude: position.coords.longitude,
         latitude: position.coords.latitude,
         accuracy_meters: position.coords.accuracy,
-        location_method: "browser",
-      });
-      locating.value = false;
-      ElMessage.success("已取得大致位置，请核对并补充地区和地址");
+        location_method: "browser" as const,
+      };
+      try {
+        const response = await qualityRiskApi.reverseGeocode(
+          position.coords.latitude,
+          position.coords.longitude,
+        );
+        const address = response.data.data;
+        update({
+          ...coordinates,
+          ...resolveRegionCodes(address.province, address.city, address.district),
+          formatted_address: address.formatted_address,
+        });
+        ElMessage.success("已根据当前位置填写地区和详细地址，请核对后保存");
+      } catch (error) {
+        update(coordinates);
+        ElMessage.warning(
+          extractApiErrorMessage(error, "当前位置已取得，但地址解析失败，请手动选择地区"),
+        );
+      } finally {
+        locating.value = false;
+      }
     },
     () => {
       locating.value = false;
@@ -79,16 +134,16 @@ function locate() {
         placeholder="选择省、市、区县"
         @update:model-value="regionChanged"
       />
-      <el-button :icon="Aim" :loading="locating" @click="locate">定位到当前位置</el-button>
+      <el-button :icon="Aim" :loading="locating" @click="locate">定位并填写地址</el-button>
     </div>
     <el-input
       :model-value="modelValue.formatted_address"
       placeholder="补充道路、园区、建筑或实验室位置"
       @update:model-value="update({ formatted_address: $event, location_method: 'manual' })"
     />
-    <p v-if="modelValue.latitude != null && modelValue.longitude != null">
-      坐标 {{ modelValue.longitude.toFixed(5) }}, {{ modelValue.latitude.toFixed(5) }}
-      <span v-if="modelValue.accuracy_meters">· 约 {{ Math.round(modelValue.accuracy_meters) }} 米</span>
+    <p v-if="modelValue.location_method === 'browser'">
+      已由当前位置填入<span v-if="modelValue.accuracy_meters"> · 定位精度约 {{ Math.round(modelValue.accuracy_meters) }} 米</span>
+      · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
     </p>
   </div>
 </template>
@@ -110,6 +165,9 @@ p {
   margin: 0;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+p a {
+  color: inherit;
 }
 @media (max-width: 640px) {
   .location-row {
