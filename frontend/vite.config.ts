@@ -23,7 +23,7 @@ function langfuseLegacyRedirect(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const backendTarget = env.VITE_PROXY_TARGET || "http://localhost:8000";
   const langfuseTarget = env.VITE_LANGFUSE_PROXY_TARGET || "http://127.0.0.1:3000";
@@ -40,6 +40,9 @@ export default defineConfig(({ mode }) => {
         resolvers: [ElementPlusResolver()],
       }),
       Components({
+        // Generate editor declarations during development; production builds
+        // should not race a running dev server for the same declaration file.
+        dts: command === "serve",
         resolvers: [ElementPlusResolver()],
       }),
     ],

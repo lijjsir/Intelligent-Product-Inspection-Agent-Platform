@@ -154,20 +154,6 @@ class Settings(BaseSettings):
     trust_review_model: str = "qwen2.5:7b-instruct"
     trust_review_timeout_sec: int = 120
     trust_scoring_enabled: bool = True
-    paper_review_enabled: bool = True
-    paper_check_languagetool_url: str = ""
-    paper_check_languagetool_language: str = "zh-CN"
-    paper_check_languagetool_timeout_sec: int = 20
-    paper_check_vale_bin: str = "vale"
-    paper_check_vale_config_dir: str = "agent/tools/assets/vale"
-    paper_check_vale_timeout_sec: int = 20
-    paper_check_pycorrector_enabled: bool = True
-    paper_check_macro_correct_enabled: bool = True
-    paper_check_engine_timeout_sec: int = 20
-    paper_check_pycorrector_timeout_sec: int = 8
-    paper_check_pycorrector_chunk_chars: int = 1200
-    paper_check_pycorrector_data_dir: str = ""
-    paper_check_pycorrector_language_model: str = "people_chars_lm.klm"
     vision_detector_url: str = ""
     vision_detector_api_key: str = ""
     vision_detector_timeout_sec: int = 120
@@ -176,11 +162,12 @@ class Settings(BaseSettings):
     qdrant_docker_url: str = "http://qdrant:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "piap_standard_book"
+    standard_published_collection: str = "piap_standard_documents_v2"
+    workspace_documents_collection: str = "piap_workspace_documents_v1"
     # The active embedding provider currently returns 2048-dimensional vectors.
     # Keep this explicit so derived Qdrant collections can be rebuilt when the
     # provider changes instead of failing later with a dimension mismatch.
     memory_vector_size: int = 2048
-    paper_template_qdrant_collection: str = "paper_template_clauses"
     rag_score_threshold: float = 0.55
     governance_secret: str = "piap-governance-secret"
     agent_route_mode: str = "router_enabled"

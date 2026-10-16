@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.services.rag_retrieval_service import RagRetrievalService
@@ -10,6 +13,52 @@ class FakeSession:
     pass
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", "   "])
+@pytest.mark.parametrize("include_system,owner", [(True, "other-user"), (False, "other-user"), (False, None)])
+async def test_missing_user_identity_does_not_authorize_personal_retrieval(monkeypatch, include_system, owner, user_id):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+    repo = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(
+        id="private-space", name="Private", created_by=owner, updated_at=None,
+    )))
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda _session: repo)
+    service = RagRetrievalService(None, org_id="org-1", user_id=user_id, include_system=include_system)
+    service._retriever = SimpleNamespace(retrieve=AsyncMock())
+    result = await service.search(rag_space_id="private-space", query="standard")
+    assert result["hit_count"] == 0
+    service._retriever.retrieve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_background_search_lists_only_system_spaces(monkeypatch):
+    repo = SimpleNamespace(list_for_org=AsyncMock(return_value=[
+        SimpleNamespace(id="system-space", created_by=None),
+        SimpleNamespace(id="personal-space", created_by="other-user"),
+    ]))
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda _session: repo)
+    service = RagRetrievalService(None, org_id="org-1", user_id=None, include_system=True)
+    service.search_many = AsyncMock(return_value={"hits": []})
+    await service.search_authorized(query="standard")
+    service.search_many.assert_awaited_once_with(rag_space_ids=["system-space"], query="standard", top_k=5)
+
+
+@pytest.mark.asyncio
+async def test_background_system_search_still_works(monkeypatch):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+    repo = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(
+        id="system-space", name="System", created_by=None, updated_at=None,
+    )))
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda _session: repo)
+    service = RagRetrievalService(None, org_id="org-1", user_id=None, include_system=True)
+    service._retriever = SimpleNamespace(retrieve=AsyncMock(return_value=[{"id": "hit", "text": "standard clause", "score": 0.95}]))
+    service._workspace_retriever = SimpleNamespace(retrieve=AsyncMock(return_value=[]))
+    result = await service.search(rag_space_id="system-space", query="standard")
+    assert result["hit_count"] == 1
+    assert service._retriever.retrieve.call_args.kwargs["payload_filter"]["rag_space_id"] == "system-space"
+
+
 class FakeSpaceRepo:
     async def get(self, *, org_id: str, rag_space_id: str, owner_user_id: str | None = None):
         if rag_space_id != "space-1":
@@ -18,6 +67,7 @@ class FakeSpaceRepo:
         class Space:
             id = "space-1"
             name = "机械"
+            created_by = "user-1"
 
         return Space()
 
@@ -101,6 +151,31 @@ async def test_rag_retrieval_service_filters_hits_below_score_threshold(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_workspace_retrieval_rejects_formal_and_managed_knowledge_points(monkeypatch):
+    _rag_space_cache.clear()
+    _rag_result_cache.clear()
+
+    class FakeRetriever:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def retrieve(self, query, top_k=5, payload_filter=None):
+            return [
+                {"id": "workspace", "title": "资料", "text": "参考资料", "score": 0.9, "payload": {"resource_domain": "workspace"}},
+                {"id": "standard", "title": "标准", "text": "正式标准", "score": 0.99, "payload": {"resource_domain": "formal_standard"}},
+                {"id": "managed", "title": "知识", "text": "已确认知识", "score": 0.98, "payload": {"resource_domain": "professional_knowledge"}},
+            ]
+
+    monkeypatch.setattr("app.services.rag_retrieval_service.RagSpaceRepository", lambda session: FakeSpaceRepo())
+    monkeypatch.setattr("app.services.rag_retrieval_service.Retriever", FakeRetriever)
+    service = RagRetrievalService(FakeSession(), org_id="org-1", user_id="user-1")
+    result = await service.search(rag_space_id="space-1", query="anything", top_k=5)
+
+    assert [hit["id"] for hit in result["hits"]] == ["workspace"]
+    assert result["hits"][0]["resource_domain"] == "workspace"
+
+
+@pytest.mark.asyncio
 async def test_rag_retrieval_service_returns_empty_when_all_candidates_are_below_threshold(monkeypatch):
     _rag_space_cache.clear()
     _rag_result_cache.clear()
@@ -163,7 +238,7 @@ async def test_rag_retrieval_service_can_return_low_confidence_fallback(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_rag_retrieval_service_caches_space_and_result(monkeypatch):
+async def test_rag_retrieval_service_rereads_authorization_and_caches_only_results(monkeypatch):
     _rag_space_cache.clear()
     _rag_result_cache.clear()
     calls = {"space": 0, "retrieve": 0}
@@ -195,7 +270,7 @@ async def test_rag_retrieval_service_caches_space_and_result(monkeypatch):
     second = await service.search(rag_space_id="space-1", query="scratch", top_k=3, scope_node_ids=["node-1"])
 
     assert first["hits"] == second["hits"]
-    assert calls == {"space": 1, "retrieve": 1}
+    assert calls == {"space": 2, "retrieve": 2}
 
 
 @pytest.mark.asyncio

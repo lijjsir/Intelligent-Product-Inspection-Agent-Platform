@@ -73,6 +73,22 @@ class EvidenceArbitrationService:
                 request=request,
                 db_session=db_session,
             )
+        automatic_chat = state.surface == "chat" and request.metadata.get("user_role") == "user" and not state.selected_rag_space
+        if automatic_chat:
+            if not str(request.user_id or '').strip():
+                raise make_agent_error("RAG_RETRIEVE_FAILED", message="缺少当前用户身份，无法检索平台资料。", source="evidence.arbitrate")
+            if db_session is None:
+                raise make_agent_error("RAG_RETRIEVE_FAILED", message="当前无法连接平台资料库，请稍后重试。", source="evidence.arbitrate")
+            from app.services.rag_retrieval_service import RagRetrievalService
+
+            retrieval = RagRetrievalService(db_session, org_id=request.org_id, user_id=request.user_id, include_system=True)
+            try:
+                result = await retrieval.search_authorized(query=state.original_query or request.query, top_k=5)
+            except AgentRuntimeError:
+                raise
+            except Exception as exc:
+                raise make_agent_error("RAG_RETRIEVE_FAILED", message="平台资料检索暂时不可用，请稍后重试。", source="evidence.arbitrate", cause=exc) from exc
+            return [result]
         if not (state.selected_rag_space or rag_scope.get("enabled")):
             return []
         if db_session is None:

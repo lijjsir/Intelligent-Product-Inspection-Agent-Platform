@@ -15,7 +15,7 @@ class ChatSessionRepository:
         self._session = session
 
     async def create(self, org_id: str, user_id: str, title: str | None = None) -> ChatSession:
-        obj = ChatSession(org_id=org_id, user_id=user_id, title=title, status="active")
+        obj = ChatSession(org_id=org_id, user_id=user_id, title=title or '新对话', title_source='manual' if title and title != '新对话' else 'auto', status="active")
         self._session.add(obj)
         await self._session.flush()
         await self._session.refresh(obj, attribute_names=["created_at", "updated_at"])
@@ -50,10 +50,28 @@ class ChatSessionRepository:
                 ChatSession.deleted_at.is_(None),
                 exists(has_message),
             )
-            .order_by(ChatSession.last_message_at.desc(), ChatSession.updated_at.desc())
+            .order_by(ChatSession.is_pinned.desc(), ChatSession.last_message_at.desc(), ChatSession.updated_at.desc())
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def update_preferences(self, org_id: str, user_id: str, session_id: str, *, title: str | None = None, is_pinned: bool | None = None) -> ChatSession | None:
+        obj = await self.get(org_id, user_id, session_id)
+        if obj is None:
+            return None
+        if title is not None:
+            obj.title = title
+            obj.title_source = 'manual'
+        if is_pinned is not None:
+            obj.is_pinned = is_pinned
+        await self._session.flush()
+        return obj
+
+    async def set_automatic_title(self, org_id: str, user_id: str, session_id: str, title: str, source: str) -> None:
+        await self._session.execute(update(ChatSession).where(
+            ChatSession.org_id == org_id, ChatSession.user_id == user_id, ChatSession.id == session_id,
+            ChatSession.deleted_at.is_(None), ChatSession.title_source.in_(['auto', 'fallback']),
+        ).values(title=title, title_source=source))
 
     async def touch(self, org_id: str, user_id: str, session_id: str, ts: datetime | None = None) -> None:
         await self._session.execute(

@@ -1,4 +1,4 @@
-from sqlalchemy import select, func
+from sqlalchemy import JSON, case, select, func, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.export_job import ExportJob
@@ -27,17 +27,30 @@ class ExportJobRepository:
         size: int,
         status: str | None = None,
         report_type: str | None = None,
+        *,
+        actor_id: str | None = None,
+        task_id: str | None = None,
     ) -> tuple[int, list[ExportJob]]:
         stmt = select(ExportJob).where(ExportJob.org_id == org_id, ExportJob.deleted_at.is_(None))
+        if actor_id:
+            stmt = stmt.where(ExportJob.actor_id == actor_id)
         if status:
             stmt = stmt.where(ExportJob.status == status)
         if report_type:
             stmt = stmt.where(ExportJob.report_type == report_type)
+        if task_id:
+            configured_task = case((func.json_valid(ExportJob.config_json) == 1,
+                                    type_coerce(ExportJob.config_json, JSON)["task_id"].as_string()), else_=None)
+            stmt = stmt.where(configured_task == task_id)
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self._session.execute(count_stmt)).scalar() or 0
-        stmt = stmt.order_by(ExportJob.created_at.desc()).offset((page - 1) * size).limit(size)
-        result = await self._session.execute(stmt)
-        return total, list(result.scalars().all())
+        # Immutable evidence bundles can be large: sort only job IDs, not their content.
+        ids = list((await self._session.scalars(stmt.with_only_columns(ExportJob.id)
+            .order_by(ExportJob.created_at.desc()).offset((page - 1) * size).limit(size))).all())
+        rows = (await self._session.scalars(select(ExportJob).where(ExportJob.org_id == org_id,
+            ExportJob.deleted_at.is_(None), ExportJob.id.in_(ids)))).all() if ids else []
+        by_id = {row.id: row for row in rows}
+        return total, [by_id[job_id] for job_id in ids if job_id in by_id]
 
     async def update_status(self, job_id: str, status: str, file_url: str | None = None, file_size: int | None = None, error_message: str | None = None, expires_at=None) -> ExportJob | None:
         job = await self.get_by_id(job_id)

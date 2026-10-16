@@ -8,11 +8,12 @@ import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
 import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
+import KnowledgeSubmitDialog from '@/components/business/KnowledgeSubmitDialog.vue';
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useMeetingStore } from "@/stores/meeting.store";
 import { useUserStore } from "@/stores/user.store";
-import type { MeetingAgentQueryAudit, MeetingAttachment, MeetingAutoParticipationMode, MeetingDataDomain, MeetingMemory, MeetingMemoryPublishScope, MeetingMessage, MeetingQuoteSnapshot, MeetingRoom, MeetingRoomMember } from "@/types/meeting.types";
+import type { MeetingAgentQueryAudit, MeetingAttachment, MeetingAutoParticipationMode, MeetingDataDomain, MeetingMemory, MeetingMemoryPublishScope, MeetingMessage, MeetingQuoteSnapshot, MeetingRoom, MeetingRoomMember, QDLDocument } from "@/types/meeting.types";
 import { normalizeAiResponseText } from "@/utils/ai-response";
 import { attachmentDisplayName, isImageAttachment } from "@/utils/attachments";
 import { writeTextToClipboard } from "@/utils/clipboard";
@@ -21,6 +22,7 @@ const auth = useAuthStore();
 const store = useMeetingStore();
 const userStore = useUserStore();
 const router = useRouter();
+const knowledgeSubmitOpen=ref(false);const knowledgeMessageId=ref('');
 const MESSAGE_RECALL_WINDOW_MS = 2 * 60 * 1000;
 
 const roomTitle = ref("会议室");
@@ -273,7 +275,8 @@ const qdlKnowledgeLevelLabels: Record<string, string> = {
   concept: "概念",
   hypothesis: "假设",
 };
-const qdlPropertyLabels: Record<string, string> = {
+type FixedQDLProperty = Exclude<keyof QDLDocument["properties"], "extensions">;
+const qdlPropertyLabels: Record<FixedQDLProperty, string> = {
   abstraction: "抽象性",
   environment: "环境相关",
   boundary: "边界性",
@@ -1023,7 +1026,7 @@ function qdlPropertyRows(memory: MeetingMemory) {
   const properties = memory.qdl_json?.properties;
   if (!properties) return [];
   const fixedRows = Object.entries(qdlPropertyLabels).map(([key, label]) => {
-    const assessment = properties[key as keyof typeof properties];
+    const assessment = properties[key as FixedQDLProperty];
     if (!assessment || typeof assessment !== "object" || !("level" in assessment)) return null;
     return {
       key,
@@ -1356,7 +1359,6 @@ function agentNameById(agentId?: string | null) {
 function memoryPublishTargetTypeLabel(key: MemoryPublishTargetKey) {
   if (key === "current_meeting_room" || key === "target_meeting_room") return "会议室";
   if (key === "user") return "成员";
-  if (key === "agent") return "Agent";
   if (key === "org_space") return "组织空间";
   return "目标";
 }
@@ -1508,7 +1510,7 @@ function normalizeMemoryWarning(warning: string) {
   if (!text) return "";
   if (isBusinessTagWarning(text)) return "";
   if (text.includes("预警中心")) return "风险洞察是预测候选，需人工确认后才能沉淀或共享；不会自动触发外部处置。";
-  if (text.includes("确认发布")) return text.replaceAll("确认发布", "确认");
+  if (text.includes("确认发布")) return text.replace(/确认发布/g, "确认");
   return text;
 }
 
@@ -2103,7 +2105,7 @@ function canRecallMessage(message: MeetingMessage) {
   if (!canMutateMessage(message)) return false;
   nowTick.value;
   const createdAt = parseApiTime(message.created_at)?.getTime();
-  if (!Number.isFinite(createdAt)) return false;
+  if (createdAt === undefined || !Number.isFinite(createdAt)) return false;
   return Date.now() - createdAt <= MESSAGE_RECALL_WINDOW_MS;
 }
 
@@ -3920,7 +3922,7 @@ onBeforeUnmount(() => {
                     :model-value="normalizedMemberRole(member.role)"
                     size="small"
                     class="member-role-select"
-                    @change="(role) => updateMemberRole(member, role as 'host' | 'member')"
+                    @change="(role: string) => updateMemberRole(member, role as 'host' | 'member')"
                   >
                     <el-option label="主持人" value="host" />
                     <el-option label="成员" value="member" />
@@ -4623,6 +4625,7 @@ onBeforeUnmount(() => {
             <el-tooltip v-if="canQuoteMessage(message)" content="引用" placement="bottom">
               <el-button text size="small" @click="quoteMessage(message)">引用</el-button>
             </el-tooltip>
+            <el-button v-if="auth.hasPermission('knowledge_candidate_submit')&&canQuoteMessage(message)" text size="small" @click="knowledgeMessageId=message.id;knowledgeSubmitOpen=true">提出知识候选</el-button>
           </div>
           <div
             v-for="reply in anchoredAgentReplies(message.id)"
@@ -6043,6 +6046,7 @@ onBeforeUnmount(() => {
     </el-dialog>
     <ImagePreviewDialog v-model="imagePreviewVisible" :src="previewImage.url" :title="previewImage.name" />
   </div>
+  <KnowledgeSubmitDialog v-model="knowledgeSubmitOpen" source-kind="meeting_message" :source-id="knowledgeMessageId"/>
 </template>
 
 <style scoped>

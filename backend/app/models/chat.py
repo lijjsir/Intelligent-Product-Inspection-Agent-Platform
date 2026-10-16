@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.mysql import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,8 @@ class ChatSession(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     user_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text('0'), nullable=False)
+    title_source: Mapped[str] = mapped_column(String(16), default='auto', server_default='auto', nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

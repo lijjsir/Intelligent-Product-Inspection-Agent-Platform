@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.ids import uuid7
@@ -23,6 +23,7 @@ class ProductCategory(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     code: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(128))
+    classification_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -30,7 +31,7 @@ class ProductCategory(Base, TimestampMixin):
 
 class QualityProduct(Base, TimestampMixin):
     __tablename__ = "quality_products"
-    __table_args__ = (UniqueConstraint("org_id", "category_id", "name", "model", name="uq_quality_product_identity"),)
+    __table_args__ = (UniqueConstraint("org_id", "category_id", "name", "model", "brand", "manufacturer_enterprise_id", name="uq_quality_product_identity"),)
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=new_id)
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
@@ -41,6 +42,18 @@ class QualityProduct(Base, TimestampMixin):
     manufacturer_enterprise_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class QualityProductionBatch(Base, TimestampMixin):
+    __tablename__ = "quality_production_batches"
+    __table_args__ = (UniqueConstraint("org_id", "product_id", "original_batch_no", name="uq_quality_batch_original"),)
+
+    id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    product_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
+    original_batch_no: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    production_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_by: Mapped[str] = mapped_column(UUIDBinary)
 
 
 class ProductIdentifier(Base, TimestampMixin):
@@ -130,7 +143,7 @@ class QualitySourceRecord(Base, TimestampMixin):
     ingestion_job_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True, index=True)
     external_record_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     record_type: Mapped[str] = mapped_column(String(48), index=True)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     content_hash: Mapped[str] = mapped_column(String(64), index=True)

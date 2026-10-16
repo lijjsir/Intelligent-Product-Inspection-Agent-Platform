@@ -1,8 +1,10 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { isAdminWorkspaceRoute } from "@/utils/admin-workspace";
 import { useAuthStore } from "@/stores/auth.store";
 import { appRoutes } from "@/router/routes/app.routes";
 import { opsRoutes } from "@/router/routes/ops.routes";
 import { governanceRoutes } from "@/router/routes/governance.routes";
+import { permissionsForRoute, ordinaryUserTaskRedirect } from "@/utils/permission-routes";
 
 const routes = [
   {
@@ -69,11 +71,24 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
 
   if (to.meta.requiresAuth && !auth.isAuthed) {
     return { path: "/login" };
+  }
+
+  if (to.meta.requiresAuth && auth.isAuthed) {
+    await auth.refreshPermissions();
+  }
+
+  if (to.meta.requiresAuth && auth.isAuthed && auth.primaryRole === "admin" && !isAdminWorkspaceRoute(to.path)) {
+    return { path: auth.resolveDefaultRoute() };
+  }
+
+  if (auth.isAuthed && auth.primaryRole === "user") {
+    const redirect = ordinaryUserTaskRedirect(to.path, String(to.query.task_id || ""));
+    if (redirect) return { path: redirect, query: to.path === "/app/export" && to.query.task_id ? { report: "1" } : {} };
   }
 
   if (auth.isAuthed && ["/app", "/ops", "/governance", "/app/dashboard"].includes(to.path)) {
@@ -84,6 +99,10 @@ router.beforeEach((to) => {
 
   // Check route meta role restrictions
   const routeRoles = to.meta.roles as string[] | undefined;
+  const routePermissions = permissionsForRoute(to.path);
+  if (routePermissions && auth.effectivePermissions !== null) {
+    return auth.hasPermission(routePermissions) ? true : { path: auth.resolveDefaultRoute() };
+  }
   if (routeRoles && routeRoles.length) {
     const currentRoles = auth.roles.length ? auth.roles : [auth.role];
     const hasAccess = routeRoles.some((r) => currentRoles.includes(r));

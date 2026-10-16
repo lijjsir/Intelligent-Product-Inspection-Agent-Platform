@@ -44,6 +44,11 @@ class StandardDocument(Base, TimestampMixin):
     __tablename__ = "standard_documents"
 
     id: Mapped[str] = mapped_column(UUIDBinary, primary_key=True, default=lambda: str(uuid7()))
+    current_revision_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    published_revision_id: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
+    processing_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    review_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    publication_status: Mapped[str] = mapped_column(String(32), default="unpublished", nullable=False)
     library_id: Mapped[str] = mapped_column(
         UUIDBinary,
         ForeignKey("inspection_standard_libraries.id"),

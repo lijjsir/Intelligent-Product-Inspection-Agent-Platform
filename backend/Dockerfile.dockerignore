@@ -1,3 +1,15 @@
 **
 !backend/
 !backend/**
+backend/.env
+backend/jwt_private.pem
+backend/jwt_public.pem
+backend/vendor_models
+**/__pycache__
+**/*.pyc
+backend/runtime
+backend/runtime_algo_workspace
+backend/runtime_uploads
+backend/test-results
+backend/agent/tools/assets/paper_templates
+backend/agent/tools/assets/vale

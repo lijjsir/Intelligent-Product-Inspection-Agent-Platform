@@ -109,16 +109,6 @@ CAPABILITIES: dict[str, Capability] = {
         cost_level="medium",
         description="基于聊天上传文件回答问题 — FileExecutor 内部能力",
     ),
-    "file.paper_format_check": Capability(
-        key="file.paper_format_check",
-        owner_agents=["file"],
-        handler="file.paper_format_check",
-        operation="paper_format_check",
-        mode="report",
-        surfaces=["chat"],
-        cost_level="medium",
-        description="对上传论文文档执行查非和模板格式检查 — FileExecutor 内部能力",
-    ),
     "quality.inspection.execute": Capability(
         key="quality.inspection.execute",
         owner_agents=["quality_analysis"],
@@ -202,12 +192,6 @@ def surface_policy(surface: str) -> dict:
 
 
 def capability_allowed(capability: Capability, surface: str, allowed_modes: list[str]) -> bool:
-    if capability.key == "file.paper_format_check":
-        from app.core.config import settings
-
-        if not settings.paper_review_enabled:
-            return False
-
     policy = surface_policy(surface)
     if surface not in capability.surfaces:
         return False

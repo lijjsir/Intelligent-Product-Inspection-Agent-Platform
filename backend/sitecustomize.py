@@ -1,24 +1,16 @@
 from __future__ import annotations
 
 
-def _patch_transformers_adamw() -> None:
+def _patch_aiomysql_bytes_escape() -> None:
+    """Use PyMySQL's current bytes encoder when its legacy alias is not callable."""
     try:
-        import transformers
-    except Exception:
+        import aiomysql.connection as aiomysql_connection
+        from pymysql.converters import escape_bytes
+    except ImportError:
         return
 
-    if hasattr(transformers, "AdamW"):
-        return
-
-    try:
-        import torch.optim
-    except Exception:
-        return
-
-    transformers.AdamW = torch.optim.AdamW
-    exports = getattr(transformers, "__all__", None)
-    if isinstance(exports, list) and "AdamW" not in exports:
-        exports.append("AdamW")
+    if not callable(aiomysql_connection.escape_bytes_prefixed):
+        aiomysql_connection.escape_bytes_prefixed = escape_bytes
 
 
-_patch_transformers_adamw()
+_patch_aiomysql_bytes_escape()

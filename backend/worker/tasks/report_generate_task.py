@@ -30,6 +30,7 @@ async def _run(payload: dict) -> dict:
         error_message = str(exc)
         async with get_session() as session:
             repo = ExportJobRepository(session)
-            await repo.update_status(job_id, "failed", error_message=error_message)
+            job=await repo.get_by_id(job_id)
+            if job and job.org_id==org_id:await repo.update_status(job_id, "failed", error_message=error_message)
             await session.commit()
         return {"status": "failed", "job_id": job_id, "error": error_message}

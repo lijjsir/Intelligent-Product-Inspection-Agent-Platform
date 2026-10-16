@@ -42,47 +42,4 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     await check_neo4j_on_startup()
     await _ensure_minio_buckets_on_startup()
-    await seed_paper_templates_on_startup()
-    await log_paper_review_runtime_status()
     yield
-
-
-async def seed_paper_templates_on_startup() -> None:
-    """Ensure paper template files and clause index are ready on startup.
-
-    Pipeline: local assets -> MinIO (idempotent) -> MySQL + Qdrant (idempotent).
-    Safe to call repeatedly — skips already-seeded data.
-    """
-    if not settings.paper_review_enabled:
-        logger.info("paper template bootstrap skipped: paper review disabled")
-        return
-
-    try:
-        from agent.tools.paper_template_storage import ensure_paper_templates_ready
-
-        result = await ensure_paper_templates_ready()
-        logger.info(
-            "paper template bootstrap complete template_id=%s minio_files=%d index_status=%s",
-            result.get("template_id"),
-            len(result.get("files") or []),
-            result.get("index_status", "unknown"),
-        )
-    except Exception as exc:
-        logger.warning("paper template bootstrap skipped: %s", exc)
-
-
-async def log_paper_review_runtime_status() -> None:
-    if not settings.paper_review_enabled:
-        logger.info("paper review runtime check skipped: paper review disabled")
-        return
-
-    try:
-        from app.services.paper_review_runtime_service import PaperReviewRuntimeService
-
-        result = await PaperReviewRuntimeService.diagnose()
-        if result.get("ok"):
-            logger.info("paper review runtime ready engines=%s", result.get("engines_used"))
-            return
-        logger.warning("paper review runtime not ready details=%s", result.get("engine_status"))
-    except Exception as exc:
-        logger.warning("paper review runtime health check failed: %s", exc)

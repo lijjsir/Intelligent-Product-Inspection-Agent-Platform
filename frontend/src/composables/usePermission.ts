@@ -20,5 +20,5 @@ export function usePermission() {
     return auth.capabilities.includes(capability);
   }
 
-  return { hasRole, hasCapability };
+  return { hasRole, hasCapability, hasPermission: auth.hasPermission };
 }

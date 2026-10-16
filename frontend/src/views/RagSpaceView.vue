@@ -15,10 +15,20 @@ import {
 
 import { ragSpaceApi } from "@/api/rag-space.api";
 import { useChatStore } from "@/stores/chat.store";
+import { useAuthStore } from "@/stores/auth.store";
+import { canWriteRagSpace } from "@/utils/rag-space-access";
+import KnowledgeSubmitDialog from '@/components/business/KnowledgeSubmitDialog.vue';
+import KnowledgeWorkspaceShareDialog from '@/components/business/KnowledgeWorkspaceShareDialog.vue';
 import type { RagNode } from "@/types/rag-space.types";
 
 const route = useRoute();
 const chatStore = useChatStore();
+const auth = useAuthStore();
+const props=withDefaults(defineProps<{scopeFilter?:'all'|'mine'|'shared'}>(),{scopeFilter:'all'});
+const visibleSpaces=computed(()=>chatStore.ragSpaces.filter(space=>props.scopeFilter==='all'||(props.scopeFilter==='mine'?space.created_by===auth.userId:space.created_by&&space.created_by!==auth.userId)));
+const sourceSubmitOpen=ref(false);const shareOpen=ref(false);
+const canPropose=computed(()=>auth.hasPermission('knowledge_candidate_submit')&&!!selectedNode.value?.document?.id&&
+  selectedSpace.value?.resource_domain!=='formal_standard'&&(selectedSpace.value?.created_by===auth.userId||selectedSpace.value?.can_submit_knowledge));
 
 const treeLoading = ref(false);
 const uploadLoading = ref(false);
@@ -53,6 +63,17 @@ const nodeForm = ref({
 });
 
 const selectedSpace = computed(() => chatStore.selectedRagSpace || null);
+const canCreateSpace = computed(() => auth.role === "admin" || auth.hasPermission("quality"));
+const canManageSelectedSpace = computed(() => canWriteRagSpace(selectedSpace.value, {
+  userId: auth.userId, orgId: auth.orgId, role: auth.role, canWrite: canCreateSpace.value,
+}));
+const isSystemSpace = computed(() => Boolean(selectedSpace.value && selectedSpace.value.created_by == null));
+
+function requireSpaceWrite(): boolean {
+  if (canManageSelectedSpace.value) return true;
+  ElMessage.warning("当前空间仅可查阅。请在自己的资料空间上传或维护文件。");
+  return false;
+}
 
 const flattenNodes = (nodes: RagNode[]): RagNode[] =>
   nodes.flatMap((node) => [node, ...flattenNodes(node.children || [])]);
@@ -202,14 +223,15 @@ function resolveNodeIcon(node: RagNode) {
 async function ensureSelectedSpace() {
   await chatStore.fetchRagSpaces();
   const requestedSpaceId = String(route.query.spaceId || "").trim();
-  if (requestedSpaceId && chatStore.ragSpaces.some((item) => item.id === requestedSpaceId)) {
+  if (requestedSpaceId && visibleSpaces.value.some((item) => item.id === requestedSpaceId)) {
     if (chatStore.selectedRagSpaceId !== requestedSpaceId) {
       chatStore.selectRagSpace(requestedSpaceId);
     }
     return;
   }
-  if (!chatStore.selectedRagSpaceId && chatStore.ragSpaces.length > 0) {
-    chatStore.selectRagSpace(chatStore.ragSpaces[0].id);
+  if (!visibleSpaces.value.some(item=>item.id===chatStore.selectedRagSpaceId)) {
+    if(visibleSpaces.value.length)chatStore.selectRagSpace(visibleSpaces.value[0].id);
+    else chatStore.clearSelectedRagSpace();
   }
 }
 
@@ -276,6 +298,7 @@ function updateExpandedKeys(nodeId: string, expanded: boolean) {
 }
 
 function openCreateSpaceDialog() {
+  if (!canCreateSpace.value) return;
   spaceDialogMode.value = "create";
   spaceForm.value = { name: "", description: "" };
   spaceDialogVisible.value = true;
@@ -286,6 +309,7 @@ function openEditSpaceDialog() {
     ElMessage.warning("请先选择一个 RAG 空间。");
     return;
   }
+  if (!requireSpaceWrite()) return;
   spaceDialogMode.value = "edit";
   spaceForm.value = {
     name: selectedSpace.value.name,
@@ -295,6 +319,7 @@ function openEditSpaceDialog() {
 }
 
 async function submitSpaceDialog() {
+  if (spaceDialogMode.value === "create" ? !canCreateSpace.value : !requireSpaceWrite()) return;
   const name = spaceForm.value.name.trim();
   if (!name) {
     ElMessage.warning("请输入空间名称。");
@@ -335,6 +360,7 @@ async function deleteCurrentSpace() {
     ElMessage.warning("请先选择一个 RAG 空间。");
     return;
   }
+  if (!requireSpaceWrite()) return;
 
   try {
     await ElMessageBox.confirm(
@@ -369,6 +395,7 @@ function openCreateFolderDialog(parentId?: string | null) {
     ElMessage.warning("请先选择一个 RAG 空间。");
     return;
   }
+  if (!requireSpaceWrite()) return;
   folderForm.value = {
     parent_id: parentId ?? selectedFolder.value?.id ?? null,
     name: "",
@@ -384,6 +411,7 @@ const folderParentLabel = computed(() => {
 
 async function submitCreateFolder() {
   if (!chatStore.selectedRagSpaceId) return;
+  if (!requireSpaceWrite()) return;
   const name = folderForm.value.name.trim();
   if (!name) {
     ElMessage.warning("请输入文件夹名称。");
@@ -412,6 +440,7 @@ async function submitCreateFolder() {
 }
 
 function openNodeDialog(node?: RagNode | null) {
+  if (!requireSpaceWrite()) return;
   const target = node || selectedNode.value;
   if (!target) {
     ElMessage.warning("请先选择一个节点。");
@@ -427,6 +456,7 @@ function openNodeDialog(node?: RagNode | null) {
 
 async function submitNodeDialog() {
   if (!chatStore.selectedRagSpaceId) return;
+  if (!requireSpaceWrite()) return;
   const nodeId = nodeForm.value.node_id;
   const name = nodeForm.value.name.trim();
   if (!nodeId || !name) {
@@ -455,6 +485,7 @@ async function submitNodeDialog() {
 }
 
 async function deleteNode(node?: RagNode | null) {
+  if (!requireSpaceWrite()) return;
   const target = node || selectedNode.value;
   if (!target || !chatStore.selectedRagSpaceId) {
     ElMessage.warning("请先选择一个节点。");
@@ -494,6 +525,7 @@ function openUploadPicker(parentNodeId?: string | null) {
     ElMessage.warning("请先选择一个 RAG 空间。");
     return;
   }
+  if (!requireSpaceWrite()) return;
   uploadTargetNodeId.value = resolveUploadTarget(parentNodeId);
   hiddenUploadInput.value?.click();
 }
@@ -502,6 +534,10 @@ async function handleUploadChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const files = Array.from(input.files || []);
   if (!chatStore.selectedRagSpaceId || files.length === 0) {
+    input.value = "";
+    return;
+  }
+  if (!requireSpaceWrite()) {
     input.value = "";
     return;
   }
@@ -532,6 +568,9 @@ async function handleUploadChange(event: Event) {
 watch(
   () => chatStore.selectedRagSpaceId,
   async (spaceId) => {
+    spaceDialogVisible.value = false;
+    folderDialogVisible.value = false;
+    nodeDialogVisible.value = false;
     if (!spaceId) {
       treeData.value = [];
       currentNodeId.value = "";
@@ -555,8 +594,8 @@ onMounted(async () => {
         <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div class="space-y-1">
             <div class="text-xs font-semibold uppercase tracking-[0.24em] text-teal-700">RAG Space Manager</div>
-            <h1 class="text-[30px] font-semibold tracking-tight text-zinc-950">RAG 空间目录树</h1>
-            <p class="max-w-3xl text-sm text-zinc-500">集中管理空间、目录与知识文件，保持树结构清晰、可维护、可追踪。</p>
+            <h1 class="text-[30px] font-semibold tracking-tight text-zinc-950">{{ props.scopeFilter==='all'?'知识资料目录':props.scopeFilter==='mine'?'我的资料':'授权共享资料' }}</h1>
+            <p class="max-w-3xl text-sm text-zinc-500">参考资料按所有者及授权范围使用；公共标准由标准库维护，知识主张经过核验后发布。</p>
           </div>
 
           <div class="flex flex-wrap gap-2">
@@ -588,7 +627,7 @@ onMounted(async () => {
               placeholder="请选择 RAG 空间"
               @change="handleSpaceChange"
             >
-              <el-option v-for="space in chatStore.ragSpaces" :key="space.id" :label="space.name" :value="space.id" />
+              <el-option v-for="space in visibleSpaces" :key="space.id" :label="space.name" :value="space.id" />
             </el-select>
             <div class="min-w-0 text-sm text-zinc-400">
               当前目录：
@@ -597,11 +636,13 @@ onMounted(async () => {
           </div>
 
           <div class="flex flex-wrap gap-2">
-            <el-button type="primary" plain :icon="Plus" @click="openCreateSpaceDialog">新建空间</el-button>
-            <el-button :icon="EditPen" :disabled="!selectedSpace" @click="openEditSpaceDialog">编辑空间</el-button>
-            <el-button type="danger" plain :icon="Delete" :disabled="!selectedSpace" @click="deleteCurrentSpace">删除空间</el-button>
-            <el-button :icon="Plus" :disabled="!selectedSpace" @click="openCreateFolderDialog()">新建文件夹</el-button>
-            <el-button :icon="UploadFilled" :loading="uploadLoading" :disabled="!selectedSpace" @click="openUploadPicker()">
+            <el-button v-if="selectedSpace?.created_by===auth.userId&&auth.hasPermission('knowledge_read')" @click="shareOpen=true">授权共享</el-button>
+            <el-button v-if="canPropose" @click="sourceSubmitOpen=true">从此文件提出知识候选</el-button>
+            <el-button v-if="canCreateSpace" type="primary" plain :icon="Plus" @click="openCreateSpaceDialog">新建空间</el-button>
+            <el-button v-if="canManageSelectedSpace" :icon="EditPen" @click="openEditSpaceDialog">编辑空间</el-button>
+            <el-button v-if="canManageSelectedSpace" type="danger" plain :icon="Delete" @click="deleteCurrentSpace">删除空间</el-button>
+            <el-button v-if="canManageSelectedSpace" :icon="Plus" @click="openCreateFolderDialog()">新建文件夹</el-button>
+            <el-button v-if="canManageSelectedSpace" :icon="UploadFilled" :loading="uploadLoading" @click="openUploadPicker()">
               上传到当前文件夹
             </el-button>
             <el-button :icon="Refresh" :loading="treeLoading" @click="refreshPage">刷新</el-button>
@@ -610,13 +651,17 @@ onMounted(async () => {
       </div>
     </section>
 
+    <el-alert v-if="selectedSpace && !canManageSelectedSpace" :closable="false" show-icon type="info"
+      :title="isSystemSpace ? '系统共享资料 · 只读' : '已授权共享资料 · 只读'"
+      description="这里展示已有资料，供查阅和引用。上传与整理请使用自己的空间；标准变更通过标准管理流程提交。" />
+
     <section class="grid min-h-0 flex-1 gap-4 grid-cols-[1fr_320px]">
       <div class="card-surface flex min-h-0 flex-col overflow-hidden">
         <div class="border-b border-zinc-200 px-4 py-3">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="text-lg font-semibold text-zinc-950">知识库目录树</h2>
-              <p class="mt-1 text-sm text-zinc-500">在树上直接新增、上传、重命名、移动或删除节点。</p>
+              <p class="mt-1 text-sm text-zinc-500">{{ canManageSelectedSpace ? '在树上直接新增、上传、重命名、移动或删除节点。' : '查阅已有目录与文件，当前空间的内容由维护方管理。' }}</p>
             </div>
             <el-tag v-if="selectedSpace" size="small" effect="plain">{{ selectedSpace.name }}</el-tag>
           </div>
@@ -653,7 +698,7 @@ onMounted(async () => {
                   <component :is="resolveNodeIcon(data)" />
                 </el-icon>
                 <span class="rag-node-name">{{ data.name }}</span>
-                <div class="rag-node-actions" @click.stop>
+                <div v-if="canManageSelectedSpace" class="rag-node-actions" @click.stop>
                   <template v-if="data.node_type === 'folder'">
                     <el-button text size="small" :icon="Plus" @click="openCreateFolderDialog(data.id)" />
                     <el-button text size="small" :icon="UploadFilled" @click="openUploadPicker(data.id)" />
@@ -710,6 +755,8 @@ onMounted(async () => {
       @change="handleUploadChange"
     />
 
+    <KnowledgeSubmitDialog v-model="sourceSubmitOpen" source-kind="rag_document" :source-id="selectedNode?.document?.id" />
+    <KnowledgeWorkspaceShareDialog v-if="selectedSpace" v-model="shareOpen" :space-id="selectedSpace.id" @changed="chatStore.fetchRagSpaces()"/>
     <el-dialog v-model="spaceDialogVisible" :title="spaceDialogTitle" width="460px">
       <el-form label-position="top">
         <el-form-item label="空间名称">

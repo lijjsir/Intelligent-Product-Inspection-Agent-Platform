@@ -11,6 +11,8 @@ const file = ref<File | null>(null),
 const labels: Record<string, string> = {
   code: "记录编号",
   name: "记录名称",
+  credit_code: "统一社会信用代码（选填）",
+  address: "详细地址（选填）",
   parent_id: "上级地区编号",
   parent_code: "上级地区编码",
   dictionary_version: "字典版本",
@@ -29,6 +31,7 @@ const labels: Record<string, string> = {
   product_category: "产品类别",
 };
 function columns() {
+  if (props.kind === "enterprises") return ["name", "credit_code", "address"];
   return props.kind === "regions"
     ? ["code", "name", "parent_code", "dictionary_version"]
     : [
@@ -91,7 +94,7 @@ function template() {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = props.kind === "regions" ? "地区数据模板.csv" : "风险线索模板.csv";
+  anchor.download = props.kind === "enterprises" ? "企业档案模板.csv" : props.kind === "regions" ? "地区数据模板.csv" : "风险线索模板.csv";
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -99,7 +102,7 @@ function template() {
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="kind === 'regions' ? '导入地区数据' : '导入风险线索'"
+    :title="kind === 'enterprises' ? '导入企业档案' : kind === 'regions' ? '导入地区数据' : '导入风险线索'"
     width="min(850px,94vw)"
     top="3vh"
     @update:model-value="emit('update:modelValue', $event)"
@@ -112,7 +115,7 @@ function template() {
     <el-collapse
       ><el-collapse-item title="文件列名映射"
         ><el-form label-position="top" class="mapping"
-          ><el-form-item v-for="column in columns()" :key="column" :label="labels[column]"
+          ><el-form-item v-for="column in columns()" :key="column" :label="kind === 'enterprises' && column === 'name' ? '企业名称（必填）' : labels[column]"
             ><el-input
               v-model="mapping[column]"
               :placeholder="column" /></el-form-item></el-form></el-collapse-item></el-collapse
@@ -123,7 +126,7 @@ function template() {
           prop="message"
           label="需要修正" /></el-table
       ><el-table :data="preview.rows"
-        ><el-table-column prop="code" label="编号" /><el-table-column
+        ><el-table-column v-if="kind !== 'enterprises'" prop="code" label="编号" /><el-table-column
           prop="name"
           label="名称" /></el-table></template
     ><template #footer

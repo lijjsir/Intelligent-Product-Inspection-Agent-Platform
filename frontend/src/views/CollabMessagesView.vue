@@ -83,7 +83,7 @@ function unwrapRouteTab(): CenterTab {
 }
 
 function formatTime(value?: string | null) {
-  return formatServerDateTime(value, { compactDate: true, includeSeconds: false }) || "—";
+  return formatServerDateTime(value, { includeSeconds: false }) || "—";
 }
 
 function itemTypeLabel(type: string) {

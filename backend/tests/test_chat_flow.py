@@ -79,16 +79,12 @@ def test_chat_general_prompt_supports_normal_model_chat():
 
 def test_chat_specialized_prompts_keep_json_contract():
     prompts = {str(item["key"]): str(item["content"]) for item in CHAT_CODE_PROMPTS}
-    for prompt_key in {"chat.rag_answer.system", "chat.file_summary.system", "chat.paper_format_check.system"}:
+    for prompt_key in {"chat.rag_answer.system", "chat.file_summary.system"}:
         content = prompts[prompt_key]
         assert "JSON" in content
         assert "answer" in content
         assert "summary" in content
-        if prompt_key == "chat.paper_format_check.system":
-            assert "markdown_report" in content
-            assert "download_title" in content
-        else:
-            assert '{"answer": string, "summary": string}' in content
+        assert '{"answer": string, "summary": string}' in content
 
 
 def test_chat_rag_prompt_does_not_refuse_on_empty_recall():
@@ -115,22 +111,6 @@ def test_prompt_builder_appends_rag_empty_recall_policy_to_runtime_override():
     assert "不来自当前知识库" in system_prompt
     assert "未检索到可用知识库片段" in user_message
     assert "请继续回答用户问题" in user_message
-
-
-def test_prompt_builder_paper_format_check_uses_ai_review_json_contract():
-    system_prompt, _user_message, temperature, metadata = PromptBuilder.build(
-        agent="chat",
-        sub_route="paper_format_check",
-        query="帮我查非",
-    )
-
-    assert metadata["prompt_key"] == "chat.paper_format_check.system"
-    assert metadata["prompt_version"] == "chat_paper_format_check_v2_ai_review"
-    assert temperature == 0.2
-    assert "Review Evidence Pack" in system_prompt
-    assert "markdown_report" in system_prompt
-    assert "download_title" in system_prompt
-    assert "不得编造" in system_prompt or "不要编造" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -643,12 +623,13 @@ async def test_run_workflow_loads_history_before_current_user_seq(monkeypatch):
     await service._run_workflow(
         session_id="session-1",
         assistant_message_id="assistant-1",
-        request=chat_service_mod.ChatMessageSendRequest(message="current question"),
+        request=chat_service_mod.ChatMessageSendRequest(message="current question", metadata={"user_role": "expert"}),
         workflow_run_id="workflow-1",
         current_user_seq_no=3,
         assistant_message_seq_no=4,
     )
 
+    assert captured_payloads[0]["metadata"]["user_role"] == "user"
     ext = captured_payloads[0]["ext"]
     assert ext["current_user_seq_no"] == 3
     assert ext["assistant_message_seq_no"] == 4

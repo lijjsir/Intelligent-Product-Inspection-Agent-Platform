@@ -4,6 +4,8 @@ import { useRouter } from "vue-router";
 import { ElMessage, type UploadFile } from "element-plus";
 import { ChatDotRound, DocumentAdd, RefreshRight, Right, UploadFilled } from "@element-plus/icons-vue";
 import { qualityRiskApi } from "@/api/quality-risk.api";
+import { extractApiErrorMessage } from "@/api/http";
+import { formatServerDateTime } from "@/utils/date-time";
 import LocationPicker from "@/components/business/quality-risk/LocationPicker.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useQualityReferenceStore } from "@/stores/quality-reference.store";
@@ -16,8 +18,11 @@ const auth = useAuthStore();
 const router = useRouter();
 const references = useQualityReferenceStore();
 const rows = ref<QualitySourceRecord[]>([]);
-const complaintTotal = ref(0);
-const opinionTotal = ref(0);
+const complaintTotal = ref<number | null>(null);
+const opinionTotal = ref<number | null>(null);
+const total = ref<number | null>(null);
+const loadError = ref("");
+let loadVersion = 0;
 const activeType = ref<TypeFilter>("all");
 const keyword = ref("");
 const page = ref(1);
@@ -32,14 +37,7 @@ const activeSources = computed(() => references.sources.filter((item) => item.st
 const filteredProducts = computed(() =>
   references.products.filter((item) => !form.category_id || item.category_id === form.category_id),
 );
-const filteredRows = computed(() =>
-  activeType.value === "all"
-    ? rows.value
-    : rows.value.filter((item) => item.record_type === activeType.value),
-);
-const visibleRows = computed(() =>
-  filteredRows.value.slice((page.value - 1) * pageSize, page.value * pageSize),
-);
+const allTotal = computed(() => complaintTotal.value === null || opinionTotal.value === null ? null : complaintTotal.value + opinionTotal.value);
 
 const form = reactive({
   source_id: "",
@@ -71,24 +69,36 @@ function resetForm() {
 }
 
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
+  loadError.value = "";
   try {
-    const params = { page: 1, size: 200, keyword: keyword.value.trim() || undefined };
-    const [complaints, opinions] = await Promise.all([
-      qualityRiskApi.records({ ...params, record_type: "consumer_complaint" }),
-      qualityRiskApi.records({ ...params, record_type: "public_opinion" }),
-      references.loadSources(),
-      references.loadProducts(),
+    const keywordParam = keyword.value.trim() || undefined;
+    const [response, complaints, opinions] = await Promise.all([
+      qualityRiskApi.records({ page: page.value, size: pageSize, keyword: keywordParam, record_types: activeType.value === "all" ? ["consumer_complaint", "public_opinion"] : [activeType.value] }),
+      qualityRiskApi.records({ page: 1, size: 1, keyword: keywordParam, record_type: "consumer_complaint" }),
+      qualityRiskApi.records({ page: 1, size: 1, keyword: keywordParam, record_type: "public_opinion" }),
     ]);
+    if (version !== loadVersion) return;
     complaintTotal.value = complaints.data.data.total;
     opinionTotal.value = opinions.data.data.total;
-    rows.value = [...complaints.data.data.items, ...opinions.data.data.items].sort(
-      (left, right) => new Date(right.occurred_at).getTime() - new Date(left.occurred_at).getTime(),
-    );
-    page.value = 1;
+    rows.value = response.data.data.items;
+    total.value = response.data.data.total;
+  } catch (error) {
+    if (version !== loadVersion) return;
+    rows.value = [];
+    total.value = null;
+    complaintTotal.value = null;
+    opinionTotal.value = null;
+    loadError.value = extractApiErrorMessage(error, "投诉与舆情线索未能加载，请重试");
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
+}
+
+async function search() {
+  page.value = 1;
+  await load();
 }
 
 async function openCreate() {
@@ -159,6 +169,7 @@ async function createRiskCase(row: QualitySourceRecord) {
 function setType(value: TypeFilter) {
   activeType.value = value;
   page.value = 1;
+  void load();
 }
 
 function sourceName(id: string) {
@@ -175,11 +186,14 @@ function locationName(row: QualitySourceRecord) {
   return row.location.formatted_address || "地点未提供";
 }
 
-function displayTime(value: string) {
-  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+function displayTime(value: string | null) {
+  return formatServerDateTime(value) || "未提供";
 }
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void Promise.allSettled([references.loadSources(), references.loadProducts()]);
+});
 </script>
 
 <template>
@@ -198,9 +212,9 @@ onMounted(load);
     </header>
 
     <section class="signal-overview" aria-label="舆情线索概览">
-      <button :class="{ active: activeType === 'all' }" @click="setType('all')"><strong>{{ complaintTotal + opinionTotal }}</strong><span>全部舆情线索</span></button>
-      <button :class="{ active: activeType === 'consumer_complaint' }" @click="setType('consumer_complaint')"><strong>{{ complaintTotal }}</strong><span>消费投诉</span></button>
-      <button :class="{ active: activeType === 'public_opinion' }" @click="setType('public_opinion')"><strong>{{ opinionTotal }}</strong><span>公开舆情</span></button>
+      <button :class="{ active: activeType === 'all' }" @click="setType('all')"><strong>{{ allTotal ?? '—' }}</strong><span>全部舆情线索</span></button>
+      <button :class="{ active: activeType === 'consumer_complaint' }" @click="setType('consumer_complaint')"><strong>{{ complaintTotal ?? '—' }}</strong><span>消费投诉</span></button>
+      <button :class="{ active: activeType === 'public_opinion' }" @click="setType('public_opinion')"><strong>{{ opinionTotal ?? '—' }}</strong><span>公开舆情</span></button>
       <div><strong>{{ references.sources.length }}</strong><span>已登记数据来源</span></div>
     </section>
 
@@ -210,16 +224,17 @@ onMounted(load);
         <el-button :icon="RefreshRight" :loading="loading" @click="load">刷新</el-button>
       </div>
       <div class="filters">
-        <el-input v-model="keyword" clearable placeholder="搜索投诉、舆情原文或外部编号" @keyup.enter="load" />
-        <el-button type="primary" @click="load">查询</el-button>
+        <el-input v-model="keyword" clearable placeholder="搜索投诉、舆情原文或外部编号" @keyup.enter="search" @clear="search" />
+        <el-button type="primary" @click="search">查询</el-button>
       </div>
 
-      <el-skeleton v-if="loading && !rows.length" :rows="5" animated />
-      <el-empty v-else-if="!visibleRows.length" description="暂无投诉或舆情线索">
+      <el-alert v-if="loadError" :title="loadError" type="warning" :closable="false" />
+      <el-skeleton v-else-if="loading" :rows="5" animated />
+      <el-empty v-else-if="!rows.length" description="暂无投诉或舆情线索">
         <el-button v-if="canCreate" type="primary" @click="openCreate">登记第一条线索</el-button>
       </el-empty>
       <div v-else class="signal-list" aria-live="polite">
-        <article v-for="row in visibleRows" :key="row.id" class="signal-card">
+        <article v-for="row in rows" :key="row.id" class="signal-card">
           <div class="signal-type" :class="row.record_type"><span>{{ row.record_type === 'consumer_complaint' ? '消费投诉' : '公开舆情' }}</span><small>{{ sourceName(row.source_id) }}</small></div>
           <div class="signal-content">
             <p>{{ row.content.text || "原文内容待补充" }}</p>
@@ -228,7 +243,7 @@ onMounted(load);
           <div class="signal-action"><el-button v-if="canCreate" :icon="Right" @click="createRiskCase(row)">形成风险线索</el-button></div>
         </article>
       </div>
-      <el-pagination v-if="filteredRows.length > pageSize" v-model:current-page="page" :page-size="pageSize" :total="filteredRows.length" layout="prev, pager, next" />
+      <el-pagination v-if="total !== null && total > pageSize" v-model:current-page="page" :page-size="pageSize" :total="total" layout="total, prev, pager, next" @current-change="load" />
     </section>
 
     <el-dialog v-model="dialog" title="登记投诉或舆情" width="min(820px, 94vw)" top="3vh" :close-on-click-modal="false">

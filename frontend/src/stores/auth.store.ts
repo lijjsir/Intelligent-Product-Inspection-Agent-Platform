@@ -1,6 +1,10 @@
 import { defineStore } from "pinia";
+import { adminLandingPaths } from "@/utils/admin-workspace";
 import { computed, ref } from "vue";
 import { authApi } from "@/api/auth.api";
+import { userApi } from "@/api/user.api";
+import { roleMenuPaths } from "@/utils/role-navigation";
+import { permissionsForRoute } from "@/utils/permission-routes";
 import { useUserStore } from "@/stores/user.store";
 import type { LoginPayload, RegisterPayload, AuthSession } from "@/types/auth.types";
 import {
@@ -36,6 +40,9 @@ export const useAuthStore = defineStore("auth", () => {
   const roles = ref<string[]>(readStoredArray(ROLES_KEY));
   const planTier = ref(readStoredValue(PLAN_TIER_KEY) || "basic");
   const capabilities = ref<string[]>(readStoredArray(CAPABILITIES_KEY));
+  const effectivePermissions = ref<string[] | null>(null);
+  let permissionRefresh: Promise<boolean> | null = null;
+  let sessionVersion = 0;
 
   if (!roles.value.length && role.value) {
     roles.value = [role.value];
@@ -50,6 +57,8 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function setSession(session: AuthSession) {
+    sessionVersion++;
+    permissionRefresh = null;
     const userStore = useUserStore();
     token.value = session.access_token;
     orgId.value = session.org_id;
@@ -59,6 +68,7 @@ export const useAuthStore = defineStore("auth", () => {
     roles.value = normalizeRoles(session);
     planTier.value = session.plan_tier || "basic";
     capabilities.value = [...(session.capabilities || [])];
+    effectivePermissions.value = null;
 
     setStoredValue(TOKEN_KEY, token.value);
     setStoredValue(ORG_ID_KEY, orgId.value);
@@ -83,10 +93,48 @@ export const useAuthStore = defineStore("auth", () => {
   async function syncCurrentUserProfile() {
     const userStore = useUserStore();
     try {
-      await userStore.fetchCurrentUser();
+      const user = await userStore.fetchCurrentUser();
+      applyCurrentPermissions(user);
     } catch (error) {
       console.warn("Failed to refresh current user profile after auth session setup", error);
     }
+  }
+
+  function applyCurrentPermissions(user: import("@/types/user.types").User) {
+    if (user.effective_permissions == null) return;
+    effectivePermissions.value = [...user.effective_permissions];
+    role.value = user.role;
+    roles.value = [user.role];
+    setStoredValue(ROLE_KEY, user.role);
+    setStoredArray(ROLES_KEY, roles.value);
+    if (user.capabilities) {
+      capabilities.value = [...user.capabilities];
+      setStoredArray(CAPABILITIES_KEY, capabilities.value);
+    }
+  }
+
+  async function refreshPermissions(): Promise<boolean> {
+    if (!isAuthed.value) return false;
+    if (permissionRefresh) return permissionRefresh;
+    const version = sessionVersion;
+    permissionRefresh = (async () => {
+      try {
+        const { data } = await userApi.getMe();
+        if (version !== sessionVersion) return false;
+        applyCurrentPermissions(data.data);
+        return true;
+      } catch {
+        if (version === sessionVersion) effectivePermissions.value = [];
+        return false;
+      } finally { if (version === sessionVersion) permissionRefresh = null; }
+    })();
+    return permissionRefresh;
+  }
+
+  function hasPermission(permission: string | string[]) {
+    if (!isAuthed.value || effectivePermissions.value === null) return false;
+    const required = Array.isArray(permission) ? permission : [permission];
+    return required.some((key) => effectivePermissions.value!.includes(key));
   }
 
   async function login(payload: LoginPayload) {
@@ -104,6 +152,8 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function logout() {
+    sessionVersion++;
+    permissionRefresh = null;
     const userStore = useUserStore();
     token.value = "";
     orgId.value = "";
@@ -113,6 +163,7 @@ export const useAuthStore = defineStore("auth", () => {
     roles.value = [];
     planTier.value = "basic";
     capabilities.value = [];
+    effectivePermissions.value = null;
     clearStoredAuthSession();
     userStore.$reset();
   }
@@ -123,6 +174,25 @@ export const useAuthStore = defineStore("auth", () => {
 
   function resolveDefaultRoute() {
     const r = primaryRole.value;
+    if (r === ROLE_ADMIN) {
+      if (effectivePermissions.value === null) return "/governance/admin/users";
+      return adminLandingPaths().find(path => {
+        const keys = permissionsForRoute(path);
+        return !keys || hasPermission(keys);
+      }) || "/app/profile";
+    }
+    if (effectivePermissions.value !== null) {
+      const preferred = r === ROLE_ADMIN ? "/governance/admin/users"
+        : r === ROLE_ALGORITHM_ENGINEER ? "/ops/data/import"
+        : r === ROLE_APP_DEVELOPER ? "/ops/agents"
+        : r === ROLE_PLATFORM_OPERATOR ? "/ops/dashboard" : "/app/chat";
+      const keys = permissionsForRoute(preferred);
+      if (!keys || hasPermission(keys)) return preferred;
+      return roleMenuPaths(r).find(path => {
+        const routeKeys = permissionsForRoute(path);
+        return routeKeys && hasPermission(routeKeys);
+      }) || "/app/profile";
+    }
     if (r === ROLE_USER || r === ROLE_EXPERT) {
       return "/app/chat";
     }
@@ -148,6 +218,9 @@ export const useAuthStore = defineStore("auth", () => {
     roles,
     planTier,
     capabilities,
+    effectivePermissions,
+    refreshPermissions,
+    hasPermission,
     userId,
     username,
     isAuthed,

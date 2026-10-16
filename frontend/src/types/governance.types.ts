@@ -198,6 +198,7 @@ export type ExportFormat = "pdf" | "docx" | "xlsx" | "csv" | "json";
 export type ExportJobStatus = "pending" | "running" | "success" | "failed" | "expired";
 
 export interface ExportJob {
+  source_issues?:string[];result_scope?:Record<string,any>;source_version?:string;effective_status?:string;
   id: string;
   org_id: string;
   actor_id: string;
@@ -224,6 +225,7 @@ export interface ExportJobCreatePayload {
 }
 
 export interface ExportJobQuery {
+  task_id?: string;
   page?: number;
   size?: number;
   status?: ExportJobStatus | null;
@@ -346,8 +348,14 @@ export interface RoleItem {
 }
 
 export interface RolesPermissionMatrix {
+  role_capabilities: Record<string, string[]>;
+  role_restrictions?: Record<string, string[]>;
   resources: string[];
   matrix: Record<string, string[]>;
+  versions: Record<string, number>;
+  catalog: import("./permission.types").PermissionAction[];
+  groups: import("./permission.types").PermissionGroup[];
+  protected_roles: string[];
 }
 
 export interface Organization {
@@ -758,6 +766,8 @@ export interface InspectionStandardRagSpace {
 }
 
 export interface InspectionStandardLibraryItem {
+  published_document_count?: number;
+  pending_review_document_count?: number;
   applicability?: Record<string, any> | null;
   id: string;
   org_id: string | null;
@@ -852,6 +862,11 @@ export interface StandardDocumentPayload {
 
 export interface StandardDocumentItem {
   id: string;
+  current_revision_id?: string | null;
+  published_revision_id?: string | null;
+  processing_status?: string;
+  review_status?: string;
+  publication_status?: string;
   library_id: string;
   standard_no: string;
   standard_name: string;

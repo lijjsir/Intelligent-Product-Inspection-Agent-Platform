@@ -8,7 +8,6 @@ services:
     command: >
       sh -c "PYTHONPATH=. alembic upgrade head &&
       PYTHONPATH=. python scripts/init_memory_qdrant.py &&
-      python scripts/install_macro_correct_vendor_models.py &&
       python -m uvicorn main:app --host 0.0.0.0 --port 8000"
     environment:
       TZ: UTC
@@ -33,9 +32,6 @@ services:
       PIAP_MEMORY_GRAPH_READ_BACKEND: neo4j
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
-      PIAP_PAPER_CHECK_PYCORRECTOR_ENABLED: "false"
-      PIAP_PAPER_CHECK_MACRO_CORRECT_ENABLED: "true"
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_PUBLIC_KEY: pk-lf-piap-local
       PIAP_LANGFUSE_SECRET_KEY: sk-lf-piap-local
@@ -56,8 +52,6 @@ services:
         condition: service_started
       neo4j:
         condition: service_healthy
-      languagetool:
-        condition: service_started
     ports:
       - "127.0.0.1:${PIAP_BACKEND_HOST_PORT:-8000}:8000"
     volumes:
@@ -73,7 +67,6 @@ services:
     working_dir: /app/backend
     command: >
       sh -c "PYTHONPATH=. python scripts/init_memory_qdrant.py &&
-      python scripts/install_macro_correct_vendor_models.py &&
       python -m celery -A worker.celery_app.celery_app worker -l info"
     environment:
       TZ: UTC
@@ -98,9 +91,6 @@ services:
       PIAP_MEMORY_GRAPH_READ_BACKEND: neo4j
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
-      PIAP_PAPER_CHECK_PYCORRECTOR_ENABLED: "false"
-      PIAP_PAPER_CHECK_MACRO_CORRECT_ENABLED: "true"
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: ${PIAP_LANGFUSE_PUBLIC_HOST:-http://127.0.0.1:30001}
@@ -118,8 +108,6 @@ services:
         condition: service_started
       neo4j:
         condition: service_healthy
-      languagetool:
-        condition: service_started
     volumes:
       - ./backend:/app/backend
     extra_hosts:
@@ -132,8 +120,7 @@ services:
     container_name: piap-celery-beat
     working_dir: /app/backend
     command: >
-      sh -c "python scripts/install_macro_correct_vendor_models.py &&
-      python -m celery -A worker.celery_app.celery_app beat -l info"
+      sh -c "python -m celery -A worker.celery_app.celery_app beat -l info"
     environment:
       TZ: UTC
       PYTHONPATH: /app/backend
@@ -157,9 +144,6 @@ services:
       PIAP_MEMORY_GRAPH_READ_BACKEND: neo4j
       PIAP_LOCAL_OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       PIAP_LOCAL_OPENAI_DOCKER_BASE_URL: http://host.docker.internal:11434/v1
-      PIAP_PAPER_CHECK_LANGUAGETOOL_URL: http://languagetool:8010
-      PIAP_PAPER_CHECK_PYCORRECTOR_ENABLED: "false"
-      PIAP_PAPER_CHECK_MACRO_CORRECT_ENABLED: "true"
       PIAP_LANGFUSE_ENABLED: "true"
       PIAP_LANGFUSE_HOST: http://langfuse-web:3000
       PIAP_LANGFUSE_PUBLIC_HOST: ${PIAP_LANGFUSE_PUBLIC_HOST:-http://127.0.0.1:3000}
@@ -177,8 +161,6 @@ services:
         condition: service_started
       neo4j:
         condition: service_healthy
-      languagetool:
-        condition: service_started
     volumes:
       - ./backend:/app/backend
     extra_hosts:
@@ -301,15 +283,6 @@ services:
       retries: 20
       start_period: 30s
 
-  languagetool:
-    image: erikvl87/languagetool:latest
-    container_name: piap-languagetool
-    environment:
-      Java_Xms: 256m
-      Java_Xmx: 1024m
-      langtool_pipelinePrewarming: "false"
-    ports:
-      - "127.0.0.1:8010:8010"
   langfuse-postgres:
     image: postgres:16-alpine
     container_name: piap-langfuse-postgres

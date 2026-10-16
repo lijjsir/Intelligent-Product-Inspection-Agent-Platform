@@ -62,6 +62,13 @@ class UserService:
             raise NotFoundError("user not found")
         return user
 
+    async def permission_directory(self, page: int, size: int, keyword: str | None = None, role: str | None = None):
+        if role:
+            ensure_valid_role(role)
+        counts = await self._repo.counts_by_role(self._org_id, keyword)
+        items = await self._repo.list(self._org_id, (page - 1) * size, size, keyword, role, sort_by_role=True)
+        return items, counts.get(role, 0) if role else sum(counts.values()), counts
+
     async def update_role(self, user_id: str, role: str, actor_role: str, actor_id: str) -> User:
         ensure_valid_role(role)
         if user_id == actor_id:

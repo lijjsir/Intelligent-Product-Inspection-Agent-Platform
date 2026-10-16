@@ -741,6 +741,7 @@ class MemoryService:
         if not include_local:
             items = [item for item in items if not self._is_local_meeting_memory(item)]
             items = items[offset:offset + limit]
+        items=[item for item in items if not (getattr(item,"content_json",None) or {}).get("knowledge_admission_id")]
         return [self._to_candidate_item(item) for item in items]
 
     async def add_candidate_support(
@@ -1135,6 +1136,8 @@ class MemoryService:
         memory = await self._item_repo.get_by_memory_id(memory_id)
         if not memory:
             raise ValueError(f"Memory {memory_id} not found")
+        if (getattr(memory,"content_json",None) or {}).get("knowledge_admission_id"):
+            raise ValueError("Managed professional knowledge must use the knowledge admission publish gate")
 
         confidence = float(getattr(memory, "confidence", 0) or 0)
         trust_score = min(1.0, max(confidence, float(promotion_score or 0) / 2.0))
@@ -1676,6 +1679,9 @@ class MemoryService:
             task_id=request.scope_filter.task_id if request.scope_filter else None,
         )
         # Cross-reference with eligible memories from MySQL.
+        if any((getattr(m,"content_json",None) or {}).get("knowledge_admission_id") for m in eligible):
+            from app.services.knowledge_admission_service import guard_managed_memory
+            eligible=await guard_managed_memory(self._session,self._org_id,eligible)
         eligible_ids = {m.memory_id for m in eligible}
         for vr in vector_results:
             if vr.get("memory_id") in eligible_ids:
@@ -1875,6 +1881,8 @@ class MemoryService:
         target = await self._item_repo.get_by_memory_id(target_memory_id)
         if not source or not target:
             raise ValueError("Both source and target memories are required for merge")
+        if any((getattr(m,"content_json",None) or {}).get("knowledge_admission_id") for m in [source,target]):
+            raise ValueError("Managed knowledge conflict resolution requires a new reviewed knowledge candidate")
 
         summary = (merged_summary or "").strip()
         if not summary:

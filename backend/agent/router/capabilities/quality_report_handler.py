@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from agent.router.contracts import CapabilityContext
 from app.core.permissions import ROLE_USER
+from app.services.result_service import result_effective_verdict, result_score_status
 
 
 DISPLAY_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -35,12 +36,12 @@ class QualityReportHandler:
         product_id = str(request.product_id or request.metadata.get("product_id") or request.ext.get("product_id") or "").strip() or None
         owner_user_id = str(request.user_id or "").strip() if str(request.metadata.get("user_role") or "") == ROLE_USER else None
 
-        task = await task_repo.get(request.org_id, task_id) if task_id else None
+        task = await task_repo.get_for_user(request.org_id, task_id, owner_user_id=owner_user_id) if task_id else None
         result = await result_repo.get_by_task(request.org_id, str(task.id)) if task else None
         tasks: list[Any] = []
         total = 0
         results_by_task_id: dict[str, Any] = {}
-        if task is None:
+        if not task_id:
             tasks, total = await task_repo.list_paged(
                 request.org_id,
                 {"product_id": product_id} if product_id else {},
@@ -120,7 +121,7 @@ class QualityReportHandler:
             "pass": "通过",
             "fail": "不通过",
             "uncertain": "待定",
-            "manual_required": "待人工审核",
+            "manual_required": "需人工复核",
         }
         return labels.get(raw.lower(), raw)
 
@@ -142,6 +143,7 @@ class QualityReportHandler:
             "readonly": True,
             "task_id": str(task.id),
             "product_id": str(task.product_id),
+            "product_name": str((getattr(task, "meta_data", None) or {}).get("quality_product_name") or (getattr(task, "meta_data", None) or {}).get("product_category_name") or task.product_id),
             "spec_code": str(task.spec_code),
             "status": str(task.status),
             "priority": int(task.priority),
@@ -150,16 +152,18 @@ class QualityReportHandler:
             "summary": f"任务 {task.id} 当前状态为 {task.status}",
         }
         if result is not None:
+            verdict = result_effective_verdict(result)
             content.update(
                 {
                     "result_found": True,
                     "result_id": str(result.id),
-                    "verdict": str(result.verdict),
-                    "verdict_label": QualityReportHandler._format_verdict(result.verdict),
+                    "verdict": verdict,
+                    "verdict_label": QualityReportHandler._format_verdict(verdict),
+                    "score_status": result_score_status(result),
                     "overall_score": float(result.overall_score),
                     "result_created_at": QualityReportHandler._format_datetime(getattr(result, "created_at", None)),
                     "summary": (
-                        f"任务 {task.id} 当前状态为 {task.status}，检测结果为 {QualityReportHandler._format_verdict(result.verdict)}，"
+                        f"任务 {task.id} 当前状态为 {task.status}，检测结果为 {QualityReportHandler._format_verdict(verdict)}，"
                         f"综合分 {QualityReportHandler._format_score(result.overall_score)}"
                     ),
                 }
@@ -222,12 +226,14 @@ class QualityReportHandler:
         if result is None:
             content.update({"verdict": None, "result_found": False, "summary": "已找到任务，但尚未找到正式检测结果"})
             return content
+        verdict = result_effective_verdict(result)
         content.update(
             {
                 "result_found": True,
                 "result_id": str(result.id),
-                "verdict": str(result.verdict),
-                "verdict_label": self._format_verdict(result.verdict),
+                "verdict": verdict,
+                "verdict_label": self._format_verdict(verdict),
+                "score_status": result_score_status(result),
                 "overall_score": float(result.overall_score),
                 "defects": result.defects,
                 "citations": result.citations,
@@ -235,7 +241,7 @@ class QualityReportHandler:
                 "llm_model": str(result.llm_model),
                 "prompt_version": str(result.prompt_version),
                 "result_created_at": self._format_datetime(getattr(result, "created_at", None)),
-                "summary": f"检测结果为 {self._format_verdict(result.verdict)}，综合分 {self._format_score(result.overall_score)}",
+                "summary": f"检测结果为 {self._format_verdict(verdict)}，综合分 {self._format_score(result.overall_score)}",
             }
         )
         return content

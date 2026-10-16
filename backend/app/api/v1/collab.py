@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.deps import get_current_user, get_db
+from app.api.v1.deps import get_current_user, get_db, apply_permission_identity, get_permission_identity
 from app.core.exceptions import ForbiddenError, ValidationError
 from app.core.permissions import require_role
 from app.core.security import safe_decode_token
@@ -36,7 +36,7 @@ def _build_service(db, current: CurrentUser) -> CollabService:
     return CollabService(db, current.org_id, current.user_id, role=current.role)
 
 
-def _get_user_for_stream(token: str = Query(default="")) -> CurrentUser:
+def _get_user_for_stream(token: str = Query(default=""), identity: dict = Depends(get_permission_identity)) -> CurrentUser:
     if not token:
         raise ForbiddenError("missing stream token")
     payload = safe_decode_token(token)
@@ -54,6 +54,7 @@ def _get_user_for_stream(token: str = Query(default="")) -> CurrentUser:
         stream_resource=payload.get("resource"),
         stream_resource_id=payload.get("resource_id"),
     )
+    current = apply_permission_identity(current, identity)
     require_role("collab", current.role)
     if current.stream_resource and current.stream_resource != "collab":
         raise ForbiddenError("invalid stream token")

@@ -11,14 +11,25 @@ import {
 const APP_ROLES = [...CHAT_ROLES];
 const COLLAB_APP_ROLES = [...COLLABORATION_ROLES];
 
+const USER_ROUTE_NAMES = new Set([
+  "app-dashboard", "app-chat", "app-tasks", "app-task-detail",
+  "app-results", "app-result-detail", "app-evidence", "app-export", "app-profile",
+]);
+
 export const appRoutes = [
+  {
+    path: "standard-reviews",
+    name: "app-standard-reviews",
+    component: () => import("@/views/StandardReviewView.vue"),
+    meta: {title: "标准审核", roles: [ROLE_EXPERT]},
+  },
   {
     path: "quality-data",
     name: "app-quality-data",
     component: () => import("@/views/quality-risk/QualityDataIntakeView.vue"),
     meta: {
       title: "质量数据接入",
-      roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
+      roles: [ROLE_ADMIN, ROLE_EXPERT],
     },
   },
   {
@@ -134,8 +145,8 @@ export const appRoutes = [
   {
     path: "rag-spaces",
     name: "app-rag-spaces",
-    component: () => import("@/views/RagSpaceView.vue"),
-    meta: { title: "RAG 空间", roles: [ROLE_ADMIN, ROLE_EXPERT] },
+    component: () => import("@/views/KnowledgeWorkspaceView.vue"),
+    meta: { title: "知识资料", roles: [ROLE_ADMIN, ROLE_EXPERT] },
   },
   {
     path: "tasks",
@@ -143,14 +154,14 @@ export const appRoutes = [
     component: () => import("@/views/TaskListView.vue"),
     meta: {
       title: "任务管理",
-      roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER],
+      roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
     },
   },
   {
     path: "tasks/:id",
     name: "app-task-detail",
     component: () => import("@/views/TaskDetailView.vue"),
-    meta: { roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER] },
+    meta: { roles: [ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR] },
   },
   {
     path: "results",
@@ -209,4 +220,12 @@ export const appRoutes = [
     component: () => import("@/views/ProfileView.vue"),
     meta: { title: "个人设置" },
   },
-];
+].map((route) => {
+  // Ordinary users open results and reports through their tasks.
+  // Other workspaces retain their existing role-specific pages.
+  if (USER_ROUTE_NAMES.has(route.name) || !route.meta?.roles) return route;
+  return {
+    ...route,
+    meta: { ...route.meta, roles: route.meta.roles.filter((role) => role !== ROLE_USER) },
+  };
+});

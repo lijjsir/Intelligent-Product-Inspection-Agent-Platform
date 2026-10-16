@@ -15,6 +15,8 @@ from app.schemas.user import (
     UserStatusUpdate,
 )
 from app.services.user_service import UserService
+from app.schemas.permission import UserPermissionUpdate
+from app.services.permission_service import PermissionService
 
 
 router = APIRouter()
@@ -66,11 +68,27 @@ async def list_assignable_roles(
     return ResponseEnvelope(data=UserService.get_assignable_roles(current.role))
 
 
+@router.get("/meta/permission-directory", response_model=ResponseEnvelope[dict])
+async def permission_directory(
+    page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=200),
+    keyword: str | None = Query(default=None, min_length=1, max_length=128),
+    role: str | None = Query(default=None),
+    current: CurrentUser = Depends(get_current_user), db=Depends(get_db),
+):
+    require_role("user", current.role)
+    items, total, counts = await UserService(db, current.org_id).permission_directory(page, size, keyword, role)
+    return ResponseEnvelope(data={"items": [_to_response(user) for user in items], "total": total,
+                                  "page": page, "size": size, "role_counts": counts})
+
+
 @router.get("/me", response_model=ResponseEnvelope[UserResponse])
 async def get_me(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
     service = UserService(db, current.org_id)
     user = await service.get_user(current.user_id)
-    return ResponseEnvelope(data=_to_response(user))
+    response = _to_response(user)
+    response.effective_permissions = current.effective_permissions
+    response.capabilities = current.capabilities
+    return ResponseEnvelope(data=response)
 
 
 @router.patch("/me", response_model=ResponseEnvelope[UserResponse])
@@ -89,6 +107,23 @@ async def update_me(
     )
     await db.refresh(user)
     return ResponseEnvelope(data=_to_response(user))
+
+
+@router.get("/{user_id}/permissions", response_model=ResponseEnvelope[dict])
+async def get_user_permissions(
+    user_id: str, current: CurrentUser = Depends(get_current_user), db=Depends(get_db),
+):
+    if current.role != "admin":
+        require_role("user", current.role)
+    return ResponseEnvelope(data=await PermissionService(db, current.org_id).user_permissions(user_id))
+
+
+@router.put("/{user_id}/permissions", response_model=ResponseEnvelope[dict])
+async def update_user_permissions(
+    user_id: str, payload: UserPermissionUpdate,
+    current: CurrentUser = Depends(get_current_user), db=Depends(get_db),
+):
+    return ResponseEnvelope(data=await PermissionService(db, current.org_id).save_user(user_id, payload, current))
 
 
 @router.get("/{user_id}", response_model=ResponseEnvelope[UserResponse])

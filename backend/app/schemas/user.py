@@ -14,6 +14,7 @@ class CurrentUser(BaseModel):
     default_workspace: str = "app"
     stream_resource: str | None = None
     stream_resource_id: str | None = None
+    effective_permissions: list[str] | None = None
 
 
 class UserCreate(BaseModel):
@@ -29,9 +30,12 @@ class UserResponse(BaseModel):
     username: str
     email: EmailStr
     role: str
+    roles: list[str] = Field(default_factory=list)
+    capabilities: list[str] | None = None
     is_active: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    effective_permissions: list[str] | None = None
 
 
 class UserRoleUpdate(BaseModel):

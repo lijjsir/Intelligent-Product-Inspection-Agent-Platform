@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from app.api.v1 import tasks as task_api
+from app.core.exceptions import ForbiddenError
 from app.core.permissions import require_role
 from app.schemas.task import TaskResultIngestRequest, TaskResultIngestResponse
 from app.schemas.user import CurrentUser
@@ -87,6 +88,7 @@ class FakeTaskService:
         inspection_standard_id: str | None = None,
         product_category_id: str | None = None,
         quality_product_id: str | None = None,
+        quality_batch_id: str | None = None,
         image_urls: list[str],
         image_items=None,
         priority: int,
@@ -102,6 +104,7 @@ class FakeTaskService:
             inspection_standard_id=inspection_standard_id,
             product_category_id=product_category_id,
             quality_product_id=quality_product_id,
+            quality_batch_id=quality_batch_id,
             status="pending",
             priority=priority,
             image_urls=image_urls,
@@ -202,8 +205,9 @@ def test_ingest_request_accepts_dataset_name_without_uuid():
     assert payload.dataset_name == "候选训练集-A"
 
 
-def test_task_permission_allows_algorithm_engineer_read_access():
-    require_role("task", "algorithm_engineer")
+def test_algorithm_engineer_cannot_read_business_tasks():
+    with pytest.raises(ForbiddenError):
+        require_role("task", "algorithm_engineer")
 
 
 @pytest.mark.asyncio
@@ -230,7 +234,7 @@ async def test_create_task_triggers_launch_and_returns_refreshed_task(monkeypatc
 
     db = FakeTaskCreateSession()
 
-    result = await task_api.create_task(payload, current=build_current_user(), db=db)
+    result = await task_api.create_task(payload, current=build_current_user(role="user"), db=db)
 
     assert launched == [{"task_id": "task-1", "org_id": "org-1"}]
     assert db.commit_calls == 1

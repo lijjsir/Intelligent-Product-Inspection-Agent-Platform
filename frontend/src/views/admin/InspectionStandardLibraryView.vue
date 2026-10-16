@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { useAuthStore } from "@/stores/auth.store";
+import StandardDocumentDetail from "@/components/business/StandardDocumentDetail.vue";
+import StandardReviewWorkspace from "@/components/business/StandardReviewWorkspace.vue";
+import { admissionLabel } from "@/utils/standard-admission";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   DocumentChecked,
@@ -36,6 +40,17 @@ import type {
 const store = useInspectionStandardStore();
 const qualityRefs = useQualityReferenceStore();
 const router = useRouter();
+const route = useRoute();
+const auth = useAuthStore();
+const canManageLibrary = computed(() => auth.hasPermission("inspection_standard_library"));
+const canSubmitStandard = computed(() => auth.hasPermission("standard_admission_submit"));
+const documentDetailOpen = ref(false);
+const reviewWorkspaceOpen = ref(false);
+const selectedDocumentId = ref("");
+function openStandardDetail(doc: StandardDocumentItem) {
+  selectedDocumentId.value = doc.id;
+  documentDetailOpen.value = true;
+}
 
 const drawerOpen = ref(false);
 const detailOpen = ref(false);
@@ -134,6 +149,8 @@ function statusLabel(status: string) {
       not_scanned: "未扫描",
       scanned: "已扫描",
       pending: "待导入",
+      pending_review: "待核对资料",
+      parsed: "解析完成，待核验",
       indexing: "导入中",
       completed: "已完成",
       partial_failed: "部分失败",
@@ -156,7 +173,20 @@ async function loadProductMasterOptions() {
 }
 
 async function loadAll() {
-  await Promise.all([store.fetchAll(), loadProductMasterOptions()]);
+  await Promise.all([store.fetchAll(), ...(canManageLibrary.value ? [loadProductMasterOptions()] : [])]);
+  if (route.params.documentId) {
+    selectedDocumentId.value = String(route.params.documentId);
+    documentDetailOpen.value = true;
+    return;
+  }
+  if (route.query.library) {
+    const library = store.items.find(item => item.id === String(route.query.library));
+    if (library) await openDocuments(library);
+    if (route.query.document) {
+      selectedDocumentId.value = String(route.query.document);
+      documentDetailOpen.value = true;
+    }
+  }
 }
 
 function openCreate() {
@@ -222,7 +252,7 @@ async function removeItem(item: InspectionStandardLibraryItem) {
 async function indexLibrary(item: InspectionStandardLibraryItem, reindex = false) {
   const result = await store.indexOne(item.id, reindex);
   const action = reindex ? "重建索引" : "批量导入";
-  ElMessage.success(`${action}完成，生成 ${result.chunk_count} 个 chunk`);
+  ElMessage.success(`已接收处理请求；待核对文件不会自动发布`);
   if (currentLibrary.value?.id === item.id) await store.fetchDocuments(item.id);
 }
 
@@ -245,7 +275,7 @@ async function doUpload() {
   try {
     const result = await store.uploadOne(uploadTargetId.value, uploadFiles.value);
     ElMessage.success(
-      `已上传 ${result.uploaded_count} 个文件，成功索引 ${result.indexed_count} 个`,
+      `已接收 ${result.uploaded_count} 个文件；后台自动解析并整理待核对候选`,
     );
     uploadDialogOpen.value = false;
     if (currentLibrary.value?.id === uploadTargetId.value)
@@ -359,8 +389,10 @@ onMounted(loadAll);
         <p>管理权威标准文档、版本和产品适用范围；需要结构化的条款条件时从具体标准进入维护。</p>
       </div>
       <div class="heading-actions">
+        <el-button v-if="auth.hasPermission('standard_review_assign')" @click="reviewWorkspaceOpen=true">审核分派与发布</el-button>
+        <router-link v-if="auth.primaryRole==='expert'" to="/app/standard-reviews"><el-button type="primary">进入标准审核工作台</el-button></router-link>
         <el-button :icon="RefreshRight" @click="loadAll">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openCreate">新建标准库</el-button>
+        <el-button v-if="canManageLibrary" type="primary" :icon="Plus" @click="openCreate">新建标准库</el-button>
       </div>
     </section>
 
@@ -374,8 +406,8 @@ onMounted(loadAll);
         <strong>{{ store.metrics.pdfs }}</strong>
       </div>
       <div class="metric-item">
-        <span>已索引 Chunk</span>
-        <strong>{{ store.metrics.chunks }}</strong>
+        <span>已发布标准</span>
+        <strong>{{ store.items.reduce((n,item)=>n+(item.published_document_count || 0),0) }}</strong>
       </div>
       <div class="metric-item">
         <span>异常库</span>
@@ -420,15 +452,14 @@ onMounted(loadAll);
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="质检门槛" min-width="180">
+        <el-table-column label="正式依据状态" min-width="200">
           <template #default="{ row }">
-            <el-tag :type="row.has_quality_threshold ? 'success' : 'warning'" effect="plain">
-              {{
-                row.has_quality_threshold
-                  ? row.spec_code || row.spec_name || "已配置"
-                  : "未配置"
-              }}
-            </el-tag>
+            <div class="evidence-status">
+              <el-tag :type="row.published_document_count ? 'success' : 'info'" effect="plain">
+                {{ row.published_document_count ? `${row.published_document_count} 份已发布` : "暂无已发布修订" }}
+              </el-tag>
+              <span class="muted">检测要求在文档详情中核对</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="domain" label="领域" width="120" />
@@ -446,11 +477,9 @@ onMounted(loadAll);
             >{{ row.pdf_count }} / {{ row.document_count }} / {{ row.chunk_count }}</template
           >
         </el-table-column>
-        <el-table-column label="导入状态" width="120">
+        <el-table-column label="发布 / 待核验" width="140">
           <template #default="{ row }">
-            <el-tag :type="statusType(row.import_status)">{{
-              statusLabel(row.import_status)
-            }}</el-tag>
+            <span>{{ row.published_document_count || 0 }} 已发布 / {{ row.pending_review_document_count || 0 }} 待核验</span>
           </template>
         </el-table-column>
         <el-table-column label="启用" width="90">
@@ -468,16 +497,17 @@ onMounted(loadAll);
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link :icon="FolderOpened" @click="openDocuments(row)">文档</el-button>
-            <el-button link type="primary" :icon="UploadFilled" @click="openUploadDialog(row)"
+            <el-button v-if="canSubmitStandard" link type="primary" :icon="UploadFilled" @click="openUploadDialog(row)"
               >上传</el-button
             >
             <el-dropdown
+              v-if="canManageLibrary"
               trigger="click"
               @command="
                 (cmd: string) => {
                   if (cmd === 'reindex') indexLibrary(row, true);
                   else if (cmd === 'edit') openEdit(row);
-                  else if (cmd === 'conditions') router.push({ name: 'governance-admin-inspection-specs', query: { standard: row.id } });
+                  else if (cmd === 'conditions') openDocuments(row);
                   else if (cmd === 'delete') removeItem(row);
                 }
               "
@@ -485,8 +515,8 @@ onMounted(loadAll);
               <el-button link :icon="MoreFilled">更多</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="reindex">重建索引</el-dropdown-item>
-                  <el-dropdown-item command="conditions">维护该标准的条款条件（高级）</el-dropdown-item>
+                  <el-dropdown-item command="reindex">处理未解析文件</el-dropdown-item>
+                  <el-dropdown-item command="conditions">查看文档与检测要求</el-dropdown-item>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
                   <el-dropdown-item command="delete" style="color: var(--el-color-danger)"
                     >删除</el-dropdown-item
@@ -525,7 +555,7 @@ onMounted(loadAll);
         ></el-collapse>
         <el-form-item label="检测标准名称" required>
           <el-input v-model="form.name" placeholder="如：陶瓷产品检测标准" />
-          <div class="form-hint">会自动创建同名 RAG 空间。任务创建时用户只选择检测标准。</div>
+          <div class="form-hint">标准库是专题分组；正式使用依据需核对并发布具体标准修订。</div>
         </el-form-item>
         <div class="form-grid">
           <el-form-item label="领域">
@@ -625,7 +655,7 @@ onMounted(loadAll);
         <el-icon class="upload-icon"><UploadFilled /></el-icon>
         <div class="upload-text">将 PDF 文件拖到此处，或<em>点击选择</em></div>
         <template #tip>
-          <div class="upload-tip">支持多文件上传，上传后自动解析并建立索引</div>
+          <div class="upload-tip">上传后自动解析、整理条款候选；核对来源、版本和适用范围后发布。</div>
         </template>
       </el-upload>
       <div v-if="uploadFiles.length" class="upload-file-list">
@@ -637,7 +667,7 @@ onMounted(loadAll);
       <template #footer>
         <el-button @click="uploadDialogOpen = false">取消</el-button>
         <el-button type="primary" :loading="uploading" @click="doUpload">
-          上传并索引（{{ uploadFiles.length }} 个文件）
+          接收并解析（{{ uploadFiles.length }} 个文件）
         </el-button>
       </template>
     </el-dialog>
@@ -650,7 +680,7 @@ onMounted(loadAll);
             @click="currentLibrary && store.fetchDocuments(currentLibrary.id)"
             >刷新文档</el-button
           >
-          <el-button :icon="UploadFilled" type="primary" @click="openUploadForCurrent"
+          <el-button v-if="canSubmitStandard" :icon="UploadFilled" type="primary" @click="openUploadForCurrent"
             >上传 PDF</el-button
           >
         </section>
@@ -675,16 +705,15 @@ onMounted(loadAll);
               >{{ row.page_count || 0 }} / {{ row.chunk_count }}</template
             >
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column label="处理 / 核验 / 发布" width="210">
             <template #default="{ row }">
-              <el-tag :type="documentStatusType(row)">{{ statusLabel(row.import_status) }}</el-tag>
+              <div class="tag-line"><el-tag effect="plain">{{ admissionLabel(row.processing_status) }}</el-tag><el-tag effect="plain">{{ admissionLabel(row.review_status) }}</el-tag><el-tag :type="row.publication_status==='published'?'success':'warning'">{{ row.published_revision_id && row.current_revision_id!==row.published_revision_id ? '旧修订已发布 · 新稿待核对' : admissionLabel(row.publication_status) }}</el-tag></div>
             </template>
           </el-table-column>
           <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <el-button link @click="openChunks(row)">Chunks</el-button>
-              <el-button link @click="startEditDocument(row)">编辑</el-button>
-              <el-button link type="danger" @click="removeDocument(row)">删除</el-button>
+              <el-button link type="primary" @click="openStandardDetail(row)">标准详情与核对</el-button>
+              <el-button v-if="canManageLibrary && !row.published_revision_id && row.publication_status==='unpublished'" link type="danger" @click="removeDocument(row)">移除草稿</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -819,6 +848,10 @@ onMounted(loadAll);
         </el-table>
       </div>
     </el-drawer>
+    <el-drawer v-model="reviewWorkspaceOpen" title="标准审核分派与发布" size="min(1500px, 97vw)" append-to-body destroy-on-close><StandardReviewWorkspace v-if="reviewWorkspaceOpen"/></el-drawer>
+    <el-drawer v-model="documentDetailOpen" title="标准详情" size="min(1100px, 96vw)" append-to-body destroy-on-close>
+      <StandardDocumentDetail v-if="documentDetailOpen && selectedDocumentId" :document-id="selectedDocumentId" :initial-revision-id="String(route.query.revision || '')" @changed="currentLibrary && store.fetchDocuments(currentLibrary.id)" />
+    </el-drawer>
   </div>
 </template>
 
@@ -944,6 +977,18 @@ onMounted(loadAll);
   color: oklch(52% 0.018 250);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.evidence-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.muted {
+  color: oklch(52% 0.018 250);
+  font-size: 12px;
 }
 
 .drawer-form,

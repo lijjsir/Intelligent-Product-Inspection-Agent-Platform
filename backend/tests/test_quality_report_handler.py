@@ -1,6 +1,12 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from agent.router.capabilities.quality_report_handler import QualityReportHandler
+from agent.contracts.quality_contracts import NormalizedRequest
+from agent.router.contracts import AgentPlanStep, CapabilityContext
+from agent.router.manager_state import ManagerState
 
 
 def test_task_collection_content_includes_real_task_and_result_facts():
@@ -52,3 +58,36 @@ def test_task_collection_content_includes_real_task_and_result_facts():
     assert "不通过" in content["summary"]
     assert "95.0" in content["summary"]
     assert "100.0" in content["summary"]
+
+
+def test_task_answer_uses_the_same_review_verdict_as_the_result_page():
+    task = SimpleNamespace(id="task-1", product_id="sample", spec_code="test", status="done", priority=5)
+    result = SimpleNamespace(
+        id="result-1", verdict="pass", overall_score=0.9, prompt_version="quality_analysis_v1",
+        reviewed_by=None, citations=[], reasoning_chain={},
+    )
+    content = QualityReportHandler._task_content(task, result)
+    assert content["verdict"] == "manual_required"
+    assert content["score_status"] == "not_calibrated"
+    assert "需人工复核" in content["summary"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_task_query_enforces_owner_and_does_not_substitute_another_task(monkeypatch):
+    lookup = AsyncMock(return_value=None)
+    fallback = AsyncMock()
+    monkeypatch.setattr("app.repositories.task_repo.TaskRepository.get_for_user", lookup)
+    monkeypatch.setattr("app.repositories.task_repo.TaskRepository.list_paged", fallback)
+    state = ManagerState(request_id="req-1", workflow_run_id="wf-1", org_id="org-1", surface="chat", original_query="查询任务状态")
+    request = NormalizedRequest(
+        request_id="req-1", org_id="org-1", user_id="user-1",
+        metadata={"user_role": "user", "task_id": "foreign-task"},
+    )
+    context = CapabilityContext(
+        step=AgentPlanStep(step_id="s1", capability="quality.task.status"),
+        state=state, request=request, db_session=object(),
+    )
+    _observation, artifacts = await QualityReportHandler().run(context)
+    lookup.assert_awaited_once_with("org-1", "foreign-task", owner_user_id="user-1")
+    fallback.assert_not_awaited()
+    assert artifacts[0].content["found"] is False

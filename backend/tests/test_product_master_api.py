@@ -10,7 +10,7 @@ def current_user(role: str) -> CurrentUser:
 
 
 @pytest.mark.asyncio
-async def test_user_can_read_product_catalog(monkeypatch):
+async def test_admin_can_read_product_catalog(monkeypatch):
     class FakeService:
         def __init__(self, db, org_id):
             self.db = db
@@ -23,7 +23,7 @@ async def test_user_can_read_product_catalog(monkeypatch):
     monkeypatch.setattr(product_api, "ProductMasterService", FakeService)
     response = await product_api.get_product_catalog(
         include_inactive=False,
-        current=current_user("user"),
+        current=current_user("admin"),
         db=object(),
     )
 

@@ -3,10 +3,10 @@ from app.services.ai_response_text import normalize_ai_response_content
 
 def test_normalize_ai_response_content_uses_answer_field():
     content, metadata = normalize_ai_response_content(
-        '{"answer": "可以检查论文。", "summary": "功能确认"}'
+        '{"answer": "可以分析检测结果。", "summary": "功能确认"}'
     )
 
-    assert content == "可以检查论文。"
+    assert content == "可以分析检测结果。"
     assert metadata == {
         "response_format": "answer_summary_json",
         "summary": "功能确认",

@@ -16,6 +16,9 @@ export const rolesOrgsApi = {
   getPermissionsMatrix() {
     return http.get<RolesPermissionMatrix>("/v1/roles/permissions");
   },
+  updateRolePermissions(role: string, resources: string[], version: number) {
+    return http.put<RolesPermissionMatrix>(`/v1/roles/${role}/permissions`, { resources, version });
+  },
   listOrganizations() {
     return http.get<Organization[]>("/v1/organizations");
   },

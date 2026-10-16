@@ -246,7 +246,7 @@ async def test_ingest_task_result_imports_rag_and_dataset_candidates(fake_ingest
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     result = await service.ingest_task_result(
@@ -282,7 +282,7 @@ async def test_ingest_task_result_is_idempotent_for_existing_doc_and_samples(fak
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
     payload = TaskResultIngestRequest(
         target="both",
@@ -315,7 +315,7 @@ async def test_ingest_task_result_rejects_missing_result(fake_ingest_deps, monke
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     with pytest.raises(ValidationError, match="task result not found"):
@@ -333,7 +333,7 @@ async def test_ingest_task_result_warns_when_task_has_no_images(fake_ingest_deps
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     result = await service.ingest_task_result(
@@ -352,7 +352,7 @@ async def test_ingest_task_result_rejects_invalid_task_id(fake_ingest_deps):
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     payload = TaskResultIngestRequest(target="dataset", dataset_name="缺陷样本集", mode="candidate")
@@ -370,7 +370,7 @@ async def test_ingest_task_result_rejects_missing_dataset_name(fake_ingest_deps)
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     with pytest.raises(ValidationError, match="dataset_name is required when target includes dataset"):
@@ -390,7 +390,7 @@ async def test_ingest_task_result_persists_data_url_images_to_object_storage(fak
         session=FakeSession(),
         org_id="org-1",
         actor_user_id="algo-1",
-        actor_role="algorithm_engineer",
+        actor_role="expert",
     )
 
     result = await service.ingest_task_result(

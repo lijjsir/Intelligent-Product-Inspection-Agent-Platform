@@ -86,7 +86,7 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
     },
     {
         "name": "File Agent",
-        "description": "文件总结、问答、RAG 入库请求和论文格式检查。",
+        "description": "文件总结、问答和 RAG 入库请求。",
         "workflow_binding": "file_agent_v1",
         "subgraph_key": "file",
         "entry_graph": "FileExecutor",
@@ -98,7 +98,7 @@ REGISTERED_SUBGRAPHS: list[dict[str, Any]] = [
         "route_enabled": True,
         "supports_route_toggle": True,
         "type": "agent",
-        "customer_visible_description": "负责文件解析、总结、问答和论文格式检查。",
+        "customer_visible_description": "负责文件解析、总结、问答和 RAG 入库。",
     },
     {
         "name": "Memory Capability",

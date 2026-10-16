@@ -11,9 +11,10 @@ import {
   usePromptTemplateStore,
 } from "@/stores/prompt-template.store";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: string;
-}>();
+  buttonLabel?: string;
+}>(), { buttonLabel:'模板' });
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
@@ -179,7 +180,7 @@ onMounted(() => {
   <div class="prompt-template-tray">
     <el-dropdown trigger="click" @command="handleCommand">
       <el-button size="small" :icon="CollectionTag">
-        模板
+        {{ buttonLabel }}
         <el-icon class="el-icon--right"><ArrowDown /></el-icon>
       </el-button>
       <template #dropdown>

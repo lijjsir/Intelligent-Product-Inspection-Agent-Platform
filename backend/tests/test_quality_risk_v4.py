@@ -7,7 +7,8 @@ from sqlalchemy import DateTime, DefaultClause, MetaData, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
-from app.models import Base, Organization, User
+from app.models import Base, Organization, User, InspectionTask
+from app.models.inspection_execution import InspectionExecutionRun
 from app.schemas.quality_risk import (
     DataSourceCreate,
     ProductCategoryCreate,
@@ -35,11 +36,32 @@ async def domain():
         "users",
         "product_categories",
         "quality_products",
+        "quality_production_batches",
+        "enterprise_product_relations",
+        "physical_samples",
+        "supervision_dependencies",
+        "product_skus",
+        "product_lines",
+        "supervision_records",
+        "supervision_runs",
+        "supervision_revisions",
+        "inspection_tasks",
+        "inspection_execution_runs",
+        "inspection_execution_actions",
+        "inspection_policy_publications",
+        "measurement_records",
+        "inspection_standard_libraries",
+        "standard_documents",
+        "standard_document_revisions",
+        "inspection_results",
+        "audit_outbox",
         "product_identifiers",
         "quality_data_sources",
         "quality_ingestion_jobs",
         "quality_attachments",
         "quality_source_records",
+        "business_number_sequences",
+        "business_identifiers",
         "quality_evidence_items",
         "quality_risk_cases",
         "quality_risk_assessments",
@@ -122,6 +144,82 @@ async def test_risk_draft_preserves_unknown_probability_and_requires_independent
         await service("user").review_risk(case["id"], RiskReviewRequest(decision="accept", comment="通过"))
     reviewed = await service("expert2").review_risk(case["id"], RiskReviewRequest(decision="accept", comment="证据与来源一致"))
     assert reviewed["trust_status"] == "verified"
+    assert reviewed['model_versions']['review_verification']['validation']['independent_observed_sources']==1
+
+
+@pytest.mark.asyncio
+async def test_risk_analysis_carries_accepted_standard_execution_context(domain):
+    db, service = domain
+    source = await service("admin").create_source(
+        DataSourceCreate(code="EXECUTION", name="标准执行结果", source_type="supervision_inspection", connector_type="manual")
+    )
+    record = await service("user").create_event(
+        QualityEventCreate(
+            source_id=source["id"],
+            record_type="supervision_inspection",
+            occurred_at=datetime.now(timezone.utc),
+            content={"text": "最高车速超限", "risk_type": "速度超限", "risk_level": "high"},
+        )
+    )
+    case = await service("user").create_risk_case(
+        RiskCaseCreate(
+            title="标准执行风险衔接",
+            scope_type="category",
+            scope={"category_name": "电动自行车"},
+            source_record_ids=[record["id"]],
+        )
+    )
+    task_id = uid()
+    db.add(
+        InspectionTask(
+            id=task_id,
+            org_id=case["org_id"],
+            created_by=(await db.get(User, case["created_by"])).id,
+            product_id="fixture-ebike",
+            spec_code="fixture",
+            image_urls=[],
+            status="pending",
+        )
+    )
+    run_id = uid()
+    db.add(
+        InspectionExecutionRun(
+            id=run_id,
+            org_id=case["org_id"],
+            task_id=task_id,
+            request_key=uid(),
+            payload_hash="execution-payload",
+            snapshot={
+                "product_category": "电动自行车",
+                "production_date": "2026-09-15",
+                "source_refs": [],
+                "observations": [],
+                "policy": {},
+            },
+            evaluation={
+                "item_verdict": "fail",
+                "product_verdict": "not_assessed",
+                "risk_level": "unknown",
+                "missing_inputs": [],
+            },
+            status="accepted",
+            created_by=case["created_by"],
+            row_version=1,
+        )
+    )
+    await db.flush()
+
+    assessment = await service("user").analyze_risk(
+        case["id"], RiskAnalyzeRequest(inspection_execution_run_id=run_id)
+    )
+
+    linked = next(item for item in assessment["standard_matches"] if item.get("run_id") == run_id)
+    assert linked["evaluation"]["item_verdict"] == "fail"
+    assert assessment["model_versions"]["inspection_execution"]["status"] == "accepted"
+    assert "引用的标准执行结果尚未完成独立专业复核" not in assessment["missing_inputs"]
+    assert linked['current_source_issues']
+    with pytest.raises(ValidationError):
+        await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='失效执行不能由填级覆盖',risk_level='low'))
 
 
 @pytest.mark.asyncio
@@ -247,6 +345,76 @@ async def test_selected_policy_applies_evidence_gate_to_risk_draft(domain):
     )
     assert assessment["policy_version"] == "v1"
     assert any("证据充分度未达到政策门槛" in item for item in assessment["missing_inputs"])
+    with pytest.raises(ValidationError,match='真实来源'):
+        await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='人工填级不能绕过缺证',risk_level='low'))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('problem',['source_deleted','source_changed','evidence_changed','scope_changed'])
+async def test_risk_review_rechecks_frozen_sources_and_scope(domain,problem):
+    from app.models.quality_risk import QualitySourceRecord,QualityEvidenceItem,QualityRiskCase,QualityRiskAssessment
+    db,service=domain
+    source=await service('admin').create_source(DataSourceCreate(code='CHECK',name='隔离来源',source_type='supervision_inspection',connector_type='manual'))
+    record=await service('user').create_event(QualityEventCreate(source_id=source['id'],record_type='supervision_inspection',
+        content={'text':'温度异常的原始抽检记录','risk_level':'high'}))
+    case=await service('user').create_risk_case(RiskCaseCreate(title='来源重核',scope_type='category',scope={'name':'电动自行车'},source_record_ids=[record['id']]))
+    assessment=await service('user').analyze_risk(case['id'],RiskAnalyzeRequest())
+    row=await db.get(QualitySourceRecord,record['id'])
+    if problem=='source_deleted':row.deleted_at=datetime.now(timezone.utc).replace(tzinfo=None)
+    elif problem=='source_changed':row.content={'text':'被改写的读数','risk_level':'low'}
+    elif problem=='scope_changed':(await db.get(QualityRiskCase,case['id'])).scope={'name':'另一个产品'}
+    else:(await db.get(QualityEvidenceItem,assessment['evidence_ids'][0])).text='被替换的证据'
+    await db.flush()
+    with pytest.raises(ValidationError):await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='不能确认失效来源',risk_level='low'))
+    stored=await db.get(QualityRiskAssessment,assessment['id'])
+    assert stored.risk_level=='high' and stored.status!='accepted' and stored.reviewed_by is None
+
+
+@pytest.mark.asyncio
+async def test_risk_review_rechecks_policy_and_keeps_weak_signal_uncertainty(domain):
+    from app.models.quality_risk import RiskPolicy
+    db,service=domain
+    policy=await service('expert').create_policy(RiskPolicyCreate(code='CHECK-POLICY',name='来源要求',version='1',
+        rules={'severity':{},'likelihood':{},'exposure':{},'evidence_sufficiency':{'minimum':1},'level_mapping':{}}))
+    await service('admin').publish_policy(policy['id'])
+    source=await service('admin').create_source(DataSourceCreate(code='CHECK-POLICY-SOURCE',name='真实弱信号',source_type='supervision_inspection',connector_type='manual'))
+    record=await service('user').create_event(QualityEventCreate(source_id=source['id'],record_type='supervision_inspection',content={'text':'实际抽查记录，尚待补测'}))
+    case=await service('user').create_risk_case(RiskCaseCreate(title='保留不确定性',scope_type='category',scope={'name':'电动自行车'},source_record_ids=[record['id']]))
+    assessment=await service('user').analyze_risk(case['id'],RiskAnalyzeRequest(policy_id=policy['id']))
+    row=await db.get(RiskPolicy,policy['id']);row.status='withdrawn';await db.flush()
+    with pytest.raises(ValidationError):await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='撤回政策不可确认',risk_level='low'))
+    row.status='published';await db.flush()
+    accepted=await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='确认受限风险信号并继续补测',risk_level='low'))
+    assert accepted['probability'] is None and accepted['source_validation']['uncertainties']
+    assert not accepted['source_validation']['blockers'] and '经规则或专家确认的风险等级' not in accepted['missing_inputs']
+    with pytest.raises(ConflictError):await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='不得覆盖历史确认',risk_level='high'))
+
+
+@pytest.mark.asyncio
+async def test_risk_report_content_cannot_change_with_updated_attachment_metadata(domain,monkeypatch):
+    from io import BytesIO
+    import hashlib
+    from pypdf import PdfWriter
+    from app.models.quality_risk import QualityAttachment
+    db,service=domain
+    writer=PdfWriter();writer.add_blank_page(width=400,height=600);out=BytesIO();writer.write(out)
+    class Storage:
+        content=out.getvalue()
+        def get_bytes(self,**kwargs):return self.content,'application/pdf'
+    storage=Storage();monkeypatch.setattr('app.services.quality_risk_service.build_object_storage',lambda:storage)
+    user=service('user');attachment=QualityAttachment(org_id=user.org_id,file_name='isolated.pdf',mime_type='application/pdf',
+        size_bytes=len(storage.content),sha256=hashlib.sha256(storage.content).hexdigest(),bucket='fixture',object_key='report',uploaded_by=user.actor)
+    db.add(attachment);await db.flush()
+    source=await service('admin').create_source(DataSourceCreate(code='REPORT-CHECK',name='报告原件',source_type='supervision_inspection',connector_type='manual'))
+    record=await user.create_event(QualityEventCreate(source_id=source['id'],record_type='inspection_report',attachment_ids=[attachment.id],
+        content={'text':'原始报告项目','risk_level':'high'}))
+    case=await user.create_risk_case(RiskCaseCreate(title='报告版本固定',scope_type='category',scope={'name':'电动自行车'},source_record_ids=[record['id']]))
+    draft=await user.analyze_risk(case['id'],RiskAnalyzeRequest())
+    original=storage.content;storage.content+=b'\n% altered report version';attachment.sha256=hashlib.sha256(storage.content).hexdigest();attachment.size_bytes=len(storage.content);await db.flush()
+    with pytest.raises(ValidationError):await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='原件被替换不能确认',risk_level='low'))
+    storage.content=original;attachment.sha256=hashlib.sha256(original).hexdigest();attachment.size_bytes=len(original);await db.flush()
+    accepted=await service('expert2').review_risk(case['id'],RiskReviewRequest(decision='accept',comment='核对案件范围内的原始报告',risk_level='high'))
+    assert accepted['trust_status']=='verified' and accepted['source_validation']['blockers']==[]
 
 
 @pytest.mark.asyncio
@@ -333,7 +501,7 @@ async def test_quality_risk_public_api_contract(domain):
                 },
             )
         ).json()["data"]
-        role["value"] = "user"
+        role["value"] = "expert"
         event = (
             await client.post(
                 "/api/v1/quality-data/events",

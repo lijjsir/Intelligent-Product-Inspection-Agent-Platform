@@ -1,3 +1,4 @@
+from app.services.business_number_service import BusinessNumberService
 import logging
 
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from app.repositories.task_repo import TaskRepository
 from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
 from app.services.audit_service import AuditService
 from app.services.product_master_service import ProductMasterService
+from app.services.object_storage.resolver import attachment_ref_from_url
 from app.schemas.task import ImageItem
 
 
@@ -81,6 +83,7 @@ class TaskService:
         inspection_standard_id: str | None = None,
         product_category_id: str | None = None,
         quality_product_id: str | None = None,
+        quality_batch_id: str | None = None,
     ) -> InspectionTask:
         standard = None
         line = sku = batch = None
@@ -98,7 +101,7 @@ class TaskService:
                         ProductCategory.org_id == self._org_id,
                         ProductCategory.is_active.is_(True),
                         ProductCategory.deleted_at.is_(None),
-                    )
+                    ).with_for_update(read=True)
                 )
                 if not category_v4:
                     raise ValidationError("产品类别不存在或未启用")
@@ -109,7 +112,7 @@ class TaskService:
                         QualityProduct.org_id == self._org_id,
                         QualityProduct.is_active.is_(True),
                         QualityProduct.deleted_at.is_(None),
-                    )
+                    ).with_for_update(read=True)
                 )
                 if not product_v4:
                     raise ValidationError("产品不存在或未启用")
@@ -118,6 +121,23 @@ class TaskService:
                 if not category_v4:
                     category_v4 = await self._session.get(ProductCategory, product_v4.category_id)
             normalized_product_id = str(product_v4.id if product_v4 else category_v4.code)
+
+        quality_batch = None
+        if quality_batch_id:
+            if not product_v4 or product_sku_id or batch_id:
+                raise ValidationError("请选择具体产品后选择其批次")
+            from uuid import UUID
+            from app.models.quality_risk import QualityProductionBatch
+            try:
+                quality_batch_id = str(UUID(quality_batch_id))
+            except ValueError as exc:
+                raise ValidationError("批次引用格式不正确") from exc
+            quality_batch = await self._session.scalar(select(QualityProductionBatch).where(
+                QualityProductionBatch.id == quality_batch_id, QualityProductionBatch.org_id == self._org_id,
+                QualityProductionBatch.product_id == product_v4.id, QualityProductionBatch.deleted_at.is_(None)).with_for_update(read=True))
+            if not quality_batch:
+                raise ValidationError("批次不存在或不属于所选产品")
+            await BusinessNumberService(self._session).attach([quality_batch])
 
         if product_sku_id or batch_id:
             if not product_sku_id or not batch_id or not inspection_standard_id:
@@ -157,7 +177,7 @@ class TaskService:
 
         normalized_items = list(image_items or [ImageItem.from_url(i, url) for i, url in enumerate(image_urls)])
         input_mode = (metadata or {}).get("input_mode", "image")
-        if input_mode not in {"image", "measurement", "mixed"}:
+        if input_mode not in {"image", "measurement", "mixed", "report"}:
             raise ValidationError("未知检测输入模式")
         if input_mode != "image":
             from app.models.organization import Organization
@@ -203,6 +223,9 @@ class TaskService:
                 url=item.url,
                 hash=item.hash,
                 sample_number=item.sample_number,
+                bucket=item.bucket or (attachment_ref_from_url(item.url) or {}).get("bucket"),
+                object_key=item.object_key or (attachment_ref_from_url(item.url) or {}).get("object_key"),
+                content_type=item.content_type,
             )
             for i, item in enumerate(normalized_items)
         ]
@@ -217,7 +240,7 @@ class TaskService:
                 "product_sku_code": str(sku.code) if sku else normalized_product_id,
                 "product_sku_name": str(sku.name) if sku else None,
                 "batch_id": str(batch.id) if batch else str(batch_id or "") or None,
-                "batch_no": str(batch.batch_no) if batch else None,
+                "batch_no": str(batch.batch_no) if batch else quality_batch.original_batch_no if quality_batch else None,
                 "batch_name": str(batch.name) if batch else None,
                 "inspection_standard_id": str(standard.id) if standard else str(inspection_standard_id or "") or None,
                 "inspection_standard_name": str(standard.name) if standard else None,
@@ -226,6 +249,8 @@ class TaskService:
                 "product_category_name": str(category_v4.name) if category_v4 else None,
                 "quality_product_id": str(product_v4.id) if product_v4 else None,
                 "quality_product_name": str(product_v4.name) if product_v4 else None,
+                "quality_batch_id": str(quality_batch.id) if quality_batch else None,
+                "quality_batch_display_no": getattr(quality_batch, "display_no", None) if quality_batch else None,
                 "standard_rag_space_ids": list(getattr(standard, "rag_space_ids", None) or []),
                 "system_rag_space_ids": list(getattr(standard, "rag_space_ids", None) or []),
                 "spec_code": normalized_spec_code,
@@ -243,12 +268,22 @@ class TaskService:
             product_category_id=str(category_v4.id) if category_v4 else product_category_id,
             quality_product_id=str(product_v4.id) if product_v4 else quality_product_id,
             image_urls=normalized_urls,
-            image_items=[item.model_dump() for item in normalized_items],
+            # Keep the persisted JSON backward-compatible: the original
+            # sample_number field remains present, while optional storage
+            # identity is present only when it was actually resolved.
+            image_items=[
+                {
+                    **item.model_dump(exclude_none=True),
+                    **({"sample_number": None} if item.sample_number is None else {}),
+                }
+                for item in normalized_items
+            ],
             priority=priority,
             meta_data=task_metadata,
-            status="collecting" if input_mode in {"measurement", "mixed"} else "pending",
+            status="collecting" if input_mode in {"measurement", "mixed", "report"} else "pending",
         )
         task = await self._repo.create(task)
+        await BusinessNumberService(self._session).assign(task)
         audit = AuditService(self._session)
         await audit.write_outbox(
             {
@@ -374,9 +409,12 @@ class TaskService:
 
     async def _annotate_tasks(self, tasks: list[InspectionTask]) -> None:
         valid_tasks = [task for task in tasks if task is not None]
+        for task in valid_tasks:
+            task.has_case_workflow = bool((getattr(task,'meta_data',None) or {}).get('case_preparation'))
         if not valid_tasks:
             return
 
+        await BusinessNumberService(self._session).attach(valid_tasks)
         org_map = {}
         if hasattr(self._session, "execute"):
             org_map = {
@@ -410,7 +448,8 @@ class TaskService:
         product_line_code = meta.get("product_line_code")
         product_line_name = meta.get("product_line_name")
         product_sku_code = meta.get("product_sku_code") or meta.get("product_code")
-        product_name = meta.get("product_sku_name") or meta.get("product_name")
+        product_name = meta.get("quality_product_name") or meta.get("product_sku_name") or meta.get("product_name")
+        product_line_name = meta.get("product_category_name") or product_line_name
         batch_no = meta.get("batch_no")
         standard_name = meta.get("inspection_standard_name") or meta.get("standard_name")
 
@@ -442,4 +481,6 @@ class TaskService:
         setattr(task, "product_sku_code", str(product_sku_code or "") or None)
         setattr(task, "product_name", str(product_name or "") or None)
         setattr(task, "batch_no", str(batch_no or "") or None)
+        setattr(task, "quality_batch_id", meta.get("quality_batch_id"))
+        setattr(task, "quality_batch_display_no", meta.get("quality_batch_display_no"))
         setattr(task, "standard_name", str(standard_name or "") or None)

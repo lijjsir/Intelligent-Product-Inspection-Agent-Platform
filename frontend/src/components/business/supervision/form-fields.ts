@@ -65,7 +65,6 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
   ],
   enterprises: [
     { key: "credit_code", label: "社会信用代码" },
-    ref("role", "企业角色", "enterpriseRoles", true),
     { key: "location", label: "所在地与详细地址", type: "location" },
   ],
   devices: [
@@ -195,7 +194,7 @@ export const fields: Record<SupervisionKind, FieldSpec[]> = {
 };
 export const defaults: Record<SupervisionKind, Record<string, any>> = {
   regions: { dictionary_version: "2026" },
-  enterprises: { role: "manufacturer", product_sku_ids: [], location: { location_method: "unknown" } },
+  enterprises: { product_sku_ids: [], location: { location_method: "unknown" } },
   devices: {
     device_type: "",
     capabilities: [],

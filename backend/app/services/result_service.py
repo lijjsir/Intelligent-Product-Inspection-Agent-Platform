@@ -14,7 +14,7 @@ from app.services.result_trace_utils import (
     is_verified_rag_citation,
 )
 
-REVIEW_ROLES = {"expert", "platform_operator"}
+REVIEW_ROLES = {"expert"}
 MANUAL_REVIEW_VERDICTS = {"pass", "fail"}
 
 
@@ -39,15 +39,22 @@ def result_effective_verdict(result) -> str:
 
 
 class ResultService:
-    def __init__(self, session: AsyncSession, org_id: str):
+    def __init__(self, session: AsyncSession, org_id: str, *, owner_user_id: str | None = None):
         self._session = session
         self._org_id = org_id
         self._repo = ResultRepository(session)
+        self._owner_user_id = owner_user_id
 
     async def get_by_task(self, task_id: str):
         return await self._repo.get_by_task(self._org_id, task_id)
 
     async def get_response_by_task(self, task_id: str) -> dict | None:
+        if self._owner_user_id:
+            task = await TaskRepository(self._session).get_for_user(
+                self._org_id, task_id, owner_user_id=self._owner_user_id,
+            )
+            if task is None:
+                return None
         result = await self._repo.get_by_task(self._org_id, task_id)
         if result is None:
             return None
@@ -59,8 +66,8 @@ class ResultService:
 
     @staticmethod
     def build_result_response_payload(result, *, task=None) -> dict:
-        citations = result.citations
-        citation_items = extract_citation_items(citations)
+        citation_items = extract_citation_items(result.citations)
+        citations = result.citations if isinstance(result.citations,dict) else {'items':citation_items}
         reasoning_chain = dict(result.reasoning_chain or {})
         rag_summary = build_rag_summary_from_reasoning(reasoning_chain, citation_items)
         if rag_summary:
@@ -110,6 +117,7 @@ class ResultService:
             task_id=query.task_id,
             page=query.page,
             size=query.size,
+            owner_user_id=self._owner_user_id,
         )
 
     async def review(self, result_id: str, actor_user_id: str, actor_role: str, payload: dict) -> dict:
@@ -117,12 +125,20 @@ class ResultService:
             raise ForbiddenError(f"role {actor_role} cannot review results")
         verdict = str(payload.get("verdict") or "").strip().lower()
         if verdict not in MANUAL_REVIEW_VERDICTS:
-            raise ValidationError("人工判定只能提交产品合格或产品不合格")
+            raise ValidationError("人工复核只能提交本次辅助或选定项目通过/不通过")
         result = await self._repo.get_by_id(self._org_id, result_id)
         if not result:
             raise NotFoundError("Result not found")
         if (result.reasoning_chain or {}).get("supervision_signed"):
             raise ConflictError("已签发结果不可覆盖，请建立新检测任务并重新签发")
+        task=await TaskRepository(self._session).get(self._org_id,result.task_id)
+        if task and task.created_by==actor_user_id:raise ForbiddenError("不能独立复核本人创建的任务结果")
+        reasoning=dict(result.reasoning_chain or {})
+        reasoning['product_verdict']='not_assessed'
+        reasoning['human_review_scope']=reasoning.get('assessment_scope') or 'legacy_auxiliary_or_selected_items'
+        if reasoning.get("assessment_scope")=="visible_image_assistance":
+            reasoning["human_image_review"]={"suggested_verdict":verdict,"scope":"visible_image_content_only","note":payload.get("note",""),"reviewed_by":actor_user_id}
+            verdict="manual_required"
         await self._repo.upsert_by_task({
             "org_id": self._org_id,
             "task_id": result.task_id,
@@ -130,7 +146,7 @@ class ResultService:
             "overall_score": result.overall_score,
             "defects": result.defects,
             "citations": result.citations,
-            "reasoning_chain": result.reasoning_chain,
+            "reasoning_chain": reasoning,
             "llm_model": result.llm_model,
             "prompt_version": result.prompt_version,
             "tokens_used": result.tokens_used,

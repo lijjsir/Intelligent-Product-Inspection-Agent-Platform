@@ -10,14 +10,14 @@ from app.core.config import settings
 
 
 class Retriever:
-    def __init__(self, *, trace_id: str | None = None, task_id: str | None = None, org_id: str | None = None) -> None:
-        self._embedder = Embedder(trace_id=trace_id, task_id=task_id, org_id=org_id)
+    def __init__(self, *, trace_id: str | None = None, task_id: str | None = None, org_id: str | None = None, collection: str | None = None, allow_pseudo_fallback: bool = True) -> None:
+        self._embedder = Embedder(trace_id=trace_id, task_id=task_id, org_id=org_id, allow_pseudo_fallback=allow_pseudo_fallback)
         self._qdrant_url = resolve_runtime_service_url(
             settings.qdrant_url,
             docker_base_url=settings.qdrant_docker_url,
         )
         self._qdrant_api_key = settings.qdrant_api_key
-        self._collection = settings.qdrant_collection
+        self._collection = collection or settings.qdrant_collection
 
     async def retrieve(
         self,

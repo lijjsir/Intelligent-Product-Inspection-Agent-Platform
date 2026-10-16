@@ -13,5 +13,11 @@ backend/runtime_uploads
 backend/logs
 logs
 backend/.env
+.env.lab
+deploy/lab/secrets
+*.tar.gz
+backend/jwt_private.pem
+backend/jwt_public.pem
+backend/vendor_models
 **/__pycache__
 **/*.pyc

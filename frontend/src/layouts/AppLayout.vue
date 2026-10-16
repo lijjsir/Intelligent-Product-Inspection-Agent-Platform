@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell flex h-screen overflow-hidden bg-zinc-50">
+  <div class="app-shell flex h-screen overflow-hidden bg-zinc-50" :class="{ 'user-workspace': isOrdinaryUser, 'chat-workspace': showChatControls && canChat }">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <aside
       v-if="showSidebar"
@@ -9,7 +9,7 @@
       <div class="app-brand border-b border-zinc-100 px-5 py-5">
         <div class="flex items-center gap-3">
           <div class="brand-mark" aria-label="PIAP 智能检测平台图标">
-            <img src="/piap-icon.svg?v=2" alt="" width="40" height="40" />
+            <img src="/piap-icon.svg?v=3" alt="" width="40" height="40" />
           </div>
           <div class="text-[1.75rem] font-bold tracking-[0.08em] text-zinc-950">PIAP</div>
         </div>
@@ -17,7 +17,8 @@
       </div>
 
       <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-        <template v-for="entry in menu" :key="entry.title">
+        <button v-if="isExpertChat" type="button" class="expert-navigation-toggle" :aria-expanded="expertNavigationExpanded" @click="expertNavigationExpanded=!expertNavigationExpanded"><Menu aria-hidden="true" /><span>{{ expertNavigationExpanded ? '收起平台功能' : '展开平台功能' }}</span><ArrowRight :class="{expanded:expertNavigationExpanded}" /></button>
+        <template v-for="entry in navigationMenu" :key="entry.title">
           <div v-if="isMenuGroup(entry)" class="nav-group">
             <button
               type="button"
@@ -87,8 +88,28 @@
             </span>
           </template>
         </template>
+        <section v-if="usesChatSidebar" class="user-conversations" aria-label="历史对话">
+          <el-button class="new-conversation" plain @click="startUserConversation">＋ 新对话</el-button>
+          <button class="conversation-search" aria-label="搜索历史对话" @click="searchDialogVisible=true"><Search aria-hidden="true" /><span>搜索对话</span></button>
+          <div class="conversation-heading">历史对话</div>
+          <div v-for="item in filteredSessions" :key="item.id" class="conversation-item" :class="{ selected: showChatControls && chatStore.session?.id === item.id }">
+            <button class="conversation-select" :title="sessionDisplayLabel(item)" @click="openUserConversation(item.id)">{{ sessionDisplayLabel(item) }}</button>
+            <el-dropdown trigger="click" placement="bottom-end" :show-arrow="false" popper-class="conversation-actions-menu" @command="(command: string) => handleConversationAction(command, item)">
+              <button class="conversation-more" :aria-label="`对话操作：${sessionDisplayLabel(item)}`"><MoreFilled aria-hidden="true" /></button>
+              <template #dropdown><el-dropdown-menu>
+                <el-dropdown-item command="rename"><EditPen />修改标题</el-dropdown-item>
+                <el-dropdown-item command="pin"><Top />{{ item.is_pinned ? '取消置顶' : '置顶对话' }}</el-dropdown-item>
+                <el-dropdown-item command="delete" class="conversation-delete"><Delete />删除对话</el-dropdown-item>
+              </el-dropdown-menu></template>
+            </el-dropdown>
+            <span v-if="item.is_pinned" class="conversation-pin" title="已置顶"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-label="已置顶"><path d="m16 3 5 5-4 1-3 5-4-4 5-3 1-4Z" /><path d="m2 22 7-7" /></svg></span>
+          </div>
+          <p v-if="!filteredSessions.length" class="conversation-empty">开始对话后会保存在这里</p>
+        </section>
       </nav>
+      <RouterLink v-if="usesChatSidebar" to="/app/profile" class="user-profile-link"><Setting aria-hidden="true" /><span>个人设置</span></RouterLink>
     </aside>
+    <ConversationSearchDialog v-if="canChat" v-model="searchDialogVisible" @select="openSearchResult" />
 
     <button
       v-if="showSidebar && mobileNavOpen"
@@ -113,9 +134,9 @@
           >
             <Menu />
           </button>
-          <span class="whitespace-nowrap text-sm font-semibold text-zinc-900">PIAP 控制台</span>
+          <span class="whitespace-nowrap text-sm font-semibold text-zinc-900">{{ showChatControls ? 'AI 对话' : 'PIAP 控制台' }}</span>
 
-          <template v-if="showChatControls">
+          <template v-if="showChatControls && !usesChatSidebar">
             <el-select
               :model-value="chatStore.session?.id || ''"
               class="!w-[260px]"
@@ -149,6 +170,7 @@
           </span>
           <RouterLink
             to="/app/profile"
+            aria-label="当前账号与个人设置"
             class="flex flex-col items-end leading-tight text-zinc-700 transition-colors hover:text-zinc-900"
           >
             <span class="text-[13px] font-medium">{{ profileName }}</span>
@@ -170,10 +192,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
-import { ArrowRight, Menu } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { ArrowRight, Menu, Search, Setting, Top, MoreFilled, EditPen, Delete } from "@element-plus/icons-vue";
+import ConversationSearchDialog from '@/components/chat/ConversationSearchDialog.vue';
 import { useAuthStore } from "@/stores/auth.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useCollabStore } from "@/stores/collab.store";
@@ -194,8 +217,8 @@ import {
   type MenuGroup,
   type MenuItem,
 } from "@/composables/useMenu";
-import type { ChatSession } from "@/types/chat.types";
-import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
+import type { ChatSession, ChatSearchItem } from "@/types/chat.types";
+import { parseServerDateTime } from "@/utils/date-time";
 
 const router = useRouter();
 const route = useRoute();
@@ -206,6 +229,16 @@ const collabStore = useCollabStore();
 const navigation = useNavigationStore();
 
 const { menu, primaryRole } = useMenu();
+const isOrdinaryUser = computed(() => primaryRole.value === ROLE_USER);
+const expertNavigationExpanded = ref(false);
+const isExpertChat = computed(() => primaryRole.value===ROLE_EXPERT && showChatControls.value);
+const usesChatSidebar = computed(() => canChat.value && (isOrdinaryUser.value || isExpertChat.value));
+const navigationMenu = computed(() => {
+  const entries = usesChatSidebar.value ? menu.value.filter((entry) => isMenuGroup(entry) || entry.path !== '/app/profile') : menu.value;
+  if (isExpertChat.value && !expertNavigationExpanded.value) return entries.filter((entry) => !isMenuGroup(entry) && entry.path==='/app/chat');
+  return entries;
+});
+const searchDialogVisible = ref(false);
 
 const showSidebar = computed(() => auth.isAuthed && menu.value.length > 0);
 
@@ -214,8 +247,10 @@ const mobileNavOpen = ref(false);
 
 const canChat = computed(() => {
   const role = primaryRole.value;
-  return role === ROLE_USER || role === ROLE_EXPERT;
+  return (role === ROLE_USER || role === ROLE_EXPERT) && auth.hasPermission('chat');
 });
+
+const canCollaborate = computed(() => primaryRole.value !== ROLE_USER && auth.hasPermission('collab'));
 
 const showChatControls = computed(
   () => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"),
@@ -249,6 +284,7 @@ const roleLabel = computed(() => {
 const sessionOptions = computed(() => {
   const rows = [...chatStore.sessions];
   rows.sort((a, b) => {
+    if (Boolean(a.is_pinned) !== Boolean(b.is_pinned)) return a.is_pinned ? -1 : 1;
     const ta =
       parseServerDateTime(a.updated_at || a.last_message_at || a.created_at)?.getTime() ?? 0;
     const tb =
@@ -257,16 +293,16 @@ const sessionOptions = computed(() => {
   });
   return rows;
 });
+const filteredSessions = sessionOptions;
 
 const AUTO_SESSION_TITLE_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
 function sessionDisplayLabel(item: ChatSession) {
   const rawTitle = String(item.title || "").trim();
-  if (rawTitle && !AUTO_SESSION_TITLE_RE.test(rawTitle)) return rawTitle;
+  if (rawTitle && item.title_source === 'manual') return rawTitle;
+  if (rawTitle && !AUTO_SESSION_TITLE_RE.test(rawTitle) && !/^[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}$/i.test(rawTitle)) return rawTitle;
   return (
-    formatServerDateTime(item.created_at || item.last_message_at || item.updated_at) ||
-    rawTitle ||
-    "无"
+    "新对话"
   );
 }
 
@@ -337,6 +373,65 @@ async function createChatSession() {
   }
 }
 
+async function startUserConversation() {
+  await router.push('/app/chat');
+  await ensureChatTopbarState();
+  if (chatStore.messages.length || !chatStore.session) await createChatSession();
+}
+
+async function openUserConversation(id: string) {
+  await router.push('/app/chat');
+  await ensureChatTopbarState();
+  if (chatStore.session?.id === id) await chatStore.reloadCurrentSessionMessages();
+  else await handleChatSessionChange(id);
+}
+
+async function openSearchResult(item: ChatSearchItem) {
+  try {
+    await router.push('/app/chat');
+    await ensureChatTopbarState();
+    if (!chatStore.sessions.some(row => row.id===item.id)) chatStore.sessions.push(item);
+    await chatStore.selectSession(item.id, item.message_seq || undefined);
+    if (!item.message_seq && (chatStore.searchFocusSeq || chatStore.hasNewerMessages)) await chatStore.reloadCurrentSessionMessages();
+  } catch { ElMessage.error('无法打开这段对话，请重试'); }
+}
+
+async function removeUserConversation(id: string) {
+  try { await ElMessageBox.confirm('删除后将无法从历史对话中恢复，确认删除此对话？', '删除对话', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }); } catch { return; }
+  try { await chatStore.deleteSession(id); } catch { ElMessage.error('删除对话失败，请稍后重试'); }
+}
+
+async function handleConversationAction(command: string, item: ChatSession) {
+  if (command === 'delete') return removeUserConversation(item.id);
+  try {
+    if (command === 'pin') await chatStore.updateSession(item.id, { is_pinned: !item.is_pinned });
+    if (command === 'rename') {
+      const { value } = await ElMessageBox.prompt('为这段对话设置一个标题', '修改标题', { inputValue: sessionDisplayLabel(item), inputValidator: (value: string) => value.trim().length > 0 && value.trim().length <= 80 || '请输入1至80字标题', confirmButtonText: '保存', cancelButtonText: '取消' });
+      await chatStore.updateSession(item.id, { title: value.trim() });
+    }
+  } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error('更新对话失败，请重试'); }
+}
+
+let titlePoll: ReturnType<typeof setTimeout> | undefined;
+let titlePolls = 0;
+function pollTitles() {
+  if (titlePoll) clearTimeout(titlePoll);
+  if (!canChat.value || (!isOrdinaryUser.value && !showChatControls.value) || !chatStore.sessions.some((item) => item.title_source === 'auto' || item.title_source === 'fallback') || titlePolls >= 15) return;
+  titlePoll = setTimeout(async () => {
+    titlePolls++;
+    try { await chatStore.fetchSessions(); } catch { /* Retry while the title job is running. */ }
+    pollTitles();
+  }, 3000);
+}
+watch(() => chatStore.sessions.map((item) => `${item.id}:${item.title_source}`).join('|'), () => { titlePolls = 0; pollTitles(); });
+watch(() => [...chatStore.messages].reverse().find((item) => item.role === 'assistant' && item.message_type !== 'streaming')?.id, async () => {
+  if (!canChat.value) return;
+  titlePolls = 0;
+  await chatStore.fetchSessions().catch(() => undefined);
+  pollTitles();
+});
+onBeforeUnmount(() => { if (titlePoll) clearTimeout(titlePoll); });
+
 async function deleteChatSession() {
   if (!chatStore.session?.id) return;
   try {
@@ -376,10 +471,11 @@ onMounted(() => {
   if (auth.isAuthed && !userStore.current) {
     userStore.fetchCurrentUser().catch(() => undefined);
   }
-  if (auth.isAuthed) {
+  if (auth.isAuthed && canCollaborate.value) {
     void collabStore.loadSummary();
     collabStore.connectStream();
   }
+  if (auth.isAuthed && canChat.value && isOrdinaryUser.value && !showChatControls.value) void chatStore.fetchSessions().catch(() => undefined);
 });
 
 function logout() {
@@ -391,6 +487,37 @@ function logout() {
 </script>
 
 <style scoped>
+.user-conversations { margin-top: 20px; border-top: 1px solid #29435e; padding-top: 17px; }
+.expert-navigation-toggle { display:flex; align-items:center; gap:8px; padding:9px 10px; margin-bottom:3px; border:0; border-radius:8px; background:transparent; color:#8eabc9; font:inherit; font-size:12px; cursor:pointer; }
+.expert-navigation-toggle:hover { background:#183654; color:#d2e2f5; }
+.expert-navigation-toggle svg { width:15px; height:15px; flex:none; }
+.expert-navigation-toggle svg:last-child { margin-left:auto; width:12px; height:12px; transition:transform 150ms; }
+.expert-navigation-toggle svg.expanded { transform:rotate(90deg); }
+.expert-navigation-toggle:focus-visible { outline:2px solid #62a6ef; outline-offset:1px; }
+.new-conversation { width: 100%; justify-content: flex-start; margin-bottom: 14px; background: transparent !important; border-color: #2c4866 !important; color: #dbe9fb !important; }
+.conversation-search { display: flex; align-items: center; gap: 8px; color: #8eabc9; padding: 9px; border:0; background:transparent; font:inherit; font-size:12px; cursor:pointer; width:100%; border-radius:8px; }
+.conversation-search:hover { background:#183654; color:#c9dbf0; }
+.conversation-search svg { width: 16px; flex: none; }
+.conversation-search input { width: 100%; min-width: 0; background: transparent; color: #dceafd; border: 0; outline: none; font-size: 12px; }
+.conversation-search input::placeholder { color: #87a0bf; }
+.conversation-heading { font-size: 11px; color: #718aa9; padding: 20px 10px 10px; }
+.conversation-item { display: flex; align-items: center; gap: 2px; border-radius: 8px; min-height: 36px; }
+.conversation-item.selected, .conversation-item:hover { background: #183654; }
+.conversation-select { min-width: 0; flex: 1; padding: 9px 10px; border: 0; background: transparent; color: #a6bfdd; font-size: 12px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.conversation-remove { background: transparent; border: 0; padding: 5px 7px; color: #8da7c7; cursor: pointer; opacity: 0; }
+.conversation-item:hover .conversation-remove, .conversation-item:focus-within .conversation-remove { opacity: 1; }
+.conversation-empty { color: #7e97b7; font-size: 11px; line-height: 1.8; padding: 0 10px; }
+.conversation-more { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:#a2b7d0; cursor:pointer; opacity:0; }
+.conversation-more svg { width:16px; height:16px; }
+.conversation-more:hover { background:#254966; color:#e1edfa; }
+.conversation-item:hover .conversation-more, .conversation-item.selected .conversation-more, .conversation-item:focus-within .conversation-more { opacity: 1; }
+.conversation-pin { display:grid; place-items:center; color:#8cb4e3; margin:0 7px 0 2px; }
+@media(max-width:700px) { .conversation-more { opacity:1; } }
+.user-profile-link { display: flex; align-items: center; gap: 10px; margin: 0 14px; padding: 18px 12px; color: #a7bedb; border-top: 1px solid #28425d; font-size: 13px; text-decoration: none; }
+.user-profile-link svg { width: 18px; }
+.chat-workspace .app-main { padding: 0 !important; background: white; overflow: hidden; }
+.chat-workspace .app-header { box-shadow: none; }
+.conversation-select:focus-visible, .conversation-more:focus-visible, .conversation-search:focus-visible, .user-profile-link:focus-visible { outline: 2px solid #62a6ef; outline-offset: 1px; }
 .skip-link {
   position: fixed;
   z-index: 1000;
@@ -587,20 +714,22 @@ function logout() {
   .app-header {
     position: relative;
     z-index: 60;
-    height: auto;
+    height: auto !important;
     min-height: 64px;
     gap: 8px;
-    padding: 7px 10px;
+    padding: 7px 10px !important;
   }
+
+  .app-header .el-select { max-width: 100%; }
 
   .app-header > div {
     gap: 8px;
   }
 
-  .topbar-workspace,
   .profile-role {
     display: none;
   }
+  .topbar-workspace { font-size:10px !important; padding:2px 7px !important; }
 
   .ghost-btn {
     padding: 5px 8px;
@@ -608,7 +737,16 @@ function logout() {
   }
 
   .app-main {
-    padding: 8px;
+    padding: 8px !important;
   }
 }
+</style>
+<style>
+.conversation-actions-menu.el-popper { border:1px solid #e3e8ef; border-radius:11px; box-shadow:0 8px 26px #13264020; min-width:164px; }
+.conversation-actions-menu .el-dropdown-menu { padding:5px; }
+.conversation-actions-menu .el-dropdown-menu__item { display:flex; align-items:center; gap:9px; height:36px; min-height:36px; box-sizing:border-box; padding:8px 12px; margin:0; border:0; border-radius:6px; font-size:13px; line-height:20px; color:#4c607b; }
+.conversation-actions-menu .el-dropdown-menu__item svg { width:16px; height:16px; margin:0; flex:none; }
+.conversation-actions-menu .el-dropdown-menu__item:hover { background:#f0f5fc; color:#426da4; }
+.conversation-actions-menu .conversation-delete { color:#bd5760; }
+.conversation-actions-menu .conversation-delete:hover { color:#b3434f; background:#fff1f2; }
 </style>

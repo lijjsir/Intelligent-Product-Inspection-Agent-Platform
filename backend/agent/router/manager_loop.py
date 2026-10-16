@@ -689,27 +689,6 @@ class ManagerLoop:
             route_source="manager",
             fallback_agent=None,
         )
-        # Preserve paper_format_report and ui_schema from composed artifact
-        if composed:
-            for key in ("paper_format_report", "ui_schema"):
-                value = composed.get(key)
-                if value is not None:
-                    agent_output[key] = value
-        if status == "failed" and sub_route == "paper_format_check":
-            error_message = self._latest_failure_message(state) or "论文查非处理失败"
-            agent_output.update(
-                {
-                    "message_type": "error",
-                    "answer": error_message,
-                    "summary": error_message,
-                    "ui_schema": "paper_review_error_v1",
-                    "status": "failed",
-                    "error": error_message,
-                    "error_code": self._paper_review_error_code(error_message),
-                    "error_message": error_message,
-                }
-            )
-
         error_payload = self._error_payload_from_state(state)
         if error_payload:
             agent_output["error"] = error_payload
@@ -732,25 +711,6 @@ class ManagerLoop:
 
     @staticmethod
     def _recover_file_artifact_response(state: ManagerState) -> dict[str, Any] | None:
-        paper_artifact = ManagerLoop._latest_artifact(state, {"paper_format_report"})
-        if paper_artifact and isinstance(paper_artifact.content, dict):
-            report = dict(paper_artifact.content or {})
-            answer = (
-                str(report.get("chat_advice") or "").strip()
-                or str(report.get("summary") or "").strip()
-                or "已完成论文查非分析。"
-            )
-            summary = str(report.get("summary") or "").strip() or answer[:200]
-            return {
-                "answer": answer,
-                "summary": summary,
-                "message_type": "file_answer",
-                "status": "completed",
-                "blocked": False,
-                "paper_format_report": report,
-                "ui_schema": "paper_review_report_v1",
-            }
-
         file_artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
         if file_artifact and isinstance(file_artifact.content, dict):
             content = dict(file_artifact.content or {})
@@ -906,7 +866,6 @@ class ManagerLoop:
                 "lab_detection": "lab_detection",
                 "file_summary": "file_summary",
                 "file_qa": "file_qa",
-                "paper_format_check": "paper_format_check",
                 "quality_report_query": "quality_report_query",
                 "quality_task_status": "quality_task_status",
                 "inspection_execute": "inspection_execute",
@@ -944,7 +903,7 @@ class ManagerLoop:
             return "visual_answer"
         if sub_route == "lab_detection":
             return "lab_answer"
-        if sub_route in {"file_summary", "file_qa", "paper_format_check"}:
+        if sub_route in {"file_summary", "file_qa"}:
             return "file_answer"
         if sub_route == "quality_task_status":
             return "task_status"
@@ -980,7 +939,7 @@ class ManagerLoop:
             error_message = state.errors[-1]["message"] if state.errors else ""
             error_code = state.errors[-1].get("code") if state.errors else ""
             if "超时" in error_message:
-                return "处理超时，请稍后重试。论文查非涉及文档解析和AI审阅，可能需要较长时间。"
+                return "处理超时，请稍后重试。"
             if "action_intent" in error_message:
                 return "正式质量检测需要由质量检测任务页面显式提交，并携带 action_intent=quality_inspection_execute。"
             if error_code == "ACTION_BLOCKED_BY_SURFACE":
@@ -988,10 +947,10 @@ class ManagerLoop:
             if error_code == "ACTION_MODE_FORBIDDEN":
                 return error_message
             if "能力执行失败" in error_message:
-                return f"论文查非处理出错：{error_message}。请稍后重试或联系管理员。"
+                return f"能力执行出错：{error_message}。请稍后重试或联系管理员。"
             return "处理请求时遇到错误。请稍后重试或联系管理员。"
         if state.route_plan and state.route_plan.reason == "action_blocked":
-            return "聊天页面不能创建或执行正式质量检测任务。请前往质量检测任务页面提交正式检测。"
+            return "我可以把当前图片和资料带到任务页。请核对产品类别、检测标准和图片后确认提交；确认前不会创建正式任务。"
         if state.route_plan and state.route_plan.reason in {"image_understanding", "vision_inspection"}:
             artifact = ManagerLoop._latest_artifact(
                 state,
@@ -1008,8 +967,8 @@ class ManagerLoop:
                 ).strip()
             notice = "这是基于聊天图片理解的初步判断，不等同于正式质检结果。如需正式检测，请到质量检测任务页面创建任务。"
             return f"{summary}\n\n{notice}" if summary else notice
-        if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa", "paper_format_check"}:
-            artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer", "paper_format_report"})
+        if state.route_plan and state.route_plan.reason in {"file_summary", "file_qa"}:
+            artifact = ManagerLoop._latest_artifact(state, {"file_summary", "file_answer"})
             if artifact:
                 summary = str((artifact.content or {}).get("summary") or "").strip()
                 if summary:
@@ -1131,15 +1090,6 @@ class ManagerLoop:
         if state.route_plan and state.route_plan.steps:
             return ManagerLoop._selected_agent(state)
         return "quality_analysis"
-
-    @staticmethod
-    def _paper_review_error_code(message: str) -> str:
-        text = str(message or "")
-        if "报告生成" in text:
-            return "paper_review_report_failed"
-        if "模板" in text or "条款" in text or "RAG" in text or "Qdrant" in text:
-            return "paper_review_template_retrieval_failed"
-        return "paper_review_model_failed"
 
     @staticmethod
     def _latest_artifact(state: ManagerState, artifact_types: set[str]):

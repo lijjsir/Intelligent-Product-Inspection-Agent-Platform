@@ -6,9 +6,12 @@ export interface User {
   username: string;
   email: string;
   role: string;
+  roles?: string[];
+  capabilities?: string[] | null;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
+  effective_permissions?: string[] | null;
 }
 
 export interface UserCreate {
@@ -34,6 +37,14 @@ export interface UserListQuery extends Partial<PageParams> {
   keyword?: string;
   role?: string;
   is_active?: boolean;
+}
+
+export interface UserPermissionDirectory {
+  items: User[];
+  total: number;
+  page: number;
+  size: number;
+  role_counts: Record<string, number>;
 }
 
 export interface UserProfileUpdate {

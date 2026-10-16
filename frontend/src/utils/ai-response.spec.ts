@@ -3,9 +3,9 @@ import { normalizeAiResponseText } from "./ai-response";
 
 describe("normalizeAiResponseText", () => {
   it("uses answer from answer-summary JSON", () => {
-    const result = normalizeAiResponseText('{"answer":"可以检查论文。","summary":"功能确认"}');
+    const result = normalizeAiResponseText('{"answer":"可以分析检测结果。","summary":"功能确认"}');
 
-    expect(result.content).toBe("可以检查论文。");
+    expect(result.content).toBe("可以分析检测结果。");
     expect(result.summary).toBe("功能确认");
   });
 

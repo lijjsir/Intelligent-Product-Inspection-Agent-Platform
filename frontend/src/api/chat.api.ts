@@ -7,6 +7,8 @@ import type {
   ChatMessageSendRequest,
   ChatSendResponse,
   ChatSession,
+  ChatSearchResponse,
+  ChatSearchKind,
   ChatStreamEvent,
 } from "@/types/chat.types";
 
@@ -16,9 +18,16 @@ export const chatApi = {
   listSessions(limit = 100) {
     return http.get<ChatSession[]>("/v1/chat/sessions", { params: { limit } });
   },
+  searchSessions(q: string, kind: ChatSearchKind = 'all', offset = 0) {
+    return http.get<ChatSearchResponse>('/v1/chat/sessions/search', { params: { q, kind, offset, limit: 30 } });
+  },
 
   createSession(title?: string) {
     return http.post<ChatSession>("/v1/chat/sessions", { title });
+  },
+
+  updateSession(id: string, payload: { title?: string; is_pinned?: boolean }) {
+    return http.patch<ChatSession>(`/v1/chat/sessions/${id}`, payload);
   },
 
   listMessages(

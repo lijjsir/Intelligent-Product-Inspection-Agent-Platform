@@ -51,6 +51,7 @@ class ResultRepository:
         task_id: str | None = None,
         page: int = 1,
         size: int = 20,
+        owner_user_id: str | None = None,
     ) -> tuple[list[tuple[InspectionResult, str]], int]:
         stmt = (
             select(InspectionResult, InspectionTask.product_id)
@@ -67,6 +68,8 @@ class ResultRepository:
             stmt = stmt.where(InspectionResult.llm_model == model_key)
         if task_id:
             stmt = stmt.where(InspectionResult.task_id == task_id)
+        if owner_user_id:
+            stmt = stmt.where(InspectionTask.created_by == owner_user_id)
 
         total = await self._session.scalar(select(func.count()).select_from(stmt.subquery()))
         rows = await self._session.execute(

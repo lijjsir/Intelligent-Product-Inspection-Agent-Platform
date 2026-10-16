@@ -3,12 +3,18 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useExportStore } from "@/stores/export.store";
 import { taskApi } from "@/api/task.api";
+import { useAuthStore } from "@/stores/auth.store";
+import UserTaskReportPanel from "@/components/business/export/UserTaskReportPanel.vue";
 import { TOKEN_KEY, ORG_ID_KEY, readStoredValue } from "@/utils/auth-session";
 import { usePagination } from "@/composables/usePagination";
 import type { ExportFormat, ExportJob, ExportJobStatus, ReportType } from "@/types/governance.types";
 import type { InspectionTask } from "@/types/task.types";
 
 const exportStore = useExportStore();
+const auth = useAuthStore();
+const canGenerate = computed(() => auth.hasPermission("report_generate"));
+const canReadReports = computed(() => auth.hasPermission("report_read"));
+const isOrdinaryUser = computed(() => auth.primaryRole === "user");
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
 const mainTab = ref<"create" | "history" | "templates">("create");
@@ -110,6 +116,8 @@ const canNext = computed(() => {
 });
 
 onMounted(() => {
+  if (isOrdinaryUser.value) return;
+  if (!canGenerate.value) mainTab.value = "history";
   fetchHistory();
   fetchTaskOptions();
 });
@@ -163,6 +171,7 @@ async function fetchTaskOptions(keyword?: string) {
 }
 
 async function fetchHistory() {
+  if (!canReadReports.value) return;
   await exportStore.fetchJobs({ page: page.value, size: pageSize.value });
   total.value = exportStore.total;
 }
@@ -320,7 +329,8 @@ async function handleRegenerate(row: ExportJob) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5">
+  <UserTaskReportPanel v-if="isOrdinaryUser" />
+  <div v-else class="flex flex-col gap-5">
     <div class="hero">
       <div>
         <h2>报告导出中心</h2>
@@ -330,8 +340,8 @@ async function handleRegenerate(row: ExportJob) {
 
     <el-card shadow="never">
       <el-tabs v-model="mainTab">
-        <el-tab-pane label="新建导出" name="create" />
-        <el-tab-pane label="导出历史" name="history" />
+        <el-tab-pane v-if="canGenerate" label="新建导出" name="create" />
+        <el-tab-pane v-if="canReadReports" label="导出历史" name="history" />
         <el-tab-pane label="报告模板" name="templates" />
       </el-tabs>
 
@@ -552,7 +562,7 @@ async function handleRegenerate(row: ExportJob) {
               <el-button v-if="row.status === 'success'" link type="primary" size="small" @click="downloadFile(row)">下载</el-button>
               <el-button v-if="row.status === 'failed'" link type="warning" size="small" @click="showFailureDetail(row)">失败原因</el-button>
               <el-button v-if="row.status === 'failed' || row.status === 'expired'" link type="primary" size="small" @click="handleRegenerate(row)">重新生成</el-button>
-              <el-button link type="danger" size="small" :loading="deletingId === row.id" @click="handleDelete(row.id)">删除</el-button>
+              <el-button v-if="canGenerate" link type="danger" size="small" :loading="deletingId === row.id" @click="handleDelete(row.id)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>

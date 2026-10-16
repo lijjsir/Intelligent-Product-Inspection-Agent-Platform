@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PIAP · 标准与质检治理预览</title>
+  <style>
+    :root {
+      --ink: #172a3d;
+      --muted: #6d7d8d;
+      --line: #dce4ea;
+      --soft-line: #e9eef2;
+      --paper: #ffffff;
+      --canvas: #f3f6f8;
+      --nav: #162b3d;
+      --nav-2: #203b50;
+      --blue: #14639b;
+      --blue-weak: #eaf3f9;
+      --teal: #187765;
+      --teal-weak: #e9f5f1;
+      --amber: #9b6511;
+      --amber-weak: #fff5e1;
+      --red: #a53b36;
+      --red-weak: #fff0ef;
+      --shadow: 0 12px 34px rgba(26, 49, 67, .07);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--canvas); color: var(--ink); font: 14px/1.55 "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid #71b5da; outline-offset: 2px; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 248px 1fr; }
+    .side { background: var(--nav); color: #dbe8f0; padding: 22px 16px; display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 1px 10px 23px; border-bottom: 1px solid #ffffff1c; }
+    .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; color: #fff; background: #237096; border: 1px solid #81c4d866; border-radius: 7px; font-weight: 800; letter-spacing: .04em; }
+    .brand strong { display: block; color: #fff; letter-spacing: .08em; font-size: 18px; }
+    .brand small { display: block; margin-top: 1px; color: #8faabd; font-size: 11px; }
+    .nav-label { padding: 24px 10px 7px; color: #7692a5; font-size: 11px; letter-spacing: .08em; }
+    .nav { width: 100%; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 5px; padding: 11px 12px; background: transparent; color: #bad0de; text-align: left; }
+    .nav:hover { background: #ffffff0d; color: #fff; }
+    .nav.active { background: #245c80; color: #fff; box-shadow: inset 3px 0 #63b7c9; }
+    .nav .glyph { width: 20px; text-align: center; color: #82b9c6; font-size: 13px; }
+    .nav.active .glyph { color: #c8f0ed; }
+    .side-note { margin: auto 10px 0; padding: 13px 0 0; border-top: 1px solid #ffffff1a; color: #87a1b2; font-size: 11px; }
+    .workspace { min-width: 0; }
+    .topbar { height: 66px; padding: 0 30px; display: flex; align-items: center; gap: 18px; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .topbar h1 { margin: 0; font-size: 17px; font-weight: 650; }
+    .crumb { color: var(--muted); font-size: 12px; padding-left: 18px; border-left: 1px solid var(--line); }
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
+    .org-chip { padding: 6px 10px; background: #f5f8fa; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); }
+    .avatar { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 50%; background: #e3eef4; color: var(--blue); font-weight: 700; }
+    .page { padding: 24px 30px 42px; max-width: 1700px; }
+    .notice { display: flex; align-items: flex-start; gap: 11px; padding: 11px 13px; margin-bottom: 18px; border: 1px solid #ebd9ad; border-radius: 4px; background: #fff9ed; color: #7a5a24; font-size: 12px; }
+    .notice b { color: #6c4a11; white-space: nowrap; }
+    .heading { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 20px; }
+    .eyebrow { color: var(--muted); font-size: 11px; letter-spacing: .08em; }
+    h2 { margin: 4px 0 3px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+    .heading p { margin: 0; color: var(--muted); }
+    .heading-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .button { min-height: 36px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); color: var(--ink); }
+    .button:hover { border-color: #8cb6cb; background: #f7fbfd; }
+    .button.primary { color: #fff; background: var(--blue); border-color: var(--blue); }
+    .button.subtle { background: #f5f8fa; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow); }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-bottom: 18px; }
+    .stat { padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); }
+    .stat label { display: block; color: var(--muted); font-size: 11px; }
+    .stat strong { display: block; margin-top: 3px; font-size: 23px; font-weight: 700; }
+    .stat small { color: var(--muted); font-size: 11px; }
+    .split { display: grid; grid-template-columns: minmax(560px, 1.6fr) minmax(340px, .9fr); gap: 18px; align-items: start; }
+    .panel-head { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 17px; border-bottom: 1px solid var(--soft-line); }
+    .panel-head h3 { margin: 0; font-size: 15px; }
+    .panel-head span { color: var(--muted); font-size: 12px; }
+    .filters { display: flex; gap: 8px; padding: 13px 17px; border-bottom: 1px solid var(--soft-line); }
+    .filters input, .filters select { min-height: 35px; border: 1px solid var(--line); border-radius: 4px; padding: 7px 9px; color: var(--ink); background: #fbfcfd; }
+    .filters input { flex: 1; min-width: 160px; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 11px 15px; background: #f8fafb; color: var(--muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
+    td { padding: 13px 15px; border-top: 1px solid var(--soft-line); vertical-align: top; }
+    tr[data-doc], tr[data-req] { cursor: pointer; }
+    tbody tr:hover { background: #f8fbfd; }
+    tr.selected { background: #edf6fa; box-shadow: inset 3px 0 var(--blue); }
+    td strong { display: block; font-weight: 650; }
+    td small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid #cfe4dc; border-radius: 3px; color: var(--teal); background: var(--teal-weak); font-size: 11px; white-space: nowrap; }
+    .pill.pending { border-color: #eed9ad; color: var(--amber); background: var(--amber-weak); }
+    .pill.gray { border-color: var(--line); color: var(--muted); background: #f3f6f8; }
+    .pill.red { border-color: #ecc7c4; color: var(--red); background: var(--red-weak); }
+    .detail { position: sticky; top: 17px; }
+    .detail-body { padding: 18px; }
+    .detail-title { margin: 0 0 4px; font-size: 18px; }
+    .detail-sub { margin: 0 0 15px; color: var(--muted); font-size: 12px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; padding: 15px 0; border-top: 1px solid var(--soft-line); border-bottom: 1px solid var(--soft-line); }
+    .datum label { display: block; color: var(--muted); font-size: 11px; }
+    .datum strong { display: block; margin-top: 2px; font-weight: 550; }
+    .detail-section { margin-top: 17px; }
+    .detail-section h4 { margin: 0 0 8px; font-size: 13px; }
+    .source-box { padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #fafcfd; color: #435b6c; font-size: 12px; }
+    .source-box mark { padding: 1px 3px; background: #fff0b8; color: inherit; }
+    .trace { display: grid; gap: 9px; }
+    .trace-row { display: grid; grid-template-columns: 86px 1fr; gap: 10px; font-size: 12px; }
+    .trace-row time { color: var(--muted); }
+    .trace-row span { color: #405666; }
+    .footer-line { padding: 12px 17px; border-top: 1px solid var(--soft-line); color: var(--muted); font-size: 11px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .tabs { display: flex; gap: 22px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+    .tabs button { padding: 9px 1px 11px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); }
+    .tabs button.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 650; }
+    .req-layout { display: grid; grid-template-columns: minmax(580px, 1.5fr) minmax(360px, .9fr); gap: 18px; align-items: start; }
+    .legend { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 17px; border-bottom: 1px solid var(--soft-line); }
+    .requirement-name { max-width: 330px; }
+    .requirement-name b { white-space: normal; }
+    .formula { font-family: Consolas, "Microsoft YaHei", monospace; font-size: 12px; color: #244c63; }
+    .confidence { display: flex; align-items: center; gap: 7px; white-space: nowrap; color: var(--muted); font-size: 11px; }
+    .confidence i { width: 52px; height: 5px; display: inline-block; background: #dfe8ec; border-radius: 4px; overflow: hidden; }
+    .confidence i::after { content: ""; display: block; width: 89%; height: 100%; background: var(--teal); }
+    .confidence.low i::after { width: 48%; background: var(--amber); }
+    .strategy-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(330px, .8fr); gap: 18px; }
+    .version-line { display: flex; gap: 12px; align-items: center; padding: 17px; border-bottom: 1px solid var(--soft-line); }
+    .version { font-size: 25px; font-weight: 750; }
+    .version-line p { margin: 0; color: var(--muted); font-size: 12px; }
+    .strategy-block { padding: 16px 17px; border-bottom: 1px solid var(--soft-line); }
+    .strategy-block:last-child { border-bottom: 0; }
+    .strategy-block h4 { margin: 0 0 5px; font-size: 14px; }
+    .strategy-block p { margin: 0 0 11px; color: var(--muted); font-size: 12px; }
+    .rule-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 11px; margin-top: 7px; border: 1px solid var(--line); border-radius: 4px; background: #fbfcfd; }
+    .rule-row strong { font-size: 12px; font-weight: 600; }
+    .rule-row span { color: var(--muted); font-size: 11px; text-align: right; }
+    .release-card { padding: 17px; }
+    .release-card h3 { margin: 0 0 12px; font-size: 15px; }
+    .release-card p { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+    .release-card hr { border: 0; border-top: 1px solid var(--soft-line); margin: 17px 0; }
+    .timeline { display: grid; gap: 13px; }
+    .timeline-row { display: grid; grid-template-columns: 10px 1fr; gap: 9px; }
+    .timeline-row i { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--teal); }
+    .timeline-row.pending i { background: var(--amber); }
+    .timeline-row b { display: block; font-size: 12px; }
+    .timeline-row span { display: block; color: var(--muted); font-size: 11px; }
+    .govern-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(340px, .8fr); gap: 18px; }
+    .source-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; padding: 15px 17px; }
+    .source-card { padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #fbfcfd; }
+    .source-card b { display: block; font-size: 12px; }
+    .source-card strong { display: block; margin-top: 7px; font-size: 20px; }
+    .source-card span { color: var(--muted); font-size: 11px; }
+    .audit-list { padding: 5px 17px 15px; }
+    .audit-item { display: grid; grid-template-columns: 80px 1fr auto; gap: 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--soft-line); font-size: 12px; }
+    .audit-item:last-child { border-bottom: 0; }
+    .audit-item time { color: var(--muted); font-size: 11px; }
+    .audit-item span { color: #435b6c; }
+    .mini-list { display: grid; gap: 9px; }
+    .mini-item { padding: 11px; border: 1px solid var(--line); border-radius: 4px; background: #fbfcfd; }
+    .mini-item b { display: block; font-size: 12px; }
+    .mini-item small { display: block; margin-top: 4px; color: var(--muted); }
+    .empty { padding: 48px 20px; text-align: center; color: var(--muted); }
+    @media (max-width: 1180px) {
+      .shell { grid-template-columns: 210px 1fr; }
+      .side { padding-left: 11px; padding-right: 11px; }
+      .split, .req-layout, .strategy-grid, .govern-grid { grid-template-columns: 1fr; }
+      .detail { position: static; }
+    }
+    @media (max-width: 760px) {
+      .shell { display: block; }
+      .side { position: static; padding: 12px; }
+      .brand { padding-bottom: 12px; }
+      .nav-label, .side-note { display: none; }
+      .nav { display: inline-flex; width: auto; margin: 8px 3px 0 0; }
+      .topbar { padding: 0 16px; }
+      .crumb, .top-actions .org-chip { display: none; }
+      .page { padding: 18px 14px 30px; }
+      .heading { display: block; }
+      .heading-actions { margin-top: 13px; }
+      h2 { font-size: 21px; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .source-cards { grid-template-columns: 1fr; }
+      .filters { flex-wrap: wrap; }
+      .filters input { width: 100%; flex-basis: 100%; }
+      th, td { padding: 10px; }
+      .hide-mobile { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand"><div class="brand-mark">P</div><div><strong>PIAP</strong><small>标准与质量治理</small></div></div>
+      <div class="nav-label">依据管理</div>
+      <button class="nav active" data-screen="library"><span class="glyph">▦</span>标准库工作台</button>
+      <button class="nav" data-screen="requirements"><span class="glyph">≡</span>检测要求总览</button>
+      <div class="nav-label">执行控制</div>
+      <button class="nav" data-screen="strategy"><span class="glyph">◈</span>检测执行策略</button>
+      <button class="nav" data-screen="governance"><span class="glyph">◇</span>风险与知识治理</button>
+      <div class="side-note">预览版本 0.1<br />业务数据均为示例，不会写入生产系统</div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><h1>治理控制台</h1><div class="crumb">标准来源 / 检测执行 / 审核发布</div><div class="top-actions"><span class="org-chip">重庆市联合基金 · 管理员</span><span>操作日志</span><div class="avatar">管</div></div></header>
+      <main class="page">
+        <div class="notice"><b>设计评审预览</b><span>这里先展示新的信息结构和交互关系。正式页面会保留原始文件、解析结果、专家确认与发布记录，不把 AI 识别结果直接当成正式标准。</span></div>
+
+        <section id="screen-library" class="screen active">
+          <div class="heading"><div><div class="eyebrow">依据管理 / 01</div><h2>标准库工作台</h2><p>先管理标准文档，再从已确认条款生成可执行检测要求。</p></div><div class="heading-actions"><button class="button subtle">导出清单</button><button class="button primary">上传标准文档</button></div></div>
+          <div class="stats"><div class="stat"><label>已发布标准</label><strong>18</strong><small>11 个产品类别</small></div><div class="stat"><label>待专家核对</label><strong>07</strong><small>包含 23 条候选要求</small></div><div class="stat"><label>解析异常</label><strong>02</strong><small>需要回看原 PDF</small></div><div class="stat"><label>无可执行要求</label><strong>03</strong><small>仅作为参考知识</small></div></div>
+          <div class="split">
+            <section class="panel"><div class="panel-head"><div><h3>标准文档</h3><span>文档是来源，不等于检测要求</span></div><span>共 27 份</span></div><div class="filters"><input placeholder="搜索标准编号、名称或产品" /><select><option>全部产品类别</option><option>陶瓷制品</option><option>电动自行车</option></select><select><option>全部状态</option><option>已发布</option><option>待核对</option></select></div><div class="table-wrap"><table><thead><tr><th>标准文档</th><th>适用范围</th><th>解析 / 审核</th><th>版本</th><th></th></tr></thead><tbody>
+              <tr data-doc="ceramic"><td><strong>GB/T 3298-2022</strong><small>日用陶瓷器抗热震性测定方法</small></td><td>日用陶瓷<br /><small>抗热震性</small></td><td><span class="pill">已发布</span><small>12 条要求 · 1 条条件</small></td><td>2022</td><td>›</td></tr>
+              <tr data-doc="ceramic2"><td><strong>GB/T 3301-2023</strong><small>日用陶瓷器抗热震性测定方法</small></td><td>日用陶瓷<br /><small>热稳定性</small></td><td><span class="pill pending">待专家核对</span><small>8 条候选 · 2 条异常</small></td><td>2023</td><td>›</td></tr>
+              <tr data-doc="bike"><td><strong>GB 17761-2018</strong><small>电动自行车安全技术规范</small></td><td>电动自行车<br /><small>整车安全</small></td><td><span class="pill">已发布</span><small>31 条要求 · 4 条条件</small></td><td>2018</td><td>›</td></tr>
+              <tr data-doc="reference"><td><strong>行业检测指南（示例）</strong><small>陶瓷产品抽样与判定说明</small></td><td>陶瓷制品<br /><small>抽样参考</small></td><td><span class="pill gray">参考知识</span><small>无可执行检测要求</small></td><td>2024</td><td>›</td></tr>
+            </tbody></table></div><div class="footer-line">发布前必须完成：来源核验、条款定位、检测要求确认、适用范围确认。</div></section>
+            <aside class="panel detail" id="doc-detail"></aside>
+          </div>
+        </section>
+
+        <section id="screen-requirements" class="screen">
+          <div class="heading"><div><div class="eyebrow">依据管理 / 02</div><h2>检测要求总览</h2><p>只展示可执行要求；方法条件和正文条款分别保留，不混成指标。</p></div><div class="heading-actions"><button class="button subtle">下载核对表</button><button class="button primary">批量提交专家核对</button></div></div>
+          <div class="tabs"><button class="active">全部要求 <small>51</small></button><button>待核对 <small>7</small></button><button>已确认 <small>44</small></button><button>无效候选 <small>6</small></button></div>
+          <div class="req-layout"><section class="panel"><div class="panel-head"><div><h3>按标准文档分组</h3><span>每条要求都能定位回原文页码</span></div><span>更新时间：2026-10-05</span></div><div class="legend"><span class="pill">检测要求</span><span class="pill gray">方法条件</span><span class="pill pending">正文条款</span><span class="pill red">需回看原文</span></div><div class="table-wrap"><table><thead><tr><th>类型 / 检测项目</th><th>判定关系</th><th>来源条款</th><th>识别质量</th><th>状态</th></tr></thead><tbody>
+              <tr data-req="water"><td class="requirement-name"><span class="pill">检测要求</span><strong>流动水槽温度</strong><small>抗热震试验 · 数值型</small></td><td class="formula">20 ± 2 ℃</td><td>GB/T 3298-2022<br /><small>第 5.2.2 条 · p.3</small></td><td><div class="confidence">高 <i></i></div></td><td><span class="pill">已确认</span></td></tr>
+              <tr data-req="ratio"><td class="requirement-name"><span class="pill gray">方法条件</span><strong>水与试样质量比</strong><small>试验条件 · 比值型</small></td><td class="formula">&gt; 10 : 1</td><td>GB/T 3298-2022<br /><small>第 5.2.2 条 · p.3</small></td><td><div class="confidence">中 <i></i></div></td><td><span class="pill pending">待核对</span></td></tr>
+              <tr data-req="distance"><td class="requirement-name"><span class="pill">检测要求</span><strong>试样投入水槽时间</strong><small>操作条件 · 时间型</small></td><td class="formula">≤ 5 s</td><td>GB/T 3301-2023<br /><small>第 6.1 条 · p.5</small></td><td><div class="confidence low">低 <i></i></div></td><td><span class="pill red">需回看原文</span></td></tr>
+              <tr data-req="text"><td class="requirement-name"><span class="pill pending">正文条款</span><strong>试验结束后观察试样</strong><small>描述性文字 · 不直接判定</small></td><td class="formula">—</td><td>GB/T 3298-2022<br /><small>第 5.2.3 条 · p.4</small></td><td><div class="confidence">高 <i></i></div></td><td><span class="pill gray">已排除</span></td></tr>
+            </tbody></table></div><div class="footer-line">原文、OCR 文本、规范化文本与专家修改记录全部留存；未确认的候选不能进入正式检测任务。</div></section><aside class="panel detail" id="req-detail"></aside></div>
+        </section>
+
+        <section id="screen-strategy" class="screen">
+          <div class="heading"><div><div class="eyebrow">执行控制 / 03</div><h2>检测执行策略</h2><p>把输入完整性、AI 辅助采信、专业复核和旧缺陷预警放到一个版本化策略里。</p></div><div class="heading-actions"><button class="button subtle">查看变更差异</button><button class="button primary">新建草稿</button></div></div>
+          <div class="strategy-grid"><section class="panel"><div class="version-line"><div class="version">v3.2</div><div><span class="pill">当前已发布</span><p>生效于 2026-09-28 · 发布人：质量管理员</p></div><div style="margin-left:auto;color:var(--muted);font-size:12px">适用：全部检测任务</div></div>
+            <div class="strategy-block"><h4>输入完整性要求</h4><p>缺少关键输入时只能生成“待补证”，不能给出整体合格结论。</p><div class="rule-row"><strong>标准来源必须有效</strong><span>已发布修订版 + 适用范围匹配</span></div><div class="rule-row"><strong>检测数据必须带单位</strong><span>数值、单位、方法、时间不可缺失</span></div><div class="rule-row"><strong>图片结果必须可追溯</strong><span>保留原图、模型版本和证据区域</span></div></div>
+            <div class="strategy-block"><h4>AI 辅助采信条件</h4><p>AI 只给出项目级建议，整体判定仍由标准项目和人工复核共同决定。</p><div class="rule-row"><strong>高置信度建议</strong><span>≥ 0.90 且无冲突证据，可进入待复核</span></div><div class="rule-row"><strong>中低置信度建议</strong><span>必须转人工复核，不得自动采信</span></div></div>
+            <div class="strategy-block"><h4>专业复核触发条件</h4><p>冲突、缺项、异常值和高风险项目必须进入专家队列。</p><div class="rule-row"><strong>标准要求与检测结果冲突</strong><span>强制复核</span></div><div class="rule-row"><strong>关键项目失败或未知</strong><span>强制复核 + 留痕</span></div></div>
+            <div class="strategy-block"><h4>既有门槛与缺陷辅助配置</h4><p>仅作为通用预警保底，不维护标准限值，不替代标准项目判定。</p><div class="rule-row"><strong>缺陷词命中</strong><span>生成风险线索，不改写检测结果</span></div></div>
+          </section><aside class="panel release-card"><h3>版本与发布</h3><div class="timeline"><div class="timeline-row"><i></i><div><b>v3.2 · 已发布</b><span>2026-09-28 · 质量管理员</span></div></div><div class="timeline-row pending"><i></i><div><b>v3.3 · 草稿</b><span>新增图片证据完整性规则</span></div></div><div class="timeline-row pending"><i></i><div><b>发布前检查</b><span>影响 4 类任务 · 需管理员复核</span></div></div></div><hr /><h3>发布前确认</h3><div class="mini-list"><div class="mini-item"><b>内容可见</b><small>可展开查看全部策略条目和变更差异</small></div><div class="mini-item"><b>职责清楚</b><small>管理员发布，专家确认专业触发条件</small></div><div class="mini-item"><b>可回滚</b><small>保留历史版本，不覆盖旧任务记录</small></div></div><button class="button primary" style="width:100%;margin-top:17px">打开 v3.3 草稿</button></aside></div>
+        </section>
+
+        <section id="screen-governance" class="screen">
+          <div class="heading"><div><div class="eyebrow">执行控制 / 04</div><h2>风险与知识治理</h2><p>标准规则决定“是否满足要求”，风险规则决定“证据是否足以支持处置”。</p></div><div class="heading-actions"><button class="button subtle">导出治理记录</button><button class="button primary">审核待处理项</button></div></div>
+          <div class="govern-grid"><section class="panel"><div class="panel-head"><div><h3>知识来源状态</h3><span>管理员负责来源与发布，专家负责专业内容确认</span></div><span>统一审计链</span></div><div class="source-cards"><div class="source-card"><b>标准库</b><strong>18</strong><span>已发布标准修订</span></div><div class="source-card"><b>专家 RAG 空间</b><strong>12</strong><span>已确认参考资料</span></div><div class="source-card"><b>待隔离文件</b><strong>04</strong><span>尚未进入检索</span></div></div><div class="audit-list"><div class="audit-item"><time>10-05 09:42</time><span><b>GB/T 3301-2023</b> 完成 OCR 复核，新增 8 条候选要求</span><span class="pill pending">待专家确认</span></div><div class="audit-item"><time>10-04 16:18</time><span><b>行业检测指南</b> 标记为“无可执行检测要求”，保留作问答参考</span><span class="pill gray">已归档</span></div><div class="audit-item"><time>10-04 11:03</time><span><b>专家资料包 2026-09</b> 完成来源核验，开放给指定问答空间</span><span class="pill">已发布</span></div><div class="audit-item"><time>10-03 14:26</time><span><b>未知来源文件</b> 被隔离，未进入标准库和 RAG 检索</span><span class="pill red">已隔离</span></div></div><div class="footer-line">任何上传文件先进入隔离区；经过来源、类型和权限核验后，才能进入对应知识空间。</div></section><aside class="panel release-card"><h3>风险等级配置</h3><p>风险等级不替代产品合格判定，仅评价证据充分度、冲突程度、影响范围与处置优先级。</p><hr /><div class="mini-list"><div class="mini-item"><b><span class="pill red">高</span> 证据冲突或关键项目失败</b><small>强制专家复核 · 记录处置意见</small></div><div class="mini-item"><b><span class="pill pending">中</span> 缺项、异常值或来源不完整</b><small>补证后再评估 · 不自动降级</small></div><div class="mini-item"><b><span class="pill">低</span> 证据完整且无冲突</b><small>允许进入常规处置队列</small></div></div><hr /><h3>当前规则来源</h3><div class="datum"><label>规则版本</label><strong>风险研判规则 v1.4</strong></div><div class="datum" style="margin-top:10px"><label>发布状态</label><strong><span class="pill">已发布</span> 2026-09-30</strong></div><p style="margin-top:14px;color:var(--amber)">示例规则需在真实部署时替换为已审核版本。</p></aside></div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script>
+    const screenNames = { library: '标准库工作台', requirements: '检测要求总览', strategy: '检测执行策略', governance: '风险与知识治理' };
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const docs = {
+      ceramic: { title: 'GB/T 3298-2022', sub: '日用陶瓷器抗热震性测定方法', status: '<span class="pill">已发布</span>', scope: '日用陶瓷 / 抗热震性', source: '国家标准全文公开系统', parsed: '12 条要求 · 1 条方法条件', updated: '2026-09-28', text: '流动水槽可保持温度在 20±2 ℃ 的流动水，水槽内水与试样的质量比应大于 10:1。', note: '原文定位：第 5.2.2 条，PDF 第 3 页。已保留原始 PDF、OCR 文本与规范化结果。' },
+      ceramic2: { title: 'GB/T 3301-2023', sub: '日用陶瓷器抗热震性测定方法', status: '<span class="pill pending">待专家核对</span>', scope: '日用陶瓷 / 热稳定性', source: '国家标准全文公开系统', parsed: '8 条候选 · 2 条异常', updated: '2026-10-05', text: '试样投入水槽后，应按照规定时间完成观察和记录。', note: '存在 OCR 异常：数字、单位和引号边界需要回看 PDF 原页。' },
+      bike: { title: 'GB 17761-2018', sub: '电动自行车安全技术规范', status: '<span class="pill">已发布</span>', scope: '电动自行车 / 整车安全', source: '国家标准全文公开系统', parsed: '31 条要求 · 4 条方法条件', updated: '2026-08-21', text: '整车质量、最高设计车速等项目按标准规定的试验方法进行检测。', note: '检测要求按项目、数据类型、单位和判定关系拆分，方法条件单独关联。' },
+      reference: { title: '行业检测指南（示例）', sub: '陶瓷产品抽样与判定说明', status: '<span class="pill gray">参考知识</span>', scope: '陶瓷制品 / 抽样参考', source: '业务资料（待确认）', parsed: '无可执行检测要求', updated: '2026-10-04', text: '本文件用于抽样流程说明，不包含可直接执行的产品限值或检测项目。', note: '保留在参考知识空间，不进入检测要求清单。' }
+    };
+    const reqs = {
+      water: { title: '流动水槽温度', type: '检测要求', status: '<span class="pill">已确认</span>', formula: '20 ± 2 ℃', source: 'GB/T 3298-2022 · 第 5.2.2 条 · p.3', ocr: '20 人士2', normalized: '20 ± 2 ℃', confidence: '0.96', note: 'OCR 将 ± 识别为“人士”，已由专家根据 PDF 原文确认。' },
+      ratio: { title: '水与试样质量比', type: '方法条件', status: '<span class="pill pending">待核对</span>', formula: '> 10 : 1', source: 'GB/T 3298-2022 · 第 5.2.2 条 · p.3', ocr: '大于10：1', normalized: '> 10 : 1', confidence: '0.78', note: '需要确认冒号与比值关系，不能仅依赖模型规范化。' },
+      distance: { title: '试样投入水槽时间', type: '检测要求', status: '<span class="pill red">需回看原文</span>', formula: '≤ 5 s', source: 'GB/T 3301-2023 · 第 6.1 条 · p.5', ocr: '10 mam', normalized: '待确认', confidence: '0.48', note: '“10 mam”不能直接猜为单位；必须回看原 PDF 页面确认是 mm、min 还是其他内容。' },
+      text: { title: '试验结束后观察试样', type: '正文条款', status: '<span class="pill gray">已排除</span>', formula: '—', source: 'GB/T 3298-2022 · 第 5.2.3 条 · p.4', ocr: '观察试样表面状态……', normalized: '描述性正文', confidence: '0.91', note: '保留为原文条款，不生成单独的检测指标。' }
+    };
+    function renderDoc(id = 'ceramic') {
+      const d = docs[id] || docs.ceramic;
+      document.querySelector('#doc-detail').innerHTML = `<div class="detail-body"><h3 class="detail-title">${esc(d.title)}</h3><p class="detail-sub">${esc(d.sub)}</p><div>${d.status}</div><div class="detail-grid"><div class="datum"><label>适用范围</label><strong>${esc(d.scope)}</strong></div><div class="datum"><label>解析结果</label><strong>${esc(d.parsed)}</strong></div><div class="datum"><label>标准来源</label><strong>${esc(d.source)}</strong></div><div class="datum"><label>最近更新</label><strong>${esc(d.updated)}</strong></div></div><div class="detail-section"><h4>原文定位</h4><div class="source-box">${esc(d.text)}</div><p class="detail-sub" style="margin:8px 0 0">${esc(d.note)}</p></div><div class="detail-section"><h4>处理记录</h4><div class="trace"><div class="trace-row"><time>09-28</time><span>解析完成，保留页码与原文片段</span></div><div class="trace-row"><time>09-29</time><span>候选要求生成，等待专家确认</span></div><div class="trace-row"><time>09-30</time><span>确认后进入发布版本</span></div></div></div></div><div class="footer-line"><button class="button subtle">查看原 PDF</button> <button class="button subtle">打开要求清单</button></div>`;
+    }
+    function renderReq(id = 'water') {
+      const r = reqs[id] || reqs.water;
+      document.querySelector('#req-detail').innerHTML = `<div class="detail-body"><h3 class="detail-title">${esc(r.title)}</h3><p class="detail-sub">${esc(r.type)} · 原文与解析结果对照</p><div>${r.status}</div><div class="detail-grid"><div class="datum"><label>规范化结果</label><strong class="formula">${esc(r.normalized)}</strong></div><div class="datum"><label>识别置信度</label><strong>${esc(r.confidence)}</strong></div><div class="datum"><label>原始 OCR</label><strong>${esc(r.ocr)}</strong></div><div class="datum"><label>来源条款</label><strong>${esc(r.source)}</strong></div></div><div class="detail-section"><h4>原文 / 解析对照</h4><div class="source-box">原文片段：<mark>${esc(r.ocr)}</mark><br />系统规范化：<mark>${esc(r.normalized)}</mark></div></div><div class="detail-section"><h4>核对意见</h4><div class="source-box">${esc(r.note)}</div></div></div><div class="footer-line"><button class="button subtle">定位原文页</button> <button class="button primary">提交确认结果</button></div>`;
+    }
+    function showScreen(name) {
+      document.querySelectorAll('.screen').forEach((el) => el.classList.toggle('active', el.id === `screen-${name}`));
+      document.querySelectorAll('.nav').forEach((el) => el.classList.toggle('active', el.dataset.screen === name));
+      document.querySelector('.crumb').textContent = `标准来源 / ${screenNames[name]} / 审核发布`;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    document.querySelectorAll('.nav').forEach((button) => button.addEventListener('click', () => showScreen(button.dataset.screen)));
+    document.querySelectorAll('[data-doc]').forEach((row) => row.addEventListener('click', () => { document.querySelectorAll('[data-doc]').forEach((r) => r.classList.remove('selected')); row.classList.add('selected'); renderDoc(row.dataset.doc); }));
+    document.querySelectorAll('[data-req]').forEach((row) => row.addEventListener('click', () => { document.querySelectorAll('[data-req]').forEach((r) => r.classList.remove('selected')); row.classList.add('selected'); renderReq(row.dataset.req); }));
+    document.querySelectorAll('.tabs button').forEach((button) => button.addEventListener('click', () => { button.parentElement.querySelectorAll('button').forEach((b) => b.classList.remove('active')); button.classList.add('active'); }));
+    renderDoc(); renderReq();
+    document.querySelector('[data-doc="ceramic"]').classList.add('selected');
+    document.querySelector('[data-req="water"]').classList.add('selected');
+  </script>
+</body>
+</html>

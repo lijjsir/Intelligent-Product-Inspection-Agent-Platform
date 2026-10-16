@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db
+from app.core.permissions import has_permission, require_role
+from app.core.exceptions import ForbiddenError, NotFoundError
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.quality_risk import (
     DataSourceCreate,
@@ -20,9 +25,12 @@ from app.schemas.quality_risk import (
     ProductCategoryCreate,
     ProductCategoryResponse,
     ProductCategoryUpdate,
+    CategoryImportConfirm,
     ProductCreate,
     ProductResponse,
     ProductUpdate,
+    ProductionBatchCreate,
+    ProductionBatchResponse,
     QualityAttachmentResponse,
     QualityEventCreate,
     QualitySourceRecordResponse,
@@ -43,7 +51,48 @@ router = APIRouter()
 
 
 def service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    require_role("quality", current.role)
     return QualityRiskService(db, current)
+
+
+def intake_service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    return QualityRiskService(db, current)
+
+
+def catalog_service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    require_role("product_master_read", current.role)
+    return QualityRiskService(db, current)
+
+
+def product_option_service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    if not any(has_permission(key, current.role) for key in ("task", "quality_material_submit", "dataset", "quality", "product_master_read")):
+        raise ForbiddenError("当前账号没有任务或资料表单的产品选项权限")
+    return QualityRiskService(db, current)
+
+
+def product_maintenance_service(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    require_role("product_master", current.role)
+    return QualityRiskService(db, current)
+
+
+@router.get("/quality-products/options", response_model=ResponseEnvelope[dict])
+async def product_form_options(svc=Depends(product_option_service)):
+    catalog = await svc.product_catalog(include_inactive=False)
+    category_fields = ("id", "org_id", "code", "name", "is_active")
+    product_fields = ("id", "org_id", "category_id", "name", "model", "brand", "is_active")
+    return ResponseEnvelope(data={
+        "categories": [{key: item.get(key) for key in category_fields} for item in catalog["categories"]],
+        "products": [{key: item.get(key) for key in product_fields} for item in catalog["products"]],
+    })
+
+
+@router.get("/quality-products/{product_id}/batch-options", response_model=ResponseEnvelope[list[dict]])
+async def product_batch_options(product_id: UUID, svc=Depends(product_option_service)):
+    product = await svc.product(str(product_id))
+    if not product.is_active:
+        raise NotFoundError("产品未开放为表单选项")
+    rows = await svc.product_batches(str(product_id))
+    return ResponseEnvelope(data=[{key: item.get(key) for key in ("id", "product_id", "display_no", "original_batch_no")} for item in rows])
 
 
 @router.get("/quality-data/locations/reverse-geocode", response_model=ResponseEnvelope[dict])
@@ -56,33 +105,115 @@ async def reverse_geocode(
 
 
 @router.get("/quality-products/catalog", response_model=ResponseEnvelope[ProductCatalogResponse])
-async def product_catalog(include_inactive: bool = False, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.product_catalog(include_inactive=include_inactive))
+async def product_catalog(include_inactive: bool = False, svc=Depends(catalog_service)):
+    return ResponseEnvelope(data=await svc.product_catalog(include_inactive=include_inactive, with_batches=True))
 
 
 @router.post("/quality-products/categories", response_model=ResponseEnvelope[ProductCategoryResponse], status_code=status.HTTP_201_CREATED)
-async def create_category(payload: ProductCategoryCreate, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.create_category(payload))
+async def create_category(payload: ProductCategoryCreate, svc=Depends(product_maintenance_service)):
+    data = await svc.create_category(payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/quality-products/categories/imports/preview", response_model=ResponseEnvelope[dict])
+async def preview_category_import(file: UploadFile = File(...), common_basis: str | None = Form(None), svc=Depends(product_maintenance_service)):
+    from app.services.quality_category_imports import preview_categories
+    return ResponseEnvelope(data=await preview_categories(svc, file.filename or '', await file.read(5 * 1024 * 1024 + 1), common_basis))
+
+
+@router.post("/quality-products/categories/imports/confirm", response_model=ResponseEnvelope[dict])
+async def confirm_category_import(payload: CategoryImportConfirm, svc=Depends(product_maintenance_service)):
+    from app.services.quality_category_imports import confirm_categories
+    data = await confirm_categories(svc, payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.patch("/quality-products/categories/{category_id}", response_model=ResponseEnvelope[ProductCategoryResponse])
-async def update_category(category_id: str, payload: ProductCategoryUpdate, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.update_category(category_id, payload))
+async def update_category(category_id: str, payload: ProductCategoryUpdate, svc=Depends(product_maintenance_service)):
+    data = await svc.update_category(category_id, payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.post("/quality-products", response_model=ResponseEnvelope[ProductResponse], status_code=status.HTTP_201_CREATED)
-async def create_product(payload: ProductCreate, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.create_product(payload))
+async def create_product(payload: ProductCreate, svc=Depends(product_maintenance_service)):
+    data = await svc.create_product(payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/quality-products/duplicate-candidates", response_model=ResponseEnvelope[list[dict]])
+async def product_duplicate_candidates(category_id: UUID, name: str = Query(..., min_length=1, max_length=255),
+    brand: str | None = Query(None, max_length=128), model: str | None = Query(None, max_length=128),
+    manufacturer_enterprise_id: UUID | None = None, exclude_id: UUID | None = None, svc=Depends(product_maintenance_service)):
+    return ResponseEnvelope(data=await svc.product_candidates(str(category_id), name, brand, model,
+        str(manufacturer_enterprise_id) if manufacturer_enterprise_id else None, str(exclude_id) if exclude_id else None))
+
+
+@router.delete("/quality-products/categories/{category_id}", response_model=ResponseEnvelope[dict])
+async def delete_category(category_id: UUID, svc=Depends(product_maintenance_service)):
+    data = await svc.delete_foundation("category", str(category_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.delete("/quality-products/{product_id}", response_model=ResponseEnvelope[dict])
+async def delete_product(product_id: UUID, svc=Depends(product_maintenance_service)):
+    data = await svc.delete_foundation("product", str(product_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.delete("/quality-products/{product_id}/batches/{batch_id}", response_model=ResponseEnvelope[dict])
+async def delete_production_batch(product_id: UUID, batch_id: UUID, svc=Depends(product_maintenance_service)):
+    data = await svc.delete_foundation("batch", str(batch_id), str(product_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.delete("/enterprises/{enterprise_id}", response_model=ResponseEnvelope[dict])
+async def delete_enterprise(enterprise_id: UUID, svc=Depends(service)):
+    data = await svc.delete_foundation("enterprise", str(enterprise_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.patch("/quality-products/{product_id}", response_model=ResponseEnvelope[ProductResponse])
-async def update_product(product_id: str, payload: ProductUpdate, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.update_product(product_id, payload))
+async def update_product(product_id: str, payload: ProductUpdate, svc=Depends(product_maintenance_service)):
+    data = await svc.update_product(product_id, payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/quality-data/sources", response_model=ResponseEnvelope[list[DataSourceResponse]])
 async def list_sources(svc=Depends(service)):
     return ResponseEnvelope(data=await svc.list_sources())
+
+
+@router.get("/quality-products/{product_id}/batches", response_model=ResponseEnvelope[list[ProductionBatchResponse]])
+async def product_batches(product_id: UUID, svc=Depends(catalog_service)):
+    return ResponseEnvelope(data=await svc.product_batches(str(product_id)))
+
+
+@router.post("/quality-products/{product_id}/batches", response_model=ResponseEnvelope[ProductionBatchResponse], status_code=201)
+async def create_production_batch(product_id: UUID, payload: ProductionBatchCreate, svc=Depends(product_maintenance_service)):
+    data = await svc.save_production_batch(str(product_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.patch("/quality-products/{product_id}/batches/{batch_id}", response_model=ResponseEnvelope[ProductionBatchResponse])
+async def update_production_batch(product_id: UUID, batch_id: UUID, payload: ProductionBatchCreate, svc=Depends(product_maintenance_service)):
+    data = await svc.save_production_batch(str(product_id), payload, str(batch_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/quality-products/{product_id}/links", response_model=ResponseEnvelope[dict])
+async def product_links(product_id: UUID, batch_id: UUID | None = None, svc=Depends(catalog_service)):
+    return ResponseEnvelope(data=await svc.product_links(str(product_id), str(batch_id) if batch_id else None))
 
 
 @router.post("/quality-data/sources", response_model=ResponseEnvelope[DataSourceResponse], status_code=status.HTTP_201_CREATED)
@@ -96,22 +227,28 @@ async def update_source(source_id: str, payload: DataSourceUpdate, svc=Depends(s
 
 
 @router.post("/quality-data/events", response_model=ResponseEnvelope[QualitySourceRecordResponse], status_code=status.HTTP_201_CREATED)
-async def create_event(payload: QualityEventCreate, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.create_event(payload))
+async def create_event(payload: QualityEventCreate, svc=Depends(intake_service)):
+    data = await svc.create_event(payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.post("/quality-data/attachments", response_model=ResponseEnvelope[list[QualityAttachmentResponse]], status_code=status.HTTP_201_CREATED)
-async def upload_attachments(files: list[UploadFile] = File(...), svc=Depends(service)):
-    return ResponseEnvelope(data=[await svc.upload_attachment(file) for file in files])
+async def upload_attachments(files: list[UploadFile] = File(...), svc=Depends(intake_service)):
+    data = [await svc.upload_attachment(file) for file in files]
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.post("/quality-data/imports", response_model=ResponseEnvelope[IngestionPreviewResponse], status_code=status.HTTP_201_CREATED)
 async def create_import(
-    source_id: str = Form(...),
+    source_id: str | None = Form(None),
+    origin_label: str | None = Form(None),
+    record_type: str | None = Form(None),
     request_key: str = Form(...),
     mapping: str = Form("{}"),
     file: UploadFile = File(...),
-    svc=Depends(service),
+    svc=Depends(intake_service),
 ):
     try:
         mapping_value = json.loads(mapping)
@@ -121,16 +258,18 @@ async def create_import(
         from app.core.exceptions import ValidationError
 
         raise ValidationError("字段映射必须为JSON对象") from None
-    return ResponseEnvelope(data=await svc.preview_import(source_id=source_id, request_key=request_key, file=file, mapping=mapping_value))
+    data = await svc.preview_import(source_id=source_id, request_key=request_key, file=file, mapping=mapping_value, origin_label=origin_label, record_type=record_type)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/quality-data/import-template")
-async def import_template(svc=Depends(service)):
-    svc.require_role({"admin", "user", "expert"})
+async def import_template(svc=Depends(intake_service)):
+    svc.require_intake(write=True)
     content = (
-        "external_record_id,record_type,occurred_at,text,production_batch_ref,"
+        "external_record_id,record_type,occurred_at,text,origin_label,category_id,product_id,enterprise_id,enterprise_name,enterprise_role,production_batch_ref,"
         "unit_serial_ref,formatted_address\n"
-        "CASE-001,consumer_complaint,2026-09-27T10:00:00,原始投诉内容,,,重庆市\n"
+        "CASE-001,consumer_complaint,,原始投诉内容,资料提供方,,,,,,,,重庆市\n"
     )
     return Response(
         content.encode("utf-8-sig"),
@@ -140,18 +279,22 @@ async def import_template(svc=Depends(service)):
 
 
 @router.get("/quality-data/imports/{job_id}", response_model=ResponseEnvelope[IngestionPreviewResponse])
-async def get_import(job_id: str, svc=Depends(service)):
+async def get_import(job_id: str, svc=Depends(intake_service)):
     return ResponseEnvelope(data=svc.ingestion_response(await svc.ingestion_job(job_id)))
 
 
 @router.post("/quality-data/imports/{job_id}/confirm", response_model=ResponseEnvelope[IngestionPreviewResponse])
-async def confirm_import(job_id: str, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.confirm_import(job_id))
+async def confirm_import(job_id: str, svc=Depends(intake_service)):
+    data = await svc.confirm_import(job_id)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.post("/quality-data/imports/{job_id}/cancel", response_model=ResponseEnvelope[IngestionPreviewResponse])
-async def cancel_import(job_id: str, svc=Depends(service)):
-    return ResponseEnvelope(data=await svc.cancel_import(job_id))
+async def cancel_import(job_id: str, svc=Depends(intake_service)):
+    data = await svc.cancel_import(job_id)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/quality-data/records", response_model=ResponseEnvelope[PagedResponse[QualitySourceRecordResponse]])
@@ -159,20 +302,45 @@ async def list_records(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     record_type: str | None = None,
+    record_types: list[str] | None = Query(None, max_length=13),
     keyword: str | None = None,
-    svc=Depends(service),
+    product_id: str | None = None,
+    production_batch_ref: str | None = None,
+    source_id: str | None = None,
+    ingestion_job_id: str | None = None,
+    svc=Depends(intake_service),
 ):
-    return ResponseEnvelope(data=await svc.list_records(page=page, size=size, record_type=record_type, keyword=keyword))
+    return ResponseEnvelope(data=await svc.list_records(page=page, size=size, record_type=record_type, record_types=record_types, keyword=keyword, product_id=product_id, production_batch_ref=production_batch_ref, source_id=source_id, ingestion_job_id=ingestion_job_id))
 
 
 @router.get("/quality-data/records/{record_id}", response_model=ResponseEnvelope[QualitySourceRecordResponse])
-async def get_record(record_id: str, svc=Depends(service)):
+async def get_record(record_id: str, svc=Depends(intake_service)):
     return ResponseEnvelope(data=await svc.get_record(record_id))
 
 
 @router.get("/quality-data/records/{record_id}/evidence", response_model=ResponseEnvelope[list[dict]])
-async def get_record_evidence(record_id: str, svc=Depends(service)):
+async def get_record_evidence(record_id: str, svc=Depends(intake_service)):
     return ResponseEnvelope(data=await svc.record_evidence(record_id))
+
+
+@router.get("/quality-data/attachments/{attachment_id}", response_model=ResponseEnvelope[QualityAttachmentResponse])
+async def get_quality_attachment(attachment_id: str, svc=Depends(intake_service)):
+    svc.require_intake()
+    return ResponseEnvelope(data=svc.attachment_response(await svc.accessible_attachment(attachment_id)))
+
+
+@router.get("/quality-data/attachments/{attachment_id}/download")
+async def download_quality_attachment(attachment_id: str, svc=Depends(intake_service)):
+    svc.require_intake()
+    row = await svc.accessible_attachment(attachment_id)
+    result = svc.storage.get_bytes(bucket=row.bucket, object_key=row.object_key)
+    if result is None:
+        from app.core.exceptions import NotFoundError
+        raise NotFoundError("附件文件不存在")
+    from urllib.parse import quote
+    content, mime_type = result
+    return StreamingResponse(BytesIO(content), media_type=mime_type or row.mime_type,
+                             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(row.file_name)}", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/risk-cases", response_model=ResponseEnvelope[PagedResponse[RiskCaseResponse]])

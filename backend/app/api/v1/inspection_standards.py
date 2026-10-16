@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status, Response
+from urllib.parse import quote
+import asyncio
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.permissions import require_role
@@ -20,10 +22,51 @@ from app.schemas.inspection_standard_library import (
 )
 from app.schemas.user import CurrentUser
 from app.services.inspection_standard_library_service import InspectionStandardLibraryService
+from app.services.standard_admission_service import StandardAdmissionService
+from app.schemas.standard_admission import CandidateEdit, CandidateReview, ReviewAssignment, RevisionAction, RevisionMetadata, RevisionReview
+from app.services.standard_review_service import StandardReviewService
+from app.core.permissions import has_permission
+from app.schemas.standard_applicability import StandardApplicabilityCheck
 
 router = APIRouter()
 standards_router = APIRouter()
 standard_documents_router = APIRouter()
+
+
+@standards_router.get("/review-queue", response_model=ResponseEnvelope[dict])
+async def review_queue(scope: str="pending", keyword: str="", domain: str="", page: int=Query(1,ge=1), size: int=Query(30,ge=1,le=100),
+                       current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read", current.role)
+    return ResponseEnvelope(data=await StandardReviewService(db,current).queue(scope=scope,keyword=keyword,domain=domain,page=page,size=size))
+
+
+@standards_router.get("/reviewers", response_model=ResponseEnvelope[list[dict]])
+async def standard_reviewers(current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_review_assign",current.role)
+    return ResponseEnvelope(data=await StandardReviewService(db,current).reviewers())
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/assignment", response_model=ResponseEnvelope[dict])
+async def assign_standard_review(document_id: str, revision_id: str, payload: ReviewAssignment,
+                                current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role("inspection_standard_library_read",current.role)
+    return ResponseEnvelope(data=await StandardReviewService(db,current).assign(document_id,revision_id,payload.model_dump()))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/candidate-review", response_model=ResponseEnvelope[dict])
+async def review_standard_candidate(document_id: str, revision_id: str, payload: CandidateReview,
+                                   current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role("standard_admission_review",current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).candidate_review(
+        document_id,revision_id,payload.model_dump(),can_confirm=str(current.role)=="expert"))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/requirements-draft", response_model=ResponseEnvelope[dict])
+async def draft_standard_requirements(document_id: str, revision_id: str, payload: RevisionAction,
+                                      current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role("standard_admission_submit",current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).draft_requirements(
+        document_id,revision_id,payload.model_dump()))
 
 
 @router.get("", response_model=ResponseEnvelope[PaginatedInspectionStandards])
@@ -127,14 +170,20 @@ async def upload_standard_pdfs(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Upload PDF files to a standard library. Files are stored in MinIO and auto-indexed."""
-    require_role("inspection_standard_library", current.role)
+    """Receive immutable PDFs; parse candidates asynchronously, never auto-publish."""
+    require_role("standard_admission_submit", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
     uploaded_files: list[tuple[str, bytes, str | None]] = []
+    if len(files)>20:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("每次最多接收20份PDF")
     for f in files:
-        content = await f.read()
+        content = await f.read(50*1024*1024+1)
+        if len(content)>50*1024*1024:
+            from app.core.exceptions import ValidationError
+            raise ValidationError("单份PDF不超过50MB")
         uploaded_files.append((f.filename or "unknown.pdf", content, f.content_type))
-    result = await service.upload_pdfs(library_id, uploaded_files)
+    result = await StandardAdmissionService(db, current.org_id, current.user_id).receive(library_id, uploaded_files)
     return ResponseEnvelope(data=result)
 
 
@@ -228,3 +277,74 @@ async def retrieve_standards(
     require_role("inspection_standard_library_read", current.role)
     service = InspectionStandardLibraryService(db, current.org_id)
     return ResponseEnvelope(data=await service.retrieve(payload.model_dump()))
+
+
+@standards_router.get("/requirements", response_model=ResponseEnvelope[list[dict]])
+async def requirements_overview(current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read",current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id).requirements())
+
+
+@standard_documents_router.get("/{document_id}/revisions", response_model=ResponseEnvelope[list[dict]])
+async def list_revisions(document_id: str, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id).list_revisions(document_id))
+
+
+@standard_documents_router.get("/{document_id}/revisions/{revision_id}", response_model=ResponseEnvelope[dict])
+async def revision_detail(document_id: str, revision_id: str, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id).detail(document_id,revision_id))
+
+
+@standard_documents_router.get("/{document_id}/revisions/{revision_id}/file")
+async def revision_file(document_id: str, revision_id: str, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read", current.role)
+    service=StandardAdmissionService(db,current.org_id)
+    _,rev=await service.revision(document_id,revision_id)
+    content=await asyncio.to_thread(service.read_original,rev)
+    return Response(content,media_type="application/pdf",headers={"Content-Disposition":f"inline; filename*=UTF-8''{quote(rev.snapshot['file_name'])}"})
+
+
+@standard_documents_router.post("/{document_id}/revisions", response_model=ResponseEnvelope[dict])
+async def amend_revision(document_id: str, payload: RevisionMetadata, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_submit", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).amend(document_id,payload.model_dump()))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/review", response_model=ResponseEnvelope[dict])
+async def review_revision(document_id: str, revision_id: str, payload: RevisionReview, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_review", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).review(document_id,revision_id,payload.model_dump(),actor_role=current.role))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/candidates", response_model=ResponseEnvelope[dict])
+async def edit_candidate(document_id: str, revision_id: str, payload: CandidateEdit, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_submit", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).candidate(document_id,revision_id,payload.model_dump(),
+        can_confirm=str(current.role)=="expert" and has_permission("standard_admission_review",current.role),actor_role=current.role))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/publish", response_model=ResponseEnvelope[dict])
+async def publish_revision(document_id: str, revision_id: str, payload: RevisionAction, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_publish", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).publish(document_id,revision_id,payload.model_dump()))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/withdraw", response_model=ResponseEnvelope[dict])
+async def withdraw_revision(document_id: str, revision_id: str, payload: RevisionAction, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_publish", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).withdraw(document_id,revision_id,payload.model_dump()))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/retry", response_model=ResponseEnvelope[dict])
+async def retry_revision(document_id: str, revision_id: str, payload: RevisionAction, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("standard_admission_submit", current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id,current.user_id).retry(document_id,revision_id,payload.model_dump()))
+
+
+@standard_documents_router.post("/{document_id}/revisions/{revision_id}/applicability", response_model=ResponseEnvelope[dict])
+async def check_standard_applicability(document_id: str, revision_id: str, payload: StandardApplicabilityCheck,
+    current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read",current.role)
+    return ResponseEnvelope(data=await StandardAdmissionService(db,current.org_id).check_applicability(document_id,revision_id,payload.model_dump()))

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, AsyncIterator
 
-from fastapi import Header, Query
+from fastapi import Depends, Header, Query
+from app.api.v1.deps import apply_permission_identity, get_permission_identity
 
 from app.core.datetime import utcnow, utcnow_iso
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
@@ -20,6 +22,8 @@ from app.schemas.chat import (
     ChatMessageSendRequest,
     ChatSendResponse,
     ChatSessionResponse,
+    ChatSearchItem,
+    ChatSearchResponse,
     ChatTaskResultAppendRequest,
     ChatTaskSubmitRequest,
 )
@@ -57,6 +61,7 @@ def _track_chat_workflow(workflow_run_id: str, assistant_message_id: str, task: 
 def get_current_user_for_stream(
     authorization: str = Header(default=""),
     token: str = Query(default=""),
+    identity: dict = Depends(get_permission_identity),
 ) -> CurrentUser:
     raw_token = ""
     if authorization.startswith("Bearer "):
@@ -68,7 +73,7 @@ def get_current_user_for_stream(
     payload = safe_decode_token(raw_token)
     if payload.get("typ") != "stream":
         raise ForbiddenError("invalid stream token type")
-    return CurrentUser(
+    return apply_permission_identity(CurrentUser(
         user_id=str(payload.get("user_id") or payload.get("sub") or ""),
         org_id=str(payload.get("org_id") or ""),
         role=str(payload.get("role") or ""),
@@ -79,7 +84,7 @@ def get_current_user_for_stream(
         default_workspace=str(payload.get("default_workspace") or "app"),
         stream_resource=str(payload.get("resource") or ""),
         stream_resource_id=str(payload.get("resource_id") or ""),
-    )
+    ), identity)
 
 
 def _make_embedder_factory(org_id: str, user_id: str | None, trace_id: str | None):
@@ -107,8 +112,7 @@ class ChatService:
     async def create_session(self, title: str | None = None) -> ChatSessionResponse:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
-            default_title = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-            obj = await repo.create(self._org_id, self._user_id, title=title or default_title)
+            obj = await repo.create(self._org_id, self._user_id, title=title)
             await session.commit()
             return ChatSessionResponse.model_validate(obj)
 
@@ -116,7 +120,39 @@ class ChatService:
         async with get_session() as session:
             repo = ChatSessionRepository(session)
             rows = await repo.list_for_user(self._org_id, self._user_id, limit=limit)
+            from app.services.chat_title_service import schedule_title
+            for row in [item for item in rows if getattr(item, 'title_source', '') in {'auto', 'fallback'}][:3]:
+                schedule_title(self._org_id, self._user_id, str(row.id))
             return [ChatSessionResponse.model_validate(item) for item in rows]
+
+    async def update_session(self, session_id: str, *, title: str | None = None, is_pinned: bool | None = None) -> ChatSessionResponse:
+        if title is None and is_pinned is None:
+            raise ValidationError('请选择需要更新的标题或置顶状态')
+        async with get_session() as session:
+            obj = await ChatSessionRepository(session).update_preferences(self._org_id, self._user_id, session_id, title=title, is_pinned=is_pinned)
+            if obj is None:
+                raise NotFoundError('chat session not found')
+            await session.commit()
+            return ChatSessionResponse.model_validate(obj)
+
+    async def search_sessions(self, query: str, kind: str = 'all', limit: int = 30, offset: int = 0) -> ChatSearchResponse:
+        from app.repositories.chat_search_repo import ChatSearchRepository
+        query = query.strip()
+        async with get_session() as db:
+            rows, messages, total = await ChatSearchRepository(db).search(self._org_id, self._user_id, query, kind, limit, offset)
+            items = []
+            for row in rows:
+                message = messages.get(str(row.id))
+                attachments = [item for item in ((message.payload or {}).get('attachment_echo') or []) if isinstance(item, dict)] if message else []
+                text = re.sub(r'\s+', ' ', message.content).strip() if message else ''
+                if query and query.casefold() not in text.casefold():
+                    matching_names = [str(item.get('name') or '') for item in attachments if query.casefold() in str(item.get('name') or '').casefold()]
+                    text = ' · '.join(matching_names) or text
+                position = text.casefold().find(query.casefold()) if query else 0
+                start = max(0, position - 45)
+                snippet = ('…' if start else '') + text[start:start + 180] + ('…' if len(text) > start + 180 else '')
+                items.append(ChatSearchItem(**ChatSessionResponse.model_validate(row).model_dump(), snippet=snippet, message_id=str(message.id) if message else None, message_seq=message.seq_no if message else None, attachments=[{key: item.get(key) for key in ('id','name','url','kind','content_type','size_bytes')} for item in attachments[:3]]))
+            return ChatSearchResponse(items=items, total=total, has_more=offset + len(items) < total)
 
     async def list_messages(
         self,
@@ -223,6 +259,12 @@ class ChatService:
             chat_session = await session_repo.get(self._org_id, self._user_id, session_id)
             if not chat_session:
                 raise NotFoundError("chat session not found")
+            # Keep a provisional question title until AI topic summarization finishes.
+            title = str(getattr(chat_session, "title", None) or "")
+            if hasattr(chat_session, "title") and getattr(chat_session, 'title_source', 'auto') == 'auto' and not getattr(chat_session, "last_message_at", None) and (
+                not title or title == '新对话' or title == session_id or re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", title)
+            ):
+                chat_session.title = " ".join(payload.message.split())[:48] or "附件分析"
             await ops_repo.ensure_chat_binding()
 
             rag_space_id = str(ext_payload.get("selected_rag_space_id") or "").strip()
@@ -695,7 +737,7 @@ class ChatService:
                     "plan_tier": self._current.plan_tier,
                     "capabilities": self._current.capabilities,
                     "query": request.message.strip(),
-                    "metadata": dict(request.metadata or {}),
+                    "metadata": {**dict(request.metadata or {}), "user_role": self._current.role},
                     "ext": ext_payload,
                     "attachments": [
                         NormalizedAttachment.model_validate(item).model_dump()
@@ -708,6 +750,8 @@ class ChatService:
                     ],
                 }
             )
+            from app.services.chat_title_service import schedule_title
+            schedule_title(self._org_id, self._user_id, session_id)
             # After successful orchestration, extract and persist reusable candidate memories.
             from app.services.memory_extraction_service import MemoryExtractionService
             from app.services.memory_service import MemoryService

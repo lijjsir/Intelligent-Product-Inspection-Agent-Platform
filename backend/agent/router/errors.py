@@ -264,7 +264,7 @@ ERROR_CATALOG: dict[str, dict[str, Any]] = {
     },
     "FILE_PARSE_FAILED": {
         "title": "文件解析失败",
-        "message": "文件解析失败，无法继续执行文件总结、问答或论文检查。",
+        "message": "文件解析失败，无法继续执行文件总结或问答。",
         "category": AgentErrorCategory.DATA,
         "user_action": "请检查文件是否损坏，并上传 docx、pdf、txt、csv、xlsx 等支持格式。",
         "retryable": False,

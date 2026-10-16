@@ -5,10 +5,11 @@ import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.v1.deps import get_current_user, get_db
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.core.permissions import require_role
 from app.models.supervision import (
     DeviceConnection,
     SupervisionRecord,
@@ -35,6 +36,7 @@ from app.schemas.user import CurrentUser
 from pydantic import BaseModel, Field
 from app.services.supervision_service import SupervisionService, serialize
 from app.services.adaptive_inspection_service import AdaptiveInspectionService
+from app.services.risk_decision_context_service import RiskDecisionContextService
 
 router = APIRouter()
 
@@ -57,6 +59,7 @@ class DatasetEnrollment(BaseModel):
 
 
 async def service(current=Depends(get_current_user), db=Depends(get_db)):
+    require_role("quality", current.role)
     svc = SupervisionService(db, current)
     await svc.permissions()
     return svc
@@ -137,6 +140,12 @@ async def manual_assessment(record_id: UUID, payload: ManualAssessment, svc=Depe
 async def reassessment(record_id: UUID, svc=Depends(service)):
     await svc.require_enabled()
     return ResponseEnvelope(data=await svc.reassessment("risk-cases", str(record_id)))
+
+
+@router.post("/sampling-plans/{record_id}/reassessment")
+async def reassess_sampling_plan(record_id: UUID, svc=Depends(service)):
+    await svc.require_enabled()
+    return ResponseEnvelope(data=await svc.reassessment("sampling-plans", str(record_id)))
 
 
 @router.get("/quality-supervision/dataset-targets")
@@ -286,7 +295,8 @@ def register_records(kind):
         status: str | None = None,
         svc=Depends(service),
     ):
-        await svc.require_enabled()
+        if kind != "enterprises":
+            await svc.require_enabled()
         return ResponseEnvelope(
             data=await svc.list(
                 kind, page, size, keyword, str(region_id) if region_id else None, status
@@ -294,14 +304,21 @@ def register_records(kind):
         )
 
     async def create_record(payload: RecordCreate, svc=Depends(service)):
-        return ResponseEnvelope(data=await svc.create(kind, payload))
+        data = await svc.create(kind, payload)
+        if kind == "enterprises":
+            await svc.db.commit()
+        return ResponseEnvelope(data=data)
 
     async def get_record(record_id: UUID, svc=Depends(service)):
-        await svc.require_enabled()
+        if kind != "enterprises":
+            await svc.require_enabled()
         return ResponseEnvelope(data=serialize(await svc.get(kind, str(record_id))))
 
     async def update_record(record_id: UUID, payload: RecordUpdate, svc=Depends(service)):
-        return ResponseEnvelope(data=await svc.update(kind, str(record_id), payload))
+        data = await svc.update(kind, str(record_id), payload)
+        if kind == "enterprises":
+            await svc.db.commit()
+        return ResponseEnvelope(data=data)
 
     async def revisions(record_id: UUID, svc=Depends(service)):
         await svc.get(kind, str(record_id))
@@ -375,6 +392,28 @@ def register_records(kind):
 for _kind in DATA_SCHEMAS:
     if _kind not in {"risk-cases", "regions"}:
         register_records(_kind)
+
+
+@router.post("/enterprises/imports/preview")
+async def preview_enterprises(file: UploadFile = File(...), mapping: str = Form("{}"), svc=Depends(service)):
+    from app.services.supervision_imports import preview
+    try:
+        columns = json.loads(mapping)
+        if not isinstance(columns, dict):
+            raise ValueError()
+    except (ValueError, TypeError) as exc:
+        raise ValidationError("列名映射必须为JSON对象") from exc
+    data = await preview(svc, "enterprises", file.filename or "", await file.read(10 * 1024 * 1024 + 1), columns)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/enterprises/imports/confirm")
+async def confirm_enterprises(preview_id: UUID, svc=Depends(service)):
+    from app.services.supervision_imports import confirm
+    data = await confirm(svc, "enterprises", str(preview_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/supervision-runs/{run_id}")
@@ -532,99 +571,29 @@ async def ingest_device(
     return ResponseEnvelope(data=await svc.ingest_or_pending(payload, device_id=conn.device_id))
 
 
+@router.get("/quality-supervision/sampling-candidates")
+async def sampling_candidates(svc=Depends(service)):
+    svc.require_role({"expert"})
+    await svc.require_enabled()
+    contexts, excluded = await RiskDecisionContextService(svc.db, svc.current).eligible()
+    return ResponseEnvelope(data={"items": [{"id": c["id"], "code": c["code"], "title": c["name"],
+        "risk_level": c["data"]["analysis"]["risk_level"], "assessment_version": c["version"],
+        "source_ref": c["source_ref"]} for c in contexts], "excluded_count": len(excluded)})
+
+
 @router.get("/quality-supervision/analytics")
 async def analytics(svc=Depends(service)):
     svc.require_role({"admin", "user", "expert", "platform_operator"})
     await svc.require_enabled()
 
-    legacy_rows = list(
-        await svc.db.scalars(
-            select(SupervisionRecord).where(
+    legacy_count = await svc.db.scalar(
+            select(func.count()).select_from(SupervisionRecord).where(
                 SupervisionRecord.org_id == svc.org_id,
                 SupervisionRecord.kind == "risk-cases",
                 SupervisionRecord.status == "risk_assessed",
             )
-        )
     )
-    from app.models.quality_risk import (
-        QualityRiskAssessment,
-        QualityRiskCase,
-        QualitySourceRecord,
-    )
-
-    risk_cases_v4 = list(
-        await svc.db.scalars(
-            select(QualityRiskCase).where(
-                QualityRiskCase.org_id == svc.org_id,
-                QualityRiskCase.status == "risk_assessed",
-                QualityRiskCase.deleted_at.is_(None),
-            )
-        )
-    )
-    adapted_cases = [serialize(r) for r in legacy_rows]
-    for case in risk_cases_v4:
-        assessment = await svc.db.scalar(
-            select(QualityRiskAssessment)
-            .where(
-                QualityRiskAssessment.org_id == svc.org_id,
-                QualityRiskAssessment.risk_case_id == case.id,
-                QualityRiskAssessment.status == "accepted",
-                QualityRiskAssessment.deleted_at.is_(None),
-            )
-            .order_by(QualityRiskAssessment.version.desc())
-            .limit(1)
-        )
-        source = await svc.db.scalar(
-            select(QualitySourceRecord)
-            .where(
-                QualitySourceRecord.org_id == svc.org_id,
-                QualitySourceRecord.id.in_(case.source_record_ids),
-                QualitySourceRecord.deleted_at.is_(None),
-            )
-            .order_by(QualitySourceRecord.occurred_at.desc())
-            .limit(1)
-        )
-        adapted_cases.append(
-            {
-                "id": case.id,
-                "status": case.status,
-                "data": {
-                    "occurred_at": (
-                        source.occurred_at.isoformat()
-                        if source
-                        else case.created_at.isoformat()
-                    ),
-                    "complaint_region_id": (
-                        (source.location or {}).get("district_code") if source else None
-                    ),
-                    "sampling_region_id": None,
-                    "enterprise_id": (
-                        (source.enterprise_ref or {}).get("name")
-                        or (source.enterprise_ref or {}).get("enterprise_id")
-                        if source
-                        else None
-                    ),
-                    "product_category": (
-                        case.scope.get("name")
-                        if case.scope_type == "category"
-                        else (source.product_ref or {}).get("category_name")
-                        if source
-                        else None
-                    ),
-                    "evidence": [
-                        {
-                            "source_type": source.record_type,
-                            "nature": source.data_nature,
-                        }
-                    ]
-                    if source
-                    else [],
-                    "analysis": {
-                        "risk_level": assessment.risk_level if assessment else "unknown"
-                    },
-                },
-            }
-        )
+    adapted_cases, excluded = await RiskDecisionContextService(svc.db, svc.current).eligible()
     exposures = list(
         await svc.db.scalars(
             select(SupervisionRecord).where(
@@ -660,6 +629,9 @@ async def analytics(svc=Depends(service)):
         )
     )
     report.update(
+        excluded_count=len(excluded),
+        legacy_unverified_count=int(legacy_count or 0),
+        risk_refs=[case["source_ref"] for case in adapted_cases],
         plans=[serialize(p) for p in plans],
         sessions=[serialize(s) for s in sessions],
         confirmed_categories=sorted(

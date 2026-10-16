@@ -23,6 +23,9 @@ interface RuleForm {
 
 const store = useInspectionSpecStore();
 const auth = useAuthStore();
+const props = withDefaults(defineProps<{ compatibilityReadonly?: boolean }>(), {
+  compatibilityReadonly: false,
+});
 
 const drawerOpen = ref(false);
 const previewOpen = ref(false);
@@ -55,14 +58,17 @@ const canManageGlobal = computed(() => {
   return allRoles.includes(ROLE_ADMIN);
 });
 const isReadonly = computed(() => {
+  if (props.compatibilityReadonly) return true;
   const allRoles = [...auth.roles, auth.role].filter(Boolean);
   return allRoles.includes(ROLE_PLATFORM_OPERATOR) && !allRoles.includes(ROLE_ADMIN);
 });
-const pageTitle = computed(() => (isReadonly.value ? "质检门槛查看" : "质检门槛配置"));
+const pageTitle = computed(() => props.compatibilityReadonly ? "历史兼容配置" : (isReadonly.value ? "质检门槛查看" : "质检门槛配置"));
 const pageSubtitle = computed(() =>
-  isReadonly.value
-    ? "平台运营只查看模型置信度、证据充分度、可追溯性和自动放行门槛；维护操作归管理员。"
-    : "维护视觉检测模型的置信度、证据充分度和可追溯性门槛。这里控制 AI 结果能否进入复核，不代替产品检测标准。",
+  props.compatibilityReadonly
+    ? "此处仅保留旧配置的只读查看和迁移核对；它不能作为标准限值，也不能单独发布产品合格结论。"
+    : isReadonly.value
+      ? "平台运营只查看 AI 辅助预警条件；维护操作归管理员。这里不设置标准项目、单位或产品限值。"
+    : "维护 AI 辅助采信和缺陷预警条件。这里不设置标准项目、单位或产品限值，不能代替标准库。",
 );
 const productOptions = computed(() =>
   Array.from(
@@ -318,7 +324,7 @@ onMounted(() => {
   <div class="spec-page">
     <section class="hero">
       <div>
-        <p class="eyebrow">Quality Gate</p>
+      <p class="eyebrow">AI ASSISTANCE / COMPATIBILITY</p>
         <h2>{{ pageTitle }}</h2>
         <p>{{ pageSubtitle }}</p>
       </div>
@@ -355,7 +361,15 @@ onMounted(() => {
       </template>
 
       <el-alert
-        v-if="isReadonly"
+        v-if="props.compatibilityReadonly"
+        title="历史兼容配置仅用于迁移核对；新的输入、复核、采信和发布统一在“检测与复核策略”中完成。"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="readonly-alert"
+      />
+      <el-alert
+        v-else-if="isReadonly"
         title="平台运营在这里做配置核对和排障定位；门槛新增、编辑、复制、删除请由管理员在治理后台完成。"
         type="info"
         :closable="false"

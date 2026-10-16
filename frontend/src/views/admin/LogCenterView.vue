@@ -191,7 +191,7 @@ function formatDateTime(value?: string) {
                 :total="authTotal"
                 :page-size="pageSize"
                 :current-page="authPage"
-                @current-change="(page) => { authPage = page; fetchAuthLogs(); }"
+                @current-change="(page: number) => { authPage = page; fetchAuthLogs(); }"
               />
             </div>
           </div>
@@ -234,7 +234,7 @@ function formatDateTime(value?: string) {
                 :total="auditTotal"
                 :page-size="pageSize"
                 :current-page="auditPage"
-                @current-change="(page) => { auditPage = page; fetchAuditLogs(); }"
+                @current-change="(page: number) => { auditPage = page; fetchAuditLogs(); }"
               />
             </div>
           </div>

@@ -37,6 +37,8 @@ async def test_delete_item_bulk_deletes_qdrant_points_documents_and_chunks():
             calls.append(("soft_delete_library", item.id))
 
     class FakeDocumentRepo:
+        async def list_by_library(self, org_id, library_id):
+            return []
         async def soft_delete_by_library(self, org_id, library_id):
             calls.append(("soft_delete_documents", org_id, library_id))
             return 17

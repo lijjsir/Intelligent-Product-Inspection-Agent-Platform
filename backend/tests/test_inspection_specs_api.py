@@ -10,8 +10,7 @@ def current_user(role: str) -> CurrentUser:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["user", "expert"])
-async def test_user_and_expert_can_read_inspection_specs(monkeypatch, role):
+async def test_expert_can_read_inspection_specs(monkeypatch):
     calls = []
 
     class FakeInspectionSpecService:
@@ -23,10 +22,16 @@ async def test_user_and_expert_can_read_inspection_specs(monkeypatch, role):
 
     monkeypatch.setattr(specs_api, "InspectionSpecService", FakeInspectionSpecService)
 
-    response = await specs_api.list_inspection_specs(current=current_user(role), db=object())
+    response = await specs_api.list_inspection_specs(current=current_user("expert"), db=object())
 
     assert response.data[0]["spec_code"] == "STD-1"
     assert calls[0][1] == "org-1"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_user_cannot_read_inspection_specs():
+    with pytest.raises(ForbiddenError):
+        await specs_api.list_inspection_specs(current=current_user("user"), db=object())
 
 
 @pytest.mark.asyncio

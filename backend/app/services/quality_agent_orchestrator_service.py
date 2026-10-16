@@ -35,7 +35,6 @@ from app.services.chat_trust_scoring_service import build_pending_trust_score, t
 from app.services.chat_trust_scoring_dispatcher import enqueue_chat_trust_scoring
 from app.services.task_service import TaskService
 from app.services.chat_message_lifecycle_service import ChatMessageLifecycleService
-from app.services.paper_review_enrichment_service import PaperReviewEnrichmentService
 from infra.database.session import get_session
 
 logger = logging.getLogger(__name__)
@@ -500,12 +499,6 @@ class QualityAgentOrchestratorService:
             payload=response_payload,
             quality=dict(output.quality or {}),
         )
-        await self._enqueue_paper_review_enrichment(
-            request=request,
-            output=output,
-            response_payload=response_payload,
-            emit=emit,
-        )
         return materialization_error is None
 
     async def _persist_agent_artifacts(
@@ -613,70 +606,6 @@ class QualityAgentOrchestratorService:
             candidate_vector_service=candidate_vector,
         ).write_candidate(candidate)
 
-    async def _enqueue_paper_review_enrichment(
-        self,
-        *,
-        request: NormalizedRequest,
-        output: AgentOutput,
-        response_payload: dict[str, Any],
-        emit,
-    ) -> None:
-        paper_report = response_payload.get("paper_format_report")
-        if not isinstance(paper_report, dict):
-            return
-        if not paper_report.get("enrichment_payload"):
-            return
-
-        async def run_enrichment() -> None:
-            try:
-                async with get_session() as session:
-                    lifecycle = ChatMessageLifecycleService(
-                        session,
-                        message_repository_cls=ChatMessageRepository,
-                        session_repository_cls=ChatSessionRepository,
-                    )
-
-                    async def emit_patch(*, content: str | None = None, message_type: str | None = None, payload: dict[str, Any] | None = None) -> None:
-                        updated = await lifecycle.patch_turn(
-                            org_id=request.org_id,
-                            user_id=str(request.user_id or ""),
-                            session_id=str(request.session_id or ""),
-                            assistant_message_id=str(request.assistant_message_id or ""),
-                            content=content,
-                            message_type=message_type,
-                            payload_patch=payload,
-                        )
-                        if updated is None:
-                            return
-                        await session.commit()
-                        await ChatMessageLifecycleService.emit_patch(
-                            emit,
-                            session_id=request.session_id,
-                            assistant_message_id=request.assistant_message_id,
-                            workflow_run_id=request.workflow_run_id,
-                            content=updated.get("content"),
-                            message_type=updated.get("message_type"),
-                            payload=updated.get("payload"),
-                        )
-
-                    enriched = await PaperReviewEnrichmentService().enrich(
-                        paper_report=paper_report,
-                        request=request,
-                        emit_patch=emit_patch,
-                        db_session=session,
-                    )
-                    output.paper_format_report = enriched
-            except Exception:
-                logger.exception(
-                    "paper review enrichment task failed session_id=%s assistant_message_id=%s",
-                    request.session_id,
-                    request.assistant_message_id,
-                )
-
-        import asyncio
-
-        asyncio.create_task(run_enrichment())
-
     async def _persist_rag_tool_executions(
         self,
         session,
@@ -745,7 +674,7 @@ class QualityAgentOrchestratorService:
     ) -> None:
         parsed_files: list[dict[str, Any]] = []
         for artifact in self._response_artifacts(output):
-            if str(artifact.get("type") or "") not in {"file_summary", "file_answer", "paper_format_report"}:
+            if str(artifact.get("type") or "") not in {"file_summary", "file_answer"}:
                 continue
             content = artifact.get("content")
             if not isinstance(content, dict):
@@ -1067,9 +996,6 @@ class QualityAgentOrchestratorService:
             payload["llm_meta"] = base_payload.get("llm_meta")
         if base_payload.get("llm_usage"):
             payload["llm_usage"] = base_payload.get("llm_usage")
-        # Preserve paper_format_report and ui_schema from agent output
-        if output.paper_format_report:
-            payload["paper_format_report"] = output.paper_format_report
         if output.ui_schema:
             payload["ui_schema"] = output.ui_schema
         return payload

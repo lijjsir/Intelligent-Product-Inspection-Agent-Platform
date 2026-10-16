@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -25,6 +28,9 @@ PDF_CONTROL_CHAR_PATTERN = re.compile(r"[\x80-\x9f]")
 
 def normalize_standard_no(file_name: str) -> str:
     name = Path(str(file_name or "")).name
+    registry = STANDARD_META_REGISTRY.get(name)
+    if registry:
+        return str(registry["standard_no"])
     normalized = name.replace("+", " ").replace("_", "-")
     lower = normalized.lower()
     match = STANDARD_NO_PATTERN.search(normalized)
@@ -34,30 +40,27 @@ def normalize_standard_no(file_name: str) -> str:
     year = match.group("year")
     if "gbt" in lower or "gb/t" in lower or "-gbt-" in lower or lower.startswith("gb-t"):
         return f"GB/T {number}-{year}"
-    if lower.startswith("gb-18401") or lower.startswith("gb 18401"):
-        return f"GB {number}-{year}"
     if lower.startswith("gb"):
-        registry_match = STANDARD_META_REGISTRY.get(name)
-        if registry_match:
-            return str(registry_match["standard_no"])
-        return f"GB/T {number}-{year}"
-    return f"GB/T {number}-{year}"
+        return f"GB {number}-{year}"
+    # An unrelated PDF containing a number and year is not a national standard.
+    return Path(name).stem
 
 
-def resolve_standard_meta(file_path: str | Path, *, fallback_domain: str | None = None, fallback_product_category: str | None = None) -> dict[str, Any]:
+def resolve_standard_meta(file_path: str | Path, *, source_file_name: str | None = None, fallback_domain: str | None = None, fallback_product_category: str | None = None) -> dict[str, Any]:
     path = Path(file_path)
-    registry = STANDARD_META_REGISTRY.get(path.name)
+    name = Path(source_file_name.replace("\\", "/")).name if source_file_name else path.name
+    registry = STANDARD_META_REGISTRY.get(name)
     if registry:
         return dict(registry)
-    standard_no = normalize_standard_no(path.name)
-    level = "GB/T" if standard_no.startswith("GB/T") else "GB" if standard_no.startswith("GB ") else "GB/T"
+    standard_no = normalize_standard_no(name)
+    level = "GB/T" if standard_no.startswith("GB/T ") else "GB" if standard_no.startswith("GB ") else "待核实"
     return {
         "standard_no": standard_no,
-        "standard_name": path.stem,
+        "standard_name": Path(name).stem,
         "domain": fallback_domain or path.parent.name or "通用质检",
         "product_category": fallback_product_category or path.parent.name or "通用标准",
         "standard_level": level,
-        "standard_status": "现行",
+        "standard_status": "待核实",
         "inspection_items": [],
         "image_defect_keywords": [],
     }
@@ -118,10 +121,52 @@ def is_unreadable_pdf_text(text: str) -> bool:
 
 
 def ocr_pdf_page_text(file_path: str | Path, *, page_number: int) -> str:
-    if shutil.which("tesseract") is None:
+    tesseract = os.getenv("PIAP_TESSERACT_BIN") or shutil.which("tesseract")
+    if not tesseract and os.name == "nt" and (
+        os.getenv("PIAP_TESSERACT_BIN") or os.getenv("PIAP_OCR_TESSDATA_DIR")
+    ):
+        for candidate in (
+            Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Tesseract-OCR" / "tesseract.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Tesseract-OCR" / "tesseract.exe",
+        ):
+            if candidate.is_file():
+                tesseract = str(candidate)
+                break
+    if tesseract is None:
         raise ValidationError("OCR fallback requires tesseract with chi_sim language data")
+
+    # Keep the language model configurable so a deployment can mount it into a
+    # writable runtime directory instead of modifying the system installation.
+    tessdata_candidates: list[Path] = []
+    for configured in (os.getenv("PIAP_OCR_TESSDATA_DIR"), os.getenv("TESSDATA_PREFIX")):
+        if configured:
+            configured_path = Path(configured)
+            tessdata_candidates.extend([configured_path, configured_path / "tessdata"])
+    executable_path = Path(tesseract)
+    tessdata_candidates.append(executable_path.parent / "tessdata")
+    if os.name != "nt":
+        tessdata_candidates.extend(
+            [
+                Path("/usr/share/tesseract-ocr/5/tessdata"),
+                Path("/usr/share/tesseract-ocr/4.00/tessdata"),
+                Path("/usr/share/tessdata"),
+            ]
+        )
+    tessdata_candidates.append(Path(__file__).resolve().parents[2] / "runtime" / "tessdata")
+    tessdata_dir = next(
+        (candidate for candidate in tessdata_candidates if (candidate / "chi_sim.traineddata").is_file()),
+        None,
+    )
+    if tessdata_dir is None:
+        raise ValidationError(
+            "OCR fallback requires tesseract with chi_sim language data; "
+            "set PIAP_OCR_TESSDATA_DIR to a directory containing chi_sim.traineddata"
+        )
     try:
-        import fitz
+        try:
+            import pymupdf as fitz
+        except ImportError:
+            import fitz
     except Exception as exc:  # pragma: no cover - runtime dependency
         raise ValidationError(f"OCR fallback requires PyMuPDF: {exc}") from exc
 
@@ -134,11 +179,17 @@ def ocr_pdf_page_text(file_path: str | Path, *, page_number: int) -> str:
         pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
             pixmap.save(image_file.name)
+            languages = "chi_sim"
+            if (tessdata_dir / "eng.traineddata").is_file():
+                languages = "chi_sim+eng"
             result = subprocess.run(
-                ["tesseract", image_file.name, "stdout", "-l", "chi_sim+eng", "--psm", "6"],
+                [tesseract, image_file.name, "stdout", "-l", languages, "--psm", "6",
+                 "--tessdata-dir", str(tessdata_dir)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=90,
                 check=False,
             )
@@ -286,9 +337,34 @@ def chunk_page_text(
     return [{"text": c[0], "section_title": c[1]} for c in pairs]
 
 
-def build_point_id(standard_no: str, *, page_number: int, chunk_index: int) -> str:
-    safe_standard = re.sub(r"[^A-Za-z0-9]+", "-", str(standard_no or "").strip()).strip("-")
-    return f"{safe_standard}-p{int(page_number)}-c{int(chunk_index)}"
+STANDARD_POINT_ID_VERSION = "standard-point-v2"
+
+
+def build_point_id(
+    standard_no: str,
+    *,
+    org_id: str | None,
+    library_id: str,
+    document_id: str,
+    content_revision: str,
+    page_number: int,
+    chunk_index: int,
+) -> str:
+    """Use immutable content and resource scope, never a standard number alone.
+
+    A standard number is shared across tenants and documents. Qdrant point IDs
+    are collection-wide, so metadata filters cannot prevent an ID overwrite.
+    None is a separate legacy/global namespace rather than an empty tenant ID.
+    """
+    if not library_id or not document_id or not content_revision:
+        raise ValidationError("standard index identity requires library, document and content revision")
+    identity = json.dumps(
+        [STANDARD_POINT_ID_VERSION, org_id, library_id, document_id, content_revision,
+         str(standard_no), int(page_number), int(chunk_index)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
 
 
 def build_title(meta: dict[str, Any], *, page_number: int, chunk_index: int) -> str:
@@ -311,6 +387,17 @@ def build_index_docs(
     path = Path(file_path)
     pages = repair_unreadable_pdf_pages_with_ocr(pages, file_path=path)
     validate_indexable_pdf_pages(pages, file_path=path)
+    # Include parsed content and chunk configuration so retries are stable but
+    # a changed document or parser projection cannot overwrite another revision.
+    content_revision = hashlib.sha256(
+        json.dumps(
+            {"pages": pages, "chunk_strategy": chunk_strategy,
+             "chunk_size": chunk_size, "overlap": overlap},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     docs: list[dict[str, Any]] = []
     for page in pages:
         page_number = int(page.get("page_number") or 1)
@@ -323,7 +410,11 @@ def build_index_docs(
         for chunk_index, chunk_info in enumerate(page_chunks, start=1):
             chunk_text = chunk_info["text"]
             section_title = chunk_info.get("section_title")
-            point_id = build_point_id(str(meta["standard_no"]), page_number=page_number, chunk_index=chunk_index)
+            point_id = build_point_id(
+                str(meta["standard_no"]), org_id=org_id, library_id=library_id,
+                document_id=document_id, content_revision=content_revision,
+                page_number=page_number, chunk_index=chunk_index,
+            )
             title = (
                 f"{meta['standard_no']} {meta['standard_name']} {section_title} 第{page_number}页 第{chunk_index}段"
                 if section_title
@@ -339,6 +430,8 @@ def build_index_docs(
                 "file_path": str(path).replace("\\", "/"),
                 "page_number": page_number,
                 "chunk_index": chunk_index,
+                "point_id_version": STANDARD_POINT_ID_VERSION,
+                "content_revision": content_revision,
             }
             if section_title:
                 payload["section_title"] = section_title
@@ -416,6 +509,14 @@ class StandardPdfImporter:
             chunk_strategy=chunk_strategy,
         )
         result = await self._indexer.index(docs)
+        if self._org_id and int(result.get("accepted") or 0) == len(docs) and not result.get("failed_embeddings"):
+            # Clean only older projections of this exact resource after the new
+            # projection was indexed completely. Never delete another tenant or
+            # library merely because it uses the same standard number.
+            await self._indexer.delete_by_filter(
+                {"org_id": self._org_id, "library_id": library_id, "document_id": document_id},
+                exclude_filter={"content_revision": docs[0]["payload"]["content_revision"]},
+            )
         return {"docs": docs, "page_count": page_count, **result}
 
     async def retrieve(self, *, query: str, top_k: int, payload_filter: dict[str, Any] | None = None) -> dict[str, Any]:

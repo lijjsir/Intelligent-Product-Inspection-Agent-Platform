@@ -7,6 +7,7 @@ class InspectionState(TypedDict, total=False):
     """在计划、视觉、RAG、推理和持久化阶段之间共享的可变状态。"""
     task_id: str
     org_id: str
+    user_id: str | None
     product_id: str
     spec_code: str
     product_family: str | None

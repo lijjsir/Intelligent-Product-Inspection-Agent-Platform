@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.core.permissions import ROLE_DISPLAY_ORDER
 
 
 class UserRepository:
@@ -29,7 +30,7 @@ class UserRepository:
         return result.scalar_one_or_none()
 
     def _apply_filters(self, stmt, org_id: str, keyword: str | None = None, role: str | None = None, is_active: bool | None = None):
-        stmt = stmt.where(User.org_id == org_id)
+        stmt = stmt.where(User.org_id == org_id, User.deleted_at.is_(None))
 
         if keyword:
             pattern = f"%{keyword.strip().lower()}%"
@@ -53,12 +54,23 @@ class UserRepository:
         keyword: str | None = None,
         role: str | None = None,
         is_active: bool | None = None,
+        sort_by_role: bool = False,
     ) -> list[User]:
         stmt = self._apply_filters(select(User), org_id, keyword, role, is_active)
+        if sort_by_role:
+            role_rank = case({role: rank for rank, role in enumerate(ROLE_DISPLAY_ORDER)}, value=User.role, else_=len(ROLE_DISPLAY_ORDER))
+            stmt = stmt.order_by(role_rank, func.lower(User.username), User.id)
+        else:
+            stmt = stmt.order_by(User.created_at.desc(), User.id)
         result = await self._session.execute(
-            stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
+            stmt.offset(offset).limit(limit)
         )
         return list(result.scalars().all())
+
+    async def counts_by_role(self, org_id: str, keyword: str | None = None) -> dict[str, int]:
+        stmt = self._apply_filters(select(User.role, func.count()).select_from(User), org_id, keyword)
+        result = await self._session.execute(stmt.group_by(User.role))
+        return {role: int(count) for role, count in result.all()}
 
     async def count(
         self,

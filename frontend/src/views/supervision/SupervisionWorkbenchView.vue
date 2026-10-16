@@ -8,8 +8,9 @@ import { qualityRiskApi } from "@/api/quality-risk.api";
 
 const router = useRouter();
 const loading = ref(false);
-const labEnabled = ref(false);
-const stats = reactive({ todos: 0, sources: 0, cases: 0, plans: 0 });
+const labEnabled = ref<boolean | null>(null);
+const loadFailures = ref<string[]>([]);
+const stats = reactive<{ todos: number | null; sources: number | null; cases: number | null; plans: number | null }>({ todos: null, sources: null, cases: null, plans: null });
 
 const agents = [
   {
@@ -63,6 +64,7 @@ const capabilities = [
 ];
 
 async function loadOverview() {
+  if (loading.value) return;
   loading.value = true;
   const results = await Promise.allSettled([
     supervisionApi.todos(),
@@ -71,13 +73,14 @@ async function loadOverview() {
     supervisionApi.list("sampling-plans", { page: 1, size: 1 }),
     supervisionApi.settings(),
   ]);
-  const value = (index: number) =>
-    results[index].status === "fulfilled" ? results[index].value.data.data : null;
-  stats.todos = value(0)?.length || 0;
-  stats.sources = value(1)?.total || 0;
-  stats.cases = value(2)?.total || 0;
-  stats.plans = value(3)?.total || 0;
-  labEnabled.value = Boolean(value(4)?.laboratory_validation_enabled);
+  const [todos, sources, cases, plans, settings] = results;
+  stats.todos = todos.status === "fulfilled" ? todos.value.data.data.length : null;
+  stats.sources = sources.status === "fulfilled" ? sources.value.data.data.total : null;
+  stats.cases = cases.status === "fulfilled" ? cases.value.data.data.total : null;
+  stats.plans = plans.status === "fulfilled" ? plans.value.data.data.total : null;
+  labEnabled.value = settings.status === "fulfilled" ? settings.value.data.data.laboratory_validation_enabled : null;
+  const labels = ["待办", "原始资料", "风险线索", "抽查方案", "实验室状态"];
+  loadFailures.value = results.flatMap((result, index) => result.status === "rejected" ? [labels[index]] : []);
   loading.value = false;
 }
 
@@ -110,24 +113,26 @@ onMounted(loadOverview);
         </div>
         <div class="metric-grid">
           <div>
-            <strong>{{ stats.todos }}</strong
+            <strong>{{ stats.todos ?? '—' }}</strong
             ><span>待我处理</span>
           </div>
           <div>
-            <strong>{{ stats.sources }}</strong
+            <strong>{{ stats.sources ?? '—' }}</strong
             ><span>原始资料</span>
           </div>
           <div>
-            <strong>{{ stats.cases }}</strong
+            <strong>{{ stats.cases ?? '—' }}</strong
             ><span>风险线索</span>
           </div>
           <div>
-            <strong>{{ stats.plans }}</strong
+            <strong>{{ stats.plans ?? '—' }}</strong
             ><span>抽查方案</span>
           </div>
         </div>
       </div>
     </section>
+
+    <el-alert v-if="loadFailures.length" class="overview-error" type="warning" :closable="false" :title="`${loadFailures.join('、')}未能加载，请刷新重试。`" />
 
     <section class="capability-band" aria-label="质监大模型核心能力">
       <article
@@ -168,7 +173,7 @@ onMounted(loadOverview);
               </div>
               <h3>{{ agent.name }}</h3>
               <p>{{ agent.description }}</p>
-              <span class="step-link">{{ agent.code === 'LAB' && !labEnabled ? '抽查需要实物验证时启用' : '进入对应模块' }} <ArrowRight v-if="agent.code !== 'LAB' || labEnabled" /></span>
+              <span class="step-link">{{ agent.code === 'LAB' && labEnabled === null ? '实验室状态暂不可用' : agent.code === 'LAB' && !labEnabled ? '抽查需要实物验证时启用' : '进入对应模块' }} <ArrowRight v-if="agent.code !== 'LAB' || labEnabled" /></span>
             </div>
           </router-link>
         </li>
@@ -186,6 +191,10 @@ onMounted(loadOverview);
   margin: 0 auto;
   padding: 14px 16px 36px;
   color: var(--desk-ink);
+}
+
+.overview-error {
+  margin-top: 16px;
 }
 
 .desk-hero {

@@ -79,6 +79,8 @@ class InspectionStandardResponse(BaseModel):
     pdf_count: int = 0
     document_count: int = 0
     chunk_count: int = 0
+    published_document_count: int = 0
+    pending_review_document_count: int = 0
     import_status: str = "not_scanned"
     last_scanned_at: datetime | None = None
     last_indexed_at: datetime | None = None
@@ -90,6 +92,11 @@ class InspectionStandardResponse(BaseModel):
 
 class StandardDocumentResponse(BaseModel):
     id: str
+    current_revision_id: str | None = None
+    published_revision_id: str | None = None
+    processing_status: str = "pending"
+    review_status: str = "pending"
+    publication_status: str = "unpublished"
     library_id: str
     standard_no: str
     standard_name: str
@@ -150,6 +157,9 @@ class StandardRetrieveRequest(BaseModel):
     defect_keywords: list[str] = Field(default_factory=list)
     top_k: int = Field(default=8, ge=1, le=20)
     only_active: bool = True
+    purpose: str = "standard_explanation"
+    revision_id: str | None = None
+    production_date: str | None = None
 
 
 class StandardRetrieveHit(BaseModel):
@@ -165,6 +175,8 @@ class StandardRetrieveHit(BaseModel):
     page_number: int | None = None
     chunk_index: int | None = None
     payload: dict = Field(default_factory=dict)
+    revision_id: str | None = None
+    publication_status: str | None = None
 
 
 class StandardRetrieveResponse(BaseModel):
@@ -172,6 +184,7 @@ class StandardRetrieveResponse(BaseModel):
     hit_count: int
     candidate_count: int
     latency_ms: float
+    missing_context: list[str] = Field(default_factory=list)
 
 
 class PaginatedInspectionStandards(BaseModel):

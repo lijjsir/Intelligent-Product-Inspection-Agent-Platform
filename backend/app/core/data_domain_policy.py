@@ -91,13 +91,8 @@ ROLE_DOMAIN_GRANTS: dict[str, set[str]] = {
         "quality.task",
         "quality.result",
         "standard.library",
-        "meeting.message",
-        "meeting.summary",
-        "meeting.action_item",
         "memory.user",
-        "memory.meeting",
         "conversation.own",
-        "conversation.meeting",
     },
     ROLE_EXPERT: {
         "quality.task",

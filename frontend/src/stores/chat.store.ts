@@ -18,7 +18,6 @@ import type { RagSpace } from "@/types/rag-space.types";
 
 const POLL_INTERVAL_MS = 1200;
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
-const PAPER_REVIEW_POLL_TIMEOUT_MS = 30 * 60 * 1000;
 const TRUST_POLL_INTERVAL_MS = 2500;
 const TRUST_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_INSPECTION_CONTEXT_ENABLED = false;
@@ -94,27 +93,11 @@ function normalizeMessage(message: ChatMessage): ChatMessage {
   };
 }
 
-function mergePaperFormatReport(current: unknown, incoming: unknown) {
-  if (!current || typeof current !== "object") return incoming;
-  if (!incoming || typeof incoming !== "object") return current;
-  return {
-    ...(current as Record<string, unknown>),
-    ...(incoming as Record<string, unknown>),
-  };
-}
-
 function mergePayload(current: ChatMessage["payload"], incoming: ChatMessage["payload"]) {
-  const next = {
+  return {
     ...(current || {}),
     ...(incoming || {}),
   };
-  if ((current || {}).paper_format_report || (incoming || {}).paper_format_report) {
-    next.paper_format_report = mergePaperFormatReport(
-      (current || {}).paper_format_report,
-      (incoming || {}).paper_format_report,
-    ) as never;
-  }
-  return next;
 }
 
 export const useChatStore = defineStore("chat", () => {
@@ -143,6 +126,8 @@ export const useChatStore = defineStore("chat", () => {
   const inspectionContextError = ref("");
   const pendingAttachments = ref<ChatAttachment[]>([]);
   const hasOlderMessages = ref(false);
+  const hasNewerMessages = ref(false);
+  const searchFocusSeq = ref<number | null>(null);
   const nextClientSeq = ref(1);
   const STORAGE_CURRENT_SESSION = "chat_current_session_id";
   const STORAGE_SELECTED_RAG_SPACE = "chat_selected_rag_space_id";
@@ -368,11 +353,6 @@ export const useChatStore = defineStore("chat", () => {
         stopPolling();
         return;
       }
-      // Adaptive timeout: extend deadline when paper_format_report is detected (AI Review takes 60-120s)
-      const current = messages.value.find((item) => item.id === messageId);
-      if (current?.payload?.paper_format_report && pollDeadline.value < Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS) {
-        pollDeadline.value = Math.max(pollDeadline.value, Date.now() + PAPER_REVIEW_POLL_TIMEOUT_MS);
-      }
       if (Date.now() > pollDeadline.value) {
         markAssistantWaitTimeout(messageId);
         stopPolling();
@@ -529,6 +509,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function createNewSession(title?: string) {
+    searchFocusSeq.value=null; hasNewerMessages.value=false;
     stopStreamForIdle();
     const { data } = await chatApi.createSession(title);
     session.value = data.data;
@@ -539,10 +520,11 @@ export const useChatStore = defineStore("chat", () => {
     return session.value;
   }
 
-  async function selectSession(sessionId: string) {
-    if (session.value?.id === sessionId && messages.value.length > 0) {
+  async function selectSession(sessionId: string, aroundSeq?: number) {
+    if (!aroundSeq && session.value?.id === sessionId && messages.value.length > 0) {
       return session.value;
     }
+    searchFocusSeq.value=null; hasNewerMessages.value=false;
     stopStreamForIdle();
     const found = sessions.value.find((x) => x.id === sessionId);
     session.value = found || null;
@@ -550,10 +532,17 @@ export const useChatStore = defineStore("chat", () => {
     if (!session.value) return null;
     saveCurrentSession(session.value.id);
     const pageSize = 100;
-    const rows = await chatApi.listMessages(session.value.id, undefined, pageSize);
+    const rows = await chatApi.listMessages(session.value.id, aroundSeq ? {beforeSeq:aroundSeq+21} : undefined, pageSize);
+    if (session.value?.id !== sessionId) return session.value;
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
     hasOlderMessages.value = rows.data.data.length >= pageSize && Number(rows.data.data[0]?.seq_no || 0) > 1;
+    if (aroundSeq) {
+      const newer=await chatApi.listMessages(sessionId,{afterSeq:Math.max(...messages.value.map(row=>row.seq_no),0)},1);
+      if (session.value?.id!==sessionId) return session.value;
+      hasNewerMessages.value=newer.data.data.length>0;
+      searchFocusSeq.value=aroundSeq;
+    }
     const reviewing = messages.value.find((item) => item.payload?.trust_scoring?.status === "reviewing");
     if (reviewing) {
       startTrustScorePolling(session.value.id, reviewing.id);
@@ -563,8 +552,11 @@ export const useChatStore = defineStore("chat", () => {
 
   async function reloadCurrentSessionMessages() {
     if (!session.value) return [];
+    const requestedSessionId = session.value.id;
     const pageSize = 100;
-    const rows = await chatApi.listMessages(session.value.id, undefined, pageSize);
+    const rows = await chatApi.listMessages(requestedSessionId, undefined, pageSize);
+    if (session.value?.id !== requestedSessionId) return [];
+    searchFocusSeq.value=null; hasNewerMessages.value=false;
     messages.value = rows.data.data.map((item) => normalizeMessage({ ...item, client_seq: item.seq_no }));
     sortMessages();
     hasOlderMessages.value = rows.data.data.length >= pageSize && Number(rows.data.data[0]?.seq_no || 0) > 1;
@@ -858,6 +850,13 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  async function updateSession(id: string, payload: { title?: string; is_pinned?: boolean }) {
+    const { data } = await chatApi.updateSession(id, payload);
+    if (session.value?.id === id) session.value = data.data;
+    await fetchSessions();
+    return data.data;
+  }
+
   function applyStreamEvent(event: ChatStreamEvent) {
     if (!session.value || event.session_id !== session.value.id) return;
     if (event.event === "ready") {
@@ -1007,6 +1006,8 @@ export const useChatStore = defineStore("chat", () => {
     session,
     messages,
     hasOlderMessages,
+    hasNewerMessages,
+    searchFocusSeq,
     streamConnected,
     ragSpaces,
     ragSpacesError,
@@ -1036,6 +1037,7 @@ export const useChatStore = defineStore("chat", () => {
     appendTaskResult,
     submitTask,
     deleteSession,
+    updateSession,
     stopStream,
   };
 });

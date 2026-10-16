@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import {useProtectedMedia} from '@/composables/useProtectedMedia';
 
 const props = defineProps<{
   src?: string | null;
   name?: string | null;
+  compact?: boolean;
+  showName?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -11,7 +14,7 @@ const emit = defineEmits<{
 }>();
 
 const failed = ref(false);
-const imageSrc = computed(() => String(props.src || ""));
+const imageSrc = useProtectedMedia(computed(() => String(props.src || "")));
 const imageName = computed(() => String(props.name || "图片"));
 const canPreview = computed(() => Boolean(imageSrc.value) && !failed.value);
 
@@ -28,7 +31,7 @@ function preview() {
   <button
     type="button"
     class="image-attachment-card"
-    :class="{ 'is-unavailable': !canPreview }"
+    :class="{ 'is-unavailable': !canPreview, compact }"
     :title="imageName"
     :aria-label="canPreview ? `预览图片 ${imageName}` : `图片暂不可用 ${imageName}`"
     :disabled="!canPreview"
@@ -36,7 +39,7 @@ function preview() {
   >
     <img v-if="imageSrc && !failed" :src="imageSrc" :alt="imageName" loading="lazy" @error="failed = true" />
     <span v-else class="image-attachment-fallback">图片暂不可用</span>
-    <span class="image-attachment-name">{{ imageName }}</span>
+    <span v-if="showName !== false" class="image-attachment-name">{{ imageName }}</span>
   </button>
 </template>
 
@@ -56,6 +59,7 @@ function preview() {
   line-height: 0;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
 }
+.image-attachment-card.compact { width:78px; height:78px; aspect-ratio:1; border-radius:12px; box-shadow:none; }
 
 .image-attachment-card:disabled {
   cursor: default;

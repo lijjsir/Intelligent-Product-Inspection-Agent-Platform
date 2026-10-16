@@ -10,20 +10,24 @@ import {
 } from "element-plus";
 
 import { inspectionStandardApi } from "@/api/inspection-standard.api";
+import { taskApi } from "@/api/task.api";
+import { qualityRiskApi } from "@/api/quality-risk.api";
+import type { QualityProductionBatch } from "@/types/quality-risk.types";
 import { usePermission } from "@/composables/usePermission";
 import { usePagination } from "@/composables/usePagination";
 import { useTaskStore } from "@/stores/task.store";
 import { useQualityReferenceStore } from "@/stores/quality-reference.store";
 import { formatCodeName, formatTaskEntityLabel } from "@/utils/master-data-labels";
-import type { InspectionStandardLibraryItem } from "@/types/governance.types";
+import type { TaskCreationStandardChoice } from "@/types/task.types";
 import type { TaskStatus } from "@/types/task.types";
 import { formatServerDateTime } from "@/utils/date-time";
+import { taskStatusLabel } from "@/utils/task-status";
 
 const router = useRouter();
 const route = useRoute();
 const taskStore = useTaskStore();
 const qualityRefs = useQualityReferenceStore();
-const { hasRole } = usePermission();
+const { hasRole, hasPermission } = usePermission();
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
 const filters = ref({ status: "", product_id: "", ids: "" });
@@ -35,25 +39,37 @@ const deleteDialogVisible = ref(false);
 const pendingDeleteTaskId = ref("");
 const formRef = ref<FormInstance>();
 const uploadFiles = ref<UploadFile[]>([]);
-const inspectionStandards = ref<InspectionStandardLibraryItem[]>([]);
+const inspectionStandards = ref<TaskCreationStandardChoice[]>([]);
+const availableBatches = ref<QualityProductionBatch[]>([]);
+const batchesLoading = ref(false);
 const createForm = ref({
-  input_mode: "image" as "image" | "measurement" | "mixed",
+  input_mode: "image" as "image" | "measurement" | "mixed" | "report",
   product_category_id: "",
   quality_product_id: "",
+  quality_batch_id: "",
   inspection_standard_id: "",
+  sample_ids: "",
+  production_date: "",
+  test_context: "",
   image_urls_input: "",
   priority: 5,
 });
 
 const isAdmin = computed(() => hasRole("admin"));
+const isOrdinaryUser = computed(() => hasRole("user"));
+const isExpert = computed(() => hasRole("expert"));
+const canReadStandardDetails = computed(() => !isOrdinaryUser.value && hasPermission("inspection_standard_library_read"));
 const canCreateTask = computed(() => hasRole(["user", "expert"]));
 const isOpsView = computed(() => route.path.startsWith("/ops/"));
 const listBasePath = computed(() => (isOpsView.value ? "/ops/tasks" : "/app/tasks"));
-const pageTitle = computed(() => (isOpsView.value ? "任务查看" : "任务管理"));
+const pageTitle = computed(() => (isOpsView.value ? "任务查看" : isOrdinaryUser.value ? "我的任务" : isExpert.value ? "检测任务" : "任务管理"));
 const pageDescription = computed(() =>
   isOpsView.value
     ? "这里查看平台侧已经物化的任务和执行状态，筛选、排查和跳转都保持在运维入口。"
-    : "统一管理图片、测量和混合检测任务；任务完成后形成可追溯的正式检测结果。",
+    : isOrdinaryUser.value
+      ? "创建检测任务，查看进度和结果，下载检测报告。"
+      : isExpert.value ? "创建与跟踪检测任务，查看检测结果，并对待复核结果进行专家判定。"
+        : "统一管理图片、测量和混合检测任务；任务完成后形成可追溯的正式检测结果。",
 );
 
 const availableProducts = computed(() =>
@@ -75,6 +91,18 @@ const selectedTaskStandard = computed(
     null,
 );
 const parsedUrlEntries = computed(() => parseImageUrlLines(createForm.value.image_urls_input));
+const inputModeLabel = computed(() => ({
+  image: "图片观察",
+  measurement: "实测数据",
+  mixed: "图片 + 实测",
+  report: "检测报告转录",
+}[createForm.value.input_mode]));
+const inputModeDescription = computed(() => ({
+  image: "适合外观、裂纹、缺陷、颜色和形态等可从图像观察的项目。",
+  measurement: "适合尺寸、质量、温度、比例等必须由设备或人工测量产生的项目。",
+  mixed: "图片用于外观观察，实测记录用于数值条款；两类证据会分别留痕。",
+  report: "适合已有实验室或抽检 PDF 报告，任务详情中逐项录入页码、项目、数值、方法和条件。",
+}[createForm.value.input_mode]));
 const totalSelectedImageCount = computed(
   () => parsedUrlEntries.value.length + uploadFiles.value.length,
 );
@@ -86,12 +114,12 @@ const rules: FormRules = {
   image_urls_input: [
     {
       validator: (_rule, value: string, callback) => {
-        if (createForm.value.input_mode === "measurement") {
+        const hasUrl = Boolean(value?.trim());
+        const hasUpload = uploadFiles.value.length > 0;
+        if (createForm.value.input_mode === "measurement" || createForm.value.input_mode === "report") {
           callback();
           return;
         }
-        const hasUrl = Boolean(value?.trim());
-        const hasUpload = uploadFiles.value.length > 0;
         if (!hasUrl && !hasUpload) {
           callback(new Error("请至少提供一张图片 URL 或上传一张图片"));
           return;
@@ -103,11 +131,15 @@ const rules: FormRules = {
   ],
 };
 
+function requiresStructuredEvidence() {
+  return ["measurement", "mixed", "report"].includes(createForm.value.input_mode);
+}
+
 function formatTaskTime(value?: string | null) {
   return formatServerDateTime(value, { includeSeconds: true }) || "-";
 }
 
-function formatStandardLabel(standard: InspectionStandardLibraryItem) {
+function formatStandardLabel(standard: TaskCreationStandardChoice) {
   return formatCodeName({ code: standard.spec_code, name: standard.name });
 }
 
@@ -159,11 +191,12 @@ async function fetchCreateOptions() {
   if (loadingCreateOptions.value) return;
   loadingCreateOptions.value = true;
   try {
-    const [, { data: standards }] = await Promise.all([
+    const [, standards] = await Promise.all([
       qualityRefs.loadProducts(),
-      inspectionStandardApi.list(),
+      !canReadStandardDetails.value ? taskApi.creationOptions().then(({ data }) => data.data.standards)
+        : inspectionStandardApi.list().then(({ data }) => data.data.items),
     ]);
-    inspectionStandards.value = standards.data.items;
+    inspectionStandards.value = standards;
   } catch (error) {
     console.error(error);
     ElMessage.warning("产品类别、具体产品或检测标准加载失败，请稍后重试。");
@@ -196,7 +229,11 @@ function resetCreateForm() {
     input_mode: "image",
     product_category_id: "",
     quality_product_id: "",
+    quality_batch_id: "",
     inspection_standard_id: "",
+    sample_ids: "",
+    production_date: "",
+    test_context: "",
     image_urls_input: "",
     priority: 5,
   };
@@ -240,7 +277,7 @@ async function handleOpenCreateFromDraft() {
     createForm.value.product_category_id =
       draft.product_category_id || matchedProduct?.category_id || "";
     createForm.value.quality_product_id = matchedProduct?.id || "";
-    createForm.value.inspection_standard_id = matchedStandard?.id || activeStandards.value[0]?.id || "";
+    createForm.value.inspection_standard_id = matchedStandard?.id || "";
     createForm.value.image_urls_input = Array.isArray(draft.image_urls)
       ? draft.image_urls.filter(Boolean).join("\n")
       : "";
@@ -296,8 +333,11 @@ async function buildImageSubmissionPayload() {
 
   const urlEntries = parsedUrlEntries.value;
   const totalCount = urlEntries.length + uploadFilesRaw.length;
-  if (totalCount === 0) {
+  if (totalCount === 0 && createForm.value.input_mode === "mixed") {
     throw new Error("请至少提供一张图片 URL 或上传一张图片");
+  }
+  if (totalCount === 0 && createForm.value.input_mode === "image") {
+    throw new Error("图片观察任务至少需要一张图片");
   }
   const [dataUrls, uploadHashes, urlHashes] = await Promise.all([
     Promise.all(uploadFilesRaw.map((item) => fileToDataUrl(item))),
@@ -362,12 +402,23 @@ async function handleSubmitCreate() {
 
   creating.value = true;
   try {
-    const { imageUrls, imageItems } =
-      createForm.value.input_mode === "measurement"
-        ? { imageUrls: [], imageItems: [] }
-        : await buildImageSubmissionPayload();
+    const { imageUrls, imageItems } = await buildImageSubmissionPayload();
+    const sampleIds = createForm.value.sample_ids
+      .split(/\r?\n|,|，/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (requiresStructuredEvidence() && !createForm.value.production_date) {
+      throw new Error("实测、混合或报告任务必须填写产品生产日期");
+    }
+    if (requiresStructuredEvidence() && !sampleIds.length) {
+      throw new Error("实测、混合或报告任务必须填写样品编号");
+    }
     const metadata: Record<string, unknown> = {
       source: "task_list",
+      input_mode: createForm.value.input_mode,
+      sample_ids: sampleIds,
+      production_date: createForm.value.production_date || null,
+      test_context: createForm.value.test_context.trim() || null,
       product_category_name: selectedCategory.value?.name,
       quality_product_name: selectedProduct.value?.name,
       inspection_standard_name: selectedTaskStandard.value?.name,
@@ -378,21 +429,22 @@ async function handleSubmitCreate() {
         input_mode: createForm.value.input_mode,
         product_category_id: createForm.value.product_category_id,
         quality_product_id: createForm.value.quality_product_id || null,
+        quality_batch_id: createForm.value.quality_batch_id || null,
         inspection_standard_id: createForm.value.inspection_standard_id,
         product_id: selectedProduct.value?.model || selectedProduct.value?.name || selectedCategory.value?.code,
         spec_code: selectedTaskStandard.value?.spec_code || undefined,
         image_urls: imageUrls,
         image_items: imageItems,
         priority: createForm.value.priority,
-        metadata,
+      metadata,
       },
       { suppressErrorToast: true },
     );
     showCreateDialog.value = false;
     ElMessage.success(
       createForm.value.input_mode === "image"
-        ? "任务已创建并开始检测"
-        : "任务已建立，请登记样品、测量及检测会话",
+        ? "任务已创建并开始图片检测"
+        : "任务已创建，等待补充实测或报告证据",
     );
     await router.push(`${listBasePath.value}/${createdTask.id}`);
   } catch (error) {
@@ -448,6 +500,18 @@ watch(
   },
 );
 
+watch(() => createForm.value.quality_product_id, async (productId) => {
+  createForm.value.quality_batch_id = "";
+  availableBatches.value = [];
+  batchesLoading.value = false;
+  if (!productId) return;
+  batchesLoading.value = true;
+  try {
+    const data = (await (isOrdinaryUser.value || !hasPermission("product_master_read") ? qualityRiskApi.productBatchOptions(productId) : qualityRiskApi.productBatches(productId))).data.data;
+    if (createForm.value.quality_product_id === productId) availableBatches.value = data;
+  } finally { if (createForm.value.quality_product_id === productId) batchesLoading.value = false; }
+});
+
 onMounted(async () => {
   syncFromRoute();
   const jobs = [fetchData()];
@@ -480,9 +544,11 @@ watch(
         <h2>{{ pageTitle }}</h2>
         <p>{{ pageDescription }}</p>
       </div>
+      <div class="task-hero-actions">
       <el-button v-if="canCreateTask" class="hero-action" plain @click="handleOpenCreate"
         >新建任务</el-button
       >
+      </div>
     </section>
 
     <div class="card-surface p-4">
@@ -527,7 +593,7 @@ watch(
         size="small"
         class="list-table"
       >
-        <el-table-column prop="id" label="任务 ID" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="display_no" label="任务编号" min-width="260" show-overflow-tooltip />
         <el-table-column v-if="isAdmin" prop="org_slug" label="组织" width="120" />
         <el-table-column label="产品线" width="150">
           <template #default="{ row }">{{
@@ -539,8 +605,8 @@ watch(
             formatTaskEntityLabel(row.product_name, row.product_sku_code || row.product_id)
           }}</template>
         </el-table-column>
-        <el-table-column label="批次" width="140">
-          <template #default="{ row }">{{ row.batch_no || "-" }}</template>
+        <el-table-column label="批次" min-width="200">
+          <template #default="{ row }">{{ row.batch_no || (row.quality_batch_display_no ? `原始批次号未知（${row.quality_batch_display_no}）` : "未提供") }}</template>
         </el-table-column>
         <el-table-column label="检测标准" min-width="180">
           <template #default="{ row }">{{ row.standard_name || row.spec_code || "-" }}</template>
@@ -548,16 +614,16 @@ watch(
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">{{
-              row.status.toUpperCase()
+              isOrdinaryUser ? taskStatusLabel(row.status) : row.status.toUpperCase()
             }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="source_kind" label="来源" width="140" />
+        <el-table-column v-if="!isOrdinaryUser" prop="source_kind" label="来源" width="140" />
         <el-table-column prop="priority" label="优先级" width="90" align="center" />
         <el-table-column prop="created_at" label="创建时间" min-width="180">
           <template #default="{ row }">{{ formatTaskTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" :width="isOrdinaryUser ? 245 : 180" fixed="right">
           <template #default="{ row }">
             <el-button
               link
@@ -566,6 +632,16 @@ watch(
               @click="router.push(`${listBasePath}/${row.id}`)"
               >查看详情</el-button
             >
+            <el-button v-if="row.has_result" link type="primary" size="small" @click="router.push(`/app/results/${row.id}`)">查看结果</el-button>
+            <el-button
+              v-if="row.status === 'awaiting_review' && row.source_kind === 'task_list' && !row.has_result"
+              link
+              type="warning"
+              size="small"
+              @click="router.push(`${listBasePath}/${row.id}`)"
+            >
+              重新检测
+            </el-button>
             <el-button
               v-if="canCreateTask && !(row.supervision && row.status === 'done')"
               link
@@ -594,7 +670,7 @@ watch(
       </div>
     </div>
 
-    <el-dialog v-model="showCreateDialog" title="新建通用检测任务" width="680px" top="3vh">
+    <el-dialog v-model="showCreateDialog" :title="isOrdinaryUser ? '新建检测任务' : '新建通用检测任务'" width="680px" top="3vh">
       <el-form
         ref="formRef"
         :model="createForm"
@@ -635,6 +711,11 @@ watch(
             />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="createForm.quality_product_id" label="产品批次（选填）">
+          <el-select v-model="createForm.quality_batch_id" clearable filterable :loading="batchesLoading" placeholder="已知时选择批次，未知可留空" class="!w-full">
+            <el-option v-for="batch in availableBatches" :key="batch.id" :value="batch.id" :label="batch.original_batch_no ? `${batch.original_batch_no} · ${batch.display_no || ''}` : `原始批次号未提供 · ${batch.display_no || ''}`" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="检测标准" prop="inspection_standard_id">
           <el-select
             v-model="createForm.inspection_standard_id"
@@ -654,13 +735,13 @@ watch(
             v-if="createForm.product_category_id && availableStandards.length === 0"
             class="task-form-hint warning"
           >
-            当前暂无可用检测标准，请先到治理页配置标准和执行规则。
+            {{ isOrdinaryUser ? '暂无已发布的检测标准，请联系管理员配置后再创建任务。' : '当前暂无可用检测标准，请先到治理页配置标准和执行规则。' }}
           </div>
           <div v-if="selectedTaskStandard" class="task-spec-preview">
             <div class="task-spec-preview-title">
               {{ formatStandardLabel(selectedTaskStandard) }}
             </div>
-            <div class="task-spec-preview-grid">
+            <div v-if="canReadStandardDetails" class="task-spec-preview-grid">
               <span>绑定规则</span
               ><strong>{{
                 selectedTaskStandard.spec_name || selectedTaskStandard.spec_code
@@ -677,16 +758,29 @@ watch(
               <span>自动放行</span
               ><strong>{{ selectedTaskStandard.auto_pass_enabled ? "开启" : "关闭" }}</strong>
             </div>
+            <p v-else class="task-form-hint">请提供至少 {{ requiredImageCount }} 张图片{{ selectedTaskStandard.required_views?.length ? `，包含${selectedTaskStandard.required_views.join('、')}视角` : '' }}。标准已由管理员发布，无需配置。</p>
           </div>
         </el-form-item>
-        <el-form-item label="检测输入"
-          ><el-radio-group v-model="createForm.input_mode"
-            ><el-radio label="image">图片检测</el-radio
-            ><el-radio label="measurement">测量检测</el-radio
-            ><el-radio label="mixed">图片与测量</el-radio></el-radio-group
-          ></el-form-item
-        >
-        <el-form-item label="图片 URL" prop="image_urls_input">
+        <el-form-item label="检测输入" required>
+          <el-radio-group v-model="createForm.input_mode" class="input-mode-grid">
+            <el-radio-button value="image">图片观察</el-radio-button>
+            <el-radio-button value="measurement">实测数据</el-radio-button>
+            <el-radio-button value="mixed">图片 + 实测</el-radio-button>
+            <el-radio-button value="report">报告转录</el-radio-button>
+          </el-radio-group>
+          <div class="task-form-hint input-mode-help"><strong>{{ inputModeLabel }}</strong>：{{ inputModeDescription }}</div>
+        </el-form-item>
+        <el-form-item v-if="requiresStructuredEvidence()" label="样品编号" required>
+          <el-input v-model="createForm.sample_ids" type="textarea" :rows="2" placeholder="每行一个样品编号，例如 S-001、S-002" />
+          <div class="task-form-hint">这些编号必须能在实测记录或检测报告中对应到具体样品。</div>
+        </el-form-item>
+        <el-form-item v-if="requiresStructuredEvidence()" label="产品生产日期" required>
+          <el-date-picker v-model="createForm.production_date" type="date" value-format="YYYY-MM-DD" placeholder="选择产品生产日期" class="!w-full" />
+        </el-form-item>
+        <el-form-item v-if="requiresStructuredEvidence()" label="试验场景说明">
+          <el-input v-model="createForm.test_context" type="textarea" :rows="2" placeholder="可填写温度、设备、方法、报告来源等背景；不要把未经核对的数值写在这里代替测量记录。" />
+        </el-form-item>
+        <el-form-item v-if="createForm.input_mode === 'image' || createForm.input_mode === 'mixed'" label="图片 URL" prop="image_urls_input">
           <el-input
             v-model="createForm.image_urls_input"
             type="textarea"
@@ -700,7 +794,7 @@ watch(
             URL 数量：{{ parsedUrlEntries.length }}。
           </div>
         </el-form-item>
-        <el-form-item label="上传图片">
+        <el-form-item v-if="createForm.input_mode === 'image' || createForm.input_mode === 'mixed'" label="上传图片">
           <el-upload
             v-model:file-list="uploadFiles"
             :auto-upload="false"
@@ -870,6 +964,28 @@ watch(
   color: #b45309;
 }
 
+.input-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+}
+
+.input-mode-grid :deep(.el-radio-button),
+.input-mode-grid :deep(.el-radio-button__inner) {
+  width: 100%;
+}
+
+.input-mode-help {
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.input-mode-help strong {
+  color: #1f2937;
+}
+
 .task-selection-summary {
   display: inline-flex;
   align-items: center;
@@ -898,5 +1014,13 @@ watch(
   .task-hero h2 {
     font-size: 34px;
   }
+
+  .input-mode-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
+</style>
+<style scoped>
+.task-hero-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.task-hero-actions .el-button+.el-button { margin-left:0; }
 </style>

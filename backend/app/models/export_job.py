@@ -1,5 +1,6 @@
 from sqlalchemy import DateTime, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.mysql import LONGTEXT
 
 from app.models.base import Base, UUIDBinary
 
@@ -14,7 +15,7 @@ class ExportJob(Base):
     report_type: Mapped[str] = mapped_column(String(32), nullable=False)
     format: Mapped[str] = mapped_column(String(16), nullable=False)
     template: Mapped[str | None] = mapped_column(String(32), nullable=True, server_default="standard")
-    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config_json: Mapped[str | None] = mapped_column(Text().with_variant(LONGTEXT(), 'mysql'), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     file_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)

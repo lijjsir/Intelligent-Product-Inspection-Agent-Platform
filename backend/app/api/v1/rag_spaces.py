@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from app.api.v1.deps import get_current_user, get_db
-from app.core.permissions import ROLE_ADMIN, require_role
+from app.core.permissions import ROLE_ADMIN, require_role,has_permission
 from app.schemas.common import ResponseEnvelope
 from app.schemas.rag_space import (
     RagDocumentResponse,
@@ -22,14 +22,18 @@ from app.services.rag_space_service import RagSpaceService
 router = APIRouter(prefix="/rag-spaces", tags=["rag-spaces"])
 
 
-def _require_rag_space_access(current: CurrentUser) -> None:
+def _require_rag_space_access(current: CurrentUser, *, write: bool = False) -> None:
+    if write:
+        require_role("quality", current.role)
     if current.role == ROLE_ADMIN:
         return
+    if has_permission("knowledge_read",current.role):return
     require_role("chat", current.role)
 
 
 def _owner_user_id(current: CurrentUser) -> str | None:
-    return None if current.role == ROLE_ADMIN else current.user_id
+    # Administration is not permission to inspect every private workspace.
+    return current.user_id
 
 
 @router.get("", response_model=ResponseEnvelope[list[RagSpaceResponse]])
@@ -72,7 +76,7 @@ async def create_rag_space(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(data=await service.create_space(name=body.name, description=body.description))
 
@@ -84,7 +88,7 @@ async def update_rag_space(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(data=await service.update_space(rag_space_id=rag_space_id, name=body.name, description=body.description))
 
@@ -96,7 +100,7 @@ async def create_rag_node(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(
         data=await service.create_node(
@@ -116,7 +120,7 @@ async def update_rag_node(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(
         data=await service.update_node(
@@ -136,7 +140,7 @@ async def upload_rag_documents_to_node(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(data=await service.upload_documents(rag_space_id=rag_space_id, files=files, parent_node_id=node_id))
 
@@ -148,7 +152,7 @@ async def upload_rag_documents(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     return ResponseEnvelope(data=await service.upload_documents(rag_space_id=rag_space_id, files=files, parent_node_id=None))
 
@@ -160,7 +164,7 @@ async def delete_rag_node(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     await service.delete_node(rag_space_id=rag_space_id, node_id=node_id)
     return ResponseEnvelope(data={"deleted": True})
@@ -172,7 +176,7 @@ async def delete_rag_space(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     await service.delete_space(rag_space_id=rag_space_id)
     return ResponseEnvelope(data={"deleted": True})
@@ -185,7 +189,7 @@ async def delete_rag_document(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    _require_rag_space_access(current)
+    _require_rag_space_access(current, write=True)
     service = RagSpaceService(db, org_id=current.org_id, user_id=_owner_user_id(current))
     await service.delete_document(rag_space_id=rag_space_id, file_id=file_id)
     return ResponseEnvelope(data={"deleted": True})

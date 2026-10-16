@@ -56,7 +56,7 @@ class StandardApplicability(Strict):
 
 class EnterpriseData(Strict):
     credit_code: str | None = Field(default=None, max_length=32)
-    role: Literal["manufacturer", "seller", "both"] = "manufacturer"
+    role: Literal["manufacturer", "seller", "both"] | None = None
     address: str | None = Field(default=None, max_length=500)
     region_id: UUID | None = None
     location: BusinessLocation = Field(default_factory=BusinessLocation)
@@ -70,6 +70,8 @@ class TestItem(Strict):
     lower_limit: float | None = Field(default=None, allow_inf_nan=False)
     upper_limit: float | None = Field(default=None, allow_inf_nan=False)
     standard_ref: str | None = None
+    standard_revision_id: str|None=None
+    standard_candidate_id: str|None=None
     normal_lower: float | None = Field(default=None, allow_inf_nan=False)
     normal_upper: float | None = Field(default=None, allow_inf_nan=False)
 
@@ -183,6 +185,8 @@ class SessionData(Strict):
     goal_id: UUID | None = None
     adaptive_enabled: bool = False
     baseline_version: str | None = None
+    product_category: str|None=None
+    production_date: str|None=None
 
     @model_validator(mode="after")
     def normalize_adaptive_items(self):
@@ -403,6 +407,8 @@ class Measurement(Strict):
     command_id: UUID | None = None
     sequence_no: int | None = Field(default=None, ge=0)
     calibration_version: str | None = Field(default=None, max_length=64)
+    conditions: dict = Field(default_factory=dict)
+    uncertainty: float|None = Field(default=None,ge=0,allow_inf_nan=False)
 
 
 class MeasurementIngest(Strict):

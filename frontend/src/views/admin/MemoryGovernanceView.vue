@@ -42,6 +42,7 @@ const searchError = ref<ApiErrorDetail | null>(null);
 const eventError = ref<ApiErrorDetail | null>(null);
 const graphError = ref<ApiErrorDetail | null>(null);
 const operationError = ref<ApiErrorDetail | null>(null);
+const policyError = ref<ApiErrorDetail | null>(null);
 const memoryWarnings = ref<Array<string | Record<string, unknown>>>([]);
 const rollbackResult = ref<MemoryRollbackResult | null>(null);
 const evaluationResult = ref<MemoryEvaluationResult | null>(null);
@@ -83,13 +84,13 @@ const orgId = computed(() => auth.orgId || "");
 const userId = computed(() => auth.userId || "");
 
 onMounted(async () => {
-  await Promise.all([fetchOrganizationGovernance(), fetchEvents(), fetchPolicies()]);
+  await Promise.all([fetchOrganizationGovernance(true), fetchEvents(true), fetchPolicies(true)]);
 });
 
-function showApiError(error: unknown, fallback: string, target?: { value: ApiErrorDetail | null }) {
+function showApiError(error: unknown, fallback: string, target?: { value: ApiErrorDetail | null }, notify = true) {
   const detail = extractApiErrorDetail(error, fallback);
   if (target) target.value = detail;
-  ElMessage.error(detail.message);
+  if (notify) ElMessage.error(detail.message);
 }
 
 function formatApiError(error: ApiErrorDetail | null): string {
@@ -123,7 +124,7 @@ async function searchMemory() {
   }
 }
 
-async function fetchOrganizationGovernance() {
+async function fetchOrganizationGovernance(silent = false) {
   organizationLoading.value = true;
   organizationError.value = null;
   try {
@@ -131,7 +132,7 @@ async function fetchOrganizationGovernance() {
     organization.value = data.data;
   } catch (error: unknown) {
     organization.value = { pending_approval: [], promotion_candidates: [], active: [] };
-    showApiError(error, "加载组织记忆治理失败", organizationError);
+    showApiError(error, "加载组织记忆治理失败", organizationError, !silent);
   } finally {
     organizationLoading.value = false;
   }
@@ -275,7 +276,7 @@ async function revokeOrganizationBinding(row: OrganizationGovernanceItem) {
   }
 }
 
-async function fetchEvents() {
+async function fetchEvents(silent = false) {
   loading.value = true;
   eventError.value = null;
   try {
@@ -287,7 +288,7 @@ async function fetchEvents() {
     });
     events.value = data.data;
   } catch (error: any) {
-    showApiError(error, "加载记忆事件失败", eventError);
+    showApiError(error, "加载记忆事件失败", eventError, !silent);
   } finally {
     loading.value = false;
   }
@@ -363,7 +364,8 @@ function formatWarning(warning: string | Record<string, unknown>): string {
   return typeof warning === "string" ? warning : JSON.stringify(warning);
 }
 
-async function fetchPolicies() {
+async function fetchPolicies(silent = false) {
+  policyError.value = null;
   try {
     const { data } = await memoryGovernanceApi.listPolicies();
     policies.value = data.data;
@@ -371,7 +373,8 @@ async function fetchPolicies() {
       selectedPolicyKey.value = policies.value[0].policy_key;
     }
   } catch (error: any) {
-    showApiError(error, "加载记忆策略失败");
+    policies.value = [];
+    showApiError(error, "加载记忆策略失败", policyError, !silent);
   }
 }
 
@@ -758,9 +761,10 @@ function graphStats() {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="策略配置" name="policies">
-          <div class="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-            <el-card shadow="never">
+         <el-tab-pane label="策略配置" name="policies">
+           <div class="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
+             <el-alert v-if="policyError" class="xl:col-span-2" type="warning" show-icon :closable="false" title="历史记忆策略服务暂不可用" :description="formatApiError(policyError)" />
+             <el-card shadow="never">
               <template #header>策略列表</template>
               <el-table :data="policies" size="small" class="list-table" @row-click="loadPolicy">
                 <el-table-column prop="policy_key" label="策略键" min-width="160" />

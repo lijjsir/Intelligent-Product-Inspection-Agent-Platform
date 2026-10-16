@@ -329,6 +329,30 @@ async def test_create_task_preserves_image_items_and_sample_numbers(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_create_task_persists_storage_identity_only_when_present(monkeypatch):
+    patch_task_create_dependencies(monkeypatch)
+    service = TaskService(session=FakeSession(), org_id="org-1")
+    task = await service.create_task(
+        created_by="user-1",
+        product_id="product-1",
+        spec_code="STD-1",
+        image_urls=["/api/v1/files/chat-attachments/chat_attachments/a.png"],
+        image_items=[ImageItem(index=0, url="/api/v1/files/chat-attachments/chat_attachments/a.png", hash="hash-a", bucket="chat-attachments", object_key="chat_attachments/a.png", content_type="image/png")],
+        priority=5,
+        metadata=None,
+    )
+    assert task.image_items == [{
+        "index": 0,
+        "url": "/api/v1/files/chat-attachments/chat_attachments/a.png",
+        "hash": "hash-a",
+        "bucket": "chat-attachments",
+        "object_key": "chat_attachments/a.png",
+        "content_type": "image/png",
+        "sample_number": None,
+    }]
+
+
+@pytest.mark.asyncio
 async def test_create_task_rejects_duplicate_images_in_same_submission(monkeypatch):
     patch_task_create_dependencies(monkeypatch)
 

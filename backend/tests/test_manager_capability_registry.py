@@ -28,7 +28,6 @@ def test_capabilities_for_surface_only_returns_allowed_agents_and_modes():
     assert "chat.general" not in CAPABILITIES
     assert "chat.response.compose" not in CAPABILITIES
     assert "quality.inspection.execute" not in chat_capabilities
-    assert "file.paper_format_check" in chat_capabilities
     assert chat_capabilities["quality.final_analyze"].owner_agents == ["quality_analysis"]
     assert "quality.inspection.execute" in quality_capabilities
     assert all(item.mode in {"answer", "report"} for item in chat_capabilities.values())
@@ -41,14 +40,6 @@ def test_professional_agent_capabilities_are_registered_with_new_owners():
     assert CAPABILITIES["quality.final_analyze"].owner_agents == ["quality_analysis"]
     assert CAPABILITIES["quality.inspection.execute"].owner_agents == ["quality_analysis"]
     assert CAPABILITIES["memory.governance"].owner_agents == ["orchestrator"]
-
-
-def test_capabilities_for_surface_excludes_paper_check_when_disabled(monkeypatch):
-    monkeypatch.setattr("app.core.config.settings.paper_review_enabled", False)
-
-    chat_capabilities = capabilities_for_surface("chat")
-
-    assert "file.paper_format_check" not in chat_capabilities
 
 
 def test_node_spec_declares_local_routing_model_requirements():

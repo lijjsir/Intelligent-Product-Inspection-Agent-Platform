@@ -4,9 +4,12 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useModelConfigStore } from "@/stores/model_config.store";
+import { useAuthStore } from "@/stores/auth.store";
 import type { ModelConfigPayload, ModelType } from "@/types/governance.types";
 
 const store = useModelConfigStore();
+const auth = useAuthStore();
+const canManage = computed(() => auth.effectivePermissions === null || auth.hasPermission("model_config"));
 const drawerOpen = ref(false);
 const editingId = ref("");
 const checkingId = ref("");
@@ -239,8 +242,8 @@ onMounted(() => {
     <AlgoWorkspaceHero title="Base Model 注册" description="维护可用于 LoRA 微调的基础模型来源、命令模板与健康状态。">
       <template #actions>
         <div class="flex gap-3">
-          <el-button @click="checkAll" :loading="checkingAll">全部检测</el-button>
-          <el-button type="primary" @click="openCreate">新增 Base Model</el-button>
+          <el-button v-if="canManage" @click="checkAll" :loading="checkingAll">全部检测</el-button>
+          <el-button v-if="canManage" type="primary" @click="openCreate">新增 Base Model</el-button>
         </div>
       </template>
     </AlgoWorkspaceHero>
@@ -283,9 +286,10 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="checkOne(row.id)" :loading="checkingId === row.id">检测</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="remove(row.id)">删除</el-button>
+            <el-button v-if="canManage" link type="primary" @click="checkOne(row.id)" :loading="checkingId === row.id">检测</el-button>
+            <el-button v-if="canManage" link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button v-if="canManage" link type="danger" @click="remove(row.id)">删除</el-button>
+            <span v-if="!canManage" class="text-xs text-zinc-400">仅可查看</span>
           </template>
         </el-table-column>
       </el-table>

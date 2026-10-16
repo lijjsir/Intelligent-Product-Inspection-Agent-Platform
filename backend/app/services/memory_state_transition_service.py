@@ -46,6 +46,8 @@ class MemoryStateTransitionService:
         if not item:
             raise ValueError(f"Memory {memory_id} not found")
         previous_status = getattr(item, "status", None)
+        if target_status=="active" and (getattr(item,"content_json",None) or {}).get("knowledge_admission_id"):
+            raise ValueError("Professional knowledge activation requires its admission publication gate")
 
         await self._items.update_status(memory_id, target_status)
         await self._events.create(

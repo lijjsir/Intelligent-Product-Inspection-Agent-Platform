@@ -38,23 +38,42 @@ def read_rows(filename, content):
 
 
 async def preview(svc, kind, filename, content, mapping):
-    await svc.require_enabled()
-    svc.require_role({"admin"} if kind == "regions" else {"user", "expert"})
+    if kind != "enterprises":
+        await svc.require_enabled()
+    svc.require_role({"admin"} if kind in {"regions", "enterprises"} else {"user", "expert"})
     rows = read_rows(filename, content)
     file_codes = {str(row.get(mapping.get("code", "code")) or "").strip() for row in rows}
-    normalized, errors, codes = [], [], set()
+    normalized, errors, codes, identities = [], [], set(), set()
     for index, row in enumerate(rows, start=2):
 
         def value(key):
-            result = row.get(mapping.get(key, key))
+            aliases = {"name": "企业名称", "credit_code": "统一社会信用代码", "address": "详细地址"}
+            column = mapping.get(key) or key
+            result = row.get(column)
+            if result is None and kind == "enterprises" and not mapping.get(key):
+                result = row.get(aliases.get(key, key))
             return result if result not in (None, "") else None
 
         try:
             code, name = str(value("code") or "").strip(), str(value("name") or "").strip()
-            if code in codes:
+            if kind == "enterprises":
+                code = None  # Each enterprise number is allocated by the server on confirmation.
+            if code and code in codes:
                 raise ValueError("文件内编号重复")
             codes.add(code)
-            if kind == "regions":
+            if kind == "enterprises":
+                credit = str(value("credit_code") or "").strip() or None
+                identity = ("credit", credit) if credit else ("name", name)
+                if identity in identities:
+                    raise ValueError("文件内企业重复，请核对企业名称或信用代码")
+                identities.add(identity)
+                duplicate_stmt = select(SupervisionRecord.id).where(
+                    SupervisionRecord.org_id == svc.org_id, SupervisionRecord.kind == "enterprises",
+                    SupervisionRecord.data["credit_code"].as_string() == credit if credit else SupervisionRecord.name == name)
+                if await svc.db.scalar(duplicate_stmt):
+                    raise ValueError("已有该企业档案，请查看或编辑现有档案")
+                data = {"credit_code": credit, "address": value("address")}
+            elif kind == "regions":
                 parent_code = str(value("parent_code") or "").strip()
                 parent_id = value("parent_id")
                 if parent_code:
@@ -108,7 +127,7 @@ async def preview(svc, kind, filename, content, mapping):
                     SupervisionRecord.code == code,
                 )
             )
-            if existing:
+            if code and existing:
                 raise ValueError("编号已存在")
             normalized.append(
                 payload.model_dump(mode="json")
@@ -159,6 +178,7 @@ async def preview(svc, kind, filename, content, mapping):
 async def confirm(svc, kind, preview_id):
     from sqlalchemy import select
 
+    svc.require_role({"admin"} if kind in {"regions", "enterprises"} else {"user", "expert"})
     run = await svc.db.scalar(
         select(SupervisionRun)
         .where(
@@ -191,14 +211,15 @@ async def confirm(svc, kind, preview_id):
                 raise ValidationError("地区层级存在循环")
             for row in ready:
                 payload = {k: v for k, v in row.items() if k != "parent_code"}
-                if row.get("parent_code") in created_codes:
+                if row.get("parent_code") and row["parent_code"] in created_codes:
                     payload["data"] = {
                         **payload["data"],
                         "parent_id": created_codes[row["parent_code"]],
                     }
                 result = await svc.create(kind, RecordCreate.model_validate(payload))
                 created.append(result["id"])
-                created_codes[row["code"]] = result["id"]
+                if row["code"]:
+                    created_codes[row["code"]] = result["id"]
                 remaining.remove(row)
         run.status = "completed"
         run.output = {"accepted": len(created), "record_ids": created}

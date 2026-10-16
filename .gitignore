@@ -26,6 +26,8 @@ docs/
 .env
 *.env.local
 backend/.env
+.env.lab
+deploy/lab/secrets/
 
 # Test artifacts
 .coverage

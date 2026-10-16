@@ -1,0 +1,3 @@
+FROM piap-lab-backend:current
+COPY backend/sitecustomize.py /app/backend/sitecustomize.py
+ENV PYTHONPATH=/app/backend

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useAlertRuleStore } from "@/stores/alert-rule.store";
-import type { AlertRule, AlertRuleCreate, AlertRuleUpdate } from "@/types/alert-rule.types";
+import type { AlertRule, AlertRuleCreate, AlertRuleUpdate, AlertRuleListQuery } from "@/types/alert-rule.types";
 
 const props = withDefaults(defineProps<{
   embedded?: boolean;
@@ -84,7 +84,7 @@ const total = computed(() => alertRuleStore.total);
 const loading = computed(() => alertRuleStore.loading);
 
 async function fetchRules() {
-  const params: Record<string, unknown> = { page: page.value, size: size.value };
+  const params: AlertRuleListQuery = { page: page.value, size: size.value };
   if (searchEnabled.value !== "") params.enabled = searchEnabled.value === "true";
   await alertRuleStore.fetchRules(params);
 }

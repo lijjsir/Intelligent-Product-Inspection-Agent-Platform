@@ -14,6 +14,7 @@ class RagSpace(Base, TimestampMixin):
     org_id: Mapped[str] = mapped_column(UUIDBinary, index=True)
     created_by: Mapped[str | None] = mapped_column(UUIDBinary, nullable=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    resource_domain: Mapped[str] = mapped_column(String(32), default="workspace", nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
     file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

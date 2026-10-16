@@ -49,7 +49,7 @@ const cardVars: Record<string, { accent: string; bg: string }> = {
   time: { accent: "#909399", bg: "#f4f4f5" },
 };
 
-const statusMap: Record<FeedbackStatus, { label: string; type: "" | "warning" | "success" | "info" | "danger" }> = {
+const statusMap: Record<FeedbackStatus, { label: string; type: "" | "primary" | "warning" | "success" | "info" | "danger" }> = {
   pending: { label: "待处理", type: "warning" },
   processing: { label: "处理中", type: "primary" },
   resolved: { label: "已解决", type: "success" },

@@ -11,7 +11,13 @@ const props = defineProps<{ modelValue: LocationRef }>();
 const emit = defineEmits<{ "update:modelValue": [LocationRef] }>();
 const locating = ref(false);
 
-function children(code: string) {
+interface AreaOption {
+  value: string;
+  label: string;
+  children?: AreaOption[];
+}
+
+function children(code: string): AreaOption[] {
   return Object.entries(areaData[code] || {}).map(([value, label]) => ({
     value,
     label,

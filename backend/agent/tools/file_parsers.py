@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import tempfile
 import zipfile
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -17,6 +18,27 @@ def parse_pdf_bytes(content: bytes) -> dict:
 
     reader = PdfReader(BytesIO(content))
     page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
+    ocr_pages = {index for index, (page, text) in enumerate(zip(reader.pages, page_texts))
+                 if not text and page.images}
+    ocr_used = bool(ocr_pages)
+    if ocr_pages:
+        if len(ocr_pages) > 20:
+            raise ValueError("扫描PDF超过同步OCR的20页上限，请拆分或通过后台解析流程处理")
+        # Reuse the existing local OCR dependency declared by the backend image.
+        # Import lazily: standard_pdf_importer itself uses this parser.
+        from app.services.standard_pdf_importer import ocr_pdf_page_text
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temporary:
+            temporary.write(content)
+            source_path = Path(temporary.name)
+        try:
+            for index in sorted(ocr_pages):
+                page_texts[index] = ocr_pdf_page_text(source_path, page_number=index + 1).strip()
+        except Exception as exc:
+            raise ValueError(f"扫描PDF OCR处理失败: {exc}") from exc
+        finally:
+            source_path.unlink(missing_ok=True)
+        if any(not page_texts[index] for index in ocr_pages):
+            raise ValueError("扫描PDF未识别出可读正文，需要人工核对原件")
     pages = [
         {
             "page_no": index,
@@ -25,6 +47,7 @@ def parse_pdf_bytes(content: bytes) -> dict:
             "fonts": [],
             "figures": [],
             "tables": [],
+            "extraction_method": "ocr" if index - 1 in ocr_pages else "text_layer",
         }
         for index, page_text in enumerate(page_texts, start=1)
     ]
@@ -36,8 +59,8 @@ def parse_pdf_bytes(content: bytes) -> dict:
         "headings": _extract_pdf_headings(text),
         "references": _extract_reference_lines(text),
         "layout": {
-            "analysis": "text_only",
-            "parser": "pypdf",
+            "analysis": "text_with_ocr" if ocr_used else "text_only",
+            "parser": "pypdf+tesseract" if ocr_used else "pypdf",
             "page_count": len(reader.pages),
         },
         "text": text,
@@ -309,17 +332,9 @@ def parse_text_bytes(content: bytes) -> dict:
 def parse_file_content(file_name: str, content: bytes) -> dict:
     suffix = Path(file_name).suffix.lower()
     if suffix == ".pdf":
-        try:
-            from agent.tools.paper_pdf_parser import parse_pdf_enhanced
-            return parse_pdf_enhanced(content)
-        except Exception:
-            return parse_pdf_bytes(content)
+        return parse_pdf_bytes(content)
     if suffix == ".docx":
-        try:
-            from agent.tools.paper_docx_parser import parse_docx_enhanced
-            return parse_docx_enhanced(content)
-        except Exception:
-            return parse_docx_bytes(content)
+        return parse_docx_bytes(content)
     if suffix == ".tex":
         return parse_tex_bytes(content)
     if suffix == ".csv":

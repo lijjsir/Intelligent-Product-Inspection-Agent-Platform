@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Header, Query, status as http_status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app.api.v1.deps import get_current_user, get_db
+from app.api.v1.deps import get_current_user, get_db, apply_permission_identity, get_permission_identity
 from app.core.exceptions import ForbiddenError
 from app.core.permissions import require_role
 from app.core.security import safe_decode_token
@@ -236,6 +236,7 @@ async def import_mcp_tools(
 def _get_current_user_for_sse(
     authorization: str = Header(default=""),
     token: str = Query(default=""),
+    identity: dict = Depends(get_permission_identity),
 ) -> CurrentUser:
     if authorization.startswith("Bearer "):
         payload = safe_decode_token(authorization.split(" ", 1)[1])
@@ -243,7 +244,7 @@ def _get_current_user_for_sse(
         payload = safe_decode_token(token)
     else:
         raise ForbiddenError("missing bearer token")
-    return CurrentUser(
+    return apply_permission_identity(CurrentUser(
         user_id=payload.get("sub", ""),
         org_id=payload.get("org_id", ""),
         role=payload.get("role", ""),
@@ -254,7 +255,7 @@ def _get_current_user_for_sse(
         default_workspace=str(payload.get("default_workspace") or "app"),
         stream_resource=str(payload.get("resource") or ""),
         stream_resource_id=str(payload.get("resource_id") or ""),
-    )
+    ), identity)
 
 
 @router.get("/events/stream")

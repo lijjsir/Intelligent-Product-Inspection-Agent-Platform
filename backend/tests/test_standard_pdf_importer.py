@@ -1,4 +1,6 @@
 from pathlib import Path
+from uuid import UUID
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -6,6 +8,7 @@ from app.core.exceptions import ValidationError
 from app.services.standard_pdf_importer import (
     build_index_docs,
     build_point_id,
+    StandardPdfImporter,
     is_unreadable_pdf_text,
     normalize_standard_no,
     repair_unreadable_pdf_pages_with_ocr,
@@ -27,6 +30,26 @@ def test_resolve_standard_meta_uses_registry_for_downloaded_pdf_names():
 def test_normalize_standard_no_handles_gbt_download_file_names():
     assert normalize_standard_no("6544-2008-gbt-e-300.pdf") == "GB/T 6544-2008"
     assert normalize_standard_no("GB-18401-2010.pdf") == "GB 18401-2010"
+    assert normalize_standard_no("GB-17761-2024.pdf") == "GB 17761-2024"
+    assert normalize_standard_no("GB-43854-2024.pdf") == "GB 43854-2024"
+    assert normalize_standard_no("GB-4351-2023.pdf") == "GB 4351-2023"
+    assert normalize_standard_no("report-1234-2026.pdf") == "report-1234-2026"
+
+
+def test_uploaded_standard_metadata_uses_original_filename_instead_of_tempfile():
+    meta = resolve_standard_meta(Path("/tmp/tmp-random-upload.pdf"), source_file_name="GB-T-3532-2022.pdf")
+    assert meta["standard_no"] == "GB/T 3532-2022"
+    assert meta["standard_name"] == "日用瓷器"
+    unverified = resolve_standard_meta(Path("/tmp/tmp-random-upload.pdf"), source_file_name="GB-17761-2024.pdf")
+    assert unverified["standard_no"] == "GB 17761-2024"
+    assert unverified["standard_level"] == "GB"
+    assert unverified["standard_status"] == "待核实"
+
+
+def test_arbitrary_pdf_is_not_declared_current_or_assigned_a_standard_level():
+    meta = resolve_standard_meta(Path("ordinary_report-2026.pdf"))
+    assert meta["standard_level"] == "待核实"
+    assert meta["standard_status"] == "待核实"
 
 
 def test_split_text_to_chunks_uses_overlap_without_empty_chunks():
@@ -43,8 +66,27 @@ def test_split_text_to_chunks_uses_overlap_without_empty_chunks():
 
 
 def test_build_point_id_is_deterministic_and_qdrant_safe():
-    assert build_point_id("GB/T 3301-2023", page_number=4, chunk_index=2) == "GB-T-3301-2023-p4-c2"
-    assert build_point_id("GB 18401-2010", page_number=1, chunk_index=1) == "GB-18401-2010-p1-c1"
+    scope = {"org_id": "org-1", "library_id": "lib-1", "document_id": "doc-1", "content_revision": "revision-1"}
+    first = build_point_id("GB/T 3301-2023", page_number=4, chunk_index=2, **scope)
+    assert UUID(first).version == 5
+    assert first == build_point_id("GB/T 3301-2023", page_number=4, chunk_index=2, **scope)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("org_id", "org-2"), ("org_id", None), ("library_id", "lib-2"),
+    ("document_id", "doc-2"), ("content_revision", "revision-2"),
+])
+def test_same_standard_cannot_overwrite_another_resource_scope_or_revision(field, value):
+    scope = {"org_id": "org-1", "library_id": "lib-1", "document_id": "doc-1", "content_revision": "revision-1"}
+    first = build_point_id("GB/T 3301-2023", page_number=4, chunk_index=2, **scope)
+    other = build_point_id("GB/T 3301-2023", page_number=4, chunk_index=2, **{**scope, field: value})
+    assert first != other
+
+
+def test_point_identity_requires_resource_identity():
+    with pytest.raises(ValidationError, match="index identity"):
+        build_point_id("GB/T 3301-2023", org_id="org-1", library_id="lib-1", document_id="",
+                       content_revision="revision-1", page_number=1, chunk_index=1)
 
 
 def test_build_index_docs_adds_required_standard_payload_fields():
@@ -61,7 +103,9 @@ def test_build_index_docs_adds_required_standard_payload_fields():
 
     assert docs
     first = docs[0]
-    assert first["id"] == "GB-T-3532-2022-p3-c1"
+    assert UUID(first["id"]).version == 5
+    assert first["payload"]["point_id_version"] == "standard-point-v2"
+    assert len(first["payload"]["content_revision"]) == 64
     assert first["source"] == "GB/T 3532-2022"
     assert first["payload"]["library_id"] == "lib-1"
     assert first["payload"]["document_id"] == "doc-1"
@@ -70,6 +114,44 @@ def test_build_index_docs_adds_required_standard_payload_fields():
     assert first["payload"]["file_name"] == "GB-T-3532-2022.pdf"
     assert first["payload"]["page_number"] == 3
     assert first["payload"]["chunk_index"] == 1
+
+
+def test_document_retries_are_stable_but_changed_content_and_chunking_have_new_ids():
+    kwargs = dict(
+        org_id="org-1", library_id="lib-1", document_id="doc-1",
+        file_path=Path("example.pdf"),
+        meta={"standard_no": "GB/T EXAMPLE-2026", "standard_name": "示例标准"},
+        pages=[{"page_number": 1, "text": "温度不得超过规定限值。" * 20}],
+    )
+    first = build_index_docs(**kwargs)
+    assert [x["id"] for x in first] == [x["id"] for x in build_index_docs(**kwargs)]
+    changed = build_index_docs(**{**kwargs, "pages": [{"page_number": 1, "text": "温度条件已修订。" * 20}]})
+    assert first[0]["id"] != changed[0]["id"]
+    assert first[0]["id"] != build_index_docs(**kwargs, chunk_size=80)[0]["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("org_id", ["org-1", None])
+@pytest.mark.parametrize("complete", [True, False])
+async def test_reindex_cleanup_is_scoped_and_waits_for_a_complete_new_projection(monkeypatch, complete, org_id):
+    monkeypatch.setattr("app.services.standard_pdf_importer.extract_pdf_pages", lambda _path: (
+        [{"page_number": 1, "text": "检测项目应满足适用要求。" * 10}], 1,
+    ))
+    indexer = type("Indexer", (), {})()
+    indexer.index = AsyncMock(return_value={"accepted": 1 if complete else 0, "failed_embeddings": 0 if complete else 1})
+    indexer.delete_by_filter = AsyncMock()
+    importer = StandardPdfImporter(org_id=org_id, indexer=indexer, retriever=object())
+    result = await importer.index_document(
+        library_id="lib-1", document_id="doc-1", file_path="example.pdf",
+        meta={"standard_no": "GB/T EXAMPLE-2026", "standard_name": "示例标准"},
+    )
+    if complete and org_id:
+        indexer.delete_by_filter.assert_awaited_once_with(
+            {"org_id": "org-1", "library_id": "lib-1", "document_id": "doc-1"},
+            exclude_filter={"content_revision": result["docs"][0]["payload"]["content_revision"]},
+        )
+    else:
+        indexer.delete_by_filter.assert_not_awaited()
 
 
 def test_build_index_docs_requires_ocr_for_unreadable_pdf_glyph_codes(monkeypatch):

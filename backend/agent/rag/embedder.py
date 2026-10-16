@@ -43,7 +43,8 @@ class Embedder:
     async def embed(self, text: str) -> list[float]:
         normalized_text = " ".join(str(text or "").strip().lower().split())
         runtime = await self._resolve_runtime()
-        cache_key = stable_cache_key("embedding", runtime.get("model_id"), normalized_text)
+        # Strict published resources must never reuse a permissive pseudo-vector.
+        cache_key = stable_cache_key("embedding", runtime.get("model_id"), normalized_text, self._allow_pseudo_fallback)
         cached = _embedding_cache.get(cache_key)
         if cached is not None:
             return list(cached)

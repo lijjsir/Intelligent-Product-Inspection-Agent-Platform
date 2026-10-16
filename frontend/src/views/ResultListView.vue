@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { usePagination } from "@/composables/usePagination";
 import { useResultStore } from "@/stores/result.store";
+import { useAuthStore } from "@/stores/auth.store";
 import type { Verdict } from "@/types/result.types";
+import {resultApi} from '@/api/result.api';
+const rows=ref<any[]>([]);const loading=ref(false);
 
 const route = useRoute();
 const router = useRouter();
 const store = useResultStore();
+const auth = useAuthStore();
+const isOrdinaryUser = computed(() => auth.primaryRole === "user");
 const { page, pageSize, total, onPageChange, onSizeChange, resetPage } = usePagination();
 
 const filters = ref<{
@@ -47,7 +52,8 @@ function syncFromRoute() {
 }
 
 async function fetchData() {
-  const data = await store.fetchResults({
+  loading.value=true;
+  try{const response = await resultApi.unifiedList({
     page: page.value,
     size: pageSize.value,
     verdict: filters.value.verdict || undefined,
@@ -55,7 +61,8 @@ async function fetchData() {
     model_key: filters.value.model_key || undefined,
     task_id: filters.value.task_id || undefined,
   });
-  total.value = data.total;
+  rows.value=response.data.data.items;total.value=response.data.data.total;
+  }finally{loading.value=false;}
 }
 
 function pushQuery() {
@@ -126,9 +133,9 @@ const VERDICT_LABELS: Record<string, string> = {
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-2xl font-bold text-zinc-900">检测结果列表</h2>
+      <h2 class="text-2xl font-bold text-zinc-900">{{ isOrdinaryUser ? '我的检测结果' : '检测结果列表' }}</h2>
       <p class="mt-2 text-sm text-zinc-500">
-        支持按产品线、模型和结论筛选。专家角色可在此进行人工复核裁定。
+        {{ isOrdinaryUser ? '查看本人任务的检测结论，打开结果详情可下载对应检测报告。' : '支持按产品线、模型和结论筛选。专家角色可在此进行人工复核裁定。' }}
       </p>
     </div>
 
@@ -164,7 +171,7 @@ const VERDICT_LABELS: Record<string, string> = {
             size="small"
           />
         </el-form-item>
-        <el-form-item label="模型">
+        <el-form-item v-if="!isOrdinaryUser" label="模型">
           <el-input v-model="filters.model_key" placeholder="模型标识" clearable size="small" />
         </el-form-item>
         <el-form-item label="任务 ID">
@@ -178,25 +185,18 @@ const VERDICT_LABELS: Record<string, string> = {
     </div>
 
     <div class="card-surface">
-      <el-table :data="store.items" v-loading="store.loading" size="small" class="list-table">
-        <el-table-column prop="id" label="结果ID" min-width="220" show-overflow-tooltip />
+      <el-table :data="rows" v-loading="loading" size="small" class="list-table">
         <el-table-column prop="task_id" label="任务ID" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="product_id" label="产品线" width="140" />
-        <el-table-column prop="llm_model" label="模型" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="verdict" label="结论" width="120">
+        <el-table-column prop="product_name" label="任务对象" min-width="160" />
+        <el-table-column label="结果来源" width="140"><template #default="{row}">{{ row.execution_run_id?'标准项目执行':'图片 / 历史辅助' }}</template></el-table-column>
+        <el-table-column label="当前项目状态" min-width="250">
           <template #default="scope">
             <el-tag :type="getVerdictType(scope.row.verdict)" size="small">{{
-              VERDICT_LABELS[scope.row.verdict] || scope.row.verdict
+              scope.row.scope.label
             }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="overall_score" label="模型置信分" width="120">
-          <template #default="scope">{{
-            scope.row.score_status === "calibrated"
-              ? (scope.row.overall_score * 100).toFixed(1)
-              : "未校准"
-          }}</template>
-        </el-table-column>
+        <el-table-column label="产品整体" width="120">未评定</el-table-column>
         <el-table-column prop="created_at" label="时间" min-width="180">
           <template #default="scope">{{
             scope.row.created_at ? new Date(scope.row.created_at).toLocaleString() : "-"
@@ -215,8 +215,8 @@ const VERDICT_LABELS: Record<string, string> = {
               link
               type="primary"
               size="small"
-              @click="router.push(`/app/results/${scope.row.task_id}/evidence`)"
-              >证据溯源</el-button
+              @click="router.push(`/app/results/${scope.row.task_id}`)"
+              >来源与范围</el-button
             >
           </template>
         </el-table-column>

@@ -21,9 +21,9 @@ async def create_export_job(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
-    service = ExportJobService(db, current.org_id)
-    item = await service.create_job(current.user_id, payload.model_dump())
+    require_role("report_generate", current.role)
+    service = ExportJobService(db, current.org_id, actor_user_id=current.user_id, actor_role=current.role)
+    item = await service.create_job(current.user_id, payload.model_dump(mode="json"))
     return ResponseEnvelope(data=ExportJobResponse.model_validate(item))
 
 
@@ -33,9 +33,9 @@ async def list_export_jobs(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
-    service = ExportJobService(db, current.org_id)
-    total, items = await service.list_jobs(query.page, query.size, query.status, query.report_type)
+    require_role("report_read", current.role)
+    service = ExportJobService(db, current.org_id, actor_user_id=current.user_id, actor_role=current.role)
+    total, items = await service.list_jobs(query.page, query.size, query.status, query.report_type, task_id=query.task_id)
     return ResponseEnvelope(
         data=PagedResponse(
             items=[ExportJobResponse.model_validate(item) for item in items],
@@ -52,8 +52,8 @@ async def get_export_job(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
-    service = ExportJobService(db, current.org_id)
+    require_role("report_read", current.role)
+    service = ExportJobService(db, current.org_id, actor_user_id=current.user_id, actor_role=current.role)
     item = await service.get_detail(job_id)
     return ResponseEnvelope(data=ExportJobResponse.model_validate(item))
 
@@ -64,10 +64,11 @@ async def download_export_job(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
-    service = ExportJobService(db, current.org_id)
+    require_role("report_read", current.role)
+    service = ExportJobService(db, current.org_id, actor_user_id=current.user_id, actor_role=current.role)
     job = await service.get_detail(job_id)
-    if not job.file_url:
+    from app.core.datetime import utcnow
+    if not job.file_url or job.status!='success' or (job.expires_at and job.expires_at<utcnow()):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="report file not available")
     storage = build_object_storage()
@@ -93,9 +94,8 @@ async def download_export_job(
                         ),
                     },
                 )
-    # Fallback: redirect to file_url
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=job.file_url)
+    from app.core.exceptions import NotFoundError
+    raise NotFoundError('报告原件不存在或定位信息无效，请重新生成')
 
 
 @router.delete("/{job_id}", response_model=ResponseEnvelope[None])
@@ -104,7 +104,7 @@ async def delete_export_job(
     current: CurrentUser = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    require_role("feedback", current.role)
-    service = ExportJobService(db, current.org_id)
+    require_role("report_generate", current.role)
+    service = ExportJobService(db, current.org_id, actor_user_id=current.user_id, actor_role=current.role)
     await service.delete_job(job_id)
     return ResponseEnvelope()

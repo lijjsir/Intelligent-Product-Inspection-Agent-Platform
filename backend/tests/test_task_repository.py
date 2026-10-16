@@ -41,3 +41,15 @@ async def test_list_paged_eagerly_loads_v4_product_references() -> None:
     sql = str(session.item_statement.compile(dialect=mysql.dialect()))
     assert "inspection_tasks.product_category_id" in sql
     assert "inspection_tasks.quality_product_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_user_task_list_does_not_include_other_users_supervision_tasks():
+    session = _RecordingSession()
+    await TaskRepository(session).list_paged(
+        "org-1", {}, page=1, size=20, owner_user_id="user-1",
+    )
+    where_clause = str(session.item_statement.compile(dialect=mysql.dialect())).split("WHERE", 1)[1]
+    assert "inspection_tasks.created_by =" in where_clause
+    assert " OR " not in where_clause
+    assert "supervision" not in where_clause

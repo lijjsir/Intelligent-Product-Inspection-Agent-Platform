@@ -114,7 +114,7 @@ async def context_assembler(state: dict[str, Any]) -> dict[str, Any]:
         elif art_type == "lab_detection_result":
             lab_result = content
             relevant = True
-        elif art_type in ("file_summary", "file_answer", "paper_format_report"):
+        elif art_type in ("file_summary", "file_answer"):
             file_results.append(content)
             relevant = True
         artifact_id = str(art.get("artifact_id") or "")

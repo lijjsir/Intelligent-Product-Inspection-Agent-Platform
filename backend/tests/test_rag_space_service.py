@@ -477,7 +477,7 @@ def build_service(monkeypatch):
     monkeypatch.setattr("app.services.rag_space_service.RagIndexJobRepository", lambda session: job_repo)
     monkeypatch.setattr("app.services.rag_space_service.FileStorageService", lambda: storage)
     monkeypatch.setattr("app.services.rag_space_service.build_object_storage", lambda: object_storage)
-    monkeypatch.setattr("app.services.rag_space_service.KnowledgeIndexer", lambda org_id=None: indexer)
+    monkeypatch.setattr("app.services.rag_space_service.KnowledgeIndexer", lambda org_id=None, collection=None: indexer)
     monkeypatch.setattr("app.services.rag_space_service.parse_file_content", lambda *_args, **_kwargs: {"text": "hello world"})
     service = RagSpaceService(session, org_id="org-1", user_id="user-1")
     return service, session, space_repo, node_repo, document_repo, storage, indexer, object_storage, chunk_repo, job_repo
@@ -504,6 +504,37 @@ async def test_get_tree_returns_nested_nodes_and_document(monkeypatch):
     assert tree[0].children[0].name == "spec.txt"
     assert tree[0].children[0].document is not None
     assert tree[0].children[0].document.file_name == "spec.txt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner,organization", [(None, "org-1"), ("user-2", "org-1"), ("user-1", "org-2")])
+async def test_readable_or_wrong_scope_space_cannot_be_mutated(monkeypatch, owner, organization):
+    service, session, repo, nodes, documents, storage, indexer, *_ = build_service(monkeypatch)
+    repo.spaces["space-1"].created_by = owner
+    repo.spaces["space-1"].org_id = organization
+
+    with pytest.raises(NotFoundError):
+        await service.update_space(rag_space_id="space-1", name="changed", description="changed")
+    with pytest.raises(NotFoundError):
+        await service.create_node(rag_space_id="space-1", parent_id=None, node_type="folder", name="changed")
+    with pytest.raises(NotFoundError):
+        await service.delete_space(rag_space_id="space-1")
+
+    assert session.commit_count == 0
+    assert repo.spaces["space-1"].name == "My Space"
+    assert not nodes.created_nodes
+    assert not documents.deleted_document_ids
+    assert not indexer.deleted_filters
+    assert not storage.deleted_urls
+
+
+@pytest.mark.asyncio
+async def test_system_space_remains_readable_without_maintenance_rights(monkeypatch):
+    service, session, repo, *_ = build_service(monkeypatch)
+    repo.spaces["space-1"].created_by = None
+    tree = await service.get_tree(rag_space_id="space-1")
+    assert tree[0].children[0].document.file_name == "spec.txt"
+    assert session.commit_count == 0
 
 
 @pytest.mark.asyncio

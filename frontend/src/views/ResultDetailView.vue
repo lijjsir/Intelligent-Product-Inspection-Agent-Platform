@@ -4,6 +4,9 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import DefectImageViewer from "@/components/business/result/DefectImageViewer.vue";
 import FeedbackWidget from "@/components/business/result/FeedbackWidget.vue";
+import UserTaskReportPanel from "@/components/business/export/UserTaskReportPanel.vue";
+import KnowledgeSubmitDialog from '@/components/business/KnowledgeSubmitDialog.vue';
+import UnifiedTaskResultPanel from '@/components/business/UnifiedTaskResultPanel.vue';
 import { resultApi, type ReviewSubmit } from "@/api/result.api";
 import { usePermission } from "@/composables/usePermission";
 import { useResultStore } from "@/stores/result.store";
@@ -24,23 +27,28 @@ const route = useRoute();
 const router = useRouter();
 const store = useResultStore();
 const taskStore = useTaskStore();
-const { hasRole } = usePermission();
+const { hasRole, hasPermission } = usePermission();
+const canDownloadReport = computed(() => hasRole(['user','expert','platform_operator']) && hasPermission(['report_read','report_generate']) && hasPermission('task') && hasPermission('result'));
 
 const loading = ref(true);
+const reportDrawerOpen = ref(canDownloadReport.value && route.query.report === "1");
+const knowledgeSubmitOpen=ref(false);
+watch(canDownloadReport, (allowed) => { if (!allowed) reportDrawerOpen.value=false; });
 const reviewing = ref(false);
 const reviewForm = ref<ReviewSubmit>({ verdict: "", note: "" });
 const canReview = computed(() => hasRole(["expert"]) && !store.current?.reasoning_chain?.supervision_signed);
 const currentTaskId = computed(() => String(route.params.id || ""));
 const currentResult = computed(() => store.current?.task_id === currentTaskId.value ? store.current : null);
+const summaryAvailable=ref(false);
 const currentTask = computed(() => taskStore.current?.id === currentTaskId.value ? taskStore.current : null);
 
 const verdictOptions = [
-  { label: "产品合格", value: "pass" },
-  { label: "产品不合格", value: "fail" },
+  { label: "确认辅助项目通过", value: "pass" },
+  { label: "确认辅助项目不通过", value: "fail" },
 ];
 const verdictLabels: Record<string, string> = {
-  pass: "产品合格",
-  fail: "产品不合格",
+  pass: "原记录项目通过（整体未评定）",
+  fail: "原记录项目不通过（整体未评定）",
   uncertain: "暂未判定",
   manual_required: "需人工复核",
 };
@@ -74,10 +82,9 @@ async function loadResultDetail(taskId: string) {
   if (store.current?.task_id !== taskId) store.current = null;
   if (taskStore.current?.id !== taskId) taskStore.current = null;
   try {
-    await Promise.all([
-      store.fetchByTask(taskId),
-      taskStore.fetchTask(taskId)
-    ]);
+    const [summary]=await Promise.all([resultApi.summary(taskId),taskStore.fetchTask(taskId)]);
+    summaryAvailable.value=summary.data.data.can_export;
+    if(summary.data.data.auxiliary)await store.fetchByTask(taskId);else store.current=null;
   } catch (err: any) {
     if (err.response?.status === 404) {
       ElMessage.warning("该任务暂无检测结果或不存在");
@@ -194,28 +201,38 @@ async function submitReview() {
         &larr; 返回
       </el-button>
       <div v-if="currentResult" class="title-area">
-        <h2 class="text-2xl font-bold text-zinc-900">分析结果大盘</h2>
-        <el-tag :type="getVerdictType(store.current.verdict)" size="large" class="ml-4">
-          判定结论：{{ verdictLabels[store.current.verdict] || "暂未判定" }}
+        <el-alert v-if="currentResult.reasoning_chain?.assessment_scope==='visible_image_assistance'" title="本次是图片可观察内容的辅助分析；图片建议或观察复核不能替代标准项目执行与产品整体判定。" type="info" :closable="false"/>
+        <h2 class="text-2xl font-bold text-zinc-900">{{ hasRole('user') ? '检测结果' : hasRole('expert') ? '检测结果与专家复核' : '分析结果大盘' }}</h2>
+        <el-tag :type="getVerdictType(currentResult.verdict)" size="large" class="ml-4">
+          判定结论：{{ verdictLabels[currentResult.verdict] || "暂未判定" }}
         </el-tag>
+        <el-button
+          v-if="canDownloadReport"
+          type="primary"
+          plain
+          @click="reportDrawerOpen = true"
+        >下载检测报告</el-button>
+        <el-button v-if="hasPermission('knowledge_candidate_submit')" plain @click="knowledgeSubmitOpen=true">从结果提出知识候选</el-button>
       </div>
     </div>
 
+    <UnifiedTaskResultPanel v-if="!loading&&summaryAvailable" :task-id="currentTaskId" :initial-run-id="String(route.query.run_id||'')"/>
     <div v-if="currentResult" class="content">
+      <KnowledgeSubmitDialog v-model="knowledgeSubmitOpen" source-kind="task_result" :source-id="currentResult.id"/>
       <div class="flex gap-5">
         <!-- 侧边摘要面板 -->
         <div>
           <el-card shadow="never" class="info-card">
             <template #header>结论摘要</template>
             <el-descriptions :column="1" size="large">
-              <el-descriptions-item label="任务编号">{{ store.current.task_id }}</el-descriptions-item>
+              <el-descriptions-item label="任务编号">{{ currentResult.task_id }}</el-descriptions-item>
               <el-descriptions-item label="模型置信分">
-                <span v-if="!calibratedScore" class="text-zinc-500">未校准，不作为概率展示</span><template v-else><span class="text-xl font-bold">{{ (store.current.overall_score * 100).toFixed(1) }}</span> 分</template>
+                <span v-if="!calibratedScore" class="text-zinc-500">未校准，不作为概率展示</span><template v-else><span class="text-xl font-bold">{{ (currentResult.overall_score * 100).toFixed(1) }}</span> 分</template>
               </el-descriptions-item>
-              <el-descriptions-item label="模型引擎">{{ store.current.llm_model }}</el-descriptions-item>
-              <el-descriptions-item label="提示词版本">{{ store.current.prompt_version }}</el-descriptions-item>
-              <el-descriptions-item label="检测耗费时间">{{ store.current.latency_ms || '-' }} ms</el-descriptions-item>
-              <el-descriptions-item label="令牌用量">{{ store.current.tokens_used || '-' }}</el-descriptions-item>
+              <el-descriptions-item v-if="!hasRole('user')" label="模型引擎">{{ currentResult.llm_model }}</el-descriptions-item>
+              <el-descriptions-item v-if="!hasRole('user')" label="提示词版本">{{ currentResult.prompt_version }}</el-descriptions-item>
+              <el-descriptions-item label="检测耗费时间">{{ currentResult.latency_ms || '-' }} ms</el-descriptions-item>
+              <el-descriptions-item v-if="!hasRole('user')" label="令牌用量">{{ currentResult.tokens_used || '-' }}</el-descriptions-item>
             </el-descriptions>
           </el-card>
         </div>
@@ -289,7 +306,7 @@ async function submitReview() {
             <template #header>缺陷与推理明细</template>
             <el-tabs type="border-card">
               <el-tab-pane label="缺陷坐标清单">
-                <el-empty v-if="!store.current.defects || store.current.defects.length === 0" :description="defectEmptyDescription" />
+                <el-empty v-if="!currentResult.defects || currentResult.defects.length === 0" :description="defectEmptyDescription" />
                 <div v-else>
                   <div v-if="erroredImageGroups.length > 0" class="error-image-summary">
                     <span class="error-image-summary-label">问题图片</span>
@@ -303,7 +320,7 @@ async function submitReview() {
                       {{ group.sample || `图${group.index + 1}` }} · {{ group.defectCount }} 处
                     </el-tag>
                   </div>
-                  <el-table :data="store.current.defects" stripe style="width: 100%">
+                  <el-table :data="currentResult.defects" stripe style="width: 100%">
                     <el-table-column type="index" label="#" width="50" />
                     <el-table-column label="样品" width="80">
                       <template #default="{ row }">
@@ -334,9 +351,9 @@ async function submitReview() {
                   </el-table>
                 </div>
               </el-tab-pane>
-              <el-tab-pane label="推理还原链路">
-                <el-empty v-if="!store.current.reasoning_chain" description="模型未输出推理链路" />
-                <pre v-else class="json-viewer">{{ JSON.stringify(store.current.reasoning_chain, null, 2) }}</pre>
+              <el-tab-pane v-if="!hasRole('user')" label="推理还原链路">
+                <el-empty v-if="!currentResult.reasoning_chain" description="模型未输出推理链路" />
+                <pre v-else class="json-viewer">{{ JSON.stringify(currentResult.reasoning_chain, null, 2) }}</pre>
               </el-tab-pane>
               <el-tab-pane label="知识库引证">
                 <div class="rag-status-panel">
@@ -371,15 +388,15 @@ async function submitReview() {
           <!-- 人工判定 -->
           <el-card shadow="never">
             <template #header>人工判定记录</template>
-            <div v-if="store.current.reviewed_by">
-              <p>专家 {{ store.current.reviewed_by }} 于 {{ new Date(store.current.reviewed_at!).toLocaleString() }} 提交了人工判定。</p>
-              <p>产品判定：<el-tag :type="getVerdictType(store.current.verdict)" size="small">{{ verdictLabels[store.current.verdict] || "暂未判定" }}</el-tag></p>
-              <p v-if="store.current.review_note">判定依据：{{ store.current.review_note }}</p>
+            <div v-if="currentResult.reviewed_by">
+              <p>专家 {{ currentResult.reviewed_by }} 于 {{ new Date(currentResult.reviewed_at!).toLocaleString() }} 提交了人工判定。</p>
+              <p>产品判定：<el-tag :type="getVerdictType(currentResult.verdict)" size="small">{{ verdictLabels[currentResult.verdict] || "暂未判定" }}</el-tag></p>
+              <p v-if="currentResult.review_note">判定依据：{{ currentResult.review_note }}</p>
             </div>
-            <div v-else-if="canReview && store.current" class="review-form">
+            <div v-else-if="canReview && currentResult" class="review-form">
               <el-form label-position="top">
                 <el-form-item label="产品判定">
-                  <el-select v-model="reviewForm.verdict" placeholder="请选择最终产品判定" class="!w-full">
+                  <el-select v-model="reviewForm.verdict" placeholder="请选择辅助 / 原记录项目复核意见" class="!w-full">
                     <el-option v-for="opt in verdictOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                   </el-select>
                 </el-form-item>
@@ -396,15 +413,18 @@ async function submitReview() {
 
           <el-card shadow="never" class="mb-4">
             <template #header>AI 结果反馈</template>
-            <FeedbackWidget :result-id="store.current.id" />
+            <FeedbackWidget :result-id="currentResult.id" />
           </el-card>
         </div>
       </div>
     </div>
     
-    <div v-else-if="!loading" class="empty-state">
+    <div v-else-if="!loading&&!summaryAvailable" class="empty-state">
       <el-empty description="无法获取该任务的结果报告" />
     </div>
+    <el-drawer v-model="reportDrawerOpen" title="检测报告" size="min(100vw, 760px)">
+      <UserTaskReportPanel v-if="reportDrawerOpen && summaryAvailable" :key="currentTaskId" :task-id="currentTaskId" embedded />
+    </el-drawer>
   </div>
 </template>
 

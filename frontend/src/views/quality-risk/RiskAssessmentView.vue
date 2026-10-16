@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { CircleCheck, DataAnalysis, Plus, RefreshRight } from "@element-plus/icons-vue";
 import { qualityRiskApi } from "@/api/quality-risk.api";
+import {resultApi} from '@/api/result.api';
 import { useAuthStore } from "@/stores/auth.store";
 import { useQualityReferenceStore } from "@/stores/quality-reference.store";
 import { RECORD_TYPE_LABELS, type QualityRecordType, type QualitySourceRecord, type RiskAssessmentV4, type RiskCaseV4 } from "@/types/quality-risk.types";
@@ -15,6 +16,8 @@ const router = useRouter();
 const rows = ref<RiskCaseV4[]>([]);
 const policies = ref<any[]>([]);
 const policyId = ref("");
+const inspectionExecutionRunId = ref(String(route.query.execution_run_id||''));
+const executionOptions=ref<any[]>([]);
 const sourceRecords = ref<QualitySourceRecord[]>([]);
 const total = ref(0);
 const page = ref(1);
@@ -68,6 +71,7 @@ async function load() {
     rows.value = response.data.data.items;
     total.value = response.data.data.total;
     policies.value = policyResponse.data.data.filter((item: any) => item.status === "published");
+    if(auth.hasPermission('inspection_execution')&&auth.hasPermission('result'))executionOptions.value=(await resultApi.executionOptions()).data.data;
     if (!policyId.value) policyId.value = policies.value[0]?.id || "";
     const requestedCaseId = String(route.query.case_id || "");
     if (requestedCaseId) {
@@ -131,7 +135,11 @@ async function selectCase(row: RiskCaseV4) {
 async function analyze() {
   if (!selected.value) return;
   assessment.value = (
-    await qualityRiskApi.analyzeRisk(selected.value.id, policyId.value || undefined)
+    await qualityRiskApi.analyzeRisk(
+      selected.value.id,
+      policyId.value || undefined,
+      inspectionExecutionRunId.value || undefined,
+    )
   ).data.data;
   expertLevel.value =
     assessment.value.risk_level === "unknown" ? "medium" : assessment.value.risk_level;
@@ -142,6 +150,7 @@ async function analyze() {
 
 async function review(decision: "accept" | "request_evidence") {
   if (!selected.value) return;
+  if(decision==='accept' && assessment.value?.source_validation?.blockers?.length){ElMessage.warning('请先处理来源核验阻断项并重新生成草稿');return;}
   const prompt = await ElMessageBox.prompt(
     decision === "accept" ? "填写独立复核依据。" : "说明需要补充的材料。",
     decision === "accept" ? "通过风险研判" : "退回补证",
@@ -202,12 +211,16 @@ onMounted(load);
       <aside v-if="selected" class="case-detail">
         <div class="detail-head"><div><small>{{ selected.code }}</small><h2>{{ selected.title }}</h2></div><el-button text @click="selected = null; assessment = null">收起</el-button></div>
         <div class="scope-card"><span>当前研判范围</span><strong>{{ selected.scope.name || selected.scope_type }}</strong><small>来源记录 {{ selected.source_record_ids.length }} 条 · 可引用证据 {{ selected.evidence_ids.length }} 项</small></div>
-        <div class="action-row"><el-select v-model="policyId" clearable placeholder="选择已发布风险等级规则（可选）"><el-option v-for="item in policies" :key="item.id" :label="`${item.name} · ${item.version}`" :value="item.id" /></el-select><el-button type="primary" :icon="DataAnalysis" @click="analyze">生成风险研判草稿</el-button></div>
+        <div class="action-row risk-inputs"><el-select v-model="policyId" clearable placeholder="选择已发布风险等级规则（可选）"><el-option v-for="item in policies" :key="item.id" :label="`${item.name} · ${item.version}`" :value="item.id" /></el-select><el-select v-model="inspectionExecutionRunId" clearable filterable placeholder="选择已独立复核的执行版本（可选）"><el-option v-for="run in executionOptions" :key="run.id" :value="run.id" :label="run.label+(run.issues.length?'（来源需核验）':'')" :disabled="!!run.issues.length"/></el-select><el-button type="primary" :icon="DataAnalysis" @click="analyze">生成风险研判草稿</el-button></div>
         <template v-if="assessment">
           <section class="assessment-card">
             <div class="assessment-title"><span>风险等级</span><el-tag :type="assessment.risk_level === 'high' || assessment.risk_level === 'critical' ? 'danger' : assessment.risk_level === 'unknown' ? 'info' : 'warning'">{{ riskLabels[assessment.risk_level] }}</el-tag></div>
             <dl><dt>风险类型</dt><dd>{{ assessment.risk_type || "待专家识别" }}</dd><dt>政策版本</dt><dd>{{ assessment.policy_version || "未指定" }}</dd><dt>可信状态</dt><dd>{{ assessment.trust_status }}</dd><dt>风险概率</dt><dd>{{ assessment.probability == null ? "未校准，不展示概率" : assessment.probability }}</dd></dl>
             <el-alert v-if="assessment.missing_inputs.length" type="warning" :closable="false" :title="`仍需补充：${assessment.missing_inputs.join('、')}`" />
+            <section v-if="assessment.source_validation?.blockers?.length"><h3>确认前必须处理</h3><ul><li v-for="(issue,index) in assessment.source_validation.blockers" :key="index">{{ issue.message }}</li></ul></section>
+            <section v-if="assessment.source_validation?.uncertainties?.length"><h3>保留的不确定性</h3><ul><li v-for="issue in assessment.source_validation.uncertainties" :key="issue">{{ issue }}</li></ul></section>
+            <el-alert type="info" :closable="false" title="风险确认仅适用于本案风险信号和建议；不表示产品整体合格或不合格，也不补造未知发生概率。" />
+            <el-alert v-if="assessment.standard_matches.some((item: any) => item.kind === 'inspection_execution')" type="info" :closable="false" title="本次风险研判已引用标准要求执行快照；项目判定与风险等级仍分别复核。" />
             <div v-if="assessment.possible_causes.length"><h3>可能成因</h3><p>{{ assessment.possible_causes.join('；') }}</p></div>
             <div v-if="assessment.recommendations.length"><h3>监管建议</h3><p>{{ assessment.recommendations.join('；') }}</p></div>
             <div v-if="isExpert && assessment.status !== 'accepted'" class="expert-confirm">
@@ -216,7 +229,7 @@ onMounted(load);
               <el-select v-model="expertLevel"><el-option label="低" value="low" /><el-option label="中" value="medium" /><el-option label="高" value="high" /><el-option label="严重" value="critical" /></el-select>
             </div>
           </section>
-          <div v-if="isExpert && assessment.status !== 'accepted'" class="review-actions"><el-button type="primary" :icon="CircleCheck" @click="review('accept')">独立复核通过</el-button><el-button @click="review('request_evidence')">退回补证</el-button></div>
+          <div v-if="isExpert && assessment.status !== 'accepted'" class="review-actions"><el-button type="primary" :icon="CircleCheck" :disabled="!!assessment.source_validation?.blockers?.length" @click="review('accept')">独立复核通过</el-button><el-button @click="review('request_evidence')">退回补证</el-button></div>
         </template>
       </aside>
     </div>
@@ -234,4 +247,6 @@ onMounted(load);
 
 <style scoped>
 .risk-page{max-width:1520px;margin:0 auto;padding:18px 20px 44px;color:#172b3a}.risk-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:26px;padding:28px 32px;border:1px solid #add9d5;border-radius:18px;background:linear-gradient(125deg,#e9f8f6,#fbfdfd 65%,#fff7e9)}.hero-copy p,.case-list header p{margin:0 0 7px;color:#087f8c;font:700 11px ui-monospace,monospace;letter-spacing:.13em}.hero-copy h1{margin:0;font-size:42px;letter-spacing:-.04em}.hero-copy span{display:block;margin-top:9px;color:#52697a;line-height:1.6}.hero-actions{display:flex;gap:8px}.principles{display:grid;grid-template-columns:repeat(4,1fr);margin:18px 0;border:1px solid #dae6e5;border-radius:14px;background:#fff;overflow:hidden}.principles div{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;padding:18px 20px;border-right:1px solid #e6eeee}.principles div:last-child{border-right:0}.principles b{grid-row:1/3;color:#c16a12;font:700 12px ui-monospace,monospace}.principles strong{font-size:14px}.principles span{color:#718391;font-size:12px}.risk-layout{display:grid;gap:18px}.risk-layout.detailed{grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr)}.case-list,.case-detail{border:1px solid #dbe5ea;border-radius:16px;background:#fff;box-shadow:0 12px 32px rgba(29,62,82,.06)}.case-list{padding:20px}.case-list>header,.detail-head{display:flex;align-items:center;justify-content:space-between}.case-list h2,.detail-head h2{margin:0;font-size:22px}.filters{display:grid;grid-template-columns:1fr 190px;gap:10px;margin:16px 0}.el-pagination{margin-top:18px}.case-detail{padding:22px;border-top:4px solid #087f8c}.detail-head small{color:#758a99;font:700 11px ui-monospace,monospace}.scope-card{display:grid;gap:5px;margin:18px 0;padding:16px;border-radius:12px;background:#eef8f7}.scope-card span,.scope-card small{color:#627b7c;font-size:12px}.scope-card strong{font-size:18px}.action-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-bottom:16px}.assessment-card{padding:18px;border:1px solid #dfE9e8;border-radius:12px}.assessment-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.assessment-title span{font-weight:700}.assessment-card dl{display:grid;grid-template-columns:90px 1fr;gap:10px;margin:0}.assessment-card dt{color:#718391}.assessment-card dd{margin:0}.assessment-card h3{margin:16px 0 5px;font-size:13px}.assessment-card p{margin:0;line-height:1.6}.expert-confirm{display:grid;grid-template-columns:1fr 130px;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid #e3eceb}.expert-confirm h3{grid-column:1/-1;margin:0}.review-actions{display:flex;gap:8px;margin-top:14px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.el-select{width:100%}@media(max-width:1000px){.risk-layout.detailed{grid-template-columns:1fr}.principles{grid-template-columns:repeat(2,1fr)}}@media(max-width:650px){.risk-page{padding:12px}.risk-hero{grid-template-columns:1fr;padding:20px 16px}.risk-hero>.hero-actions{grid-column:1}.hero-copy h1{font-size:30px}.principles{grid-template-columns:1fr}.principles div{border-right:0;border-bottom:1px solid #e6eeee}.filters,.form-grid,.expert-confirm,.action-row{grid-template-columns:1fr}}
+.risk-inputs{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
+@media(max-width:650px){.risk-inputs{grid-template-columns:1fr}}
 </style>

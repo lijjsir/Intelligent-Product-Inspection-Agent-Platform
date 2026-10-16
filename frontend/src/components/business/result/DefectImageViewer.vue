@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
+import {useProtectedMedia} from '@/composables/useProtectedMedia';
 
 interface Defect {
   id?: string
   type: string
   confidence: number
   bbox: [number, number, number, number] // [x, y, width, height] in pixels or normalized [0-1]
-  description?: string
+  description?: string | null
 }
 
 interface Props {
@@ -21,6 +22,7 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
   normalized: true,
 })
+const resolvedImageUrl=useProtectedMedia(computed(()=>props.imageUrl));
 
 const canvasRef = ref<HTMLCanvasElement>()
 const containerRef = ref<HTMLDivElement>()
@@ -104,7 +106,7 @@ function drawImageAndDefects() {
     ctx.fillText('图片加载失败', canvas.width / 2, canvas.height / 2)
   }
   
-  img.src = props.imageUrl
+  img.src = resolvedImageUrl.value
 }
 
 function drawDefectBox(ctx: CanvasRenderingContext2D, defect: Defect, index: number) {
@@ -188,7 +190,7 @@ function drawDefectBox(ctx: CanvasRenderingContext2D, defect: Defect, index: num
 }
 
 // Redraw when props change
-watch(() => [props.imageUrl, props.defects, props.normalized], () => {
+watch(() => [resolvedImageUrl.value, props.defects, props.normalized], () => {
   if (props.imageUrl) {
     drawImageAndDefects()
   }

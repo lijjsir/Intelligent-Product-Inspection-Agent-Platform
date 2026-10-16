@@ -14,6 +14,9 @@ import type { PagedResponse } from "@/types/common.types";
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const taskApi = {
+  creationOptions() {
+    return http.get<{ standards: import("@/types/task.types").TaskCreationStandardChoice[] }>("/v1/tasks/meta/creation-options");
+  },
   list(query: TaskListQuery, config?: ApiRequestConfig) {
     return http.get<PagedResponse<InspectionTask>>("/v1/tasks", { ...config, params: query });
   },

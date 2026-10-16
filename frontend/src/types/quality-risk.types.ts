@@ -14,6 +14,8 @@ export type QualityRecordType =
   | "expert_opinion";
 
 export interface ProductCategoryV4 {
+  classification_basis?: string | null;
+  display_no?: string | null;
   id: string;
   org_id: string;
   code: string;
@@ -24,6 +26,7 @@ export interface ProductCategoryV4 {
 }
 
 export interface QualityProduct {
+  display_no?: string | null;
   id: string;
   org_id: string;
   category_id: string;
@@ -32,7 +35,9 @@ export interface QualityProduct {
   model?: string | null;
   brand?: string | null;
   manufacturer_enterprise_id?: string | null;
+  manufacturer_enterprise_name?: string | null;
   attributes: Record<string, unknown>;
+  batches?: QualityProductionBatch[];
   identifiers: Array<{
     id?: string;
     identifier_type: "model_code" | "sku" | "barcode" | "source_product_id";
@@ -43,6 +48,7 @@ export interface QualityProduct {
 }
 
 export interface QualityDataSource {
+  display_no?: string | null;
   id: string;
   code: string;
   name: string;
@@ -50,6 +56,30 @@ export interface QualityDataSource {
   connector_type: "manual" | "file" | "api" | "webhook" | "database_sync";
   config: Record<string, unknown>;
   status: "active" | "inactive";
+}
+
+export interface QualityProductCandidate {
+  id: string;
+  display_no?: string | null;
+  name: string;
+  brand?: string | null;
+  model?: string | null;
+  manufacturer_enterprise_name?: string | null;
+  missing_fields: string[];
+  reason: string;
+}
+
+export interface QualityProductionBatch {
+  id: string;
+  product_id: string;
+  display_no?: string | null;
+  original_batch_no?: string | null;
+  production_date?: string | null;
+}
+
+export interface QualityProductLinks {
+  records: Array<{ id: string; display_no?: string | null; record_type: QualityRecordType; origin_label?: string | null; received_at: string }>;
+  tasks: Array<{ id: string; display_no?: string | null; status: string; has_result: boolean; created_at: string }>;
 }
 
 export interface QualityAttachment {
@@ -73,12 +103,13 @@ export interface LocationRef {
 }
 
 export interface QualitySourceRecord {
+  display_no?: string | null;
   id: string;
   source_id: string;
   ingestion_job_id?: string | null;
   external_record_id?: string | null;
   record_type: QualityRecordType;
-  occurred_at: string;
+  occurred_at: string | null;
   received_at: string;
   content: Record<string, any>;
   content_hash: string;
@@ -95,6 +126,7 @@ export interface QualitySourceRecord {
 }
 
 export interface RiskCaseV4 {
+  display_no?: string | null;
   id: string;
   code: string;
   title: string;
@@ -110,6 +142,8 @@ export interface RiskCaseV4 {
 }
 
 export interface RiskAssessmentV4 {
+  source_validation?: {blockers:{code:string;message:string;evidence_id?:string}[];uncertainties:string[];checked_at?:string;boundary?:string};
+  effective_status?:string;
   id: string;
   risk_case_id: string;
   version: number;

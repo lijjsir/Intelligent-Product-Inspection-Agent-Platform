@@ -62,17 +62,19 @@ class TaskResultIngestService:
         )
         if task is None:
             raise NotFoundError(f"Task {task_id} not found")
-        if (getattr(task,"meta_data",None) or {}).get("supervision") and self._actor_role=="algorithm_engineer":
+        if self._actor_role=="algorithm_engineer":
+            if payload.target != "dataset" or not payload.dataset_id:
+                raise ForbiddenError("算法工程师只能导入明确授权到本人数据集的业务样本")
             from sqlalchemy import select
             from app.models.supervision import SupervisionRecord
             enrolled=await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.org_id==self._org_id,
                 SupervisionRecord.kind=="dataset-enrollments",SupervisionRecord.status=="authorized",
                 SupervisionRecord.code==f"enroll:{task_id}:{payload.dataset_id}"))
-            if not enrolled or enrolled.data["dataset_owner_id"]!=self._actor_user_id or payload.target!="dataset":
-                raise ForbiddenError("此质监样本尚未由业务人员明确授权到该数据集")
-            session=await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.id==enrolled.data["session_id"],
+            if not enrolled or (enrolled.data or {}).get("dataset_owner_id")!=self._actor_user_id:
+                raise ForbiddenError("该业务样本尚未由业务人员明确授权到当前数据集")
+            session=await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.id==(enrolled.data or {}).get("session_id"),
                 SupervisionRecord.org_id==self._org_id))
-            if not session or session.version!=enrolled.data["session_version"] or session.data.get("knowledge_status")=="needs_reassessment":
+            if not session or session.version!=(enrolled.data or {}).get("session_version") or (session.data or {}).get("knowledge_status")=="needs_reassessment":
                 raise ForbiddenError("样本来源版本已变化，需要重新授权")
         if str(getattr(task, "status", "") or "") != "done":
             raise ValidationError("only completed tasks can be ingested")

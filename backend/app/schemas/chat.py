@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.rag_space import ChatAttachmentPayload
 
@@ -36,6 +36,8 @@ class ChatSessionResponse(BaseModel):
     org_id: str
     user_id: str
     title: str | None = None
+    is_pinned: bool = False
+    title_source: str = 'auto'
     status: str
     last_message_at: datetime | None = None
     created_at: datetime | None = None
@@ -57,8 +59,36 @@ class ChatMessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChatSearchItem(ChatSessionResponse):
+    snippet: str = ''
+    message_id: str | None = None
+    message_seq: int | None = None
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatSearchResponse(BaseModel):
+    items: list[ChatSearchItem]
+    total: int
+    has_more: bool
+
+
 class ChatSessionCreateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=120)
+
+
+class ChatSessionUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    is_pinned: bool | None = None
+
+    @field_validator('title')
+    @classmethod
+    def nonblank_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError('标题不能为空')
+        return value
 
 
 class ChatMessageSendRequest(BaseModel):

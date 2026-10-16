@@ -11,14 +11,14 @@ from app.core.config import settings
 
 
 class KnowledgeIndexer:
-    def __init__(self, *, org_id: str | None = None) -> None:
-        self._embedder = Embedder(org_id=org_id)
+    def __init__(self, *, org_id: str | None = None, collection: str | None = None, allow_pseudo_fallback: bool = True) -> None:
+        self._embedder = Embedder(org_id=org_id, allow_pseudo_fallback=allow_pseudo_fallback)
         self._qdrant_url = resolve_runtime_service_url(
             settings.qdrant_url,
             docker_base_url=settings.qdrant_docker_url,
         )
         self._qdrant_api_key = settings.qdrant_api_key
-        self._collection = settings.qdrant_collection
+        self._collection = collection or settings.qdrant_collection
 
     async def ensure_collection(self, vector_size: int) -> None:
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -73,14 +73,16 @@ class KnowledgeIndexer:
         payload = {"points": points}
         async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
             resp = await client.put(
-                f"{self._qdrant_url}/collections/{self._collection}/points",
+                f"{self._qdrant_url}/collections/{self._collection}/points?wait=true",
                 json=payload,
                 headers=headers,
             )
             resp.raise_for_status()
         return {"accepted": len(points), "failed_embeddings": failed_embeddings}
 
-    async def delete_by_filter(self, payload_filter: dict[str, Any]) -> None:
+    async def delete_by_filter(
+        self, payload_filter: dict[str, Any], *, exclude_filter: dict[str, Any] | None = None,
+    ) -> None:
         must = [
             {
                 "key": key,
@@ -99,6 +101,12 @@ class KnowledgeIndexer:
                 "must": must,
             }
         }
+        if exclude_filter:
+            payload["filter"]["must_not"] = [
+                {"key": key, "match": {"value": value}}
+                for key, value in exclude_filter.items()
+                if value is not None and value != ""
+            ]
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.post(
                 f"{self._qdrant_url}/collections/{self._collection}/points/delete",

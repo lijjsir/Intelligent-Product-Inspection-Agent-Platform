@@ -12,6 +12,8 @@ import type {
 import type { PagedResponse } from "@/types/common.types";
 
 export const supervisionApi = {
+  samplingCandidates: () => http.get<{ items: Array<{ id: string; code: string; title: string; assessment_version: number; risk_level: string }>; excluded_count: number }>("/v1/quality-supervision/sampling-candidates"),
+  reassessSamplingPlan: (id: string) => http.post<SupervisionRecord>(`/v1/sampling-plans/${id}/reassessment`, {}),
   createInspectionGoal: (
     sessionId: string,
     payload: {

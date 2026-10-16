@@ -81,7 +81,7 @@ const dashboardActions: DashboardAction[] = [
   { label: "告警管理", path: "/ops/alerts" },
   { label: "模型观测", path: "/ops/calls" },
   { label: "Agent 查看", path: "/ops/agents" },
-  { label: "质检门槛", path: "/ops/ai-review-gates" },
+  { label: "检测执行策略", path: "/ops/ai-review-gates" },
   { label: "个人设置", path: "/app/profile" },
 ];
 

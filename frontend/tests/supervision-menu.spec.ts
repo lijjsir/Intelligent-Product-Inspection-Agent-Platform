@@ -11,7 +11,7 @@ describe("supervision role boundaries and business form submission", () => {
     const cases = appRoutes.find((r) => r.name === "app-risk-cases");
     expect(cases?.redirect).toBeUndefined();
     expect(cases?.component).toBeTypeOf("function");
-    expect(cases?.meta.roles).toContain("user");
+    expect(cases?.meta.roles).not.toContain("user");
     expect(cases?.meta.roles).toContain("expert");
     expect(cases?.meta.roles).not.toContain("algorithm_engineer");
     expect(cases?.meta.roles).not.toContain("app_developer");
@@ -21,7 +21,7 @@ describe("supervision role boundaries and business form submission", () => {
   });
   it("exposes the streamlined quality-supervision workbench only to business roles", () => {
     const workbench = appRoutes.find((r) => r.name === "app-supervision-workbench");
-    expect(workbench?.meta.roles).toEqual(["user", "expert"]);
+    expect(workbench?.meta.roles).toEqual(["expert"]);
   });
   it("keeps the risk-first business chain concise and groups general tasks with results", () => {
     setActivePinia(createPinia());
@@ -32,6 +32,7 @@ describe("supervision role boundaries and business form submission", () => {
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
       "质监工作台",
+      "资料接入",
       "市场监控",
       "舆情监测",
       "风险研判",
@@ -40,7 +41,7 @@ describe("supervision role boundaries and business form submission", () => {
     const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
     expect(
       taskResult && "items" in taskResult ? taskResult.items.map((item) => item.title) : [],
-    ).toEqual(["通用任务", "通用结果"]);
+    ).toEqual(["检测任务", "检测结果"]);
   });
   it("submits only editable case inputs and retains nested real-source evidence", () => {
     const result = cleanFields(

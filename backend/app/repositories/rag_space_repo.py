@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
 from app.models.rag_space import RagDocument, RagDocumentChunk, RagIndexJob, RagNode, RagSpace
+from app.models.knowledge_admission import RagSpaceGrant
 
 
 class RagSpaceRepository:
@@ -31,9 +32,11 @@ class RagSpaceRepository:
     def _ownership_filter(self, owner_user_id: str | None, *, include_system: bool = False):
         if owner_user_id is None:
             return None
+        granted=RagSpace.id.in_(select(RagSpaceGrant.space_id).where(RagSpaceGrant.user_id==owner_user_id,
+            RagSpaceGrant.org_id==RagSpace.org_id,RagSpaceGrant.status=="active"))
         if include_system:
-            return or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None))
-        return RagSpace.created_by == owner_user_id
+            return or_(RagSpace.created_by == owner_user_id, RagSpace.created_by.is_(None),granted)
+        return or_(RagSpace.created_by == owner_user_id,granted)
 
     async def get(
         self,

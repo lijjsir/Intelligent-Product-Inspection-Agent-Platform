@@ -27,6 +27,8 @@ from app.models.supervision import (
     SupervisionRecord,
     SupervisionRevision,
 )
+from app.models.inspection_standard_library import InspectionStandardLibrary, StandardDocument
+from app.models.standard_admission import StandardDocumentRevision
 from app.schemas.user import CurrentUser
 from app.schemas.supervision import (
     EnterpriseData,
@@ -81,6 +83,7 @@ async def domain():
             "stability_reports",
             "inspection_standard_libraries",
             "standard_documents",
+            "standard_document_revisions",
             "standard_document_chunks",
             "inspection_specs",
             "inspection_goals",
@@ -90,6 +93,7 @@ async def domain():
             "datasets",
             "dataset_samples",
             "audit_logs",
+            "model_configs",
         }
         or n.startswith(("supervision_", "business_", "measurement_", "device_connections"))
     ]
@@ -388,9 +392,10 @@ async def test_expert_review_and_self_review_rejection(domain):
     await db.flush()
     with pytest.raises(ForbiddenError):
         await svc("expert").review_decision(r.id, ReviewDecision(decision="accept", comment="同意"))
-    await svc("expert2").review_decision(
-        r.id, ReviewDecision(decision="accept", comment="独立专家确认")
-    )
+    with pytest.raises(ValidationError):
+        await svc("expert2").review_decision(
+            r.id, ReviewDecision(decision="accept", comment="空方案缺少有效分析，不能批准")
+        )
 
 
 @pytest.mark.asyncio
@@ -467,7 +472,7 @@ async def test_process_distinguishes_instrument_and_product(domain):
     )
     record = await svc().get("inspection-sessions", session["id"])
     output = await AGENTS["laboratory_testing"].run(await svc().snapshot(record))
-    assert output["early_warning"] and output["status"] == "awaiting_review"
+    assert output["early_warning"] and output["status"] == "insufficient_evidence"
     assert output["probability"] is None and not output["can_make_final_verdict"]
     await svc("platform_operator").device_status(d["id"], {"calibration_status": "expired"})
     output = await AGENTS["laboratory_testing"].run(await svc().snapshot(record))
@@ -505,10 +510,55 @@ async def test_run_persistent_checkpoint_idempotence_and_staleness(domain, monke
 async def test_result_review_then_signoff_and_lock(domain):
     db, svc, ids = domain
     d, s, session, m = await session_setup(domain)
+    # Bind the legacy supervision-session fixture to a published, confirmed
+    # requirement so the current standard execution gate can evaluate it.
+    library_id, document_id, revision_id, candidate_id = uid(), uid(), uid(), uid()
+    db.add(InspectionStandardLibrary(
+        id=library_id, org_id=ids["org"], name="监督测试标准", product_family="电动自行车",
+        product_category="电动自行车", domain="电动自行车", rag_space_ids=[], is_active=True,
+    ))
+    db.add(StandardDocument(
+        id=document_id, org_id=ids["org"], library_id=library_id, domain="电动自行车",
+        product_category="电动自行车", standard_no="TEST-001", standard_name="监督测试标准",
+        standard_level="GB", standard_status="现行", file_name="test.pdf", file_path="test.pdf",
+        current_revision_id=revision_id, published_revision_id=revision_id,
+        publication_status="published", review_status="approved", processing_status="parsed",
+    ))
+    db.add(StandardDocumentRevision(
+        id=revision_id, document_id=document_id, org_id=ids["org"], revision_no=1,
+        snapshot={"standard_no":"TEST-001", "product_category":"电动自行车",
+                  "standard_status":"现行", "production_from":"2020-01-01",
+                  "production_to":"2030-12-31", "scope_notes":"监督测试范围"},
+        file_hash="test-standard-hash", processing_status="parsed", review_status="approved",
+        publication_status="published", candidates_json=[{
+            "id": candidate_id, "candidate_type":"inspection_requirement", "status":"confirmed", "reviewed_by":ids["actors"]["expert"],
+            "indicator":"温升", "measurement_key":"温升", "unit":"C", "method":"试点方法",
+            "operator":"le", "numeric_upper":45.0, "execution_mode":"numeric",
+            "expected_conditions":{}, "clause_no":"1", "page_number":1,
+        }], pages_json=[]
+    ))
+    session["data"] = {
+        **session["data"],
+        "product_category": "电动自行车",
+        "production_date": "2026-09-15",
+        "test_items": [{**session["data"]["test_items"][0],
+                         "standard_revision_id": revision_id,
+                         "standard_candidate_id": candidate_id}],
+    }
+    await db.flush()
     await svc().ingest(
         MeasurementIngest(session_id=session["id"], source_key="batch-1", measurements=[m])
     )
     record = await svc().get("inspection-sessions", session["id"])
+    record.data = {
+        **record.data,
+        "product_category": "电动自行车",
+        "production_date": "2026-09-15",
+        "test_items": [{**record.data["test_items"][0],
+                         "standard_revision_id": revision_id,
+                         "standard_candidate_id": candidate_id}],
+    }
+    await db.flush()
     run = await svc().queue_run(
         "inspection-sessions",
         record.id,
@@ -527,6 +577,19 @@ async def test_result_review_then_signoff_and_lock(domain):
         record.id,
         ReviewRequest(version=record.version, operation="result.review"),
     )
+    record.data["analysis"] = {
+        **record.data.get("analysis", {}),
+        "suggested_verdict": "fail",
+        "missing_inputs": [],
+    }
+    record.data["analysis"]["standard_execution"] = {
+        "item_verdict": "fail",
+        "product_verdict": "not_assessed",
+        "risk_level": "unknown",
+        "review_status": "required",
+        "missing_inputs": [],
+    }
+    await db.flush()
     await svc("expert").review_decision(
         review["id"], ReviewDecision(decision="accept", comment="核对完整测量及标准")
     )
@@ -630,6 +693,36 @@ async def test_sampling_reports_infeasible_coverage():
 
 
 @pytest.mark.asyncio
+async def test_four_supervision_agents_share_standard_execution_context():
+    shared = {
+        "standard_execution_evaluation": {
+            "item_verdict": "fail",
+            "product_verdict": "not_assessed",
+            "risk_level": "unknown",
+            "missing_inputs": [],
+            "boundary": "仅判定选定项目",
+        },
+        "standard_execution_sources": [{"revision_id": "rev-1", "candidate_id": "candidate-1"}],
+        "observations": [{"evidence_id": "e-1", "kind": "measurement_record", "measurement_key": "最高车速", "sample_id": "sample-1", "validation_status": "accepted", "quality_flag": "valid"}],
+        "as_of": "2026-09-15T00:00:00",
+        "data": {"evidence": [], "candidates": [], "budget": 0, "max_samples": 0, "max_staff_hours": 0, "hours_per_sample": 1, "required_categories": []},
+        "cases": [],
+        "devices": [],
+    }
+    outputs = [
+        await AGENTS["public_opinion_monitoring"].run(shared),
+        await AGENTS["market_monitoring"].run(shared),
+        await AGENTS["supervision_sampling"].run(shared),
+        await AGENTS["laboratory_testing"].run(shared),
+    ]
+    contexts = [output["standard_execution_context"] for output in outputs]
+    assert all(context["status"] == "evaluated" for context in contexts)
+    assert all(context["evaluation"]["item_verdict"] == "fail" for context in contexts)
+    assert all(context["standard_sources"][0]["revision_id"] == "rev-1" for context in contexts)
+    assert all(context["evidence"][0]["evidence_id"] == "e-1" for context in contexts)
+
+
+@pytest.mark.asyncio
 async def test_public_api_authorization_and_device_token_rotation(domain):
     from fastapi import FastAPI
     from httpx import AsyncClient, ASGITransport
@@ -674,6 +767,7 @@ async def test_public_api_authorization_and_device_token_rotation(domain):
                 json={"code": "越权", "name": "越权", "data": {"role": "manufacturer"}},
             )
         ).status_code == 403
+        role["value"] = "expert"
         assert (await client.get("/api/v1/enterprises/not-a-uuid")).status_code == 422
         d, s, session_record, m = await session_setup(domain)
         await db.commit()
@@ -772,7 +866,7 @@ async def test_image_draft_does_not_create_formal_result(domain):
         citations=[{"source_id": "条款"}],
     )
     draft = await _save_supervision_image_draft(db, task, out)
-    assert draft.status == "awaiting_review"
+    assert draft.status == "awaiting_evidence"
     assert await db.scalar(select(InspectionResult)) is None
 
 

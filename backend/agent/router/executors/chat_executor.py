@@ -13,6 +13,7 @@ from agent.router.contracts import AgentArtifact, AgentObservation, AgentPlanSte
 from agent.router.executors.base import artifact, observation
 from agent.router.manager_state import ManagerState
 from app.core.config import settings
+from agent.platform_help import ordinary_user_platform_guide
 
 
 logger = logging.getLogger(__name__)
@@ -44,19 +45,6 @@ DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
         'Answer from the parsed file content and extracted evidence only. '
         'Call out uncertainty when the uploaded material is incomplete. '
         'Return JSON in the form {"answer": "...", "summary": "..."}.'
-    ),
-    "chat.paper_format_check.system": (
-        'You are a professional paper-format review assistant. Respond in Chinese.\n'
-        'You will receive a Review Evidence Pack with structured check results, issues, and evidence snippets.\n'
-        'Generate a professional review report based on the evidence provided.\n'
-        'Do NOT invent template requirements, paper content, or reference conclusions.\n'
-        'Mark issues without sufficient evidence as "需要人工复核" (needs human review).\n'
-        'Prioritize high-severity issues first, then medium, then low.\n'
-        'Include a complete markdown report in the "markdown_report" field.\n'
-        'If the document type has parsing limitations (e.g., LaTeX or PDF), explain them in limitations.\n'
-        'Return JSON in the form: {"answer": "...", "summary": "...", "markdown_report": "...", '
-        '"issues": [{"title": "", "severity": "", "category": "", "location": "", "evidence": "", '
-        '"impact": "", "suggestion": "", "need_human_review": false}], "download_title": "..."}.'
     ),
 }
 
@@ -121,10 +109,6 @@ class ChatExecutor:
             return observation(step, status="success", summary=answer), []
 
         if cap == "chat.response.compose":
-            if self._should_short_circuit_paper_reply(state):
-                composed = self._compose_paper_reply(state)
-                art = artifact(step, "composed_response", content=composed)
-                return observation(step, status="success", summary=composed.get("summary", ""), artifact_ids=[art.artifact_id]), [art]
             answer = await self._call_model(
                 state,
                 request,
@@ -714,6 +698,9 @@ class ChatExecutor:
         # Pipeline-backed meeting agents may provide an administrator-owned
         # persona/instruction set. Keep the platform safety and evidence rules
         # first, then append the scoped prompt as an explicit specialization.
+        if state.surface == "chat" and (request.metadata or {}).get("user_role") == "user":
+            base = f"{base}\n\n{ordinary_user_platform_guide()}"
+
         pipeline_definition = (request.ext or {}).get("pipeline_agent_definition")
         if isinstance(pipeline_definition, dict):
             specialized_prompt = str(pipeline_definition.get("system_prompt") or "").strip()
@@ -738,8 +725,6 @@ class ChatExecutor:
         reason = str(state.route_plan.reason if state.route_plan else "").strip().lower()
         if reason == "rag_qa":
             return "chat.rag_answer.system"
-        if reason == "paper_format_check":
-            return "chat.paper_format_check.system"
         if reason in {"file_summary", "file_qa"}:
             return "chat.file_summary.system"
         return "chat.compose.system"
@@ -1010,66 +995,6 @@ class ChatExecutor:
             fields.append(f"failure_reasons={'; '.join(reason[:120] for reason in failure_reasons[:3])}")
         return ", ".join(fields)
 
-    # ── compose helpers ──
-
-    @staticmethod
-    def _should_short_circuit_paper_reply(state: ManagerState) -> bool:
-        reason = str(state.route_plan.reason if state.route_plan else "").strip().lower()
-        if reason != "paper_format_check":
-            return False
-        paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report") or {}
-        if str(paper_report.get("chat_advice") or "").strip():
-            return True
-        if list(paper_report.get("issues") or []) or str(paper_report.get("summary") or "").strip():
-            return True
-        return False
-
-    @staticmethod
-    def _compose_paper_reply(state: ManagerState) -> dict[str, Any]:
-        status, blocked = ChatExecutor._resolve_status(state)
-        paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report") or {}
-        ai_output = paper_report.get("ai_review_output") or {}
-        answer = (
-            str(paper_report.get("chat_advice") or "").strip()
-            or str(paper_report.get("summary") or "").strip()
-            or str(ai_output.get("answer") or "").strip()
-            or ChatExecutor._build_fallback(state)
-        )
-        summary = (
-            str(paper_report.get("summary") or "").strip()
-            or str(ai_output.get("summary") or "").strip()
-            or answer[:200]
-        )
-        return {
-            "answer": answer,
-            "summary": summary,
-            "message_type": "file_answer",
-            "surface": state.surface,
-            "status": status,
-            "blocked": blocked,
-            "paper_format_report": {
-                "score": paper_report.get("score", 0),
-                "issue_count": paper_report.get("issue_count", len(paper_report.get("issues") or [])),
-                "high_count": paper_report.get("high_count", 0),
-                "medium_count": paper_report.get("medium_count", 0),
-                "low_count": paper_report.get("low_count", 0),
-                "summary": paper_report.get("summary", ""),
-                "chat_advice": paper_report.get("chat_advice", ""),
-                "issues": paper_report.get("issues", []),
-                "limitations": paper_report.get("limitations", []),
-                "report_files": paper_report.get("report_files", []),
-                "model_used": paper_report.get("model_used", ai_output.get("model_used")),
-                "document_type": paper_report.get("document_type", ""),
-                "template_id": paper_report.get("template_id", ""),
-                "template_errors": paper_report.get("template_errors", []),
-                "engines_used": paper_report.get("engines_used", []),
-                "engine_status": paper_report.get("engine_status", []),
-                "runtime_ready": paper_report.get("runtime_ready", True),
-                "enrichment_payload": paper_report.get("enrichment_payload"),
-            },
-            "ui_schema": "paper_review_report_v1",
-        }
-
     @staticmethod
     def _compose_from_model(state: ManagerState, answer: str) -> dict[str, Any]:
         status, blocked = ChatExecutor._resolve_status(state)
@@ -1079,7 +1004,7 @@ class ChatExecutor:
             mt = "action_blocked"
         elif reason == "image_understanding":
             mt = "image_analysis"
-        elif reason in {"file_summary", "file_qa", "paper_format_check"}:
+        elif reason in {"file_summary", "file_qa"}:
             mt = "file_answer"
         elif reason == "quality_report_query":
             mt = "report_answer"
@@ -1095,38 +1020,6 @@ class ChatExecutor:
             "status": status,
             "blocked": blocked,
         }
-        if reason == "paper_format_check":
-            paper_report = ChatExecutor._find_artifact_content(state, "paper_format_report")
-            if paper_report:
-                ai_output = paper_report.get("ai_review_output") or {}
-                result["paper_format_report"] = {
-                    "score": paper_report.get("score", 0),
-                    "issue_count": paper_report.get("issue_count", len(paper_report.get("issues") or [])),
-                    "high_count": paper_report.get("high_count", 0),
-                    "medium_count": paper_report.get("medium_count", 0),
-                    "low_count": paper_report.get("low_count", 0),
-                    "summary": paper_report.get("summary", ""),
-                    "chat_advice": paper_report.get("chat_advice", ""),
-                    "issues": paper_report.get("issues", []),
-                    "limitations": paper_report.get("limitations", []),
-                    "report_files": paper_report.get("report_files", []),
-                    "model_used": paper_report.get("model_used", ai_output.get("model_used", True)),
-                    "document_type": paper_report.get("document_type", ""),
-                    "template_id": paper_report.get("template_id", ""),
-                    "template_errors": paper_report.get("template_errors", []),
-                    "engines_used": paper_report.get("engines_used", []),
-                    "engine_status": paper_report.get("engine_status", []),
-                    "runtime_ready": paper_report.get("runtime_ready", True),
-                    "enrichment_payload": paper_report.get("enrichment_payload"),
-                }
-                result["ui_schema"] = "paper_review_report_v1"
-                result["answer"] = (
-                    str(paper_report.get("chat_advice") or "").strip()
-                    or str(ai_output.get("answer") or "").strip()
-                    or str(paper_report.get("summary") or "").strip()
-                    or answer
-                )
-                result["summary"] = ai_output.get("summary") or paper_report.get("summary") or result["summary"]
         return result
 
     @staticmethod

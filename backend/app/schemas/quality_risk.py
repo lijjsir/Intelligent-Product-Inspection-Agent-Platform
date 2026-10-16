@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -40,9 +41,16 @@ class LocationRef(Strict):
 class ProductRef(Strict):
     category_id: str | None = None
     product_id: str | None = None
+    production_batch_id: str | None = None
     production_batch_ref: str | None = Field(default=None, max_length=128)
     unit_serial_ref: str | None = Field(default=None, max_length=255)
     source_product_id: str | None = Field(default=None, max_length=255)
+
+
+    @field_validator("category_id", "product_id", "production_batch_id")
+    @classmethod
+    def canonical_reference(cls, value):
+        return str(UUID(value)) if value else None
 
 
 class EnterpriseRef(Strict):
@@ -52,9 +60,16 @@ class EnterpriseRef(Strict):
     role: str | None = Field(default=None, max_length=32)
 
 
+    @field_validator("enterprise_id")
+    @classmethod
+    def canonical_reference(cls, value):
+        return str(UUID(value)) if value else None
+
+
 class ProductCategoryCreate(Strict):
-    code: str = Field(min_length=1, max_length=64)
+    code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
+    classification_basis: str | None = Field(default=None, max_length=2000)
     parent_id: str | None = None
     description: str | None = None
     is_active: bool = True
@@ -62,12 +77,15 @@ class ProductCategoryCreate(Strict):
 
 class ProductCategoryUpdate(Strict):
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    classification_basis: str | None = Field(default=None, max_length=2000)
     parent_id: str | None = None
     description: str | None = None
     is_active: bool | None = None
 
 
 class ProductCategoryResponse(ProductCategoryCreate):
+    name: str
+    display_no: str | None = None
     id: str
     org_id: str
     created_at: datetime | None = None
@@ -76,10 +94,19 @@ class ProductCategoryResponse(ProductCategoryCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CategoryImportConfirm(Strict):
+    rows: list[ProductCategoryCreate] = Field(min_length=1, max_length=1000)
+
+
 class ProductIdentifierInput(Strict):
     identifier_type: Literal["model_code", "sku", "barcode", "source_product_id"]
     identifier_value: str = Field(min_length=1, max_length=255)
     source_id: str | None = None
+
+
+class ProductionBatchCreate(Strict):
+    original_batch_no: str | None = Field(default=None, min_length=1, max_length=128)
+    production_date: date | None = None
 
 
 class ProductCreate(Strict):
@@ -90,7 +117,13 @@ class ProductCreate(Strict):
     manufacturer_enterprise_id: str | None = None
     attributes: dict = Field(default_factory=dict)
     identifiers: list[ProductIdentifierInput] = Field(default_factory=list, max_length=100)
+    initial_batch: ProductionBatchCreate | None = None
     is_active: bool = True
+
+    @field_validator("category_id", "manufacturer_enterprise_id")
+    @classmethod
+    def canonical_reference(cls, value):
+        return str(UUID(value)) if value else None
 
 
 class ProductUpdate(Strict):
@@ -103,8 +136,14 @@ class ProductUpdate(Strict):
     identifiers: list[ProductIdentifierInput] | None = Field(default=None, max_length=100)
     is_active: bool | None = None
 
+    @field_validator("category_id", "manufacturer_enterprise_id")
+    @classmethod
+    def canonical_reference(cls, value):
+        return str(UUID(value)) if value else None
+
 
 class ProductResponse(Strict):
+    display_no: str | None = None
     id: str
     org_id: str
     category_id: str
@@ -113,6 +152,7 @@ class ProductResponse(Strict):
     model: str | None = None
     brand: str | None = None
     manufacturer_enterprise_id: str | None = None
+    manufacturer_enterprise_name: str | None = None
     attributes: dict = Field(default_factory=dict)
     identifiers: list[dict] = Field(default_factory=list)
     is_active: bool
@@ -120,13 +160,23 @@ class ProductResponse(Strict):
     updated_at: datetime | None = None
 
 
+class ProductionBatchResponse(ProductionBatchCreate):
+    id: str
+    product_id: str
+    display_no: str | None = None
+
+
+class ProductCatalogItemResponse(ProductResponse):
+    batches: list[ProductionBatchResponse] = Field(default_factory=list)
+
+
 class ProductCatalogResponse(Strict):
     categories: list[ProductCategoryResponse]
-    products: list[ProductResponse]
+    products: list[ProductCatalogItemResponse]
 
 
 class DataSourceCreate(Strict):
-    code: str = Field(min_length=1, max_length=64)
+    code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     source_type: str = Field(min_length=1, max_length=48)
     connector_type: Literal["manual", "file", "api", "webhook", "database_sync"]
@@ -143,6 +193,7 @@ class DataSourceUpdate(Strict):
 
 
 class DataSourceResponse(DataSourceCreate):
+    display_no: str | None = None
     id: str
     org_id: str
     created_by: str
@@ -153,10 +204,11 @@ class DataSourceResponse(DataSourceCreate):
 
 
 class QualityEventCreate(Strict):
-    source_id: str
+    source_id: str | None = None
+    origin_label: str | None = Field(default=None, max_length=500)
     external_record_id: str | None = Field(default=None, max_length=255)
     record_type: str
-    occurred_at: datetime
+    occurred_at: datetime | None = None
     content: dict = Field(default_factory=dict)
     enterprise_ref: EnterpriseRef = Field(default_factory=EnterpriseRef)
     product_ref: ProductRef = Field(default_factory=ProductRef)
@@ -167,6 +219,11 @@ class QualityEventCreate(Strict):
     data_nature: Literal["observed", "inferred", "synthetic"] = "observed"
     ingestion_job_id: str | None = None
 
+    @field_validator("occurred_at")
+    @classmethod
+    def event_time_utc(cls, value):
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value and value.tzinfo else value
+
     @field_validator("record_type")
     @classmethod
     def known_record_type(cls, value: str) -> str:
@@ -175,14 +232,22 @@ class QualityEventCreate(Strict):
         return value
 
 
+    @field_validator("source_id", "ingestion_job_id")
+    @classmethod
+    def canonical_reference(cls, value):
+        return str(UUID(value)) if value else None
+
+
 class QualitySourceRecordResponse(Strict):
+    duplicate: bool = False
+    display_no: str | None = None
     id: str
     org_id: str
     source_id: str
     ingestion_job_id: str | None = None
     external_record_id: str | None = None
     record_type: str
-    occurred_at: datetime
+    occurred_at: datetime | None = None
     received_at: datetime
     content: dict
     content_hash: str
@@ -209,6 +274,13 @@ class QualityAttachmentResponse(Strict):
 
 
 class IngestionPreviewResponse(Strict):
+    source_columns: list[str] = Field(default_factory=list)
+    mapping: dict[str, str] = Field(default_factory=dict)
+    created_count: int = 0
+    duplicate_count: int = 0
+    failed_count: int = 0
+    records: list[dict] = Field(default_factory=list)
+    display_no: str | None = None
     id: str
     source_id: str
     request_key: str
@@ -232,6 +304,7 @@ class RiskCaseCreate(Strict):
 
 
 class RiskCaseResponse(Strict):
+    display_no: str | None = None
     id: str
     org_id: str
     code: str
@@ -249,9 +322,13 @@ class RiskCaseResponse(Strict):
 
 class RiskAnalyzeRequest(Strict):
     policy_id: str | None = None
+    inspection_execution_run_id: str | None = None
 
 
 class RiskAssessmentResponse(Strict):
+    source_validation:dict=Field(default_factory=dict)
+    effective_status:str|None=None
+    display_no: str | None = None
     id: str
     org_id: str
     risk_case_id: str
@@ -288,7 +365,7 @@ class RiskReviewRequest(Strict):
 
 
 class RiskPolicyCreate(Strict):
-    code: str = Field(min_length=1, max_length=64)
+    code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     version: str = Field(min_length=1, max_length=32)
     rules: dict
@@ -303,6 +380,7 @@ class RiskPolicyCreate(Strict):
 
 
 class RiskPolicyResponse(RiskPolicyCreate):
+    display_no: str | None = None
     id: str
     org_id: str
     status: str
@@ -315,7 +393,7 @@ class RiskPolicyResponse(RiskPolicyCreate):
 
 
 class StandardExecutionRuleCreate(Strict):
-    code: str = Field(min_length=1, max_length=64)
+    code: str | None = Field(default=None, min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     version: str = Field(min_length=1, max_length=32)
     standard_id: str
@@ -332,6 +410,7 @@ class StandardExecutionRuleCreate(Strict):
 
 
 class StandardExecutionRuleResponse(StandardExecutionRuleCreate):
+    display_no: str | None = None
     id: str
     org_id: str
     status: str
@@ -355,6 +434,7 @@ class PhysicalSampleCreate(Strict):
 
 
 class PhysicalSampleResponse(PhysicalSampleCreate):
+    display_no: str | None = None
     id: str
     org_id: str
     custody_status: str

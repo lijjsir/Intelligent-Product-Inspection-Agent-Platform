@@ -1,12 +1,32 @@
 import type { PageParams } from "./common.types";
 
-export type TaskStatus = "pending" | "queued" | "running" | "done" | "failed" | "reviewing" | "archived" | "collecting" | "awaiting_review";
+export interface TaskCreationStandardChoice extends Partial<
+  import("./governance.types").InspectionStandardLibraryItem
+> {
+  id: string;
+  name: string;
+  is_active: boolean;
+}
+
+export type TaskStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "reviewing"
+  | "archived"
+  | "collecting"
+  | "awaiting_review";
 
 export interface ImageItem {
   index: number;
   url: string;
   hash: string;
   sample_number?: number | null;
+  bucket?: string | null;
+  object_key?: string | null;
+  content_type?: string | null;
 }
 
 export interface DefectItem {
@@ -19,6 +39,9 @@ export interface DefectItem {
 }
 
 export interface InspectionTask {
+  has_case_workflow?:boolean;
+  has_execution_result?:boolean;
+  display_no?: string | null;
   supervision?: boolean;
   id: string;
   org_id: string;
@@ -30,6 +53,8 @@ export interface InspectionTask {
   inspection_standard_id?: string | null;
   product_category_id?: string | null;
   quality_product_id?: string | null;
+  quality_batch_id?: string | null;
+  quality_batch_display_no?: string | null;
   product_line_code?: string | null;
   product_line_name?: string | null;
   product_sku_code?: string | null;
@@ -52,9 +77,10 @@ export interface InspectionTask {
 }
 
 export interface TaskCreate {
-  input_mode?: "image" | "measurement" | "mixed";
+  input_mode?: "image" | "measurement" | "mixed" | "report";
   product_category_id?: string | null;
   quality_product_id?: string | null;
+  quality_batch_id?: string | null;
   product_sku_id?: string | null;
   batch_id?: string | null;
   inspection_standard_id?: string | null;

@@ -10,7 +10,7 @@ def current_user(role: str) -> CurrentUser:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["admin", "app_developer", "platform_operator", "algorithm_engineer", "user", "expert"])
+@pytest.mark.parametrize("role", ["admin", "app_developer", "platform_operator", "algorithm_engineer", "expert"])
 async def test_allowed_roles_can_list_inspection_standards(monkeypatch, role):
     class FakeService:
         def __init__(self, db, org_id):

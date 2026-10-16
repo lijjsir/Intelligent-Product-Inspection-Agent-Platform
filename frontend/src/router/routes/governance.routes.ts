@@ -1,13 +1,19 @@
-import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER } from "@/constants/roles";
+import { ROLE_ADMIN, ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT } from "@/constants/roles";
 
 export const governanceRoutes = [
-  ...["enterprises", "devices"].map((kind) => ({
+  {
+    path: "admin/enterprises",
+    name: "governance-admin-enterprises",
+    component: () => import("@/views/admin/EnterpriseArchiveView.vue"),
+    meta: { title: "企业档案", roles: [ROLE_ADMIN] },
+  },
+  ...["devices"].map((kind) => ({
     path: `admin/${kind}`,
     name: `governance-admin-${kind}`,
     component: () => import("@/views/supervision/SupervisionRecordsView.vue"),
     meta: {
       title: (
-        { enterprises: "监管对象", devices: "设备资源" } as Record<
+        { enterprises: "企业档案", devices: "设备资源" } as Record<
           string,
           string
         >
@@ -27,7 +33,7 @@ export const governanceRoutes = [
     path: "admin/roles-orgs",
     name: "governance-admin-roles-orgs",
     component: () => import("@/views/admin/RolesOrgsView.vue"),
-    meta: { title: "权限与组织", roles: [ROLE_ADMIN] },
+    meta: { title: "权限管理", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/models",
@@ -51,43 +57,49 @@ export const governanceRoutes = [
     path: "admin/product-master",
     name: "governance-admin-product-master",
     redirect: { name: "governance-admin-quality-products" },
-    meta: { title: "产品类别与产品", roles: [ROLE_ADMIN], hiddenInMenu: true },
+    meta: { title: "产品目录", roles: [ROLE_ADMIN], hiddenInMenu: true },
   },
   {
     path: "admin/quality-products",
     name: "governance-admin-quality-products",
     component: () => import("@/views/admin/QualityProductView.vue"),
-    meta: { title: "产品类别与产品", roles: [ROLE_ADMIN] },
+    meta: { title: "产品目录", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/quality-data-sources",
     name: "governance-admin-quality-data-sources",
-    component: () => import("@/views/admin/QualityDataSourceView.vue"),
-    meta: { title: "数据来源", roles: [ROLE_ADMIN] },
+    redirect: { name: "governance-admin-quality-products" },
+    meta: { roles: [ROLE_ADMIN], hiddenInMenu: true },
   },
   {
     path: "admin/inspection-standards",
     name: "governance-admin-inspection-standards",
     component: () => import("@/views/admin/InspectionStandardLibraryView.vue"),
-    meta: { title: "检测标准", roles: [ROLE_ADMIN] },
+    meta: { title: "标准文档库", roles: [ROLE_ADMIN, ROLE_EXPERT] },
+  },
+  {
+    path: "admin/inspection-standards/:documentId",
+    name: "governance-admin-inspection-standard-detail",
+    component: () => import("@/views/admin/InspectionStandardLibraryView.vue"),
+    meta: { title: "标准文档详情", roles: [ROLE_ADMIN, ROLE_EXPERT], hiddenInMenu: true },
   },
   {
     path: "admin/inspection-specs",
     name: "governance-admin-inspection-specs",
-    component: () => import("@/views/admin/StandardExecutionRuleView.vue"),
-    meta: { title: "标准条款判定条件", roles: [ROLE_ADMIN] },
+    component: () => import("@/views/admin/StandardRequirementsOverview.vue"),
+    meta: { title: "检测要求总览", roles: [ROLE_ADMIN, ROLE_EXPERT] },
   },
   {
     path: "admin/ai-review-gates",
     name: "governance-admin-ai-review-gates",
-    component: () => import("@/views/admin/InspectionSpecView.vue"),
-    meta: { title: "质检门槛", roles: [ROLE_ADMIN] },
+    component: () => import("@/views/admin/InspectionPolicyWorkspaceView.vue"),
+    meta: { title: "检测执行策略", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/risk-policies",
     name: "governance-admin-risk-policies",
     component: () => import("@/views/admin/RiskPolicyView.vue"),
-    meta: { title: "风险等级规则", roles: [ROLE_ADMIN] },
+    meta: { title: "风险等级配置", roles: [ROLE_ADMIN] },
   },
   {
     path: "admin/alert-rules",
@@ -138,7 +150,7 @@ export const governanceRoutes = [
   {
     path: "memory",
     name: "governance-memory",
-    component: () => import("@/views/admin/MemoryGovernanceView.vue"),
-    meta: { title: "记忆治理", roles: [ROLE_ADMIN] },
+    component: () => import("@/views/admin/KnowledgeGovernanceView.vue"),
+    meta: { title: "知识准入与发布", roles: [ROLE_ADMIN] },
   },
 ];

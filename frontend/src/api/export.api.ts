@@ -1,4 +1,4 @@
-import { http } from "./http";
+import instance, { http } from "./http";
 import type {
   ExportJob,
   ExportJobCreatePayload,
@@ -18,5 +18,8 @@ export const exportApi = {
   },
   remove(id: string) {
     return http.delete(`/v1/exports/${id}`);
+  },
+  download(id: string) {
+    return instance.get<Blob>(`/v1/exports/${id}/download`, { responseType: "blob" });
   },
 };

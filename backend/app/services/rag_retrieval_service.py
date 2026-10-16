@@ -10,12 +10,14 @@ from infra.cache.memory_cache import _rag_result_cache, _rag_space_cache, stable
 
 
 class RagRetrievalService:
-    def __init__(self, session, *, org_id: str, user_id: str | None = None):
+    def __init__(self, session, *, org_id: str, user_id: str | None = None, include_system: bool = False):
         self._session = session
         self._org_id = org_id
-        self._user_id = user_id
+        self._user_id = str(user_id).strip() if user_id is not None and str(user_id).strip() else None
+        self._include_system = include_system
         self._spaces = RagSpaceRepository(session)
         self._retriever = Retriever(org_id=org_id)
+        self._workspace_retriever = Retriever(org_id=org_id, collection=settings.workspace_documents_collection)
 
     @staticmethod
     def _score_threshold() -> float:
@@ -28,6 +30,14 @@ class RagRetrievalService:
     def _is_relevant(cls, item: dict[str, Any], *, threshold: float | None = None) -> bool:
         threshold = cls._score_threshold() if threshold is None else threshold
         return float(item.get("score") or 0.0) >= threshold
+
+    def _allows_identity(self, space) -> bool:
+        # Background execution without a user may read system documents only.
+        # Repository owner_user_id=None means an unrestricted metadata lookup,
+        # not a grant to retrieve every user's personal documents.
+        if self._user_id is None:
+            return self._include_system and getattr(space, "created_by", None) is None
+        return True
 
     async def search(
         self,
@@ -51,17 +61,19 @@ class RagRetrievalService:
                 "latency_ms": 0.0,
             }
 
-        space_cache_key = f"rag_space:{self._org_id}:{self._user_id or ''}:{rag_space_id}"
-        space = _rag_space_cache.get(space_cache_key)
+        space_cache_key = f"rag_space:{self._org_id}:{self._user_id or ''}:{rag_space_id}" + (":system" if self._include_system else "")
+        # Re-read authorization/domain; a cached space must not prolong a revoked grant.
+        space = None
         if space is None:
             space = await self._spaces.get(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
                 owner_user_id=self._user_id,
+                **({"include_system": True} if self._include_system else {}),
             )
             if space is not None:
                 _rag_space_cache.set(space_cache_key, space, ttl_seconds=120)
-        if not space:
+        if not space or not self._allows_identity(space):
             return {
                 "rag_space_id": rag_space_id,
                 "rag_space_name": None,
@@ -73,9 +85,22 @@ class RagRetrievalService:
                 "latency_ms": round((perf_counter() - started_at) * 1000, 2),
             }
 
+        if getattr(space, "resource_domain", None) == "formal_standard":
+            from sqlalchemy import select
+            from app.models.inspection_standard_library import InspectionStandardLibrary
+            from app.services.standard_admission_service import StandardAdmissionService
+            libraries=(await self._session.execute(select(InspectionStandardLibrary).where(
+                InspectionStandardLibrary.org_id==self._org_id, InspectionStandardLibrary.deleted_at.is_(None),
+                InspectionStandardLibrary.is_active.is_(True)))).scalars().all()
+            ids=[lib.id for lib in libraries if str(space.id) in (lib.rag_space_ids or [])]
+            result=await StandardAdmissionService(self._session,self._org_id).search({
+                "query":query,"top_k":top_k,"purpose":"standard_explanation"},library_ids=ids)
+            return {**result,"rag_space_id":str(space.id),"rag_space_name":space.name,
+                "resource_domain":"formal_standard", "score_threshold":self._score_threshold(),"rejected_count":0}
+
         payload_filter: dict[str, Any] = {
             "org_id": self._org_id,
-            "user_id": self._user_id,
+            "user_id": getattr(space, "created_by", None),
             "rag_space_id": str(space.id),
         }
         if scope_node_ids:
@@ -101,7 +126,17 @@ class RagRetrievalService:
                 top_k=max(int(top_k or 0), 1),
                 payload_filter=payload_filter,
             )
+            workspace_docs=await self._workspace_retriever.retrieve(query,top_k=max(int(top_k or 0),1),payload_filter=payload_filter)
+            docs=sorted({str(item.get("id")):item for item in [*docs,*workspace_docs]}.values(),key=lambda item:float(item.get("score") or 0),reverse=True)
             _rag_result_cache.set(result_cache_key, docs, ttl_seconds=120)
+        # A normal expert workspace is reference material only.  Older points
+        # may still live in the shared legacy collection, so reject any point
+        # explicitly marked as a formal standard or managed knowledge claim.
+        docs = [
+            item for item in docs
+            if (item.get("resource_domain") or (item.get("payload") or {}).get("resource_domain"))
+            not in {"formal_standard", "professional_knowledge"}
+        ]
         score_threshold = self._score_threshold()
         candidates = docs[: max(1, top_k)]
         filtered = [item for item in candidates if self._is_relevant(item, threshold=score_threshold)]
@@ -121,6 +156,8 @@ class RagRetrievalService:
                 "page_number": item.get("page_number"),
                 "document_id": item.get("document_id"),
                 "node_id": item.get("node_id"),
+                "resource_domain": item.get("resource_domain") or (item.get("payload") or {}).get("resource_domain") or "workspace",
+                "usage_status": "reference_only",
             }
             for item in filtered
         ]
@@ -142,8 +179,9 @@ class RagRetrievalService:
             org_id=self._org_id,
             rag_space_id=rag_space_id,
             owner_user_id=self._user_id,
+            **({"include_system": True} if self._include_system else {}),
         )
-        if not space:
+        if not space or not self._allows_identity(space):
             return {
                 "rag_space_id": rag_space_id,
                 "rag_space_name": None,
@@ -161,8 +199,9 @@ class RagRetrievalService:
         docs = await RagDocumentRepository(self._session).list_for_space(
             org_id=self._org_id,
             rag_space_id=rag_space_id,
-            owner_user_id=self._user_id,
+            owner_user_id=getattr(space,"created_by",None),
             limit=limit,
+            **({"include_system": True} if self._include_system else {}),
         )
         hits = [
             {
@@ -190,6 +229,15 @@ class RagRetrievalService:
             "overview_mode": True,
             "latency_ms": round((perf_counter() - started_at) * 1000, 2),
         }
+
+    async def search_authorized(self, *, query: str, top_k: int = 5) -> dict[str, Any]:
+        spaces = await self._spaces.list_for_org(
+            org_id=self._org_id, owner_user_id=self._user_id,
+            include_system=self._include_system, limit=200,
+        )
+        if self._user_id is None:
+            spaces = [space for space in spaces if self._allows_identity(space)]
+        return await self.search_many(rag_space_ids=[str(space.id) for space in spaces], query=query, top_k=top_k)
 
     async def search_many(
         self,

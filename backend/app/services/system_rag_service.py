@@ -69,7 +69,7 @@ async def resolve_and_search_system_rag(
     if not merged_rag_space_ids:
         return _empty_rag_result()
 
-    retrieval = RagRetrievalService(session, org_id=org_id, user_id=user_id)
+    retrieval = RagRetrievalService(session, org_id=org_id, user_id=user_id, include_system=True)
     try:
         rag_result = await retrieval.search_many(
             rag_space_ids=merged_rag_space_ids,

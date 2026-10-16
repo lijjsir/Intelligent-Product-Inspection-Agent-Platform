@@ -239,10 +239,10 @@ export interface ToolCreateRequest {
   description: string;
   category: ToolCategory;
   tool_type: ToolType;
-  risk_level: RiskLevel;
-  is_readonly: boolean;
-  parameters_schema: Record<string, unknown>;
-  returns_schema: Record<string, unknown>;
+  risk_level?: RiskLevel | null;
+  is_readonly?: boolean;
+  parameters_schema?: Record<string, unknown>;
+  returns_schema?: Record<string, unknown>;
   endpoint?: string;
   method?: string;
   handler_path?: string;

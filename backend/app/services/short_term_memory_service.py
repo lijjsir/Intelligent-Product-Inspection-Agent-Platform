@@ -144,7 +144,6 @@ class ShortTermMemoryService:
             "task_draft": pending_state.get("task_draft"),
             "task_form_defaults": pending_state.get("task_form_defaults"),
             "missing_slots": pending_state.get("missing_slots"),
-            "paper_review_status": pending_state.get("paper_review_status"),
         }
 
         ui_state = {
@@ -177,7 +176,6 @@ class ShortTermMemoryService:
             "task_draft": working_state["task_draft"],
             "task_form_defaults": working_state["task_form_defaults"],
             "missing_slots": working_state["missing_slots"],
-            "paper_review_status": working_state["paper_review_status"],
             "selected_rag_space": ui_state["selected_rag_space"],
             "token_budget": token_budget,
             "semantic_recall": semantic_recall,
@@ -218,7 +216,6 @@ class ShortTermMemoryService:
                 "task_draft": payload.get("task_draft"),
                 "task_form_defaults": payload.get("task_form_defaults"),
                 "missing_slots": payload.get("missing_slots"),
-                "paper_review_status": payload.get("paper_review_status"),
             }
 
             pa = payload.get("pending_action")
@@ -276,7 +273,6 @@ class ShortTermMemoryService:
             "task_draft": None,
             "task_form_defaults": None,
             "missing_slots": None,
-            "paper_review_status": None,
             "selected_rag_space": None,
         }
 

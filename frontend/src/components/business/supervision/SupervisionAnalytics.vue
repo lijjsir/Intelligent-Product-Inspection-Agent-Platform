@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { supervisionApi } from "@/api/supervision.api";
+import { extractApiErrorMessage } from "@/api/http";
 import { useAuthStore } from "@/stores/auth.store";
 import { useRouter } from "vue-router";
 const auth = useAuthStore(),
   router = useRouter();
 const enabled = ref(false),
   report = ref<any>(null);
+const loading = ref(false), loadError = ref("");
 const dimensions: Record<string, string> = {
   complaint_region_id: "投诉发生地",
   sampling_region_id: "抽样地",
@@ -14,16 +16,24 @@ const dimensions: Record<string, string> = {
   product_category: "产品类别",
 };
 async function load() {
+  if (loading.value) return;
+  loading.value = true;
+  loadError.value = "";
   try {
     enabled.value = (await supervisionApi.settings()).data.data.enabled;
     if (enabled.value) report.value = (await supervisionApi.analytics()).data.data;
-  } catch {
+  } catch (error) {
     report.value = null;
+    loadError.value = extractApiErrorMessage(error, "市场态势未能加载，请重试");
+  } finally {
+    loading.value = false;
   }
 }
 onMounted(load);
 </script>
 <template>
+  <div v-if="loadError" class="supervision-analytics"><el-alert :title="loadError" type="warning" :closable="false" /><el-button :loading="loading" @click="load">重试</el-button></div>
+  <el-skeleton v-else-if="loading && !report" :rows="4" animated />
   <section v-if="enabled && report" class="supervision-analytics">
     <header class="analytics-head">
       <div class="analytics-title">
@@ -42,8 +52,10 @@ onMounted(load);
       <div><span>当前观察</span><strong>{{ report.summary }}</strong></div>
       <small>数量变化只表示线索变化；没有销量、在用量或抽查量等分母时，不计算产品失效率。</small>
     </div>
+    <el-alert v-if="report.excluded_count || report.legacy_unverified_count" type="warning" :closable="false" :title="`${(report.excluded_count || 0) + (report.legacy_unverified_count || 0)} 条历史确认风险需重新核验，未计入当前态势。`" />
+    <el-alert v-if="report.unknown_time_count" type="info" :closable="false" :title="`${report.unknown_time_count} 条有效风险缺少发生时间，未计入周期变化。`" />
     <div class="coverage-cards">
-      <article><span>已确认产品类别</span><strong>{{ report.confirmed_categories.length }}</strong></article>
+      <article><span>有效风险涉及类别</span><strong>{{ report.confirmed_categories.length }}</strong></article>
       <article><span>抽查计划</span><strong>{{ report.plans.length }}</strong></article>
       <article><span>检测会话</span><strong>{{ report.sessions.length }}</strong></article>
       <article><span>已签发验证</span><strong>{{ report.sessions.filter((x: any) => x.status === "signed").length }}</strong></article>

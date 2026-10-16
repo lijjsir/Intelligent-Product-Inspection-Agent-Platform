@@ -1390,7 +1390,7 @@ async def test_run_general_agent_routes_summary_and_creates_candidate_memory(mon
     fake_repo = FakeRepo()
     monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
 
-    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1", role="expert")
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 
@@ -1547,7 +1547,7 @@ async def test_run_general_agent_recalls_user_meeting_agent_and_org_scope_memori
     fake_repo = FakeRepo()
     monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
 
-    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1")
+    service = meeting_service_mod.MeetingService(FakeSession(), "org-1", "user-1", role="expert")
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 
@@ -1593,7 +1593,7 @@ async def test_cancel_general_agent_run_prevents_final_message(monkeypatch):
     fake_session = FakeSession()
     monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
 
-    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1", role="expert")
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 
@@ -1638,7 +1638,7 @@ async def test_run_general_agent_intro_question_returns_capability_intro(monkeyp
     fake_repo = FakeRepo()
     monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
 
-    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1", role="expert")
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 
@@ -2540,7 +2540,7 @@ async def test_run_general_agent_passes_attachments_to_agent_manager(monkeypatch
     monkeypatch.setattr(meeting_service_mod, "AgentManagerService", FakeAgentManagerService)
     monkeypatch.setattr(meeting_service_mod.meeting_stream_broker, "publish", fake_publish)
 
-    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1")
+    service = meeting_service_mod.MeetingService(fake_session, "org-1", "user-1", role="expert")
     service._repo = fake_repo
     service._users = FakeUsersRepo()
 

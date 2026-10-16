@@ -60,7 +60,7 @@ describe("useMenu", () => {
     expect(flattenTitles()).not.toContain("Prompt 管理");
   });
 
-  it("shows task management entry for algorithm engineers", () => {
+  it("keeps algorithm engineers in training and explicitly authorized data workflows", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ALGORITHM_ENGINEER;
     auth.roles = [ROLE_ALGORITHM_ENGINEER];
@@ -68,15 +68,16 @@ describe("useMenu", () => {
     const titles = flattenTitles();
     const paths = flattenPaths();
 
-    expect(titles).toContain("任务管理");
-    expect(paths).toContain("/app/tasks");
+    expect(titles).not.toContain("任务管理");
+    expect(paths).not.toContain("/app/tasks");
+    expect(paths).toContain("/ops/training/jobs");
+    expect(paths).toContain("/ops/data/business-samples");
   });
 
   it("shows collaboration entry points to non-expert workbench roles", () => {
     const auth = useAuthStore();
 
     for (const role of [
-      ROLE_ADMIN,
       ROLE_APP_DEVELOPER,
       ROLE_PLATFORM_OPERATOR,
       ROLE_ALGORITHM_ENGINEER,
@@ -106,14 +107,14 @@ describe("useMenu", () => {
 
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
-    expect(flattenPaths().slice(0, 3)).toEqual([
+    expect(flattenPaths().slice(0, 4)).toEqual([
       "/app/chat",
       "/app/workbench",
+      "/app/quality-data",
       "/app/quality-analytics",
     ]);
 
     for (const role of [
-      ROLE_ADMIN,
       ROLE_APP_DEVELOPER,
       ROLE_PLATFORM_OPERATOR,
       ROLE_ALGORITHM_ENGINEER,
@@ -125,24 +126,47 @@ describe("useMenu", () => {
     }
   });
 
-  it("exposes task management and results as one discoverable business entry", () => {
+  it("keeps expert tasks and results grouped with supervision features", () => {
     const auth = useAuthStore();
-    for (const role of [ROLE_USER, ROLE_EXPERT]) {
-      auth.role = role;
-      auth.roles = [role];
-      if (role === ROLE_USER) expect(flattenTitles()).toContain("数据接入");
-      else expect(flattenTitles()).not.toContain("数据接入");
-      expect(flattenTitles()).toContain("风险研判");
-      expect(flattenTitles()).not.toContain("实验室检测");
-      expect(flattenTitles()).toContain("通用任务");
-      expect(flattenTitles()).toContain("通用结果");
+    auth.role = ROLE_EXPERT;
+    auth.roles = [ROLE_EXPERT];
+    expect(flattenTitles()).not.toContain("数据接入");
+    expect(flattenTitles()).toContain("风险研判");
+    expect(flattenTitles()).not.toContain("实验室检测");
+    expect(flattenTitles()).toContain("检测任务");
+    expect(flattenTitles()).toContain("检测结果");
 
-      const { menu } = useMenu();
-      const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
-      expect(taskResult && "items" in taskResult ? taskResult.items : []).toEqual([
-        { title: "通用任务", path: "/app/tasks" },
-        { title: "通用结果", path: "/app/results" },
-      ]);
+    const { menu } = useMenu();
+    const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
+    expect(taskResult && "items" in taskResult ? taskResult.items : []).toEqual([
+      { title: "检测任务", path: "/app/tasks" },
+      { title: "检测结果", path: "/app/results" },
+    ]);
+  });
+
+  it("keeps ordinary-user navigation focused on chat, personal tasks and settings", () => {
+    const auth = useAuthStore();
+    auth.role = ROLE_USER;
+    auth.roles = [ROLE_USER];
+
+    expect(flattenTitles()).toEqual(["AI 对话", "任务列表", "检测结果", "个人设置"]);
+    expect(flattenPaths()).toEqual(["/app/chat", "/app/tasks", "/app/results", "/app/profile"]);
+    const { menu } = useMenu();
+    expect(menu.value[1]).toMatchObject({ title: "我的任务", items: [
+      { title: "任务列表", path: "/app/tasks" },
+      { title: "检测结果", path: "/app/results", activeMatchPaths: ["/app/export"] },
+    ] });
+  });
+
+  it("limits ordinary-user pages to chat and the personal task flow", () => {
+    const allowedNames = new Set([
+      "app-dashboard", "app-chat", "app-tasks", "app-task-detail",
+      "app-results", "app-result-detail", "app-evidence", "app-export", "app-profile",
+    ]);
+    for (const route of appRoutes) {
+      if (route.meta?.roles) {
+        expect(route.meta.roles.includes(ROLE_USER)).toBe(allowedNames.has(route.name));
+      }
     }
   });
 
@@ -151,7 +175,6 @@ describe("useMenu", () => {
     const collabRoute = appRoutes.find((route) => route.name === "app-collab");
 
     for (const role of [
-      ROLE_ADMIN,
       ROLE_APP_DEVELOPER,
       ROLE_PLATFORM_OPERATOR,
       ROLE_ALGORITHM_ENGINEER,
@@ -176,7 +199,7 @@ describe("useMenu", () => {
     expect(groupTitles).not.toContain("只读巡检");
     expect(titles).toContain("告警管理");
     expect(titles).toContain("Agent 查看");
-    expect(titles).toContain("质检门槛");
+    expect(titles).toContain("检测执行策略");
     expect(titles).not.toContain("标准条款判定条件");
     expect(titles).toContain("模型观测");
     expect(titles).not.toContain("数据质量");
@@ -202,7 +225,7 @@ describe("useMenu", () => {
     ).toEqual(["工具总览", "工具库", "外部导入", "Agent 绑定", "执行监控"]);
   });
 
-  it("surfaces alert rule governance for admins instead of the ops alert page", () => {
+  it("retains operation approvals while keeping alert operations outside admin", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ADMIN;
     auth.roles = [ROLE_ADMIN];
@@ -210,21 +233,21 @@ describe("useMenu", () => {
     const titles = flattenTitles();
     const paths = flattenPaths();
 
-    expect(titles).toContain("告警规则");
+    expect(titles).not.toContain("告警规则");
     expect(titles).not.toContain("告警管理");
     expect(paths).toContain("/governance/admin/quality-products");
-    expect(paths).toContain("/governance/admin/alert-rules");
+    expect(paths).toContain("/governance/admin/approvals");
   });
 
-  it("exposes the governance analytics center in admin navigation", () => {
+  it("keeps operational analytics outside the administrator workspace", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ADMIN;
     auth.roles = [ROLE_ADMIN];
 
-    expect(flattenPaths()).toContain("/governance/quality/analysis-center");
+    expect(flattenPaths()).not.toContain("/governance/quality/analysis-center");
   });
 
-  it("keeps tool management routes accessible to admins", () => {
+  it("preserves legacy tool route metadata without listing tools in admin navigation", () => {
     const auth = useAuthStore();
     auth.role = ROLE_ADMIN;
     auth.roles = [ROLE_ADMIN];

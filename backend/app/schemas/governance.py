@@ -450,6 +450,10 @@ class ExportJobCreate(BaseModel):
 
 
 class ExportJobResponse(BaseModel):
+    source_issues:list[str]=Field(default_factory=list)
+    result_scope:dict=Field(default_factory=dict)
+    source_version:str|None=None
+    effective_status:str|None=None
     id: str
     org_id: str
     actor_id: str
@@ -472,3 +476,4 @@ class ExportJobResponse(BaseModel):
 class ExportJobQuery(PageParams):
     status: Optional[str] = None
     report_type: Optional[str] = None
+    task_id: Optional[str] = None

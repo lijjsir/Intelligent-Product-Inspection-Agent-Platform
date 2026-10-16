@@ -8,7 +8,7 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.deps import get_current_user, get_db
+from app.api.v1.deps import get_current_user, get_db, apply_permission_identity, get_permission_identity
 from app.core.datetime import utcnow_iso
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.permissions import ROLE_USER, require_role
@@ -46,6 +46,7 @@ def _task_event_payload(event) -> dict:
 def get_current_user_for_sse(
     authorization: str = Header(default=""),
     token: str = Query(default=""),
+    identity: dict = Depends(get_permission_identity),
 ) -> CurrentUser:
     """为 SSE 长连接请求解析当前用户，兼容请求头和查询参数两种令牌传递方式。"""
     if authorization.startswith("Bearer "):
@@ -54,7 +55,7 @@ def get_current_user_for_sse(
         payload = safe_decode_token(token)
     else:
         raise ForbiddenError("missing bearer token")
-    return CurrentUser(
+    return apply_permission_identity(CurrentUser(
         user_id=payload.get("sub", ""),
         org_id=payload.get("org_id", ""),
         role=payload.get("role", ""),
@@ -65,7 +66,7 @@ def get_current_user_for_sse(
         default_workspace=str(payload.get("default_workspace") or "app"),
         stream_resource=str(payload.get("resource") or ""),
         stream_resource_id=str(payload.get("resource_id") or ""),
-    )
+    ), identity)
 
 
 @router.post("/tasks/{task_id}/run", response_model=ResponseEnvelope[dict])

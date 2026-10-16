@@ -1,5 +1,12 @@
 export type Verdict = 'pass' | 'fail' | 'uncertain' | 'manual_required';
 
+export interface TaskResultBundle {
+  bundle_version:string;task:{id:string;product_id:string;product_name:string;spec_code:string};
+  selection:{execution_run_id:string|null;legacy_only:boolean};execution_versions:{id:string;row_version:number;status:string;created_at:string;item_verdict:string}[];
+  execution:import('./inspection-execution.types').ExecutionRun|null;auxiliary:any;risks:any[];
+  scope:{stage:string;label:string;product_verdict:string;boundary:string};source_refs:any[];result_token:string;can_export:boolean;
+}
+
 export interface Defect {
   id?: string;
   type: string;

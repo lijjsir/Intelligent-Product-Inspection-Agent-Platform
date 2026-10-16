@@ -10,6 +10,9 @@ class ReportRenderer(Protocol):
 
 def build_renderer(format: str) -> ReportRenderer:
     fmt = str(format or "").strip().lower()
+    if fmt == "docx":
+        from app.services.report_renderers.docx_renderer import DocxRenderer
+        return DocxRenderer()
     if fmt == "pdf":
         try:
             from app.services.report_renderers.pdf_renderer import PdfRenderer

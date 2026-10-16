@@ -126,6 +126,9 @@ class RagContextBuilder:
                 "quote": str(hit.get("quote") or ""),
                 "score": float(hit.get("score") or 0.0),
                 "kind": "rag",
+                "resource_domain": hit.get("resource_domain") or (hit.get("payload") or {}).get("resource_domain") or "workspace",
+                "usage_status": hit.get("usage_status") or "reference_only",
+                "revision_id": hit.get("revision_id") or (hit.get("payload") or {}).get("revision_id"),
             })
         return citations
 
@@ -138,7 +141,9 @@ class RagContextBuilder:
             title = str(hit.get("title") or "Untitled")
             quote = str(hit.get("quote") or "")
             source = str(hit.get("source") or "")
-            chunk = f"[{title}] ({source})\n{quote}\n"
+            domain=hit.get("resource_domain") or (hit.get("payload") or {}).get("resource_domain") or "workspace"
+            kind="已发布标准：仍须核对适用条件" if domain=="formal_standard" else "参考资料：不自动作为标准或正式判定依据"
+            chunk = f"[{kind}] [{title}] ({source})\n{quote}\n"
             if total + len(chunk) > max_chars:
                 break
             parts.append(chunk)

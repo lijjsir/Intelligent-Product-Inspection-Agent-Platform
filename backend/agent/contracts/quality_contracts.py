@@ -73,7 +73,6 @@ class RouteDecision(BaseModel):
         "image_understanding",
         "file_summary",
         "file_qa",
-        "paper_format_check",
         "quality_report_query",
         "quality_task_status",
         "evidence_arbitration",
@@ -190,7 +189,6 @@ class AgentOutput(BaseModel):
     result_card: dict[str, Any] | None = None
     expectation_check: dict[str, Any] | None = None
     rag_summary: dict[str, Any] | None = None
-    paper_format_report: dict[str, Any] | None = None
     ui_schema: str | None = None
     action_state: str | None = None
     task_draft: dict[str, Any] | None = None

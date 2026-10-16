@@ -1,19 +1,19 @@
 <template>
-  <div class="auth-form-card w-full max-w-[420px]">
+  <div class="auth-form-card auth-register-card w-full max-w-[420px]">
     <div class="mb-8">
       <h2 class="text-2xl font-bold text-zinc-900">注册账号</h2>
       <p class="mt-2 text-sm text-zinc-500">{{ createOrg ? "创建新组织并注册首个账号" : "加入已有组织" }}</p>
     </div>
 
     <!-- Tab 切换 -->
-    <div class="flex mb-6 bg-zinc-100 rounded-lg p-1">
+    <div class="auth-register-tabs flex mb-6 rounded-lg p-1">
       <button
-        :class="createOrg ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500'"
+        :class="{ 'is-active': createOrg }"
         class="flex-1 py-2 text-[13px] font-medium rounded-md transition-colors"
         @click="createOrg = true"
       >创建新组织</button>
       <button
-        :class="!createOrg ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-500'"
+        :class="{ 'is-active': !createOrg }"
         class="flex-1 py-2 text-[13px] font-medium rounded-md transition-colors"
         @click="createOrg = false"
       >加入已有组织</button>
@@ -88,7 +88,7 @@
         </el-select>
       </div>
 
-      <div v-else class="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-[13px] leading-6 text-zinc-500">
+      <div v-else class="auth-register-note rounded-2xl border px-4 py-3 text-[13px] leading-6">
         创建组织后，该账号会自动成为组织管理员；成员身份可在系统治理中统一维护。
       </div>
 
@@ -106,7 +106,7 @@
 
     <p class="mt-6 text-center text-[13px] text-zinc-400">
       已有账号？
-      <RouterLink to="/login" class="text-zinc-900 font-medium hover:underline">返回登录</RouterLink>
+      <RouterLink to="/login" class="auth-return-link font-medium hover:underline">返回登录</RouterLink>
     </p>
   </div>
 </template>

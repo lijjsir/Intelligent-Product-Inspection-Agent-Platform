@@ -161,7 +161,7 @@ class MemoryVectorService:
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.put(
-                f"{self._qdrant_url}/collections/{self._collection}/points",
+                f"{self._qdrant_url}/collections/{self._collection}/points?wait=true",
                 json={
                     "points": [
                         {

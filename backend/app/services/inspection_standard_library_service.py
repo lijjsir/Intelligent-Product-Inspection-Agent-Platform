@@ -11,6 +11,7 @@ from app.core.datetime import utcnow
 from app.core.exceptions import NotFoundError, ServiceUnavailableError, ValidationError
 from app.core.ids import uuid7
 from app.models.inspection_standard_library import InspectionStandardLibrary, StandardDocument, StandardDocumentChunk
+from app.models.standard_admission import StandardDocumentRevision
 from app.repositories.inspection_standard_library_repo import (
     InspectionStandardLibraryRepository,
     StandardDocumentChunkRepository,
@@ -66,6 +67,23 @@ class InspectionStandardLibraryService:
             self._raise_if_table_missing(exc)
             raise
 
+    async def list_task_choices(self) -> list[dict[str, Any]]:
+        """Only selection and input requirements; no documents or governance settings."""
+        rows = await self._repo.list_all(self._org_id)
+        choices = []
+        for item in rows:
+            if not item.is_active:
+                continue
+            spec = await self._spec_repo.get(self._org_id, str(item.inspection_spec_id)) if item.inspection_spec_id else None
+            if (not spec or not spec.is_active) and item.spec_code:
+                spec = await self._spec_repo.get_active_spec(self._org_id, item.spec_code)
+            if not spec or not spec.is_active:
+                continue
+            choices.append({"id": item.id, "name": item.name, "spec_code": spec.spec_code,
+                            "required_image_count": int(spec.required_image_count or 1),
+                            "required_views": list(spec.required_views or []), "is_active": True})
+        return choices
+
     async def create_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             normalized = await self._normalize_payload(payload)
@@ -97,6 +115,15 @@ class InspectionStandardLibraryService:
             item = await self._repo.get(self._org_id, library_id)
             if not item:
                 raise NotFoundError("inspection standard library not found")
+            documents = await self._document_repo.list_by_library(self._org_id, library_id)
+            if any(d.published_revision_id or d.publication_status == "publishing" for d in documents):
+                raise ValidationError("库中有已发布或发布中的标准，请先撤回并保留修订记录")
+            if documents:
+                history=(await self._session.execute(select(StandardDocumentRevision.id).where(
+                    StandardDocumentRevision.document_id.in_([d.id for d in documents]),StandardDocumentRevision.org_id==self._org_id,
+                    StandardDocumentRevision.publication_status.in_(["published","publishing","suspended","withdrawn"])).limit(1))).scalar_one_or_none()
+                if history:
+                    raise ValidationError("库中有发布历史，请停用标准库并保留可追溯记录")
             await self._importer.delete_library_points(library_id=library_id)
             await self._chunk_repo.soft_delete_by_library(library_id)
             await self._document_repo.soft_delete_by_library(self._org_id, library_id)
@@ -106,157 +133,20 @@ class InspectionStandardLibraryService:
             raise
 
     async def scan_library(self, library_id: str) -> dict[str, Any]:
-        try:
-            item = await self._get_library(library_id)
-            if not item.pdf_root_dir:
-                raise ValidationError("pdf_root_dir is required before scanning")
-            scanned = self._importer.scan_directory(
-                item.pdf_root_dir,
-                file_glob=item.file_glob or "*.pdf",
-                fallback_domain=item.domain,
-                fallback_product_category=item.product_category,
-            )
-            created_count = 0
-            updated_count = 0
-            rows: list[StandardDocument] = []
-            for payload in scanned:
-                meta_payload = {
-                    "domain": payload["domain"],
-                    "product_category": payload.get("product_category"),
-                    "standard_no": payload["standard_no"],
-                    "standard_name": payload["standard_name"],
-                    "standard_level": payload["standard_level"],
-                    "standard_status": payload.get("standard_status") or item.standard_status or "现行",
-                    "file_name": payload["file_name"],
-                    "file_path": payload["file_path"],
-                    "file_hash": payload.get("file_hash"),
-                    "file_size": payload.get("file_size"),
-                    "qdrant_collection": item.qdrant_collection,
-                    "import_status": payload.get("import_status") or "pending",
-                    "error_message": None,
-                }
-                row, created = await self._document_repo.upsert_scanned(
-                    org_id=self._org_id,
-                    library_id=library_id,
-                    payload=meta_payload,
-                )
-                rows.append(row)
-                if created:
-                    created_count += 1
-                else:
-                    updated_count += 1
-            item.pdf_count = len(scanned)
-            item.document_count = await self._document_repo.count_completed_by_library(self._org_id, library_id)
-            item.chunk_count = await self._chunk_repo.count_by_library(library_id)
-            item.import_status = "scanned" if scanned else "not_scanned"
-            item.last_scanned_at = utcnow()
-            item.error_message = None
-            await self._session.flush()
-            return {
-                "library_id": library_id,
-                "scanned_count": len(scanned),
-                "created_count": created_count,
-                "updated_count": updated_count,
-                "documents": [self._serialize_document(row) for row in rows],
-            }
-        except Exception as exc:
-            self._raise_if_table_missing(exc)
-            raise
+        item = await self._get_library(library_id)
+        if not item.pdf_root_dir:
+            raise ValidationError("pdf_root_dir is required before scanning")
+        scanned = self._importer.scan_directory(item.pdf_root_dir, file_glob=item.file_glob or "*.pdf",
+            fallback_domain=item.domain, fallback_product_category=item.product_category)
+        before = {d.id for d in await self._document_repo.list_by_library(self._org_id, library_id)}
+        result = await self.upload_pdfs(library_id, [(p["file_name"], Path(p["file_path"]).read_bytes(), "application/pdf") for p in scanned]) if scanned else {"documents": []}
+        created = sum(d["id"] not in before for d in result["documents"])
+        return {"library_id":library_id,"scanned_count":len(scanned),"created_count":created,
+            "updated_count":0,"documents":result["documents"]}
 
     async def upload_pdfs(self, library_id: str, files: list[tuple[str, bytes, str | None]]) -> dict[str, Any]:
-        """Upload PDF files to MinIO, parse metadata, create doc records, and index."""
-        import tempfile
-        from app.core.config import settings
-        from app.services.object_storage.factory import build_object_storage
-
-        item = await self._get_library(library_id)
-        storage = build_object_storage()
-
-        uploaded_count = 0
-        indexed_count = 0
-        failed_count = 0
-        documents: list[StandardDocument] = []
-
-        for file_name, file_bytes, content_type in files:
-            # Upload to MinIO
-            object_key = f"standard/{library_id}/{file_name}"
-            try:
-                storage.put_bytes(
-                    bucket=settings.rag_storage_bucket,
-                    object_key=object_key,
-                    data=file_bytes,
-                    content_type=content_type or "application/pdf",
-                )
-            except Exception:
-                failed_count += 1
-                continue
-
-            # Parse metadata from file bytes via temp file
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(file_bytes)
-                tmp_path = tmp.name
-
-            try:
-                from app.services.standard_pdf_importer import resolve_standard_meta, sha256_file
-                meta = resolve_standard_meta(
-                    tmp_path,
-                    fallback_domain=item.domain,
-                    fallback_product_category=item.product_category,
-                )
-                meta_payload = {
-                    "domain": meta.get("domain") or item.domain or "",
-                    "product_category": meta.get("product_category") or item.product_category,
-                    "standard_no": meta.get("standard_no") or file_name.replace(".pdf", ""),
-                    "standard_name": meta.get("standard_name") or file_name.replace(".pdf", ""),
-                    "standard_level": meta.get("standard_level") or "待核实",
-                    "standard_status": meta.get("standard_status") or item.standard_status or "现行",
-                    "file_name": file_name,
-                    "file_path": object_key,
-                    "file_hash": sha256_file(tmp_path),
-                    "file_size": len(file_bytes),
-                    "qdrant_collection": item.qdrant_collection,
-                    "import_status": "pending",
-                    "error_message": None,
-                }
-                row, _created = await self._document_repo.upsert_scanned(
-                    org_id=self._org_id,
-                    library_id=library_id,
-                    payload=meta_payload,
-                )
-                documents.append(row)
-                uploaded_count += 1
-
-                # Index from temp file
-                try:
-                    await self._index_document_from_path(item, row, file_path=tmp_path)
-                    if row.import_status == "completed":
-                        indexed_count += 1
-                    else:
-                        failed_count += 1
-                except Exception:
-                    failed_count += 1
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
-
-        item.pdf_count = len(documents)
-        item.document_count = await self._document_repo.count_completed_by_library(self._org_id, library_id)
-        item.chunk_count = await self._chunk_repo.count_by_library(library_id)
-        if failed_count and indexed_count:
-            item.import_status = "partial_failed"
-        elif failed_count:
-            item.import_status = "failed"
-        elif documents:
-            item.import_status = "completed"
-        item.last_indexed_at = utcnow() if documents else item.last_indexed_at
-        await self._session.flush()
-
-        return {
-            "library_id": library_id,
-            "uploaded_count": uploaded_count,
-            "indexed_count": indexed_count,
-            "failed_count": failed_count,
-            "documents": [self._serialize_document(row) for row in documents],
-        }
+        from app.services.standard_admission_service import StandardAdmissionService
+        return await StandardAdmissionService(self._session, self._org_id).receive(library_id, files)
 
     async def _index_document_from_path(self, library: InspectionStandardLibrary, document: StandardDocument, *, file_path: str) -> None:
         """Index a document from a local file path (used for uploaded files)."""
@@ -321,66 +211,34 @@ class InspectionStandardLibraryService:
         await self._session.flush()
 
     async def index_library(self, library_id: str, *, reindex: bool = False) -> dict[str, Any]:
-        try:
-            item = await self._get_library(library_id)
-            documents = await self._document_repo.list_by_library(self._org_id, library_id)
-            if not documents and item.pdf_root_dir:
-                await self.scan_library(library_id)
-                documents = await self._document_repo.list_by_library(self._org_id, library_id)
-            indexed_document_count = 0
-            chunk_count = 0
-            failed_count = 0
-            item.import_status = "indexing"
-            await self._session.flush()
-            for document in documents:
-                if document.import_status == "completed" and not reindex:
-                    indexed_document_count += 1
-                    chunk_count += int(document.chunk_count or 0)
-                    continue
-                await self._index_document(item, document, reindex=reindex)
-                if document.import_status == "completed":
-                    indexed_document_count += 1
-                    chunk_count += int(document.chunk_count or 0)
-                else:
-                    failed_count += 1
-            item.pdf_count = len(documents)
-            item.document_count = indexed_document_count
-            item.chunk_count = await self._chunk_repo.count_by_library(library_id)
-            item.last_indexed_at = utcnow() if documents else item.last_indexed_at
-            if failed_count and indexed_document_count:
-                item.import_status = "partial_failed"
-            elif failed_count:
-                item.import_status = "failed"
-            elif documents:
-                item.import_status = "completed"
-            else:
-                item.import_status = "not_scanned"
-            item.error_message = None if not failed_count else f"{failed_count} standard documents failed to index"
-            await self._session.flush()
-            return {
-                "library_id": library_id,
-                "document_count": len(documents),
-                "indexed_document_count": indexed_document_count,
-                "chunk_count": item.chunk_count,
-                "failed_count": failed_count,
-            }
-        except Exception as exc:
-            self._raise_if_table_missing(exc)
-            raise
+        from app.services.standard_admission_service import StandardAdmissionService
+        item = await self._get_library(library_id)
+        documents = await self._document_repo.list_by_library(self._org_id, library_id)
+        service = StandardAdmissionService(self._session, self._org_id)
+        for document in documents:
+            if document.current_revision_id:
+                _, rev = await service.revision(document.id, document.current_revision_id)
+                if rev.processing_status != "parsed":
+                    await service.enqueue(rev, "parse")
+        return {"library_id":library_id,"document_count":len(documents),
+            "indexed_document_count":sum(d.publication_status == "published" for d in documents),
+            "chunk_count":sum(int(d.chunk_count or 0) for d in documents if d.publication_status == "published"),
+            "failed_count":sum(d.processing_status == "failed" for d in documents)}
 
     async def index_document(self, document_id: str, *, reindex: bool = False) -> dict[str, Any]:
         document = await self._document_repo.get(self._org_id, document_id)
         if not document:
             raise NotFoundError("standard document not found")
-        item = await self._get_library(str(document.library_id))
-        await self._index_document(item, document, reindex=reindex)
-        return {
-            "library_id": str(document.library_id),
-            "document_count": 1,
-            "indexed_document_count": 1 if document.import_status == "completed" else 0,
-            "chunk_count": int(document.chunk_count or 0),
-            "failed_count": 0 if document.import_status == "completed" else 1,
-        }
+        if document.current_revision_id:
+            from app.services.standard_admission_service import StandardAdmissionService
+            service = StandardAdmissionService(self._session, self._org_id)
+            _, rev = await service.revision(document.id, document.current_revision_id)
+            if rev.processing_status != "parsed":
+                await service.enqueue(rev, "parse")
+        return {"library_id":document.library_id,"document_count":1,
+            "indexed_document_count":int(document.publication_status == "published"),
+            "chunk_count":int(document.chunk_count or 0) if document.publication_status == "published" else 0,
+            "failed_count":int(document.processing_status == "failed")}
 
     async def list_documents(self, library_id: str, *, page: int = 1, size: int = 50) -> dict[str, Any]:
         await self._get_library(library_id)
@@ -394,6 +252,9 @@ class InspectionStandardLibraryService:
         document = await self._document_repo.get(self._org_id, document_id)
         if not document:
             raise NotFoundError("standard document not found")
+        if document.current_revision_id:
+            from app.core.exceptions import ConflictError
+            raise ConflictError("请在标准详情补充元信息并新建修订，不能覆盖已有版本")
         allowed = {"standard_no", "standard_name", "domain", "product_category", "standard_level", "standard_status", "error_message"}
         normalized = {k: v for k, v in payload.items() if k in allowed and v is not None}
         if normalized:
@@ -404,6 +265,14 @@ class InspectionStandardLibraryService:
         document = await self._document_repo.get(self._org_id, document_id)
         if not document:
             raise NotFoundError("standard document not found")
+        if document.published_revision_id or document.publication_status == "publishing":
+            raise ValidationError("已发布或发布中的标准请先撤回；保留历史修订")
+        if document.current_revision_id:
+            history=(await self._session.execute(select(StandardDocumentRevision.id).where(
+                StandardDocumentRevision.document_id==document.id,StandardDocumentRevision.org_id==self._org_id,
+                StandardDocumentRevision.publication_status.in_(["published","publishing","suspended","withdrawn"])).limit(1))).scalar_one_or_none()
+            if history:
+                raise ValidationError("标准有发布历史，请使用撤回或停用，保留原文与历史修订")
         try:
             await self._importer.delete_document_points(document_id=document_id, library_id=str(document.library_id))
         except Exception:
@@ -424,40 +293,8 @@ class InspectionStandardLibraryService:
         return [self._serialize_chunk(row) for row in rows]
 
     async def retrieve(self, payload: dict[str, Any]) -> dict[str, Any]:
-        query = str(payload.get("query") or "").strip()
-        if not query:
-            raise ValidationError("query is required")
-        top_k = int(payload.get("top_k") or 8)
-        # Expand query with defect keywords for better recall
-        defect_keywords: list[str] = [str(k).strip() for k in list(payload.get("defect_keywords") or []) if str(k).strip()]
-        if defect_keywords:
-            expanded_terms = " ".join(defect_keywords)
-            query = f"{query} {expanded_terms}"
-        filters: list[dict[str, Any]] = []
-        base = {"org_id": self._org_id}
-        domain = str(payload.get("domain") or "").strip()
-        product_category = str(payload.get("product_category") or "").strip()
-        if domain and product_category:
-            filters.append({**base, "domain": domain, "product_category": product_category})
-        if domain:
-            filters.append({**base, "domain": domain})
-        filters.append(base)
-
-        best_result: dict[str, Any] | None = None
-        for payload_filter in filters:
-            result = await self._importer.retrieve(query=query, top_k=top_k, payload_filter=payload_filter)
-            if result["hits"]:
-                best_result = result
-                break
-            best_result = result
-        result = best_result or {"hits": [], "hit_count": 0, "candidate_count": 0, "latency_ms": 0.0}
-        hits = [self._serialize_retrieval_hit(hit) for hit in result.get("hits") or []]
-        return {
-            "hits": hits,
-            "hit_count": len(hits),
-            "candidate_count": int(result.get("candidate_count") or len(hits)),
-            "latency_ms": float(result.get("latency_ms") or 0.0),
-        }
+        from app.services.standard_admission_service import StandardAdmissionService
+        return await StandardAdmissionService(self._session, self._org_id).search(payload)
 
     async def resolve_active_binding(self, *, product_family: str | None) -> dict[str, Any] | None:
         family = str(product_family or "").strip().lower()
@@ -557,9 +394,11 @@ class InspectionStandardLibraryService:
                 name = str(payload.get("name") or "").strip()
                 if not name:
                     raise ValidationError("name is required to auto-create rag space")
-                from app.services.rag_space_service import RagSpaceService
-                rag_service = RagSpaceService(self._session, org_id=self._org_id, user_id=None)
-                created_space = await rag_service.create_space(name=name, description=f"Auto-created for standard library: {name}")
+                from app.models.rag_space import RagSpace
+                created_space=RagSpace(org_id=self._org_id,created_by=None,name=name[:120],
+                    resource_domain="formal_standard",description=f"标准库关联视图：{name}")
+                self._session.add(created_space)
+                await self._session.flush()
                 rag_space_ids = [str(created_space.id)]
             else:
                 await self._ensure_rag_spaces_exist(rag_space_ids)
@@ -620,6 +459,9 @@ class InspectionStandardLibraryService:
                 raise ValidationError(f"product not found: {product_id}")
 
     async def _serialize(self, item: InspectionStandardLibrary) -> dict[str, Any]:
+        admission_docs=await self._document_repo.list_by_library(self._org_id,item.id)
+        published_count=sum(bool(doc.published_revision_id) and doc.publication_status=="published" for doc in admission_docs)
+        pending_count=sum(doc.review_status!="approved" for doc in admission_docs)
         rows = await self._rag_repo.list_for_org(org_id=self._org_id, owner_user_id=None, limit=500)
         space_map = {str(row.id): row for row in rows}
         spec = None
@@ -671,6 +513,8 @@ class InspectionStandardLibraryService:
             "rag_space_ids": list(item.rag_space_ids or []),
             "rag_spaces": rag_spaces,
             "total_document_count": total_document_count,
+            "published_document_count": published_count,
+            "pending_review_document_count": pending_count,
             "qdrant_collection": item.qdrant_collection,
             "pdf_root_dir": item.pdf_root_dir,
             "file_glob": item.file_glob,
@@ -759,6 +603,11 @@ class InspectionStandardLibraryService:
     def _serialize_document(self, row: StandardDocument) -> dict[str, Any]:
         return {
             "id": str(row.id),
+            "current_revision_id": getattr(row,"current_revision_id",None),
+            "published_revision_id": getattr(row,"published_revision_id",None),
+            "processing_status": getattr(row,"processing_status",None) or "pending",
+            "review_status": getattr(row,"review_status",None) or "pending",
+            "publication_status": getattr(row,"publication_status",None) or "unpublished",
             "library_id": str(row.library_id),
             "standard_no": row.standard_no,
             "standard_name": row.standard_name,

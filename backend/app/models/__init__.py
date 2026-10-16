@@ -1,4 +1,8 @@
 from app.models.base import Base
+from app.models.inspection_execution import InspectionPolicyPublication,InspectionExecutionRun,InspectionExecutionAction
+from app.models.knowledge_admission import KnowledgeAdmission, KnowledgeAdmissionAction, RagSpaceGrant
+from app.models.standard_admission import StandardDocumentRevision, StandardAdmissionReview, StandardSyncOutbox
+from app.models.business_number import BusinessIdentifier, BusinessNumberSequence
 from app.models.supervision import (
     BusinessReview,
     DeviceCommand,
@@ -16,6 +20,7 @@ from app.models.supervision import (
 )
 from app.models.organization import Organization
 from app.models.user import User
+from app.models.permission import RolePermission, UserPermission
 from app.models.task import InspectionTask
 from app.models.task_execution_event import TaskExecutionEvent
 from app.models.result import InspectionResult
@@ -54,6 +59,7 @@ from app.models.quality_risk import (
     QualityEvidenceItem,
     QualityIngestionJob,
     QualityProduct,
+    QualityProductionBatch,
     QualityRiskAssessment,
     QualityRiskCase,
     QualitySourceRecord,

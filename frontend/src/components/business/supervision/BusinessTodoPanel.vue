@@ -4,20 +4,24 @@ import { useRouter } from "vue-router";
 import { ArrowRight, CircleCheck, RefreshRight } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { supervisionApi } from "@/api/supervision.api";
+import { extractApiErrorMessage } from "@/api/http";
 import { OP_LABELS, type BusinessTodo } from "@/types/supervision.types";
 
 const router = useRouter();
-const enabled = ref(false);
+const enabled = ref<boolean | null>(null);
 const loading = ref(false);
+const loadError = ref("");
 const items = ref<BusinessTodo[]>([]);
 
 async function load() {
   loading.value = true;
+  loadError.value = "";
   try {
     enabled.value = (await supervisionApi.settings()).data.data.enabled;
-    if (enabled.value) items.value = (await supervisionApi.todos()).data.data;
-  } catch {
-    if (enabled.value) ElMessage.error("业务待办暂时不可用，请刷新");
+    items.value = enabled.value ? (await supervisionApi.todos()).data.data : [];
+  } catch (error) {
+    items.value = [];
+    loadError.value = extractApiErrorMessage(error, "业务待办暂时不可用，请刷新");
   } finally {
     loading.value = false;
   }
@@ -42,7 +46,7 @@ onMounted(load);
 </script>
 
 <template>
-  <section v-if="enabled" class="todo-panel" v-loading="loading" aria-labelledby="todo-title">
+  <section v-if="enabled !== false" class="todo-panel" v-loading="loading" aria-labelledby="todo-title">
     <header>
       <div>
         <span class="queue-kicker">HUMAN REVIEW QUEUE</span>
@@ -54,7 +58,8 @@ onMounted(load);
       <el-button :icon="RefreshRight" @click="load">刷新</el-button>
     </header>
 
-    <el-table v-if="items.length" :data="items" class="todo-table">
+    <el-alert v-if="loadError" :title="loadError" type="warning" :closable="false" />
+    <el-table v-else-if="items.length" :data="items" class="todo-table">
       <el-table-column prop="name" label="业务记录" min-width="180" />
       <el-table-column label="处理事项" width="150">
         <template #default="{ row }">{{ OP_LABELS[row.operation] || row.operation }}</template>
@@ -72,7 +77,7 @@ onMounted(load);
       </el-table-column>
     </el-table>
 
-    <div v-else class="queue-empty">
+    <div v-else-if="!loading" class="queue-empty">
       <span class="empty-icon"><CircleCheck /></span>
       <div>
         <strong>当前队列已处理完</strong>

@@ -73,7 +73,12 @@ async def _process_memory_sync_outbox(org_id: str) -> dict:
 async def _replay_outbox_row(session, org_id: str, target_backend: str, action: str, payload: dict) -> None:
     backend = str(target_backend or "").lower()
     if backend == "qdrant":
-        await _replay_qdrant(org_id, action, payload)
+        clean=dict(payload)
+        admission_id=clean.pop("managed_admission_id",None)
+        await _replay_qdrant(org_id, action, clean)
+        if admission_id:
+            from app.services.knowledge_admission_service import finish_knowledge_projection
+            await finish_knowledge_projection(session,org_id,admission_id)
         return
     if backend == "neo4j":
         await _replay_neo4j(session, org_id, action, payload)

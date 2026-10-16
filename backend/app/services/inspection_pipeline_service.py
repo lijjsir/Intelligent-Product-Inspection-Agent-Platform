@@ -40,16 +40,28 @@ logger = logging.getLogger(__name__)
 InspectionState = dict[str, Any]
 
 
-def _normalize_image_urls_for_runtime(image_urls: list[str] | None) -> list[str]:
+def _normalize_image_urls_for_runtime(
+    image_urls: list[str] | None,
+    image_items: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    from app.services.object_storage.resolver import attachment_to_data_url, url_to_data_url
+
     normalized: list[str] = []
-    for raw in image_urls or []:
+    items = list(image_items or [])
+    for index, raw in enumerate(image_urls or []):
         url = str(raw or "").strip()
         if not url:
+            continue
+        protected_data_url = url_to_data_url(url)
+        if protected_data_url:
+            normalized.append(protected_data_url)
             continue
         if url.startswith(("http://", "https://", "data:")):
             normalized.append(url)
             continue
-        normalized.append(FileStorageService().to_data_url(url) or url)
+        item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
+        data_url = attachment_to_data_url(item) if item.get("bucket") and item.get("object_key") else None
+        normalized.append(data_url or FileStorageService().to_data_url(url) or url_to_data_url(url) or url)
     return normalized
 
 
@@ -116,23 +128,38 @@ async def _record_token_usage(
     return total_tokens
 
 
-def _build_manager_task_request(task: InspectionTask) -> NormalizedRequest:
+def _build_manager_task_request(task: InspectionTask, image_urls_override: list[str] | None = None) -> NormalizedRequest:
+    from app.services.object_storage.resolver import attachment_ref_from_url
+
     metadata = dict(task.meta_data or {})
     workflow_run_id = str(
         (metadata.get("execution") or {}).get("workflow_run_id")
         or metadata.get("workflow_run_id")
         or uuid7()
     )
-    image_urls = _normalize_image_urls_for_runtime(task.image_urls or [])
+    image_urls = image_urls_override if image_urls_override is not None else _normalize_image_urls_for_runtime(
+        task.image_urls or [], task.image_items or []
+    )
+    image_items = list(task.image_items or [])
+
+    def storage_ref(item: dict[str, Any]) -> dict[str, str]:
+        return {
+            **(attachment_ref_from_url(str(item.get("url") or "")) or {}),
+            **({"bucket": str(item["bucket"])} if item.get("bucket") else {}),
+            **({"object_key": str(item["object_key"])} if item.get("object_key") else {}),
+        }
+
     attachments = [
         NormalizedAttachment(
             id=str((item or {}).get("id") or (item or {}).get("hash") or index),
             name=str((item or {}).get("name") or f"task-image-{index + 1}"),
             url=image_urls[index] if index < len(image_urls) else str((item or {}).get("url") or ""),
             kind="image",
-            content_type="image/*",
+            content_type=str((item or {}).get("content_type") or "image/*"),
+            bucket=storage_ref(item or {}).get("bucket"),
+            object_key=storage_ref(item or {}).get("object_key"),
         )
-        for index, item in enumerate(list(task.image_items or []))
+        for index, item in enumerate(image_items)
     ]
     if not attachments:
         attachments = [
@@ -231,7 +258,7 @@ async def _save_supervision_image_draft(session, task, output):
         "summary": output.answer or output.summary or "图片分析草稿", "suggested_verdict": verdict,
         "probability": None, "confidence": None, "findings": list((result.reasoning_chain or {}).get("defects") or []) if result else [],
         "citations": list(output.citations or []), "consumed_event_ids": [],
-        "missing_inputs": [] if verdict in {"pass", "fail"} and output.citations else ["图片判定或标准证据不足"],
+        "missing_inputs": ["图片只产生辅助建议；须绑定已确认检测要求并完成独立复核"],
         "limitations": ["此结论仅针对本次图片可观察内容，未经校准，不提供失效概率"],
         "can_make_final_verdict": False}
     if not record:
@@ -311,6 +338,11 @@ async def _materialize_manager_task_output(
     quality_trace = persistable.quality_trace
     reasoning_chain = dict(result_data.reasoning_chain or {})
     reasoning_chain.setdefault("score_status", "not_calibrated")
+    reasoning_chain["ai_suggested_verdict"]=str(result_data.verdict or "manual_required")
+    reasoning_chain["assessment_scope"]="visible_image_assistance"
+    reasoning_chain["formal_verdict_status"]="requires_confirmed_requirements_and_independent_review"
+    reasoning_chain.setdefault("limitations",[])
+    reasoning_chain["limitations"]=[*reasoning_chain["limitations"],"图片模型建议不能替代已确认标准项目的执行或产品整体合格判断"]
     if quality_trace:
         reasoning_chain.setdefault("trace", quality_trace.model_dump(exclude_none=True))
     result = await result_repo.upsert_by_task(
@@ -318,7 +350,7 @@ async def _materialize_manager_task_output(
             "id": result_data.id or str(uuid7()),
             "task_id": task.id,
             "org_id": task.org_id,
-            "verdict": result_data.verdict or "manual_required",
+            "verdict": "manual_required",
             "overall_score": float(result_data.overall_score or 0.0),
             "defects": reasoning_chain.get("defects") or [],
             "citations": result_data.citations or {"items": output.citations},
@@ -643,7 +675,9 @@ async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
         pipeline_started_at = perf_counter()
 
         try:
-            manager_request = _build_manager_task_request(task)
+            from app.services.material_task_service import resolve_material_images
+            material_images=await resolve_material_images(session,task)
+            manager_request = _build_manager_task_request(task,material_images)
             await emit({"type": "agent_stage", "stage": "manager", "status": "running", "message": "AgentManager 开始调度"})
             router_output = await get_agent_manager().run(manager_request, db_session=session)
             if router_output.status != "completed":

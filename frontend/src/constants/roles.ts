@@ -15,7 +15,13 @@ export const ALL_ROLES = [
 ] as const;
 
 export const CHAT_ROLES = [ROLE_USER, ROLE_EXPERT] as const;
-export const COLLABORATION_ROLES = ALL_ROLES;
+export const COLLABORATION_ROLES = [
+  ROLE_ADMIN,
+  ROLE_APP_DEVELOPER,
+  ROLE_PLATFORM_OPERATOR,
+  ROLE_ALGORITHM_ENGINEER,
+  ROLE_EXPERT,
+] as const;
 
 export const CAPABILITY_PRIVATE_RAG = "private_rag";
 export const CAPABILITY_CUSTOM_PROMPT = "custom_prompt";

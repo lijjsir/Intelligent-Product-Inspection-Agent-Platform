@@ -14,9 +14,12 @@ from uuid import UUID
 
 from pydantic import ValidationError as SchemaError
 from sqlalchemy import select, func, or_
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.ids import uuid7
+from app.services.business_number_service import BusinessNumberService
+from app.services.risk_decision_context_service import RiskDecisionContextService
 from app.models.supervision import (
     BusinessReview,
     DeviceConnection,
@@ -53,6 +56,9 @@ INPUT_KEYS = {
     "image_assessment",
     "market_monitor_report",
     "memory_publication",
+    "risk_refs",
+    "sampling_batches",
+    "reassessment_basis",
 }
 
 
@@ -79,7 +85,7 @@ def serialize(record) -> dict:
             "assigned_to",
             "data",
         )
-    } | {"created_at": record.created_at.isoformat(), "updated_at": record.updated_at.isoformat()}
+    } | {"display_no": getattr(record, "display_no", None), "created_at": record.created_at.isoformat(), "updated_at": record.updated_at.isoformat()}
 
 
 class SupervisionService:
@@ -148,6 +154,7 @@ class SupervisionService:
         record = await self.db.scalar(stmt)
         if not record:
             raise NotFoundError("记录不存在")
+        await BusinessNumberService(self.db).attach([record], kind)
         return record
 
     async def list(self, kind, page=1, size=20, keyword=None, region_id=None, status=None):
@@ -182,6 +189,7 @@ class SupervisionService:
                 .limit(size)
             )
         )
+        await BusinessNumberService(self.db).attach(rows, kind)
         return {
             "items": [serialize(x) for x in rows],
             "total": int(total or 0),
@@ -241,7 +249,7 @@ class SupervisionService:
         for rid in clean.get("sales_region_ids", []):
             await self.get("regions", rid)
         if clean.get("enterprise_id"):
-            await self.get("enterprises", clean["enterprise_id"])
+            await self.get("enterprises", clean["enterprise_id"], lock=True)
         if clean.get("assigned_to"):
             from app.models.user import User
 
@@ -324,30 +332,33 @@ class SupervisionService:
                 raise ValidationError("样品产品或批次与任务不匹配")
         for key, target in (("case_id", "risk-cases"), ("plan_id", "sampling-plans")):
             if clean.get(key):
+                if key == "case_id":
+                    await RiskDecisionContextService(self.db, self.current).accepted(clean[key])
+                    continue
                 linked = await self.get(target, clean[key])
                 if key == "plan_id" and linked.status != "approved":
                     raise ValidationError("必须关联已批准计划")
+                if key == "plan_id":
+                    contexts = await self.sampling_analysis_contexts(linked)
+                    selected_ids = {candidate["case_id"] for candidate in linked.data["analysis"]["selected"]}
+                    if clean.get("case_id") and (clean["case_id"] not in selected_ids or clean["case_id"] not in {c["id"] for c in contexts}):
+                        raise ValidationError("检测会话风险对象不在已批准计划的选定范围")
         for sid in clean.get("sample_ids", []):
             sample = await self.get("samples", sid)
             if sample.data["task_id"] != clean.get("task_id"):
                 raise ValidationError("样品不属于此检测任务")
         for did in clean.get("device_ids", []):
             await self.get("devices", did)
+        risk_refs = []
         for candidate in clean.get("candidates", []):
-            from app.models.quality_risk import QualityRiskCase
-
-            risk_case = await self.db.scalar(
-                select(QualityRiskCase).where(
-                    QualityRiskCase.id == candidate["case_id"],
-                    QualityRiskCase.org_id == self.org_id,
-                    QualityRiskCase.status == "risk_assessed",
-                    QualityRiskCase.deleted_at.is_(None),
-                )
-            )
-            if not risk_case:
-                raise ValidationError("监督抽查候选必须来自已复核风险研判")
+            if candidate["case_id"] in {ref["case_id"] for ref in risk_refs}:
+                raise ValidationError("同一风险案件不能重复作为抽查候选")
+            context = await RiskDecisionContextService(self.db, self.current).accepted(candidate["case_id"])
+            risk_refs.append(context["source_ref"])
             if candidate.get("device_id"):
                 await self.get("devices", candidate["device_id"])
+        if kind == "sampling-plans":
+            clean["risk_refs"] = risk_refs
         for item in clean.get("test_items", []):
             if (
                 item.get("lower_limit") is not None
@@ -376,7 +387,8 @@ class SupervisionService:
         return clean
 
     async def create(self, kind, payload):
-        await self.require_enabled()
+        if kind != "enterprises":
+            await self.require_enabled()
         self.require_role(
             {"admin"}
             if kind in ARCHIVES
@@ -415,6 +427,7 @@ class SupervisionService:
         )
         self.db.add(record)
         await self.db.flush()
+        await BusinessNumberService(self.db).assign(record, kind)
         await self.journal(record, "create", increment=False)
         return serialize(record)
 
@@ -435,7 +448,8 @@ class SupervisionService:
         await self.db.flush()
 
     async def update(self, kind, record_id, payload):
-        await self.require_enabled()
+        if kind != "enterprises":
+            await self.require_enabled()
         record = await self.get(kind, record_id, lock=True)
         self.edit_access(record)
         if payload.version != record.version:
@@ -443,8 +457,11 @@ class SupervisionService:
         if payload.status and kind not in ARCHIVES | {"baselines", "exposures"}:
             raise ValidationError("业务状态只能通过复核和确认流程变更")
         if payload.data is not None:
+            reassessment_basis = copy.deepcopy(record.data.get("reassessment_basis"))
             current = {k: v for k, v in record.data.items() if k not in INPUT_KEYS}
             record.data = await self.validate_data(kind, {**current, **payload.data}, record_id)
+            if reassessment_basis:
+                record.data = {**record.data, "reassessment_basis": reassessment_basis}
             if kind == "risk-cases":
                 record.assigned_to = record.data.get("assigned_to")
             if kind not in ARCHIVES | {"baselines", "exposures", "samples"}:
@@ -765,6 +782,10 @@ class SupervisionService:
         measurements, errors = [], []
         for i, row in enumerate(rows, start=2):
             data = {field: row.get(mapping.get(field, field)) for field in Measurement.model_fields}
+            if not data.get("conditions"):data.pop("conditions",None)
+            elif isinstance(data["conditions"],str):
+                try:data["conditions"]=json.loads(data["conditions"])
+                except ValueError:data["conditions"]={"unparsed":data["conditions"]}
             if not data.get("quality_flag"):
                 data["quality_flag"] = "valid"
             try:
@@ -844,51 +865,19 @@ class SupervisionService:
         snap["as_of"] = datetime.utcnow().isoformat()
         snap["knowledge_snapshot_id"] = digest(snap)
         if record.kind == "sampling-plans" or operation == "risk_monitoring":
-            from app.models.quality_risk import QualityRiskAssessment, QualityRiskCase
-
-            risk_rows = list(
-                await self.db.scalars(
-                    select(QualityRiskCase).where(
-                        QualityRiskCase.org_id == self.org_id,
-                        QualityRiskCase.deleted_at.is_(None),
-                    )
-                )
-            )
-            snap["cases"] = []
-            for item in risk_rows:
-                assessment = await self.db.scalar(
-                    select(QualityRiskAssessment)
-                    .where(
-                        QualityRiskAssessment.org_id == self.org_id,
-                        QualityRiskAssessment.risk_case_id == item.id,
-                        QualityRiskAssessment.status == "accepted",
-                        QualityRiskAssessment.deleted_at.is_(None),
-                    )
-                    .order_by(QualityRiskAssessment.version.desc())
-                    .limit(1)
-                )
-                snap["cases"].append(
-                    {
-                        "id": item.id,
-                        "status": item.status,
-                        "created_by": item.created_by,
-                        "assigned_to": item.assigned_to,
-                        "data": {
-                            "product_category": item.scope.get("name")
-                            if item.scope_type == "category"
-                            else item.scope.get("product_category"),
-                            "analysis": {
-                                "risk_level": assessment.risk_level
-                                if assessment
-                                else "unknown"
-                            },
-                            **item.scope,
-                        },
-                    }
-                )
+            risk_context = RiskDecisionContextService(self.db, self.current)
             if record.kind == "sampling-plans":
                 source_ids = {c["case_id"] for c in record.data.get("candidates", [])}
-                snap["cases"] = [c for c in snap["cases"] if c["id"] in source_ids]
+                refs = record.data.get("risk_refs")
+                if refs:
+                    if {ref["case_id"] for ref in refs} != source_ids:
+                        raise ValidationError("抽查候选与保存的风险来源不一致，请重新保存候选")
+                    snap["cases"] = await risk_context.verify_refs(refs)
+                else:
+                    # Historical drafts can be analyzed anew; their old decisions cannot be approved.
+                    snap["cases"] = [await risk_context.accepted(case_id) for case_id in sorted(source_ids)]
+            else:
+                snap["cases"], snap["excluded_cases"] = await risk_context.eligible()
             snap["exposures"] = [
                 serialize(x)
                 for x in await self.db.scalars(
@@ -928,8 +917,14 @@ class SupervisionService:
             snap["related_sources"] = []
             for key, kind in (("case_id", "risk-cases"), ("plan_id", "sampling-plans")):
                 if record.data.get(key):
+                    if key == "case_id":
+                        expected = (task.meta_data or {}).get("risk_ref") if task else None
+                        snap["related_sources"].append(await RiskDecisionContextService(self.db, self.current).accepted(record.data[key], expected=expected))
+                        continue
+                    plan = await self.get(kind, record.data[key])
+                    await self.sampling_analysis_contexts(plan)
                     snap["related_sources"].append(
-                        serialize(await self.get(kind, record.data[key]))
+                        serialize(plan)
                     )
             if record.data.get("baseline_version"):
                 baselines = list(
@@ -980,30 +975,10 @@ class SupervisionService:
                 "status": standard.standard_status,
                 "applicability": getattr(standard, "applicability", None),
             }
-            docs = list(
-                await self.db.scalars(
-                    select(StandardDocument)
-                    .where(
-                        StandardDocument.library_id == standard.id,
-                        StandardDocument.deleted_at.is_(None),
-                    )
-                    .limit(30)
-                )
-            )
-            chunks = list(
-                await self.db.scalars(
-                    select(StandardDocumentChunk)
-                    .where(StandardDocumentChunk.library_id == standard.id)
-                    .limit(40)
-                )
-            )
-            snap["standard"]["documents"] = [
-                {"id": d.id, "number": d.standard_no, "hash": d.file_hash} for d in docs
-            ]
-            snap["standard"]["clauses"] = [
-                {"id": c.id, "document_id": c.document_id, "text": c.chunk_text[:2500]}
-                for c in chunks
-            ]
+            from app.services.standard_execution_context_service import published_standard_context
+            published=await published_standard_context(self.db,self.org_id,library_id=standard.id)
+            snap["standard"]["documents"]=[{"id":d["document_id"],"number":d["standard_no"],"hash":d["file_hash"],"revision_id":d["revision_id"]} for d in published]
+            snap["standard"]["clauses"]=[{**c,"document_id":d["document_id"],"revision_id":d["revision_id"]} for d in published for c in d["clauses"]]
             if record.data.get("batch_id"):
                 from app.models.product import ProductBatch
 
@@ -1011,7 +986,20 @@ class SupervisionService:
                 snap["production_date"] = (
                     batch.production_date.isoformat() if batch and batch.production_date else None
                 )
+        if record.kind=="inspection-sessions":
+            bindings=[{"revision_id":t["standard_revision_id"],"candidate_id":t["standard_candidate_id"]} for t in record.data.get("test_items",[]) if t.get("standard_revision_id") and t.get("standard_candidate_id")]
+            if bindings:
+                from app.services.inspection_execution_service import InspectionExecutionService
+                from app.services.inspection_requirement_engine import evaluate_plan
+                category=record.data.get("product_category")
+                production=record.data.get("production_date") or snap.get("production_date")
+                rules,refs,issues=await InspectionExecutionService(self.db,self.current).bindings(bindings,category,production)
+                actual=list(await self.db.scalars(select(MeasurementRecord).where(MeasurementRecord.org_id==self.org_id,MeasurementRecord.session_id==record.id)))
+                observations=[{**m.data,"evidence_id":m.id,"sample_id":str(m.sample_id),"measurement_key":m.data["item"],"validation_status":m.validation_status or "unverified"} for m in actual]
+                snap["standard_execution_evaluation"]=evaluate_plan(rules,record.data.get("sample_ids",[]),observations,source_issues=issues)
+                snap["standard_execution_sources"]=refs
         snap["knowledge_snapshot_id"] = digest(snap)
+        snap["knowledge_snapshot_id"] = digest({key: value for key, value in snap.items() if key != "knowledge_snapshot_id"})
         return snap
 
     async def queue_run(self, kind, record_id, payload):
@@ -1154,6 +1142,13 @@ class SupervisionService:
         if record.version != run.input_version:
             run.status = "stale"
             return self.run_response(run)
+        if run.agent == "supervision_sampling":
+            try:
+                await RiskDecisionContextService(self.db, self.current).verify_refs(
+                    [case["source_ref"] for case in run.snapshot.get("cases", [])])
+            except (NotFoundError, ValidationError) as exc:
+                run.status, run.error = "stale", exc.message
+                return self.run_response(run)
         run.status = "running"
         run.iteration += 1
         run.updated_at = datetime.utcnow()
@@ -1212,6 +1207,13 @@ class SupervisionService:
                 *snapshot.get("devices", []),
                 *snapshot.get("cases", []),
             ]:
+                if src.get("kind") == "quality_risk_case":
+                    try:
+                        await RiskDecisionContextService(self.db, self.current).accepted(src["id"], expected=src["source_ref"])
+                    except (NotFoundError, ValidationError) as exc:
+                        run.status, run.error = "stale", exc.message
+                        return self.run_response(run)
+                    continue
                 current = await self.db.scalar(
                     select(SupervisionRecord)
                     .where(
@@ -1290,6 +1292,9 @@ class SupervisionService:
                             target_version=record.version,
                         )
                     )
+            # The journal flush occurs before these JSON additions. Persist the final consumed versions explicitly.
+            flag_modified(run, "output")
+            flag_modified(record, "data")
         except Exception:
             run = await self.db.scalar(
                 select(SupervisionRun)
@@ -1513,6 +1518,31 @@ class SupervisionService:
         except Exception:
             return {"assessment_state": "manual_review_required", "can_make_final_verdict": False}
 
+    async def sampling_analysis_contexts(self, plan):
+        if plan.data.get("knowledge_status") == "needs_reassessment":
+            raise ValidationError("方案依据或反馈已变化，请重新分析")
+        analysis = plan.data.get("analysis") or {}
+        if analysis.get("status") != "completed" or not analysis.get("selected"):
+            raise ValidationError("抽查方案尚未形成有效候选或未满足约束，请重新分析")
+        run = await self.db.scalar(select(SupervisionRun).where(
+            SupervisionRun.id == plan.data.get("analysis_run_id"), SupervisionRun.org_id == self.org_id,
+            SupervisionRun.record_id == plan.id, SupervisionRun.agent == "supervision_sampling",
+            SupervisionRun.status == "completed").execution_options(populate_existing=True))
+        if not run or digest(run.output) != digest(analysis):
+            raise ValidationError("方案缺少与当前分析一致的运行快照，历史草稿请重新分析")
+        keys = DATA_SCHEMAS["sampling-plans"].model_fields
+        if digest({key: plan.data.get(key) for key in keys}) != digest({key: run.snapshot["data"].get(key) for key in keys}):
+            raise ValidationError("方案输入已变化，请重新分析")
+        if digest(plan.data.get("reassessment_basis")) != digest(run.snapshot["data"].get("reassessment_basis")):
+            raise ValidationError("重评估反馈与分析快照不一致，请重新分析")
+        cases = run.snapshot.get("cases") or []
+        candidates = {c["case_id"] for c in plan.data.get("candidates", [])}
+        selected = [c["case_id"] for c in analysis["selected"]]
+        if ({c["id"] for c in cases} != candidates or not candidates or len(selected) != len(set(selected))
+                or not set(selected) <= candidates or any(c.get("kind") != "quality_risk_case" or not c.get("source_ref") for c in cases)):
+            raise ValidationError("方案候选或风险版本引用不完整，请重新分析")
+        return await RiskDecisionContextService(self.db, self.current).verify_refs([c["source_ref"] for c in cases])
+
     async def submit_review(self, kind, record_id, payload):
         record = await self.get(kind, record_id, lock=True)
         self.edit_access(record)
@@ -1529,6 +1559,8 @@ class SupervisionService:
             raise ValidationError("请先运行分析")
         if payload.operation == "sampling.approve" and analysis.get("status") != "completed":
             raise ValidationError("方案未满足资源与覆盖约束")
+        if payload.operation == "sampling.approve":
+            await self.sampling_analysis_contexts(record)
         if payload.operation == "result.signoff":
             if (
                 analysis.get("status") != "awaiting_review"
@@ -1612,6 +1644,8 @@ class SupervisionService:
         if analysis.get("author_id") == self.actor:
             raise ForbiddenError("不能独立复核本人编写的人工判断")
         if payload.decision == "accept":
+            if review.operation == "sampling.approve":
+                await self.sampling_analysis_contexts(record)
             if review.operation == "risk.review" and (
                 analysis.get("missing_inputs")
                 or analysis.get("conflicts")
@@ -1620,6 +1654,13 @@ class SupervisionService:
                 raise ValidationError("请先解决缺证、冲突和未知风险判断")
             if review.operation == "result.review" and analysis.get("missing_inputs"):
                 raise ValidationError("检测数据或标准限值不完整")
+            if review.operation in {"result.review","result.signoff"}:
+                current_snapshot=await self.snapshot(record)
+                confirmed=current_snapshot.get("standard_execution_evaluation")
+                if not confirmed or confirmed.get("missing_inputs"):
+                    raise ValidationError("正式复核需核对已发布标准要求、有效观测及本次覆盖范围")
+                if confirmed.get("item_verdict")!=analysis.get("suggested_verdict"):
+                    raise ValidationError("当前标准项目执行结果与建议结论不一致，请重新分析")
             if record.data.get("knowledge_status") == "needs_reassessment":
                 raise ValidationError("依据已变化，请重新评估")
         review.status = "accepted" if payload.decision == "accept" else payload.decision
@@ -1668,6 +1709,8 @@ class SupervisionService:
 
         created = []
         sampling_batches = []
+        contexts = await self.sampling_analysis_contexts(plan)
+        refs = {context["id"]: context["source_ref"] for context in contexts}
         organization = await self.db.get(Organization, self.org_id)
         lab_enabled = bool(
             organization
@@ -1694,6 +1737,7 @@ class SupervisionService:
                     "code": sampling_batch_code,
                     "sample_count": candidate["sample_count"],
                     "location": candidate.get("region_id"),
+                    "risk_ref": refs[case.id],
                 }
             )
             if not candidate.get("laboratory_validation"):
@@ -1718,6 +1762,7 @@ class SupervisionService:
                     "plan_id": plan.id,
                     "assigned_to": case.assigned_to,
                     "case_id": case.id,
+                    "risk_ref": refs[case.id],
                     "sample_count": candidate["sample_count"],
                     "test_items": candidate["test_items"],
                     "sampling_location": candidate.get("region_id"),
@@ -1798,6 +1843,9 @@ class SupervisionService:
                     "supervision_signed": True,
                     "signed_version": session.version,
                     "inspection_session_id": session.id,
+                    "assessment_scope":"selected_confirmed_requirements",
+                    "product_verdict":"not_assessed",
+                    "standard_execution":out.get("standard_execution",{}),
                 },
                 llm_model="process-rules-v1",
                 prompt_version="supervision-v1",
@@ -1878,7 +1926,7 @@ class SupervisionService:
             original.assigned_to,
         }:
             raise ForbiddenError("仅创建人或负责人可发起重评估")
-        if kind != "risk-cases":
+        if kind not in {"risk-cases", "sampling-plans"}:
             raise ValidationError("检测会话请先建立新检测任务，以保留已签发结果")
         from app.schemas.supervision import RecordCreate
 
@@ -1889,6 +1937,13 @@ class SupervisionService:
                 code=f"{original.code[:90]}-重评-{str(uuid7())[-8:]}", name=original.name, data=data
             ),
         )
+        if kind == "sampling-plans":
+            draft = await self.get(kind, created["id"], lock=True)
+            draft.data = {**draft.data, "reassessment_basis": {
+                "source_id": original.id, "source_code": original.code, "source_version": original.version,
+                "feedback": copy.deepcopy(original.data.get("feedback", []))}}
+            await self.journal(draft, "reassessment_origin")
+            created = serialize(draft)
         self.db.add(
             SupervisionDependency(
                 org_id=self.org_id,

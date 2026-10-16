@@ -184,7 +184,7 @@ function setRange(days: number) {
   fetchData();
 }
 
-function metricCallCount(metric?: Pick<ModelAnalyticsMetric, "call_count" | "result_count"> | null) {
+function metricCallCount(metric?: Partial<Pick<ModelAnalyticsMetric, "call_count" | "result_count">> | null) {
   if (!metric) return 0;
   return metric.call_count ?? metric.result_count ?? 0;
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any, AsyncIterator
+from typing import Literal
 
 from io import BytesIO
 
@@ -19,7 +20,9 @@ from app.schemas.chat import (
     ChatMessageSendRequest,
     ChatSendResponse,
     ChatSessionCreateRequest,
+    ChatSessionUpdateRequest,
     ChatSessionResponse,
+    ChatSearchResponse,
     ChatTaskSubmitRequest,
     ChatTaskResultAppendRequest,
 )
@@ -54,6 +57,17 @@ async def create_session(
 ):
     service = _build_service(current)
     return ResponseEnvelope(data=await service.create_session(title=body.title))
+
+
+@router.get('/sessions/search', response_model=ResponseEnvelope[ChatSearchResponse])
+async def search_sessions(q: str = Query(default='', max_length=200), kind: Literal['all','chat','image','file'] = 'all', limit: int = Query(default=30, ge=1, le=50), offset: int = Query(default=0, ge=0), current: CurrentUser = Depends(get_current_user)):
+    return ResponseEnvelope(data=await _build_service(current).search_sessions(q, kind, limit, offset))
+
+
+@router.patch('/sessions/{session_id}', response_model=ResponseEnvelope[ChatSessionResponse])
+async def update_session(session_id: str, body: ChatSessionUpdateRequest, current: CurrentUser = Depends(get_current_user)):
+    service = _build_service(current)
+    return ResponseEnvelope(data=await service.update_session(session_id, title=body.title, is_pinned=body.is_pinned))
 
 
 @router.get("/sessions/{session_id}/messages", response_model=ResponseEnvelope[list[ChatMessageResponse]])

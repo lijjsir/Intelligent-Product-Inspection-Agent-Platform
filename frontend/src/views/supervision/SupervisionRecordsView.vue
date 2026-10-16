@@ -113,6 +113,7 @@ const options = ref<Record<string, { value: string; label: string }[]>>({
     { value: "synthetic", label: "模拟或合成" },
   ],
 });
+const excludedRiskCandidates = ref(0);
 const runtimeEdit = computed(() => auth.role === "platform_operator" && kind.value === "devices");
 const canCreate = computed(() =>
   ["regions", "enterprises", "devices"].includes(kind.value)
@@ -179,7 +180,7 @@ function requiredOptionKeys(specs: any[] = inputSpecs.value, target = new Set<st
 async function loadOptions(force = false) {
   const staticKeys = new Set(["enterpriseRoles", "calibration", "online", "sources", "natures"]);
   const keys = [...requiredOptionKeys()].filter(
-    (key) => staticKeys.has(key) || force || Date.now() - (optionLoadedAt.get(key) || 0) >= optionTtlMs,
+    (key) => key === "cases" || staticKeys.has(key) || force || Date.now() - (optionLoadedAt.get(key) || 0) >= optionTtlMs,
   );
   const pendingKeys = keys.filter((key) => !staticKeys.has(key));
   if (!pendingKeys.length) return;
@@ -196,10 +197,11 @@ async function loadOptions(force = false) {
       options.value.assignees = (await supervisionApi.assignees()).data.data;
     },
     cases: async () => {
-      const result = await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" });
+      const result = await supervisionApi.samplingCandidates();
+      excludedRiskCandidates.value = result.data.data.excluded_count;
       options.value.cases = result.data.data.items.map((item) => ({
         value: item.id,
-        label: `${item.code} · ${item.title}`,
+        label: `${item.code} · ${item.title} · 研判第 ${item.assessment_version} 版`,
       }));
     },
     products: async () => {
@@ -262,6 +264,20 @@ async function openCreate() {
   form.value = structuredClone(defaults[kind.value]);
   dialog.value = true;
   await loadOptions();
+}
+async function reassessSampling() {
+  if (!selected.value || saving.value) return;
+  saving.value = true;
+  try {
+    const result = await supervisionApi.reassessSamplingPlan(selected.value.id);
+    selected.value = result.data.data;
+    page.value = 1;
+    await router.replace({query: {...route.query, record: result.data.data.id}});
+    ElMessage.success("已创建重评估草稿，请核对当前候选并重新分析");
+    await load();
+  } finally {
+    saving.value = false;
+  }
 }
 async function checkSimilarNames() {
   const query = name.value.trim();
@@ -500,7 +516,7 @@ onUnmounted(() => {
             highlight-current-row
             empty-text="暂无记录，可新增或导入业务资料"
             @row-click="select"
-            ><el-table-column prop="code" label="编号" min-width="100" /><el-table-column
+            ><el-table-column prop="display_no" label="编号" min-width="100" /><el-table-column
               prop="name"
               label="名称"
               min-width="160" /><el-table-column label="状态" width="110"
@@ -614,13 +630,14 @@ onUnmounted(() => {
             >
             <el-button
               v-if="
-                ['risk-cases', 'inspection-sessions'].includes(kind) &&
+                ['risk-cases', 'inspection-sessions', 'sampling-plans'].includes(kind) &&
                 ['user', 'expert'].includes(auth.role)
               "
               size="small"
               @click="feedback"
               >结果反馈</el-button
             >
+            <el-button v-if="kind === 'sampling-plans' && auth.role === 'expert' && (selected.status === 'approved' || selected.data.knowledge_status === 'needs_reassessment')" size="small" :loading="saving" @click="reassessSampling">新建重评估方案</el-button>
           </div>
           <el-alert
             v-if="selected.data.knowledge_status === 'needs_reassessment'"
@@ -681,6 +698,17 @@ onUnmounted(() => {
               {{ r.comment }}
             </p>
           </section>
+          <section v-if="kind === 'sampling-plans' && selected.data.risk_refs?.length">
+            <h3>引用的风险研判</h3>
+            <p v-for="ref in selected.data.risk_refs" :key="ref.case_id">研判第 {{ ref.version }} 版
+              <el-button link type="primary" @click="router.push({path:'/app/risk-assessments',query:{case_id:ref.case_id}})">核对案件当前依据</el-button>
+            </p>
+          </section>
+          <section v-if="kind === 'sampling-plans' && selected.data.reassessment_basis">
+            <h3>重评估来源与反馈</h3>
+            <p>{{ selected.data.reassessment_basis.source_code }} · 原方案第 {{ selected.data.reassessment_basis.source_version }} 版</p>
+            <p v-for="(item, index) in selected.data.reassessment_basis.feedback" :key="index">{{ item.text }}</p>
+          </section>
         </aside>
       </div>
     </template>
@@ -698,6 +726,7 @@ onUnmounted(() => {
           ><el-form-item label="名称" required><el-input v-model="name" @blur="checkSimilarNames" /></el-form-item>
         </div>
         <p v-if="!editing" class="form-hint">系统保存后自动生成编号；请先按名称或已有记录检查是否重复。</p>
+        <el-alert v-if="kind === 'sampling-plans' && excludedRiskCandidates" type="warning" :closable="false" :title="`${excludedRiskCandidates} 条历史确认风险需重新核验，暂不能作为抽查候选。`" />
         <el-alert v-if="similarRecords.length && !editing" type="warning" :closable="false" class="similar-records">
           <template #title>找到名称相近的已有记录</template>
           <div v-for="item in similarRecords" :key="item.id">

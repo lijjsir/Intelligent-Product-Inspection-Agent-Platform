@@ -19,9 +19,11 @@ celery_app.conf.imports = (
     "worker.tasks.report_generate_task",
     "worker.tasks.stability_task",
     "worker.tasks.memory_sync_outbox_task",
+    "worker.tasks.standard_sync_outbox_task",
 )
 
 celery_app.conf.beat_schedule = {
+    "standard-sync-outbox-dispatch": {"task": "worker.tasks.standard_sync_outbox_task.dispatch_standard_sync_outbox", "schedule": 20.0},
     "supervision-run-dispatch": {"task": "worker.tasks.supervision_task.dispatch_supervision_runs", "schedule": 30.0},
     "model-health-check": {
         "task": "worker.tasks.health_check_task.run_model_health_check",
@@ -53,4 +55,5 @@ from worker.tasks import (  # noqa: E402,F401
     memory_sync_outbox_task,
     report_generate_task,
     stability_task,
+    standard_sync_outbox_task,
 )

@@ -108,7 +108,7 @@ class RagSpaceService:
         self._jobs = RagIndexJobRepository(session)
         self._storage = build_object_storage()
         self._rag_storage_bucket = settings.rag_storage_bucket
-        self._indexer = KnowledgeIndexer(org_id=self._org_id)
+        self._indexer = KnowledgeIndexer(org_id=self._org_id, collection=settings.workspace_documents_collection)
 
     async def create_space(self, *, name: str, description: str | None) -> RagSpaceResponse:
         try:
@@ -132,7 +132,18 @@ class RagSpaceService:
                 include_system=True,
                 limit=limit,
             )
-            return [RagSpaceResponse.model_validate(row) for row in rows]
+            result=[]
+            for row in rows:
+                response=RagSpaceResponse.model_validate(row)
+                response.can_submit_knowledge=row.created_by==self._user_id and row.created_by is not None
+                if row.created_by is not None and row.created_by!=self._user_id:
+                    from app.models.knowledge_admission import RagSpaceGrant
+                    allowed=await self._session.scalar(select(RagSpaceGrant.id).where(RagSpaceGrant.org_id==self._org_id,
+                        RagSpaceGrant.space_id==row.id,RagSpaceGrant.user_id==self._user_id,RagSpaceGrant.status=="active",
+                        RagSpaceGrant.allow_knowledge_submission.is_(True)))
+                    response.can_submit_knowledge=bool(allowed)
+                result.append(response)
+            return result
         except Exception as exc:
             self._raise_if_rag_metadata_missing(exc)
             raise
@@ -178,17 +189,17 @@ class RagSpaceService:
 
     async def get_tree(self, *, rag_space_id: str) -> list[RagNodeResponse]:
         try:
-            await self._get_readable_space(rag_space_id)
+            space = await self._get_readable_space(rag_space_id)
             nodes = await self._nodes.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
+                owner_user_id=space.created_by,
                 include_system=True,
             )
             documents = await self._documents.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
+                owner_user_id=space.created_by,
                 include_system=True,
                 limit=5000,
             )
@@ -298,18 +309,18 @@ class RagSpaceService:
 
     async def list_documents(self, *, rag_space_id: str, limit: int = 1000) -> list[RagSpaceDocumentListItem]:
         try:
-            await self._get_readable_space(rag_space_id)
+            space = await self._get_readable_space(rag_space_id)
             nodes = await self._nodes.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
+                owner_user_id=space.created_by,
                 include_system=True,
             )
             node_map = {node.id: node for node in nodes}
             rows = await self._documents.list_for_space(
                 org_id=self._org_id,
                 rag_space_id=rag_space_id,
-                owner_user_id=self._user_id,
+                owner_user_id=space.created_by,
                 include_system=True,
                 limit=limit,
             )
@@ -713,6 +724,9 @@ class RagSpaceService:
             "rag_space_id": rag_space_id,
             "org_id": self._org_id,
             "user_id": self._user_id,
+            # Workspace material is explicitly tagged so it cannot be
+            # mistaken for a formal standard or managed professional claim.
+            "resource_domain": "workspace",
             "node_id": node_id,
             "document_id": document_id,
             "file_name": file_name,
@@ -959,7 +973,9 @@ class RagSpaceService:
             rag_space_id=rag_space_id,
             owner_user_id=self._user_id,
         )
-        if space is None:
+        if space is None or str(space.org_id) != str(self._org_id) or (
+            self._user_id is not None and str(space.created_by) != str(self._user_id)
+        ):
             raise NotFoundError("rag space not found")
         return space
 

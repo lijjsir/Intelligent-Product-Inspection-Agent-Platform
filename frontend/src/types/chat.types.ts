@@ -5,11 +5,22 @@ export interface ChatSession {
   org_id: string;
   user_id: string;
   title?: string | null;
+  is_pinned?: boolean;
+  title_source?: 'auto' | 'ai' | 'manual' | 'fallback';
   status: string;
   last_message_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
+
+export interface ChatSearchItem extends ChatSession {
+  snippet: string;
+  message_id?: string | null;
+  message_seq?: number | null;
+  attachments: ChatAttachment[];
+}
+export interface ChatSearchResponse { items: ChatSearchItem[]; total: number; has_more: boolean; }
+export type ChatSearchKind = 'all' | 'chat' | 'image' | 'file';
 
 export type ChatStreamPhase = "idle" | "connecting" | "streaming" | "polling" | "reconnecting" | "closing";
 
@@ -49,7 +60,6 @@ export type ChatSubRoute =
   | "memory_governance"
   | "file_summary"
   | "file_qa"
-  | "paper_format_check"
   | "action_blocked"
   | "data_analysis"
   | "error";
@@ -60,7 +70,6 @@ export type ChatUiSchema =
   | "quality_answer_v1"
   | "task_action_v1"
   | "task_result_v1"
-  | "paper_review_report_v1"
   | "error_v1"
   | "chat_error_v1"
   | "agent_error_v1";
@@ -102,65 +111,6 @@ export interface AgentErrorPayload {
   stage?: string | null;
   capability?: string | null;
   step_id?: string | null;
-}
-
-export interface PaperReviewReportFile {
-  format: "md" | "docx" | "pdf";
-  file_name: string;
-  bucket: string;
-  object_key: string;
-  url: string;
-  content_type: string;
-}
-
-export interface PaperReviewIssueLocation {
-  section?: string;
-  section_title?: string;
-  paragraph_index?: number;
-  paragraph_no?: number;
-  line?: number;
-  template_id?: string;
-  display_text?: string;
-}
-
-export interface PaperReviewIssue {
-  code: string;
-  title: string;
-  severity: string;
-  category: string;
-  message: string;
-  evidence: string;
-  location: PaperReviewIssueLocation;
-  suggestion: string;
-  engine?: string;
-  engine_rule_id?: string;
-  confidence?: string;
-}
-
-export interface PaperReviewEngineStatus {
-  name: string;
-  ok: boolean;
-  detail?: string;
-}
-
-export interface PaperReviewReport {
-  score: number;
-  issue_count: number;
-  high_count: number;
-  medium_count: number;
-  low_count: number;
-  summary: string;
-  chat_advice?: string;
-  issues?: PaperReviewIssue[];
-  limitations: string[];
-  report_files: PaperReviewReportFile[];
-  model_used?: boolean;
-  document_type: string;
-  template_id: string;
-  template_errors: string[];
-  engines_used?: string[];
-  engine_status?: PaperReviewEngineStatus[];
-  runtime_ready?: boolean;
 }
 
 export type ChatMode = "auto" | "chat" | "inspection";
@@ -341,7 +291,6 @@ export interface ChatMessagePayload {
   satisfied?: boolean;
   selected_rag_space?: Pick<RagSpace, "id" | "name" | "description"> | null;
   attachment_echo?: ChatAttachment[];
-  paper_format_report?: PaperReviewReport | null;
   evidence_packet?: {
     query?: string;
     sources?: Record<string, unknown>;

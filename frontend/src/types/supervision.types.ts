@@ -13,6 +13,7 @@ export type SupervisionKind =
   | "baselines";
 export interface SupervisionRecord {
   id: string;
+  display_no?: string | null;
   org_id: string;
   kind: SupervisionKind;
   code: string;

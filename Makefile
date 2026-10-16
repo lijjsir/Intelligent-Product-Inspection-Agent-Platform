@@ -7,7 +7,6 @@ help:
 	@echo "  dev-down        Stop local dependencies"
 	@echo "  backend-setup   Install backend runtime dependencies (from backend/)"
 	@echo "  backend-run     Run backend (from backend/)"
-	@echo "  paper-runtime-init  Warm paper-review runtime models and tools (from backend/)"
 	@echo "  frontend-dev    Run frontend dev server (from frontend/)"
 	@echo "  db-migrate      Run Alembic migrations (from backend/)"
 
@@ -26,10 +25,6 @@ backend-run:
 .PHONY: backend-setup
 backend-setup:
 	cd backend && python3 -m pip install -r requirements.txt
-
-.PHONY: paper-runtime-init
-paper-runtime-init:
-	cd backend && PYTHONPATH=. python3 scripts/init_paper_review_runtime.py
 
 .PHONY: frontend-dev
 frontend-dev:

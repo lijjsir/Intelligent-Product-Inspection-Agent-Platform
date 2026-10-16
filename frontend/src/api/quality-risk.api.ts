@@ -5,12 +5,27 @@ import type {
   QualityAttachment,
   QualityDataSource,
   QualityProduct,
+  QualityProductCandidate,
+  QualityProductionBatch,
+  QualityProductLinks,
   QualitySourceRecord,
   RiskAssessmentV4,
   RiskCaseV4,
 } from "@/types/quality-risk.types";
 
 export const qualityRiskApi = {
+  productOptions: () => http.get<{
+    categories: Pick<ProductCategoryV4, "id" | "org_id" | "code" | "name" | "is_active">[];
+    products: Pick<QualityProduct, "id" | "org_id" | "category_id" | "name" | "model" | "brand" | "is_active">[];
+  }>("/v1/quality-products/options"),
+  productBatchOptions: (productId: string) => http.get<QualityProductionBatch[]>(`/v1/quality-products/${productId}/batch-options`),
+  previewCategoryImport: (file: File, commonBasis: string) => {
+    const form = new FormData(); form.append("file", file);
+    if (commonBasis.trim()) form.append("common_basis", commonBasis.trim());
+    return http.post<{ rows: Array<{ name: string; classification_basis: string | null }>; errors: Array<{ row: number; message: string }>; valid_count: number; can_confirm: boolean }>("/v1/quality-products/categories/imports/preview", form);
+  },
+  confirmCategoryImport: (rows: Array<{ name: string; classification_basis: string | null }>) =>
+    http.post<{ created_count: number; reused_count: number }>("/v1/quality-products/categories/imports/confirm", { rows }),
   productCatalog: (includeInactive = false) =>
     http.get<{ categories: ProductCategoryV4[]; products: QualityProduct[] }>(
       "/v1/quality-products/catalog",
@@ -20,17 +35,32 @@ export const qualityRiskApi = {
     http.post<ProductCategoryV4>("/v1/quality-products/categories", payload),
   updateCategory: (id: string, payload: Record<string, unknown>) =>
     http.patch<ProductCategoryV4>(`/v1/quality-products/categories/${id}`, payload),
+  deleteCategory: (id: string) => http.delete<{ deleted: boolean }>(`/v1/quality-products/categories/${id}`),
   createProduct: (payload: Record<string, unknown>) =>
     http.post<QualityProduct>("/v1/quality-products", payload),
+  productCandidates: (params: Record<string, unknown>) =>
+    http.get<QualityProductCandidate[]>("/v1/quality-products/duplicate-candidates", { params }),
   updateProduct: (id: string, payload: Record<string, unknown>) =>
     http.patch<QualityProduct>(`/v1/quality-products/${id}`, payload),
+  deleteProduct: (id: string) => http.delete<{ deleted: boolean }>(`/v1/quality-products/${id}`),
+  deleteEnterprise: (id: string) => http.delete<{ deleted: boolean }>(`/v1/enterprises/${id}`),
+  deleteProductionBatch: (productId: string, batchId: string) =>
+    http.delete<{ deleted: boolean }>(`/v1/quality-products/${productId}/batches/${batchId}`),
+  productBatches: (productId: string) =>
+    http.get<QualityProductionBatch[]>(`/v1/quality-products/${productId}/batches`),
+  createProductionBatch: (productId: string, payload: Record<string, unknown>) =>
+    http.post<QualityProductionBatch>(`/v1/quality-products/${productId}/batches`, payload),
+  updateProductionBatch: (productId: string, batchId: string, payload: Record<string, unknown>) =>
+    http.patch<QualityProductionBatch>(`/v1/quality-products/${productId}/batches/${batchId}`, payload),
+  productLinks: (productId: string, batchId?: string) =>
+    http.get<QualityProductLinks>(`/v1/quality-products/${productId}/links`, { params: { batch_id: batchId || undefined } }),
   sources: () => http.get<QualityDataSource[]>("/v1/quality-data/sources"),
   createSource: (payload: Record<string, unknown>) =>
     http.post<QualityDataSource>("/v1/quality-data/sources", payload),
   updateSource: (id: string, payload: Record<string, unknown>) =>
     http.patch<QualityDataSource>(`/v1/quality-data/sources/${id}`, payload),
   records: (params: Record<string, unknown> = {}) =>
-    http.get<PagedResponse<QualitySourceRecord>>("/v1/quality-data/records", { params }),
+    http.get<PagedResponse<QualitySourceRecord>>("/v1/quality-data/records", { params, paramsSerializer: { indexes: null } }),
   reverseGeocode: (latitude: number, longitude: number) =>
     http.get<{
       formatted_address: string;
@@ -51,9 +81,13 @@ export const qualityRiskApi = {
     files.forEach((file) => form.append("files", file));
     return http.post<QualityAttachment[]>("/v1/quality-data/attachments", form);
   },
-  previewImport: (sourceId: string, requestKey: string, file: File, mapping = {}) => {
+  attachment: (id: string) => http.get<QualityAttachment>(`/v1/quality-data/attachments/${id}`),
+  downloadAttachment: (id: string) => http.get<Blob>(`/v1/quality-data/attachments/${id}/download`, { responseType: "blob" }),
+  previewImport: (sourceId: string | null, requestKey: string, file: File, mapping = {}, originLabel: string | null = null, recordType?: string) => {
     const form = new FormData();
-    form.append("source_id", sourceId);
+    if (sourceId) form.append("source_id", sourceId);
+    if (originLabel) form.append("origin_label", originLabel);
+    if (recordType) form.append("record_type", recordType);
     form.append("request_key", requestKey);
     form.append("mapping", JSON.stringify(mapping));
     form.append("file", file);
@@ -61,15 +95,16 @@ export const qualityRiskApi = {
   },
   importTemplate: () =>
     http.get<Blob>("/v1/quality-data/import-template", { responseType: "blob" }),
-  confirmImport: (id: string) => http.post(`/v1/quality-data/imports/${id}/confirm`, {}),
+  confirmImport: (id: string) => http.post<any>(`/v1/quality-data/imports/${id}/confirm`, {}),
   cancelImport: (id: string) => http.post(`/v1/quality-data/imports/${id}/cancel`, {}),
   riskCases: (params: Record<string, unknown> = {}) =>
     http.get<PagedResponse<RiskCaseV4>>("/v1/risk-cases", { params }),
   createRiskCase: (payload: Record<string, unknown>) =>
     http.post<RiskCaseV4>("/v1/risk-cases", payload),
-  analyzeRisk: (id: string, policyId?: string) =>
+  analyzeRisk: (id: string, policyId?: string, inspectionExecutionRunId?: string) =>
     http.post<RiskAssessmentV4>(`/v1/risk-cases/${id}/analyze`, {
       policy_id: policyId || null,
+      inspection_execution_run_id: inspectionExecutionRunId || null,
     }),
   reviewRisk: (
     id: string,

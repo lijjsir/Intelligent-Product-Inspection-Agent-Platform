@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1.deps import get_db, get_current_user
 from app.core.exceptions import NotFoundError
-from app.core.permissions import require_role
+from app.core.permissions import ROLE_USER, require_role
 from app.schemas.common import PagedResponse, ResponseEnvelope
 from app.schemas.result import ResultListItemResponse, ResultListQuery, ResultResponse, ReviewSubmit
 from app.schemas.user import CurrentUser
@@ -10,6 +10,9 @@ from app.services.result_service import ResultService, result_effective_verdict,
 
 
 router = APIRouter()
+
+from app.api.v1.task_result_summary import router as summary_router
+router.include_router(summary_router)
 
 
 @router.get("", response_model=ResponseEnvelope[PagedResponse[ResultListItemResponse]])
@@ -19,7 +22,7 @@ async def list_results(
     db=Depends(get_db),
 ):
     require_role("result", current.role)
-    service = ResultService(db, current.org_id)
+    service = ResultService(db, current.org_id, owner_user_id=current.user_id if current.role == ROLE_USER else None)
     rows, total = await service.list_results(query)
     items = [
         ResultListItemResponse(
@@ -46,7 +49,7 @@ async def get_by_task(
     db=Depends(get_db),
 ):
     require_role("result", current.role)
-    service = ResultService(db, current.org_id)
+    service = ResultService(db, current.org_id, owner_user_id=current.user_id if current.role == ROLE_USER else None)
     result = await service.get_response_by_task(task_id)
     if not result:
         raise NotFoundError("Result not found for task")

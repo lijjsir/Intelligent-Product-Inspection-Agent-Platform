@@ -6,7 +6,8 @@ PIAP, Intelligent Product Inspection Agent Platform, is an internal product-qual
 
 ## Users
 
-- End users and experts use the app workspace to ask inspection questions, manage inspection tasks, review results, upload evidence, and export reports.
+- Ordinary users have three app entries: AI chat, My tasks, and Personal settings. They can ask general questions or questions about inspection, quality supervision, and platform usage; analyze attachments; create and follow their own inspection tasks; and export their own task reports as PDF or Word from task/result pages. Chat history and feedback stay inside the conversation. Ordinary users do not have meeting rooms or the collaboration center.
+- Experts use the app workspace for quality supervision, inspection tasks, results, evidence, knowledge spaces, collaboration, and reports.
 - Admins use the governance workspace to manage users, model configuration, inspection standards, GPU scheduling, memory governance, and quality analytics.
 - Platform operators use the ops and governance workspaces to monitor models, data quality, costs, releases, templates, and quality trends.
 - Algorithm engineers use the governance and ops workspaces to maintain model configuration, inspection standards, datasets, evaluation, training, deployment records, and experiment traceability.

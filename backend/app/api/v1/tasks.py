@@ -24,7 +24,22 @@ from app.services.task_service import TaskService
 router = APIRouter()
 
 
+@router.get("/meta/creation-options", response_model=ResponseEnvelope[dict])
+async def task_creation_options(current: CurrentUser = Depends(get_current_user), db=Depends(get_db)):
+    require_role("task", current.role)
+    from app.services.inspection_standard_library_service import InspectionStandardLibraryService
+    choices = await InspectionStandardLibraryService(db, current.org_id).list_task_choices()
+    return ResponseEnvelope(data={"standards": choices})
+
+
 def _require_task_ingest_access(role: str) -> None:
+    if role == "algorithm_engineer":
+        # The authorized-sample page uses this bridge to import approved samples.
+        # The service validates the dataset owner, explicit enrollment and version.
+        require_role("dataset", role)
+        return
+    if role == "user":
+        raise ForbiddenError("普通用户不能导入检测结果到知识库或数据集")
     if role == ROLE_ADMIN:
         return
     if role in PERMISSIONS.get("task", set()) or role in PERMISSIONS.get("dataset", set()):
@@ -79,6 +94,7 @@ async def create_task(
         inspection_standard_id=payload.inspection_standard_id,
         product_category_id=payload.product_category_id,
         quality_product_id=payload.quality_product_id,
+        quality_batch_id=payload.quality_batch_id,
         image_urls=payload.image_urls,
         image_items=payload.image_items,
         priority=payload.priority,

@@ -34,7 +34,7 @@ async def run_knowledge(state: InspectionState) -> InspectionState:
             rag_result = await resolve_and_search_system_rag(
                 session=session,
                 org_id=str(state.get("org_id") or ""),
-                user_id=None,
+                user_id=str(state.get("user_id") or "").strip() or None,
                 query=query,
                 product_family=str(state.get("product_family") or "") or None,
                 product_id=str(state.get("product_id") or "") or None,

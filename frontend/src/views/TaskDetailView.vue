@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
-import MeasurementPanel from "@/components/business/supervision/MeasurementPanel.vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
@@ -18,13 +17,16 @@ import { useTaskStore } from "@/stores/task.store";
 import { formatTaskEntityLabel } from "@/utils/master-data-labels";
 import type { TaskResultIngestResponse, TaskResultIngestTarget, TaskStreamEvent } from "@/types/task.types";
 import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
+import { taskStatusLabel } from "@/utils/task-status";
+import InspectionExecutionPanel from '@/components/business/InspectionExecutionPanel.vue';
+import InspectionCaseWorkflowPanel from '@/components/business/InspectionCaseWorkflowPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
 const taskStore = useTaskStore();
 const chatStore = useChatStore();
 const datasetStore = useDatasetStore();
-const { hasRole } = usePermission();
+const { hasRole, hasPermission } = usePermission();
 
 const loading = ref(true);
 const running = ref(false);
@@ -51,7 +53,7 @@ const ingestForm = ref({
 let unsubscribe: (() => void) | null = null;
 
 const canIngestTaskResult = computed(() =>
-  hasRole([ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]),
+  hasRole([ROLE_ADMIN, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR, ROLE_ALGORITHM_ENGINEER]),
 );
 const canBrowseRagSpaces = computed(() => hasRole([ROLE_ADMIN, ROLE_USER, ROLE_EXPERT]));
 const canBrowseDatasets = computed(() => hasRole(ROLE_ALGORITHM_ENGINEER));
@@ -320,9 +322,9 @@ onUnmounted(() => {
     <div>
       <el-button @click="goBack" class="back-button">&larr; 返回列表</el-button>
       <div v-if="currentTask" class="title-area">
-        <h2 class="text-2xl font-bold text-zinc-900">任务：{{ taskStore.current.id }}</h2>
-        <el-tag :type="getStatusType(taskStore.current.status)" size="large">
-          {{ taskStore.current.status.toUpperCase() }}
+        <h2 class="text-2xl font-bold text-zinc-900">任务：{{ currentTask.id }}</h2>
+        <el-tag :type="getStatusType(currentTask.status)" size="large">
+          {{ hasRole(ROLE_USER) ? taskStatusLabel(currentTask.status) : currentTask.status.toUpperCase() }}
         </el-tag>
         <el-button
           v-if="canRerunTask"
@@ -333,20 +335,28 @@ onUnmounted(() => {
           重新执行检测
         </el-button>
         <el-button
-          v-if="taskStore.current.has_result && canViewInspectionResults"
+          v-if="currentTask.has_result && canViewInspectionResults"
           type="success"
           plain
-          @click="router.push(`/app/results/${taskStore.current.id}`)"
+          @click="router.push(`/app/results/${currentTask.id}`)"
         >
-          查看分析结果
+          {{ hasRole(ROLE_USER) ? '查看检测结果' : '查看分析结果' }}
         </el-button>
         <el-button
-          v-if="taskStore.current.has_stability && canViewInspectionResults"
+          v-if="currentTask.has_stability && canViewInspectionResults && !hasRole(ROLE_USER)"
           type="warning"
           plain
-          @click="router.push(`/app/stability/${taskStore.current.id}`)"
+          @click="router.push(`/app/stability/${currentTask.id}`)"
         >
           查看稳定性评估
+        </el-button>
+        <el-button
+          v-if="currentTask.has_result && hasRole(ROLE_EXPERT) && hasPermission('result') && hasPermission(['report_read','report_generate'])"
+          type="primary"
+          plain
+          @click="router.push({ path: `/app/results/${currentTask.id}`, query: { report: '1' } })"
+        >
+          下载检测报告
         </el-button>
         <el-button
           v-if="canIngestTaskResult"
@@ -358,7 +368,7 @@ onUnmounted(() => {
           导入检测结果
         </el-button>
         <el-button
-          v-if="taskStore.current.status !== 'running' && !(taskStore.current.supervision && taskStore.current.status==='done')"
+          v-if="currentTask.status !== 'running' && !(currentTask.supervision && currentTask.status==='done')"
           type="danger"
           plain
           :loading="deleting"
@@ -370,25 +380,27 @@ onUnmounted(() => {
     </div>
 
     <div v-if="currentTask" class="content">
-      <MeasurementPanel v-if="hasRole([ROLE_USER,ROLE_EXPERT,ROLE_PLATFORM_OPERATOR])" :key="taskId" :task-id="taskId" :product-sku-id="currentTask.product_sku_id" :batch-id="currentTask.batch_id" />
+      <InspectionCaseWorkflowPanel v-if="currentTask.has_case_workflow&&hasPermission('inspection_execution')&&hasPermission('result')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
+      <InspectionExecutionPanel v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
       <el-card shadow="never">
         <template #header>基本信息</template>
         <el-descriptions :column="2">
-          <el-descriptions-item label="任务 ID">{{ taskStore.current.id }}</el-descriptions-item>
-          <el-descriptions-item label="组织 ID">{{ taskStore.current.org_id }}</el-descriptions-item>
-          <el-descriptions-item label="产品线">{{ formatTaskEntityLabel(taskStore.current.product_line_name, taskStore.current.product_line_code || taskStore.current.product_id) }}</el-descriptions-item>
-          <el-descriptions-item label="SKU">{{ formatTaskEntityLabel(taskStore.current.product_name, taskStore.current.product_sku_code || taskStore.current.product_id) }}</el-descriptions-item>
-          <el-descriptions-item label="批次">{{ taskStore.current.batch_no || "-" }}</el-descriptions-item>
-          <el-descriptions-item label="检测标准">{{ taskStore.current.standard_name || taskStore.current.spec_code }}</el-descriptions-item>
-          <el-descriptions-item label="优先级">{{ taskStore.current.priority }}</el-descriptions-item>
+          <el-descriptions-item label="任务 ID">{{ currentTask.id }}</el-descriptions-item>
+          <el-descriptions-item v-if="!hasRole(ROLE_USER)" label="组织 ID">{{ currentTask.org_id }}</el-descriptions-item>
+          <el-descriptions-item label="产品线">{{ formatTaskEntityLabel(currentTask.product_line_name, currentTask.product_line_code || currentTask.product_id) }}</el-descriptions-item>
+          <el-descriptions-item label="SKU">{{ formatTaskEntityLabel(currentTask.product_name, currentTask.product_sku_code || currentTask.product_id) }}</el-descriptions-item>
+          <el-descriptions-item label="原始批次号">{{ currentTask.batch_no || "未提供" }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentTask.quality_batch_display_no" label="系统批次编号">{{ currentTask.quality_batch_display_no }}</el-descriptions-item>
+          <el-descriptions-item label="检测标准">{{ currentTask.standard_name || currentTask.spec_code }}</el-descriptions-item>
+          <el-descriptions-item label="优先级">{{ currentTask.priority }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">
-            {{ formatTaskTime(taskStore.current.created_at) }}
+            {{ formatTaskTime(currentTask.created_at) }}
           </el-descriptions-item>
-          <el-descriptions-item label="执行模式">{{ taskStore.current.execution?.mode || "-" }}</el-descriptions-item>
-          <el-descriptions-item label="执行 Job">{{ taskStore.current.execution?.job_id || "-" }}</el-descriptions-item>
+          <el-descriptions-item v-if="!hasRole(ROLE_USER)" label="执行模式">{{ currentTask.execution?.mode || "-" }}</el-descriptions-item>
+          <el-descriptions-item v-if="!hasRole(ROLE_USER)" label="执行 Job">{{ currentTask.execution?.job_id || "-" }}</el-descriptions-item>
         </el-descriptions>
         <el-alert
-          v-if="taskStore.current.status === 'done' && !taskStore.current.has_result"
+          v-if="currentTask.status === 'done' && !currentTask.has_result"
           class="missing-result-alert"
           type="warning"
           :closable="false"
@@ -413,15 +425,20 @@ onUnmounted(() => {
       </el-card>
 
       <el-card shadow="never" class="timeline-card">
-        <template #header>AI 检测 Agent 实时流</template>
+        <template #header>{{ hasRole(ROLE_USER) ? '检测进度' : 'AI 检测 Agent 实时流' }}</template>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
         <el-timeline v-else>
           <el-timeline-item v-for="item in timeline" :key="eventKey(item)" :timestamp="formatTaskTime(item.ts)" placement="top">
             <div class="event-line">
-              <strong>{{ item.type }}</strong>
-              <span v-if="item.stage"> / {{ item.stage }}</span>
-              <span v-if="item.message"> - {{ item.message }}</span>
-              <span v-if="item.status">（{{ item.status }}）</span>
+              <template v-if="hasRole(ROLE_USER)">
+                <strong>{{ item.message || (item.status ? taskStatusLabel(item.status) : '检测处理中') }}</strong>
+              </template>
+              <template v-else>
+                <strong>{{ item.type }}</strong>
+                <span v-if="item.stage"> / {{ item.stage }}</span>
+                <span v-if="item.message"> - {{ item.message }}</span>
+                <span v-if="item.status">（{{ item.status }}）</span>
+              </template>
             </div>
           </el-timeline-item>
         </el-timeline>

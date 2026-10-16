@@ -46,6 +46,8 @@ export default [
     },
     rules: {
       ...tsPlugin.configs.recommended.rules,
+      "no-redeclare": "off",
+      "@typescript-eslint/no-redeclare": "error",
       "@typescript-eslint/no-explicit-any": "off",
     },
   },

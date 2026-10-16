@@ -32,10 +32,6 @@ class ManagerEvaluator:
             a.type == "lab_detection_result"
             and a.status == "success"
         ),
-        "file.paper_format_check": lambda a: (
-            a.type == "paper_format_report"
-            and a.status == "success"
-        ),
         "quality.inspection.execute": lambda a: (
             a.type in {"inspection_result", "quality_final_assessment"}
             and a.status == "success"

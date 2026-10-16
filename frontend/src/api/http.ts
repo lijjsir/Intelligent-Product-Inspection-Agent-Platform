@@ -1,4 +1,4 @@
-import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
+import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from "axios";
 import { clearStoredAuthSession, ORG_ID_KEY, TOKEN_KEY, readStoredValue } from "@/utils/auth-session";
 
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
@@ -199,8 +199,14 @@ instance.interceptors.response.use(
   },
 );
 
+function get<T extends Blob>(url: string, config: ApiRequestConfig & { responseType: "blob" }): Promise<AxiosResponse<T>>;
+function get<T>(url: string, config?: ApiRequestConfig): Promise<AxiosResponse<ApiEnvelope<T>>>;
+function get<T>(url: string, config?: ApiRequestConfig) {
+  return instance.get<ApiEnvelope<T> | T>(url, config);
+}
+
 export const http = {
-  get: <T>(url: string, config?: ApiRequestConfig) => instance.get<ApiEnvelope<T>>(url, config),
+  get,
   post: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.post<ApiEnvelope<T>>(url, data, config),
   put: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.put<ApiEnvelope<T>>(url, data, config),
   patch: <T>(url: string, data?: unknown, config?: ApiRequestConfig) => instance.patch<ApiEnvelope<T>>(url, data, config),

@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 from app.api.v1 import quality_risk, supervision
+from app.api.v1 import knowledge
+from app.api.v1 import inspection_execution
 
 from app.api.v1 import (
     admin_meetings,
@@ -23,8 +25,6 @@ from app.api.v1 import (
     files,
     gpu_nodes,
     organizations,
-    paper_templates,
-    paper_review_runtime,
     inspection_specs,
     inspection_standards,
     infrastructure,
@@ -46,6 +46,8 @@ from app.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(inspection_execution.router)
+router.include_router(knowledge.router)
 router.include_router(quality_risk.router, tags=["quality-risk-v4"])
 router.include_router(supervision.router, tags=["quality-supervision"])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -90,5 +92,3 @@ router.include_router(quality.router, prefix="/quality", tags=["quality"])
 router.include_router(quality_kg.router, prefix="/quality-kg", tags=["quality-kg"])
 router.include_router(langfuse_proxy.router, tags=["langfuse"])
 router.include_router(memory.router, prefix="/memory", tags=["memory"])
-router.include_router(paper_templates.router)
-router.include_router(paper_review_runtime.router)

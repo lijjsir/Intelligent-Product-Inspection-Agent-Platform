@@ -27,8 +27,8 @@ const modules = [
     color: "#d97706",
   },
   {
-    title: "质检门槛",
-    description: "查看模型置信度、证据充分度、可追溯性和自动放行门槛。",
+    title: "检测执行策略",
+    description: "查看输入完整性、失败复核、报告转录核验和独立专业复核策略。",
     icon: DocumentChecked,
     route: "ops-ai-review-gates",
     color: "#dc2626",
@@ -45,7 +45,7 @@ function navigateTo(routeName: string) {
     <div class="page-header">
       <h1>治理工作台</h1>
       <p class="mt-2 text-sm text-zinc-500">
-        围绕 Agent、Prompt、路由策略和质检门槛的统一治理入口。
+        围绕 Agent、Prompt、路由策略和检测执行策略的统一治理入口。
       </p>
     </div>
 

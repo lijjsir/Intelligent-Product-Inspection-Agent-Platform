@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.claims import (
@@ -12,6 +12,7 @@ from app.core.claims import (
 )
 from app.core.security import safe_decode_token
 from app.core.exceptions import ForbiddenError
+from app.core.permissions import PermissionRole
 from app.schemas.user import CurrentUser
 from infra.database.session import get_session
 
@@ -36,7 +37,42 @@ def _require_uuid_claim(payload: dict, key: str) -> str:
         raise ForbiddenError("invalid token claims") from None
 
 
-def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
+async def get_permission_identity(
+    authorization: str = Header(default=""), token: str = Query(default=""), db=Depends(get_db),
+) -> dict:
+    from app.core.exceptions import NotFoundError
+    from app.services.permission_service import PermissionService
+
+    raw_token = authorization.split(" ", 1)[1] if authorization.startswith("Bearer ") else token
+    if not raw_token:
+        raise ForbiddenError("missing bearer token")
+    payload = safe_decode_token(raw_token)
+    claims = {**payload, "sub": payload.get("user_id") or payload.get("sub")}
+    user_id = _require_uuid_claim(claims, "sub")
+    org_id = _require_uuid_claim(claims, "org_id")
+    try:
+        identity = await PermissionService(db, org_id).identity(user_id)
+    except NotFoundError:
+        raise ForbiddenError("账号不存在或组织归属已变更，请重新登录") from None
+    return {**identity, "org_id": org_id}
+
+
+def apply_permission_identity(current: CurrentUser, identity) -> CurrentUser:
+    if isinstance(identity, dict):
+        if current.user_id != identity["user_id"] or current.org_id != identity["org_id"]:
+            raise ForbiddenError("invalid token claims")
+        current.role = PermissionRole(identity["role"], identity["effective"])
+        current.roles = [identity["role"]]
+        current.effective_permissions = identity["effective"]
+        current.workspaces = derive_workspaces(current.roles, current.plan_tier)
+        current.default_workspace = derive_default_workspace(current.roles, current.workspaces, current.plan_tier)
+        current.capabilities = derive_capabilities(current.plan_tier, current.roles)
+    return current
+
+
+def get_current_user(
+    authorization: str = Header(default=""), identity: dict = Depends(get_permission_identity),
+) -> CurrentUser:
     if not authorization.startswith("Bearer "):
         raise ForbiddenError("missing bearer token")
     token = authorization.split(" ", 1)[1]
@@ -52,7 +88,7 @@ def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
     capabilities = payload.get("capabilities")
     if not isinstance(capabilities, list):
         capabilities = derive_capabilities(plan_tier, roles)
-    return CurrentUser(
+    current = CurrentUser(
         user_id=user_id,
         org_id=org_id,
         role=role,
@@ -64,3 +100,4 @@ def get_current_user(authorization: str = Header(default="")) -> CurrentUser:
             payload.get("default_workspace") or derive_default_workspace(roles, [str(item) for item in workspaces])
         ),
     )
+    return apply_permission_identity(current, identity)

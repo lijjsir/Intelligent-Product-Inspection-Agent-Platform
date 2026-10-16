@@ -16,6 +16,11 @@ class ImageItem(BaseModel):
     url: str = Field(min_length=1)
     hash: str = Field(min_length=1, description="SHA-256 hex digest of the image content")
     sample_number: int | None = Field(default=None, ge=1, description="Batch sample/unit number for traceability")
+    # Object storage identity is retained when the URL is a protected API path.
+    # It lets asynchronous workers read the same bytes without relying on a browser URL.
+    bucket: str | None = Field(default=None, min_length=1, max_length=128)
+    object_key: str | None = Field(default=None, min_length=1, max_length=1024)
+    content_type: str | None = Field(default=None, min_length=1, max_length=255)
 
     @classmethod
     def from_url(cls, index: int, url: str, content_bytes: bytes | None = None) -> ImageItem:
@@ -41,9 +46,13 @@ class TaskListQuery(PageParams):
 
 
 class TaskCreate(BaseModel):
-    input_mode: Literal["image", "measurement", "mixed"] = "image"
+    # A task can start from visual evidence, structured measurements, or a
+    # previously issued report. Numeric execution is completed in the
+    # inspection-execution workflow after the task is created.
+    input_mode: Literal["image", "measurement", "mixed", "report"] = "image"
     product_category_id: str | None = None
     quality_product_id: str | None = None
+    quality_batch_id: str | None = None
     product_sku_id: str | None = None
     batch_id: str | None = None
     inspection_standard_id: str | None = None
@@ -81,6 +90,8 @@ class TaskCreate(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    has_case_workflow: bool = False
+    display_no: str | None = None
     supervision: bool = False
     id: str
     org_id: str
@@ -92,6 +103,8 @@ class TaskResponse(BaseModel):
     inspection_standard_id: str | None = None
     product_category_id: str | None = None
     quality_product_id: str | None = None
+    quality_batch_id: str | None = None
+    quality_batch_display_no: str | None = None
     product_line_code: str | None = None
     product_line_name: str | None = None
     product_sku_code: str | None = None
@@ -116,6 +129,8 @@ class TaskResponse(BaseModel):
 
 
 class TaskListItemResponse(BaseModel):
+    has_case_workflow: bool = False
+    display_no: str | None = None
     supervision: bool = False
     id: str
     org_id: str
@@ -127,6 +142,8 @@ class TaskListItemResponse(BaseModel):
     inspection_standard_id: str | None = None
     product_category_id: str | None = None
     quality_product_id: str | None = None
+    quality_batch_id: str | None = None
+    quality_batch_display_no: str | None = None
     product_line_code: str | None = None
     product_line_name: str | None = None
     product_sku_code: str | None = None

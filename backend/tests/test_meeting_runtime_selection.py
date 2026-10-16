@@ -206,6 +206,7 @@ async def test_meeting_agent_uses_model_config_runtime_even_if_agent_model_is_st
         org_id="org-1",
         user_id="user-1",
         username="alice",
+        user_role="expert",
     )
 
     assert gateway.calls[0]["models"] == runtime_models

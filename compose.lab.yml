@@ -1,0 +1,175 @@
+name: piap-lab
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Run deploy/lab/init-secrets.sh first}
+      MYSQL_DATABASE: piap_main
+      MYSQL_USER: piap
+      MYSQL_PASSWORD: ${PIAP_DB_PASSWORD:?Run deploy/lab/init-secrets.sh first}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: piap
+      MINIO_ROOT_PASSWORD: ${PIAP_MINIO_ROOT_PASSWORD:?Run deploy/lab/init-secrets.sh first}
+    volumes:
+      - minio_data:/data
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${PIAP_NEO4J_PASSWORD:?Run deploy/lab/init-secrets.sh first}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512m
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  backend:
+    image: piap-lab-backend:current
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    working_dir: /app/backend
+    command: >-
+      sh -c 'PYTHONPATH=. alembic upgrade head &&
+      exec python -m uvicorn main:app --host 0.0.0.0 --port 8000'
+    env_file: .env.lab
+    environment: &app_environment
+      PYTHONPATH: /app/backend
+      PIAP_APP_ENV: prod
+      PIAP_DB_URL: mysql+aiomysql://piap:${PIAP_DB_PASSWORD}@mysql:3306/piap_main
+      PIAP_DB_REPLICA_URL: mysql+aiomysql://piap:${PIAP_DB_PASSWORD}@mysql:3306/piap_main
+      PIAP_REDIS_URL: redis://redis:6379/0
+      PIAP_CELERY_BROKER_URL: redis://redis:6379/0
+      PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/0
+      PIAP_S3_ENDPOINT: http://minio:9000
+      PIAP_S3_ACCESS_KEY: piap
+      PIAP_S3_SECRET_KEY: ${PIAP_MINIO_ROOT_PASSWORD}
+      PIAP_OBJECT_STORAGE_BACKEND: minio
+      PIAP_QDRANT_URL: http://qdrant:6333
+      PIAP_QDRANT_DOCKER_URL: http://qdrant:6333
+      PIAP_NEO4J_ENABLED: "true"
+      PIAP_NEO4J_URI: bolt://neo4j:7687
+      PIAP_NEO4J_USERNAME: neo4j
+      PIAP_NEO4J_PASSWORD: ${PIAP_NEO4J_PASSWORD}
+      PIAP_MEMORY_GRAPH_WRITE_BACKEND: neo4j
+      PIAP_MEMORY_GRAPH_READ_BACKEND: neo4j
+      PIAP_JWT_PRIVATE_KEY: /run/secrets/jwt_private.pem
+      PIAP_JWT_PUBLIC_KEY: /run/secrets/jwt_public.pem
+      PIAP_GOVERNANCE_SECRET: ${PIAP_GOVERNANCE_SECRET}
+      PIAP_LANGFUSE_ENABLED: "false"
+      PIAP_TRUST_SCORING_ENABLED: "false"
+    volumes:
+      - ./deploy/lab/secrets:/run/secrets:ro
+      - uploads_data:/app/backend/runtime_uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  celery-worker:
+    image: piap-lab-backend:current
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    working_dir: /app/backend
+    command: python -m celery -A worker.celery_app.celery_app worker -l info --concurrency=4
+    env_file: .env.lab
+    environment: *app_environment
+    volumes:
+      - ./deploy/lab/secrets:/run/secrets:ro
+      - uploads_data:/app/backend/runtime_uploads
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  celery-beat:
+    image: piap-lab-backend:current
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    working_dir: /app/backend
+    command: python -m celery -A worker.celery_app.celery_app beat -l info
+    env_file: .env.lab
+    environment: *app_environment
+    volumes:
+      - ./deploy/lab/secrets:/run/secrets:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  web:
+    image: piap-lab-web:current
+    build:
+      context: .
+      dockerfile: deploy/lab/Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "${PIAP_WEB_BIND_ADDRESS:-0.0.0.0}:${PIAP_WEB_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  uploads_data:

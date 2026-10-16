@@ -68,4 +68,4 @@ async def test_manual_review_rejects_non_final_verdict(monkeypatch):
             payload={"verdict": "manual_required", "note": "继续复核"},
         )
 
-    assert "产品合格或产品不合格" in exc_info.value.message
+    assert "辅助或选定项目通过/不通过" in exc_info.value.message

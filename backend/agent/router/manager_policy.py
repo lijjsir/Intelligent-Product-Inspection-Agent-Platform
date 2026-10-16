@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.contracts.quality_contracts import NormalizedRequest
+from agent.platform_help import is_platform_help_query
 from agent.router.capability_registry import CAPABILITIES, SURFACE_MODE_POLICY, capabilities_for_surface
 from agent.router.contracts import AgentPlanStep, AgentRoutePlan
 from agent.router.manager_state import ManagerState
@@ -40,17 +41,7 @@ READONLY_TASK_QUERY_PATTERNS = [
     ]
 ]
 SUMMARY_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"总结|概括|摘要|summary"]]
-PAPER_FORMAT_PATTERNS = [
-    re.compile(pattern, re.I)
-    for pattern in [
-        r"查非",
-        r"论文.{0,6}(格式|排版|模板|规范).{0,4}(检查|检测|审查|审阅)",
-        r"(格式|排版|模板).{0,4}(检查|检测|审查|审阅)",
-        r"错别字|病句|标点错误|格式错误|标点符号",
-        r"paper format|format check|proofread",
-    ]
-]
-RAG_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"知识库|RAG|根据.{0,8}(资料|文档|知识库|标准)|AQL|标准"]]
+RAG_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"知识库|RAG|根据.{0,8}(资料|文档|知识库|标准)|AQL|标准|质检|质监|质量监督|监督抽查|检测依据|检验要求|产品.{0,8}(风险|质量|缺陷)"]]
 DATA_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"数据分析|统计|趋势|分析数据|报表分析"]]
 RAG_INGEST_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"(加入|写入|导入|入库).{0,8}(知识库|RAG)|rag ingest|ingest"]]
 LAB_PATTERNS = [re.compile(pattern, re.I) for pattern in [r"实验室|检验数据|检测数据|设备数据|环境数据|lab|equipment|environment"]]
@@ -95,17 +86,6 @@ class ManagerPolicy:
                 "risk": "high",
                 "stop_on_match": True,
                 "description": "请求把文件写入 RAG 空间，需要显式确认且不能在聊天页直接执行",
-            },
-            {
-                "priority": 2,
-                "name": "论文查非/格式检查",
-                "condition": "附件包含 document 且命中 PAPER_FORMAT_PATTERNS",
-                "intent": "paper_format_check",
-                "target_agent": "file",
-                "needs": ["file.paper_format_check", "quality.final_analyze"],
-                "risk": "low",
-                "stop_on_match": True,
-                "description": "对论文文档执行结构、格式、文字规范检查（优先于纯文本任务拦截）",
             },
             {
                 "priority": 3,
@@ -298,6 +278,15 @@ class ManagerPolicy:
                 risk="high",
             )
 
+        if state.surface == "chat" and not state.attachments and is_platform_help_query(query):
+            return Understanding(
+                goal="根据当前角色的功能说明回答平台操作与能力问题",
+                intent="general_chat",
+                needs=["quality.final_analyze"],
+                missing_inputs=[],
+                entities={},
+            )
+
         if self._matches(query, RAG_INGEST_PATTERNS):
             return Understanding(
                 goal="请求把文件写入 RAG 空间，需要显式确认且不能在聊天页直接执行",
@@ -306,20 +295,6 @@ class ManagerPolicy:
                 missing_inputs=[],
                 entities=self._extract_entities(query, state.attachments),
                 risk="high",
-            )
-        # Attachments with specific intent keywords take priority over
-        # pure-text task-intent blocking — documents for paper check
-        # and images for understanding never mean "create a task".
-        has_doc = any(kind == "document" for kind in attachment_kinds)
-        paper_match = self._matches(query, PAPER_FORMAT_PATTERNS)
-        _log.info("ManagerPolicy.understand paper_format_check has_doc=%s paper_match=%s", has_doc, paper_match)
-        if settings.paper_review_enabled and has_doc and paper_match:
-            return Understanding(
-                goal="检查论文文档的格式、结构和文字规范问题",
-                intent="paper_format_check",
-                needs=["file.paper_format_check"],
-                missing_inputs=[],
-                entities=self._extract_entities(query, state.attachments),
             )
         if state.surface != "quality_task" and "image" in attachment_kinds:
             needs = ["vision.inspect", "quality.final_analyze"]
@@ -430,7 +405,6 @@ class ManagerPolicy:
         "rag.ingest": ["confirmed by user", "documents indexed"],
         "file.summary": ["parsed_text is not empty", "summary is not empty"],
         "file.qa": ["parsed_text is not empty", "answer references file content"],
-        "file.paper_format_check": ["paper issues are structured", "summary explains key findings"],
         "vision.inspect": ["visual_inspection_result is present"],
         "lab.early_risk.assess": ["lab_detection_result is present"],
         "quality.final_analyze": ["generate non-empty answer"],
@@ -449,7 +423,6 @@ class ManagerPolicy:
         "rag.ingest": "rag_ingest_request",
         "file.summary": "file_summary",
         "file.qa": "file_answer",
-        "file.paper_format_check": "paper_format_report",
         "vision.inspect": "visual_inspection_result",
         "lab.early_risk.assess": "lab_detection_result",
         "quality.final_analyze": "quality_final_assessment",
@@ -578,7 +551,7 @@ class ManagerPolicy:
         if key in {"evidence.arbitrate", "memory.governance"}:
             return "orchestrator"
 
-        if intent in {"file_summary", "file_qa", "paper_format_check"}:
+        if intent in {"file_summary", "file_qa"}:
             if "file" in capability.owner_agents:
                 return "file"
 
@@ -644,6 +617,8 @@ class ManagerPolicy:
     def _is_readonly_task_query(self, query: str) -> bool:
         text = str(query or "").strip()
         if not text:
+            return False
+        if is_platform_help_query(text):
             return False
         if self._matches(text, READONLY_TASK_QUERY_PATTERNS):
             return True

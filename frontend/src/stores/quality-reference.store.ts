@@ -15,7 +15,7 @@ export const useQualityReferenceStore = defineStore("quality-reference", () => {
   let cacheIdentity = "";
 
   function ensureIdentity() {
-    const next = `${auth.orgId}:${auth.primaryRole}`;
+    const next = `${auth.orgId}:${auth.primaryRole}:${auth.primaryRole !== 'user' && auth.hasPermission('product_master_read') ? 'catalog' : 'options'}`;
     if (next !== cacheIdentity) {
       cacheIdentity = next;
       categories.value = [];
@@ -32,9 +32,17 @@ export const useQualityReferenceStore = defineStore("quality-reference", () => {
   async function loadProducts(force = false) {
     ensureIdentity();
     if (!force && fresh("products")) return;
-    const response = await qualityRiskApi.productCatalog(false);
-    categories.value = response.data.data.categories;
-    products.value = response.data.data.products;
+    if (auth.primaryRole === "user" || !auth.hasPermission("product_master_read")) {
+      const { data } = await qualityRiskApi.productOptions();
+      categories.value = data.data.categories;
+      // These references are only public form labels; never cache catalog
+      // attributes, identifiers or manufacturer records in this branch.
+      products.value = data.data.products.map((item) => ({ ...item, attributes: {}, identifiers: [] }));
+    } else {
+      const response = await qualityRiskApi.productCatalog(false);
+      categories.value = response.data.data.categories;
+      products.value = response.data.data.products;
+    }
     loadedAt.value.products = Date.now();
   }
 

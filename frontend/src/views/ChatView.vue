@@ -1,37 +1,52 @@
 ﻿<script setup lang="ts">
-import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled } from "@element-plus/icons-vue";
+import MaterialIntakeButton from "@/components/business/MaterialIntakeButton.vue";
+import { CircleClose, CollectionTag, Paperclip, Promotion, WarningFilled, Plus, Top, Search } from "@element-plus/icons-vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { feedbackApi } from "@/api/feedback.api";
+import { taskApi } from "@/api/task.api";
 import AgentErrorAlert from "@/components/chat/AgentErrorAlert.vue";
 import AgentTraceTimeline from "@/components/chat/AgentTraceTimeline.vue";
 import ChatInspectionContextPanel from "@/components/chat/ChatInspectionContextPanel.vue";
 import EvidencePacketCard from "@/components/chat/EvidencePacketCard.vue";
 import LabDetectionCard from "@/components/chat/LabDetectionCard.vue";
 import PromptTemplateTray from "@/components/chat/PromptTemplateTray.vue";
+import ChatAnswer from "@/components/chat/ChatAnswer.vue";
 import QualityAssessmentCard from "@/components/chat/QualityAssessmentCard.vue";
 import VisualInspectionCard from "@/components/chat/VisualInspectionCard.vue";
 import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
+import DocumentAttachmentCard from '@/components/common/DocumentAttachmentCard.vue';
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useBillingStore } from "@/stores/billing.store";
 import { useChatStore } from "@/stores/chat.store";
 import { useInspectionSpecStore } from "@/stores/inspection_spec.store";
 import { useTaskStore } from "@/stores/task.store";
+import { useAuthStore } from "@/stores/auth.store";
 import type { AgentErrorPayload, ChatAttachment, ChatMessage, ChatTaskDraft } from "@/types/chat.types";
-import type { InspectionTask, TaskCreate } from "@/types/task.types";
+import type { InspectionTask, TaskCreate, TaskCreationStandardChoice } from "@/types/task.types";
 import { attachmentDisplayName, isImageAttachment } from "@/utils/attachments";
 import { writeTextToClipboard } from "@/utils/clipboard";
 import { formatServerDateTime } from "@/utils/date-time";
 import { agentErrorPayload, messageCardType } from "./chat-rendering";
 import { canConfirmTaskAction, hasTaskAction } from "./chat-task-actions";
+import { offersTaskCreation, platformTaskLinks, platformSources } from './chat-platform-actions';
+import { taskStatusLabel } from '@/utils/task-status';
 
 const router = useRouter();
+const auth = useAuthStore();
+const isOrdinaryUser = computed(() => auth.primaryRole === "user");
+const isExpert = computed(() => auth.primaryRole === 'expert');
+const usesSharedChatLayout = computed(() => isOrdinaryUser.value || isExpert.value);
+const canCreateTask = computed(() => auth.hasPermission('task'));
 const billingStore = useBillingStore();
 const chatStore = useChatStore();
 const taskStore = useTaskStore();
 const inspectionSpecStore = useInspectionSpecStore();
+const canBrowseInspectionSpecs = computed(() => !isOrdinaryUser.value && auth.hasPermission("inspection_spec_read"));
+const ordinaryTaskChoices = ref<TaskCreationStandardChoice[]>([]);
+const loadingTaskChoices = ref(false);
 
 const input = ref("");
 const messageListRef = ref<HTMLElement | null>(null);
@@ -79,7 +94,43 @@ const taskRules: FormRules = {
 };
 
 const canSend = computed(() => !chatStore.loading && Boolean(input.value.trim() || chatStore.pendingAttachments.length > 0));
-const composerPlaceholder = computed(() => "输入消息，Enter 发送，Shift+Enter 换行");
+const composerPlaceholder = computed(() => isOrdinaryUser.value ? '询问平台标准、本人任务，或上传图片和资料…' : isExpert.value ? '询问检测标准、风险研判和检测任务，或上传资料…' : '输入消息，Enter 发送，Shift+Enter 换行');
+const sharedQuestionExamples = computed(() => isExpert.value ? [
+  {label:'核对标准依据',query:'质检判断的标准条款和证据应该怎样核对？'},
+  {label:'查看待复核任务',query:'查看当前权限范围内需要人工复核的检测任务及主要问题。'},
+  {label:'整理风险线索',query:'我可以提供检测资料，请帮我整理风险线索和建议进一步核验的内容。'},
+] : [
+  {label:'检测前要准备什么？',query:'检测前需要准备哪些图片和资料？'},
+  {label:'查看最近的检测任务',query:'帮我查看最近的检测任务和当前状态'},
+  {label:'读懂检测报告',query:'检测报告里哪些内容需要重点关注？'},
+]);
+const starterQuestions = [
+  { title: "平台使用", description: "我能问什么、做什么", query: "这个平台可以问些什么、做些什么？如何创建检测任务并导出报告？" },
+  { title: "质检与质监", description: "了解概念与检测准备", query: "质检和质量监督有什么区别？提交产品检测前需要准备哪些材料？" },
+  { title: "我的任务", description: "查看最近任务和结果", query: "查看我最近的检测任务状态和结果。" },
+  { title: "日常问答", description: "学习、写作与一般问题", query: "帮我把一段文字整理得更清楚，我可以直接把内容发给你吗？" },
+];
+
+async function useStarterQuestion(query: string) {
+  input.value = query;
+  await nextTick();
+  document.querySelector<HTMLTextAreaElement>(".composer-input textarea")?.focus();
+}
+
+function openPlatformTaskForm(message?: ChatMessage) {
+  const index = message ? chatStore.messages.findIndex((item) => item.id === message.id) : chatStore.messages.length;
+  const source = [...chatStore.messages.slice(0, index)].reverse().find((item) => item.role === 'user');
+  const draft = message ? buildTaskDraft(message) : null;
+  const attachments = message ? source?.payload?.attachment_echo || [] : chatStore.pendingAttachments;
+  const imageUrls = draft?.image_urls?.length ? draft.image_urls : attachments.filter(isImageAttachment).map((item) => item.url);
+  sessionStorage.setItem('piap_quality_task_draft', JSON.stringify({ ...draft, image_urls: imageUrls, metadata: { source: 'chat_draft', chat_source_message_id: source?.id } }));
+  void router.push({ path: '/app/tasks', query: { create: '1', source: 'chat' } });
+}
+
+function handleAttachmentAction(command: string) {
+  if (command === 'task' && canCreateTask.value) openPlatformTaskForm();
+  else triggerAttachmentSelect();
+}
 let uiClockTimer: number | null = null;
 
 function formatElapsed(ms: number) {
@@ -124,7 +175,13 @@ const FINAL_ASSISTANT_MESSAGE_TYPES = new Set([
   "error",
   "interrupted",
 ]);
-const specOptions = computed(() => inspectionSpecStore.items);
+interface ChatSpecOption {
+  id: string; name: string; spec_code?: string | null; is_active?: boolean;
+  product_family?: string | null; product_id?: string | null;
+  required_image_count?: number | null; required_views?: string[] | null;
+  auto_pass_enabled?: boolean | null; ai_gate_confidence_threshold?: number | null;
+}
+const specOptions = computed<ChatSpecOption[]>(() => canBrowseInspectionSpecs.value ? inspectionSpecStore.items : ordinaryTaskChoices.value);
 const filteredSpecOptions = computed(() =>
   specOptions.value.filter((item) => item.is_active),
 );
@@ -153,6 +210,10 @@ function roleLabel(role: ChatMessage["role"]) {
   return "系统";
 }
 
+function isAttachmentOnlyMessage(message: ChatMessage) {
+  return message.role === 'user' && Boolean(message.payload?.attachment_echo?.length) && message.content.trim() === '请先查看附件并说明你能识别到的信息。';
+}
+
 function isFinalAssistantMessage(message: ChatMessage) {
   return message.role === "assistant" && message.message_type !== "streaming" && FINAL_ASSISTANT_MESSAGE_TYPES.has(message.message_type);
 }
@@ -177,20 +238,6 @@ function materializationTagType(status?: string | null) {
   if (status === "synced") return "success";
   if (status === "failed") return "danger";
   return "info";
-}
-
-function paperScoreTagType(score: number) {
-  if (score >= 80) return "success";
-  if (score >= 60) return "warning";
-  return "danger";
-}
-
-function downloadReport(file: { url: string; file_name: string }) {
-  const a = document.createElement("a");
-  a.href = file.url;
-  a.download = file.file_name;
-  a.target = "_blank";
-  a.click();
 }
 
 function parseImageUrls(value: string) {
@@ -225,15 +272,21 @@ function fillTaskForm(message: ChatMessage) {
 let specsLoadPromise: Promise<void> | null = null;
 
 async function ensureInspectionSpecsLoaded(force = false) {
-  if (!force && inspectionSpecStore.items.length > 0) return;
+  if (!canBrowseInspectionSpecs.value && !canCreateTask.value) return;
+  if (!force && specOptions.value.length > 0) return;
   if (!specsLoadPromise) {
     specsLoadPromise = (async () => {
       try {
-        await inspectionSpecStore.fetchAll();
+        if (!canBrowseInspectionSpecs.value) {
+          loadingTaskChoices.value = true;
+          const { data } = await taskApi.creationOptions();
+          ordinaryTaskChoices.value = data.data.standards;
+        } else await inspectionSpecStore.fetchAll();
       } catch (error) {
         ElMessage.error("检测标准加载失败，请稍后重试。");
         console.error(error);
       } finally {
+        loadingTaskChoices.value = false;
         specsLoadPromise = null;
       }
     })();
@@ -242,6 +295,7 @@ async function ensureInspectionSpecsLoaded(force = false) {
 }
 
 async function openTaskDialog(message: ChatMessage) {
+  if (!canBrowseInspectionSpecs.value) { openPlatformTaskForm(message); return; }
   await ensureInspectionSpecsLoaded(true);
   taskSourceMessage.value = message;
   fillTaskForm(message);
@@ -249,6 +303,7 @@ async function openTaskDialog(message: ChatMessage) {
 }
 
 async function openManualTaskDialog() {
+  if (!canBrowseInspectionSpecs.value) { openPlatformTaskForm(); return; }
   await ensureInspectionSpecsLoaded(true);
   taskSourceMessage.value = null;
   taskForm.value = { product_id: "", spec_code: "", image_urls_input: "", priority: 5 };
@@ -337,8 +392,11 @@ async function submitTaskDialog() {
 
 async function sendMessage() {
   if (!canSend.value) return;
+  if (isOrdinaryUser.value) chatStore.clearSelectedRagSpace();
   const message = input.value.trim() || "请先查看附件并说明你能识别到的信息。";
   try {
+    chatStore.searchFocusSeq=null;
+    if (chatStore.hasNewerMessages) await chatStore.reloadCurrentSessionMessages();
     await chatStore.sendMessage({
       message,
       metadata: undefined,
@@ -701,7 +759,7 @@ async function retryFromAssistantMessage(message: ChatMessage) {
     return;
   }
   const sourceRag = source.payload?.selected_rag_space;
-  if (sourceRag?.id) {
+  if (sourceRag?.id && !isOrdinaryUser.value) {
     chatStore.selectRagSpace(sourceRag.id);
   } else {
     chatStore.clearSelectedRagSpace();
@@ -757,6 +815,7 @@ function errorCardTitle(message: ChatMessage): string {
 }
 
 async function scrollToBottom() {
+  if (chatStore.searchFocusSeq) return;
   await nextTick();
   const container = messageListRef.value;
   if (!container) return;
@@ -775,6 +834,8 @@ function onChatScroll() {
 }
 
 async function jumpToLatestChatMessage() {
+  chatStore.searchFocusSeq=null;
+  if (chatStore.hasNewerMessages) await chatStore.reloadCurrentSessionMessages();
   chatWasNearBottom.value = true;
   chatNewMessageCount.value = 0;
   await scrollToBottom();
@@ -821,37 +882,6 @@ function ensureTaskStream(taskId: string) {
     }
     taskStreamStates.value = { ...taskStreamStates.value, [taskId]: { status: String(event.status || taskStreamStates.value[taskId]?.status || "running"), stage: typeof event.stage === "string" ? event.stage : taskStreamStates.value[taskId]?.stage, message: typeof event.message === "string" ? event.message : taskStreamStates.value[taskId]?.message } };
     if (event.status === "done" || event.status === "failed") { const currentDispose = taskStreamDisposers.get(taskId); currentDispose?.(); taskStreamDisposers.delete(taskId); await chatStore.reloadCurrentSessionMessages(); }
-  }, {
-    onOpen: () => {
-      taskStreamStates.value = {
-        ...taskStreamStates.value,
-        [taskId]: {
-          status: taskStreamStates.value[taskId]?.status || "running",
-          stage: taskStreamStates.value[taskId]?.stage,
-          message: "任务实时连接已建立，等待后台输出...",
-        },
-      };
-    },
-    onError: () => {
-      taskStreamStates.value = {
-        ...taskStreamStates.value,
-        [taskId]: {
-          status: taskStreamStates.value[taskId]?.status || "running",
-          stage: taskStreamStates.value[taskId]?.stage,
-          message: "任务实时连接波动，请到任务详情页查看轮询同步状态。",
-        },
-      };
-    },
-    onHeartbeat: (event) => {
-      taskStreamStates.value = {
-        ...taskStreamStates.value,
-        [taskId]: {
-          status: taskStreamStates.value[taskId]?.status || "running",
-          stage: taskStreamStates.value[taskId]?.stage,
-          message: typeof event.message === "string" && event.message !== "stream_connected" ? event.message : "后台仍在处理，实时连接保持中...",
-        },
-      };
-    },
   });
   taskStreamDisposers.set(taskId, dispose);
 }
@@ -870,8 +900,9 @@ onMounted(async () => {
   uiClockTimer = window.setInterval(() => {
     if (chatStore.loading) uiNow.value = Date.now();
   }, 1000);
-  try { await chatStore.initForChatPage(); } catch (error) { ElMessage.error("聊天初始化失败，请刷新页面后重试。"); console.error(error); }
-  await ensureInspectionSpecsLoaded();
+  // AppLayout initializes the conversation once; remounting this view must not create another session.
+  // General conversation has no dependency on task form options. Load them
+  // only when a permitted task workflow opens its selection form.
   try { await billingStore.fetchMyUsage({ suppressErrorToast: true }); } catch { /* non-blocking */ }
   await scrollToBottom();
   syncTaskStreamsFromMessages();
@@ -906,6 +937,12 @@ watch(() => chatStore.session?.id, async () => {
   await scrollToBottom();
 });
 watch(() => chatStore.messages.map((item) => item.id).join(","), loadMessageReactions);
+watch(()=>chatStore.searchFocusSeq,async seq=> {
+  if (!seq) return;
+  chatWasNearBottom.value=false;
+  await nextTick();
+  messageListRef.value?.querySelector<HTMLElement>(`[data-message-seq="${seq}"]`)?.scrollIntoView({block:'center',behavior:'auto'});
+});
 watch(latestTokenCountedMessageId, async (messageId) => {
   if (!messageId || messageId === syncedUsageMessageId.value) return;
   syncedUsageMessageId.value = messageId;
@@ -914,20 +951,23 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 </script>
 
 <template>
-  <div class="chat-page">
+  <div class="chat-page" :class="{ 'user-chat': usesSharedChatLayout, 'chat-is-empty': !chatStore.messages.length }">
+    <div class="quality-material-action"><MaterialIntakeButton /></div>
     <!-- Toolbar -->
+    <details v-if="!isOrdinaryUser" class="expert-chat-options">
+    <summary>知识来源与常用提问<span v-if="chatStore.selectedRagSpace"> · {{ chatStore.selectedRagSpace.name }}</span></summary>
     <div class="toolbar">
       <div class="toolbar-left">
-        <span class="token-badge">Token: {{ totalTokenText }}</span>
+        <span v-if="!isOrdinaryUser" class="token-badge">Token: {{ totalTokenText }}</span>
         <el-select
           v-model="chatStore.selectedRagSpaceId"
-          placeholder="普通聊天（不使用知识库）"
+          placeholder="自动选择知识来源"
           clearable
           size="small"
           class="rag-select"
           @change="(val: string) => val ? chatStore.selectRagSpace(val) : chatStore.clearSelectedRagSpace()"
         >
-          <el-option label="普通聊天（不使用知识库）" value="" />
+          <el-option label="自动选择知识来源" value="" />
           <el-option
             v-for="space in chatStore.ragSpaces"
             :key="space.id"
@@ -935,7 +975,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :value="space.id"
           />
         </el-select>
-        <el-tooltip :content="webSearchEnabled ? '联网搜索已开启：Agent 必须使用网络检索' : '联网搜索已关闭：Agent 自行判断'" placement="bottom">
+        <el-tooltip v-if="!usesSharedChatLayout" :content="webSearchEnabled ? '联网搜索已开启：Agent 必须使用网络检索' : '联网搜索已关闭：Agent 自行判断'" placement="bottom">
           <el-button
             size="small"
             :type="webSearchEnabled ? 'primary' : 'default'"
@@ -950,9 +990,11 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         </el-tag>
 </div>
     </div>
+    <PromptTemplateTray v-model="input" button-label="常用提问" class="expert-prompt-options" />
+    </details>
 
     <el-alert
-      v-if="chatStore.ragSpacesError"
+      v-if="chatStore.ragSpacesError && !isOrdinaryUser"
       class="alert-bar"
       type="warning" :closable="false" show-icon
       title="知识库暂不可用" :description="chatStore.ragSpacesError"
@@ -982,9 +1024,17 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           @click="loadOlderChatMessages"
         >加载更早消息</button>
         <div v-if="chatStore.messages.length === 0" class="empty-state">
-          <div class="empty-icon">&#x1F4AC;</div>
-          <div class="empty-title">&#x5F00;&#x59CB;&#x5BF9;&#x8BDD;</div>
-          <div class="empty-desc">&#x53D1;&#x9001;&#x4E00;&#x6761;&#x6D88;&#x606F;&#xFF0C;&#x667A;&#x80FD;&#x52A9;&#x624B;&#x5C06;&#x4E3A;&#x4F60;&#x89E3;&#x7B54;&#x95EE;&#x9898;</div>
+          <div class="empty-title">{{ usesSharedChatLayout ? '有什么可以帮你？' : '想了解什么，或检查什么？' }}</div>
+          <div class="empty-desc">{{ isExpert ? '结合可访问的任务、标准与证据，开展质检分析和质量监督研判' : isOrdinaryUser ? '结合平台标准和本人任务提问，也可以上传图片、文件进行分析' : '可以咨询质检、质监和平台操作，也可以讨论日常问题。' }}</div>
+          <div v-if="usesSharedChatLayout" class="platform-question-examples" aria-label="试试这样问">
+            <button v-for="question in sharedQuestionExamples" :key="question.label" type="button" @click="useStarterQuestion(question.query)">{{ question.label }}</button>
+          </div>
+          <div v-if="!usesSharedChatLayout" class="starter-questions">
+            <button v-for="question in starterQuestions" :key="question.title" type="button" class="starter-question" @click="useStarterQuestion(question.query)">
+              <strong>{{ question.title }}</strong><span>{{ question.description }}</span>
+            </button>
+          </div>
+          <el-button v-if="!usesSharedChatLayout && canCreateTask" link type="primary" class="starter-task-link" @click="router.push('/app/tasks')">创建检测任务或查看报告 →</el-button>
         </div>
 
         <div v-else class="message-group">
@@ -993,14 +1043,23 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             :key="message.id"
             :id="`chat-message-${message.id}`"
             class="message-row"
-            :class="message.role"
+            :data-message-seq="message.seq_no"
+            :class="[message.role, { 'search-message-match': chatStore.searchFocusSeq===message.seq_no }]"
           >
-            <div class="message-meta">
+            <div v-if="!usesSharedChatLayout" class="message-meta">
               <span class="role-name">{{ roleLabel(message.role) }}</span>
               <span class="time">{{ formatTime(message.created_at) }}</span>
             </div>
+            <div v-if="usesSharedChatLayout && message.role === 'assistant'" class="assistant-identity"><img src="/piap-icon.svg?v=3" alt="" /><span>PIAP 助手</span></div>
 
-            <div class="bubble" :class="message.role">
+            <div v-if="usesSharedChatLayout && message.role === 'user' && message.payload?.attachment_echo?.length" class="user-message-attachments">
+              <template v-for="att in message.payload.attachment_echo" :key="att.id">
+                <ImageAttachmentCard v-if="isImageAttachment(att)" :src="att.url" :name="attachmentDisplayName(att)" compact :show-name="false" @preview="openImagePreview(att)" />
+                <DocumentAttachmentCard v-else :name="attachmentDisplayName(att)" :url="att.url" :size-bytes="att.size_bytes" />
+              </template>
+            </div>
+
+            <div v-if="!(usesSharedChatLayout && isAttachmentOnlyMessage(message))" class="bubble" :class="message.role">
               <div v-if="editingMessageId === message.id" class="bubble-edit">
                 <el-input
                   v-model="editingContent"
@@ -1015,6 +1074,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                   <el-button size="small" type="primary" @click="saveEditedMessage(message)">保存并发送</el-button>
                 </div>
               </div>
+              <ChatAnswer v-else-if="usesSharedChatLayout && message.role === 'assistant'" :content="getDisplayedContent(message)" />
               <div v-else class="bubble-text">
                 <template v-for="(seg, si) in renderRagCitations(getDisplayedContent(message))" :key="si">
                   <span v-if="seg.type === 'text'">{{ seg.value }}</span>
@@ -1023,16 +1083,36 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 <span v-if="message.message_type === 'streaming' && chatStore.loading" class="cursor-blink">&nbsp;</span>
               </div>
 
+              <details v-if="usesSharedChatLayout && platformSources(message).length" class="platform-answer-sources">
+                <summary>参考资料 · {{ platformSources(message).length }} 份</summary>
+                <div v-for="(source, index) in platformSources(message)" :key="index"><strong>{{ source.label }}</strong><p v-if="source.quote">{{ source.quote }}</p></div>
+              </details>
+              <section v-if="usesSharedChatLayout && platformTaskLinks(message).length" class="platform-task-results" aria-label="平台任务操作">
+                <div v-for="task in platformTaskLinks(message)" :key="task.id" class="platform-task-row">
+                  <div><strong>{{ task.product }}</strong><span>{{ taskStatusLabel(task.status) }}</span></div>
+                  <div class="platform-task-buttons">
+                    <el-button v-if="auth.hasPermission('task')" link type="primary" @click="router.push(`/app/tasks/${encodeURIComponent(task.id)}`)">查看任务</el-button>
+                    <el-button v-if="task.hasResult && auth.hasPermission('result')" link type="primary" @click="router.push(`/app/results/${encodeURIComponent(task.id)}`)">查看结果</el-button>
+                    <el-button v-if="task.hasResult && auth.hasPermission('feedback') && auth.hasPermission('task') && auth.hasPermission('result')" link type="primary" @click="router.push({ path: '/app/export', query: { task_id: task.id } })">导出报告</el-button>
+                  </div>
+                </div>
+              </section>
+              <div v-if="usesSharedChatLayout && canCreateTask && offersTaskCreation(message)" class="platform-task-handoff">
+                <div><strong>准备好后，提交正式检测任务</strong><p>携带当前图片和资料，到任务页核对产品与标准。</p></div>
+                <el-button link type="primary" @click="openPlatformTaskForm(message)">核对并创建任务 →</el-button>
+              </div>
+
               <!-- Attachments -->
-              <div v-if="message.payload?.attachment_echo?.length" class="bubble-attachments">
+              <div v-if="message.payload?.attachment_echo?.length && !(usesSharedChatLayout && message.role === 'user')" class="bubble-attachments">
                 <template v-for="att in message.payload.attachment_echo" :key="att.id">
                   <ImageAttachmentCard
                     v-if="isImageAttachment(att)"
                     :src="att.url"
                     :name="attachmentDisplayName(att)"
+                    :show-name="!usesSharedChatLayout"
                     @preview="openImagePreview(att)"
                   />
-                  <a v-else :href="att.url" target="_blank" rel="noreferrer" class="att-link">{{ attachmentDisplayName(att) }}</a>
+                  <DocumentAttachmentCard v-else :name="attachmentDisplayName(att)" :url="att.url" :size-bytes="att.size_bytes" />
                 </template>
               </div>
 
@@ -1086,75 +1166,6 @@ watch(latestTokenCountedMessageId, async (messageId) => {
                 </div>
               </div>
 
-              <!-- Paper review report card -->
-              <div v-if="message.payload?.paper_format_report" class="paper-review-card">
-                <div class="prc-header">
-                  <span class="prc-title">论文查非辅助报告</span>
-                  <div class="prc-header-right">
-                    <el-tag v-if="message.payload.paper_format_report.model_used === false" size="small" type="warning" effect="dark">
-                      模型未生效-仅规则检查
-                    </el-tag>
-                    <el-tag size="small" effect="dark" :type="paperScoreTagType(message.payload.paper_format_report.score)">
-                      {{ message.payload.paper_format_report.score }} / 100
-                    </el-tag>
-                  </div>
-                </div>
-                <div class="prc-meta" v-if="message.payload.paper_format_report.document_type">
-                  <span>文档：{{ message.payload.paper_format_report.document_type?.toUpperCase() }}</span>
-                  <span v-if="message.payload.paper_format_report.template_id">模板：{{ message.payload.paper_format_report.template_id }}</span>
-                </div>
-                <div class="prc-grid">
-                  <div class="prc-item">
-                    <span>发现问题</span>
-                    <strong>{{ message.payload.paper_format_report.issue_count }}</strong>
-                  </div>
-                  <div class="prc-item">
-                    <span>高优先级</span>
-                    <strong class="prc-high">{{ message.payload.paper_format_report.high_count }}</strong>
-                  </div>
-                  <div class="prc-item">
-                    <span>中优先级</span>
-                    <strong class="prc-medium">{{ message.payload.paper_format_report.medium_count }}</strong>
-                  </div>
-                  <div class="prc-item">
-                    <span>低优先级</span>
-                    <strong class="prc-low">{{ message.payload.paper_format_report.low_count }}</strong>
-                  </div>
-                </div>
-                <div class="prc-summary" v-if="message.payload.paper_format_report.summary">
-                  {{ message.payload.paper_format_report.summary }}
-                </div>
-                <div class="prc-template-errors" v-if="message.payload.paper_format_report.template_errors?.length">
-                  <el-alert
-                    v-for="(err, ei) in message.payload.paper_format_report.template_errors"
-                    :key="ei"
-                    :title="err"
-                    type="error"
-                    show-icon
-                    :closable="false"
-                    style="margin-bottom: 6px;"
-                  />
-                </div>
-                <div class="prc-limitations" v-if="message.payload.paper_format_report.limitations?.length">
-                  <span v-for="limit in message.payload.paper_format_report.limitations" :key="limit" class="prc-limit-tag">{{ limit }}</span>
-                </div>
-                <div class="prc-downloads">
-                  <el-button
-                    v-for="file in message.payload.paper_format_report.report_files"
-                    :key="file.format"
-                    size="small"
-                    type="primary"
-                    :plain="file.format !== 'md'"
-                    @click="downloadReport(file)"
-                  >
-                    下载 {{ file.format.toUpperCase() }}
-                  </el-button>
-                  <span v-if="!message.payload.paper_format_report.report_files?.length" class="prc-no-files">
-                    报告文件生成中，请稍后刷新页面下载。
-                  </span>
-                </div>
-              </div>
-
               <!-- Task card -->
               <div v-if="message.payload?.created_task" class="task-card">
                 <div class="task-title">{{ taskCardTitle(message) }}</div>
@@ -1195,7 +1206,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               </div>
 
               <!-- Evidence packet card -->
-              <div v-if="message.payload?.evidence_packet" class="agent-card-wrapper">
+              <div v-if="!isOrdinaryUser && message.payload?.evidence_packet" class="agent-card-wrapper">
                 <EvidencePacketCard
                   :rag-hit-count="(message.payload.evidence_packet.sources as any)?.rag?.hit_count"
                   :memory-count="(message.payload.evidence_packet.sources as any)?.memory?.items?.length"
@@ -1237,7 +1248,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               </div>
 
               <!-- Quality assessment card -->
-              <div v-if="message.payload?.quality_final_assessment" class="agent-card-wrapper">
+              <div v-if="!isOrdinaryUser && message.payload?.quality_final_assessment" class="agent-card-wrapper">
                 <QualityAssessmentCard
                   :final-verdict="message.payload.quality_final_assessment.final_verdict"
                   :overall-score="message.payload.quality_final_assessment.overall_score"
@@ -1252,7 +1263,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               </div>
 
               <!-- Agent trace timeline -->
-              <div v-if="message.payload?.route_trace || message.payload?.capabilities_used?.length" class="agent-card-wrapper">
+              <div v-if="!isOrdinaryUser && (message.payload?.route_trace || message.payload?.capabilities_used?.length)" class="agent-card-wrapper">
                 <AgentTraceTimeline
                   :trace="message.payload.route_trace"
                   :capabilities-used="message.payload.capabilities_used"
@@ -1260,7 +1271,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
               </div>
 
               <!-- Task actions -->
-              <div v-if="message.role === 'assistant' && hasTaskAction(message)" class="task-actions">
+              <div v-if="message.role === 'assistant' && canCreateTask && hasTaskAction(message)" class="task-actions">
                 <div class="task-action-note">
                   <strong>当前还是任务草稿</strong>
                   <span>你可以继续追问识别依据、补充检测关注点或修改字段；点确认后才会创建正式任务并进入执行队列。</span>
@@ -1275,7 +1286,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             <MessageActionBar
               :reaction="messageReactions[message.id] || ''"
               :show-edit="message.role === 'user'"
-              :show-feedback="isVisibleAssistantAnswer(message)"
+              :show-feedback="auth.hasPermission('feedback') && isVisibleAssistantAnswer(message)"
               :show-retry="isVisibleAssistantAnswer(message)"
               :retry-disabled="chatStore.loading"
               @copy="copyToClipboard(message.content, '消息已复制')"
@@ -1289,19 +1300,23 @@ watch(latestTokenCountedMessageId, async (messageId) => {
         </div>
         </div>
         <button
-          v-if="chatNewMessageCount"
+          v-if="chatNewMessageCount || chatStore.hasNewerMessages || chatStore.searchFocusSeq"
           type="button"
           class="chat-new-message-jump"
-          :aria-label="`有 ${chatNewMessageCount} 条新消息，回到最新消息`"
+          :aria-label="chatNewMessageCount ? `有 ${chatNewMessageCount} 条新消息，回到最新消息` : '返回最新对话'"
           @click="jumpToLatestChatMessage"
-        >有 {{ chatNewMessageCount }} 条新消息</button>
+        >{{ chatNewMessageCount ? `有 ${chatNewMessageCount} 条新消息` : '返回最新对话' }}</button>
       </div>
 
       <!-- Composer -->
       <div class="composer">
 
         <div v-if="chatStore.pendingAttachments.length" class="composer-attachments">
-          <el-tag v-for="att in chatStore.pendingAttachments" :key="att.id" closable effect="plain" @close="removePendingAttachment(att.id)">{{ att.name }}</el-tag>
+          <div v-for="att in chatStore.pendingAttachments" :key="att.id" class="pending-attachment">
+            <ImageAttachmentCard v-if="isImageAttachment(att)" :src="att.url" :name="attachmentDisplayName(att)" compact :show-name="false" @preview="openImagePreview(att)" />
+            <DocumentAttachmentCard v-else :name="attachmentDisplayName(att)" :url="att.url" :size-bytes="att.size_bytes" compact />
+            <button :aria-label="`移除附件 ${attachmentDisplayName(att)}`" class="attachment-remove" @click="removePendingAttachment(att.id)">×</button>
+          </div>
         </div>
         <div v-if="streamStatusText" class="stream-status">
           <span class="stream-status-dot" />
@@ -1317,17 +1332,23 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             中断回答
           </el-button>
         </div>
-        <PromptTemplateTray v-model="input" class="prompt-template-entry" />
         <div class="composer-row" @paste="handleComposerPaste">
           <el-input v-model="input" type="textarea" :rows="2" resize="none" :placeholder="composerPlaceholder" @keydown="onInputKeydown" class="composer-input" />
           <div class="composer-actions">
-            <el-button size="small" :icon="Paperclip" @click="triggerAttachmentSelect" />
-            <el-button size="small" :icon="CollectionTag" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined" :type="chatStore.selectedRagSpaceId ? 'warning' : 'default'" />
-            <el-button type="primary" :icon="Promotion" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage">发送</el-button>
+            <el-dropdown v-if="usesSharedChatLayout" trigger="click" @command="handleAttachmentAction">
+              <button class="user-attachment-button" aria-label="添加资料或创建任务"><Plus /></button>
+              <template #dropdown><el-dropdown-menu><el-dropdown-item command="upload">上传图片或文件</el-dropdown-item><el-dropdown-item v-if="canCreateTask" command="task">创建检测任务</el-dropdown-item></el-dropdown-menu></template>
+            </el-dropdown>
+            <el-button v-else size="small" :icon="Paperclip" aria-label="上传图片或文件" @click="triggerAttachmentSelect" />
+            <el-button v-if="usesSharedChatLayout" text :icon="Search" :aria-pressed="webSearchEnabled" :class="{ 'search-enabled': webSearchEnabled }" @click="webSearchEnabled = !webSearchEnabled">联网搜索</el-button>
+            <el-button v-if="!usesSharedChatLayout" size="small" :icon="CollectionTag" aria-label="清除已选知识库" @click="chatStore.selectedRagSpaceId ? chatStore.clearSelectedRagSpace() : undefined" :type="chatStore.selectedRagSpaceId ? 'warning' : 'default'" />
+            <el-button v-if="usesSharedChatLayout" class="user-send-button" circle type="primary" :icon="Top" aria-label="发送" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage" />
+            <el-button v-else type="primary" :icon="Promotion" :loading="chatStore.loading" :disabled="!canSend" @click="sendMessage">发送</el-button>
           </div>
         </div>
         <input ref="attachmentInputRef" type="file" multiple hidden @change="handleAttachmentSelected" />
       </div>
+      <div v-if="usesSharedChatLayout" class="user-composer-hint">Enter 发送 · Shift + Enter 换行</div>
     </div>
 
     <!-- Task dialog -->
@@ -1339,7 +1360,7 @@ watch(latestTokenCountedMessageId, async (messageId) => {
           </el-select>
           <div class="task-form-toolbar">
             <span class="task-form-toolbar-text">如果下拉列表没有及时更新，可以手动刷新一次。</span>
-            <el-button link type="primary" :loading="inspectionSpecStore.loading" @click="ensureInspectionSpecsLoaded(true)">刷新检测标准</el-button>
+            <el-button link type="primary" :loading="canBrowseInspectionSpecs ? inspectionSpecStore.loading : loadingTaskChoices" @click="ensureInspectionSpecsLoaded(true)">刷新检测标准</el-button>
           </div>
           <div class="task-form-hint">
             &#x5F53;&#x524D;&#x53EF;&#x9009; {{ filteredSpecOptions.length }} &#x4E2A;&#x68C0;&#x6D4B;&#x6807;&#x51C6;&#x3002;
@@ -1348,12 +1369,13 @@ watch(latestTokenCountedMessageId, async (messageId) => {
             <div class="task-spec-preview-title">
               {{ selectedTaskSpec.spec_code }} · {{ selectedTaskSpec.name }}
             </div>
-            <div class="task-spec-preview-grid">
+            <div v-if="canBrowseInspectionSpecs" class="task-spec-preview-grid">
               <span>&#x4EA7;&#x54C1;&#x7EBF;</span><strong v-if="selectedTaskSpec.product_id">{{ selectedTaskSpec.product_id }}</strong><strong v-else>&#x5168;&#x5C40;</strong>
               <span>&#x9700;&#x8981;&#x56FE;&#x7247;</span><strong>{{ selectedTaskSpec.required_image_count }}</strong>
               <span>&#x81EA;&#x52A8;&#x653E;&#x884C;</span><strong v-if="selectedTaskSpec.auto_pass_enabled">&#x5F00;&#x542F;</strong><strong v-else>&#x5173;&#x95ED;</strong>
-              <span>&#x7F6E;&#x4FE1;&#x5EA6;&#x95E8;&#x9650;</span><strong>{{ selectedTaskSpec.ai_gate_confidence_threshold.toFixed(2) }}</strong>
+              <span>&#x7F6E;&#x4FE1;&#x5EA6;&#x95E8;&#x9650;</span><strong>{{ selectedTaskSpec.ai_gate_confidence_threshold?.toFixed(2) }}</strong>
             </div>
+            <p v-else class="task-form-hint">至少提供 {{ selectedTaskSpec.required_image_count || 1 }} 张清晰图片{{ selectedTaskSpec.required_views?.length ? `，包括${selectedTaskSpec.required_views.join('、')}视角` : '' }}。具体要求以已发布标准为准。</p>
           </div>
         </el-form-item>
         <el-form-item label="产品线">
@@ -1385,6 +1407,75 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 </template>
 
 <style scoped>
+.expert-chat-options { flex:none; padding:10px 24px; border-bottom:1px solid #edf1f6; background:#fff; font-size:12px; color:#7a90aa; }
+.expert-chat-options>summary { cursor:pointer; }
+.expert-chat-options>summary span { color:#4a78af; }
+.expert-chat-options .toolbar { padding:12px 0 9px; border:0; }
+.expert-prompt-options { padding-bottom:4px; }
+.assistant-identity { display:flex; align-items:center; gap:8px; color:#8398b4; font-size:11px; margin-bottom:12px; }
+.assistant-identity img { width:23px; height:23px; border-radius:7px; }
+.user-chat .message-row.assistant { padding-bottom:5px; }
+.user-chat .search-message-match { outline:1px solid #c6dbf5; outline-offset:8px; border-radius:8px; background:#f8fbff; content-visibility:visible; }
+.user-message-attachments { display:flex; flex-wrap:wrap; align-items:flex-end; gap:9px; justify-content:flex-end; margin:0 0 9px; max-width:100%; }
+.user-message-attachments :deep(.image-attachment-card.compact) { width:112px; height:112px; }
+.user-chat .composer-attachments { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:13px; }
+.pending-attachment { position:relative; max-width:100%; }
+.attachment-remove { position:absolute; top:-6px; right:-6px; width:20px; height:20px; background:#f9fbfe; border:1px solid #dce5ef; border-radius:50%; color:#7b8fa8; cursor:pointer; z-index:1; line-height:16px; font-size:15px; }
+.user-chat .message-row { contain-intrinsic-size: auto 90px; }
+.user-chat .message-row.assistant { padding-top:2px; }
+.user-chat :deep(.message-actions) { min-height:32px; margin-top:2px; }
+.user-chat .empty-state { position:relative; }
+.user-chat .empty-state::before { content:''; width:46px; height:3px; border-radius:2px; background:linear-gradient(90deg,#2687e8,#50c7cf); margin-bottom:22px; }
+.user-chat .chat-shell { grid-template-rows: 1fr auto auto; }
+.user-chat .message-list { padding: 28px 32px 35px; }
+.user-chat .message-group { width: min(100%, 790px); margin: 0 auto; gap: 32px; }
+.user-chat .message-row.assistant { width: 100%; }
+.user-chat .bubble { font-size: 16px; line-height: 1.85; }
+.user-chat .bubble.user { background: #f0f4f8; color: #2c3d51; border-radius: 20px; max-width: 86%; padding: 14px 20px; }
+.user-chat .bubble.assistant { width: 100%; max-width: 100%; background: transparent; border: 0; padding: 0 4px; }
+.user-chat .message-row.user :deep(.message-actions) { opacity: 0; }
+.user-chat .message-row.user:hover :deep(.message-actions), .user-chat .message-row.user:focus-within :deep(.message-actions) { opacity: 1; }
+.user-chat :deep(.message-actions .el-button) { min-width: 28px; width: 28px; height: 30px; padding: 4px; color: #8c98a6; }
+.user-chat .composer { width: min(calc(100% - 64px), 790px); margin: 10px auto 0; padding: 15px 18px 12px; border: 1px solid #dfe5ed; border-radius: 23px; box-shadow: 0 4px 18px #25395608; }
+.user-chat .composer-row { display: flex; flex-direction: column; align-items: stretch; gap: 9px; }
+.user-chat .composer-input :deep(.el-textarea__inner) { padding: 0 4px; box-shadow: none !important; border: 0; font-size: 15px; line-height: 1.8; min-height: 44px !important; background: transparent; color: #334256; }
+.user-chat .composer-actions { display: flex; align-items: center; width: 100%; gap: 8px; }
+.user-chat .user-send-button { margin-left: auto; width: 34px; height: 34px; }
+.user-chat .composer-actions .el-button.is-text { font-size: 12px; color: #7d8da1; padding: 6px; }
+.user-chat .composer-actions .search-enabled { color: #2671d9 !important; background: #eff5ff; }
+.user-attachment-button { display: grid; place-items: center; width: 31px; height: 31px; background: transparent; border: 0; color: #7d8da1; cursor: pointer; border-radius: 7px; }
+.user-attachment-button:hover { background: #f0f5fb; }
+.user-attachment-button svg { width: 19px; height: 19px; }
+.user-attachment-button:focus-visible { outline: 2px solid #2671d9; }
+.user-composer-hint { text-align: center; color: #a1abba; font-size: 10px; padding: 11px 0 18px; background: #fff; }
+.user-chat.chat-is-empty .chat-shell { display: flex; flex-direction: column; justify-content: center; padding-bottom: 90px; }
+.user-chat.chat-is-empty .message-pane { flex: none; overflow: visible; }
+.user-chat.chat-is-empty .message-list { height: auto; overflow: visible; padding: 0 24px; }
+.user-chat .empty-state { padding: 0; margin: 0 auto 20px; }
+.user-chat .empty-state .empty-title { color: #26384f; font-size: 30px; font-weight: 500; margin-bottom: 13px; }
+.user-chat .empty-desc { color: #8a97a8; font-size: 13px; }
+.platform-question-examples { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin-top:20px; }
+.platform-question-examples button { background:#f8fafd; border:1px solid #e8eef5; border-radius:18px; padding:7px 12px; color:#7388a2; font:inherit; font-size:11px; cursor:pointer; }
+.platform-question-examples button:hover { background:#edf4fe; color:#356fae; border-color:#d6e5f7; }
+.platform-question-examples button:focus-visible { outline:2px solid #87b3ec; outline-offset:2px; }
+.user-chat.chat-is-empty .composer { margin-top: 8px; }
+.platform-task-results { margin-top: 21px; border: 1px solid #e3ebf5; border-radius: 12px; padding: 2px 15px; }
+.platform-answer-sources { margin-top: 16px; color: #6f85a0; font-size: 12px; }
+.platform-answer-sources summary { cursor: pointer; }
+.platform-answer-sources > div { margin-top: 10px; padding: 10px 13px; border-left: 2px solid #dce7f5; background: #f8fafd; }
+.platform-answer-sources strong { font-weight: 500; }
+.platform-answer-sources p { font-size: 12px; color: #8b99ab; line-height: 1.7; margin: 5px 0 0; }
+.platform-task-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 0; border-bottom: 1px solid #edf2f8; }
+.platform-task-row:last-child { border-bottom: 0; }
+.platform-task-row strong { display: block; font-size: 13px; font-weight: 500; }
+.platform-task-row span { font-size: 11px; color: #91a0b3; }
+.platform-task-buttons { display: flex; gap: 5px; white-space: nowrap; }
+.platform-task-buttons .el-button { margin: 0; font-size: 11px; }
+.user-chat .platform-task-buttons :deep(.el-button.is-link), .user-chat .platform-task-handoff :deep(.el-button.is-link) { box-shadow: none !important; background: transparent !important; }
+.platform-task-handoff { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 20px; padding: 16px; border: 1px solid #e2ebf7; border-radius: 12px; background: #f7faff; }
+.platform-task-handoff strong { font-size: 13px; font-weight: 500; }
+.platform-task-handoff p { font-size: 12px; color: #8b9bb0; margin: 5px 0 0; }
+@media(max-width:700px) { .user-chat .message-list { padding: 22px 16px; } .user-chat .composer { width: calc(100% - 30px); padding: 13px; } .user-chat .empty-state .empty-title { font-size: 25px; } .user-chat.chat-is-empty .chat-shell { padding-bottom: 55px; } .user-chat .bubble { font-size: 14px; } .platform-task-row, .platform-task-handoff { flex-direction: column; align-items: flex-start; } .user-message-attachments :deep(.image-attachment-card.compact) { width:76px; height:76px; } }
 .chat-page {
   display: flex;
   flex-direction: column;
@@ -1488,6 +1579,16 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .empty-icon { font-size: 48px; margin-bottom: 16px; }
 .empty-title { font-size: 18px; font-weight: 600; color: #6b7280; margin-bottom: 8px; }
 .empty-desc { font-size: 14px; }
+.empty-state .empty-title { color: #18181b; font-size: 24px; }
+.empty-state .empty-desc { max-width: 570px; text-align: center; line-height: 1.8; }
+.starter-questions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: min(100%, 570px); margin-top: 26px; }
+.starter-question { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; text-align: left; border: 1px solid #e4e4e7; border-radius: 10px; background: white; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.starter-question strong { color: #27272a; font-size: 14px; font-weight: 600; }
+.starter-question span { color: #71717a; font-size: 12px; }
+.starter-question:hover { background: #f8fafc; border-color: #93c5fd; }
+.starter-question:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.starter-task-link { margin-top: 18px; }
+@media (max-width: 480px) { .starter-questions { grid-template-columns: 1fr; } .empty-state { padding: 36px 12px; } }
 
 .message-group { display: flex; flex-direction: column; gap: 12px; }
 
@@ -1619,30 +1720,6 @@ watch(latestTokenCountedMessageId, async (messageId) => {
 .rc-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
 .rc-sources { max-width: 50%; }
 .rc-sync { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-
-/* ── Paper review report card ── */
-.paper-review-card {
-  margin-top: 10px;
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid #dbeafe;
-  background: #eff6ff;
-}
-.prc-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
-.prc-header-right { display: flex; gap: 6px; align-items: center; }
-.prc-title { font-weight: 700; color: #1e40af; font-size: 14px; }
-.prc-meta { display: flex; gap: 16px; font-size: 12px; color: #64748b; margin-bottom: 8px; }
-.prc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-bottom: 10px; }
-.prc-item { display: flex; justify-content: space-between; font-size: 13px; color: #475569; }
-.prc-item strong { color: #1e293b; }
-.prc-high { color: #dc2626 !important; }
-.prc-medium { color: #d97706 !important; }
-.prc-low { color: #6b7280 !important; }
-.prc-summary { font-size: 13px; color: #475569; line-height: 1.5; margin-bottom: 10px; }
-.prc-downloads { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.prc-limitations { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
-.prc-limit-tag { font-size: 11px; color: #b45309; background: #fef3c7; padding: 2px 6px; border-radius: 4px; }
-.prc-no-files { font-size: 12px; color: #94a3b8; }
 
 /* ── Task card ── */
 .task-card {

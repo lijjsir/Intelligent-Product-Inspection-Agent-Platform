@@ -452,4 +452,5 @@ PYTHONPATH=. alembic upgrade head
 
 ## 补充文档
 
+- [项目全景与质量监督六模块完成度复核（2026-10-14）](docs/项目全景与质量监督六模块完成度复核_2026-10-14.md)
 - [AI 质量与稳定性指标说明](docs/AI_QUALITY_METRICS.md)

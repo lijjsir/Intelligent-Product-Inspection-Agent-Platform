@@ -54,6 +54,8 @@ export type RagSpaceFile = RagSpaceDocumentListItem;
 
 export interface RagSpace {
   id: string;
+  resource_domain?: string;
+  can_submit_knowledge?: boolean;
   org_id: string;
   created_by?: string | null;
   name: string;

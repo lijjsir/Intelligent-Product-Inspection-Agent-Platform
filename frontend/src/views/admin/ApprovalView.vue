@@ -184,7 +184,7 @@ function payloadPreview(value?: Record<string, unknown> | null) {
           :total="total"
           :page-size="pageSize"
           :current-page="page"
-          @current-change="(nextPage) => { page = nextPage; fetchApprovals(); }"
+          @current-change="(nextPage: number) => { page = nextPage; fetchApprovals(); }"
         />
       </div>
     </el-card>

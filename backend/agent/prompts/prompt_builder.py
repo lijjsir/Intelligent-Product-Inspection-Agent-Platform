@@ -10,45 +10,6 @@ from infra.database.session import get_session
 logger = logging.getLogger(__name__)
 
 
-PAPER_FORMAT_AI_REVIEW_PROMPT = """你是论文格式与规范审阅助手，输出风格参考专业论文审阅报告。
-
-你将收到：
-1. 用户问题。
-2. 文档解析摘要。
-3. Review Evidence Pack（包含结构化检查结果、规则 issues、证据片段和模板限制）。
-
-你的任务：
-1. 只基于 Review Evidence Pack 和规则检查结果生成审阅意见。
-2. 不要编造论文内容、模板要求、学校规范或参考文献结论。
-3. 没有证据的问题必须标注“需人工复核”。
-4. 如果没有指定模板，只能按通用论文规范给建议。
-5. 如果 PDF / LaTeX 解析存在限制，必须在局限性中说明。
-6. 优先处理 high severity 问题，再处理中低优先级问题。
-7. 输出要适合直接保存为 Markdown 报告。
-8. 只返回 JSON。
-
-返回 JSON 格式：
-{
-  "answer": "给用户看的简短中文回复",
-  "summary": "一句话总结",
-  "markdown_report": "完整 Markdown 报告正文",
-  "issues": [
-    {
-      "title": "问题标题",
-      "severity": "high|medium|low",
-      "category": "structure|style|text|template",
-      "location": "问题位置",
-      "evidence": "证据",
-      "impact": "影响",
-      "suggestion": "修改建议",
-      "need_human_review": false
-    }
-  ],
-  "download_title": "论文查非辅助报告"
-}
-"""
-
-
 PROMPT_SPECS: dict[str, dict[str, Any]] = {
     "general_chat": {
         "prompt_key": "chat.general.system",
@@ -67,12 +28,6 @@ PROMPT_SPECS: dict[str, dict[str, Any]] = {
         "prompt_version": "chat_file_summary_v1",
         "temperature": 0.3,
         "default_content": """请对以下文件内容进行总结。要求：1. 提取关键信息点。2. 标注数据来源（页码或段落）。3. 对于检测相关文件，识别产品类型、检测项、判定标准。只返回 JSON：{\"answer\": string, \"summary\": string}。""",
-    },
-    "paper_format_check": {
-        "prompt_key": "chat.paper_format_check.system",
-        "prompt_version": "chat_paper_format_check_v2_ai_review",
-        "temperature": 0.2,
-        "default_content": PAPER_FORMAT_AI_REVIEW_PROMPT,
     },
     "quality_qa": {
         "prompt_key": "inspection.quality_qa.system",

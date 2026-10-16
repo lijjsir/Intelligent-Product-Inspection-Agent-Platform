@@ -85,6 +85,8 @@ class RagSpaceDocumentListItem(BaseModel):
 
 
 class RagSpaceResponse(BaseModel):
+    resource_domain: str = "workspace"
+    can_submit_knowledge: bool = False
     id: str
     org_id: str
     created_by: str | None = None

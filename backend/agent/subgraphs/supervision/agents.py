@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
+from app.services.standard_execution_context_service import agent_execution_context
 
 ModelCall = Callable[[str, dict], Awaitable[dict]]
 
@@ -92,6 +93,7 @@ class PublicOpinionMonitoringAgent:
     async def run(self, snapshot: dict, model_call: ModelCall | None = None) -> dict:
         async def analyze(state: dict) -> dict:
             data = state["snapshot"]["data"]
+            execution_context = agent_execution_context(state["snapshot"])
             evidence = [e for e in data.get("evidence", []) if e.get("nature") == "observed"]
             public_sources = [
                 e
@@ -117,6 +119,7 @@ class PublicOpinionMonitoringAgent:
                 "sentiment_is_risk": False,
                 "limitations": ["风险概率尚未经过校准"],
                 "summary": "需要补齐证据后进行风险研判",
+                "standard_execution_context": execution_context,
             }
             if model_call and evidence:
                 try:
@@ -124,6 +127,7 @@ class PublicOpinionMonitoringAgent:
                         "risk_case.assess",
                         {
                             "snapshot": state["snapshot"],
+                            "standard_execution_context": execution_context,
                             "instruction": "仅依据observed证据，从投诉、舆情和图像中识别企业、产品、缺陷与风险线索，区分情绪强度和质量事实。不得推断不可观察的内部缺陷。返回JSON：summary、risk_level(low/medium/high/critical/unknown)、evidence_ids、normalized_signals(string[])、conflicts(string[])、missing_inputs(string[])、limitations(string[])。每个判断必须引用给定证据编号。",
                         },
                     )
@@ -190,12 +194,22 @@ class MarketMonitoringAgent:
 
     async def run(self, snapshot: dict, model_call: ModelCall | None = None) -> dict:
         async def calculate(state: dict) -> dict:
-            now = datetime.fromisoformat(snapshot["as_of"])
+            def utc(value):
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+            now = utc(snapshot["as_of"])
+            execution_context = agent_execution_context(snapshot)
             cases = snapshot.get("cases", [])
             current, previous = [], []
+            unknown_time_count = 0
             for case in cases:
-                at = datetime.fromisoformat(case["data"]["occurred_at"]).replace(tzinfo=None)
-                delta = (now.replace(tzinfo=None) - at).days
+                try:
+                    at = utc(case["data"].get("occurred_at"))
+                except (AttributeError, TypeError, ValueError):
+                    unknown_time_count += 1
+                    continue
+                delta = (now - at).total_seconds() / 86400
                 if 0 <= delta < 30:
                     current.append(case)
                 elif 30 <= delta < 60:
@@ -231,6 +245,7 @@ class MarketMonitoringAgent:
                     "summary": f"最近30天记录{len(current)}个案件，前30天{len(previous)}个",
                     "current_count": len(current),
                     "previous_count": len(previous),
+                    "unknown_time_count": unknown_time_count,
                     "dimensions": dimensions,
                     "source_distribution": source_distribution,
                     "risk_distribution": risk_distribution,
@@ -244,6 +259,7 @@ class MarketMonitoringAgent:
                         "缺少匹配的暴露量时不估计总体风险概率",
                     ],
                     "scenario": "若新增线索持续增加，优先补充样本与使用条件，再安排代表性抽查",
+                    "standard_execution_context": execution_context,
                 }
             }
 
@@ -258,6 +274,7 @@ class SupervisionSamplingAgent:
     async def run(self, snapshot: dict, model_call: ModelCall | None = None) -> dict:
         async def optimize(state: dict) -> dict:
             data = snapshot["data"]
+            execution_context = agent_execution_context(snapshot)
             cases = {x["id"]: x for x in snapshot.get("cases", [])}
             devices = {x["id"]: x for x in snapshot.get("devices", [])}
             ranks = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
@@ -343,6 +360,7 @@ class SupervisionSamplingAgent:
                     "staff_hours": hours,
                     "probability": None,
                     "limitations": ["使用确定性覆盖与排序策略，不保证全局最优"],
+                    "standard_execution_context": execution_context,
                 }
             }
 
@@ -357,6 +375,7 @@ class LaboratoryTestingAgent:
     async def run(self, snapshot: dict, model_call: ModelCall | None = None) -> dict:
         async def compute(state: dict) -> dict:
             data = snapshot["data"]
+            execution_context = agent_execution_context(snapshot)
             if data.get("input_mode") == "image":
                 return {
                     "output": data.get("image_assessment")
@@ -364,9 +383,20 @@ class LaboratoryTestingAgent:
                         "status": "insufficient_evidence",
                         "summary": "尚无图片分析草稿",
                         "missing_inputs": ["图片分析"],
+                        "standard_execution_context": execution_context,
                         "probability": None,
                     }
                 }
+            confirmed=execution_context.get("evaluation") if execution_context.get("status")=="evaluated" else None
+            if confirmed:
+                complete=not confirmed.get("missing_inputs") and confirmed.get("item_verdict") in {"pass","fail"}
+                return {"output":{"status":"awaiting_review" if complete else "insufficient_evidence",
+                    "summary":f"已核对本次选定项目 {confirmed.get('complete_count',0)}/{confirmed.get('expected_count',0)} 项",
+                    "suggested_verdict":confirmed["item_verdict"] if complete else "manual_required",
+                    "findings":[f for check in confirmed.get("checks",[]) for f in check.get("findings",[]) if f.get("status")=="fail"],
+                    "missing_inputs":confirmed.get("missing_inputs",[]),"consumed_event_ids":confirmed.get("consumed_evidence_ids",[]),
+                    "standard_execution":confirmed,"standard_execution_context":execution_context,"limitations":[confirmed["boundary"]],"probability":None,
+                    "can_make_final_verdict":False,"risk_level":"unknown"}}
             measurements = snapshot.get("measurements", [])
             devices = {d["id"]: d for d in snapshot.get("devices", [])}
             expected = {
@@ -431,6 +461,12 @@ class LaboratoryTestingAgent:
                 if source["data"].get("knowledge_status") == "needs_reassessment":
                     missing.append("关联案件或计划依据已失效，需要重评估")
             complete = bool(expected) and not missing and not missing_limits
+            confirmed=execution_context.get("evaluation") if execution_context.get("status")=="evaluated" else None
+            if not confirmed:
+                missing.append("未绑定已发布、已确认的标准项目，表单限值仅作辅助观察")
+                complete=False
+            elif confirmed.get("missing_inputs"):
+                missing.extend(confirmed["missing_inputs"]);complete=False
             visual = snapshot.get("visual_inspection_result")
             visual_verdict = str(
                 (visual or {}).get("verdict") or (visual or {}).get("draft_verdict") or "unknown"
@@ -462,6 +498,8 @@ class LaboratoryTestingAgent:
                     else "pass"
                     if complete and not findings
                     else "manual_required",
+                    "standard_execution":confirmed or {"item_verdict":"incomplete","product_verdict":"not_assessed"},
+                    "standard_execution_context":execution_context,
                     "consumed_event_ids": [m["event_id"] for m in latest.values()],
                     "visual_defects": (visual or {}).get("defects", []),
                     "limitations": ["提前提示不替代完整检测及人工结果签发"],

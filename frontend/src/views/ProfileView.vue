@@ -1,218 +1,122 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
-import { ElMessage, type FormInstance, type FormRules } from "element-plus";
-
-import { useUserStore } from "@/stores/user.store";
+import { computed, onMounted, reactive, ref } from 'vue';
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
+import { User, Lock, CircleCheck } from '@element-plus/icons-vue';
+import { useUserStore } from '@/stores/user.store';
+import { formatServerDateTime } from '@/utils/date-time';
 
 const store = useUserStore();
+const activeTab = ref<'profile'|'security'>('profile');
 const loading = ref(false);
 const savingProfile = ref(false);
 const changingPassword = ref(false);
 const profileFormRef = ref<FormInstance>();
 const passwordFormRef = ref<FormInstance>();
-
-const profileForm = reactive({
-  username: "",
-  email: "",
-});
-
-const passwordForm = reactive({
-  current_password: "",
-  new_password: "",
-});
-
+const profileForm = reactive({ username:'', email:'' });
+const passwordForm = reactive({ current_password:'', new_password:'', confirm_password:'' });
+const roleNames: Record<string,string> = {user:'普通用户',expert:'质监专家',admin:'系统管理员',app_developer:'应用开发者',platform_operator:'平台运营',algorithm_engineer:'算法工程师'};
+const roleLabel = computed(() => roleNames[store.current?.role || ''] || '平台用户');
+const hasProfileChanges = computed(() => profileForm.username.trim() !== store.current?.username || profileForm.email.trim() !== store.current?.email);
 const profileRules: FormRules = {
-  username: [{ required: true, message: "请输入用户名", trigger: "blur" }],
-  email: [{ required: true, type: "email", message: "请输入有效邮箱", trigger: "blur" }],
+  username:[{required:true,message:'请输入用户名',trigger:'blur'}],
+  email:[{required:true,type:'email',message:'请输入有效邮箱',trigger:'blur'}],
 };
-
 const passwordRules: FormRules = {
-  current_password: [{ required: true, message: "请输入当前密码", trigger: "blur" }],
-  new_password: [{ required: true, min: 6, message: "新密码不少于 6 位", trigger: "blur" }],
+  current_password:[{required:true,message:'请输入当前密码',trigger:'blur'}],
+  new_password:[{required:true,min:6,message:'新密码至少6个字符',trigger:'blur'}],
+  confirm_password:[{validator:(_rule,value,callback) => value && value === passwordForm.new_password ? callback() : callback(new Error('两次输入的新密码不一致')),trigger:'blur'}],
 };
 
-onMounted(() => {
-  fetchProfile();
-});
-
-async function fetchProfile() {
+onMounted(async () => {
   loading.value = true;
-  try {
-    const user = await store.fetchCurrentUser();
-    profileForm.username = user.username;
-    profileForm.email = user.email;
-  } finally {
-    loading.value = false;
-  }
-}
+  try { const user = await store.fetchCurrentUser(); profileForm.username=user.username; profileForm.email=user.email; }
+  catch { ElMessage.error('无法加载个人资料，请稍后重试'); }
+  finally { loading.value=false; }
+});
 
 async function handleSaveProfile() {
-  if (!profileFormRef.value) return;
-
-  const valid = await profileFormRef.value.validate().catch(() => false);
-  if (!valid) return;
-
-  savingProfile.value = true;
+  if (!await profileFormRef.value?.validate().catch(() => false)) return;
+  savingProfile.value=true;
   try {
-    const user = await store.updateCurrentUser({
-      username: profileForm.username,
-      email: profileForm.email,
-    });
-    profileForm.username = user.username;
-    profileForm.email = user.email;
-    ElMessage.success("个人资料已更新");
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "资料更新失败");
-  } finally {
-    savingProfile.value = false;
-  }
+    const user=await store.updateCurrentUser({username:profileForm.username.trim(),email:profileForm.email.trim()});
+    profileForm.username=user.username; profileForm.email=user.email;
+    ElMessage.success('个人资料已保存');
+  } catch (error: any) { ElMessage.error(error?.response?.data?.message || '保存失败，请重试'); }
+  finally { savingProfile.value=false; }
 }
 
 async function handleChangePassword() {
-  if (!passwordFormRef.value) return;
-
-  const valid = await passwordFormRef.value.validate().catch(() => false);
-  if (!valid) return;
-
-  changingPassword.value = true;
+  if (!await passwordFormRef.value?.validate().catch(() => false)) return;
+  changingPassword.value=true;
   try {
-    await store.updateCurrentUser({
-      current_password: passwordForm.current_password,
-      new_password: passwordForm.new_password,
-    });
-    passwordForm.current_password = "";
-    passwordForm.new_password = "";
-    ElMessage.success("密码已更新");
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || "密码更新失败");
-  } finally {
-    changingPassword.value = false;
-  }
-}
-
-function formatDateTime(value?: string) {
-  if (!value) return "-";
-  return new Date(value).toLocaleString();
+    await store.updateCurrentUser({current_password:passwordForm.current_password,new_password:passwordForm.new_password});
+    passwordForm.current_password=''; passwordForm.new_password=''; passwordForm.confirm_password='';
+    ElMessage.success('密码已更新');
+  } catch (error: any) { ElMessage.error(error?.response?.data?.message || '密码更新失败，请重试'); }
+  finally { changingPassword.value=false; }
 }
 </script>
 
 <template>
-  <div v-loading="loading" class="profile-page">
-    <section class="profile-hero">
-      <p class="eyebrow">Account Desk</p>
-      <h2>个人设置</h2>
-      <p>维护当前登录账号的基础信息、账号状态和密码，保持与平台工作台一致的操作入口。</p>
-    </section>
-
-    <div class="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-      <div class="card-surface col-span-2">
-        <div class="px-5 py-3 border-b border-zinc-100 text-sm font-semibold text-zinc-900">账户信息</div>
-        <div class="p-5">
-          <el-descriptions :column="1" border v-if="store.current" size="small">
-            <el-descriptions-item label="用户 ID">{{ store.current.id }}</el-descriptions-item>
-            <el-descriptions-item label="组织 ID">{{ store.current.org_id }}</el-descriptions-item>
-            <el-descriptions-item label="角色">{{ store.current.role }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
-              {{ store.current.is_active ? "启用中" : "已停用" }}
-            </el-descriptions-item>
-            <el-descriptions-item label="创建时间">
-              {{ formatDateTime(store.current.created_at) }}
-            </el-descriptions-item>
-            <el-descriptions-item label="更新时间">
-              {{ formatDateTime(store.current.updated_at) }}
-            </el-descriptions-item>
-          </el-descriptions>
-        </div>
-      </div>
-
-      <div class="card-surface">
-        <div class="px-5 py-3 border-b border-zinc-100 text-sm font-semibold text-zinc-900">基础资料</div>
-        <div class="p-5">
-          <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-width="88px" size="small">
-            <el-form-item label="用户名" prop="username">
-              <el-input v-model="profileForm.username" />
-            </el-form-item>
-            <el-form-item label="邮箱" prop="email">
-              <el-input v-model="profileForm.email" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="savingProfile" @click="handleSaveProfile">保存资料</el-button>
-            </el-form-item>
+  <div class="profile-page" v-loading="loading">
+    <header class="settings-heading"><h1>个人设置</h1><p>管理你的个人资料与账号安全</p></header>
+    <div class="settings-layout">
+      <nav class="settings-navigation" aria-label="设置分类">
+        <button :class="{active:activeTab==='profile'}" @click="activeTab='profile'"><User />个人资料</button>
+        <button :class="{active:activeTab==='security'}" @click="activeTab='security'"><Lock />账号安全</button>
+      </nav>
+      <main class="settings-content">
+        <section v-if="activeTab==='profile'" class="settings-section">
+          <div class="section-heading"><h2>个人资料</h2><p>用于登录和平台联系的基本信息</p></div>
+          <div class="account-summary"><span class="account-symbol"><User /></span><div><strong>{{ store.current?.username || '当前账号' }}</strong><small>{{ roleLabel }}</small></div><span class="account-state"><CircleCheck />{{ store.current?.is_active ? '账号正常' : '账号已停用' }}</span></div>
+          <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-position="top" class="settings-form">
+            <el-form-item label="用户名" prop="username"><el-input v-model="profileForm.username" placeholder="你的用户名" maxlength="64" /></el-form-item>
+            <el-form-item label="邮箱" prop="email"><el-input v-model="profileForm.email" placeholder="用于接收平台联系信息" /></el-form-item>
+            <div class="settings-form-actions"><el-button type="primary" :loading="savingProfile" :disabled="!hasProfileChanges" @click="handleSaveProfile">保存修改</el-button></div>
           </el-form>
-        </div>
-      </div>
-
-      <div class="card-surface">
-        <div class="px-5 py-3 border-b border-zinc-100 text-sm font-semibold text-zinc-900">修改密码</div>
-        <div class="p-5">
-          <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="88px" size="small">
-            <el-form-item label="当前密码" prop="current_password">
-              <el-input v-model="passwordForm.current_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item label="新密码" prop="new_password">
-              <el-input v-model="passwordForm.new_password" type="password" show-password />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">更新密码</el-button>
-            </el-form-item>
+          <div class="account-detail"><span>加入平台</span><span>{{ formatServerDateTime(store.current?.created_at) || '暂无记录' }}</span></div>
+        </section>
+        <section v-else class="settings-section">
+          <div class="section-heading"><h2>账号安全</h2><p>验证当前密码后设置新密码</p></div>
+          <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-position="top" class="settings-form">
+            <el-form-item label="当前密码" prop="current_password"><el-input v-model="passwordForm.current_password" type="password" show-password autocomplete="current-password" /></el-form-item>
+            <el-form-item label="新密码" prop="new_password"><el-input v-model="passwordForm.new_password" type="password" show-password autocomplete="new-password" placeholder="至少6个字符" /></el-form-item>
+            <el-form-item label="确认新密码" prop="confirm_password"><el-input v-model="passwordForm.confirm_password" type="password" show-password autocomplete="new-password" /></el-form-item>
+            <div class="settings-form-actions"><el-button type="primary" :loading="changingPassword" @click="handleChangePassword">更新密码</el-button></div>
           </el-form>
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   </div>
 </template>
 
 <style scoped>
-.profile-page {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top left, rgba(30, 64, 175, 0.12), transparent 24%),
-    radial-gradient(circle at right top, rgba(202, 138, 4, 0.14), transparent 25%),
-    linear-gradient(180deg, #eef2ff 0%, #fefce8 100%);
-}
-
-.profile-hero {
-  padding: 28px;
-  border-radius: 24px;
-  background:
-    radial-gradient(circle at 86% 18%, rgba(250, 204, 21, 0.24), transparent 30%),
-    linear-gradient(135deg, #111827 0%, #1e3a8a 52%, #854d0e 100%);
-  color: #f8fafc;
-  box-shadow: 0 24px 60px rgba(30, 58, 138, 0.18);
-}
-
-.profile-hero .eyebrow {
-  margin: 0 0 8px;
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  opacity: 0.76;
-}
-
-.profile-hero h2 {
-  margin: 0;
-  font-size: 40px;
-  line-height: 1.1;
-}
-
-.profile-hero p:not(.eyebrow) {
-  max-width: 760px;
-  margin: 12px 0 0;
-  color: rgba(248, 250, 252, 0.82);
-  line-height: 1.7;
-}
-
-@media (max-width: 780px) {
-  .profile-page {
-    padding: 14px;
-  }
-
-  .profile-hero h2 {
-    font-size: 34px;
-  }
-}
+.profile-page { width:min(100%,1020px); margin:16px auto; color:#30435a; }
+.settings-heading { margin:0 0 32px; }
+.settings-heading h1 { font-size:26px; font-weight:600; margin:0 0 9px; letter-spacing:0; }
+.settings-heading p { margin:0; font-size:13px; color:#8b9bb0; }
+.settings-layout { display:grid; grid-template-columns:180px minmax(0,1fr); gap:32px; }
+.settings-navigation { display:flex; flex-direction:column; gap:6px; }
+.settings-navigation button { display:flex; align-items:center; gap:9px; padding:12px 14px; border:0; border-radius:9px; background:transparent; color:#8294ad; text-align:left; font:inherit; font-size:13px; cursor:pointer; }
+.settings-navigation button.active { background:#eaf2ff; color:#356bac; font-weight:500; }
+.settings-navigation svg { width:17px; height:17px; }
+.settings-content { min-width:0; }
+.settings-section { background:#fff; border:1px solid #e2e9f2; border-radius:14px; padding:30px 34px; }
+.section-heading h2 { font-size:18px; font-weight:600; margin:0 0 7px; }
+.section-heading p { font-size:12px; color:#92a0b3; margin:0 0 27px; }
+.account-summary { display:flex; align-items:center; gap:12px; padding-bottom:22px; margin-bottom:24px; border-bottom:1px solid #edf1f6; }
+.account-symbol { width:42px; height:42px; border-radius:12px; background:#edf4ff; color:#6e96c4; display:grid; place-items:center; }
+.account-symbol svg { width:23px; height:23px; }
+.account-summary strong { display:block; font-size:14px; font-weight:500; }
+.account-summary small { display:block; margin-top:5px; font-size:11px; color:#95a2b5; }
+.account-state { margin-left:auto; color:#6c9985; font-size:11px; display:flex; align-items:center; gap:5px; }
+.account-state svg { width:14px; height:14px; }
+.settings-form { max-width:430px; }
+.settings-form :deep(.el-form-item__label) { font-size:12px; color:#526986; padding-bottom:5px; }
+.settings-form :deep(.el-input__wrapper) { min-height:38px; border-radius:8px; }
+.settings-form-actions { display:flex; padding-top:9px; }
+.settings-form-actions :deep(.el-button) { border-radius:8px; box-shadow:none; font-size:12px; }
+.account-detail { display:flex; justify-content:space-between; gap:18px; border-top:1px solid #edf1f6; padding-top:20px; margin-top:27px; font-size:11px; color:#99a6b7; }
+.settings-navigation button:focus-visible { outline:2px solid #87b3ec; outline-offset:2px; }
+@media(max-width:700px) { .profile-page { margin:7px auto; } .settings-layout { grid-template-columns:1fr; gap:16px; } .settings-navigation { flex-direction:row; } .settings-section { padding:22px 18px; } .settings-heading { margin-bottom:20px; } .account-state { font-size:10px; } }
 </style>
