@@ -113,6 +113,7 @@ declare module 'vue' {
     MessageActionBar: typeof import('./src/components/common/MessageActionBar.vue')['default']
     ModelCompareTable: typeof import('./src/components/business/analytics/ModelCompareTable.vue')['default']
     OverviewMetricGrid: typeof import('./src/components/business/analytics/OverviewMetricGrid.vue')['default']
+    PagedReferenceSelect: typeof import('./src/components/business/supervision/PagedReferenceSelect.vue')['default']
     PassRateTrendChart: typeof import('./src/components/business/analytics/PassRateTrendChart.vue')['default']
     PermissionMatrix: typeof import('./src/components/business/PermissionMatrix.vue')['default']
     PipelineNode: typeof import('./src/components/routing/PipelineNode.vue')['default']

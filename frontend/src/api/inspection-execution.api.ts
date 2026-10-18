@@ -1,6 +1,10 @@
 import {http, type ApiRequestConfig} from './http';
 import type {ExecutionRun} from '@/types/inspection-execution.types';
+import type {ReferenceQuery,ReferencePage} from './supervision.api';
 export const inspectionExecutionApi={
+  page:(taskId:string,page:number,keyword='')=>http.get<{items:ExecutionRun[];total:number;page:number;size:number}>('/v1/inspection-execution/run-pages',{params:{task_id:taskId,page,size:20,keyword},suppressErrorToast:true}),
+  selectedContext:(taskId:string,body:{session_id:string|null;sample_ids:string[];policy_id:string|null})=>http.post<import('@/types/inspection-execution.types').ExecutionTaskContext>(`/v1/inspection-execution/tasks/${taskId}/context-selection`,body,{suppressErrorToast:true}),
+  referencePage:(taskId:string,kind:'sessions'|'samples'|'policies',query:ReferenceQuery)=>http.get<ReferencePage>(`/v1/inspection-execution/tasks/${taskId}/reference-pages/${kind}`,{params:{...query,size:20},paramsSerializer:{indexes:null},suppressErrorToast:true}),
   caseWorkflow:(taskId:string,config?:ApiRequestConfig)=>http.get<import('@/types/inspection-execution.types').InspectionCaseWorkflow|null>(`/v1/inspection-execution/tasks/${taskId}/case-workflow`,config),
   context:(taskId:string,config?:ApiRequestConfig)=>http.get<import('@/types/inspection-execution.types').ExecutionTaskContext>(`/v1/inspection-execution/tasks/${taskId}/context`,config),
   taskReport:(taskId:string,id:string)=>http.get<Blob>(`/v1/inspection-execution/tasks/${taskId}/reports/${id}`,{responseType:'blob'}),

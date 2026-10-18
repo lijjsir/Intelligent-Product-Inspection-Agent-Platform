@@ -48,7 +48,10 @@ export interface DemoSamplingSuggestion extends DemoSamplingCandidate {
   events: Array<{ action: string; actor_name: string; at: string }>;
 }
 const quiet = { suppressErrorToast: true };
+export interface SamplingPage<T> {items:T[];next_cursor:string|null;has_more:boolean;size:number;blockers:string[];boundary:string}
 export const demoSamplingApi = {
+  page: <T extends DemoSamplingCandidate | DemoSamplingSuggestion>(kind:'candidates'|'suggestions',params:{case_id?:string;cursor?:string;keyword?:string}) =>
+    http.get<SamplingPage<T>>(`/v1/risk-sampling/pages/${kind}`,{...quiet,params:{...params,size:20}}),
   candidates: (caseId?: string) =>
     http.get<{ items: DemoSamplingCandidate[]; blockers: string[]; boundary: string }>(
       "/v1/risk-sampling/candidates",

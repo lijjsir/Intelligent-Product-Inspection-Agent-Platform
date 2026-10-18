@@ -808,7 +808,7 @@ class CollabService:
     async def _ensure_target_visible(self, target_type: str, target_id: str) -> None:
         if target_type == "user":
             user = await self._users.get_by_id(self._org_id, target_id)
-            if user is None:
+            if user is None or not getattr(user,'is_active',True):
                 raise NotFoundError("target user not found")
             if target_id == self._user_id:
                 raise ValidationError("cannot create a collaboration thread to self")
@@ -1171,9 +1171,9 @@ class CollabService:
         if participant is None:
             raise ForbiddenError("not a participant of this collaboration thread")
         if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id"):
-            from app.services.risk_collaboration_service import check_room_access
+            from app.services.risk_collaboration_service import check_room_access,bound_id
             room = await self._meetings.get_room(self._org_id, str(thread.target_id))
-            if not room:
+            if not room or bound_id(room)!=(thread.metadata_json or {}).get('risk_collaboration_id'):
                 raise ForbiddenError("关联研判的会议室已不可用")
             await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
         return thread

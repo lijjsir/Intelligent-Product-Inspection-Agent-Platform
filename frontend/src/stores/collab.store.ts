@@ -35,6 +35,9 @@ export const useCollabStore = defineStore("collab", () => {
   });
   const activeWorkItemView = ref<CollabWorkItemView>("pending");
   const workItemError = ref("");
+  const workItemNextCursor=ref<string|null>(null);
+  let workItemEpoch=0,workItemCursor:string|null=null;
+  let workItemFilters:{item_type?:CollabWorkItemType|null;scope_type?:string|null;room_id?:string|null;keyword?:string}={};
   const activeThreadId = ref("");
   const eventSource = shallowRef<EventSource | null>(null);
   const streamConnected = ref(false);
@@ -187,20 +190,25 @@ export const useCollabStore = defineStore("collab", () => {
 
   async function loadWorkItems(
     view: CollabWorkItemView = activeWorkItemView.value,
-    filters: { item_type?: CollabWorkItemType | null; scope_type?: string | null; room_id?: string | null } = {},
+    filters: { item_type?: CollabWorkItemType | null; scope_type?: string | null; room_id?: string | null;keyword?:string } = workItemFilters,
+    cursor:string|null=null,
   ) {
     activeWorkItemView.value = view;
+    const key=++workItemEpoch;workItemFilters={...filters};workItemCursor=cursor;
     loadingWorkItems.value = true;
     workItemError.value = "";
+    workItems.value=[];workItemNextCursor.value=null;
     try {
-      const { data } = await collabApi.listWorkItems({ view, ...filters, limit: 200 });
-      workItems.value = unwrap<CollabWorkItem[]>(data);
+      const { data } = await collabApi.workItemPage({ view, ...filters, cursor });
+      if(key!==workItemEpoch)return [];
+      const page=unwrap<{items:CollabWorkItem[];next_cursor:string|null}>(data);
+      workItems.value = page.items;workItemNextCursor.value=page.next_cursor;
       return workItems.value;
     } catch (error) {
-      workItemError.value = error instanceof Error ? error.message : "协作工作项加载失败";
+      if(key===workItemEpoch)workItemError.value = error instanceof Error ? error.message : "协作工作项加载失败";
       throw error;
     } finally {
-      loadingWorkItems.value = false;
+      if(key===workItemEpoch)loadingWorkItems.value = false;
     }
   }
 
@@ -252,7 +260,7 @@ export const useCollabStore = defineStore("collab", () => {
           decision_note: decisionNote || null,
         });
       }
-      await Promise.all([loadWorkItems(activeWorkItemView.value), loadSummary()]);
+      await Promise.all([loadWorkItems(activeWorkItemView.value,workItemFilters,workItemCursor), loadSummary()]);
     } finally {
       handlingWorkItem.value = false;
     }
@@ -467,7 +475,7 @@ export const useCollabStore = defineStore("collab", () => {
       case "work_item_completed": {
         void Promise.all([
           loadSummary(),
-          loadWorkItems(activeWorkItemView.value).catch(() => undefined),
+          loadWorkItems(activeWorkItemView.value,workItemFilters,workItemCursor).catch(() => undefined),
         ]);
         break;
       }
@@ -509,6 +517,7 @@ export const useCollabStore = defineStore("collab", () => {
     messagesByThread,
     pendingAttachments,
     workItems,
+    workItemNextCursor,
     workItemSummary,
     activeWorkItemView,
     workItemError,

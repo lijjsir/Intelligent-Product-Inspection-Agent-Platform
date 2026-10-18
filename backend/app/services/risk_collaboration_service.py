@@ -118,6 +118,7 @@ class RiskCollaborationService:
                 raise ConflictError("本版本已有固定参与范围的协同，请进入原讨论")
             if existing.data["purpose"] != payload.purpose:
                 raise ConflictError("本版本的协同议题已固定，新的意见请在原讨论中补充")
+            await self.authorize_link(existing)
             return {**await self.serialize(existing), "reused": True}
         link_id = str(uuid5(NAMESPACE_URL, f"risk-collaboration:{self.org_id}:{assessment.id}"))
         mode = self.demo.mode
@@ -172,8 +173,31 @@ class RiskCollaborationService:
             if row.data.get("case_id") == case_id and row.data.get('execution_mode','demo') == self.demo.mode and self.actor in row.data.get("participant_ids", []):
                 member = await self.meetings.get_member(self.org_id, row.data["room_id"], self.actor)
                 if member:
-                    result.append(await self.serialize(row))
+                    try:
+                        await self.authorize_link(row)
+                        result.append(await self.serialize(row))
+                    except (ForbiddenError,NotFoundError):continue
         return result
+
+    async def page_for_case(self,case_id,*,assessment_id=None,size=20,cursor=None):
+        from sqlalchemy import String,cast,func
+        from app.services.record_scan_page import scan_records
+        await self.guard()
+        await self.demo.risk.risk_case(case_id)
+        query=select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,SupervisionRecord.kind==KIND,
+            SupervisionRecord.data['case_id'].as_string()==case_id,
+            func.coalesce(SupervisionRecord.data['execution_mode'].as_string(),'demo')==self.demo.mode,
+            cast(SupervisionRecord.data['participant_ids'],String).contains(f'"{self.actor}"',autoescape=True))
+        if assessment_id: query=query.where(SupervisionRecord.data['assessment_id'].as_string()==assessment_id)
+        async def item(row):
+            await self.authorize_link(row)
+            return await self.serialize(row)
+        return await scan_records(self.db,query,item,scope=[self.org_id,self.actor,self.demo.mode,case_id,assessment_id,size],purpose='risk-collaboration-page-v1',size=size,cursor=cursor)
+
+    async def authorize_link(self,row):
+        room=await self.meetings.get_room(self.org_id,row.data['room_id'])
+        if not room or bound_id(room)!=row.id:raise ForbiddenError('协同与会议室的关联已变化，请重新核对访问范围')
+        await check_room_access(self.db,self.org_id,self.actor,self.current.role,room)
 
     async def get(self, link_id):
         await self.guard()
@@ -181,12 +205,7 @@ class RiskCollaborationService:
             SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind == KIND))
         if not row:
             raise NotFoundError("研判协同不存在")
-        room = await self.meetings.get_room(self.org_id, row.data["room_id"])
-        if not room:
-            raise NotFoundError("关联会议室已不可用")
-        if bound_id(room) != row.id:
-            raise ForbiddenError('协同与会议室的关联已变化，请重新核对访问范围')
-        await check_room_access(self.db, self.org_id, self.actor, self.current.role, room)
+        await self.authorize_link(row)
         return await self.serialize(row, details=True)
 
     async def serialize(self, link, details=False):

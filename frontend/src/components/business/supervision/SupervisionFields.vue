@@ -6,11 +6,14 @@ import {
   type FieldSpec,
 } from "./form-fields";
 import LocationPicker from "@/components/business/quality-risk/LocationPicker.vue";
+import PagedReferenceSelect from './PagedReferenceSelect.vue';
+import type { ReferenceLoader } from '@/api/supervision.api';
 defineOptions({ name: "SupervisionFields" });
 const props = defineProps<{
   modelValue: Record<string, any>;
   specs: FieldSpec[];
   options: Record<string, FieldOption[]>;
+  optionLoaders?: Record<string, ReferenceLoader>;
 }>();
 const emit = defineEmits<{ "update:modelValue": [Record<string, any>] }>();
 function dependencyLabel(field: FieldSpec): string {
@@ -76,6 +79,7 @@ function add(f: FieldSpec) {
             :model-value="row"
             :specs="f.fields || []"
             :options="options"
+            :option-loaders="optionLoaders"
             @update:model-value="updateRow(f.key, index, $event)"
           />
         </div>
@@ -86,6 +90,7 @@ function add(f: FieldSpec) {
           :model-value="modelValue[f.key] || { location_method: 'unknown' }"
           @update:model-value="set(f.key, $event)"
         />
+        <PagedReferenceSelect v-else-if="f.type === 'select' && optionLoaders?.[f.options || '']" :loader="optionLoaders[f.options || '']!" :label="f.label" :multiple="f.multiple" :disabled="isDisabled(f)" :context-key="String(modelValue.task_id || '')" :model-value="modelValue[f.key]" @update:model-value="set(f.key,$event)" />
         <el-select
           v-else-if="f.type === 'select'"
           :model-value="modelValue[f.key]"

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { Check, Close, Document, Paperclip, Plus, Refresh, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { collabApi } from '@/api/collab.api';
+import type { ReferenceLoader } from '@/api/supervision.api';
+import PagedReferenceSelect from '@/components/business/supervision/PagedReferenceSelect.vue';
+import { extractApiErrorMessage } from '@/api/http';
 import { useRoute, useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth.store";
 import { useCollabStore } from "@/stores/collab.store";
 import type {
   CollabActionRequestCreatePayload,
-  CollabTarget,
   CollabWorkItem,
   CollabWorkItemType,
   CollabWorkItemView,
@@ -25,6 +28,12 @@ const selectedHistoryThreadId = ref("");
 const itemTypeFilter = ref<CollabWorkItemType | "">("");
 const scopeFilter = ref("");
 const roomFilter = ref("");
+const keyword=ref(''),page=ref(1),cursors=ref<Array<string|null>>([null]),pinnedWorkItem=ref<CollabWorkItem|null>(null),detailError=ref('');
+let loadEpoch=0;
+const roomOptions:ReferenceLoader=async query=>(await collabApi.targetPage('meeting_room',query)).data.data;
+const recipientOptions:ReferenceLoader=async query=>(await collabApi.targetPage(createForm.target_type==='meeting_room'?'meeting_room':'user',query)).data.data;
+function resetPages(){page.value=1;cursors.value=[null];}
+function movePage(direction:number){if(store.loadingWorkItems)return;if(direction>0){if(!store.workItemNextCursor)return;cursors.value[page.value]=store.workItemNextCursor;}else if(page.value<=1)return;page.value+=direction;void loadActiveWorkItems();}
 const createVisible = ref(false);
 const decisionVisible = ref(false);
 const decisionAction = ref("");
@@ -54,7 +63,7 @@ const tabs: Array<{ value: CenterTab; label: string }> = [
 const selectedWorkItem = computed(
   () =>
     store.workItems.find((item) => item.id === selectedWorkItemId.value) ||
-    store.workItems[0] ||
+    (pinnedWorkItem.value?.id===selectedWorkItemId.value?pinnedWorkItem.value:null) ||
     null,
 );
 const riskWorkContext = computed(() => {
@@ -72,18 +81,6 @@ const selectedHistoryThread = computed(
 const selectedHistoryMessages = computed(() =>
   selectedHistoryThread.value ? store.messagesByThread[selectedHistoryThread.value.id] || [] : [],
 );
-const meetingTargets = computed(() =>
-  store.targets.filter((target) => target.target_type === "meeting_room"),
-);
-const createTargets = computed(() =>
-  store.targets.filter((target) => target.target_type === createForm.target_type),
-);
-const activeCount = computed(() => {
-  if (activeTab.value === "pending") return store.workItemSummary.pending_count;
-  if (activeTab.value === "initiated") return store.workItemSummary.initiated_count;
-  if (activeTab.value === "processed") return store.workItemSummary.processed_count;
-  return store.threads.length;
-});
 
 function unwrapRouteTab(): CenterTab {
   const requested = String(route.query.view || "");
@@ -137,10 +134,6 @@ function actionType(action: string) {
   return "default";
 }
 
-function targetLabel(target: CollabTarget) {
-  return `${target.label}${target.description ? ` · ${target.description}` : ""}`;
-}
-
 function compactEvidence(value: Record<string, unknown>) {
   return String(
     value.label ||
@@ -155,17 +148,21 @@ function compactEvidence(value: Record<string, unknown>) {
 
 async function loadActiveWorkItems() {
   if (activeTab.value === "history") return;
+  const key=++loadEpoch,requestedId=String(route.query.work_item||selectedWorkItemId.value||'');
+  pinnedWorkItem.value=null;selectedWorkItemId.value='';detailError.value='';
   try {
     await store.loadWorkItems(activeTab.value, {
       item_type: itemTypeFilter.value || null,
       scope_type: scopeFilter.value || null,
       room_id: roomFilter.value || null,
-    });
-    const requestedId = String(route.query.work_item || "");
-    selectedWorkItemId.value = store.workItems.some((item) => item.id === requestedId)
-      ? requestedId
-      : store.workItems[0]?.id || "";
-  } catch {
+      keyword:keyword.value.trim(),
+    },cursors.value[page.value-1]);
+    if(key!==loadEpoch)return;
+    const detail=requestedId?(await collabApi.workItemDetail(requestedId)).data.data:store.workItems[0]||null;
+    if(key!==loadEpoch)return;
+    pinnedWorkItem.value=detail;selectedWorkItemId.value=detail?.id||'';
+  } catch(e) {
+    if(key===loadEpoch){pinnedWorkItem.value=null;selectedWorkItemId.value='';detailError.value=extractApiErrorMessage(e,'工作项加载失败，请核对访问范围后重试');}
     // The store exposes a recoverable error state in the page.
   }
 }
@@ -288,6 +285,7 @@ async function submitCreate() {
 }
 
 watch(activeTab, async (tab) => {
+  ++loadEpoch;resetPages();pinnedWorkItem.value=null;selectedWorkItemId.value='';
   if (tab === "history") await loadHistory();
   else await loadActiveWorkItems();
 });
@@ -301,10 +299,13 @@ watch(
 
 onMounted(async () => {
   activeTab.value = unwrapRouteTab();
-  await Promise.all([store.loadSummary(), store.loadTargets()]);
+  await store.loadSummary();
   if (activeTab.value === "history") await loadHistory();
   else await loadActiveWorkItems();
 });
+watch([itemTypeFilter,scopeFilter,roomFilter],()=>{resetPages();void loadActiveWorkItems();});
+watch(()=>route.query.work_item,()=>void loadActiveWorkItems());
+onBeforeUnmount(()=>{++loadEpoch;});
 </script>
 
 <template>
@@ -335,7 +336,7 @@ onMounted(async () => {
         <span
           v-if="tab.value === 'pending' && store.workItemSummary.pending_count"
           class="tab-count"
-          >{{ store.workItemSummary.pending_count }}</span
+          >至少 {{ store.workItemSummary.pending_count }}</span
         >
       </button>
     </nav>
@@ -346,7 +347,6 @@ onMounted(async () => {
           v-model="itemTypeFilter"
           clearable
           placeholder="全部类型"
-          @change="loadActiveWorkItems"
         >
           <el-option label="记忆共享" value="memory_share" /><el-option
             label="处理请求"
@@ -357,28 +357,15 @@ onMounted(async () => {
           v-model="scopeFilter"
           clearable
           placeholder="全部作用域"
-          @change="loadActiveWorkItems"
         >
           <el-option label="会议室" value="meeting_room" /><el-option
             label="成员个人"
             value="user"
           /><el-option label="组织空间" value="org_space" />
         </el-select>
-        <el-select
-          v-model="roomFilter"
-          clearable
-          filterable
-          placeholder="全部会议室"
-          @change="loadActiveWorkItems"
-        >
-          <el-option
-            v-for="target in meetingTargets"
-            :key="target.target_id"
-            :label="target.label"
-            :value="target.target_id"
-          />
-        </el-select>
-        <span class="result-count">{{ activeCount }} 项</span>
+        <PagedReferenceSelect v-model="roomFilter" label="筛选会议室" show-label :loader="roomOptions" />
+        <el-input v-model="keyword" aria-label="协同工作项搜索" placeholder="按标题或内容搜索" :maxlength="200" clearable @keyup.enter="resetPages();loadActiveWorkItems()" /><el-button @click="resetPages();loadActiveWorkItems()">搜索工作项</el-button>
+        <span class="result-count">本页 {{ store.workItems.length }} 项</span>
         <el-button
           class="touch-button"
           :icon="Refresh"
@@ -388,6 +375,9 @@ onMounted(async () => {
         >
       </div>
 
+      <div class="filter-bar"><el-button :disabled="store.loadingWorkItems||page<=1" @click="movePage(-1)">上一页工作项</el-button><span>第 {{ page }} 页 · 按创建时间排序</span><el-button :disabled="store.loadingWorkItems||!store.workItemNextCursor" @click="movePage(1)">下一页工作项</el-button><el-button :disabled="store.loadingWorkItems" @click="resetPages();loadActiveWorkItems()">回到工作项首页</el-button></div>
+      <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" />
+      <p v-if="selectedWorkItem && !store.workItems.some(row=>row.id===selectedWorkItem?.id)" class="subtitle">当前链接指向本页之外的工作项，已单独核对访问权限。</p>
       <div v-if="store.workItemError" class="error-state" role="alert">
         <span>{{ store.workItemError }}</span
         ><button type="button" @click="loadActiveWorkItems">重新加载</button>
@@ -396,7 +386,7 @@ onMounted(async () => {
       <div class="workbench">
         <aside class="work-list" aria-label="协作工作项列表">
           <el-skeleton v-if="store.loadingWorkItems" :rows="6" animated class="p-5" />
-          <el-empty v-else-if="!store.workItems.length" description="当前视图暂无工作项" />
+          <el-empty v-else-if="!store.workItems.length" :description="store.workItemNextCursor ? '本页暂无可处理工作项，可继续查看下一页' : '当前视图暂无工作项'" />
           <button
             v-for="item in store.workItems"
             v-else
@@ -404,7 +394,7 @@ onMounted(async () => {
             type="button"
             class="work-card"
             :class="{ selected: selectedWorkItem?.id === item.id }"
-            @click="selectedWorkItemId = item.id"
+            @click="router.replace({query:{...route.query,work_item:item.id}})"
           >
             <span class="card-topline"
               ><span class="type-label">{{ itemTypeLabel(item.item_type) }}</span
@@ -655,13 +645,8 @@ onMounted(async () => {
               ]"
           /></el-form-item>
           <el-form-item label="协作目标" required
-            ><el-select v-model="createForm.target_id" filterable placeholder="选择目标"
-              ><el-option
-                v-for="target in createTargets"
-                :key="target.target_id"
-                :label="targetLabel(target)"
-                :value="target.target_id" /></el-select
-          ></el-form-item>
+            ><PagedReferenceSelect v-model="createForm.target_id" label="处理请求接收对象" :loader="recipientOptions" :context-key="createForm.target_type" />
+          </el-form-item>
         </div>
         <el-form-item label="标题" required
           ><el-input

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -122,6 +124,31 @@ async def get_work_item_summary(
 ):
     service = _build_service(db, current)
     return ResponseEnvelope(data=await service.get_work_item_summary())
+
+
+@router.get('/work-item-pages')
+async def work_item_page(view: str=Query('pending',pattern='^(pending|initiated|processed)$'),
+    item_type: str | None=Query(None,pattern='^(memory_share|action_request)$'),scope_type: str | None=Query(None,max_length=32),
+    room_id: UUID | None=None,keyword: str=Query('',max_length=200),size: int=Query(20,ge=1,le=50),cursor: str | None=Query(None,max_length=2048),
+    current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    from app.services.collab_work_item_page_service import CollabWorkItemPageService
+    svc=_build_service(db,current)
+    return ResponseEnvelope(data=await CollabWorkItemPageService(svc).page(view=view,item_type=item_type,scope_type=scope_type,
+        room_id=str(room_id) if room_id else None,keyword=keyword,size=size,cursor=cursor))
+
+
+@router.get('/work-item-detail/{kind}/{item_id}')
+async def work_item_detail(kind: Literal['action_request','memory_share'],item_id: UUID,current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    from app.services.collab_work_item_page_service import CollabWorkItemPageService
+    return ResponseEnvelope(data=await CollabWorkItemPageService(_build_service(db,current)).get(kind+':'+str(item_id)))
+
+
+@router.get('/target-pages/{kind}')
+async def target_page(kind: Literal['user','meeting_room'],page: int=Query(1,ge=1),size: int=Query(20,ge=1,le=50),keyword: str=Query('',max_length=200),
+    selected_ids: list[UUID]=Query(default=[],max_length=20),current: CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    from app.services.collab_reference_service import CollabReferenceService
+    _build_service(db,current)
+    return ResponseEnvelope(data=await CollabReferenceService(db,current).page(kind,page=page,size=size,keyword=keyword,selected_ids=[str(v) for v in selected_ids]))
 
 
 @router.post("/action-requests", response_model=ResponseEnvelope[CollabWorkItemResponse])

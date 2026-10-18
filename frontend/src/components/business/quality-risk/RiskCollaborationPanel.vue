@@ -4,6 +4,8 @@ import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { extractApiErrorMessage } from "@/api/http";
 import { riskCollaborationApi } from "@/api/risk-collaboration.api";
+import PagedReferenceSelect from '@/components/business/supervision/PagedReferenceSelect.vue';
+import type { ReferenceLoader } from '@/api/supervision.api';
 import { useAuthStore } from "@/stores/auth.store";
 import { formatServerDateTime } from "@/utils/date-time";
 import type { RiskAssessmentV4, RiskWorkflowContext } from "@/types/quality-risk.types";
@@ -27,7 +29,7 @@ const loading = ref(false),
   detailError = ref("");
 const open = ref(false),
   showAll = ref(false);
-const candidates = ref<Array<{ id: string; name: string }>>([]);
+const participantOptions:ReferenceLoader=async query=>(await riskCollaborationApi.participantPage(query)).data.data;
 const form = reactive({ coordinator_id: "", participant_ids: [] as string[], purpose: "" });
 let requestKey = crypto.randomUUID(),
   epoch = 0,
@@ -39,14 +41,16 @@ let alive = true;
 const visibleRows = computed(() =>
   rows.value.filter((r) => showAll.value || r.assessment_id === props.assessment?.id),
 );
-const current = computed(() => rows.value.find((r) => r.assessment_id === props.assessment?.id));
+const currentExists=ref(false),page=ref(1),nextCursor=ref<string|null>(null),cursors=ref<Array<string|undefined>>([undefined]);
+function resetPages(){page.value=1;cursors.value=[undefined];nextCursor.value=null;}
+function movePage(direction:number){if(loading.value||saving.value)return;if(direction>0){if(!nextCursor.value)return;cursors.value[page.value]=nextCursor.value;}else if(page.value<=1)return;page.value+=direction;void load();}
 const canCreate = computed(
   () =>
     auth.role === "expert" &&
     props.isLatest &&
     (isDemo.value ? props.assessment?.demo_workflow && props.assessment.status !== "demo_draft" : props.assessment?.status === "accepted") &&
     eligible.value &&
-    !current.value,
+    !currentExists.value,
 );
 const messages = computed(() =>
   [...(selected.value?.discussion || []), ...(selected.value?.comments || [])].sort(
@@ -65,8 +69,9 @@ async function load() {
   error.value = "";
   rows.value = [];
   try {
-    const result = await riskCollaborationApi.list(props.caseId);
-    if (token === epoch) rows.value = result.data.data;
+    const result = await riskCollaborationApi.page(props.caseId,{assessment_id:showAll.value?undefined:props.assessment?.id,cursor:cursors.value[page.value-1]});
+    const currentPage=showAll.value||page.value>1?await riskCollaborationApi.page(props.caseId,{assessment_id:props.assessment?.id}):result;
+    if (token === epoch){ rows.value = result.data.data.items;nextCursor.value=result.data.data.next_cursor;currentExists.value=!!currentPage.data.data.items.length; }
   } catch (e) {
     if (token === epoch) {
       selected.value = null;
@@ -107,9 +112,7 @@ async function start() {
   error.value = "";
   const target = draftTarget.value;
   try {
-    const choices = (await riskCollaborationApi.participants()).data.data;
     if (!alive || props.caseId !== target.caseId || props.assessment?.id !== target.id) return;
-    candidates.value = choices;
     Object.assign(form, { coordinator_id: "", participant_ids: [], purpose: "" });
     requestKey = crypto.randomUUID();
     open.value = true;
@@ -169,10 +172,12 @@ watch(
     ++detailEpoch;
     open.value = false;
     selected.value = null;
+    resetPages();currentExists.value=false;
     void load();
   },
 );
 onMounted(load);
+watch(showAll,()=>{resetPages();void load();});
 onBeforeUnmount(() => {
   alive = false;
   ++epoch;
@@ -230,6 +235,7 @@ onBeforeUnmount(() => {
         ><el-button @click="detail(item.id)">查看返回意见</el-button>
       </div>
     </article>
+    <div class="panel-actions"><el-button :disabled="loading||saving||page<=1" @click="movePage(-1)">上一页协同</el-button><span>第 {{ page }} 页 · 本页 {{ rows.length }} 条</span><el-button :disabled="loading||saving||!nextCursor" @click="movePage(1)">下一页协同</el-button><el-button v-if="page>1||error" :disabled="loading||saving" @click="resetPages();load()">回到协同首页</el-button></div>
     <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" />
     <section v-if="selected" class="collaboration-feedback">
       <h4>第 {{ selected.assessment_version }} 版返回的协同意见</h4>
@@ -263,22 +269,9 @@ onBeforeUnmount(() => {
       <el-alert v-if="error" :title="error" type="error" :closable="false" /><el-form
         label-position="top"
         ><el-form-item label="协同负责人"
-          ><el-select
-            v-model="form.coordinator_id"
-            placeholder="选择另一位同单位专家"
-            style="width: 100%"
-            ><el-option
-              v-for="c in candidates"
-              :key="c.id"
-              :label="c.name"
-              :value="c.id" /></el-select></el-form-item
-        ><el-form-item v-if="candidates.length > 1" label="其他参与专家（可选）"
-          ><el-select v-model="form.participant_ids" multiple style="width: 100%"
-            ><el-option
-              v-for="c in candidates.filter((c) => c.id !== form.coordinator_id)"
-              :key="c.id"
-              :label="c.name"
-              :value="c.id" /></el-select></el-form-item
+          ><PagedReferenceSelect v-model="form.coordinator_id" label="协同负责人" :loader="participantOptions" :disabled="saving" /></el-form-item
+        ><el-form-item label="其他参与专家（可选）"
+          ><PagedReferenceSelect v-model="form.participant_ids" label="其他参与专家" multiple :selection-limit="8" :loader="participantOptions" :disabled="saving" /></el-form-item
         ><el-form-item label="协同问题"
           ><el-input
             v-model="form.purpose"

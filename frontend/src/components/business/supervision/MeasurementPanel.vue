@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage, type UploadFile } from "element-plus";
-import { supervisionApi } from "@/api/supervision.api";
-import { qualityRiskApi } from "@/api/quality-risk.api";
+import { supervisionApi, type ReferenceLoader } from "@/api/supervision.api";
+import { extractApiErrorMessage } from '@/api/http';
+import { useRoute,useRouter } from 'vue-router';
+import PagedReferenceSelect from './PagedReferenceSelect.vue';
 import SupervisionFields from "./SupervisionFields.vue";
 import SupervisionAssessment from "./SupervisionAssessment.vue";
 import AdaptiveInspectionPanel from "./AdaptiveInspectionPanel.vue";
@@ -16,6 +18,11 @@ const props = defineProps<{
   batchId?: string | null;
 }>();
 const auth = useAuthStore();
+const route = useRoute();
+const router=useRouter();
+const sessionPage=ref(1),samplePage=ref(1),sessionTotal=ref(0),sampleTotal=ref(0),sessionSearch=ref(''),loadError=ref(''),reading=ref(false);
+let epoch=0;
+const optionLoaders: Record<string,ReferenceLoader>=Object.fromEntries(['devices','samples','regions','plans','cases'].map(key=>[key,async query=>(await supervisionApi.referenceOptions(key,{...query,task_id:props.taskId})).data.data]));
 const enrollmentDialog = ref(false),
   enrollmentDataset = ref("");
 async function enroll() {
@@ -59,35 +66,28 @@ const plannedSamples = computed(() =>
   taskSamples.value.filter((sample) => !sample.data.sampled_at),
 );
 async function load() {
+  const key=++epoch,target=props.taskId,selectedId=session.value?.id || (typeof route.query.session==='string'?route.query.session:undefined);
+  reading.value=true;loadError.value='';measurements.value=[];taskSamples.value=[];
   try {
     const settings = (await supervisionApi.settings()).data.data;
     enabled.value = settings.enabled;
     if (!enabled.value) return;
-    if (canWrite.value) options.value.datasets = (await supervisionApi.datasetTargets()).data.data;
-    sessions.value = (
-      await supervisionApi.list("inspection-sessions", { size: 200 })
-    ).data.data.items.filter((x) => x.data.task_id === props.taskId);
-    if (session.value)
-      session.value = sessions.value.find((x) => x.id === session.value?.id) || null;
-    else session.value = sessions.value[0] || null;
-    if (session.value)
-      measurements.value = (await supervisionApi.measurements(session.value.id)).data.data;
-    for (const kind of ["devices", "samples", "regions", "sampling-plans"] as const) {
-      const result = (await supervisionApi.list(kind, { size: 200 })).data.data.items;
-      if (kind === "samples")
-        taskSamples.value = result.filter((item) => item.data.task_id === props.taskId);
-      const key = kind === "sampling-plans" ? "plans" : kind;
-      options.value[key] = result
-        .filter((x) => kind !== "samples" || x.data.task_id === props.taskId)
-        .filter((x) => !["inactive", "archived"].includes(x.status))
-        .map((x) => ({ value: x.id, label: x.name + " · " + x.code }));
-    }
-    options.value.cases = (await qualityRiskApi.riskCases({ page: 1, size: 200, status: "risk_assessed" })).data.data.items.map(
-      (item) => ({ value: item.id, label: item.title + " · " + item.code }),
-    );
-  } catch {
-    if (enabled.value) ElMessage.error("无法读取测量资料，请检查服务连接后刷新");
-  }
+    const [batchResult,sampleResult,datasets]=await Promise.all([
+      supervisionApi.list('inspection-sessions',{page:sessionPage.value,size:20,task_id:target,keyword:sessionSearch.value}),
+      supervisionApi.list('samples',{page:samplePage.value,size:20,task_id:target}),
+      canWrite.value?supervisionApi.datasetTargets():Promise.resolve(null),
+    ]);
+    let active=selectedId?batchResult.data.data.items.find(row=>row.id===selectedId)|| (await supervisionApi.get('inspection-sessions',selectedId,{suppressErrorToast:true})).data.data:batchResult.data.data.items[0]||null;
+    if(active && active.data.task_id!==target)throw new Error('检测批次不属于当前任务');
+    const values=active?(await supervisionApi.measurements(active.id)).data.data:[];
+    if(key!==epoch||target!==props.taskId)return;
+    sessions.value=batchResult.data.data.items;sessionTotal.value=batchResult.data.data.total;
+    taskSamples.value=sampleResult.data.data.items;sampleTotal.value=sampleResult.data.data.total;
+    session.value=active;measurements.value=values;
+    if(datasets)options.value.datasets=datasets.data.data;
+  } catch(e) {
+    if(key===epoch){session.value=null;sessions.value=[];taskSamples.value=[];sessionTotal.value=0;sampleTotal.value=0;loadError.value=extractApiErrorMessage(e,'无法读取测量资料，请重试');}
+  } finally {if(key===epoch)reading.value=false;}
 }
 function newSession() {
   form.value = {
@@ -101,14 +101,17 @@ function newSession() {
   dialog.value = true;
 }
 async function createSession() {
+  const target=props.taskId;
   loading.value = true;
   try {
-    session.value = (
+    const created = (
       await supervisionApi.create("inspection-sessions", {
         name: "检测会话",
         data: cleanFields(form.value, fields["inspection-sessions"]),
       })
     ).data.data;
+    if(target!==props.taskId)return;
+    session.value=created;
     dialog.value = false;
     await load();
   } finally {
@@ -155,7 +158,7 @@ async function confirmPlannedSamples() {
       }),
     ),
   );
-  ElMessage.success(`已确认 ${plannedSamples.value.length} 个计划样品完成抽样`);
+  ElMessage.success(`已确认本页 ${plannedSamples.value.length} 个计划样品完成抽样`);
   await load();
 }
 function fileChanged(upload: UploadFile) {
@@ -217,10 +220,11 @@ async function review(operation: string) {
   );
   ElMessage.success("已进入业务待办");
 }
-onMounted(load);
+watch(()=>props.taskId,()=>{++epoch;sessionPage.value=1;samplePage.value=1;sessionSearch.value='';session.value=null;dialog.value=false;sampleDialog.value=false;preview.value=null;void load();},{immediate:true});
+onBeforeUnmount(()=>{++epoch;});
 </script>
 <template>
-  <section v-if="enabled" class="measurement-panel" v-loading="loading">
+  <section v-if="enabled || loadError" class="measurement-panel" v-loading="loading || reading">
     <header>
       <div>
         <h2>检测过程与测量</h2>
@@ -228,31 +232,33 @@ onMounted(load);
       </div>
       <el-button @click="load">刷新</el-button>
     </header>
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" />
+    <div class="controls"><el-input v-model="sessionSearch" aria-label="检测批次搜索" placeholder="按批次编号或名称搜索" clearable @keyup.enter="sessionPage=1;load()" /><el-button @click="sessionPage=1;load()">搜索批次</el-button><el-button :disabled="reading||sessionPage<=1" @click="sessionPage--;load()">上一页批次</el-button><span>第 {{ sessionPage }} 页 · 共 {{ sessionTotal }} 批</span><el-button :disabled="reading||sessionPage*20>=sessionTotal" @click="sessionPage++;load()">下一页批次</el-button></div>
     <div class="controls">
       <el-select
-        v-if="sessions.length > 1"
+        v-if="sessions.length || session"
         v-model="session"
         value-key="id"
         placeholder="选择检测批次"
         @change="load"
         ><el-option
-          v-for="s in sessions"
+          v-for="s in (session && !sessions.some(row=>row.id===session?.id) ? [session,...sessions] : sessions)"
           :key="s.id"
           :label="s.name + ' · ' + (STATUS_LABELS[s.status] || s.status)"
           :value="s" /></el-select
-      ><el-tag v-else-if="session" type="info"
-        >{{ session.name }} · {{ STATUS_LABELS[session.status] || session.status }}</el-tag
       ><el-button v-if="canWrite && !session" type="primary" @click="sampleDialog = true"
         >开始实验室检测</el-button
       ><el-button v-if="canWrite && plannedSamples.length" @click="confirmPlannedSamples"
-        >确认计划样品已抽取</el-button
+        >确认本页计划样品已抽取（{{ plannedSamples.length }}）</el-button
       ><el-button v-if="canWrite && session" @click="newSession">新增复测</el-button>
     </div>
+    <div class="controls"><span>任务样品第 {{ samplePage }} 页 · 共 {{ sampleTotal }} 个</span><el-button :disabled="reading||samplePage<=1" @click="samplePage--;load()">上一页样品</el-button><el-button :disabled="reading||samplePage*20>=sampleTotal" @click="samplePage++;load()">下一页样品</el-button></div>
     <el-empty
       v-if="!session"
       description="点击“开始实验室检测”，登记实物样品后选择设备和检测项目"
     />
     <template v-else>
+      <div class="controls"><el-button v-if="session.data.case_id && auth.hasPermission('quality_material_read_business')" @click="router.push({path:'/app/risk-assessments',query:{case_id:session.data.case_id}})">返回来源研判</el-button><el-button v-if="session.data.plan_id && auth.role==='expert'" @click="router.push({path:'/app/sampling-plans',query:{record:session.data.plan_id}})">查看来源抽查计划</el-button></div>
       <el-alert
         v-if="session.status === 'signed'"
         type="success"
@@ -324,7 +330,7 @@ onMounted(load);
         ><SupervisionFields
           v-model="form"
           :specs="fields['inspection-sessions'].filter((x) => x.key !== 'task_id')"
-          :options="options" /></el-form
+          :options="options" :option-loaders="optionLoaders" /></el-form
       ><template #footer
         ><el-button @click="dialog = false">取消</el-button
         ><el-button type="primary" @click="createSession">开始检测</el-button></template
@@ -334,12 +340,7 @@ onMounted(load);
       ><el-form label-position="top"
         ><el-form-item label="实物标签或外部样品号（选填）"><el-input v-model="sampleCode" placeholder="留空时由系统生成编号" /></el-form-item
         ><el-form-item label="抽样地"
-          ><el-select v-model="sampleRegion" clearable
-            ><el-option
-              v-for="o in options.regions"
-              :key="o.value"
-              :value="o.value"
-              :label="o.label" /></el-select></el-form-item></el-form
+          ><PagedReferenceSelect v-model="sampleRegion" label="抽样地" :loader="optionLoaders.regions!" :context-key="taskId" /></el-form-item></el-form
       ><template #footer
         ><el-button @click="sampleDialog = false">取消</el-button
         ><el-button type="primary" @click="registerSample"

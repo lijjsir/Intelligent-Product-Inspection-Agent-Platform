@@ -60,6 +60,8 @@ def handle(route):
                 'assessment_id':state['assessments'][0]['id'], 'basis_hash':'a'*64, 'blockers':[], 'boundary':'隔离正式业务界面契约'}
     elif path == f'/risk-cases/{CASE}/collaborations':
         data = []
+    elif path == f'/risk-cases/{CASE}/collaboration-pages':
+        data = {'items':[], 'next_cursor':None, 'has_more':False, 'size':20}
     elif path == f'/risk-cases/{CASE}/laboratory-options':
         data = {'tasks':[], 'records':[]}
     elif path in [f'/risk-cases/{CASE}/laboratory-tasks-options', f'/risk-cases/{CASE}/laboratory-records-options']:
@@ -92,6 +94,8 @@ def handle(route):
         data = []
     elif path == '/risk-sampling/candidates':
         data = {'items':[], 'blockers':[], 'boundary':'隔离业务建议'}
+    elif path.startswith('/risk-sampling/pages/'):
+        data = {'items':[], 'blockers':[], 'boundary':'隔离业务建议','next_cursor':None,'has_more':False,'size':20}
     elif path == '/risk-laboratory-verifications/lab-formal/execution-results':
         if request.method == 'GET':
             number = int(query.get('page', ['1'])[0])
@@ -156,6 +160,10 @@ def handle(route):
         data = record
     elif path == "/quality-supervision/settings":
         data = {"enabled": True, "laboratory_validation_enabled": True}
+    elif path == '/quality-supervision/laboratory-summary':
+        data = {'collecting':0,'review':0,'signed':0,'online':0}
+    elif path.startswith('/quality-supervision/options/'):
+        data = {'items':[],'selected':[],'unavailable_selected_ids':[],'total':0,'has_more':False,'page':1,'size':20}
     elif path == "/quality-supervision/analytics":
         data = {"summary": "隔离态势", "confirmed_categories": [], "plans": [], "sessions": [], "dimensions": {}, "metric_status": "分母不足", "limitations": []}
     elif path == "/quality-supervision/sampling-candidates":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
@@ -93,6 +94,27 @@ async def assignees(svc=Depends(service)):
         )
     )
     return ResponseEnvelope(data=[{"value": u.id, "label": u.username} for u in users])
+
+
+@router.get('/quality-supervision/options/{key}')
+async def reference_options(key: Literal['regions','devices','plans','samples','sessions','enterprises','tasks','standards','cases'],
+    page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=50), keyword: str = Query('', max_length=200),
+    task_id: UUID | None = None, selected_ids: list[UUID] = Query(default=[], max_length=20), svc=Depends(service)):
+    from app.services.supervision_option_service import SupervisionOptionService
+    return ResponseEnvelope(data=await SupervisionOptionService(svc).page(key, page=page, size=size, keyword=keyword,
+        task_id=str(task_id) if task_id else None, selected_ids=[str(v) for v in selected_ids]))
+
+
+@router.get('/quality-supervision/laboratory-summary')
+async def laboratory_summary(svc=Depends(service)):
+    await svc.require_enabled()
+    svc.read_access('inspection-sessions')
+    counts = dict((await svc.db.execute(select(SupervisionRecord.status,func.count()).where(
+        SupervisionRecord.org_id == svc.org_id, SupervisionRecord.kind == 'inspection-sessions').group_by(SupervisionRecord.status))).all())
+    online = await svc.db.scalar(select(func.count()).select_from(SupervisionRecord).where(
+        SupervisionRecord.org_id == svc.org_id, SupervisionRecord.kind == 'devices', SupervisionRecord.status == 'active',
+        SupervisionRecord.data['online_status'].as_string() == 'online'))
+    return ResponseEnvelope(data={'collecting':counts.get('collecting',0),'review':counts.get('awaiting_review',0),'signed':counts.get('signed',0),'online':int(online or 0)})
 
 
 @router.get("/quality-supervision/agent-config")
@@ -293,13 +315,14 @@ def register_records(kind):
         keyword: str | None = None,
         region_id: UUID | None = None,
         status: str | None = None,
+        task_id: UUID | None = None,
         svc=Depends(service),
     ):
         if kind != "enterprises":
             await svc.require_enabled()
         return ResponseEnvelope(
             data=await svc.list(
-                kind, page, size, keyword, str(region_id) if region_id else None, status
+                kind, page, size, keyword, str(region_id) if region_id else None, status, task_id=str(task_id) if task_id else None
             )
         )
 

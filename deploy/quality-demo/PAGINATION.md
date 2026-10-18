@@ -53,4 +53,6 @@ docker compose --env-file .env.quality-demo -f compose.quality-demo.yml exec -T 
 
 本轮完成报告中心及相关事项、实验室选择器，没有宣称全平台分页完成。其他通用抽查/协同列表、手工检测入口的旧下拉选项（如 `MeasurementPanel.vue`）仍须逐项检查；大体量来源扫描、复杂大快照和生产并发需另行验收。真实授权资料、标准适用性、真实检测与模型业务质量、实体手机及 Safari 继续按 `REMAINING_VALIDATION.md` 验收。
 
+2026-10-19 已继续完成正式抽查表单、实验室总览、抽查建议、事项协同及协同中心主要列表/选择器，并将原生检测执行的分页选择接到实际任务页。旧测量面板未被重新挂载。新增范围、兼容接口与剩余专项见 [后续分页验收](REMAINING_PAGINATION_2026-10-19.md)。
+
 汇总结果见 `PAGINATION_CHECKS.json`；原始日志、账号、导出和截图在忽略的 `.codex_tmp/` 中。

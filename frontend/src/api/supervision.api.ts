@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import type {
   SupervisionKind,
   SupervisionRecord,
@@ -11,7 +11,15 @@ import type {
 } from "@/types/supervision.types";
 import type { PagedResponse } from "@/types/common.types";
 
+export interface ReferenceOption {value: string; label: string;disabled?:boolean}
+export interface ReferencePage {items: ReferenceOption[]; selected: ReferenceOption[]; unavailable_selected_ids: string[]; total: number | null; has_more: boolean; page: number; size: number}
+export interface ReferenceQuery {page: number; keyword: string; selected_ids: string[]}
+export type ReferenceLoader = (query: ReferenceQuery) => Promise<ReferencePage>;
+
 export const supervisionApi = {
+  laboratorySummary: () => http.get<{collecting:number;review:number;signed:number;online:number}>('/v1/quality-supervision/laboratory-summary',{suppressErrorToast:true}),
+  referenceOptions: (key: string, query: ReferenceQuery & {task_id?: string}) =>
+    http.get<ReferencePage>(`/v1/quality-supervision/options/${key}`, {params:{...query,size:20},paramsSerializer:{indexes:null},suppressErrorToast:true}),
   samplingCandidates: () => http.get<{ items: Array<{ id: string; code: string; title: string; assessment_version: number; risk_level: string }>; excluded_count: number }>("/v1/quality-supervision/sampling-candidates"),
   reassessSamplingPlan: (id: string) => http.post<SupervisionRecord>(`/v1/sampling-plans/${id}/reassessment`, {}),
   createInspectionGoal: (
@@ -84,7 +92,7 @@ export const supervisionApi = {
     http.patch("/v1/quality-supervision/settings", {}, { params: { enabled } }),
   list: (kind: SupervisionKind, params: Record<string, any> = {}) =>
     http.get<PagedResponse<SupervisionRecord>>(`/v1/${kind}`, { params, suppressErrorToast: true }),
-  get: (kind: SupervisionKind, id: string) => http.get<SupervisionRecord>(`/v1/${kind}/${id}`),
+  get: (kind: SupervisionKind, id: string, feedback: Pick<ApiRequestConfig,'suppressErrorToast'> = {}) => http.get<SupervisionRecord>(`/v1/${kind}/${id}`, feedback),
   create: (kind: SupervisionKind, payload: Record<string, any>) =>
     http.post<SupervisionRecord>(`/v1/${kind}`, payload),
   update: (kind: SupervisionKind, id: string, payload: Record<string, any>) =>

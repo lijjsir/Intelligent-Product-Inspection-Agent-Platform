@@ -530,6 +530,25 @@ async def demo_sampling_candidates(case_id: UUID | None = None, svc=Depends(demo
     return ResponseEnvelope(data=await svc.candidates(str(case_id) if case_id else None))
 
 
+@router.get('/risk-sampling/pages/{kind}')
+async def risk_sampling_page(kind: Literal['candidates','suggestions'],case_id: UUID | None=None,size: int=Query(20,ge=1,le=50),
+    cursor: str | None=Query(None,max_length=2048),keyword: str=Query('',max_length=200),svc=Depends(demo_sampling_service)):
+    return ResponseEnvelope(data=await svc.page(str(case_id) if case_id else None,candidates=kind=='candidates',size=size,cursor=cursor,keyword=keyword))
+
+
+@router.get('/risk-cases/{case_id}/collaboration-pages')
+async def risk_collaboration_page(case_id: UUID,assessment_id: UUID | None=None,size: int=Query(20,ge=1,le=50),cursor: str | None=Query(None,max_length=2048),svc=Depends(risk_collaboration_service)):
+    return ResponseEnvelope(data=await svc.page_for_case(str(case_id),assessment_id=str(assessment_id) if assessment_id else None,size=size,cursor=cursor))
+
+
+@router.get('/risk-collaborations/participant-pages')
+async def risk_participant_page(page: int=Query(1,ge=1),size: int=Query(20,ge=1,le=50),keyword: str=Query('',max_length=200),
+    selected_ids: list[UUID]=Query(default=[],max_length=20),svc=Depends(risk_collaboration_service)):
+    from app.services.collab_reference_service import CollabReferenceService
+    await svc.guard()
+    return ResponseEnvelope(data=await CollabReferenceService(svc.db,svc.current).page('user',page=page,size=size,keyword=keyword,selected_ids=[str(v) for v in selected_ids],expert_only=True))
+
+
 @router.get("/demo-sampling/suggestions")
 @router.get("/risk-sampling/suggestions")
 async def demo_sampling_list(case_id: UUID | None = None, svc=Depends(demo_sampling_service)):

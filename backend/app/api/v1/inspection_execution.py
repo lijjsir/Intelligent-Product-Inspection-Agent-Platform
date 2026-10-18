@@ -1,4 +1,7 @@
 from fastapi import APIRouter,Depends,Query
+from pydantic import BaseModel,Field
+from typing import Literal,Annotated
+from uuid import UUID
 from sqlalchemy import select
 from app.api.v1.deps import get_db,get_current_user
 from app.core.permissions import require_role
@@ -11,6 +14,30 @@ from app.models.standard_admission import StandardDocumentRevision
 from app.models.inspection_standard_library import StandardDocument,InspectionStandardLibrary
 
 router=APIRouter(prefix="/inspection-execution",tags=["inspection-execution"])
+
+
+class ContextSelection(BaseModel):
+    session_id:UUID|None=None
+    sample_ids:list[Annotated[str,Field(min_length=1,max_length=128)]]=Field(default_factory=list,max_length=500)
+    policy_id:UUID|None=None
+
+
+@router.post('/tasks/{task_id}/context-selection',response_model=ResponseEnvelope[dict])
+async def selected_context(task_id:UUID,body:ContextSelection,current:CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role('inspection_execution',current.role)
+    from app.services.inspection_execution_context_service import InspectionExecutionContextService
+    task=await InspectionExecutionService(db,current).task(str(task_id))
+    return ResponseEnvelope(data=await InspectionExecutionContextService(db,current).context(task,session_id=str(body.session_id) if body.session_id else None,
+        sample_ids=[str(i) for i in body.sample_ids],policy_id=str(body.policy_id) if body.policy_id else None))
+
+
+@router.get('/tasks/{task_id}/reference-pages/{kind}')
+async def context_reference_page(task_id:UUID,kind:Literal['sessions','samples','policies'],page:int=Query(1,ge=1),size:int=Query(20,ge=1,le=50),keyword:str=Query('',max_length=200),
+    selected_ids:list[UUID]=Query(default=[],max_length=20),current:CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role('inspection_execution',current.role)
+    from app.services.inspection_reference_service import InspectionReferenceService
+    task=await InspectionExecutionService(db,current).task(str(task_id))
+    return ResponseEnvelope(data=await InspectionReferenceService(db,current).page(task,kind,page=page,size=size,keyword=keyword,selected_ids=[str(i) for i in selected_ids]))
 
 
 @router.get("/tasks/{task_id}/case-workflow",response_model=ResponseEnvelope[dict|None])
@@ -113,6 +140,12 @@ async def create(payload:InspectionExecutionCreate,current:CurrentUser=Depends(g
 async def list_runs(task_id:str,current:CurrentUser=Depends(get_current_user),db=Depends(get_db)):
     require_role("inspection_execution",current.role)
     return ResponseEnvelope(data=await InspectionExecutionService(db,current).list(task_id))
+
+
+@router.get('/run-pages')
+async def run_page(task_id:UUID,page:int=Query(1,ge=1),size:int=Query(20,ge=1,le=50),keyword:str=Query('',max_length=200),current:CurrentUser=Depends(get_current_user),db=Depends(get_db)):
+    require_role('inspection_execution',current.role)
+    return ResponseEnvelope(data=await InspectionExecutionService(db,current).page(str(task_id),page=page,size=size,keyword=keyword))
 
 
 @router.get("/runs/{run_id}",response_model=ResponseEnvelope[dict])

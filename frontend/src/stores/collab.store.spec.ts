@@ -11,7 +11,7 @@ vi.mock("@/api/collab.api", () => ({
   collabApi: {
     listThreads: vi.fn(),
     listTargets: vi.fn(),
-    listWorkItems: vi.fn(),
+    workItemPage: vi.fn(),
     getSummary: vi.fn(),
     createActionRequest: vi.fn(),
     createThread: vi.fn(),
@@ -117,7 +117,7 @@ describe("collab store stream handling", () => {
     const auth = useAuthStore();
     auth.userId = "user-1";
     vi.mocked(collabApi.listThreads).mockReset();
-    vi.mocked(collabApi.listWorkItems).mockReset();
+    vi.mocked(collabApi.workItemPage).mockReset();
     vi.mocked(collabApi.getSummary).mockReset();
     vi.mocked(collabApi.markRead).mockReset();
     vi.mocked(collabApi.listMessages).mockReset();
@@ -128,8 +128,8 @@ describe("collab store stream handling", () => {
       { data: { code: 0, message: "ok", data: [] } } as unknown as Awaited<ReturnType<typeof collabApi.listMessages>>,
     );
     vi.mocked(collabApi.stream).mockReset();
-    vi.mocked(collabApi.listWorkItems).mockResolvedValue(
-      { data: { code: 0, message: "ok", data: [] } } as unknown as Awaited<ReturnType<typeof collabApi.listWorkItems>>,
+    vi.mocked(collabApi.workItemPage).mockResolvedValue(
+      { data: { code: 0, message: "ok", data: {items:[],next_cursor:null,has_more:false} } } as unknown as Awaited<ReturnType<typeof collabApi.workItemPage>>,
     );
     vi.mocked(collabApi.getSummary).mockResolvedValue(
       { data: { code: 0, message: "ok", data: { pending_count: 0, initiated_count: 0, processed_count: 0 } } } as unknown as Awaited<ReturnType<typeof collabApi.getSummary>>,
@@ -299,8 +299,8 @@ describe("collab store stream handling", () => {
 
   it("loads unified work items and exposes only pending-work badge count", async () => {
     const store = useCollabStore();
-    vi.mocked(collabApi.listWorkItems).mockResolvedValueOnce(
-      { data: { code: 0, message: "ok", data: [workItem()] } } as unknown as Awaited<ReturnType<typeof collabApi.listWorkItems>>,
+    vi.mocked(collabApi.workItemPage).mockResolvedValueOnce(
+      { data: { code: 0, message: "ok", data: {items:[workItem()],next_cursor:'opaque-next',has_more:true} } } as unknown as Awaited<ReturnType<typeof collabApi.workItemPage>>,
     );
     vi.mocked(collabApi.getSummary).mockResolvedValueOnce(
       { data: { code: 0, message: "ok", data: { pending_count: 3, initiated_count: 4, processed_count: 5 } } } as unknown as Awaited<ReturnType<typeof collabApi.getSummary>>,
@@ -309,6 +309,7 @@ describe("collab store stream handling", () => {
     await Promise.all([store.loadWorkItems("pending"), store.loadSummary()]);
 
     expect(store.workItems).toHaveLength(1);
+    expect(store.workItemNextCursor).toBe('opaque-next');
     expect(store.activeWorkItemView).toBe("pending");
     expect(store.pendingWorkItemCount).toBe(3);
   });
@@ -321,7 +322,17 @@ describe("collab store stream handling", () => {
     await store.handleWorkItem(item, "approve", "证据充分");
 
     expect(meetingApi.approveMemoryShare).toHaveBeenCalledWith("transfer-1", "证据充分");
-    expect(collabApi.listWorkItems).toHaveBeenCalledWith(expect.objectContaining({ view: "pending" }));
+    expect(collabApi.workItemPage).toHaveBeenCalledWith(expect.objectContaining({ view: "pending" }));
     expect(collabApi.getSummary).toHaveBeenCalled();
+  });
+  it('discards an older failed filter request and keeps the current cursor context for stream refresh', async()=>{
+    const store=useCollabStore();let rejectOld:(error:Error)=>void=()=>{};
+    vi.mocked(collabApi.workItemPage).mockReturnValueOnce(new Promise((_,reject)=>{rejectOld=reject;}));
+    const old=store.loadWorkItems('pending',{keyword:'old'}).catch(()=>undefined);
+    await store.loadWorkItems('processed',{keyword:'current',room_id:'room-1'},'cursor-page-2');
+    rejectOld(new Error('obsolete request'));await old;
+    expect(store.workItemError).toBe('');expect(store.loadingWorkItems).toBe(false);
+    store.handleStreamEvent({event:'work_item_updated',work_item_id:'action_request:new',resource_id:'new',item_type:'action_request',status:'done'});
+    await vi.waitFor(()=>expect(collabApi.workItemPage).toHaveBeenLastCalledWith(expect.objectContaining({view:'processed',keyword:'current',room_id:'room-1',cursor:'cursor-page-2'})));
   });
 });

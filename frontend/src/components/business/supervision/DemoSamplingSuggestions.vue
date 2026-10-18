@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { extractApiErrorMessage } from "@/api/http";
@@ -29,34 +29,40 @@ const candidates = ref<DemoSamplingCandidate[]>([]),
   rows = ref<DemoSamplingSuggestion[]>([]);
 const selected = ref<DemoSamplingSuggestion | null>(null),
   form = ref<DemoSamplingContent | null>(null);
+function paging(){return reactive({page:1,cursors:[undefined] as Array<string|undefined>,next:null as string|null});}
+const listPaging=paging(),candidatePaging=paging(),keyword=ref(''),appliedKeyword=ref('');
+function resetPages(){for(const state of [listPaging,candidatePaging]){state.page=1;state.cursors=[undefined];state.next=null;}}
+function movePage(kind:'list'|'candidates',direction:number){if(loading.value||saving.value)return;const state=kind==='list'?listPaging:candidatePaging;if(direction>0){if(!state.next)return;state.cursors[state.page]=state.next;}else if(state.page<=1)return;state.page+=direction;void load(true);}
 let epoch = 0;
 let alive = true;
 function apply(row: DemoSamplingSuggestion | null) {
   selected.value = row;
   form.value = row ? { ...row.content } : null;
 }
-async function load() {
+async function load(listOnly=false) {
   if (auth.role !== "expert") return;
   const key = ++epoch;
   loading.value = true;
   error.value = "";
-  apply(null);
+  if(!listOnly)apply(null);
   rows.value = [];
   candidates.value = [];
   blockers.value = [];
   try {
     await runtime.load();
     const [list, options] = await Promise.all([
-      demoSamplingApi.list(caseId.value),
-      demoSamplingApi.candidates(caseId.value),
+      demoSamplingApi.page<DemoSamplingSuggestion>('suggestions',{case_id:caseId.value,cursor:listPaging.cursors[listPaging.page-1],keyword:appliedKeyword.value}),
+      demoSamplingApi.page<DemoSamplingCandidate>('candidates',{case_id:caseId.value,cursor:candidatePaging.cursors[candidatePaging.page-1],keyword:appliedKeyword.value}),
     ]);
+    const id = typeof route.query.suggestion === "string" ? route.query.suggestion : null;
+    const detail=listOnly?selected.value:id?(await demoSamplingApi.get(id)).data.data:null;
+    if(detail&&caseId.value&&detail.snapshot.case_id!==caseId.value)throw new Error('建议不属于当前事项');
     if (key !== epoch) return;
-    rows.value = list.data.data;
+    rows.value = list.data.data.items;
+    listPaging.next=list.data.data.next_cursor;candidatePaging.next=options.data.data.next_cursor;
     candidates.value = options.data.data.items;
     blockers.value = options.data.data.blockers;
-    const id = typeof route.query.suggestion === "string" ? route.query.suggestion : null;
-    if (id && !rows.value.some((r) => r.id === id)) throw new Error("建议不存在或不在当前访问范围");
-    apply(rows.value.find((r) => r.id === id) || null);
+    if(!listOnly)apply(detail);
   } catch (e) {
     if (key === epoch) {
       error.value = extractApiErrorMessage(e, "加载抽查建议失败");
@@ -112,8 +118,8 @@ async function save(confirm = false) {
 const dirty = computed(
   () => !!selected.value && JSON.stringify(form.value) !== JSON.stringify(selected.value.content),
 );
-watch(() => [route.query.case_id, route.query.suggestion], load);
-onMounted(load);
+watch(() => [route.query.case_id, route.query.suggestion],(now,old)=>{if(now[0]!==old?.[0])resetPages();void load();});
+onMounted(()=>load());
 onBeforeUnmount(() => {
   alive = false;
   ++epoch;
@@ -128,7 +134,7 @@ onBeforeUnmount(() => {
         <h1>{{ isDemo ? "演示抽查建议" : "抽查建议" }}</h1>
         <p>把已复核研判和同单位协同意见整理为建议，保留来源、缺口和未知信息。</p>
       </div>
-      <el-button :disabled="saving" @click="load">刷新依据与列表</el-button>
+      <el-button :disabled="saving" @click="load()">刷新依据与列表</el-button>
     </header>
     <el-alert
       type="warning"
@@ -143,6 +149,7 @@ onBeforeUnmount(() => {
       title="请使用受邀专家账号查看研判建议。"
     />
     <template v-else>
+      <el-form class="panel-actions" @submit.prevent="appliedKeyword=keyword.trim();resetPages();load(true)"><el-input v-model="keyword" aria-label="抽查建议搜索" placeholder="按编号或标题搜索" :maxlength="200" :disabled="loading||saving" clearable /><el-button native-type="submit" :disabled="loading||saving">搜索建议</el-button><el-button :disabled="loading||saving" @click="resetPages();load(true)">回到建议首页</el-button></el-form>
       <el-button
         v-if="caseId"
         class="return-case"
@@ -167,7 +174,7 @@ onBeforeUnmount(() => {
         />
         <el-empty
           v-if="!candidates.length && !loading"
-          description="暂无符合条件的建议候选，请先完成研判复核和同单位协同"
+          :description="candidatePaging.next ? '本页暂无可用候选，可继续查看下一页' : '暂无符合条件的建议候选，请先完成研判复核和同单位协同'"
           :image-size="56"
         />
         <article
@@ -191,12 +198,13 @@ onBeforeUnmount(() => {
               : "编写建议"
           }}</el-button>
         </article>
+        <div class="panel-actions"><el-button :disabled="loading||saving||candidatePaging.page<=1" @click="movePage('candidates',-1)">上一页候选</el-button><span>第 {{ candidatePaging.page }} 页 · 本页 {{ candidates.length }} 项</span><el-button :disabled="loading||saving||!candidatePaging.next" @click="movePage('candidates',1)">下一页候选</el-button></div>
       </section>
       <section>
         <h2>建议记录</h2>
         <el-empty
           v-if="!rows.length && !loading"
-          description="尚未编写抽查建议"
+          :description="listPaging.next ? '本页暂无可访问建议，可继续查看下一页' : '尚未编写抽查建议'"
           :image-size="56"
         />
         <button
@@ -219,6 +227,7 @@ onBeforeUnmount(() => {
             · 修订 {{ row.revision }}</span
           >
         </button>
+        <div class="panel-actions"><el-button :disabled="loading||saving||listPaging.page<=1" @click="movePage('list',-1)">上一页建议</el-button><span>第 {{ listPaging.page }} 页 · 本页 {{ rows.length }} 条</span><el-button :disabled="loading||saving||!listPaging.next" @click="movePage('list',1)">下一页建议</el-button></div>
       </section>
       <section v-if="selected && form" class="suggestion-detail">
         <header>

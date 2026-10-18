@@ -173,7 +173,7 @@ class InspectionExecutionService:
             if old.payload_hash!=raw:raise ConflictError("相同运行编号携带了不同输入")
             return await self.serialize(old)
         context_service=InspectionExecutionContextService(self.session,self.current,self.storage)
-        context=await context_service.context(task)
+        context=await context_service.context(task,session_id=payload.get('session_id'),sample_ids=payload.get('sample_ids',[]),policy_id=payload.get('policy_id'))
         selection_issues=await context_service.validate_selection(task,payload,context)
         rules,sources,issues=await self.bindings(payload["requirements"],payload["product_category"],payload["production_date"])
         issues.extend(selection_issues)
@@ -222,6 +222,16 @@ class InspectionExecutionService:
             InspectionExecutionRun.task_id==task_id).order_by(InspectionExecutionRun.created_at.desc()))).scalars().all()
         return [await self.serialize(row) for row in rows]
 
+    async def page(self,task_id,*,page=1,size=20,keyword=''):
+        from sqlalchemy import func
+        await self.task(task_id)
+        if page<1 or not 1<=size<=50:raise ValidationError('执行列表分页参数无效')
+        query=select(InspectionExecutionRun).where(InspectionExecutionRun.org_id==self.org_id,InspectionExecutionRun.task_id==task_id)
+        if keyword.strip():query=query.where(func.lower(func.hex(InspectionExecutionRun.id)).contains(keyword.strip().replace('-','').lower(),autoescape=True))
+        total=int(await self.session.scalar(select(func.count()).select_from(query.subquery())) or 0)
+        rows=(await self.session.scalars(query.order_by(InspectionExecutionRun.created_at.desc(),InspectionExecutionRun.id.desc()).offset((page-1)*size).limit(size))).all()
+        return {'items':[await self.serialize(row) for row in rows],'total':total,'page':page,'size':size}
+
     async def verification(self,run):
         refs=[{"revision_id":s["revision_id"],"candidate_id":s["candidate_id"]} for s in run.snapshot["source_refs"]]
         try:_,sources,issues=await self.bindings(refs,run.snapshot["product_category"],run.snapshot["production_date"])
@@ -238,8 +248,8 @@ class InspectionExecutionService:
         if run.snapshot.get("task_context"):
             context_service=InspectionExecutionContextService(self.session,self.current,self.storage)
             task=await self.task(run.task_id)
-            context=await context_service.context(task)
             frozen=run.snapshot["task_context"]
+            context=await context_service.context(task,session_id=run.session_id,sample_ids=run.snapshot.get('sample_ids',[]),policy_id=run.snapshot.get('policy',{}).get('publication_id'))
             if fingerprint(context["task_scope"])!=fingerprint(frozen["scope"]):
                 validation["blockers"].append(blocker("task_scope_changed","任务产品、批次或日期与冻结对象不一致"))
             current_samples={s['id']:s for s in context['samples']}

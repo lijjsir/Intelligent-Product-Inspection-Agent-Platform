@@ -2,11 +2,10 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { extractApiErrorMessage } from '@/api/http';
 import { useAuthStore } from "@/stores/auth.store";
-import { supervisionApi } from "@/api/supervision.api";
+import { supervisionApi, type ReferenceLoader } from "@/api/supervision.api";
 import { qualityRiskApi } from "@/api/quality-risk.api";
-import { taskApi } from "@/api/task.api";
-import { http } from "@/api/http";
 import { formatServerDateTime } from "@/utils/date-time";
 import SupervisionFields from "@/components/business/supervision/SupervisionFields.vue";
 import SupervisionAssessment from "@/components/business/supervision/SupervisionAssessment.vue";
@@ -29,6 +28,7 @@ const route = useRoute(),
   router = useRouter(),
   auth = useAuthStore();
 const kind = computed(() => (route.meta.supervisionKind || "risk-cases") as SupervisionKind);
+const pagedOptions: Record<string,ReferenceLoader>=Object.fromEntries(['regions','devices','enterprises','plans','samples','cases','tasks','standards'].map(key=>[key,async query=>(await supervisionApi.referenceOptions(key,{...query,task_id:key==='samples' ? form.value.task_id || undefined:undefined})).data.data]));
 const runtime = useRuntimeContext();
 const demoSampling = computed(() => kind.value === 'sampling-plans' && runtime.context.value?.execution_mode === 'demo');
 const title = computed(() => KIND_LABELS[kind.value]);
@@ -146,8 +146,12 @@ const inputSpecs = computed(() =>
     : fields[kind.value],
 );
 let timer: ReturnType<typeof setTimeout> | undefined;
+let readEpoch=0;
+const readError=ref('');
 
 async function load() {
+  const key=++readEpoch,target=kind.value,selectedId=String(route.query.record || selected.value?.id || '');
+  rows.value=[];selected.value=null;readError.value='';
   await runtime.load();
   if (demoSampling.value || (kind.value === 'sampling-plans' && !runtime.context.value)) { loading.value = false; return; }
   loading.value = true;
@@ -155,22 +159,19 @@ async function load() {
     const settings = await supervisionApi.settings();
     enabled.value = settings.data.data.enabled;
     if (!enabled.value) return;
-    const result = await supervisionApi.list(kind.value, {
+    const result = await supervisionApi.list(target, {
       page: page.value,
       size: 20,
       keyword: keyword.value || undefined,
     });
-    rows.value = result.data.data.items;
-    total.value = result.data.data.total;
-    if (route.query.record) {
-      selected.value = (await supervisionApi.get(kind.value, String(route.query.record))).data.data;
-      void loadOptions();
-    } else if (selected.value)
-      selected.value = rows.value.find((x) => x.id === selected.value?.id) || null;
-  } catch {
-    /* API reports errors; disabled organizations show the setup state. */
+    const detail=selectedId?(await supervisionApi.get(target,selectedId,{suppressErrorToast:true})).data.data:null;
+    if(key!==readEpoch)return;
+    rows.value=result.data.data.items;total.value=result.data.data.total;selected.value=detail;
+    if(detail)void loadOptions();
+  } catch(e) {
+    if(key===readEpoch){rows.value=[];selected.value=null;total.value=0;readError.value=extractApiErrorMessage(e,'列表读取失败，请重试');}
   } finally {
-    loading.value = false;
+    if(key===readEpoch)loading.value = false;
   }
 }
 const optionLoadedAt = new Map<string, number>();
@@ -187,27 +188,12 @@ async function loadOptions(force = false) {
   const keys = [...requiredOptionKeys()].filter(
     (key) => key === "cases" || staticKeys.has(key) || force || Date.now() - (optionLoadedAt.get(key) || 0) >= optionTtlMs,
   );
-  const pendingKeys = keys.filter((key) => !staticKeys.has(key));
+  const pendingKeys = keys.filter((key) => !staticKeys.has(key) && !pagedOptions[key]);
   if (!pendingKeys.length) return;
   optionsLoading.value = true;
-  const genericKinds: Record<string, SupervisionKind> = {
-    regions: "regions",
-    devices: "devices",
-    enterprises: "enterprises",
-    plans: "sampling-plans",
-    samples: "samples",
-  };
   const loaders: Record<string, () => Promise<void>> = {
     assignees: async () => {
       options.value.assignees = (await supervisionApi.assignees()).data.data;
-    },
-    cases: async () => {
-      const result = await supervisionApi.samplingCandidates();
-      excludedRiskCandidates.value = result.data.data.excluded_count;
-      options.value.cases = result.data.data.items.map((item) => ({
-        value: item.id,
-        label: `${item.code} · ${item.title} · 研判第 ${item.assessment_version} 版`,
-      }));
     },
     products: async () => {
       const catalog = (await qualityRiskApi.productCatalog(true)).data.data;
@@ -223,31 +209,7 @@ async function loadOptions(force = false) {
     batches: async () => {
       options.value.batches = [];
     },
-    standards: async () => {
-      const result = await http.get<any>("/v1/inspection-standards", {
-        params: { size: 200 },
-        suppressErrorToast: true,
-      });
-      options.value.standards = (result.data.data.items || [])
-        .filter((item: any) => item.is_active)
-        .map((item: any) => ({ value: item.id, label: item.name }));
-    },
-    tasks: async () => {
-      const result = (await taskApi.list({ page: 1, size: 200 })).data.data;
-      options.value.tasks = result.items.map((item) => ({
-        value: item.id,
-        label: `${item.product_name || item.product_id} · ${item.id.slice(-8)}`,
-      }));
-    },
   };
-  for (const [key, optionKind] of Object.entries(genericKinds)) {
-    loaders[key] = async () => {
-      const result = await supervisionApi.list(optionKind, { size: 200 });
-      options.value[key] = result.data.data.items
-        .filter((item) => !["inactive", "archived"].includes(item.status))
-        .map((item) => ({ value: item.id, label: `${item.code} · ${item.name}` }));
-    };
-  }
   try {
     await Promise.allSettled(
       pendingKeys.map(async (key) => {
@@ -271,7 +233,8 @@ async function openCreate() {
   await loadOptions();
   const caseId = String(route.query.case_id || "");
   if (kind.value === "sampling-plans" && caseId) {
-    if (options.value.cases?.some(item => item.value === caseId)) {
+    const chosen=(await supervisionApi.referenceOptions('cases',{page:1,keyword:'',selected_ids:[caseId]})).data.data.selected;
+    if (chosen.some(item => item.value === caseId)) {
       form.value.candidates = [{case_id: caseId, sample_count: 1, unit_cost: 0, laboratory_validation: false}];
     } else ElMessage.warning("该事项未进入当前有效抽查候选，请先核验风险来源并完成独立复核");
   }
@@ -451,6 +414,7 @@ watch(kind, () => {
 });
 onMounted(load);
 onUnmounted(() => {
+  ++readEpoch;
   if (timer) clearTimeout(timer);
 });
 </script>
@@ -458,6 +422,7 @@ onUnmounted(() => {
   <el-alert v-if="kind === 'sampling-plans' && !runtime.context.value" title="正在核对运行环境；若加载失败，请刷新页面重试。" type="info" :closable="false" />
   <DemoSamplingSuggestions v-else-if="demoSampling" />
   <main v-else class="supervision-page" v-loading="loading">
+    <el-alert v-if="readError" :title="readError" type="error" :closable="false" />
     <SupervisionModuleHeader
       v-if="moduleMeta"
       :title="title"
@@ -754,7 +719,7 @@ onUnmounted(() => {
         <p v-if="inputSpecs.some((f) => f.options === 'regions') && !options.regions?.length" class="form-hint">
           暂无匹配地区，请使用内置地点选择或填写详细地址。
         </p>
-        <SupervisionFields v-model="form" :specs="inputSpecs" :options="options" /></el-form
+        <SupervisionFields v-model="form" :specs="inputSpecs" :options="options" :option-loaders="pagedOptions" /></el-form
       ><template #footer
         ><el-button @click="dialog = false">取消</el-button
         ><el-button type="primary" :loading="saving" @click="save">保存</el-button></template

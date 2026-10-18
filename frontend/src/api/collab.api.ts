@@ -1,5 +1,6 @@
 import { http } from "./http";
 import { streamApi } from "./stream.api";
+import type { ReferencePage,ReferenceQuery } from './supervision.api';
 import type {
   CollabMessage,
   CollabActionRequestCreatePayload,
@@ -20,6 +21,11 @@ import type {
 const apiBase = String(import.meta.env.VITE_API_BASE ?? "/api").trim();
 
 export const collabApi = {
+  workItemPage(params:{view?:CollabWorkItemView;item_type?:CollabWorkItemType|null;scope_type?:string|null;room_id?:string|null;keyword?:string;cursor?:string|null}){
+    return http.get<{items:CollabWorkItem[];next_cursor:string|null;has_more:boolean}>('/v1/collab/work-item-pages',{params:{...params,size:20},suppressErrorToast:true});
+  },
+  workItemDetail(id:string){const [kind,rid]=id.split(':');return http.get<CollabWorkItem>(`/v1/collab/work-item-detail/${kind}/${rid}`,{suppressErrorToast:true});},
+  targetPage(kind:'user'|'meeting_room',query:ReferenceQuery){return http.get<ReferencePage>(`/v1/collab/target-pages/${kind}`,{params:{...query,size:20},paramsSerializer:{indexes:null},suppressErrorToast:true});},
   listThreads(limit = 100) {
     return http.get<CollabThread[]>("/v1/collab/threads", { params: { limit } });
   },

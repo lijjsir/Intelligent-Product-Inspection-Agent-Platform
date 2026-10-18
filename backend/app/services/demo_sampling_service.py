@@ -121,6 +121,30 @@ class DemoSamplingService:
                 blockers.append(str(error.message))
         return {"items": items, "blockers": list(dict.fromkeys(blockers)), "boundary": self.boundary}
 
+    async def page(self, case_id=None, *, candidates=False, size=20, cursor=None, keyword=''):
+        from sqlalchemy import String,cast,or_,func
+        from app.services.record_scan_page import scan_records
+        await self.guard()
+        kind=COLLAB_KIND if candidates else self.kind
+        query=select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,SupervisionRecord.kind==kind,
+            func.coalesce(SupervisionRecord.data['execution_mode'].as_string(),'demo')==self.demo.mode)
+        case_field=SupervisionRecord.data['case_id'] if candidates else SupervisionRecord.data['snapshot']['case_id']
+        if case_id: query=query.where(case_field.as_string()==case_id)
+        if keyword.strip(): query=query.where(or_(SupervisionRecord.name.contains(keyword.strip(),autoescape=True),SupervisionRecord.data['snapshot']['case_code'].as_string().contains(keyword.strip(),autoescape=True)))
+        if candidates: query=query.where(cast(SupervisionRecord.data['participant_ids'],String).contains(f'"{self.actor}"',autoescape=True))
+        blockers=[]
+        async def item(row):
+            if candidates:
+                try:
+                    snapshot,token=await self.context(row.data['case_id'],row.id)
+                    return {'snapshot':snapshot,'context_hash':token}
+                except (ConflictError,ValidationError):
+                    blockers.append('部分协同尚未满足当前研判复核或工作项完成条件，请返回事项核对。');return None
+            await self.row(row.id)
+            return await self.serialize(row)
+        result=await scan_records(self.db,query,item,scope=[self.org_id,self.actor,self.demo.mode,case_id,candidates,keyword.strip(),size],purpose='risk-sampling-page-v1',size=size,cursor=cursor)
+        return {**result,'blockers':list(dict.fromkeys(blockers)),'boundary':self.boundary}
+
     async def row(self, suggestion_id):
         row = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(
             SupervisionRecord.id == suggestion_id, SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind == self.kind)))

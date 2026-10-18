@@ -1,17 +1,43 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import {useRouter} from 'vue-router';
+import {useRouter,useRoute} from 'vue-router';
 import { useAuthStore } from "@/stores/auth.store";
 import { extractApiErrorMessage } from "@/api/http";
 import { inspectionExecutionApi as api } from "@/api/inspection-execution.api";
 import type { ExecutionRun,ExecutionTaskContext } from "@/types/inspection-execution.types";
 import KnowledgeSubmitDialog from "./KnowledgeSubmitDialog.vue";
+import PagedReferenceSelect from './supervision/PagedReferenceSelect.vue';
+import type {ReferenceLoader} from '@/api/supervision.api';
 
 const props = defineProps<{ taskId: string }>();
 const auth = useAuthStore();
 const router=useRouter();
+const route=useRoute();
+let contextEpoch=0,loadEpoch=0;
+const sessionOptions:ReferenceLoader=async query=>(await api.referencePage(props.taskId,'sessions',query)).data.data;
+const policyOptions:ReferenceLoader=async query=>(await api.referencePage(props.taskId,'policies',query)).data.data;
+const sampleOptions:ReferenceLoader=async query=>{
+  const additional=(taskContext.value?.samples||[]).filter(sample=>sample.kind!=='platform_sample');
+  const extraIds=new Set(additional.map(sample=>sample.id));
+  const result=(await api.referencePage(props.taskId,'samples',{...query,selected_ids:query.selected_ids.filter(id=>!extraIds.has(id))})).data.data;
+  const extra=additional.map(sample=>({value:sample.id,label:`${sample.label} · ${sample.kind==='report_sample'?'报告原样品':'实物样品'}`}));
+  const matching=extra.filter(item=>!query.keyword||item.label.includes(query.keyword));
+  if(query.page===1)result.items.unshift(...matching);
+  result.selected.push(...extra.filter(item=>query.selected_ids.includes(item.value)));
+  if(result.total!==null)result.total+=matching.length;
+  return result;
+};
+async function refreshSelectedContext(){
+  const key=++contextEpoch,target=props.taskId;
+  busy.value=true;error.value='';
+  try{const result=(await api.selectedContext(target,{session_id:form.session_id||null,sample_ids:form.samples,policy_id:form.policy_id||null})).data.data;
+    if(key===contextEpoch&&target===props.taskId)applyContext(result);
+  }catch(e){if(key===contextEpoch){taskContext.value=null;error.value=extractApiErrorMessage(e,'所选任务资料无法核对，请重新打开执行表单');}}
+  finally{if(key===contextEpoch)busy.value=false;}
+}
 const rows = ref<ExecutionRun[]>([]);
+const runPage=ref(1),runTotal=ref(0),runKeyword=ref('');
 const requirements = ref<any[]>([]);
 const selected = ref<string[]>([]);
 const current = ref<ExecutionRun | null>(null);
@@ -73,7 +99,7 @@ async function openDraftReport(item:EvidenceDraft){
     reportOpen.value=true;
   }catch(cause){error.value=extractApiErrorMessage(cause,'报告原件无法取得，请先核对来源关联');}
 }
-onBeforeUnmount(()=>{if(reportUrl.value)URL.revokeObjectURL(reportUrl.value.split('#')[0]!);});
+onBeforeUnmount(()=>{++contextEpoch;++loadEpoch;if(reportUrl.value)URL.revokeObjectURL(reportUrl.value.split('#')[0]!);});
 
 type EvidenceDraft = {
   kind: "measurement_record" | "report_attachment";
@@ -119,7 +145,8 @@ function applyContext(value:ExecutionTaskContext,reset=false){
   taskContext.value=value;
   if(reset){
     form.product_category=value.task_scope.product_category;form.production_date=value.task_scope.production_date;
-    form.session_id=value.sessions.length===1?value.sessions[0]!.id:'';form.samples=[];
+    const requested=typeof route.query.session==='string'?route.query.session:'';
+    form.session_id=requested ? (value.sessions.some(item=>item.id===requested)?requested:'') : value.sessions.length===1?value.sessions[0]!.id:'';form.samples=[];
     form.policy_id=value.policies.find(item=>!item.issues.length)?.id||'';
     form.imageViews=Object.fromEntries(value.images.map(item=>[item.image_hash,item.view]));
   }
@@ -222,31 +249,39 @@ const checkCount = computed(() => {
 const reviewAcceptAllowed = computed(() => ["pass", "fail"].includes(current.value?.evaluation?.item_verdict || "") && !currentMissingInputs.value.length);
 
 async function load() {
+  const key=++loadEpoch,target=props.taskId;
+  rows.value=[];
   loading.value = true;
   error.value = "";
   try {
-    rows.value = (await api.list(props.taskId, { suppressErrorToast: true })).data.data;
+    const result=(await api.page(target,runPage.value,runKeyword.value)).data.data;
+    if(key===loadEpoch && target===props.taskId){rows.value=result.items;runTotal.value=result.total;}
   } catch (cause) {
-    error.value = extractApiErrorMessage(cause, "执行记录暂时无法加载，请确认后端已更新到检测执行版本");
+    if(key===loadEpoch){current.value=null;drawer.value=false;runTotal.value=0;error.value = extractApiErrorMessage(cause, "执行记录暂时无法加载，请确认后端已更新到检测执行版本");}
   } finally {
-    loading.value = false;
+    if(key===loadEpoch)loading.value = false;
   }
 }
 
 async function openCreate() {
+  if(busy.value||loading.value)return;
+  const target=props.taskId,key=++contextEpoch;
   busy.value = true;
   error.value = "";
   try {
-    const [requirementResponse,contextResponse]=await Promise.all([api.requirements(props.taskId,{suppressErrorToast:true}),api.context(props.taskId,{suppressErrorToast:true})]);
+    const linkedSession=typeof route.query.session==='string'?route.query.session:null;
+    const [requirementResponse,contextResponse]=await Promise.all([api.requirements(props.taskId,{suppressErrorToast:true}),linkedSession?api.selectedContext(props.taskId,{session_id:linkedSession,sample_ids:[],policy_id:null}):api.context(props.taskId,{suppressErrorToast:true})]);
+    if(key!==contextEpoch||target!==props.taskId)return;
+    if(linkedSession&&!contextResponse.data.data.sessions.some(item=>item.id===linkedSession))throw new Error('链接的检测批次不属于当前任务或已不可用');
     requirements.value=requirementResponse.data.data;
     selected.value = [];
     applyContext(contextResponse.data.data,true);
     form.evidence = [{...emptyEvidence(),kind:contextResponse.data.data.sessions.length?'measurement_record':'report_attachment'}];
     dialog.value = true;
   } catch (cause) {
-    error.value = extractApiErrorMessage(cause, "无法读取已发布检测要求，请先确认标准要求已发布");
+    if(key===contextEpoch&&target===props.taskId)error.value = extractApiErrorMessage(cause, "无法读取已发布检测要求，请先确认标准要求已发布");
   } finally {
-    busy.value = false;
+    if(key===contextEpoch&&target===props.taskId)busy.value = false;
   }
 }
 
@@ -305,6 +340,8 @@ function parseEvidence() {
 }
 
 async function create() {
+  if(busy.value||!taskContext.value)return;
+  const target=props.taskId,key=contextEpoch;
   if (!selected.value.length || !form.product_category.trim() || !form.production_date || sampleIds.value.length === 0) {
     error.value = "请补齐产品类别、生产日期、样品编号和至少一项标准检测要求";
     return;
@@ -315,7 +352,7 @@ async function create() {
     const refs = requirements.value
       .filter((item) => selected.value.includes(`${item.revision_id}:${item.id}`))
       .map((item) => ({ revision_id: item.revision_id, candidate_id: item.id }));
-    current.value = (await api.create({
+    const created = (await api.create({
       request_key: crypto.randomUUID(),
       task_id: props.taskId,
       session_id: form.session_id.trim() || null,
@@ -328,13 +365,15 @@ async function create() {
       context_hash:taskContext.value?.context_hash,
       image_view_assignments:Object.entries(form.imageViews).filter(([,view])=>!!view).map(([image_hash,view])=>({image_hash,view})),
     })).data.data;
+    if(target!==props.taskId||key!==contextEpoch)return;
+    current.value=created;
     dialog.value = false;
     drawer.value = true;
     await load();
   } catch (cause: any) {
-    error.value = extractApiErrorMessage(cause, cause?.message || "执行未完成，请核对标准要求和证据来源");
+    if(target===props.taskId&&key===contextEpoch)error.value = extractApiErrorMessage(cause, cause?.message || "执行未完成，请核对标准要求和证据来源");
   } finally {
-    busy.value = false;
+    if(target===props.taskId&&key===contextEpoch)busy.value = false;
   }
 }
 
@@ -388,7 +427,7 @@ async function review() {
   }
 }
 
-onMounted(load);
+watch(()=>props.taskId,()=>{++contextEpoch;runPage.value=1;runKeyword.value='';dialog.value=false;drawer.value=false;taskContext.value=null;current.value=null;busy.value=false;void load();},{immediate:true});
 </script>
 
 <template>
@@ -402,11 +441,12 @@ onMounted(load);
       <div class="heading-actions">
         <el-button v-if="rows.length&&auth.hasPermission('result')" @click="router.push(`/app/results/${taskId}`)">查看统一结果与报告</el-button>
         <el-button @click="load">刷新</el-button>
-        <el-button v-if="canCreate" type="primary" @click="openCreate">新建执行记录</el-button>
+        <el-button v-if="canCreate" type="primary" :disabled="busy||loading" @click="openCreate">新建执行记录</el-button>
       </div>
     </header>
 
     <el-alert v-if="error" :title="error" type="warning" show-icon :closable="false" />
+    <el-form @submit.prevent="runPage=1;load()"><el-input v-model="runKeyword" aria-label="执行记录编号搜索" placeholder="输入执行记录编号搜索" :maxlength="200" clearable /><el-button native-type="submit">搜索执行记录</el-button></el-form>
     <el-table v-loading="loading" :data="rows" empty-text="本任务还没有标准执行记录">
       <el-table-column label="项目判定" min-width="190"><template #default="{ row }"><el-tag :type="runVerdict(row).tone">{{ runVerdict(row).label }}</el-tag></template></el-table-column>
       <el-table-column label="复核状态" width="140"><template #default="{ row }"><el-tag :type="effectiveStatus(row) === 'accepted' ? 'success' : effectiveStatus(row) === 'rejected' ? 'danger' : effectiveStatus(row) === 'needs_reassessment' ? 'danger' : 'warning'">{{ statusLabel(effectiveStatus(row)) }}</el-tag></template></el-table-column>
@@ -414,12 +454,14 @@ onMounted(load);
       <el-table-column label="创建时间" prop="created_at" width="180" />
       <el-table-column label="操作" width="160"><template #default="{ row }"><el-button link type="primary" @click="show(row)">查看执行详情</el-button></template></el-table-column>
     </el-table>
+    <el-pagination layout="prev,pager,next,total" :page-size="20" :total="runTotal" :current-page="runPage" :disabled="loading||busy" @current-change="runPage=$event;load()" />
 
     <el-dialog v-model="dialog" class="execution-create-dialog" title="新建标准执行记录" width="min(980px, 94vw)" top="5vh" append-to-body :close-on-click-modal="false">
       <el-alert title="标准限值来自已确认、已发布的标准要求。提交后，本任务的独立复核专家可核对引用原件；私有资料仍只在本次复核范围内使用。" type="info" :closable="false" />
       <el-form label-position="top" class="execution-form">
         <el-alert v-if="error" :title="error" type="warning" :closable="false" />
-        <el-alert v-if="taskContext&&(taskContext.truncated.samples||taskContext.truncated.measurements||taskContext.truncated.sessions)" title="关联资料较多，当前列表只显示最近一批；缺少目标资料时请先在实验检测中核对会话和样品。" type="warning" :closable="false"/>
+        <el-alert v-if="taskContext&&(taskContext.truncated.samples||taskContext.truncated.sessions)" title="会话、样品和策略支持分页搜索；选中后会重新核对本任务的资料范围。" type="info" :closable="false"/>
+        <el-alert v-if="taskContext?.truncated.measurements" title="当前会话测量记录较多，显示的读数可能不完整；缺少目标记录时请核对原始来源。" type="warning" :closable="false"/>
         <el-alert v-if="taskContext?.task_scope.issues.length" :title="taskContext.task_scope.issues.join('；')" type="warning" :closable="false"/>
         <el-button v-if="taskContext?.case_preparation" plain type="primary" @click="applyCaseDraft">带入本案首轮报告转录</el-button>
         <div v-if="taskContext" class="task-scope-strip"><div><span>本次任务对象</span><strong>{{ taskContext.task_scope.product_name }}</strong></div><div><span>生产批次</span><strong>{{ taskContext.task_scope.production_batch_ref||'尚未关联' }}</strong></div><div><span>输入类型</span><strong>{{ ({image:'图片辅助',measurement:'设备测量',mixed:'混合资料',report:'检测报告'} as Record<string,string>)[taskContext.task_scope.input_mode] }}</strong></div></div>
@@ -428,8 +470,8 @@ onMounted(load);
           <div class="form-grid two">
             <el-form-item label="产品类别" required><el-input v-model="form.product_category" :disabled="!!taskContext?.task_scope.product_category" placeholder="补齐本任务实际产品类别" /></el-form-item>
             <el-form-item label="实际生产日期" required><el-date-picker v-model="form.production_date" :disabled="!!taskContext?.task_scope.production_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
-            <el-form-item label="本次样品" required><el-select v-model="form.samples" multiple filterable style="width:100%" placeholder="从任务已关联样品中选择"><el-option v-for="sample in taskContext?.samples||[]" :key="sample.id" :value="sample.id" :label="`${sample.label} · ${sample.kind==='report_sample'?'报告原样品':'平台样品'}${sample.issues.length?'（资料待补齐）':''}`"/></el-select><p v-if="!taskContext?.samples.length" class="field-hint">暂无关联样品。实测样品请先在实验检测登记；报告样品可通过下方关联入口加入。</p></el-form-item>
-            <el-form-item label="检测会话（引用实测记录时必选）"><el-select v-model="form.session_id" clearable filterable style="width:100%" placeholder="选择本任务检测会话"><el-option v-for="session in taskContext?.sessions||[]" :key="session.id" :value="session.id" :label="`${session.label} · ${session.code}`"/></el-select></el-form-item>
+            <el-form-item label="本次样品" required><PagedReferenceSelect v-model="form.samples" multiple :selection-limit="500" label="本次样品" :loader="sampleOptions" :context-key="taskId" :disabled="busy" @update:model-value="refreshSelectedContext" /><p v-if="!taskContext?.samples.length" class="field-hint">暂无关联样品。实测样品请先在实验检测登记；报告样品可通过下方关联入口加入。</p></el-form-item>
+            <el-form-item label="检测会话（引用实测记录时必选）"><PagedReferenceSelect v-model="form.session_id" label="检测会话" :loader="sessionOptions" :context-key="taskId" :disabled="busy" @update:model-value="refreshSelectedContext" /></el-form-item>
           </div>
         </div>
 
@@ -444,7 +486,7 @@ onMounted(load);
           <el-empty v-if="!usableRequirements.length" description="暂无用途已核对的可执行要求，请由专家核对分类并发布新稿" :image-size="60" />
         </div>
 
-        <div class="form-section"><div class="section-title"><span>03</span><div><h4>执行与复核策略</h4><p>产品限值来自标准；策略检查本任务的材料完整性。</p></div></div><el-form-item label="已发布适用策略"><el-select v-model="form.policy_id" style="width:100%" :clearable="!taskContext?.policies.some(p=>!p.issues.length)" placeholder="当前没有适用发布版本，使用默认独立复核"><el-option v-for="policy in taskContext?.policies||[]" :key="policy.id" :value="policy.id" :disabled="!!policy.issues.length" :label="`${policy.snapshot.name} · ${policy.snapshot.version} · 第 ${policy.snapshot.publication_no||1} 发布版${policy.issues.length?'（范围不适用）':''}`"/></el-select></el-form-item><div v-if="selectedPolicy" class="policy-summary"><span>独立专业复核</span><span>图片 {{ selectedPolicy.snapshot.required_image_count||0 }} 张</span><span>视角 {{ selectedPolicy.snapshot.required_views?.join('、')||'无特定要求' }}</span><p class="muted">图片要求适用于图片及混合输入；报告和纯测量任务按对应材料检查。</p></div><div v-if="selectedPolicy?.snapshot.required_views?.length&&['image','mixed'].includes(taskContext?.task_scope.input_mode||'')" class="form-grid two"><el-form-item v-for="image in taskContext?.images||[]" :key="image.image_hash" :label="`任务图片 ${image.index+1} 的实际视角`"><el-select v-model="form.imageViews[image.image_hash]" clearable placeholder="对照任务图片标注"><el-option v-for="view in selectedPolicy.snapshot.required_views" :key="view" :label="view" :value="view"/></el-select></el-form-item></div></div>
+        <div class="form-section"><div class="section-title"><span>03</span><div><h4>执行与复核策略</h4><p>产品限值来自标准；策略检查本任务的材料完整性。</p></div></div><el-form-item label="已发布适用策略"><PagedReferenceSelect v-model="form.policy_id" label="已发布适用策略" :clearable="!taskContext?.policies.some(p=>!p.issues.length)" :loader="policyOptions" :context-key="taskId" :disabled="busy" @update:model-value="refreshSelectedContext" /></el-form-item><div v-if="selectedPolicy" class="policy-summary"><span>独立专业复核</span><span>图片 {{ selectedPolicy.snapshot.required_image_count||0 }} 张</span><span>视角 {{ selectedPolicy.snapshot.required_views?.join('、')||'无特定要求' }}</span><p class="muted">图片要求适用于图片及混合输入；报告和纯测量任务按对应材料检查。</p></div><div v-if="selectedPolicy?.snapshot.required_views?.length&&['image','mixed'].includes(taskContext?.task_scope.input_mode||'')" class="form-grid two"><el-form-item v-for="image in taskContext?.images||[]" :key="image.image_hash" :label="`任务图片 ${image.index+1} 的实际视角`"><el-select v-model="form.imageViews[image.image_hash]" clearable placeholder="对照任务图片标注"><el-option v-for="view in selectedPolicy.snapshot.required_views" :key="view" :label="view" :value="view"/></el-select></el-form-item></div></div>
         <div class="form-section">
           <div class="section-title"><span>04</span><div><h4>证据来源</h4><p>实测值引用原始记录；报告值需逐项登记并独立复核。</p></div><el-button size="small" plain @click="openReportLink">关联已有检测报告</el-button><el-button size="small" plain @click="addEvidence">添加证据</el-button></div>
           <div v-for="(item, index) in form.evidence" :key="index" class="evidence-card">

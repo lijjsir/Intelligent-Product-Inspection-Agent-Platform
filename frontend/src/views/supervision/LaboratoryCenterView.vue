@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowRight, RefreshRight } from "@element-plus/icons-vue";
 import { supervisionApi } from "@/api/supervision.api";
@@ -8,14 +8,17 @@ import SupervisionModuleHeader from "@/components/business/supervision/Supervisi
 import DemoLabWorkspace from "@/components/business/supervision/DemoLabWorkspace.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useRuntimeContext } from "@/composables/useRuntimeContext";
+import { extractApiErrorMessage } from '@/api/http';
 const runtime=useRuntimeContext();
 const auth = useAuthStore();
 
 const router = useRouter();
 const loading = ref(false);
 const sessions = ref<SupervisionRecord[]>([]);
-const devices = ref<SupervisionRecord[]>([]);
 const filter = ref("all");
+const page=ref(1),total=ref(0),keyword=ref(''),error=ref('');
+const metrics=ref({collecting:0,review:0,signed:0,online:0});
+let epoch=0;
 
 const filters = [
   { key: "all", label: "全部" },
@@ -24,32 +27,23 @@ const filters = [
   { key: "signed", label: "已确认" },
 ];
 
-const visibleSessions = computed(() =>
-  filter.value === "all"
-    ? sessions.value
-    : sessions.value.filter((session) => session.status === filter.value),
-);
-
-const metrics = computed(() => ({
-  collecting: sessions.value.filter((item) => item.status === "collecting").length,
-  review: sessions.value.filter((item) => item.status === "awaiting_review").length,
-  signed: sessions.value.filter((item) => item.status === "signed").length,
-  online: devices.value.filter((item) => item.data.online_status === "online").length,
-}));
-
 async function load() {
+  const key=++epoch;
   await runtime.load();
   if(runtime.context.value?.execution_mode==='demo' || !runtime.context.value)return;
   loading.value = true;
+  error.value='';sessions.value=[];
   try {
-    const [sessionResult, deviceResult] = await Promise.all([
-      supervisionApi.list("inspection-sessions", { page: 1, size: 200 }),
-      supervisionApi.list("devices", { page: 1, size: 200 }),
+    const [sessionResult, summary] = await Promise.all([
+      supervisionApi.list("inspection-sessions", { page:page.value, size:20,keyword:keyword.value,status:filter.value==='all'?undefined:filter.value }),
+      supervisionApi.laboratorySummary(),
     ]);
+    if(key!==epoch)return;
     sessions.value = sessionResult.data.data.items;
-    devices.value = deviceResult.data.data.items;
-  } finally {
-    loading.value = false;
+    total.value=sessionResult.data.data.total;metrics.value=summary.data.data;
+  } catch(e) {if(key===epoch){sessions.value=[];total.value=0;error.value=extractApiErrorMessage(e,'检测批次加载失败，请重试');}}
+  finally {
+    if(key===epoch)loading.value = false;
   }
 }
 
@@ -69,12 +63,15 @@ function openSession(session: SupervisionRecord) {
 }
 
 onMounted(load);
+watch(filter,()=>{page.value=1;void load();});
+onBeforeUnmount(()=>{++epoch;});
 </script>
 
 <template>
   <el-alert v-if="!runtime.context.value" title="正在核对运行环境，请稍候或刷新重试。" type="info" :closable="false" />
   <DemoLabWorkspace v-else-if="runtime.context.value.execution_mode==='demo'" />
   <main v-else class="laboratory-page" v-loading="loading">
+    <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <details v-if="runtime.context.value.execution_mode === 'business' && auth.role === 'expert'" style="margin-bottom:24px"><summary style="cursor:pointer; padding:16px">风险事项的可选验证与资料回流</summary><DemoLabWorkspace /></details>
     <SupervisionModuleHeader
       title="实验室检测"
@@ -139,8 +136,9 @@ onMounted(load);
         </div>
       </div>
 
-      <div v-if="visibleSessions.length" class="session-list">
-        <article v-for="session in visibleSessions" :key="session.id" class="session-row">
+      <el-form class="session-search" @submit.prevent="page=1;load()"><el-input v-model="keyword" aria-label="实验室批次搜索" placeholder="按批次编号或名称搜索" :maxlength="200" clearable /><el-button native-type="submit">搜索批次</el-button></el-form>
+      <div v-if="sessions.length" class="session-list">
+        <article v-for="session in sessions" :key="session.id" class="session-row">
           <div class="session-identity">
             <span class="session-code">{{ session.code }}</span>
             <h3>{{ session.name }}</h3>
@@ -181,11 +179,13 @@ onMounted(load);
           <p>抽查方案确认后会自动生成批次，也可以从任务管理发起独立检测。</p>
         </div>
       </div>
+      <el-pagination layout="prev,pager,next,total" :page-size="20" :total="total" :current-page="page" :disabled="loading" @current-change="page=$event;load()" />
     </section>
   </main>
 </template>
 
 <style scoped>
+.session-search{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0;}.session-search .el-input{max-width:300px;}
 .task-relationship { color: #52677d; line-height: 1.7; margin: 18px 0; }
 .laboratory-page {
   max-width: 1520px;

@@ -158,13 +158,17 @@ class SupervisionService:
         await BusinessNumberService(self.db).attach([record], kind)
         return record
 
-    async def list(self, kind, page=1, size=20, keyword=None, region_id=None, status=None):
+    async def list(self, kind, page=1, size=20, keyword=None, region_id=None, status=None, *, task_id=None):
         self.read_access(kind)
         stmt = select(SupervisionRecord).where(
             SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind == kind
         )
         if keyword:
-            stmt = stmt.where(SupervisionRecord.name.contains(keyword, autoescape=True))
+            stmt = stmt.where(or_(SupervisionRecord.name.contains(keyword, autoescape=True), SupervisionRecord.code.contains(keyword, autoescape=True)))
+        if task_id:
+            if kind not in {'inspection-sessions','samples'}:
+                raise ValidationError('该资料不支持按检测任务筛选')
+            stmt = stmt.where(SupervisionRecord.data['task_id'].as_string() == task_id)
         if status:
             stmt = stmt.where(SupervisionRecord.status == status)
         if region_id:

@@ -76,9 +76,12 @@ class InspectionExecutionContextService:
         if (start and now<start) or (end and now>end):issues.append("策略当前尚未生效或已超出执行有效期")
         return issues
 
-    async def policies(self,scope):
+    async def policies(self,scope,selected_id=None):
         rows=(await self.session.scalars(select(InspectionPolicyPublication).where(InspectionPolicyPublication.org_id==self.org_id,
-            InspectionPolicyPublication.status=="published").order_by(InspectionPolicyPublication.created_at.desc()).limit(200))).all()
+            InspectionPolicyPublication.status=="published").order_by(InspectionPolicyPublication.created_at.desc(),InspectionPolicyPublication.id.desc()).limit(200))).all()
+        if selected_id and not any(p.id==selected_id for p in rows):
+            selected=await self.session.scalar(select(InspectionPolicyPublication).where(InspectionPolicyPublication.org_id==self.org_id,InspectionPolicyPublication.id==selected_id,InspectionPolicyPublication.status=='published'))
+            if selected:rows=[*rows,selected]
         return [{"id":p.id,"snapshot":p.snapshot,"published_at":p.created_at.isoformat(),"definition_hash":fingerprint(p.snapshot),"issues":self.policy_issues(p,scope)} for p in rows]
 
     def source_permitted(self,record,task,*,submitted=False):
@@ -112,13 +115,22 @@ class InspectionExecutionContextService:
     def record_hash(record):
         return fingerprint({key:getattr(record,key) for key in ["content","content_hash","attachment_ids","data_nature","product_ref"]})
 
-    async def context(self,task):
+    async def context(self,task,*,session_id=None,sample_ids=(),policy_id=None):
         scope=await self.scope(task)
         sessions=(await self.session.scalars(select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,
             SupervisionRecord.kind=="inspection-sessions",SupervisionRecord.data["task_id"].as_string()==task.id)
-            .order_by(SupervisionRecord.created_at.desc()).limit(200))).all()
+            .order_by(SupervisionRecord.created_at.desc(),SupervisionRecord.id.desc()).limit(200))).all()
+        if session_id and not any(s.id==session_id for s in sessions):
+            extra=await self.session.scalar(select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,SupervisionRecord.kind=='inspection-sessions',
+                SupervisionRecord.id==session_id,SupervisionRecord.data['task_id'].as_string()==task.id))
+            if extra:sessions=[*sessions,extra]
         native_samples=(await self.session.scalars(select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,
-            SupervisionRecord.kind=="samples",SupervisionRecord.data["task_id"].as_string()==task.id).limit(500))).all()
+            SupervisionRecord.kind=="samples",SupervisionRecord.data["task_id"].as_string()==task.id).order_by(SupervisionRecord.created_at.desc(),SupervisionRecord.id.desc()).limit(500))).all()
+        missing={valid_uuid(value) for value in sample_ids if valid_uuid(value)}-{s.id for s in native_samples}
+        if missing:
+            extra=(await self.session.scalars(select(SupervisionRecord).where(SupervisionRecord.org_id==self.org_id,SupervisionRecord.kind=='samples',SupervisionRecord.id.in_(missing),
+                SupervisionRecord.data['task_id'].as_string()==task.id).order_by(SupervisionRecord.created_at.desc(),SupervisionRecord.id.desc()))).all()
+            native_samples=[*native_samples,*extra]
         samples=[]
         for s in native_samples:
             sample_issues=[] if s.data.get("sampled_at") else ["尚未记录采样时间"]
@@ -135,7 +147,7 @@ class InspectionExecutionContextService:
             if scope['production_batch_ref'] and s.production_batch_ref!=scope['production_batch_ref']:sample_issues.append("实物样品批次与任务批次不一致")
             samples.append({"id":s.id,"label":s.external_sample_code or s.unit_serial_ref or "抽查实物样品", "code":s.external_sample_code,
                 "kind":"physical_sample","sampled_at":str(s.sampled_at) if s.sampled_at else None,"issues":sample_issues})
-        ids=[s.id for s in sessions]
+        ids=[s.id for s in sessions if not session_id or s.id==session_id]
         measurements=(await self.session.scalars(select(MeasurementRecord).where(MeasurementRecord.org_id==self.org_id,
             MeasurementRecord.session_id.in_(ids)).order_by(MeasurementRecord.created_at.desc()).limit(5000))).all() if ids else []
         reports=[]
@@ -147,7 +159,7 @@ class InspectionExecutionContextService:
                 samples.extend({"id":s["id"],"label":s["label"],"kind":"report_sample","report_attachment_id":attachment.id,"issues":[]} for s in link.get("samples",[]))
             except (NotFoundError,ValidationError) as exc:
                 reports.append({"attachment_id":link["attachment_id"],"source_record_id":link["source_record_id"],"issues":[exc.message],"samples":[]})
-        policies=await self.policies(scope)
+        policies=await self.policies(scope,policy_id)
         token=fingerprint({"task":{k:getattr(task,k) for k in ["id","product_id","product_sku_id","batch_id","quality_product_id","product_category_id","meta_data","image_items","image_urls"]},
             "scope":scope,"sessions":[(s.id,s.version,s.data) for s in sessions],"samples":[(s.id,s.version,s.data) for s in native_samples],
             "physical":[(s.id,s.updated_at) for s in physical],"measurements":[(m.id,m.content_hash,m.validation_status) for m in measurements],
@@ -158,7 +170,7 @@ class InspectionExecutionContextService:
                 "product_category":s.data.get("product_category"),"production_date":s.data.get("production_date")} for s in sessions],
             "measurements":[{"id":m.id,"session_id":m.session_id,"sample_id":m.sample_id,"device_id":m.device_id,"event_id":m.event_id,
                 "validation_status":m.validation_status,"source_hash":m.content_hash,"data":m.data} for m in measurements],
-            "truncated":{"sessions":len(sessions)==200,"samples":len(native_samples)==500,"measurements":len(measurements)==5000}}
+            "truncated":{"sessions":len(sessions)>=200,"samples":len(native_samples)>=500,"measurements":len(measurements)>=5000}}
 
     async def report_candidates(self,task,keyword=""):
         scope=await self.scope(task)
