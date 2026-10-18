@@ -21,6 +21,18 @@ class LabReturn(Strict):
     note: str = Field(min_length=1, max_length=2000)
 
 
+class LabExecutionReturn(Strict):
+    expected_revision: int = Field(ge=1)
+    run_id: UUID
+    expected_run_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class LabExecutionWithdraw(Strict):
+    expected_revision: int = Field(ge=1)
+    note: str = Field(min_length=1, max_length=2000)
+
+
 class RiskReportCreate(Strict):
     assessment_id: UUID
     expected_basis_hash: str = Field(pattern=r"^[a-f0-9]{64}$")

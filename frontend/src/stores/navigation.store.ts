@@ -17,7 +17,11 @@ export const useNavigationStore = defineStore("navigation", () => {
     { flush: "sync" },
   );
 
-  function revealGroups(titles: string[]) {
+  function revealGroups(titles: string[], exclusive = false) {
+    if (exclusive) {
+      expandedGroups.value = titles.slice(0, 1);
+      return;
+    }
     expandedGroups.value = Array.from(
       new Set([
         ...expandedGroups.value,
@@ -26,14 +30,14 @@ export const useNavigationStore = defineStore("navigation", () => {
     );
   }
 
-  function toggleGroup(title: string) {
+  function toggleGroup(title: string, exclusive = false) {
     if (expandedGroups.value.includes(title)) {
       expandedGroups.value = expandedGroups.value.filter((item) => item !== title);
       collapsedGroups.value = Array.from(new Set([...collapsedGroups.value, title]));
       return false;
     }
     collapsedGroups.value = collapsedGroups.value.filter((item) => item !== title);
-    expandedGroups.value = [...expandedGroups.value, title];
+    expandedGroups.value = exclusive ? [title] : [...expandedGroups.value, title];
     return true;
   }
 

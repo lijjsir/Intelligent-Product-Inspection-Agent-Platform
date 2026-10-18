@@ -2,7 +2,7 @@
 import copy
 from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import require_role
@@ -12,6 +12,9 @@ from app.models.task import InspectionTask
 from app.services.demo_risk_workflow_service import DemoRiskWorkflowService, is_manual_demo
 from app.services.risk_workflow_context_service import RiskWorkflowContextService
 from app.services.quality_risk_service import stable_hash
+from app.services.risk_execution_evidence_service import RiskExecutionEvidenceService, execution_returns
+from app.core.ids import uuid7
+from app.models.inspection_execution import InspectionExecutionRun
 
 KIND = "risk-lab-verifications"
 BOUNDARY = "演示验证分支；可跳过，仅关联既有任务和模拟检测资料，不启动设备、模型或检测执行，不代替正式检测报告。"
@@ -68,13 +71,16 @@ class RiskLabService:
                 "already_linked": r.id in (case.source_record_ids or [])} for r in records if self.matches(case, r)], "boundary": self.boundary}
 
     async def row(self, link_id):
-        row = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(SupervisionRecord.id == link_id,
-            SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind == KIND)))
+        query = select(SupervisionRecord).where(SupervisionRecord.id == link_id,
+            SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind == KIND)
+        row = await self.db.scalar(query.execution_options(populate_existing=True))
         if not row:
             raise NotFoundError("验证关联不存在")
         if row.data.get('execution_mode','demo') != self.demo.mode:
             raise ForbiddenError('验证关联不属于当前业务环境')
         await self.demo.risk.risk_case(row.data["case_id"], lock=self.demo.locked)
+        if self.demo.locked:
+            row = await self.db.scalar(self.demo.read(query))
         return row
 
     async def serialize(self, row):
@@ -96,9 +102,30 @@ class RiskLabService:
             issues.extend(b["message"] for b in blockers)
             if stable_hash(basis) != row.data["returned_basis_hash"]:
                 issues.append("回流后事项资料或对象已变化，请在新版研判中重新核对")
+        data = copy.deepcopy(row.data)
+        if data.get('execution_returns'):
+            service = RiskExecutionEvidenceService(self.db, self.current, self.demo.risk.storage)
+            redacted = False
+            for entry in data['execution_returns']:
+                entry['issues'] = []
+                try:
+                    await service.authorize(entry['ref'])
+                except (ForbiddenError, NotFoundError) as error:
+                    entry.update(summary=None, note='原报告已不可访问，仅保留关联与撤回操作记录', withdrawal_note=None)
+                    entry['issues'].append(error.message)
+                    redacted = True
+                else:
+                    if not entry.get('withdrawn_at'):
+                        try:
+                            await service.resolve(case, entry['ref'])
+                        except (ForbiddenError, NotFoundError, ValidationError, ConflictError) as error:
+                            entry['issues'].append(error.message)
+                issues.extend(entry['issues'])
+            if redacted:
+                data['events'] = [{k:v for k,v in event.items() if k != 'note'} for event in data['events']]
         return {"id": row.id, "status": row.status, "revision": row.version, "created_by": row.created_by,
             "is_latest_assessment": bool(latest and latest.id == assessment.id), "issues": list(dict.fromkeys(issues)),
-            "boundary": self.boundary, **copy.deepcopy(row.data)}
+            "boundary": self.boundary, **data}
 
     async def list(self, case_id):
         await self.guard()
@@ -127,7 +154,7 @@ class RiskLabService:
                 return {**await self.serialize(row), "reused": True}
             if row.created_by != self.actor:
                 raise ForbiddenError("只有原编写人可以调整验证选择")
-            if row.version != payload.expected_revision or row.data.get("record_ids"):
+            if row.version != payload.expected_revision or row.data.get("record_ids") or row.data.get('execution_returns'):
                 raise ConflictError("验证选择已更新或已有资料回流，请保留原记录并在新版研判中处理")
             row.version += 1
             row.data = {**row.data, **values, "events": [*row.data["events"], self.demo.event(actor, "decision_changed", **values)]}
@@ -144,6 +171,99 @@ class RiskLabService:
         row.status = ('demo_' if self.demo.is_demo else '') + ('skipped' if payload.mode == 'skip' else 'requested')
         await self.db.flush()
         return {**await self.serialize(row), "reused": False}
+
+    async def execution_candidates(self, link_id, *, page=1, size=20):
+        await self.guard()
+        if self.demo.is_demo:
+            raise ValidationError('演示环境不接入正式检测结果，请使用模拟资料回流')
+        row = await self.row(link_id)
+        case = await self.demo.risk.risk_case(row.data['case_id'])
+        if row.data['mode'] != 'verify' or not row.data.get('task_id'):
+            raise ValidationError('请先为验证分支关联已有的同产品检测任务')
+        task = await self.task(row.data['task_id'], case)
+        service = RiskExecutionEvidenceService(self.db, self.current, self.demo.risk.storage)
+        service.permissions()
+        query = select(InspectionExecutionRun).where(InspectionExecutionRun.org_id == self.org_id,
+            InspectionExecutionRun.task_id == task.id, InspectionExecutionRun.status == 'accepted')
+        total = await self.db.scalar(select(func.count()).select_from(query.subquery()))
+        runs = await self.db.scalars(query.order_by(InspectionExecutionRun.created_at.desc(), InspectionExecutionRun.id.desc())
+            .offset((page-1)*size).limit(size).execution_options(populate_existing=True))
+        returned = await execution_returns(self.db, self.org_id, case.id)
+        items = []
+        for run in runs:
+            item = {'id':run.id, 'row_version':run.row_version, 'reviewed_at':run.reviewed_at,
+                'eligible':False, 'issues':[], 'summary':None, 'definition_hash':None,
+                'already_returned':any(e['ref']['run_id'] == run.id for e in returned)}
+            try:
+                ref = await service.checked(case, run)
+                item.update(eligible=True, definition_hash=ref['definition_hash'], summary=service.summary(run))
+            except (ForbiddenError, NotFoundError, ValidationError, ConflictError) as error:
+                item['issues'].append(error.message)
+            items.append(item)
+        return {'items':items, 'total':total, 'page':page, 'size':size}
+
+    async def return_execution(self, link_id, payload):
+        actor = await self.guard(write=True)
+        if self.demo.is_demo:
+            raise ValidationError('演示环境不能回流正式检测结果')
+        row = await self.row(link_id)
+        case = await self.demo.risk.risk_case(row.data['case_id'], lock=True)
+        if row.data['mode'] != 'verify' or not row.data.get('task_id'):
+            raise ConflictError('验证选择已变化或尚未关联检测任务')
+        task = await self.task(row.data['task_id'], case)
+        service = RiskExecutionEvidenceService(self.db, self.current, self.demo.risk.storage)
+        service.permissions()
+        run = await service.native.get(str(payload.run_id), lock=True)
+        if run.task_id != task.id:
+            raise ValidationError('检测结果不属于本次关联的检测任务')
+        ref = await service.checked(case, run)
+        if ref['definition_hash'] != payload.expected_run_hash:
+            raise ConflictError('检测结果或复核已变化，请刷新后重新选择')
+        entries = await execution_returns(self.db, self.org_id, case.id, lock=True)
+        old = next((e for e in entries if e['ref']['run_id'] == run.id), None)
+        if old:
+            if old['ref'] != ref:
+                raise ConflictError('原回流结果已变化，请先明确撤回旧引用')
+            if old['note'] != payload.note:
+                raise ConflictError('该结果已回流，原说明已固定，请使用原关联查看记录')
+            return {**await self.serialize(await self.row(old['link_id'])), 'reused':True, 'return_id':old['id']}
+        if row.version != payload.expected_revision:
+            raise ConflictError('验证关联已更新，请刷新后重试')
+        entry = {'id':str(uuid7()), 'ref':ref, 'summary':service.summary(run), 'note':payload.note,
+            'returned_by':self.actor, 'returned_at':self.demo.event(actor, 'execution_returned')['at'], 'withdrawn_at':None}
+        row.version += 1
+        row.status = 'returned'
+        row.data = {**row.data, 'execution_returns':[*row.data.get('execution_returns', []), entry],
+            'events':[*row.data['events'], self.demo.event(actor, 'execution_returned', return_id=entry['id'], run_id=run.id, note=payload.note)]}
+        case.status = 'awaiting_evidence'
+        await self.db.flush()
+        return {**await self.serialize(row), 'reused':False, 'return_id':entry['id']}
+
+    async def withdraw_execution(self, link_id, return_id, payload):
+        actor = await self.guard(write=True)
+        if self.demo.is_demo:
+            raise ValidationError('演示环境不操作正式检测结果回流')
+        row = await self.row(link_id)
+        case = await self.demo.risk.risk_case(row.data['case_id'], lock=True)
+        entries = copy.deepcopy(row.data.get('execution_returns', []))
+        entry = next((e for e in entries if e['id'] == return_id), None)
+        if not entry:
+            raise NotFoundError('检测结果回流记录不存在')
+        if self.actor not in {entry['returned_by'], row.created_by}:
+            raise ForbiddenError('请由验证编写人或本次回流人撤回引用')
+        if entry.get('withdrawn_at'):
+            return {**await self.serialize(row), 'reused':True}
+        if row.version != payload.expected_revision:
+            raise ConflictError('验证关联已更新，请刷新后撤回')
+        entry.update(withdrawn_at=self.demo.event(actor, 'execution_withdrawn')['at'], withdrawn_by=self.actor,
+            withdrawal_note=payload.note)
+        row.version += 1
+        row.status = 'returned' if row.data.get('record_ids') or any(not e.get('withdrawn_at') for e in entries) else 'reference_withdrawn'
+        row.data = {**row.data, 'execution_returns':entries, 'events':[*row.data['events'],
+            self.demo.event(actor, 'execution_withdrawn', return_id=entry['id'], note=payload.note)]}
+        case.status = 'awaiting_evidence'
+        await self.db.flush()
+        return {**await self.serialize(row), 'reused':False}
 
     async def return_records(self, link_id, payload):
         actor = await self.guard(write=True)

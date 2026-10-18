@@ -1,7 +1,7 @@
 """Recheck the frozen evidence of a risk draft before professional acceptance."""
 from sqlalchemy import select
 from app.core.datetime import utcnow
-from app.core.exceptions import NotFoundError,ForbiddenError,ValidationError
+from app.core.exceptions import NotFoundError,ForbiddenError,ValidationError,ConflictError
 from app.core.permissions import has_permission
 from app.models.quality_risk import QualityEvidenceItem,QualitySourceRecord,RiskPolicy
 from app.models.standard_admission import StandardDocumentRevision
@@ -20,7 +20,7 @@ def evidence_definition(row):
         "nature","text","structured_data","locator"]})
 
 
-async def validate_risk(session,current,case,assessment,storage=None,*,freeze_sources=False):
+async def validate_risk(session,current,case,assessment,storage=None,*,freeze_sources=False,lock_returns=False):
     blockers=[];sources=[]
     basis=(assessment.model_versions or {}).get("evidence_basis") or {}
     if not basis:blockers.append(blocker("risk_evidence_provenance","历史草稿未冻结来源版本，请重新生成草稿后复核"))
@@ -116,6 +116,21 @@ async def validate_risk(session,current,case,assessment,storage=None,*,freeze_so
                     StandardDocument.deleted_at.is_(None),InspectionStandardLibrary.deleted_at.is_(None),InspectionStandardLibrary.is_active.is_(True)))).scalar_one_or_none()
             if not row or row.review_status!="approved" or row.publication_status!="published" or row.file_hash!=match.get("file_hash"):
                 blockers.append(blocker("risk_standard_changed","引用标准已撤回、停用或版本不一致"))
+    from app.services.risk_execution_evidence_service import execution_returns, RiskExecutionEvidenceService
+    entries = await execution_returns(session, current.org_id, case.id, lock=freeze_sources or lock_returns)
+    refs = [{'return_id':entry['id'], **entry['ref']} for entry in entries]
+    frozen_refs = (assessment.model_versions or {}).get('returned_execution_refs', [])
+    if fingerprint(refs) != fingerprint(frozen_refs):
+        blockers.append(blocker('risk_execution_returns_changed', '检测结果回流或撤回后须生成新版研判并独立复核'))
+    service = RiskExecutionEvidenceService(session, current, storage)
+    matches = {m.get('run_id'):m for m in assessment.standard_matches or [] if m.get('kind') == 'inspection_execution'}
+    for entry in entries:
+        try:
+            await service.resolve(case, entry['ref'])
+            if matches.get(entry['ref']['run_id'], {}).get('row_version') != entry['ref']['row_version']:
+                blockers.append(blocker('risk_execution_return_missing', '本版未完整引用原事项回流的检测结果'))
+        except (NotFoundError, ForbiddenError, ValidationError, ConflictError) as exc:
+            blockers.append(blocker('risk_execution_return_invalid', exc.message))
     uncertainties=list(dict.fromkeys(m for m in (assessment.missing_inputs or []) if m!="真实来源证据" and m!="经规则或专家确认的风险等级"))
     if assessment.probability is None:uncertainties.append("发生概率尚未校准，当前确认只适用于本案风险信号及建议")
     return {"validator_version":VALIDATOR_VERSION,"checked_at":utcnow().isoformat(),"blockers":blockers,

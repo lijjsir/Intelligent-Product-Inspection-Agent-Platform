@@ -21,11 +21,23 @@ def risk_report_sections(report):
         calls = s.get('model_call') or {}
         sections[1]['paragraphs'].append(f"模型请求次数：{calls.get('attempted_calls') if calls.get('attempted_calls') is not None else '未记录'}；已解析返回次数：{calls.get('successful_calls') if calls.get('successful_calls') is not None else '未记录'}；推理流程状态：{calls.get('inference_status') or '规则流程或历史未记录'}。调用返回不等于业务结论正确。")
     labs = s["laboratory"]
+    results = s.get('execution_results', [])
+    if results:
+        sections.append({'title':'已复核检测结果回流', 'paragraphs':[
+            '本报告固定生成时的引用。检测项目判定不替代产品整体结论，风险等级仍经本版独立复核。',
+            *[f"回流编号：{entry['id']}；原任务：{entry['ref']['task_id']}；检测执行：{entry['ref']['run_id']}；版本：{entry['ref']['row_version']}；"
+              f"项目判定：{ {'pass':'所选项目通过','fail':'所选项目未通过'}.get((entry.get('summary') or {}).get('item_verdict'), '待核对')}；"
+              f"说明：{entry['note']}；回流时间（UTC）：{entry['returned_at']}；原结果摘要：{entry['ref']['definition_hash']}。" for entry in results]]})
+        sections[-1]['paragraphs'].extend(f"检测执行 {entry['ref']['run_id']} 的原始资料：{origin['record_id']}；附件：{origin['attachment_id']}。"
+            for entry in results for origin in entry['ref'].get('report_sources', []))
     sections.append({"title": "可选实验室验证", "paragraphs": ["未选择实验室分支；分析流程不依赖检测任务。"] if not labs else [
         f"原研判第 {l['assessment_version']} 版：{'跳过验证' if l['mode']=='skip' else '关联验证'}；目的：{l['purpose']}；"
-        f"状态：{ {'demo_skipped':'演示已跳过','demo_requested':'演示待资料','demo_returned':'演示资料已回流'}.get(l['status'],l['status'])}；"
+        f"状态：{ {'demo_skipped':'演示已跳过','demo_requested':'演示待资料','demo_returned':'演示资料已回流', 'skipped':'已跳过', 'requested':'待验证', 'returned':'已回流', 'reference_withdrawn':'检测结果引用已撤回'}.get(l['status'],l['status'])}；"
         f"任务：{l.get('task_id') or '未关联'}；返回资料：{'、'.join(l.get('record_ids',[])) or '无'}；"
         f"说明：{l.get('return_note') or '未返回资料'}" for l in labs]})
+    if not demo:
+        sections[-1]['paragraphs'].extend(f"原研判第 {lab['assessment_version']} 版的回流 {entry['id']}：{'引用已撤回' if entry.get('withdrawn_at') else '已关联'}；说明：{entry.get('withdrawal_note') or entry['note']}"
+            for lab in labs for entry in lab.get('execution_returns', []))
     suggestions = [f"研判建议：{text}" for text in c.get("recommendations", [])]
     for item in s["sampling"]:
         suggestions.extend([f"{item['title']}；生成时有效性：{ '待重评' if item['effective_status']=='needs_reassessment' else ('演示建议' if demo else '抽查建议')}；原研判第 {item['snapshot']['assessment_version']} 版。",

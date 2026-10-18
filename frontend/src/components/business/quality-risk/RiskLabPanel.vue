@@ -6,6 +6,7 @@ import { extractApiErrorMessage } from "@/api/http";
 import { riskCompletionApi, type LabLink } from "@/api/risk-completion.api";
 import type { RiskAssessmentV4, RiskWorkflowContext } from "@/types/quality-risk.types";
 import { useAuthStore } from "@/stores/auth.store";
+import RiskExecutionReturnPanel from "./RiskExecutionReturnPanel.vue";
 const props = defineProps<{
   caseId: string;
   assessment: RiskAssessmentV4 | null;
@@ -42,16 +43,18 @@ const canDecide = computed(
     (isDemo.value ? props.assessment?.status === "demo_reviewed" : props.assessment?.status === "accepted") &&
     eligible.value &&
     (!current.value ||
-      (current.value.created_by === auth.userId && !current.value.record_ids.length)),
+      (current.value.created_by === auth.userId && !current.value.record_ids.length && !current.value.execution_returns?.length)),
 );
 const statuses: Record<string, string> = {
   skipped: "已跳过", requested: "待验证资料", returned: "资料已回流",
+  reference_withdrawn: "检测结果引用已撤回",
   demo_skipped: "演示已跳过",
   demo_requested: "演示待验证资料",
   demo_returned: "演示资料已回流",
 };
 let epoch = 0;
 let alive = true;
+async function executionChanged() { await load(); emit("changed"); }
 async function load() {
   const key = ++epoch;
   const requestedCase = props.caseId;
@@ -177,6 +180,7 @@ onBeforeUnmount(() => {
       >
     </el-form>
     <p v-if="!canDecide">请先完成最新版本的独立复核；已有回流记录保持原版本关联。</p>
+    <RiskExecutionReturnPanel v-if="!isDemo" :case-id="caseId" :links="rows" @changed="executionChanged" />
     <section v-if="target" class="lab-return">
       <h3>把验证资料返回原事项</h3>
       <p>

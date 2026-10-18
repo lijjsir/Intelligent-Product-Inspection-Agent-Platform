@@ -1,6 +1,7 @@
 // Match real API access keys. Unmapped routes retain their existing role rules
 // and business data boundaries; a grant does not bypass tenant or owner checks.
 const routePermissions: Array<[RegExp, string[]]> = [
+  [/^\/app\/workbench(?:\/|$)/, ["quality", "quality_material_read_business"]],
   [/^\/app\/risk-reports(?:\/|$)/, ["quality", "quality_material_read_business", "report_read"]],
   [/^\/app\/export(?:\/|$)/, ["report_generate", "report_read"]],
   [/^\/app\/quality-data(?:\/|$)/, ["quality_material_read_business"]],

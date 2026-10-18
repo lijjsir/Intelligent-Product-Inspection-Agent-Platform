@@ -87,6 +87,31 @@ def handle(route):
         data = []
     elif path == '/risk-sampling/candidates':
         data = {'items':[], 'blockers':[], 'boundary':'隔离业务建议'}
+    elif path == '/risk-laboratory-verifications/lab-formal/execution-results':
+        if request.method == 'GET':
+            number = int(query.get('page', ['1'])[0])
+            data = {'page':number, 'size':20, 'total':21, 'items':[
+                {'id':'run-blocked', 'row_version':2, 'reviewed_at':STAMP, 'eligible':False, 'issues':['原报告尚未明确共享'], 'summary':None, 'definition_hash':None, 'already_returned':False},
+                {'id':'run-valid' if number == 1 else 'run-next-page', 'row_version':2, 'reviewed_at':STAMP, 'eligible':True,
+                    'issues':[], 'summary':{'item_verdict':'fail', 'product_verdict':'not_assessed'}, 'definition_hash':'c'*64,
+                    'already_returned':bool(state['lab'].get('execution_returns'))}]}
+        else:
+            payload = request.post_data_json
+            assert payload['expected_revision'] == state['lab']['revision'] and payload['run_id'] == 'run-valid' and payload['expected_run_hash'] == 'c'*64
+            if state.get('return_conflict'):
+                route.fulfill(status=409, content_type='application/json', body=json.dumps({'error':{'code':'conflict', 'message':'检测结果已变化，请刷新后重试'}}))
+                return
+            state['lab'] = {**state['lab'], 'revision':state['lab']['revision']+1, 'status':'returned', 'execution_returns':[
+                {'id':'return-1', 'ref':{'run_id':'run-valid', 'task_id':'task-formal', 'row_version':2, 'definition_hash':'c'*64},
+                 'note':payload['note'], 'summary':{'item_verdict':'fail', 'product_verdict':'not_assessed'}, 'returned_by':'reviewer',
+                 'returned_at':STAMP, 'withdrawn_at':None, 'issues':[]}]}
+            data = state['lab']
+    elif path == '/risk-laboratory-verifications/lab-formal/execution-results/return-1/withdraw':
+        payload = request.post_data_json
+        assert payload['expected_revision'] == state['lab']['revision'] and payload['note'].strip()
+        state['lab']['execution_returns'][0].update(withdrawn_at=STAMP, withdrawal_note=payload['note'])
+        state['lab']['revision'] += 1
+        data = state['lab']
     elif path.startswith("/risk-assessments/"):
         data = next(item for item in state["assessments"] if item["id"] == path.split("/")[-1])
     elif path == f"/risk-cases/{CASE}/sources":
@@ -240,10 +265,38 @@ with sync_playwright() as pw:
     page.goto(BASE+f'/app/risk-sampling?case_id={CASE}', wait_until='networkidle')
     expect(page.get_by_role('heading', name='抽查建议', exact=True)).to_be_visible()
     expect(page.get_by_role('button', name='查看正式抽查计划', exact=True)).to_be_visible()
+    # Inspect the actual rendered result-return controls before exercising them.
+    state['lab'].update(mode='verify', task_id='task-formal', status='requested', purpose='隔离检测结果回流', revision=2)
+    page.goto(BASE+f'/app/risk-assessments?case_id={CASE}&tab=laboratory', wait_until='networkidle')
+    panel = page.get_by_role('region', name='已复核检测结果回流')
+    expect(panel.get_by_role('heading', name='从检测任务返回已复核结果')).to_be_visible()
+    assert '选择检测结果' in panel.locator('fieldset').inner_text()
+    expect(panel.get_by_role('radio', name='检测执行 run-blocked', exact=False)).to_be_disabled()
+    panel.get_by_role('button', name='下一页', exact=True).click()
+    expect(panel).to_contain_text('run-next-page')
+    panel.get_by_role('button', name='上一页', exact=True).click()
+    panel.get_by_role('radio', name='检测执行 run-valid', exact=False).check()
+    panel.get_by_role('textbox', name='检测结果回流说明', exact=True).fill('隔离已复核结果回流界面核验')
+    state['return_conflict'] = True
+    panel.get_by_role('button', name='将已复核结果返回原事项', exact=True).click()
+    expect(panel).to_contain_text('检测结果已变化，请刷新后重试')
+    state['return_conflict'] = False
+    panel.get_by_role('button', name='将已复核结果返回原事项', exact=True).click()
+    expect(panel).to_contain_text('检测结果已返回')
+    expect(panel.get_by_role('radio', name='检测执行 run-valid', exact=False)).to_be_disabled()
+    expect(panel.get_by_role('button', name='返回事项创建新版研判', exact=True)).to_be_visible()
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    panel.get_by_role('heading', name='从检测任务返回已复核结果').scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT/'execution-return-mobile.png'))
+    panel.get_by_role('heading', name='检测结果回流记录').scroll_into_view_if_needed()
+    page.screenshot(path=str(OUT/'execution-return-history-mobile.png'))
+    panel.get_by_role('textbox', name='撤回引用说明（需要撤回时填写）', exact=True).fill('来源需要补证，明确撤回本次引用')
+    panel.get_by_role('button', name='撤回本次结果引用', exact=True).click()
+    expect(panel).to_contain_text('本次引用已撤回')
     assert not errors, errors
     assert not unexpected, unexpected
     browser.close()
     result = {"passed": True, "api_mode": "isolated fixtures", "console_errors": errors, "unexpected_requests": unexpected,
-        "checks": ["deep link outside current list", "refresh restores review", "source provenance link", "history cannot be reviewed", "sampling carries case", "unified opinion intake", "supplement requires reassessment", "mobile layout", "retry clears stale case", "lab navigation and task relationship", "formal collaboration eligibility", "formal optional validation", "formal report generation and mobile layout", "formal suggestion route"]}
+        "checks": ["deep link outside current list", "refresh restores review", "source provenance link", "history cannot be reviewed", "sampling carries case", "unified opinion intake", "supplement requires reassessment", "mobile layout", "retry clears stale case", "lab navigation and task relationship", "formal collaboration eligibility", "formal optional validation", "formal report generation and mobile layout", "formal suggestion route", "execution return permission and conflict display", "execution return pagination", "execution return duplicate disabled", "execution return withdrawal and mobile layout"]}
     (OUT/"result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))

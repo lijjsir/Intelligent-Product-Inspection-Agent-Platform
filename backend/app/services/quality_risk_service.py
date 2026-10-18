@@ -539,6 +539,43 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
             policy = await self.db.scalar(select(RiskPolicy).where(RiskPolicy.id == payload.policy_id, RiskPolicy.org_id == self.org_id, RiskPolicy.status == "published"))
             if not policy:
                 raise ValidationError("风险政策不存在或尚未发布")
+        from app.services.risk_execution_evidence_service import execution_returns, RiskExecutionEvidenceService
+        returned = await execution_returns(self.db, self.org_id, case.id, lock=True)
+        returned_refs = [{"return_id":entry['id'], **entry['ref']} for entry in returned]
+        execution_contexts = []
+        execution_service = RiskExecutionEvidenceService(self.db, self.current, self.storage)
+        for entry in returned:
+            run = await execution_service.resolve(case, entry['ref'])
+            execution_contexts.append({**execution_service.context(run), 'return_id':entry['id']})
+        if payload.inspection_execution_run_id:
+            from app.services.inspection_execution_service import InspectionExecutionService
+            history = await execution_returns(self.db, self.org_id, case.id, active_only=False, lock=True)
+            if (any(e['ref']['run_id'] == payload.inspection_execution_run_id for e in history)
+                    and not any(e['ref']['run_id'] == payload.inspection_execution_run_id for e in returned)):
+                raise ValidationError('本次检测结果引用已撤回，如需重新使用请从验证分支明确回流')
+            execution_service = InspectionExecutionService(self.db, self.current)
+            execution = await execution_service.get(payload.inspection_execution_run_id)
+            execution_issues = await execution_service.validity(execution)
+            manual_context = {
+                "kind": "inspection_execution",
+                "run_id": execution.id,
+                "status": execution.status,
+                "row_version": execution.row_version,
+                "current_source_issues": execution_issues,
+                "evaluation": execution.evaluation,
+                "source_refs": execution.snapshot.get("source_refs", []),
+                "observation_refs": [
+                    {
+                        "evidence_id": item.get("evidence_id"),
+                        "kind": item.get("kind"),
+                        "measurement_key": item.get("measurement_key"),
+                        "sample_id": item.get("sample_id"),
+                    }
+                    for item in execution.snapshot.get("observations", [])
+                ],
+            }
+            if execution.id not in {c["run_id"] for c in execution_contexts}:
+                execution_contexts.append(manual_context)
         explicit_levels = [clean(x.content.get("risk_level")) for x in records if clean(x.content.get("risk_level")) in {"low", "medium", "high", "critical"}]
         level = max(explicit_levels, key=lambda x: {"low": 1, "medium": 2, "high": 3, "critical": 4}[x]) if explicit_levels else "unknown"
         types = [clean(x.content.get("risk_type")) for x in records if clean(x.content.get("risk_type"))]
@@ -570,6 +607,7 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                         ),
                         "standard": None,
                         "data": {
+                            "execution_results": execution_contexts,
                             "product_category": case.scope.get("name")
                             if case.scope_type == "category"
                             else case.scope.get("product_category"),
@@ -590,7 +628,10 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                                     "nature": x.nature,
                                 }
                                 for x in observed
-                            ],
+                            ] + [{"evidence_id":f"execution:{c['run_id']}:{c['row_version']}",
+                                "source_type":"inspection_execution", "source_id":c['run_id'],
+                                "occurred_at":None, "nature":"observed", "text":json.dumps(c['evaluation'], ensure_ascii=False)}
+                                for c in execution_contexts if c.get('return_id')],
                         },
                     },
                     "public_opinion_monitoring",
@@ -617,35 +658,10 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
             model_versions.update(getattr(model_call, 'model_versions', {}))
         model_versions.setdefault("llm_called", False)
         model_versions.setdefault("model_success", False)
-        execution_context = None
-        if payload.inspection_execution_run_id:
-            from app.services.inspection_execution_service import InspectionExecutionService
-
-            execution_service = InspectionExecutionService(self.db, self.current)
-            execution = await execution_service.get(payload.inspection_execution_run_id)
-            execution_issues = await execution_service.validity(execution)
-            execution_context = {
-                "kind": "inspection_execution",
-                "run_id": execution.id,
-                "status": execution.status,
-                "row_version": execution.row_version,
-                "current_source_issues": execution_issues,
-                "evaluation": execution.evaluation,
-                "source_refs": execution.snapshot.get("source_refs", []),
-                "observation_refs": [
-                    {
-                        "evidence_id": item.get("evidence_id"),
-                        "kind": item.get("kind"),
-                        "measurement_key": item.get("measurement_key"),
-                        "sample_id": item.get("sample_id"),
-                    }
-                    for item in execution.snapshot.get("observations", [])
-                ],
-            }
         missing = [] if observed else ["真实来源证据"]
         if any(r.occurred_at is None for r in opinion_records):
             missing.append("部分投诉或舆情来源缺少发生时间，时序关系仍需核对")
-        if execution_context:
+        for execution_context in execution_contexts:
             if execution_context["status"] != "accepted":
                 missing.append("引用的标准执行结果尚未完成独立专业复核")
             if execution_context["current_source_issues"]:
@@ -657,6 +673,9 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                 "product_verdict": execution_context["evaluation"].get("product_verdict"),
                 "risk_level": execution_context["evaluation"].get("risk_level", "unknown"),
             }
+        model_versions["returned_execution_refs"] = returned_refs
+        if execution_contexts:
+            model_versions["inspection_executions"] = execution_contexts
         if policy:
             minimum = float((policy.rules.get("evidence_sufficiency") or {}).get("minimum") or 0)
             sufficiency = len(observed) / len(evidence) if evidence else 0.0
@@ -672,9 +691,8 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
         category=case.scope.get("name") if case.scope_type=="category" else case.scope.get("product_category")
         standard_matches=await published_standard_context(self.db,self.org_id,product_category=category) if category else []
         unresolved=[{"revision_id":match["revision_id"],"conflict":"适用条件或版本尚需专业确认"} for match in standard_matches if not match.get("applicability")]
-        if execution_context:
-            standard_matches.append(execution_context)
-        assessment = QualityRiskAssessment(org_id=self.org_id, risk_case_id=case.id, version=int(latest or 0) + 1, risk_type=types[0] if types else None, risk_level=level, scope=case.scope, evidence_ids=[x.id for x in observed], standard_matches=[], conflicts=[], missing_inputs=missing, possible_causes=list(dict.fromkeys(causes)), recommendations=list(dict.fromkeys(recommendations)), trust_status="needs_review", probability=None, model_versions=model_versions, policy_version=policy.version if policy else None, knowledge_snapshot_id=stable_hash({"records": [(x.id, x.updated_at) for x in records], "evidence": [x.content_hash for x in evidence], "inspection_execution": execution_context}), status="awaiting_evidence" if missing else "awaiting_review", submitted_by=self.actor)
+        standard_matches.extend(execution_contexts)
+        assessment = QualityRiskAssessment(org_id=self.org_id, risk_case_id=case.id, version=int(latest or 0) + 1, risk_type=types[0] if types else None, risk_level=level, scope=case.scope, evidence_ids=[x.id for x in observed], standard_matches=[], conflicts=[], missing_inputs=missing, possible_causes=list(dict.fromkeys(causes)), recommendations=list(dict.fromkeys(recommendations)), trust_status="needs_review", probability=None, model_versions=model_versions, policy_version=policy.version if policy else None, knowledge_snapshot_id=stable_hash({"records": [(x.id, x.updated_at) for x in records], "evidence": [x.content_hash for x in evidence], "inspection_executions": execution_contexts}), status="awaiting_evidence" if missing else "awaiting_review", submitted_by=self.actor)
         assessment.standard_matches=standard_matches;assessment.conflicts=unresolved
         self.db.add(assessment)
         await self.db.flush()
@@ -704,7 +722,7 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
             raise ForbiddenError("不能复核本人提交的风险研判")
         if assessment.status=="accepted":raise ConflictError("已确认研判不能静默覆盖，请重新生成草稿")
         if not payload.comment.strip():raise ValidationError("请填写有效复核意见")
-        validation=await validate_risk(self.db,self.current,case,assessment,self.storage)
+        validation=await validate_risk(self.db,self.current,case,assessment,self.storage,lock_returns=True)
         if payload.decision == "accept":
             if validation["blockers"]:
                 raise ValidationError("真实来源或引用依据未通过核验，不能确认风险研判",detail={"blockers":validation["blockers"]})

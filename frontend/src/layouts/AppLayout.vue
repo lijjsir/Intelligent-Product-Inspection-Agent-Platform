@@ -329,13 +329,14 @@ function syncActiveMenuGroups() {
     .filter((entry): entry is MenuGroup => isMenuGroup(entry))
     .filter((group) => group.items.some((item) => isMenuItemActive(item)))
     .map((group) => group.title);
-  navigation.revealGroups(matchingGroups);
+  navigation.revealGroups(matchingGroups, primaryRole.value === ROLE_EXPERT);
 }
 
 function toggleMenuGroup(group: MenuGroup) {
-  const expanded = navigation.toggleGroup(group.title);
+  const exclusive = primaryRole.value === ROLE_EXPERT;
+  const expanded = navigation.toggleGroup(group.title, exclusive);
   const landingPath = resolveMenuGroupLandingPath(group);
-  if (expanded && landingPath && !group.items.some(isMenuItemActive)) {
+  if (!exclusive && expanded && landingPath && !group.items.some(isMenuItemActive)) {
     router.push(landingPath);
   }
 }

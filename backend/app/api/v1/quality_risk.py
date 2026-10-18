@@ -52,7 +52,7 @@ from app.services.quality_risk_service import QualityRiskService
 from app.schemas.demo_risk_workflow import DemoDraftCreate, DemoDraftSave, DemoDraftSubmit, DemoDraftReview
 from app.schemas.risk_collaboration import RiskCollaborationCreate
 from app.schemas.demo_sampling import DemoSamplingCreate, DemoSamplingSave, DemoSamplingConfirm
-from app.schemas.risk_completion import LabDecision, LabReturn, RiskReportCreate, RiskReportExport
+from app.schemas.risk_completion import LabDecision, LabReturn, LabExecutionReturn, LabExecutionWithdraw, RiskReportCreate, RiskReportExport
 
 router = APIRouter()
 
@@ -461,6 +461,25 @@ async def risk_lab_decide(case_id: UUID, payload: LabDecision, svc=Depends(risk_
 @router.post("/risk-laboratory-verifications/{link_id}/evidence")
 async def risk_lab_return(link_id: UUID, payload: LabReturn, svc=Depends(risk_lab_service)):
     data = await svc.return_records(str(link_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get('/risk-laboratory-verifications/{link_id}/execution-results')
+async def risk_lab_execution_candidates(link_id: UUID, page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=50), svc=Depends(risk_lab_service)):
+    return ResponseEnvelope(data=await svc.execution_candidates(str(link_id), page=page, size=size))
+
+
+@router.post('/risk-laboratory-verifications/{link_id}/execution-results')
+async def risk_lab_execution_return(link_id: UUID, payload: LabExecutionReturn, svc=Depends(risk_lab_service)):
+    data = await svc.return_execution(str(link_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post('/risk-laboratory-verifications/{link_id}/execution-results/{return_id}/withdraw')
+async def risk_lab_execution_withdraw(link_id: UUID, return_id: UUID, payload: LabExecutionWithdraw, svc=Depends(risk_lab_service)):
+    data = await svc.withdraw_execution(str(link_id), str(return_id), payload)
     await svc.db.commit()
     return ResponseEnvelope(data=data)
 

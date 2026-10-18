@@ -49,12 +49,30 @@ describe("navigation session choices", () => {
     expect(navigation.expandedGroups).toEqual([]);
   });
 
+  it('keeps expert navigation to one open group and reveals the active group on navigation', () => {
+    const navigation = useNavigationStore();
+    navigation.revealGroups(['质量监督'], true);
+    navigation.toggleGroup('实验室检测', true);
+    expect(navigation.expandedGroups).toEqual(['实验室检测']);
+    navigation.toggleGroup('实验室检测', true);
+    expect(navigation.expandedGroups).toEqual([]);
+    navigation.revealGroups(['实验室检测'], true);
+    expect(navigation.expandedGroups).toEqual(['实验室检测']);
+  });
+
+  it('closes expert groups on standalone pages without changing other roles defaults', () => {
+    const navigation = useNavigationStore();
+    navigation.revealGroups(['质量监督'], true);
+    navigation.revealGroups([], true);
+    expect(navigation.expandedGroups).toEqual([]);
+  });
+
   it.each([
     ["admin", "/governance/admin/users"],
     ["app_developer", "/ops/agents"],
     ["platform_operator", "/ops/dashboard"],
     ["algorithm_engineer", "/ops/data/import"],
-    ["expert", "/app/chat"],
+    ["expert", "/app/workbench"],
     ["user", "/app/chat"],
   ])("opens a visible permitted menu page for %s at login", (role, landingPath) => {
     const auth = useAuthStore();

@@ -53,7 +53,7 @@ async def generate_report(*,job_id:str,org_id:str):
             bundle=await prepare_report(session,job)
             format=job.format;report_name=job.report_name;report_type=job.report_type
             if format not in {'pdf','docx'}:raise ValueError('任务报告只支持 PDF 或 DOCX')
-            content=build_renderer(format).render({'report_name':report_name,'report_type_label':_type_label(report_type),
+            content=build_renderer(format).render({'report_name':report_name,'report_type_label':_type_label(report_type, (bundle.get('risk_report') or {}).get('snapshot', {}).get('execution_mode')),
                 **bundle} if report_type=='risk_assessment' else {'report_name':report_name,'report_type_label':_type_label(report_type),'bundle':bundle})
             # Re-open the read snapshot, so withdrawal during rendering is visible.
             await session.commit();session.expire_all()
@@ -83,8 +83,8 @@ def _parse_config(value):
     except (ValueError,TypeError):return {}
 
 
-def _type_label(value):
-    if value=='risk_assessment':return '独立演示研判报告'
+def _type_label(value, execution_mode=None):
+    if value=='risk_assessment':return '独立演示研判报告' if execution_mode == 'demo' else '独立风险研判报告'
     return {'single_task':'单任务检测记录','batch_summary':'检测汇总（本次单任务范围）','quality_analysis':'质量分析（本次单任务范围）',
         'feedback_report':'异常反馈（本次单任务范围）','evidence_trace':'证据溯源（本次单任务范围）'}.get(value,'单任务检测记录')
 

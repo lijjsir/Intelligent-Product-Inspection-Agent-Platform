@@ -185,7 +185,8 @@ export const useAuthStore = defineStore("auth", () => {
       const preferred = r === ROLE_ADMIN ? "/governance/admin/users"
         : r === ROLE_ALGORITHM_ENGINEER ? "/ops/data/import"
         : r === ROLE_APP_DEVELOPER ? "/ops/agents"
-        : r === ROLE_PLATFORM_OPERATOR ? "/ops/dashboard" : "/app/chat";
+        : r === ROLE_PLATFORM_OPERATOR ? "/ops/dashboard"
+        : r === ROLE_EXPERT ? "/app/workbench" : "/app/chat";
       const keys = permissionsForRoute(preferred);
       if (!keys || hasPermission(keys)) return preferred;
       return roleMenuPaths(r).find(path => {
@@ -193,7 +194,8 @@ export const useAuthStore = defineStore("auth", () => {
         return routeKeys && hasPermission(routeKeys);
       }) || "/app/profile";
     }
-    if (r === ROLE_USER || r === ROLE_EXPERT) {
+    if (r === ROLE_EXPERT) return "/app/workbench";
+    if (r === ROLE_USER) {
       return "/app/chat";
     }
     if (r === ROLE_ADMIN) {

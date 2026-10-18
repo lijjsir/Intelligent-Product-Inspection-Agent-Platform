@@ -2,7 +2,7 @@
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.exceptions import ForbiddenError, ConflictError, ValidationError
+from app.core.exceptions import ForbiddenError, ConflictError, ValidationError, NotFoundError
 from app.core.permissions import require_role
 from app.models.organization import Organization
 from app.models.user import User
@@ -41,7 +41,19 @@ class RiskWorkflowContextService(DemoRiskWorkflowService):
     async def capture(self, case):
         if not self.is_demo and (case.scope or {}).get('execution_mode') == 'demo':
             raise ForbiddenError('演示事项不能进入正式业务流程')
-        return await super().capture(case)
+        basis, issues = await super().capture(case)
+        if not self.is_demo:
+            from app.services.risk_execution_evidence_service import execution_returns, RiskExecutionEvidenceService
+            entries = await execution_returns(self.db, self.org_id, case.id, lock=self.locked)
+            if entries:
+                basis['execution_returns'] = [{'return_id':e['id'], **e['ref']} for e in entries]
+                service = RiskExecutionEvidenceService(self.db, self.current, self.risk.storage)
+                for entry in entries:
+                    try:
+                        await service.resolve(case, entry['ref'])
+                    except (ConflictError, ForbiddenError, ValidationError, NotFoundError) as exc:
+                        issues.append({'code':'execution_return_changed', 'message':exc.message})
+        return basis, issues
 
     async def validation(self, case, row, captured=None):
         if self.is_demo:

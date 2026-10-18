@@ -29,8 +29,8 @@ class PdfRenderer:
         output=BytesIO();story=[]
         def p(value,style=body):return Paragraph(escape(str(value if value is not None else '未提供')).replace('\n','<br/>'),style)
         story.append(p(('PIAP 演示研判报告 · 模拟资料' if data['risk_report']['snapshot'].get('execution_mode') == 'demo' else 'PIAP 风险研判报告') if data.get('risk_report') else 'PIAP 任务检测记录 · 产品整体未评定',title))
-        story.append(p(data.get('report_name') or '任务检测记录'))
-        story.append(p(data.get('report_type_label') or '单任务检测记录'))
+        story.append(p(data.get('report_name') or (data['risk_report']['title'] if data.get('risk_report') else '任务检测记录')))
+        story.append(p(data.get('report_type_label') or ('独立研判报告' if data.get('risk_report') else '单任务检测记录')))
         for section in report_sections(data):
             story.append(p(section['title'],heading))
             for line in section.get('paragraphs',[]):story.append(p(line,before_table if section.get('rows') else body))

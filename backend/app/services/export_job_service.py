@@ -126,6 +126,7 @@ class ExportJobService(TenantAwareService):
         except (TypeError, ValueError): raise ValidationError('研判报告编号无效') from None
         report = await service.get(report_id)
         format = payload.get('format', 'pdf')
+        renderer_version = 'risk-report-v1' if report['snapshot']['execution_mode'] == 'demo' else 'risk-report-v2'
         # Serialize retries in the demo organization, then reuse an unexpired
         # export of this same immutable report and format by the same reader.
         jobs = list(await self._session.scalars(select(ExportJob).where(ExportJob.org_id == self._org_id,
@@ -135,16 +136,16 @@ class ExportJobService(TenantAwareService):
         from datetime import timedelta
         for job in jobs:
             job_config = json.loads(job.config_json or '{}')
-            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == 'risk-report-v1' and job.status == 'success' and job.expires_at and job.expires_at > utcnow():
+            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == renderer_version and job.status == 'success' and job.expires_at and job.expires_at > utcnow():
                 return job
-            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == 'risk-report-v1' and job.status in {'pending', 'running'} and job.created_at >= utcnow() - timedelta(minutes=5):
+            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == renderer_version and job.status in {'pending', 'running'} and job.created_at >= utcnow() - timedelta(minutes=5):
                 if inflight is None or job.created_at > inflight.created_at:
                     inflight = job
         if inflight is not None:
             return inflight
         job = await self._repo.create({'id': str(uuid7()), 'org_id': self._org_id, 'actor_id': actor_id,
             'report_name': report['title'], 'report_type': 'risk_assessment', 'format': format, 'template': 'risk_assessment',
-            'config_json': json.dumps({'risk_report_id': report['id'], 'snapshot_hash': report['snapshot_hash'], 'renderer_version':'risk-report-v1'}, ensure_ascii=False),
+            'config_json': json.dumps({'risk_report_id': report['id'], 'snapshot_hash': report['snapshot_hash'], 'renderer_version':renderer_version}, ensure_ascii=False),
             'status': 'pending', 'created_at': utcnow(), 'updated_at': utcnow()})
         await self._session.commit()
         # The isolated compose intentionally has no model/Celery workers. Use
@@ -173,7 +174,7 @@ class ExportJobService(TenantAwareService):
             if report['snapshot_hash'] != config.get('snapshot_hash'):
                 raise ConflictError('导出与原报告快照不一致')
             job.source_issues=report['source_issues']; job.source_version=report['snapshot_hash']
-            job.result_scope={'label':'演示研判报告','assessment_version':report['snapshot']['assessment_version']}
+            job.result_scope={'label':'演示研判报告' if report['snapshot']['execution_mode'] == 'demo' else '风险研判报告','assessment_version':report['snapshot']['assessment_version']}
             job.effective_status=report['effective_status']
             return job
         snapshot=config.get('report_snapshot') or {}

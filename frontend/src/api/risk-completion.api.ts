@@ -19,6 +19,36 @@ export interface LabLink {
   issues: string[];
   boundary: string;
   events: Array<{ actor_name: string; action: string; at: string }>;
+  execution_returns?: ExecutionReturn[];
+}
+export interface ExecutionSummary {
+  item_verdict?: string | null;
+  product_verdict?: string | null;
+  risk_level?: string | null;
+  complete_count?: number | null;
+  expected_count?: number | null;
+}
+export interface ExecutionReturn {
+  id: string;
+  ref: { run_id: string; task_id: string; row_version: number; definition_hash: string;
+    report_sources?: Array<{record_id: string; attachment_id: string}> };
+  summary: ExecutionSummary | null;
+  note: string;
+  returned_by: string;
+  returned_at: string;
+  withdrawn_at: string | null;
+  withdrawal_note?: string | null;
+  issues: string[];
+}
+export interface ExecutionCandidate {
+  id: string;
+  row_version: number;
+  reviewed_at: string | null;
+  eligible: boolean;
+  issues: string[];
+  summary: ExecutionSummary | null;
+  definition_hash: string | null;
+  already_returned: boolean;
 }
 export interface ReportSummary {
   id: string;
@@ -64,6 +94,13 @@ export const riskCompletionApi = {
   reports: (caseId?: string) =>
     http.get<ReportSummary[]>("/v1/risk-reports", { ...quiet, params: { case_id: caseId } }),
   report: (id: string) => http.get<RiskReport>(`/v1/risk-reports/${id}`, quiet),
+  executionCandidates: (id: string, page = 1) =>
+    http.get<{items: ExecutionCandidate[]; total: number; page: number; size: number}>(
+      `/v1/risk-laboratory-verifications/${id}/execution-results`, {...quiet, params:{page, size:20}}),
+  returnExecution: (id: string, data: {expected_revision: number; run_id: string; expected_run_hash: string; note: string}) =>
+    http.post<LabLink>(`/v1/risk-laboratory-verifications/${id}/execution-results`, data, quiet),
+  withdrawExecution: (id: string, returnId: string, data: {expected_revision: number; note: string}) =>
+    http.post<LabLink>(`/v1/risk-laboratory-verifications/${id}/execution-results/${returnId}/withdraw`, data, quiet),
   createReport: (caseId: string, assessmentId: string, basis: string) =>
     http.post<RiskReport>(
       `/v1/risk-cases/${caseId}/reports`,

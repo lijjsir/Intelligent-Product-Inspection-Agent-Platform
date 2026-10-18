@@ -69,3 +69,5 @@ python deploy/quality-demo/manage.py stop
 
 停止只作用于演示项目，保留专用数据卷。后续更新表结构需增加明确的演示库升级步骤，
 现有初始化不会自动改写已存在的列，也不会运行历史迁移种子。
+
+已复核检测结果的显式回流、新版自动引用、引用撤回，以及专家目录菜单整理见 [RESULT_RETURN.md](RESULT_RETURN.md)。

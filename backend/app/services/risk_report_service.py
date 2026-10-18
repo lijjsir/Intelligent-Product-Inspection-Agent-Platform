@@ -4,7 +4,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select, or_
 
-from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import require_role
 from app.models.quality_risk import QualityRiskAssessment, QualityEvidenceItem, QualityProduct
 from app.models.supervision import SupervisionRecord
@@ -108,6 +108,10 @@ class RiskReportService:
         if not self.demo.is_demo:
             snapshot['model_call'] = {key:(assessment.model_versions or {}).get(key) for key in (
                 'llm_called', 'model_success', 'attempted_calls', 'successful_calls', 'inference_status')}
+            from app.services.risk_execution_evidence_service import execution_returns
+            entries = await execution_returns(self.db, self.org_id, case.id)
+            if entries:
+                snapshot['execution_results'] = entries
         token = stable_hash(snapshot)
         existing = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(SupervisionRecord.org_id == self.org_id,
             SupervisionRecord.kind == KIND, SupervisionRecord.code == token)))
@@ -144,6 +148,10 @@ class RiskReportService:
                 raise ForbiddenError('报告引用资料已不在当前授权范围，不能继续读取原文快照')
         for attachment in snapshot["attachments"]:
             await authorization.attachment(attachment["id"])
+        from app.services.risk_execution_evidence_service import RiskExecutionEvidenceService
+        execution_access = RiskExecutionEvidenceService(self.db, self.current, self.demo.risk.storage)
+        for entry in snapshot.get('execution_results', []):
+            await execution_access.authorize(entry['ref'])
         for item in snapshot["sampling"]:
             await DemoSamplingService(self.db, self.current).row(item["id"])
         issues = []
@@ -163,7 +171,7 @@ class RiskReportService:
                     _, token = await DemoSamplingService(self.db, self.current).context(case.id, ref["id"])
                     if token != ref["hash"]:
                         issues.append("公开协同意见已变化；报告保留生成时意见")
-                except ConflictError:
+                except (ConflictError, ValidationError):
                     issues.append("原协同对应的研判已更新；报告保留历史意见")
                 continue
             original = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(

@@ -27,4 +27,10 @@ describe("role-owned menus", () => {
     expect(paths).not.toContain("/app/chat");
     expect(auth.resolveDefaultRoute()).toBe("/governance/admin/models");
   });
+  it('falls back to chat when an expert does not have business-workbench permissions', () => {
+    const auth = useAuthStore(); auth.token = 'session'; auth.role = 'expert'; auth.roles = ['expert'];
+    auth.effectivePermissions = ['chat'];
+    expect(auth.resolveDefaultRoute()).toBe('/app/chat');
+    expect(useMenu().menu.value.some(item => item.title === '质监工作台')).toBe(false);
+  });
 });

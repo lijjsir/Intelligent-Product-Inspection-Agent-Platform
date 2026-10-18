@@ -19,8 +19,8 @@ class DocxRenderer:
         document.styles['Normal'].font.size=Pt(10)
         if data.get('risk_report'):document.styles['Normal'].paragraph_format.space_after=Pt(4)
         document.add_heading(('PIAP 演示研判报告 · 模拟资料' if data['risk_report']['snapshot'].get('execution_mode') == 'demo' else 'PIAP 风险研判报告') if data.get('risk_report') else 'PIAP 任务检测记录 · 产品整体未评定',0)
-        document.add_paragraph(data.get('report_name') or '任务检测记录')
-        document.add_paragraph(data.get('report_type_label') or '单任务检测记录')
+        document.add_paragraph(data.get('report_name') or (data['risk_report']['title'] if data.get('risk_report') else '任务检测记录'))
+        document.add_paragraph(data.get('report_type_label') or ('独立研判报告' if data.get('risk_report') else '单任务检测记录'))
         for item in report_sections(data):
             document.add_heading(item['title'],1)
             for line in item.get('paragraphs',[]):document.add_paragraph(str(line))
