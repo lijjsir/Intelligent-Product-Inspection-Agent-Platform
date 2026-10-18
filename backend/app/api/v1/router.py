@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from app.api.v1 import quality_risk, supervision
+from app.api.v1 import runtime_context
+from app.api.v1 import quality_risk, supervision, market_monitoring
 from app.api.v1 import knowledge
 from app.api.v1 import inspection_execution
 
@@ -46,10 +47,12 @@ from app.api.v1 import (
 )
 
 router = APIRouter()
+router.include_router(runtime_context.router, tags=["runtime"])
 router.include_router(inspection_execution.router)
 router.include_router(knowledge.router)
 router.include_router(quality_risk.router, tags=["quality-risk-v4"])
 router.include_router(supervision.router, tags=["quality-supervision"])
+router.include_router(market_monitoring.router)
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(roles.router, prefix="/roles", tags=["roles"])
 router.include_router(organizations.router, prefix="/organizations", tags=["organizations"])

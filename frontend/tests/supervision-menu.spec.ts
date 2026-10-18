@@ -31,13 +31,15 @@ describe("supervision role boundaries and business form submission", () => {
     const { menu } = useMenu();
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
-      "质监工作台",
-      "资料接入",
+      "数据采集",
       "市场监控",
-      "舆情监测",
       "风险研判",
       "监督抽查",
+      "协同中心",
+      "报告中心",
     ]);
+    expect(menu.value.some((item) => item.title === "实验室检测" && !("items" in item))).toBe(true);
+    expect(menu.value.some((item) => item.title === "质监工作台" && !("items" in item))).toBe(true);
     const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
     expect(
       taskResult && "items" in taskResult ? taskResult.items.map((item) => item.title) : [],

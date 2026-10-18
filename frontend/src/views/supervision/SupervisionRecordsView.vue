@@ -10,9 +10,10 @@ import { http } from "@/api/http";
 import { formatServerDateTime } from "@/utils/date-time";
 import SupervisionFields from "@/components/business/supervision/SupervisionFields.vue";
 import SupervisionAssessment from "@/components/business/supervision/SupervisionAssessment.vue";
-import SupervisionAgentRail from "@/components/business/supervision/SupervisionAgentRail.vue";
 import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
 import BulkImportDialog from "@/components/business/supervision/BulkImportDialog.vue";
+import DemoSamplingSuggestions from "@/components/business/supervision/DemoSamplingSuggestions.vue";
+import { useRuntimeContext } from "@/composables/useRuntimeContext";
 const importDialog = ref(false);
 import { cleanFields, defaults, fields } from "@/components/business/supervision/form-fields";
 import {
@@ -28,6 +29,8 @@ const route = useRoute(),
   router = useRouter(),
   auth = useAuthStore();
 const kind = computed(() => (route.meta.supervisionKind || "risk-cases") as SupervisionKind);
+const runtime = useRuntimeContext();
+const demoSampling = computed(() => kind.value === 'sampling-plans' && runtime.context.value?.execution_mode === 'demo');
 const title = computed(() => KIND_LABELS[kind.value]);
 const moduleMeta = computed(() => {
   if (kind.value === "risk-cases") {
@@ -145,6 +148,8 @@ const inputSpecs = computed(() =>
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 async function load() {
+  await runtime.load();
+  if (demoSampling.value || (kind.value === 'sampling-plans' && !runtime.context.value)) { loading.value = false; return; }
   loading.value = true;
   try {
     const settings = await supervisionApi.settings();
@@ -264,6 +269,12 @@ async function openCreate() {
   form.value = structuredClone(defaults[kind.value]);
   dialog.value = true;
   await loadOptions();
+  const caseId = String(route.query.case_id || "");
+  if (kind.value === "sampling-plans" && caseId) {
+    if (options.value.cases?.some(item => item.value === caseId)) {
+      form.value.candidates = [{case_id: caseId, sample_count: 1, unit_cost: 0, laboratory_validation: false}];
+    } else ElMessage.warning("该事项未进入当前有效抽查候选，请先核验风险来源并完成独立复核");
+  }
 }
 async function reassessSampling() {
   if (!selected.value || saving.value) return;
@@ -311,6 +322,10 @@ async function save() {
   saving.value = true;
   try {
     const data = cleanFields(form.value, inputSpecs.value);
+    if (kind.value === 'sampling-plans') {
+      const source = editing.value ? selected.value?.data.source_suggestion_id : route.query.source_suggestion_id;
+      if (typeof source === 'string') data.source_suggestion_id = source;
+    }
     let result;
     if (editing.value && selected.value)
       result = runtimeEdit.value
@@ -440,7 +455,9 @@ onUnmounted(() => {
 });
 </script>
 <template>
-  <main class="supervision-page" v-loading="loading">
+  <el-alert v-if="kind === 'sampling-plans' && !runtime.context.value" title="正在核对运行环境；若加载失败，请刷新页面重试。" type="info" :closable="false" />
+  <DemoSamplingSuggestions v-else-if="demoSampling" />
+  <main v-else class="supervision-page" v-loading="loading">
     <SupervisionModuleHeader
       v-if="moduleMeta"
       :title="title"
@@ -479,7 +496,8 @@ onUnmounted(() => {
         >
       </div>
     </header>
-    <SupervisionAgentRail v-if="moduleMeta" class="agent-navigation" />
+    <el-button v-if="kind === 'sampling-plans' && auth.role === 'expert'" @click="router.push({path:'/app/risk-sampling', query:{case_id:route.query.case_id}})">查看研判抽查建议</el-button>
+    <el-alert v-if="enabled && kind === 'sampling-plans' && route.query.case_id" type="info" :closable="false" title="已带入来源研判事项。新建方案时会核对当前候选资格；抽查建议与实验室验证分别选择。"><template #default><el-button link type="primary" @click="router.push({path: '/app/risk-assessments',query: {case_id: route.query.case_id}})">返回来源研判事项</el-button></template></el-alert>
     <el-result
       v-if="!enabled"
       icon="info"

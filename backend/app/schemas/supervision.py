@@ -162,6 +162,7 @@ class Candidate(Strict):
 
 
 class PlanData(Strict):
+    source_suggestion_id: UUID | None = None
     candidates: list[Candidate] = Field(default_factory=list, max_length=200)
     budget: float = Field(default=0, ge=0, allow_inf_nan=False)
     max_samples: int = Field(default=10, ge=1, le=10000)

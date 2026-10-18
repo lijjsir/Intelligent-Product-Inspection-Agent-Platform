@@ -1,0 +1,116 @@
+name: piap-quality-demo
+
+services:
+  mysql:
+    image: mysql:8.0
+    pull_policy: never
+    environment:
+      MYSQL_ROOT_PASSWORD: ${QUALITY_DEMO_MYSQL_ROOT_PASSWORD:?Run the demo setup first}
+      MYSQL_DATABASE: piap_quality_demo
+      MYSQL_USER: quality_demo
+      MYSQL_PASSWORD: ${QUALITY_DEMO_DB_PASSWORD:?Run the demo setup first}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -u root --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7
+    pull_policy: never
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  backend:
+    image: agent_project-backend:latest
+    pull_policy: never
+    working_dir: /app/backend
+    command: ["sh", "-c", "python scripts/init_quality_demo.py && exec python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - "127.0.0.1:18010:8000"
+    networks: [default, web]
+    environment:
+      PYTHONPATH: /app/backend
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIAP_ENV_FILE: ""
+      PIAP_APP_ENV: local
+      PIAP_QUALITY_DEMO_ENABLED: "true"
+      PIAP_DB_URL: mysql+aiomysql://quality_demo:${QUALITY_DEMO_DB_PASSWORD}@mysql:3306/piap_quality_demo
+      PIAP_DB_REPLICA_URL: mysql+aiomysql://quality_demo:${QUALITY_DEMO_DB_PASSWORD}@mysql:3306/piap_quality_demo
+      PIAP_REDIS_URL: redis://redis:6379/15
+      PIAP_CELERY_BROKER_URL: redis://redis:6379/15
+      PIAP_CELERY_RESULT_BACKEND: redis://redis:6379/15
+      PIAP_JWT_PRIVATE_KEY: /run/quality-demo/secrets/private.pem
+      PIAP_JWT_PUBLIC_KEY: /run/quality-demo/secrets/public.pem
+      PIAP_JWT_ISSUER: piap-quality-demo
+      PIAP_JWT_AUDIENCE: piap-quality-demo-users
+      PIAP_GOVERNANCE_SECRET: ${QUALITY_DEMO_GOVERNANCE_SECRET}
+      PIAP_OBJECT_STORAGE_BACKEND: local
+      PIAP_LOCAL_UPLOAD_DIR: /var/lib/piap_quality_demo/uploads
+      PIAP_LOCAL_UPLOAD_URL_PREFIX: /quality-demo-uploads
+      PIAP_S3_BUCKET: quality-demo-business
+      PIAP_RAG_STORAGE_BUCKET: quality-demo-knowledge
+      PIAP_DATASET_STORAGE_BUCKET: quality-demo-datasets
+      PIAP_DATASET_EXPORT_BUCKET: quality-demo-dataset-exports
+      PIAP_MODEL_ARTIFACT_BUCKET: quality-demo-model-artifacts
+      PIAP_REPORT_EXPORT_BUCKET: quality-demo-reports
+      PIAP_ALGO_RUNNER_WORKDIR: /var/lib/piap_quality_demo/algo
+      PIAP_NEO4J_ENABLED: "false"
+      PIAP_MEMORY_GRAPH_WRITE_BACKEND: mysql
+      PIAP_MEMORY_GRAPH_READ_BACKEND: mysql
+      PIAP_LANGFUSE_ENABLED: "false"
+      PIAP_TRUST_SCORING_ENABLED: "false"
+      PIAP_GPU_ENABLE_REAL_EXECUTION: "false"
+      PIAP_QUALITY_DEMO_ADMIN_PASSWORD: ${QUALITY_DEMO_ADMIN_PASSWORD}
+      PIAP_QUALITY_DEMO_ANALYST_PASSWORD: ${QUALITY_DEMO_ANALYST_PASSWORD}
+      PIAP_QUALITY_DEMO_REVIEWER_PASSWORD: ${QUALITY_DEMO_REVIEWER_PASSWORD}
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./.codex_tmp/piap_quality_demo/secrets:/run/quality-demo/secrets:ro
+      - runtime_data:/var/lib/piap_quality_demo
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/runtime-context', timeout=3).read()"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
+
+  frontend:
+    image: agent_project-frontend:latest
+    pull_policy: never
+    working_dir: /app/frontend
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
+    ports:
+      - "127.0.0.1:15174:5173"
+    networks: [web]
+    environment:
+      VITE_API_BASE: /api
+      VITE_PROXY_TARGET: http://backend:8000
+    volumes:
+      - ./frontend/src:/app/frontend/src:ro
+      - ./frontend/public:/app/frontend/public:ro
+      - ./frontend/index.html:/app/frontend/index.html:ro
+      - ./frontend/package.json:/app/frontend/package.json:ro
+      - ./frontend/vite.config.ts:/app/frontend/vite.config.ts:ro
+      - ./frontend/tailwind.config.js:/app/frontend/tailwind.config.js:ro
+      - ./frontend/postcss.config.js:/app/frontend/postcss.config.js:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  runtime_data:
+
+networks:
+  default:
+    internal: true
+  web:

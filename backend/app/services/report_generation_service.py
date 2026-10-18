@@ -25,6 +25,12 @@ async def report_actor(session,job):
 async def prepare_report(session,job):
     current=await report_actor(session,job)
     config=_parse_config(job.config_json)
+    if job.report_type == 'risk_assessment':
+        from app.services.risk_report_service import RiskReportService
+        report=await RiskReportService(session,current).get(config.get('risk_report_id'))
+        if report['snapshot_hash'] != config.get('snapshot_hash'):
+            raise ConflictError('研判导出与固定报告摘要不一致')
+        return {'risk_report':report}
     service=TaskResultBundleService(session,current)
     bundle=config.get('report_snapshot')
     if not bundle:
@@ -47,13 +53,19 @@ async def generate_report(*,job_id:str,org_id:str):
             bundle=await prepare_report(session,job)
             format=job.format;report_name=job.report_name;report_type=job.report_type
             if format not in {'pdf','docx'}:raise ValueError('任务报告只支持 PDF 或 DOCX')
-            content=build_renderer(format).render({'report_name':report_name,'report_type_label':_type_label(report_type),'bundle':bundle})
+            content=build_renderer(format).render({'report_name':report_name,'report_type_label':_type_label(report_type),
+                **bundle} if report_type=='risk_assessment' else {'report_name':report_name,'report_type_label':_type_label(report_type),'bundle':bundle})
             # Re-open the read snapshot, so withdrawal during rendering is visible.
             await session.commit();session.expire_all()
             fresh=await repo.get_by_id(job_id)
             if not fresh or fresh.org_id!=org_id:raise NotFoundError('导出任务已撤回')
             current=await report_actor(session,fresh)
-            await TaskResultBundleService(session,current).recheck(bundle)
+            if report_type=='risk_assessment':
+                fresh_bundle=await prepare_report(session,fresh)
+                if fresh_bundle['risk_report']['snapshot_hash'] != bundle['risk_report']['snapshot_hash']:
+                    raise ConflictError('研判报告快照已变化')
+            else:
+                await TaskResultBundleService(session,current).recheck(bundle)
             storage=build_object_storage();bucket=settings.report_export_bucket
             object_key=f'{org_id}/{job_id}/report.{format}'
             storage.ensure_bucket(bucket)
@@ -72,6 +84,7 @@ def _parse_config(value):
 
 
 def _type_label(value):
+    if value=='risk_assessment':return '独立演示研判报告'
     return {'single_task':'单任务检测记录','batch_summary':'检测汇总（本次单任务范围）','quality_analysis':'质量分析（本次单任务范围）',
         'feedback_report':'异常反馈（本次单任务范围）','evidence_trace':'证据溯源（本次单任务范围）'}.get(value,'单任务检测记录')
 

@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, case, select, func, type_coerce
+from sqlalchemy import JSON, case, select, func, type_coerce, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.export_job import ExportJob
@@ -30,8 +30,10 @@ class ExportJobRepository:
         *,
         actor_id: str | None = None,
         task_id: str | None = None,
+        risk_actor_id: str | None = None,
     ) -> tuple[int, list[ExportJob]]:
         stmt = select(ExportJob).where(ExportJob.org_id == org_id, ExportJob.deleted_at.is_(None))
+        stmt = stmt.where(or_(ExportJob.report_type != 'risk_assessment', ExportJob.actor_id == risk_actor_id))
         if actor_id:
             stmt = stmt.where(ExportJob.actor_id == actor_id)
         if status:

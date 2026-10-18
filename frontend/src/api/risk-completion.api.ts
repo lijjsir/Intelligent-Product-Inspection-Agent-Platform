@@ -1,0 +1,75 @@
+import { http } from "./http";
+import type { ExportJob } from "@/types/governance.types";
+export interface LabLink {
+  id: string;
+  status: string;
+  revision: number;
+  created_by: string;
+  case_id: string;
+  case_code: string;
+  assessment_id: string;
+  assessment_version: number;
+  mode: "skip" | "verify";
+  purpose: string;
+  task_id: string | null;
+  record_ids: string[];
+  return_note?: string;
+  added_new_evidence?: boolean;
+  is_latest_assessment: boolean;
+  issues: string[];
+  boundary: string;
+  events: Array<{ actor_name: string; action: string; at: string }>;
+}
+export interface ReportSummary {
+  id: string;
+  title: string;
+  frozen_at: string;
+  effective_status: string;
+  source_issues: string[];
+}
+export interface RiskReport extends ReportSummary {
+  snapshot_hash: string;
+  snapshot: {
+    case_id: string;
+    assessment_id: string;
+    assessment_version: number;
+    source_refs: Array<{ id: string; kind: string; hash: string }>;
+  };
+  sections: Array<{ title: string; paragraphs?: string[]; rows?: string[][]; columns?: string[] }>;
+}
+const quiet = { suppressErrorToast: true };
+export const riskCompletionApi = {
+  labs: (caseId: string) =>
+    http.get<LabLink[]>(`/v1/risk-cases/${caseId}/laboratory-verifications`, quiet),
+  labOptions: (caseId: string) =>
+    http.get<{
+      tasks: Array<{ id: string; label: string; status: string }>;
+      records: Array<{ id: string; label: string; already_linked: boolean }>;
+    }>(`/v1/risk-cases/${caseId}/laboratory-options`, quiet),
+  decide: (
+    caseId: string,
+    data: {
+      assessment_id: string;
+      expected_basis_hash: string;
+      expected_revision: number | null;
+      mode: "skip" | "verify";
+      purpose: string;
+      task_id: string | null;
+    },
+  ) => http.post<LabLink>(`/v1/risk-cases/${caseId}/laboratory-verifications`, data, quiet),
+  returnRecords: (
+    id: string,
+    data: { expected_revision: number; record_ids: string[]; note: string },
+  ) => http.post<LabLink>(`/v1/risk-laboratory-verifications/${id}/evidence`, data, quiet),
+  reports: (caseId?: string) =>
+    http.get<ReportSummary[]>("/v1/risk-reports", { ...quiet, params: { case_id: caseId } }),
+  report: (id: string) => http.get<RiskReport>(`/v1/risk-reports/${id}`, quiet),
+  createReport: (caseId: string, assessmentId: string, basis: string) =>
+    http.post<RiskReport>(
+      `/v1/risk-cases/${caseId}/reports`,
+      { assessment_id: assessmentId, expected_basis_hash: basis },
+      quiet,
+    ),
+  exportReport: (id: string, format: "pdf" | "docx") =>
+    http.post<ExportJob>(`/v1/risk-reports/${id}/exports`, { format }, quiet),
+};

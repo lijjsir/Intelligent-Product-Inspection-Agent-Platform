@@ -144,6 +144,10 @@ class MeetingAdminService:
         )
 
     async def delete_room(self, room_id: str) -> None:
+        from app.services.risk_collaboration_service import bound_id
+        from app.core.exceptions import ValidationError
+        if bound_id(await self._repo.get_room(self._org_id, room_id)):
+            raise ValidationError("研判协同会议须保留版本追溯记录")
         deleted = await self._repo.delete_room_admin(self._org_id, room_id)
         if not deleted:
             raise NotFoundError("meeting room not found")

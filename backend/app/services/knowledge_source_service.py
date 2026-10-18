@@ -65,6 +65,8 @@ class KnowledgeSourceService:
                 raise NotFoundError("结果不在当前任务范围")
             shareable=task.created_by==actor or result.signed_by==actor
             if not shareable:raise ForbiddenError("任务结果可查阅，但知识提交须由任务创建者或签发者进行")
+            if (task.meta_data or {}).get('execution_mode')=='demo':
+                raise ValidationError('演示检测任务结果不能进入正式知识候选')
             body=json.dumps({"verdict":result.verdict,"defects":result.defects,"citations":result.citations,
                 "reasoning_chain":result.reasoning_chain,"review_note":result.review_note},ensure_ascii=False,default=str)
             digest=fingerprint({"body":body,"reviewed_at":result.reviewed_at,"signed_at":result.signed_at})
@@ -80,6 +82,8 @@ class KnowledgeSourceService:
             if message_meta.get("recalled_at"):raise NotFoundError("会议消息已撤回")
             recipient=message_meta.get("private_recipient_user_id") or message_meta.get("response_owner_user_id")
             if recipient and actor not in {msg.user_id,recipient}:raise NotFoundError("私人会议消息不可读取")
+            if (getattr(room,"memory_policy",None) or {}).get("risk_collaboration_id"):
+                raise ValidationError("研判协同意见不能直接作为正式知识来源，请引用原始证据并经过知识审核")
             shareable=room.created_by==actor and not recipient
             if organization and not shareable:raise ForbiddenError("会议内容跨出会议范围须由会议创建者确认，私人消息不可发布组织知识")
             if not shareable and msg.user_id!=actor:raise ForbiddenError("不能将他人的会议发言提交到其他审核范围")
@@ -91,6 +95,8 @@ class KnowledgeSourceService:
             own=record.created_by==actor
             if not own and (record.authorization_scope=="private" or not has_permission("quality_material_read_business",self.current.role)):
                 raise NotFoundError("资料接入记录不在当前授权范围")
+            if record.data_nature=='synthetic' or (record.provenance or {}).get('execution_mode')=='demo' or (record.content or {}).get('execution_mode')=='demo':
+                raise ValidationError('模拟或演示接入资料不能进入正式知识候选')
             shareable=own or record.authorization_scope!="private"
             body=json.dumps(record.content,ensure_ascii=False,default=str)
             digest=fingerprint({"content":record.content,"attachments":record.attachment_ids,"nature":record.data_nature})

@@ -2,7 +2,8 @@
 import { Check, Close, Document, Paperclip, Plus, Refresh, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { useAuthStore } from "@/stores/auth.store";
 import { useCollabStore } from "@/stores/collab.store";
 import type {
   CollabActionRequestCreatePayload,
@@ -17,6 +18,7 @@ type CenterTab = CollabWorkItemView | "history";
 
 const store = useCollabStore();
 const route = useRoute();
+const router = useRouter(), auth = useAuthStore();
 const activeTab = ref<CenterTab>("pending");
 const selectedWorkItemId = ref("");
 const selectedHistoryThreadId = ref("");
@@ -55,6 +57,12 @@ const selectedWorkItem = computed(
     store.workItems[0] ||
     null,
 );
+const riskWorkContext = computed(() => {
+  const value = selectedWorkItem.value?.payload.source_context;
+  if (!value || typeof value !== "object") return null;
+  const ctx = value as Record<string, unknown>;
+  return ctx.kind === "risk_assessment" && typeof ctx.risk_case_id === "string" && typeof ctx.risk_assessment_id === "string" ? ctx : null;
+});
 const selectedHistoryThread = computed(
   () =>
     store.threads.find((thread) => thread.id === selectedHistoryThreadId.value) ||
@@ -307,6 +315,7 @@ onMounted(async () => {
         <h1 id="collab-title">协作中心</h1>
         <p class="subtitle">统一处理记忆共享审批和轻量处理请求；旧协作会话仅作历史查阅。</p>
       </div>
+      <el-button v-if="auth.hasPermission('meeting')" class="touch-button" @click="router.push('/app/meetings')">进入会议室</el-button>
       <el-button class="touch-button" type="primary" :icon="Plus" @click="openCreate"
         >发起处理请求</el-button
       >
@@ -446,6 +455,8 @@ onMounted(async () => {
               </div>
             </dl>
 
+            <el-alert v-if="riskWorkContext" class="risk-collab-notice" type="warning" :closable="false"
+              :title="`同单位${riskWorkContext.execution_mode === 'demo' ? '演示' : '研判'}协同 · ${riskWorkContext.case_code} · 固定第 ${riskWorkContext.risk_assessment_version} 版；请求接收和完成不改变独立复核状态。`" />
             <section class="detail-section">
               <div class="section-title">
                 <h3>来源证据</h3>

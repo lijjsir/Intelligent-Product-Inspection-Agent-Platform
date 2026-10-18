@@ -22,13 +22,13 @@ for path in ['/usr/share/fonts/truetype/wqy/wqy-microhei.ttc','C:/Windows/Fonts/
 class PdfRenderer:
     def render(self,data):
         font=_FONT_NAME if _font_available else 'Helvetica'
-        body=ParagraphStyle('PIAPBody',fontName=font,fontSize=9,leading=14,wordWrap='CJK',spaceAfter=4)
+        body=ParagraphStyle('PIAPBody',fontName=font,fontSize=9,leading=13 if data.get('risk_report') else 14,wordWrap='CJK',spaceAfter=4)
         heading=ParagraphStyle('PIAPHeading',parent=body,fontSize=13,leading=19,spaceBefore=12,spaceAfter=7,keepWithNext=True)
         before_table=ParagraphStyle('PIAPBeforeTable',parent=body,keepWithNext=True)
         title=ParagraphStyle('PIAPTitle',parent=heading,fontSize=18,leading=25)
         output=BytesIO();story=[]
         def p(value,style=body):return Paragraph(escape(str(value if value is not None else '未提供')).replace('\n','<br/>'),style)
-        story.append(p('PIAP 任务检测记录 · 产品整体未评定',title))
+        story.append(p(('PIAP 演示研判报告 · 模拟资料' if data['risk_report']['snapshot'].get('execution_mode') == 'demo' else 'PIAP 风险研判报告') if data.get('risk_report') else 'PIAP 任务检测记录 · 产品整体未评定',title))
         story.append(p(data.get('report_name') or '任务检测记录'))
         story.append(p(data.get('report_type_label') or '单任务检测记录'))
         for section in report_sections(data):
@@ -44,6 +44,6 @@ class PdfRenderer:
             story.extend([table,Spacer(1,3*mm)])
         doc=SimpleDocTemplate(output,pagesize=A4,leftMargin=25*mm,rightMargin=25*mm,topMargin=22*mm,bottomMargin=20*mm)
         def footer(canvas,document):
-            canvas.setFont(font,8);canvas.drawString(25*mm,12*mm,'PIAP · 生成时快照 / 限定范围记录');canvas.drawRightString(185*mm,12*mm,str(document.page))
+            canvas.setFont(font,8);canvas.drawString(25*mm,12*mm,'PIAP · 演示 / 模拟资料 / 生成时快照' if (data.get('risk_report') or {}).get('snapshot', {}).get('execution_mode') == 'demo' else 'PIAP · 生成时快照 / 限定范围记录');canvas.drawRightString(185*mm,12*mm,str(document.page))
         doc.build(story,onFirstPage=footer,onLaterPages=footer)
         return output.getvalue()

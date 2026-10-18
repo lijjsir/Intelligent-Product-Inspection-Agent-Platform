@@ -25,6 +25,11 @@ async def validate_risk(session,current,case,assessment,storage=None,*,freeze_so
     basis=(assessment.model_versions or {}).get("evidence_basis") or {}
     if not basis:blockers.append(blocker("risk_evidence_provenance","历史草稿未冻结来源版本，请重新生成草稿后复核"))
     if fingerprint(case.scope)!=fingerprint(assessment.scope):blockers.append(blocker("risk_scope_changed","本案对象范围与研判快照不一致，请重新生成草稿"))
+    if basis and (
+        set(case.evidence_ids or []) != set(basis.get("evidence_ids", assessment.evidence_ids or []))
+        or set(case.source_record_ids or []) != set(basis.get("records", {}))
+    ):
+        blockers.append(blocker("risk_evidence_set_changed", "本案关联证据已更新，请生成新版草稿后重新复核"))
     ids=basis.get("evidence_ids",assessment.evidence_ids or [])
     evidence=(await session.scalars(select(QualityEvidenceItem).where(QualityEvidenceItem.org_id==current.org_id,
         QualityEvidenceItem.id.in_(ids),QualityEvidenceItem.deleted_at.is_(None)).execution_options(populate_existing=True))).all()

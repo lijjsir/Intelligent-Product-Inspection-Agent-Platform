@@ -109,12 +109,12 @@ function getQualitySupervisionGroup(includeDataIntake: boolean): MenuGroup {
     title: "质量监督",
     icon: "Operation",
     items: [
-      { title: "质监工作台", path: "/app/workbench" },
-      ...(includeDataIntake ? [{ title: "资料接入", path: "/app/quality-data" }] : []),
+      ...(includeDataIntake ? [{ title: "数据采集", path: "/app/quality-data" }] : []),
       { title: "市场监控", path: "/app/quality-analytics" },
-      { title: "舆情监测", path: "/app/risk-cases" },
       { title: "风险研判", path: "/app/risk-assessments" },
       { title: "监督抽查", path: "/app/sampling-plans" },
+      { title: "协同中心", path: "/app/collab", activeMatchPaths: ["/app/meetings"] },
+      { title: "报告中心", path: "/app/risk-reports", activeMatchPaths: ["/app/export"] },
     ],
   };
 }
@@ -148,12 +148,12 @@ function getUserMenu(): MenuStructure {
 function getExpertMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
+    { title: "质监工作台", path: "/app/workbench" },
     getQualitySupervisionGroup(true),
+    { title: "实验室检测", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
     getTaskResultGroup(),
-    ...getCollaborationMenuItems(),
     { title: "标准审核", path: "/app/standard-reviews", activeMatchPaths: ["/governance/admin/inspection-standards"] },
     { title: "知识资料", path: "/app/rag-spaces" },
-    { title: "报告导出", path: "/app/export" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

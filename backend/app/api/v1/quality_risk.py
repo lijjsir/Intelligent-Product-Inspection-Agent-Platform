@@ -41,11 +41,18 @@ from app.schemas.quality_risk import (
     RiskPolicyCreate,
     RiskPolicyResponse,
     RiskReviewRequest,
+    RiskWorkspaceResponse,
+    RiskSourcesAppend,
+    RecordObjectsUpdate,
     StandardExecutionRuleCreate,
     StandardExecutionRuleResponse,
 )
 from app.schemas.user import CurrentUser
 from app.services.quality_risk_service import QualityRiskService
+from app.schemas.demo_risk_workflow import DemoDraftCreate, DemoDraftSave, DemoDraftSubmit, DemoDraftReview
+from app.schemas.risk_collaboration import RiskCollaborationCreate
+from app.schemas.demo_sampling import DemoSamplingCreate, DemoSamplingSave, DemoSamplingConfirm
+from app.schemas.risk_completion import LabDecision, LabReturn, RiskReportCreate, RiskReportExport
 
 router = APIRouter()
 
@@ -305,12 +312,30 @@ async def list_records(
     record_types: list[str] | None = Query(None, max_length=13),
     keyword: str | None = None,
     product_id: str | None = None,
+    enterprise_id: UUID | None = None,
     production_batch_ref: str | None = None,
     source_id: str | None = None,
     ingestion_job_id: str | None = None,
     svc=Depends(intake_service),
 ):
-    return ResponseEnvelope(data=await svc.list_records(page=page, size=size, record_type=record_type, record_types=record_types, keyword=keyword, product_id=product_id, production_batch_ref=production_batch_ref, source_id=source_id, ingestion_job_id=ingestion_job_id))
+    return ResponseEnvelope(data=await svc.list_records(page=page, size=size, record_type=record_type, record_types=record_types, keyword=keyword, product_id=product_id, enterprise_id=str(enterprise_id) if enterprise_id else None, production_batch_ref=production_batch_ref, source_id=source_id, ingestion_job_id=ingestion_job_id))
+
+
+@router.get("/quality-data/reference-options", response_model=ResponseEnvelope[dict])
+async def intake_reference_options(keyword: str = Query("", max_length=100), limit: int = Query(50, ge=1, le=100), svc=Depends(intake_service)):
+    return ResponseEnvelope(data=await svc.intake_references(keyword, limit))
+
+
+@router.get("/quality-data/records/{record_id}/context", response_model=ResponseEnvelope[dict])
+async def get_record_context(record_id: UUID, svc=Depends(intake_service)):
+    return ResponseEnvelope(data=await svc.record_context(str(record_id)))
+
+
+@router.patch("/quality-data/records/{record_id}/objects", response_model=ResponseEnvelope[QualitySourceRecordResponse])
+async def update_record_objects(record_id: UUID, payload: RecordObjectsUpdate, svc=Depends(intake_service)):
+    data = await svc.update_record_objects(str(record_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/quality-data/records/{record_id}", response_model=ResponseEnvelope[QualitySourceRecordResponse])
@@ -369,6 +394,18 @@ async def analyze_risk(risk_case_id: str, payload: RiskAnalyzeRequest, svc=Depen
     return ResponseEnvelope(data=await svc.analyze_risk(risk_case_id, payload))
 
 
+@router.get("/risk-cases/{risk_case_id}/workspace", response_model=ResponseEnvelope[RiskWorkspaceResponse])
+async def get_risk_workspace(risk_case_id: str, svc=Depends(service)):
+    return ResponseEnvelope(data=await svc.risk_workspace(risk_case_id))
+
+
+@router.post("/risk-cases/{risk_case_id}/sources", response_model=ResponseEnvelope[RiskCaseResponse])
+async def append_risk_sources(risk_case_id: str, payload: RiskSourcesAppend, svc=Depends(service)):
+    data = await svc.append_risk_sources(risk_case_id, payload.source_record_ids)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
 @router.post("/risk-cases/{risk_case_id}/reviews", response_model=ResponseEnvelope[RiskAssessmentResponse])
 async def review_risk(risk_case_id: str, payload: RiskReviewRequest, svc=Depends(service)):
     return ResponseEnvelope(data=await svc.review_risk(risk_case_id, payload))
@@ -377,6 +414,173 @@ async def review_risk(risk_case_id: str, payload: RiskReviewRequest, svc=Depends
 @router.get("/risk-assessments/{assessment_id}", response_model=ResponseEnvelope[RiskAssessmentResponse])
 async def get_assessment(assessment_id: str, svc=Depends(service)):
     return ResponseEnvelope(data=await svc.get_assessment(assessment_id))
+
+
+def demo_service(current=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.demo_risk_workflow_service import DemoRiskWorkflowService
+    return DemoRiskWorkflowService(db, current)
+
+
+def risk_collaboration_service(current=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.risk_collaboration_service import RiskCollaborationService
+    return RiskCollaborationService(db, current)
+
+
+def demo_sampling_service(current=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.demo_sampling_service import DemoSamplingService
+    return DemoSamplingService(db, current)
+
+
+def risk_lab_service(current=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.risk_lab_service import RiskLabService
+    return RiskLabService(db, current)
+
+
+def risk_report_service(current=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.risk_report_service import RiskReportService
+    return RiskReportService(db, current)
+
+
+@router.get("/risk-cases/{case_id}/laboratory-options")
+async def risk_lab_options(case_id: UUID, svc=Depends(risk_lab_service)):
+    return ResponseEnvelope(data=await svc.options(str(case_id)))
+
+
+@router.get("/risk-cases/{case_id}/laboratory-verifications")
+async def risk_lab_list(case_id: UUID, svc=Depends(risk_lab_service)):
+    return ResponseEnvelope(data=await svc.list(str(case_id)))
+
+
+@router.post("/risk-cases/{case_id}/laboratory-verifications")
+async def risk_lab_decide(case_id: UUID, payload: LabDecision, svc=Depends(risk_lab_service)):
+    data = await svc.decide(str(case_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/risk-laboratory-verifications/{link_id}/evidence")
+async def risk_lab_return(link_id: UUID, payload: LabReturn, svc=Depends(risk_lab_service)):
+    data = await svc.return_records(str(link_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/risk-reports")
+async def risk_report_list(case_id: UUID | None = None, svc=Depends(risk_report_service)):
+    return ResponseEnvelope(data=await svc.list(str(case_id) if case_id else None))
+
+
+@router.get("/risk-reports/{report_id}")
+async def risk_report_get(report_id: UUID, svc=Depends(risk_report_service)):
+    return ResponseEnvelope(data=await svc.get(str(report_id)))
+
+
+@router.post("/risk-cases/{case_id}/reports")
+async def risk_report_create(case_id: UUID, payload: RiskReportCreate, svc=Depends(risk_report_service)):
+    data = await svc.create(str(case_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/risk-reports/{report_id}/exports")
+async def risk_report_export(report_id: UUID, payload: RiskReportExport, svc=Depends(risk_report_service)):
+    from app.services.export_job_service import ExportJobService
+    from app.schemas.governance import ExportJobResponse
+    item = await ExportJobService(svc.db, svc.org_id, actor_user_id=svc.actor, actor_role=svc.current.role).create_job(svc.actor,
+        {"report_type": "risk_assessment", "format": payload.format, "config_json": {"risk_report_id": str(report_id)}})
+    return ResponseEnvelope(data=ExportJobResponse.model_validate(item))
+
+
+@router.get("/demo-sampling/candidates")
+@router.get("/risk-sampling/candidates")
+async def demo_sampling_candidates(case_id: UUID | None = None, svc=Depends(demo_sampling_service)):
+    return ResponseEnvelope(data=await svc.candidates(str(case_id) if case_id else None))
+
+
+@router.get("/demo-sampling/suggestions")
+@router.get("/risk-sampling/suggestions")
+async def demo_sampling_list(case_id: UUID | None = None, svc=Depends(demo_sampling_service)):
+    return ResponseEnvelope(data=await svc.list(str(case_id) if case_id else None))
+
+
+@router.get("/demo-sampling/suggestions/{suggestion_id}")
+@router.get("/risk-sampling/suggestions/{suggestion_id}")
+async def demo_sampling_get(suggestion_id: UUID, svc=Depends(demo_sampling_service)):
+    return ResponseEnvelope(data=await svc.get(str(suggestion_id)))
+
+
+@router.post("/risk-cases/{risk_case_id}/demo-sampling-suggestions")
+@router.post("/risk-cases/{risk_case_id}/risk-sampling-suggestions")
+async def demo_sampling_create(risk_case_id: UUID, payload: DemoSamplingCreate, svc=Depends(demo_sampling_service)):
+    data = await svc.create(str(risk_case_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.patch("/demo-sampling/suggestions/{suggestion_id}")
+@router.patch("/risk-sampling/suggestions/{suggestion_id}")
+async def demo_sampling_save(suggestion_id: UUID, payload: DemoSamplingSave, svc=Depends(demo_sampling_service)):
+    data = await svc.mutate(str(suggestion_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/demo-sampling/suggestions/{suggestion_id}/confirm")
+@router.post("/risk-sampling/suggestions/{suggestion_id}/confirm")
+async def demo_sampling_confirm(suggestion_id: UUID, payload: DemoSamplingConfirm, svc=Depends(demo_sampling_service)):
+    data = await svc.mutate(str(suggestion_id), payload, confirm=True)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/risk-collaborations/participants")
+async def risk_collaboration_participants(svc=Depends(risk_collaboration_service)):
+    return ResponseEnvelope(data=await svc.candidates())
+
+
+@router.get("/risk-cases/{risk_case_id}/collaborations")
+async def list_risk_collaborations(risk_case_id: UUID, svc=Depends(risk_collaboration_service)):
+    return ResponseEnvelope(data=await svc.list_for_case(str(risk_case_id)))
+
+
+@router.post("/risk-cases/{risk_case_id}/collaborations")
+async def create_risk_collaboration(risk_case_id: UUID, payload: RiskCollaborationCreate, svc=Depends(risk_collaboration_service)):
+    data = await svc.create(str(risk_case_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/risk-collaborations/{collaboration_id}")
+async def get_risk_collaboration(collaboration_id: UUID, svc=Depends(risk_collaboration_service)):
+    return ResponseEnvelope(data=await svc.get(str(collaboration_id)))
+
+
+@router.post("/risk-cases/{risk_case_id}/demo-drafts", response_model=ResponseEnvelope[RiskAssessmentResponse])
+async def create_demo_draft(risk_case_id: UUID, payload: DemoDraftCreate, svc=Depends(demo_service)):
+    data = await svc.create(str(risk_case_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.patch("/risk-cases/{risk_case_id}/demo-drafts/{assessment_id}", response_model=ResponseEnvelope[RiskAssessmentResponse])
+async def save_demo_draft(risk_case_id: UUID, assessment_id: UUID, payload: DemoDraftSave, svc=Depends(demo_service)):
+    data = await svc.save(str(risk_case_id), str(assessment_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/risk-cases/{risk_case_id}/demo-drafts/{assessment_id}/submit", response_model=ResponseEnvelope[RiskAssessmentResponse])
+async def submit_demo_draft(risk_case_id: UUID, assessment_id: UUID, payload: DemoDraftSubmit, svc=Depends(demo_service)):
+    data = await svc.submit(str(risk_case_id), str(assessment_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/risk-cases/{risk_case_id}/demo-drafts/{assessment_id}/review", response_model=ResponseEnvelope[RiskAssessmentResponse])
+async def review_demo_draft(risk_case_id: UUID, assessment_id: UUID, payload: DemoDraftReview, svc=Depends(demo_service)):
+    data = await svc.review(str(risk_case_id), str(assessment_id), payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
 
 
 @router.get("/risk-policies", response_model=ResponseEnvelope[list[RiskPolicyResponse]])

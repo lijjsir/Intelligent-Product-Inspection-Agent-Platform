@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 
-INFERENCE_MODEL_TYPES = {"chat", "vision", "multimodal", "vlm", "llm"}
+TEXT_MODEL_TYPES = {"chat", "llm", "text_generation"}
+MULTIMODAL_CHAT_TYPES = {"vision", "multimodal", "vlm"}
+INFERENCE_MODEL_TYPES = TEXT_MODEL_TYPES | MULTIMODAL_CHAT_TYPES
 
 
 class ModelSelector:
@@ -22,9 +24,7 @@ class ModelSelector:
             and self._is_configured_runtime(item)
             and self.runtime_id(item) not in excluded_runtime_ids
         ]
-        # Order model_types as a list so earlier entries carry higher preference.
-        # Python 3.7+ preserves insertion order for sets, so {"multimodal", "vision", "chat"}
-        # iterates in that order and maps to preference 0, 1, 2.
+        # Explicitly requested types precede compatible multimodal fallbacks.
         type_order = {t: i for i, t in enumerate(model_types) if t} if model_types else {}
         return sorted(active, key=lambda item: self._sort_key(item, type_order=type_order))
 
@@ -69,7 +69,12 @@ class ModelSelector:
 
     @staticmethod
     def _normalize_model_types(model_types: set[str]) -> set[str]:
-        return {str(item or "").strip().lower() for item in model_types if str(item or "").strip()}
+        normalized = {str(item or "").strip().lower() for item in model_types if str(item or "").strip()}
+        # Vision-language chat endpoints also accept plain text. Text-only
+        # callers must not discard the organization's only configured VLM.
+        if normalized & TEXT_MODEL_TYPES:
+            normalized |= MULTIMODAL_CHAT_TYPES
+        return normalized
 
     @staticmethod
     def _health_rank(health_status: str | None) -> int:

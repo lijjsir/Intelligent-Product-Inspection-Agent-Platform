@@ -59,6 +59,7 @@ INPUT_KEYS = {
     "risk_refs",
     "sampling_batches",
     "reassessment_basis",
+    "suggestion_ref",
 }
 
 
@@ -359,6 +360,14 @@ class SupervisionService:
                 await self.get("devices", candidate["device_id"])
         if kind == "sampling-plans":
             clean["risk_refs"] = risk_refs
+            if clean.get('source_suggestion_id'):
+                from app.services.demo_sampling_service import DemoSamplingService
+                suggestion = await DemoSamplingService(self.db, self.current).get(clean['source_suggestion_id'])
+                if (suggestion['snapshot']['execution_mode'] != 'business' or suggestion['status'] != 'confirmed'
+                        or not suggestion['is_current'] or suggestion['snapshot']['source_ref'] not in risk_refs):
+                    raise ValidationError('来源建议须为当前有效的正式已确认建议，且包含对应风险候选')
+                clean['suggestion_ref'] = {'id':suggestion['id'], 'revision':suggestion['revision'],
+                    'context_hash':suggestion['context_hash'], 'content_hash':digest(suggestion['content'])}
         for item in clean.get("test_items", []):
             if (
                 item.get("lower_limit") is not None
@@ -1320,6 +1329,9 @@ class SupervisionService:
             return None
 
         async def call(name, data):
+            call.model_versions["llm_called"] = True
+            call.model_versions["model_success"] = False
+            call.model_versions["attempted_calls"] += 1
             client = LLMClient(
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
@@ -1340,12 +1352,19 @@ class SupervisionService:
                 observation_name=f"supervision.{name}",
                 observation_metadata={"org_id": self.org_id, "workflow_run_id": run_id},
             )
-            return parse_model_json(response)
+            parsed = parse_model_json(response)
+            call.model_versions["successful_calls"] += 1
+            call.model_versions["model_success"] = call.model_versions['successful_calls'] == call.model_versions['attempted_calls']
+            return parsed
 
         call.model_versions = {
             "analyst": runtime.get("model_id"),
             "reviewer": runtime.get("model_id"),
             "review_mode": "independent_prompt_same_model",
+            "llm_called": False,
+            "model_success": False,
+            "attempted_calls": 0,
+            "successful_calls": 0,
         }
         return call
 
@@ -1519,6 +1538,15 @@ class SupervisionService:
             return {"assessment_state": "manual_review_required", "can_make_final_verdict": False}
 
     async def sampling_analysis_contexts(self, plan):
+        if plan.data.get('source_suggestion_id'):
+            from app.services.demo_sampling_service import DemoSamplingService
+            suggestion = await DemoSamplingService(self.db, self.current).get(plan.data['source_suggestion_id'])
+            expected = {'id':suggestion['id'], 'revision':suggestion['revision'],
+                'context_hash':suggestion['context_hash'], 'content_hash':digest(suggestion['content'])}
+            if (suggestion['snapshot']['execution_mode'] != 'business' or suggestion['status'] != 'confirmed'
+                    or not suggestion['is_current'] or expected != plan.data.get('suggestion_ref')
+                    or suggestion['snapshot']['source_ref'] not in (plan.data.get('risk_refs') or [])):
+                raise ValidationError('抽查建议或来源已变化，请回到原事项重新核对')
         if plan.data.get("knowledge_status") == "needs_reassessment":
             raise ValidationError("方案依据或反馈已变化，请重新分析")
         analysis = plan.data.get("analysis") or {}

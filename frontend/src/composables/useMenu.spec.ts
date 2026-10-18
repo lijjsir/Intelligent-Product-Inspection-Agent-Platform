@@ -97,7 +97,7 @@ describe("useMenu", () => {
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
 
-    expect(flattenTitles()).toContain("协作中心");
+    expect(flattenTitles()).toContain("协同中心");
     expect(flattenTitles()).not.toContain("协作消息");
     expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("协作中心");
   });
@@ -132,11 +132,13 @@ describe("useMenu", () => {
     auth.roles = [ROLE_EXPERT];
     expect(flattenTitles()).not.toContain("数据接入");
     expect(flattenTitles()).toContain("风险研判");
-    expect(flattenTitles()).not.toContain("实验室检测");
+    expect(flattenTitles()).toContain("实验室检测");
     expect(flattenTitles()).toContain("检测任务");
     expect(flattenTitles()).toContain("检测结果");
 
     const { menu } = useMenu();
+    const quality = menu.value.find(item => 'items' in item && item.title==='质量监督');
+    expect(quality && 'items' in quality ? quality.items.map(item=>item.title) : []).toEqual(['数据采集','市场监控','风险研判','监督抽查','协同中心','报告中心']);
     const taskResult = menu.value.find((item) => "items" in item && item.title === "任务与结果");
     expect(taskResult && "items" in taskResult ? taskResult.items : []).toEqual([
       { title: "检测任务", path: "/app/tasks" },

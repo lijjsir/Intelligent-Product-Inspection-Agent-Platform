@@ -458,9 +458,79 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
         await BusinessNumberService(self.db).attach(rows)
         return {"items": [self.risk_case_response(x) for x in rows], "total": int(total or 0), "page": page, "size": size}
 
+    async def append_risk_sources(self, risk_case_id: str, record_ids: list[str]) -> dict:
+        self.require_role(BUSINESS_WRITE)
+        await self.lock_demo_intake()
+        case = await self.risk_case(risk_case_id, lock=True)
+        if self.current.role == "user" and self.actor not in {case.created_by, case.assigned_to}:
+            raise ForbiddenError("只能为本人创建或受派的研判事项补充资料")
+        for record_id in dict.fromkeys(record_ids):
+            await self.record(record_id)
+        added = set(record_ids) - set(case.source_record_ids or [])
+        evidence = list(await self.db.scalars(select(QualityEvidenceItem.id).where(
+                QualityEvidenceItem.org_id == self.org_id,
+                QualityEvidenceItem.source_record_id.in_(record_ids),
+                QualityEvidenceItem.deleted_at.is_(None),
+            )))
+        if added or set(evidence) - set(case.evidence_ids or []):
+            case.source_record_ids = list(dict.fromkeys([*(case.source_record_ids or []), *record_ids]))
+            case.evidence_ids = list(dict.fromkeys([*(case.evidence_ids or []), *evidence]))
+            case.status = "awaiting_evidence"
+            await self.db.flush()
+        return self.risk_case_response(case)
+
+    async def risk_workspace(self, risk_case_id: str) -> dict:
+        """Restore a case without regenerating an assessment or widening source access."""
+        self.require_role(BUSINESS_READ)
+        case = await self.risk_case(risk_case_id)
+        records, unavailable = [], []
+        for record_id in dict.fromkeys(case.source_record_ids or []):
+            try:
+                record = await self.record(record_id)
+            except (ForbiddenError, NotFoundError):
+                unavailable.append(record_id)
+                continue
+            records.append(self.record_response(record))
+        versions = list(await self.db.scalars(
+            select(QualityRiskAssessment).where(
+                QualityRiskAssessment.org_id == self.org_id,
+                QualityRiskAssessment.risk_case_id == case.id,
+                QualityRiskAssessment.deleted_at.is_(None),
+            ).order_by(QualityRiskAssessment.version.desc())
+        ))
+        latest = await self.get_assessment(versions[0].id) if versions else None
+        result = {
+            "case": self.risk_case_response(case),
+            "records": records,
+            "unavailable_source_ids": unavailable,
+            "latest_assessment": latest,
+            "assessment_versions": [
+                {key: getattr(row, key) for key in (
+                    "id", "version", "status", "risk_level", "created_at", "reviewed_at",
+                )} for row in versions
+            ],
+        }
+        if settings.quality_demo_enabled and str(self.current.role) in {"admin", "expert"}:
+            from app.services.demo_risk_workflow_service import DemoRiskWorkflowService
+            result["demo_context"] = await DemoRiskWorkflowService(self.db, self.current, self.storage).context(case)
+        if str(self.current.role) == "expert":
+            from app.services.risk_workflow_context_service import RiskWorkflowContextService
+            try:
+                result["workflow_context"] = await RiskWorkflowContextService(self.db, self.current, self.storage).context(case)
+            except ForbiddenError as exc:
+                # Existing read access survives when optional supervision workflows are disabled.
+                result["workflow_context"] = {'enabled':False, 'execution_mode':'demo' if settings.quality_demo_enabled else 'business',
+                    'can_author':False, 'eligible':False, 'assessment_id':None, 'basis_hash':'',
+                    'blockers':[{'message':exc.message}], 'boundary':exc.message}
+        return result
+
     async def analyze_risk(self, risk_case_id: str, payload) -> dict:
         self.require_role({"user", "expert"})
+        if settings.quality_demo_enabled:
+            raise ValidationError("演示环境请使用人工演示草稿入口；此操作不会调用真实模型")
         case = await self.risk_case(risk_case_id, lock=True)
+        if case.scope.get("execution_mode") == "demo":
+            raise ValidationError("演示事项不能进入正式模型研判流程")
         evidence = list(await self.db.scalars(select(QualityEvidenceItem).where(QualityEvidenceItem.org_id == self.org_id, QualityEvidenceItem.id.in_(case.evidence_ids), QualityEvidenceItem.deleted_at.is_(None))))
         observed = [x for x in evidence if x.nature == "observed"]
         records = list(await self.db.scalars(select(QualitySourceRecord).where(QualitySourceRecord.org_id == self.org_id, QualitySourceRecord.id.in_(case.source_record_ids),QualitySourceRecord.deleted_at.is_(None))))
@@ -475,11 +545,14 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
         causes = [clean(c) for x in records for c in (x.content.get("possible_causes") or []) if clean(c)]
         recommendations = [clean(c) for x in records for c in (x.content.get("recommendations") or []) if clean(c)]
         model_versions = {}
+        model_call = None
         opinion_records = [
             x
             for x in records
             if x.record_type in {"consumer_complaint", "public_opinion", "image", "video"}
         ]
+        occurred_times = [r.occurred_at for r in opinion_records if r.occurred_at is not None]
+        record_times = {r.id: r.occurred_at for r in records}
         if opinion_records:
             try:
                 from app.services.supervision_service import SupervisionService
@@ -504,7 +577,7 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                                 clean(x.content.get("text") or x.content.get("description"))
                                 for x in opinion_records
                             ),
-                            "occurred_at": max(x.occurred_at for x in opinion_records).isoformat(),
+                            "occurred_at": max(occurred_times).isoformat() if occurred_times else None,
                             "evidence": [
                                 {
                                     "evidence_id": x.id,
@@ -512,7 +585,7 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                                     if x.evidence_type == "attachment"
                                     else x.evidence_type,
                                     "source_id": x.source_record_id,
-                                    "occurred_at": x.created_at.isoformat(),
+                                    "occurred_at": record_times[x.source_record_id].isoformat() if record_times.get(x.source_record_id) else None,
                                     "text": x.text or "多媒体来源证据",
                                     "nature": x.nature,
                                 }
@@ -534,9 +607,16 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                 recommendations.extend(
                     clean(x) for x in output.get("recommendations", []) if clean(x)
                 )
-                model_versions = dict(output.get("model_versions") or {})
+                model_versions = {**dict(output.get("model_versions") or {}), 'analysis_summary':{
+                    'summary':str(output.get('summary') or ''),
+                    'limitations':list(output.get('limitations') or []),
+                }, 'inference_status': output.get('status')}
             except Exception:  # noqa: BLE001 - model/provider failures must degrade to review
                 model_versions = {"status": "unavailable_or_manual_review_required"}
+        if model_call is not None:
+            model_versions.update(getattr(model_call, 'model_versions', {}))
+        model_versions.setdefault("llm_called", False)
+        model_versions.setdefault("model_success", False)
         execution_context = None
         if payload.inspection_execution_run_id:
             from app.services.inspection_execution_service import InspectionExecutionService
@@ -563,6 +643,8 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
                 ],
             }
         missing = [] if observed else ["真实来源证据"]
+        if any(r.occurred_at is None for r in opinion_records):
+            missing.append("部分投诉或舆情来源缺少发生时间，时序关系仍需核对")
         if execution_context:
             if execution_context["status"] != "accepted":
                 missing.append("引用的标准执行结果尚未完成独立专业复核")
@@ -608,10 +690,16 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
 
     async def review_risk(self, risk_case_id: str, payload) -> dict:
         self.require_role({"expert"})
+        if settings.quality_demo_enabled and payload.decision == "accept":
+            raise ValidationError("演示环境不能确认正式风险结论；后续演示复核将使用独立状态")
         case = await self.risk_case(risk_case_id, lock=True)
         assessment = await self.db.scalar(select(QualityRiskAssessment).where(QualityRiskAssessment.org_id == self.org_id, QualityRiskAssessment.risk_case_id == case.id).order_by(QualityRiskAssessment.version.desc()).limit(1).with_for_update())
         if not assessment:
             raise ValidationError("请先生成风险研判草稿")
+        if (assessment.model_versions or {}).get("execution_mode") == "demo" or case.scope.get("execution_mode") == "demo":
+            raise ValidationError("演示版本请使用独立演示复核入口，不能转为正式确认")
+        if payload.assessment_id and payload.assessment_id != assessment.id:
+            raise ConflictError("研判版本已更新，请刷新并核对最新草稿后复核")
         if assessment.submitted_by == self.actor:
             raise ForbiddenError("不能复核本人提交的风险研判")
         if assessment.status=="accepted":raise ConflictError("已确认研判不能静默覆盖，请重新生成草稿")
@@ -648,6 +736,11 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
         if not row:
             raise NotFoundError("风险研判不存在")
         case=await self.risk_case(row.risk_case_id)
+        from app.services.demo_risk_workflow_service import is_manual_demo, DemoRiskWorkflowService
+        if is_manual_demo(row):
+            workflow = DemoRiskWorkflowService(self.db, self.current, self.storage)
+            await workflow.guard()
+            return await workflow.respond(case, row)
         response=self.assessment_response(row)
         response["source_validation"]=await validate_risk(self.db,self.current,case,row,self.storage)
         response["effective_status"]="needs_reassessment" if response["source_validation"]["blockers"] else row.status
@@ -656,7 +749,7 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
     async def risk_case(self, risk_case_id: str, *, lock: bool = False) -> QualityRiskCase:
         stmt = select(QualityRiskCase).where(QualityRiskCase.id == risk_case_id, QualityRiskCase.org_id == self.org_id, QualityRiskCase.deleted_at.is_(None))
         if lock:
-            stmt = stmt.with_for_update()
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
         row = await self.db.scalar(stmt)
         if not row:
             raise NotFoundError("风险案件不存在")

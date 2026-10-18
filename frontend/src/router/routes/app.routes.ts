@@ -28,7 +28,7 @@ export const appRoutes = [
     name: "app-quality-data",
     component: () => import("@/views/quality-risk/QualityDataIntakeView.vue"),
     meta: {
-      title: "质量数据接入",
+      title: "数据采集",
       roles: [ROLE_ADMIN, ROLE_EXPERT],
     },
   },
@@ -40,6 +40,18 @@ export const appRoutes = [
       title: "风险研判",
       roles: [ROLE_ADMIN, ROLE_USER, ROLE_EXPERT, ROLE_PLATFORM_OPERATOR],
     },
+  },
+  {
+    path: "risk-sampling",
+    name: "app-risk-sampling",
+    component: () => import("@/components/business/supervision/DemoSamplingSuggestions.vue"),
+    meta: { title: "抽查建议", roles: [ROLE_EXPERT] },
+  },
+  {
+    path: "risk-reports",
+    name: "app-risk-reports",
+    component: () => import("@/views/quality-risk/RiskReportCenterView.vue"),
+    meta: { title: "报告中心", roles: [ROLE_EXPERT] },
   },
   {
     path: "risk-policies",

@@ -30,6 +30,8 @@ class ExportJobService(TenantAwareService):
 
     async def create_job(self, actor_id: str, payload: dict):
         self._require_business_access("report_generate")
+        if payload.get('report_type') == 'risk_assessment':
+            return await self.create_risk_report_job(actor_id, payload)
         if self._actor_user_id is not None and actor_id!=self._actor_user_id:raise ForbiddenError('导出创建者必须是当前业务身份')
         if self._actor_role == ROLE_USER:
             if not self._owner_user_id or actor_id != self._owner_user_id:
@@ -104,6 +106,54 @@ class ExportJobService(TenantAwareService):
 
         return job
 
+    async def create_risk_report_job(self, actor_id, payload):
+        from app.schemas.user import CurrentUser
+        from app.services.risk_report_service import RiskReportService
+        from app.services.report_generation_service import generate_report
+        from app.models.export_job import ExportJob
+        from app.core.datetime import utcnow
+        from sqlalchemy import select
+        if not self._actor_user_id or actor_id != self._actor_user_id or str(self._actor_role) != 'expert':
+            raise ForbiddenError('研判报告导出需要明确的专家身份')
+        current = CurrentUser(user_id=actor_id, org_id=self._org_id, role=str(self._actor_role)); current.role = self._actor_role
+        service = RiskReportService(self._session, current)
+        await service.guard(write=True)
+        config = payload.get('config_json') or {}
+        if set(config) != {'risk_report_id'} or payload.get('format', 'pdf') not in {'pdf', 'docx'}:
+            raise ValidationError('研判报告仅接受原报告编号与 PDF/Word 格式，不接受任务或客户端快照')
+        from uuid import UUID
+        try: report_id = str(UUID(str(config['risk_report_id'])))
+        except (TypeError, ValueError): raise ValidationError('研判报告编号无效') from None
+        report = await service.get(report_id)
+        format = payload.get('format', 'pdf')
+        # Serialize retries in the demo organization, then reuse an unexpired
+        # export of this same immutable report and format by the same reader.
+        jobs = list(await self._session.scalars(select(ExportJob).where(ExportJob.org_id == self._org_id,
+            ExportJob.actor_id == actor_id, ExportJob.report_type == 'risk_assessment', ExportJob.format == format,
+            ExportJob.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True)))
+        inflight = None
+        from datetime import timedelta
+        for job in jobs:
+            job_config = json.loads(job.config_json or '{}')
+            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == 'risk-report-v1' and job.status == 'success' and job.expires_at and job.expires_at > utcnow():
+                return job
+            if job_config.get('risk_report_id') == report['id'] and job_config.get('renderer_version') == 'risk-report-v1' and job.status in {'pending', 'running'} and job.created_at >= utcnow() - timedelta(minutes=5):
+                if inflight is None or job.created_at > inflight.created_at:
+                    inflight = job
+        if inflight is not None:
+            return inflight
+        job = await self._repo.create({'id': str(uuid7()), 'org_id': self._org_id, 'actor_id': actor_id,
+            'report_name': report['title'], 'report_type': 'risk_assessment', 'format': format, 'template': 'risk_assessment',
+            'config_json': json.dumps({'risk_report_id': report['id'], 'snapshot_hash': report['snapshot_hash'], 'renderer_version':'risk-report-v1'}, ensure_ascii=False),
+            'status': 'pending', 'created_at': utcnow(), 'updated_at': utcnow()})
+        await self._session.commit()
+        # The isolated compose intentionally has no model/Celery workers. Use
+        # the same renderer/storage generation service directly for this type.
+        job_id = job.id
+        await generate_report(job_id=job_id, org_id=self._org_id)
+        self._session.expire_all()
+        return await self.get_detail(job_id)
+
     async def get_detail(self, job_id: str):
         self._require_business_access()
         job = await self._repo.get_by_id(job_id)
@@ -113,6 +163,19 @@ class ExportJobService(TenantAwareService):
             raise NotFoundError("export job not found")
         try:config=json.loads(getattr(job,'config_json',None) or '{}')
         except (ValueError,TypeError):config={}
+        if job.report_type == 'risk_assessment':
+            if job.actor_id != self._actor_user_id:
+                raise ForbiddenError('只能读取本人生成的研判导出记录')
+            from app.schemas.user import CurrentUser
+            from app.services.risk_report_service import RiskReportService
+            current=CurrentUser(user_id=self._actor_user_id,org_id=self._org_id,role=str(self._actor_role));current.role=self._actor_role
+            report=await RiskReportService(self._session,current).get(config.get('risk_report_id'))
+            if report['snapshot_hash'] != config.get('snapshot_hash'):
+                raise ConflictError('导出与原报告快照不一致')
+            job.source_issues=report['source_issues']; job.source_version=report['snapshot_hash']
+            job.result_scope={'label':'演示研判报告','assessment_version':report['snapshot']['assessment_version']}
+            job.effective_status=report['effective_status']
+            return job
         snapshot=config.get('report_snapshot') or {}
         if snapshot.get('risks'):
             from app.core.permissions import has_permission
@@ -138,6 +201,8 @@ class ExportJobService(TenantAwareService):
     async def list_jobs(self, page: int, size: int, status: str | None = None, report_type: str | None = None, *, task_id: str | None = None):
         self._require_business_access()
         filters = {"task_id": task_id} if task_id else {}
+        if str(self._actor_role) == 'expert':
+            filters['risk_actor_id'] = self._actor_user_id
         return await self._repo.list_jobs(
             self._org_id, page, size, status, report_type, actor_id=self._owner_user_id, **filters,
         )

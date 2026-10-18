@@ -269,7 +269,16 @@ class MeetingService:
             self._user_id,
             limit=limit,
         )
-        return await self._serialize_rooms(rooms)
+        from app.services.risk_collaboration_service import bound_id, check_room_access
+        visible = []
+        for room in rooms:
+            if bound_id(room):
+                try:
+                    await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
+                except (ForbiddenError, NotFoundError):
+                    continue
+            visible.append(room)
+        return await self._serialize_rooms(visible)
 
     async def create_room(
         self,
@@ -311,6 +320,8 @@ class MeetingService:
         room = await self._repo.get_room_by_code(self._org_id, access_code.strip().upper())
         if not room:
             raise NotFoundError("meeting room not found")
+        from app.services.risk_collaboration_service import check_room_access
+        await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
         if str(room.status) != "active":
             raise ForbiddenError("meeting room is not active")
         if room.password_hash and not verify_password(password or "", room.password_hash):
@@ -345,6 +356,9 @@ class MeetingService:
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
+        from app.services.risk_collaboration_service import bound_id
+        if bound_id(room) and any(value is not None for value in (visibility, allowed_data_domains, business_context, auto_participation_mode)):
+            raise ValidationError("研判协同的参与范围、版本和人工讨论方式已固定，不能在会议中改写")
         effective_domains = (
             self._effective_domains_for_create(allowed_data_domains)
             if allowed_data_domains is not None
@@ -385,6 +399,9 @@ class MeetingService:
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
+        from app.services.risk_collaboration_service import bound_id
+        if bound_id(room):
+            raise ValidationError("研判协同的事项与版本由发起入口固定，请返回原事项")
         context = await self._normalize_business_context(request.model_dump())
         memory_policy = self._with_business_context(getattr(room, "memory_policy", None), context)
         await self._repo.update_room(self._org_id, room_id, memory_policy=memory_policy)
@@ -608,6 +625,8 @@ class MeetingService:
         quote_snapshot: dict | None = None,
     ) -> MeetingMessageResponse:
         await self._ensure_active_member(room_id)
+        from app.services.risk_collaboration_service import bound_id
+        linked_risk_room = bool(bound_id(await self._repo.get_room(self._org_id, room_id)))
         user = await self._users.get_by_id(self._org_id, self._user_id)
         username = user.username if user else self._user_id[-8:]
         clean_content = content.strip()
@@ -629,13 +648,17 @@ class MeetingService:
         general_agent_mentioned = self._contains_general_agent_mention(clean_content)
         legacy_ai_alias_mentioned = not general_agent_mentioned and self._contains_meeting_ai_mention(clean_content)
         agent_alias_mentioned = general_agent_mentioned or legacy_ai_alias_mentioned
-        should_invoke_general_agent = bool(agent_alias_mentioned and not skip_agent_trigger and not private_recipient_user_id)
-        agent_sidecar_private = bool(skip_agent_trigger and not private_recipient_user_id and agent_alias_mentioned)
-        mentions = [] if (private_recipient_user_id or agent_alias_mentioned) else await self._parse_mentions(clean_content, room_id)
+        should_invoke_general_agent = bool(agent_alias_mentioned and not skip_agent_trigger and not private_recipient_user_id and not linked_risk_room)
+        agent_sidecar_private = bool(skip_agent_trigger and not private_recipient_user_id and agent_alias_mentioned and not linked_risk_room)
+        mentions = [] if (private_recipient_user_id or agent_alias_mentioned or linked_risk_room) else await self._parse_mentions(clean_content, room_id)
         stored_mentions = list(mentions)
-        if agent_alias_mentioned and not private_recipient_user_id:
+        if agent_alias_mentioned and not private_recipient_user_id and not linked_risk_room:
             stored_mentions.append({"agent_id": _MEETING_GENERAL_AGENT_ID, "agent_name": _MEETING_GENERAL_AGENT_NAME})
         message_metadata = {"attachment_echo": attachment_echo} if attachment_echo else {}
+        if linked_risk_room:
+            bound_room = await self._repo.get_room(self._org_id, room_id)
+            message_metadata["execution_mode"] = ((bound_room.memory_policy or {}).get('business_context') or {}).get('execution_mode','demo')
+            message_metadata["risk_collaboration_id"] = bound_id(await self._repo.get_room(self._org_id, room_id))
         if normalized_quote_snapshot:
             message_metadata["quote_snapshot"] = normalized_quote_snapshot
         if agent_sidecar_private:
@@ -688,6 +711,7 @@ class MeetingService:
         auto_participation_mode = self._auto_participation_mode(room)
         should_evaluate_auto_participation = bool(
             auto_participation_mode == "live"
+            and not linked_risk_room
             and clean_content
             and not private_recipient_user_id
             and not skip_agent_trigger
@@ -703,6 +727,7 @@ class MeetingService:
             )
         if (
             clean_content
+            and not linked_risk_room
             and not private_recipient_user_id
             and not agent_sidecar_private
             and hasattr(self._repo, "upsert_context_summary")
@@ -1161,6 +1186,7 @@ class MeetingService:
         allowed_tools: list[str] | None = None,
     ) -> MeetingRoomAgentResponse:
         await self._ensure_member(room_id)
+        await self._require_unbound_automation(room_id)
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
@@ -1216,6 +1242,9 @@ class MeetingService:
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
+        from app.services.risk_collaboration_service import bound_id
+        if bound_id(room):
+            raise ValidationError("本次研判协同的参与专家及负责人已固定")
         if str(room.created_by) != self._user_id:
             raise ForbiddenError("only the meeting creator can assign member permissions")
         if str(member_user_id) == str(room.created_by) and role != "host":
@@ -1230,6 +1259,9 @@ class MeetingService:
         return await self._serialize_member(row)
 
     async def delete_room(self, room_id: str) -> None:
+        from app.services.risk_collaboration_service import bound_id
+        if bound_id(await self._repo.get_room(self._org_id, room_id)):
+            raise ValidationError("研判协同会议须保留版本追溯记录，可结束会议后继续查阅")
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
@@ -1336,6 +1368,7 @@ class MeetingService:
         request: MeetingAgentRunRequest,
     ) -> MeetingAgentRunResponse:
         await self._ensure_member(room_id)
+        await self._require_unbound_automation(room_id)
         room = await self._repo.get_room(self._org_id, room_id)
         if not room:
             raise NotFoundError("meeting room not found")
@@ -1729,6 +1762,7 @@ class MeetingService:
         request: MeetingMemoryExtractRequest,
     ) -> list[MeetingCandidateMemoryResponse]:
         await self._ensure_host(room_id)
+        await self._require_unbound_automation(room_id)
         return await self._extract_candidate_memories_from_messages(
             room_id,
             max_items=request.max_items,
@@ -3193,6 +3227,13 @@ class MeetingService:
         member = await self._repo.get_member(self._org_id, room_id, self._user_id)
         if not member:
             raise ForbiddenError("join the meeting room before sending messages")
+        from app.services.risk_collaboration_service import check_room_access
+        await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
+
+    async def _require_unbound_automation(self, room_id: str) -> None:
+        from app.services.risk_collaboration_service import bound_id
+        if bound_id(await self._repo.get_room(self._org_id, room_id)):
+            raise ValidationError("本轮研判协同仅支持人工讨论，模型、记忆发布与检测执行仍使用各自业务入口")
 
     async def _ensure_active_member(self, room_id: str) -> None:
         room = await self._repo.get_room(self._org_id, room_id)
@@ -3201,6 +3242,8 @@ class MeetingService:
         member = await self._repo.get_member(self._org_id, room_id, self._user_id)
         if not member:
             raise ForbiddenError("join the meeting room before sending messages")
+        from app.services.risk_collaboration_service import check_room_access
+        await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
         if str(getattr(room, "status", "active")) != "active":
             raise ForbiddenError("meeting room is not active")
 
@@ -3447,6 +3490,8 @@ class MeetingService:
         member = await self._repo.get_member(self._org_id, room_id, self._user_id)
         if not member:
             raise ForbiddenError("join the meeting room before managing it")
+        from app.services.risk_collaboration_service import check_room_access
+        await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
         if str(room.created_by) != self._user_id and str(member.role) != "host":
             raise ForbiddenError("only the meeting host can manage the room")
 
@@ -5968,6 +6013,7 @@ class MeetingService:
         room_id = self._memory_room_id(item)
         if not room_id:
             raise ForbiddenError("memory is not sourced from a meeting room")
+        await self._require_unbound_automation(room_id)
         category = str(content_json.get("memory_category") or _MEETING_MEMORY_CATEGORY)
         if category == _REJECTED_MEMORY_CATEGORY:
             raise ValidationError("rejected_noise memory cannot be confirmed")
@@ -6745,6 +6791,8 @@ class MeetingService:
 
     async def _normalize_business_context(self, raw_context: dict | None) -> MeetingBusinessContext:
         context = raw_context or {}
+        if any(context.get(k) for k in ("risk_case_id", "risk_assessment_id", "risk_assessment_version", "execution_mode")):
+            raise ValidationError("研判事项与版本须从研判事项的同单位协同入口关联")
         task_ids = self._dedupe_text_values(context.get("task_ids"), limit=20)
         product_ids = self._dedupe_text_values(context.get("product_ids"), limit=20)
         batch_nos = self._dedupe_text_values(context.get("batch_nos"), limit=20)
@@ -6858,7 +6906,15 @@ class MeetingService:
             standard_ids.extend(context.standard_ids or [])
             for task in context.tasks or []:
                 tasks_by_id.setdefault(task.id, task)
+        risk_context = {}
+        for context in contexts:
+            if context and context.risk_assessment_id:
+                values = {k: getattr(context, k) for k in ("risk_case_id", "risk_assessment_id", "risk_assessment_version", "execution_mode")}
+                if risk_context and risk_context != values:
+                    raise ValidationError("不能将不同研判版本合并为同一会议上下文")
+                risk_context = values
         return MeetingBusinessContext(
+            **risk_context,
             task_ids=MeetingService._dedupe_text_values(task_ids, limit=20),
             product_ids=MeetingService._dedupe_text_values(product_ids, limit=20),
             batch_nos=MeetingService._dedupe_text_values(batch_nos, limit=20),

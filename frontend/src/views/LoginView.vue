@@ -58,14 +58,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Lock, OfficeBuilding, User } from "@element-plus/icons-vue";
 import { useAuthStore } from "@/stores/auth.store";
+import { useRuntimeContext } from "@/composables/useRuntimeContext";
 
 const router = useRouter();
 const auth = useAuthStore();
+const { context: runtimeContext } = useRuntimeContext();
 
 const orgId = ref("cqupt");
 const username = ref("");
@@ -75,9 +77,13 @@ const rememberMe = ref(true);
 
 onMounted(() => {
   const savedOrg = window.localStorage.getItem("piap_login_org");
-  orgId.value = savedOrg || "cqupt";
+  orgId.value = savedOrg || runtimeContext.value?.organization_slug || "cqupt";
   username.value = window.localStorage.getItem("piap_login_username") || "";
   rememberMe.value = Boolean(savedOrg || username.value);
+});
+watch(runtimeContext, (value) => {
+  if (value?.execution_mode === "demo" && !window.localStorage.getItem("piap_login_org") && orgId.value === "cqupt")
+    orgId.value = value.organization_slug || "cqupt";
 });
 
 const showForgotPassword = () => {

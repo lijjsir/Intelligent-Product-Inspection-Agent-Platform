@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-18",
+  "environment": "existing local business backend",
+  "synthetic_probe_only": true,
+  "business_data_sent": false,
+  "configurations_modified": false,
+  "retry_attempts": 1,
+  "max_tokens": 128,
+  "results": [
+    {"model": "deepseek-v4-pro-260425", "ok": true, "json_ok": true, "elapsed_seconds": 2.02, "total_tokens": 62},
+    {"model": "doubao-seed-2-0-lite-260215", "ok": true, "json_ok": true, "elapsed_seconds": 2.11, "total_tokens": 90},
+    {"model": "doubao-seed-2-1-lite-260915", "ok": true, "json_ok": true, "elapsed_seconds": 2.87, "total_tokens": 106}
+  ],
+  "limits": ["No business assessment accuracy claim", "No embedding or image understanding probe", "No remote deployment or configuration changes"]
+}

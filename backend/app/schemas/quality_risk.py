@@ -219,6 +219,11 @@ class QualityEventCreate(Strict):
     data_nature: Literal["observed", "inferred", "synthetic"] = "observed"
     ingestion_job_id: str | None = None
 
+    @field_validator("attachment_ids")
+    @classmethod
+    def canonical_attachment_ids(cls, values):
+        return list(dict.fromkeys(str(UUID(value)) for value in values))
+
     @field_validator("occurred_at")
     @classmethod
     def event_time_utc(cls, value):
@@ -236,6 +241,26 @@ class QualityEventCreate(Strict):
     @classmethod
     def canonical_reference(cls, value):
         return str(UUID(value)) if value else None
+
+
+class RecordObjectsUpdate(Strict):
+    enterprise_id: str | None = None
+    product_id: str | None = None
+    category_id: str | None = None
+    expected_version: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("enterprise_id", "product_id", "category_id")
+    @classmethod
+    def canonical_id(cls, value):
+        return str(UUID(value)) if value else None
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value):
+        if not value.strip():
+            raise ValueError("请填写关联依据")
+        return value.strip()
 
 
 class QualitySourceRecordResponse(Strict):
@@ -326,6 +351,8 @@ class RiskAnalyzeRequest(Strict):
 
 
 class RiskAssessmentResponse(Strict):
+    demo_workflow: dict | None = None
+    demo_validation: dict | None = None
     source_validation:dict=Field(default_factory=dict)
     effective_status:str|None=None
     display_no: str | None = None
@@ -355,7 +382,36 @@ class RiskAssessmentResponse(Strict):
     created_at: datetime | None = None
 
 
+class RiskAssessmentVersionResponse(Strict):
+    id: str
+    version: int
+    status: str
+    risk_level: str
+    created_at: datetime | None = None
+    reviewed_at: datetime | None = None
+
+
+class RiskWorkspaceResponse(Strict):
+    demo_context: dict | None = None
+    workflow_context: dict | None = None
+    case: RiskCaseResponse
+    records: list[QualitySourceRecordResponse]
+    unavailable_source_ids: list[str]
+    latest_assessment: RiskAssessmentResponse | None = None
+    assessment_versions: list[RiskAssessmentVersionResponse]
+
+
+class RiskSourcesAppend(Strict):
+    source_record_ids: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("source_record_ids")
+    @classmethod
+    def normalize_source_ids(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(str(UUID(value)) for value in values))
+
+
 class RiskReviewRequest(Strict):
+    assessment_id: str | None = None
     decision: Literal["accept", "request_evidence", "revise"]
     comment: str = Field(min_length=1, max_length=4000)
     risk_type: str | None = Field(default=None, max_length=128)

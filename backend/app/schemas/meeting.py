@@ -56,6 +56,10 @@ class MeetingBusinessContextTask(BaseModel):
 
 
 class MeetingBusinessContext(BaseModel):
+    risk_case_id: str | None = None
+    risk_assessment_id: str | None = None
+    risk_assessment_version: int | None = None
+    execution_mode: str | None = None
     task_ids: list[str] = []
     product_ids: list[str] = []
     batch_nos: list[str] = []

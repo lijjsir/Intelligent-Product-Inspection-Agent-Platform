@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import SupervisionAnalytics from "@/components/business/supervision/SupervisionAnalytics.vue";
-import SupervisionAgentRail from "@/components/business/supervision/SupervisionAgentRail.vue";
-import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
+import MarketMonitoring from "@/components/business/supervision/MarketMonitoring.vue";
+import { useAuthStore } from "@/stores/auth.store";
+const auth = useAuthStore();
 </script>
 <template>
   <main class="supervision-analytics-page">
-    <SupervisionModuleHeader
-      title="市场监控"
-      agent-name="市场监控 Agent"
-      tone="blue"
-      description="持续分析企业、产品、地区、市场分布、抽查覆盖与暴露量变化，识别值得优先关注的对象。"
-      principle="有分母才计算比率 · 数量变化不等于失效率"
+    <MarketMonitoring v-if="auth.hasPermission('quality_material_read_business')" />
+    <el-alert
+      v-else
+      title="原始资料监测目前向管理员和研判专家开放，请使用对应账号进入。"
+      type="info"
+      :closable="false"
     />
-    <SupervisionAgentRail class="agent-navigation" />
-    <SupervisionAnalytics />
+    <details class="legacy-stats">
+      <summary>已确认风险与抽查统计</summary>
+      <SupervisionAnalytics />
+    </details>
   </main>
 </template>
 
@@ -24,8 +27,14 @@ import SupervisionModuleHeader from "@/components/business/supervision/Supervisi
   padding: 18px 18px 40px;
 }
 
-.agent-navigation {
-  margin-top: 16px;
+.legacy-stats {
+  margin-top: 24px;
+  border-top: 1px solid var(--el-border-color-light);
+}
+.legacy-stats summary {
+  padding: 16px 0;
+  cursor: pointer;
+  font-size: 13px;
 }
 
 @media (max-width: 640px) {

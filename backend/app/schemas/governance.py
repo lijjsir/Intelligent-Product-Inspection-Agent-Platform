@@ -39,6 +39,7 @@ class FeedbackSourceType(str, Enum):
 
 
 class ReportType(str, Enum):
+    risk_assessment = "risk_assessment"
     single_task = "single_task"
     batch_summary = "batch_summary"
     quality_analysis = "quality_analysis"

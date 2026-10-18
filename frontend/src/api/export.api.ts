@@ -1,9 +1,5 @@
 import instance, { http } from "./http";
-import type {
-  ExportJob,
-  ExportJobCreatePayload,
-  ExportJobQuery,
-} from "@/types/governance.types";
+import type { ExportJob, ExportJobCreatePayload, ExportJobQuery } from "@/types/governance.types";
 import type { PagedResponse } from "@/types/common.types";
 
 export const exportApi = {
@@ -13,8 +9,8 @@ export const exportApi = {
   list(query: ExportJobQuery) {
     return http.get<PagedResponse<ExportJob>>("/v1/exports", { params: query });
   },
-  detail(id: string) {
-    return http.get<ExportJob>(`/v1/exports/${id}`);
+  detail(id: string, timeout = 60000) {
+    return http.get<ExportJob>(`/v1/exports/${id}`, { timeout });
   },
   remove(id: string) {
     return http.delete(`/v1/exports/${id}`);

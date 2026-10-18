@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.datetime import utcnow
@@ -59,7 +60,15 @@ class CollabService:
             participant_id=self._user_id,
             limit=limit,
         )
-        return await self._serialize_threads(rows)
+        visible = []
+        for row in rows:
+            if (getattr(row, "metadata_json", None) or {}).get("risk_collaboration_id"):
+                try:
+                    await self._ensure_user_participates(str(row.id))
+                except (ForbiddenError, NotFoundError):
+                    continue
+            visible.append(row)
+        return await self._serialize_threads(visible)
 
     async def list_targets(self, limit: int = 100) -> list[CollabTargetResponse]:
         users = await self._users.list_by_org_id(self._org_id)
@@ -166,6 +175,11 @@ class CollabService:
             message_ids = [str(message.id) for message, _, _ in action_rows]
             receipts = await self._repo.list_receipts(self._org_id, message_ids)
             for message, receipt, thread in action_rows:
+                if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id"):
+                    try:
+                        await self._ensure_user_participates(str(thread.id))
+                    except (ForbiddenError, NotFoundError):
+                        continue
                 message_receipts = receipts.get(str(message.id), [])
                 status = self._action_request_status(message, message_receipts)
                 initiated = str(message.sender_id) == self._user_id
@@ -322,6 +336,12 @@ class CollabService:
         self,
         request: CollabActionRequestCreateRequest,
     ) -> CollabWorkItemResponse:
+        if any((request.source_context or {}).get(k) for k in ("risk_case_id", "risk_assessment_id", "collaboration_id")):
+            raise ValidationError("研判事项与版本须通过事项内的同单位协同入口关联")
+        if request.target_type == "meeting_room":
+            from app.services.risk_collaboration_service import bound_id
+            if bound_id(await self._meetings.get_room(self._org_id, request.target_id)):
+                raise ValidationError("本会议的研判协同请求已固定，请进入原协同事项")
         thread = await self.create_thread(
             CollabThreadCreateRequest(
                 target_type=request.target_type,
@@ -409,6 +429,11 @@ class CollabService:
         if message is None:
             raise NotFoundError("collaboration message not found")
         thread = await self._ensure_user_participates(str(message.thread_id))
+        risk_bound = (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id")
+        if risk_bound:
+            from app.models.supervision import SupervisionRecord
+            await self._session.scalar(select(SupervisionRecord).where(SupervisionRecord.id == risk_bound,
+                SupervisionRecord.org_id == self._org_id).with_for_update())
         receipt = await self._repo.get_receipt_for_recipient(
             org_id=self._org_id,
             message_id=message_id,
@@ -424,6 +449,8 @@ class CollabService:
                 recipient_id=self._user_id,
                 delivered_at=utcnow(),
             )
+        if risk_bound:
+            await self._session.refresh(receipt, with_for_update=True)
         await self._ensure_meeting_room_action_available(thread, message, receipt, request.action_status)
         if message.message_type == "memory_card":
             if request.action_status == "rejected" and not str(request.decision_note or "").strip():
@@ -436,6 +463,12 @@ class CollabService:
             )
         previous_action_status = str(getattr(receipt, "action_status", "") or "pending")
         updated = await self._repo.update_receipt_action(receipt, request.action_status)
+        if risk_bound and previous_action_status != request.action_status:
+            metadata = dict(message.metadata_json or {})
+            metadata["risk_action_history"] = [*metadata.get("risk_action_history", []), {"action": request.action_status,
+                "actor_id": self._user_id, "at": utcnow().isoformat(), "note": request.decision_note or ""}]
+            metadata["risk_decision_note"] = request.decision_note or ""
+            message.metadata_json = metadata
         status_message = None
         if previous_action_status != request.action_status:
             status_message = await self._create_action_status_message(thread, message, updated)
@@ -463,6 +496,8 @@ class CollabService:
 
     async def delete_thread(self, thread_id: str) -> dict[str, str | bool]:
         thread = await self._ensure_user_participates(thread_id)
+        if (thread.metadata_json or {}).get("risk_collaboration_id"):
+            raise ValidationError("关联研判的协同记录须保留追溯，请使用归档")
         if str(thread.created_by) != self._user_id:
             raise ForbiddenError("only the thread owner can delete this collaboration record")
         await self._repo.soft_delete_thread(org_id=self._org_id, thread_id=str(thread.id))
@@ -475,6 +510,8 @@ class CollabService:
         if message is None:
             raise NotFoundError("collaboration message not found")
         thread = await self._ensure_user_participates(str(message.thread_id))
+        if (thread.metadata_json or {}).get("risk_collaboration_id") and message.message_type == "action_request":
+            raise ValidationError("固定版本的协同请求须保留追溯记录")
         is_sender = message.sender_type == "user" and message.sender_id == self._user_id
         is_owner = str(thread.created_by) == self._user_id
         if not (is_sender or is_owner):
@@ -614,6 +651,8 @@ class CollabService:
         status = self._action_request_status(message, receipts)
         can_handle = await self._can_handle_action_request(thread, message, receipt)
         allowed_actions = ["accepted", "rejected", "done"] if status == "pending" and can_handle else []
+        if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id") and status == "accepted" and can_handle:
+            allowed_actions = ["done"]
         attachments = await self._repo.list_message_attachments(self._org_id, [str(message.id)])
         source = await self._scope_descriptor(str(thread.source_type), str(thread.source_id))
         target = await self._scope_descriptor(str(thread.target_type), str(thread.target_id))
@@ -670,6 +709,7 @@ class CollabService:
             evidence=evidence,
             source_link=str(request_payload.get("source_link") or metadata.get("source_link") or "") or None,
             allowed_actions=allowed_actions,
+            decision_note=metadata.get("risk_decision_note"),
             decided_by=(str(acted_receipt.recipient_id) if acted_receipt is not None else None),
             decided_at=(acted_receipt.acted_at if acted_receipt is not None else None),
             history=history,
@@ -703,7 +743,8 @@ class CollabService:
     ) -> bool:
         if str(message.sender_id) == self._user_id or receipt is None:
             return False
-        if str(receipt.action_status or "pending") != "pending":
+        permitted_statuses = {"pending", "accepted"} if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id") else {"pending"}
+        if str(receipt.action_status or "pending") not in permitted_statuses:
             return False
         if str(thread.target_type) == "user":
             return str(thread.target_id) == self._user_id
@@ -1129,6 +1170,12 @@ class CollabService:
         )
         if participant is None:
             raise ForbiddenError("not a participant of this collaboration thread")
+        if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id"):
+            from app.services.risk_collaboration_service import check_room_access
+            room = await self._meetings.get_room(self._org_id, str(thread.target_id))
+            if not room:
+                raise ForbiddenError("关联研判的会议室已不可用")
+            await check_room_access(self._session, self._org_id, self._user_id, self._role, room)
         return thread
 
     async def _ensure_meeting_room_action_available(
@@ -1143,6 +1190,11 @@ class CollabService:
         if message.message_type not in {"memory_card", "action_request"}:
             return
         await self._ensure_meeting_room_action_host(str(thread.target_id))
+        if (getattr(thread, "metadata_json", None) or {}).get("risk_collaboration_id"):
+            if str(message.sender_id) == self._user_id:
+                raise ForbiddenError("发起人不能代替受邀专家处理本次协同请求")
+            if receipt.action_status == "accepted" and requested_action_status == "done":
+                return
         if receipt.action_status and receipt.action_status != "pending":
             if receipt.action_status == requested_action_status:
                 return

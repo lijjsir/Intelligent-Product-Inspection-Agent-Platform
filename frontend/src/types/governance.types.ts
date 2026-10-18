@@ -193,7 +193,7 @@ export interface FeedbackSummary {
   avg_resolution_hours: number | null;
 }
 
-export type ReportType = "single_task" | "batch_summary" | "quality_analysis" | "feedback_report" | "evidence_trace";
+export type ReportType = "single_task" | "batch_summary" | "quality_analysis" | "feedback_report" | "evidence_trace" | "risk_assessment";
 export type ExportFormat = "pdf" | "docx" | "xlsx" | "csv" | "json";
 export type ExportJobStatus = "pending" | "running" | "success" | "failed" | "expired";
 

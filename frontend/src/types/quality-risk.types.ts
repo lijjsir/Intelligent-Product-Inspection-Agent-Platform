@@ -78,8 +78,20 @@ export interface QualityProductionBatch {
 }
 
 export interface QualityProductLinks {
-  records: Array<{ id: string; display_no?: string | null; record_type: QualityRecordType; origin_label?: string | null; received_at: string }>;
-  tasks: Array<{ id: string; display_no?: string | null; status: string; has_result: boolean; created_at: string }>;
+  records: Array<{
+    id: string;
+    display_no?: string | null;
+    record_type: QualityRecordType;
+    origin_label?: string | null;
+    received_at: string;
+  }>;
+  tasks: Array<{
+    id: string;
+    display_no?: string | null;
+    status: string;
+    has_result: boolean;
+    created_at: string;
+  }>;
 }
 
 export interface QualityAttachment {
@@ -103,6 +115,7 @@ export interface LocationRef {
 }
 
 export interface QualitySourceRecord {
+  duplicate?: boolean;
   display_no?: string | null;
   id: string;
   source_id: string;
@@ -125,12 +138,42 @@ export interface QualitySourceRecord {
   created_by: string;
 }
 
+export interface IntakeReferenceOptions {
+  categories: Array<{ id: string; name: string }>;
+  products: Array<{
+    id: string;
+    name: string;
+    category_id: string;
+    brand?: string | null;
+    model?: string | null;
+  }>;
+  enterprises: Array<{ id: string; name: string }>;
+}
+
+export interface QualityRecordContext {
+  record: QualitySourceRecord;
+  objects: Record<
+    "enterprise" | "product" | "category",
+    { id: string | null; name: string | null; status: "linked" | "unlinked" | "unavailable" }
+  >;
+  source: { id: string; name: string | null; status: string };
+  attachments: QualityAttachment[];
+  unavailable_attachment_ids: string[];
+  related_cases: Array<{ id: string; code: string; title: string; status: string }>;
+}
+
 export interface RiskCaseV4 {
   display_no?: string | null;
   id: string;
   code: string;
   title: string;
-  scope_type: "category" | "enterprise" | "product" | "production_batch" | "individual_unit" | "mixed";
+  scope_type:
+    | "category"
+    | "enterprise"
+    | "product"
+    | "production_batch"
+    | "individual_unit"
+    | "mixed";
   scope: Record<string, any>;
   status: string;
   evidence_ids: string[];
@@ -142,8 +185,24 @@ export interface RiskCaseV4 {
 }
 
 export interface RiskAssessmentV4 {
-  source_validation?: {blockers:{code:string;message:string;evidence_id?:string}[];uncertainties:string[];checked_at?:string;boundary?:string};
-  effective_status?:string;
+  demo_workflow?: DemoRiskWorkflow | null;
+  demo_validation?: {
+    is_current: boolean;
+    blockers: { code: string; message: string }[];
+    boundary: string;
+    basis_hash: string;
+  } | null;
+  submitted_by?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  created_at?: string | null;
+  source_validation?: {
+    blockers: { code: string; message: string; evidence_id?: string }[];
+    uncertainties: string[];
+    checked_at?: string;
+    boundary?: string;
+  };
+  effective_status?: string;
   id: string;
   risk_case_id: string;
   version: number;
@@ -161,6 +220,67 @@ export interface RiskAssessmentV4 {
   policy_version?: string | null;
   status: string;
   review_comment?: string | null;
+}
+
+export interface RiskWorkflowContext {
+  enabled: boolean; execution_mode: "demo" | "business"; can_author: boolean; eligible: boolean;
+  assessment_id: string | null; basis_hash: string; blockers: Array<{ message: string }>; boundary: string;
+}
+
+export interface RiskWorkspace {
+  workflow_context?: RiskWorkflowContext | null;
+  demo_context?: DemoRiskContext | null;
+  case: RiskCaseV4;
+  records: QualitySourceRecord[];
+  unavailable_source_ids: string[];
+  latest_assessment: RiskAssessmentV4 | null;
+  assessment_versions: Array<{
+    id: string;
+    version: number;
+    status: string;
+    risk_level: string;
+    created_at?: string | null;
+    reviewed_at?: string | null;
+  }>;
+}
+
+export interface DemoRiskContent {
+  summary: string;
+  reasoning: string;
+  limitations: string;
+  risk_type: string | null;
+  risk_level: "unknown" | "low" | "medium" | "high" | "critical";
+  cited_record_ids: string[];
+  missing_inputs: string[];
+  recommendations: string[];
+}
+
+export interface DemoRiskWorkflow {
+  schema: string;
+  revision: number;
+  basis_hash: string;
+  author_name: string;
+  boundary: string;
+  submitted_at?: string;
+  content: DemoRiskContent;
+  events: Array<{
+    action: string;
+    actor_id: string;
+    actor_name: string;
+    at: string;
+    decision?: string;
+    comment?: string;
+    revision?: number;
+  }>;
+}
+
+export interface DemoRiskContext {
+  enabled: boolean;
+  execution_mode: "demo";
+  basis_hash: string;
+  blockers: { code: string; message: string }[];
+  boundary: string;
+  can_author: boolean;
 }
 
 export const RECORD_TYPE_LABELS: Record<QualityRecordType, string> = {

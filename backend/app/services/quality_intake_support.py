@@ -6,11 +6,13 @@ import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from openpyxl import load_workbook
-from sqlalchemy import String, exists, func, or_, select
+from sqlalchemy import String, and_, exists, func, or_, select
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from app.core.config import settings
 from app.core.permissions import has_permission, require_role
 from app.models.quality_risk import (
     QualityAttachment,
@@ -18,6 +20,8 @@ from app.models.quality_risk import (
     QualityIngestionJob,
     QualityRiskCase,
     QualitySourceRecord,
+    ProductCategory,
+    QualityProduct,
 )
 from app.models.supervision import SupervisionRecord
 from app.schemas.quality_risk import RECORD_TYPES, QualityEventCreate
@@ -39,6 +43,11 @@ def json_cell(value, default):
 
 
 class QualityIntakeMixin:
+    async def lock_demo_intake(self):
+        if settings.quality_demo_enabled:
+            from app.models.organization import Organization
+            await self.db.scalar(select(Organization.id).where(Organization.id == self.org_id).with_for_update())
+
     def require_intake(self, write=False):
         if write:
             require_role("quality_material_submit", self.current.role)
@@ -103,9 +112,16 @@ class QualityIntakeMixin:
         if not payload.attachment_ids and not any(v not in (None, "", [], {}) for v in payload.content.values()):
             raise ValidationError("请提供原始内容或附件")
         if payload.product_ref.category_id:
-            await self.category(payload.product_ref.category_id)
+            category = await self.category(payload.product_ref.category_id)
+            if not category.is_active:
+                raise ValidationError("所选产品类别已停用")
         if payload.product_ref.product_id:
             product = await self.product(payload.product_ref.product_id)
+            if not product.is_active:
+                raise ValidationError("所选产品已停用")
+            category = await self.category(product.category_id)
+            if not category.is_active:
+                raise ValidationError("产品所属类别已停用")
             if payload.product_ref.category_id and product.category_id != payload.product_ref.category_id:
                 raise ValidationError("产品不属于所选产品类别")
         if payload.product_ref.production_batch_id:
@@ -117,7 +133,7 @@ class QualityIntakeMixin:
         if payload.enterprise_ref.enterprise_id:
             enterprise = await self.db.scalar(select(SupervisionRecord.id).where(
                 SupervisionRecord.id == payload.enterprise_ref.enterprise_id, SupervisionRecord.org_id == self.org_id,
-                SupervisionRecord.kind == "enterprises", SupervisionRecord.status != "archived",
+                SupervisionRecord.kind == "enterprises", SupervisionRecord.status == "active",
             ).with_for_update(read=True))
             if not enterprise:
                 raise ValidationError("企业不属于当前组织或不可用")
@@ -125,8 +141,15 @@ class QualityIntakeMixin:
 
     async def create_event(self, payload: QualityEventCreate, *, import_job_id=None):
         self.require_intake(write=True)
+        if {"object_binding_version", "object_binding_history", "original_object_refs"} & payload.provenance.keys():
+            raise ValidationError("对象关联版本和历史由系统记录，请使用关联确认操作")
+        if settings.quality_demo_enabled:
+            payload = payload.model_copy(update={"data_nature": "synthetic", "provenance": {
+                **payload.provenance, "execution_mode": "demo",
+            }})
         if payload.ingestion_job_id and payload.ingestion_job_id != import_job_id:
             raise ValidationError("导入任务关联由系统生成，请通过导入确认提交")
+        await self.lock_demo_intake()
         source = await self.intake_source(payload.source_id, "file" if payload.ingestion_job_id else "manual")
         await self.validate_intake(payload)
         data = payload.model_dump(mode="json")
@@ -146,7 +169,19 @@ class QualityIntakeMixin:
             content_hash = digest(identity)
         except ValueError as exc:
             raise ValidationError("资料包含非法数值") from exc
-        candidates = select(QualitySourceRecord).where(QualitySourceRecord.org_id == self.org_id, QualitySourceRecord.source_id == source.id).with_for_update()
+        candidates = select(QualitySourceRecord).where(QualitySourceRecord.org_id == self.org_id)
+        if source.code in {"BUILTIN-MANUAL", "BUILTIN-FILE"} and (source.config or {}).get("builtin") and origin and payload.external_record_id:
+            # Built-in manual/file sources describe transport, not independent
+            # evidence origins. Only an explicit origin + external id permits
+            # cross-transport reuse; unknown origins remain separate.
+            from app.models.organization import Organization
+            await self.db.scalar(select(Organization.id).where(Organization.id == self.org_id).with_for_update())
+            builtin_ids = select(QualityDataSource.id).where(QualityDataSource.org_id == self.org_id,
+                QualityDataSource.code.in_(["BUILTIN-MANUAL", "BUILTIN-FILE"]))
+            candidates = candidates.where(QualitySourceRecord.source_id.in_(builtin_ids))
+        else:
+            candidates = candidates.where(QualitySourceRecord.source_id == source.id)
+        candidates = candidates.with_for_update()
         if payload.external_record_id:
             previous = list(await self.db.scalars(candidates.where(QualitySourceRecord.external_record_id == payload.external_record_id)))
             previous = [x for x in previous if cleaned(x.provenance.get("origin_label")) == origin and
@@ -155,6 +190,8 @@ class QualityIntakeMixin:
                 raise ConflictError("同一出处的外部编号已存在不同内容，请明确修订资料")
         existing = await self.db.scalar(candidates.where(QualitySourceRecord.content_hash == content_hash))
         if existing:
+            if existing.deleted_at is not None:
+                raise ConflictError("该资料已撤回，不能通过重复提交静默恢复")
             if existing.created_by != self.actor and not has_permission("quality_material_read_business", self.current.role):
                 await self.record(existing.id)
             await BusinessNumberService(self.db).attach([existing])
@@ -173,7 +210,7 @@ class QualityIntakeMixin:
         await self.materialize_evidence(row)
         return {**self.record_response(row), "duplicate": False}
 
-    async def list_records(self, *, page, size, record_type=None, record_types=None, keyword=None, product_id=None,
+    async def list_records(self, *, page, size, record_type=None, record_types=None, keyword=None, product_id=None, enterprise_id=None,
                            production_batch_ref=None, source_id=None, ingestion_job_id=None):
         self.require_intake()
         stmt = await self.scoped_records()
@@ -188,6 +225,11 @@ class QualityIntakeMixin:
                                   QualitySourceRecord.external_record_id.contains(keyword, autoescape=True)))
         if product_id:
             stmt = stmt.where(QualitySourceRecord.product_ref["product_id"].as_string() == product_id)
+        if enterprise_id:
+            # Read historical seeded references without rewriting original evidence.
+            stmt = stmt.where(or_(QualitySourceRecord.enterprise_ref["enterprise_id"].as_string() == enterprise_id,
+                                  and_(QualitySourceRecord.enterprise_ref["enterprise_id"].as_string().is_(None),
+                                       QualitySourceRecord.enterprise_ref["id"].as_string() == enterprise_id)))
         if production_batch_ref:
             stmt = stmt.where(QualitySourceRecord.product_ref["production_batch_ref"].as_string() == production_batch_ref)
         if source_id:
@@ -202,6 +244,164 @@ class QualityIntakeMixin:
     async def get_record(self, record_id):
         self.require_intake()
         return self.record_response(await self.record(record_id))
+
+    async def intake_references(self, keyword="", limit=50):
+        if not has_permission("quality_material_submit", self.current.role):
+            self.require_intake()
+        result = {}
+        for name, model in (("categories", ProductCategory), ("products", QualityProduct), ("enterprises", SupervisionRecord)):
+            stmt = select(model).where(model.org_id == self.org_id)
+            if name == "enterprises":
+                stmt = stmt.where(model.kind == "enterprises", model.status == "active")
+            else:
+                stmt = stmt.where(model.is_active.is_(True), model.deleted_at.is_(None))
+            if name == "products":
+                stmt = stmt.where(model.category_id.in_(select(ProductCategory.id).where(
+                    ProductCategory.org_id == self.org_id, ProductCategory.is_active.is_(True), ProductCategory.deleted_at.is_(None))))
+            if keyword:
+                stmt = stmt.where(or_(model.name.contains(keyword, autoescape=True), model.brand.contains(keyword, autoescape=True),
+                                      model.model.contains(keyword, autoescape=True)) if name == "products" else model.name.contains(keyword, autoescape=True))
+            rows = list(await self.db.scalars(stmt.order_by(model.name, model.id).limit(limit)))
+            result[name] = [
+                {"id": row.id, "name": row.name, **({"category_id": row.category_id, "brand": row.brand, "model": row.model}
+                                                       if name == "products" else {})}
+                for row in rows
+            ]
+        missing_categories = {item["category_id"] for item in result["products"]} - {item["id"] for item in result["categories"]}
+        if missing_categories:
+            categories = await self.db.scalars(select(ProductCategory).where(ProductCategory.org_id == self.org_id,
+                ProductCategory.id.in_(missing_categories), ProductCategory.is_active.is_(True), ProductCategory.deleted_at.is_(None)))
+            result["categories"].extend({"id": row.id, "name": row.name} for row in categories)
+        return result
+
+    async def record_context(self, record_id):
+        self.require_intake()
+        record = await self.record(record_id)
+
+        async def resolve(model, reference, *, enterprise=False):
+            if not reference:
+                return {"id": None, "name": None, "status": "unlinked"}
+            try:
+                canonical = str(UUID(str(reference)))
+            except ValueError:
+                return {"id": reference, "name": None, "status": "unavailable"}
+            stmt = select(model).where(model.id == canonical, model.org_id == self.org_id)
+            if enterprise:
+                stmt = stmt.where(model.kind == "enterprises")
+            else:
+                stmt = stmt.where(model.deleted_at.is_(None))
+            row = await self.db.scalar(stmt)
+            if not row:
+                return {"id": canonical, "name": None, "status": "unavailable"}
+            active = row.status == "active" if enterprise else row.is_active
+            return {"id": canonical, "name": row.name, "status": "linked" if active else "unavailable"}
+
+        product = await resolve(QualityProduct, record.product_ref.get("product_id"))
+        category_id = record.product_ref.get("category_id")
+        if not category_id and product["status"] == "linked":
+            current_product = await self.db.get(QualityProduct, product["id"])
+            category_id = current_product.category_id
+        enterprise = await resolve(SupervisionRecord, record.enterprise_ref.get("enterprise_id") or record.enterprise_ref.get("id"), enterprise=True)
+        source = await self.db.scalar(select(QualityDataSource).where(QualityDataSource.id == record.source_id,
+            QualityDataSource.org_id == self.org_id, QualityDataSource.deleted_at.is_(None)))
+        attachments, unavailable = [], []
+        for attachment_id in dict.fromkeys(record.attachment_ids or []):
+            try:
+                attachment_id = str(UUID(str(attachment_id)))
+            except ValueError:
+                unavailable.append(str(attachment_id))
+                continue
+            try:
+                attachments.append(self.attachment_response(await self.accessible_attachment(attachment_id)))
+            except NotFoundError:
+                unavailable.append(attachment_id)
+        related = select(QualityRiskCase).where(QualityRiskCase.org_id == self.org_id, QualityRiskCase.deleted_at.is_(None),
+            QualityRiskCase.source_record_ids.cast(String).contains(f'"{record.id}"', autoescape=True))
+        if not has_permission("quality_material_read_business", self.current.role):
+            related = related.where(or_(QualityRiskCase.created_by == self.actor, QualityRiskCase.assigned_to == self.actor))
+        can_list_cases = has_permission("quality", self.current.role) and str(self.current.role) in {"admin", "user", "expert", "platform_operator"}
+        cases = list(await self.db.scalars(related.order_by(QualityRiskCase.created_at.desc(), QualityRiskCase.id).limit(50))) if can_list_cases else []
+        return {"record": self.record_response(record), "objects": {"enterprise": enterprise, "product": product,
+                "category": await resolve(ProductCategory, category_id)},
+            "source": {"id": record.source_id, "name": source.name if source else None,
+                       "status": "active" if source and source.status == "active" else "unavailable"},
+            "attachments": attachments, "unavailable_attachment_ids": unavailable,
+            "related_cases": [{"id": row.id, "code": row.code, "title": row.title, "status": row.status} for row in cases]}
+
+    async def update_record_objects(self, record_id, payload):
+        self.require_intake(write=True)
+        await self.lock_demo_intake()
+        row = await self.db.scalar((await self.scoped_records()).where(QualitySourceRecord.id == record_id)
+                                   .with_for_update().execution_options(populate_existing=True))
+        if not row:
+            raise NotFoundError("来源记录不存在或无权访问")
+        if row.created_by != self.actor and not has_permission("quality_material_read_business", self.current.role):
+            raise ForbiddenError("只能确认本人提交资料的对象关联")
+        provenance = dict(row.provenance or {})
+        version = provenance.get("object_binding_version", 0)
+        if not isinstance(version, int) or payload.expected_version != version:
+            raise ConflictError("资料关联版本已变化，请刷新后重新核对")
+        check = QualityEventCreate(record_type=row.record_type, content={"binding_validation": True},
+            enterprise_ref={"enterprise_id": payload.enterprise_id},
+            product_ref={"product_id": payload.product_id, "category_id": payload.category_id})
+        await self.validate_intake(check)
+        product_ref, enterprise_ref = dict(row.product_ref or {}), dict(row.enterprise_ref or {})
+        if product_ref.get("product_id") != payload.product_id:
+            product_ref.pop("production_batch_id", None)
+        for name, value in (("product_id", payload.product_id), ("category_id", payload.category_id)):
+            if value:
+                product_ref[name] = value
+            else:
+                product_ref.pop(name, None)
+        if payload.product_id and not payload.category_id:
+            product_ref["category_id"] = (await self.product(payload.product_id)).category_id
+        enterprise_ref.pop("id", None)  # Only the original snapshot retains the legacy alias.
+        if payload.enterprise_id:
+            enterprise_ref["enterprise_id"] = payload.enterprise_id
+        else:
+            enterprise_ref.pop("enterprise_id", None)
+        if product_ref == row.product_ref and enterprise_ref == row.enterprise_ref:
+            return self.record_response(row)
+        original = {"product_ref": dict(row.product_ref or {}), "enterprise_ref": dict(row.enterprise_ref or {})}
+        from app.models.user import User
+        actor = await self.db.scalar(select(User).where(User.id == self.actor, User.org_id == self.org_id))
+        previous = provenance.get("object_binding_history", [])
+        if not isinstance(previous, list):
+            raise ConflictError("资料关联历史异常，请核对后再修改")
+        async def labels(product, enterprise):
+            result = {}
+            for name, model, reference in (("enterprise", SupervisionRecord, enterprise.get("enterprise_id") or enterprise.get("id")),
+                                           ("product", QualityProduct, product.get("product_id")),
+                                           ("category", ProductCategory, product.get("category_id"))):
+                result[name] = None
+                if not reference:
+                    continue
+                try:
+                    reference = str(UUID(str(reference)))
+                except ValueError:
+                    continue
+                stmt = select(model.name).where(model.id == reference, model.org_id == self.org_id)
+                stmt = stmt.where(model.kind == "enterprises") if name == "enterprise" else stmt.where(model.deleted_at.is_(None))
+                result[name] = await self.db.scalar(stmt)
+            return result
+        before_labels = await labels(original["product_ref"], original["enterprise_ref"])
+        after_labels = await labels(product_ref, enterprise_ref)
+        provenance.setdefault("original_object_refs", original)
+        provenance["object_binding_version"] = version + 1
+        provenance["object_binding_history"] = [*previous, {"version": version + 1, "actor_id": self.actor,
+            "actor_name": actor.username if actor else None, "reason": payload.reason,
+            "confirmed_at": datetime.utcnow().isoformat(), "before": original, "before_labels": before_labels, "after_labels": after_labels,
+            "after": {"product_ref": product_ref, "enterprise_ref": enterprise_ref}}]
+        row.product_ref, row.enterprise_ref, row.provenance = product_ref, enterprise_ref, provenance
+        # Keep the original submission fingerprint, text, time, attachments and evidence ids.
+        # The changed references/provenance alter record_definition, invalidating old risk snapshots.
+        cases = list(await self.db.scalars(select(QualityRiskCase).where(QualityRiskCase.org_id == self.org_id,
+            QualityRiskCase.deleted_at.is_(None), QualityRiskCase.source_record_ids.cast(String).contains(f'"{row.id}"', autoescape=True)).with_for_update()))
+        for case in cases:
+            if case.status in {"risk_assessed", "awaiting_review", "demo_submitted", "demo_reviewed", "demo_draft"}:
+                case.status = "awaiting_evidence"
+        await self.flush_and_refresh(row)
+        return self.record_response(row)
 
     async def record(self, record_id):
         row = await self.db.scalar((await self.scoped_records()).where(QualitySourceRecord.id == record_id))
@@ -230,18 +430,49 @@ class QualityIntakeMixin:
         data = await file.read(50*1024*1024+1)
         if not data or len(data) > 50*1024*1024:
             raise ValidationError("附件不能为空且不能超过50MB")
-        name = Path(file.filename or "").name
+        name = Path((file.filename or "").replace("\\", "/")).name
         allowed = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".csv", ".xlsx", ".json"}
         if Path(name).suffix.lower() not in allowed:
             raise ValidationError("首版附件支持PDF、图片、文本、CSV、XLSX和JSON")
         checksum = hashlib.sha256(data).hexdigest()
+        existing = await self.db.scalar(select(QualityAttachment).where(
+            QualityAttachment.org_id == self.org_id, QualityAttachment.uploaded_by == self.actor,
+            QualityAttachment.sha256 == checksum, QualityAttachment.file_name == name,
+            QualityAttachment.deleted_at.is_(None)).order_by(QualityAttachment.created_at, QualityAttachment.id).limit(1))
+        if existing:
+            exists = getattr(self.storage, "object_exists", None)
+            if callable(exists) and not exists(bucket=existing.bucket, object_key=existing.object_key):
+                # An active record may recover identical missing bytes. A revoked
+                # record never reaches this branch and is never restored.
+                self.storage.put_bytes(bucket=existing.bucket, object_key=existing.object_key, data=data, content_type=existing.mime_type)
+            return self.attachment_response(existing)
+        attachment_id = str(uuid5(NAMESPACE_URL, f"piap-intake-attachment-v1:{self.org_id}:{self.actor}:{checksum}:{name}"))
+        tombstone = await self.db.scalar(select(QualityAttachment.id).where(
+            QualityAttachment.org_id == self.org_id, QualityAttachment.uploaded_by == self.actor,
+            QualityAttachment.sha256 == checksum, QualityAttachment.file_name == name,
+            QualityAttachment.deleted_at.is_not(None)).limit(1))
+        if tombstone:
+            raise ConflictError("相同附件已撤回，不能静默恢复；请提交明确修订后的文件")
         # Include the uploader so two private uploads never share a public object key.
-        key = f"quality-data/{self.org_id}/{self.actor}/{checksum}-{name}"
-        stored = self.storage.put_bytes(bucket="quality-data", object_key=key, data=data, content_type=file.content_type)
-        row = QualityAttachment(org_id=self.org_id, file_name=name, mime_type=file.content_type or "application/octet-stream",
-                                size_bytes=len(data), sha256=checksum, bucket=str(stored.get("bucket") or "quality-data"),
-                                object_key=str(stored.get("object_key") or key), uploaded_by=self.actor)
-        self.db.add(row)
+        prefix = "quality-demo" if settings.quality_demo_enabled else "quality-data"
+        bucket = "quality-demo-business" if settings.quality_demo_enabled else "quality-data"
+        key = f"{prefix}/{self.org_id}/{self.actor}/{checksum}-{name}"
+        stored = self.storage.put_bytes(bucket=bucket, object_key=key, data=data, content_type=file.content_type)
+        values = {"id": attachment_id, "org_id": self.org_id, "file_name": name, "mime_type": file.content_type or "application/octet-stream",
+                  "size_bytes": len(data), "sha256": checksum, "bucket": str(stored.get("bucket") or bucket),
+                  "object_key": str(stored.get("object_key") or key), "uploaded_by": self.actor}
+        if self.db.get_bind().dialect.name == "mysql":
+            from sqlalchemy.dialects.mysql import insert
+            statement = insert(QualityAttachment).values(**values)
+            statement = statement.on_duplicate_key_update(id=statement.inserted.id)
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+            statement = insert(QualityAttachment).values(**values).on_conflict_do_nothing(index_elements=["id"])
+        await self.db.execute(statement)
+        row = await self.db.scalar(select(QualityAttachment).where(QualityAttachment.id == attachment_id)
+                                   .with_for_update().execution_options(populate_existing=True))
+        if row.deleted_at is not None:
+            raise ConflictError("相同附件已撤回，不能静默恢复")
         await self.flush_and_refresh(row)
         return self.attachment_response(row)
 
@@ -291,6 +522,10 @@ class QualityIntakeMixin:
                 raw["origin_label"] = cleaned(mapped.get("origin_label")) or origin_label
                 raw["provenance"] = {**raw["provenance"], "import_row": location, "original_row": row}
                 payload = QualityEventCreate.model_validate(raw)
+                if settings.quality_demo_enabled:
+                    payload = payload.model_copy(update={"data_nature": "synthetic", "provenance": {
+                        **payload.provenance, "execution_mode": "demo",
+                    }})
                 await self.validate_intake(payload)
                 normalized.append(payload.model_dump(mode="json"))
             except (TypeError, ValueError, ValidationError, NotFoundError) as exc:

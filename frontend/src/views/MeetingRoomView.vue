@@ -9,6 +9,7 @@ import { feedbackApi } from "@/api/feedback.api";
 import ImageAttachmentCard from "@/components/common/ImageAttachmentCard.vue";
 import ImagePreviewDialog from "@/components/common/ImagePreviewDialog.vue";
 import KnowledgeSubmitDialog from '@/components/business/KnowledgeSubmitDialog.vue';
+import RiskMeetingContextBanner from "@/components/business/quality-risk/RiskMeetingContextBanner.vue";
 import MessageActionBar from "@/components/common/MessageActionBar.vue";
 import { useAuthStore } from "@/stores/auth.store";
 import { useMeetingStore } from "@/stores/meeting.store";
@@ -22,6 +23,7 @@ const auth = useAuthStore();
 const store = useMeetingStore();
 const userStore = useUserStore();
 const router = useRouter();
+const riskCollaborationId = computed(() => String(store.activeRoom?.memory_policy?.risk_collaboration_id || ""));
 const knowledgeSubmitOpen=ref(false);const knowledgeMessageId=ref('');
 const MESSAGE_RECALL_WINDOW_MS = 2 * 60 * 1000;
 
@@ -138,6 +140,7 @@ const leftPanelWidth = ref(260);
 const rightPanelWidth = ref(360);
 const leftPanelCollapsed = ref(false);
 const rightPanelCollapsed = ref(false);
+watch(riskCollaborationId, id => { if (id) { workspaceSection.value = "live"; leftPanelCollapsed.value = true; rightPanelCollapsed.value = true; } }, { immediate: true });
 const resizingPanel = ref<"" | "left" | "right">("");
 let stopResizeListeners: (() => void) | null = null;
 let stopPrivateWindowListeners: (() => void) | null = null;
@@ -371,6 +374,7 @@ const hostMember = computed(() => {
 });
 const visibleMemberCount = computed(() => store.members.length || store.activeRoom?.member_count || 0);
 const canManageRoom = computed(() => {
+  if (riskCollaborationId.value) return false;
   if (!store.activeRoom) return false;
   if (store.activeRoom.created_by === auth.userId) return true;
   return store.members.some((member) => member.user_id === auth.userId && member.role === "host");
@@ -3696,6 +3700,7 @@ onBeforeUnmount(() => {
       'is-resizing-right': resizingPanel === 'right',
       'is-workspace-layout': meetingLayoutMode === 'workspace',
       'is-workspace-focus': meetingLayoutMode === 'workspace',
+      'is-risk-collaboration': !!riskCollaborationId,
     }"
     :style="meetingLayoutStyle"
   >
@@ -3841,16 +3846,17 @@ onBeforeUnmount(() => {
           <div v-if="store.activeRoom" class="room-submeta">
             <span v-if="hostMember" class="host-pill">主持人{{ hostMember.username }}</span>
             <span class="status-pill" :class="`status-${store.activeRoom.status}`">{{ roomStatusLabel }}</span>
-            <span class="auto-mode-pill" :class="`auto-mode-${autoParticipationMode}`">
+            <span v-if="!riskCollaborationId" class="auto-mode-pill" :class="`auto-mode-${autoParticipationMode}`">
               Agent {{ autoParticipationModeLabel(autoParticipationMode) }}
             </span>
             <button
               type="button"
               class="discussion-object-entry"
+              :disabled="!!riskCollaborationId"
               :class="{ 'discussion-object-entry-ambiguous': visibleBusinessObjects.some((item) => item.status === 'candidate') }"
               @click="businessObjectDrawerVisible = true"
             >
-              讨论对象 {{ visibleBusinessObjects.length }}
+              {{ riskCollaborationId ? '已固定研判版本' : '讨论对象 ' + visibleBusinessObjects.length }}
             </button>
           </div>
         </div>
@@ -3964,7 +3970,7 @@ onBeforeUnmount(() => {
           </el-popover>
 
           </div>
-          <div v-if="canManageRoom" class="room-toolbar-admin">
+          <div v-if="canManageRoom && !riskCollaborationId" class="room-toolbar-admin">
             <el-popover placement="bottom-end" :width="344" trigger="click">
               <template #reference>
                 <el-button size="small" :icon="Setting">
@@ -4008,8 +4014,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <p v-else class="room-hint">创建或加入会议后开始聊天，也可以点 @会议Agent。</p>
+        <RiskMeetingContextBanner v-if="riskCollaborationId" :collaboration-id="riskCollaborationId" />
       </header>
-
       <nav v-if="meetingLayoutMode === 'workspace' && store.activeRoom" class="meeting-workspace-nav" aria-label="会议工作区">
         <div class="meeting-workspace-label">
           <strong>会议工作区</strong>
@@ -4029,6 +4035,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             role="tab"
+            v-if="!riskCollaborationId"
             :aria-selected="workspaceSection === 'ai'"
             :class="{ 'meeting-workspace-tab-active': workspaceSection === 'ai' }"
             @click="openWorkspaceSection('ai')"
@@ -4063,6 +4070,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             role="tab"
+            v-if="!riskCollaborationId"
             :aria-selected="workspaceSection === 'memory'"
             :class="{ 'meeting-workspace-tab-active': workspaceSection === 'memory' }"
             @click="openWorkspaceSection('memory')"
@@ -4074,6 +4082,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             role="tab"
+            v-if="!riskCollaborationId"
             :aria-selected="workspaceSection === 'tasks'"
             :class="{ 'meeting-workspace-tab-active': workspaceSection === 'tasks' }"
             @click="openWorkspaceSection('tasks')"
@@ -4610,7 +4619,7 @@ onBeforeUnmount(() => {
           <div v-if="!messageMetadata(message).recalled_at" class="message-toolbar">
             <MessageActionBar
               :reaction="store.messageReactions[message.id] || ''"
-              show-ask-agent
+              :show-ask-agent="!riskCollaborationId"
               :show-share="false"
               @copy="copyToClipboard(copyMessageContent(message), '消息已复制')"
               @ask-agent="askAgentAboutMessage(message)"
@@ -4625,7 +4634,7 @@ onBeforeUnmount(() => {
             <el-tooltip v-if="canQuoteMessage(message)" content="引用" placement="bottom">
               <el-button text size="small" @click="quoteMessage(message)">引用</el-button>
             </el-tooltip>
-            <el-button v-if="auth.hasPermission('knowledge_candidate_submit')&&canQuoteMessage(message)" text size="small" @click="knowledgeMessageId=message.id;knowledgeSubmitOpen=true">提出知识候选</el-button>
+            <el-button v-if="!riskCollaborationId&&auth.hasPermission('knowledge_candidate_submit')&&canQuoteMessage(message)" text size="small" @click="knowledgeMessageId=message.id;knowledgeSubmitOpen=true">提出知识候选</el-button>
           </div>
           <div
             v-for="reply in anchoredAgentReplies(message.id)"
@@ -4666,7 +4675,7 @@ onBeforeUnmount(() => {
             <CopyDocument aria-hidden="true" />
             <span>复制</span>
           </button>
-          <button type="button" @click="askAgentAboutSelection">
+          <button v-if="!riskCollaborationId" type="button" @click="askAgentAboutSelection">
             <MagicStick aria-hidden="true" />
             <span>问会议Agent</span>
           </button>
@@ -4769,6 +4778,7 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="sidecar-tab"
+            v-if="!riskCollaborationId"
             :class="{ 'sidecar-tab-active': rightPanelTab === 'ai' }"
             :aria-selected="rightPanelTab === 'ai'"
             :aria-label="autoParticipationUnreadCount ? `AI，${autoParticipationUnreadCount} 条主动介入未读` : 'AI'"
@@ -4798,7 +4808,7 @@ onBeforeUnmount(() => {
             记忆与协作          </button>
         </div>
 
-        <section v-show="rightPanelTab === 'ai'" class="agent-sidecar sidecar-pane">
+        <section v-show="rightPanelTab === 'ai' && !riskCollaborationId" class="agent-sidecar sidecar-pane">
           <div class="agent-sidecar-head">
             <div>
               <h2>会议Agent</h2>
@@ -11358,6 +11368,38 @@ label span {
 
   .private-composer-actions {
     justify-content: end;
+  }
+}
+@media (max-width: 700px) {
+  .meeting-page.is-risk-collaboration.is-workspace-focus {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    grid-template-rows: auto auto auto minmax(210px, auto) auto;
+  }
+  .meeting-page.is-risk-collaboration .meeting-sidebar.panel-collapsed {
+    min-height: 52px;
+    height: 52px;
+    max-height: 52px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .meeting-page.is-risk-collaboration .meeting-sidebar.panel-collapsed .panel-collapsed-label {
+    writing-mode: horizontal-tb;
+    letter-spacing: normal;
+    white-space: nowrap;
+    width: auto;
+    max-width: none;
+  }
+  .meeting-page.is-risk-collaboration .meeting-sidebar.panel-collapsed .panel-content {
+    display: none;
+  }
+  .meeting-page.is-risk-collaboration .room-header {
+    min-height: max-content;
+  }
+  .meeting-page.is-risk-collaboration .room-header-right {
+    display: none;
   }
 }
 </style>

@@ -71,7 +71,7 @@ async def test_expert_export_history_remains_organization_scoped():
     service = ExportJobService(None, "org-1", actor_user_id="expert-1", actor_role="expert")
     service._repo.list_jobs = AsyncMock(return_value=(0, []))
     await service.list_jobs(1, 20)
-    service._repo.list_jobs.assert_awaited_once_with("org-1", 1, 20, None, None, actor_id=None)
+    service._repo.list_jobs.assert_awaited_once_with("org-1", 1, 20, None, None, actor_id=None, risk_actor_id="expert-1")
 
 
 @pytest.mark.asyncio

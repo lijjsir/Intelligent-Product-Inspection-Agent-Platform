@@ -30,6 +30,9 @@ STATUSES={'accepted':'已独立确认','draft':'待复核','rejected':'已驳回
 
 def report_sections(data):
     """PDF and Word use the same sections and wording."""
+    if data.get('risk_report'):
+        from app.services.report_renderers.risk_report_content import risk_report_sections
+        return risk_report_sections(data['risk_report'])
     bundle=data.get('bundle')
     if not bundle:
         old=data.get('result') or {}

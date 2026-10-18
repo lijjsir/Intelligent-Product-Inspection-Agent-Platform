@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -71,6 +72,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="PIAP_", case_sensitive=False, extra="ignore")
 
     app_env: str = "dev"
+    quality_demo_enabled: bool = False
     jwt_private_key: str = ""
     jwt_public_key: str = ""
     jwt_issuer: str = "piap"
@@ -221,6 +223,14 @@ class Settings(BaseSettings):
         return normalized
 
     @model_validator(mode="after")
+    def _validate_quality_demo_isolation(self):
+        if self.quality_demo_enabled:
+            from app.core.quality_demo import validate_demo_settings
+
+            validate_demo_settings(self)
+        return self
+
+    @model_validator(mode="after")
     def _ensure_local_jwt_keys(self):
         private_missing = _is_placeholder_private_key(self.jwt_private_key)
         public_missing = _is_placeholder_public_key(self.jwt_public_key)
@@ -253,4 +263,6 @@ class Settings(BaseSettings):
         return text if text and text.lower() not in {"none", "null", "undefined"} else None
 
 
-settings = Settings()
+# An explicitly empty PIAP_ENV_FILE prevents the demo process from reading the
+# developer's normal .env. The default remains unchanged for existing services.
+settings = Settings(_env_file=os.environ.get("PIAP_ENV_FILE", ".env") or None)

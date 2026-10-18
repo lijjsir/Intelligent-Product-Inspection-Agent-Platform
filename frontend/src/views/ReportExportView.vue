@@ -76,6 +76,7 @@ const statusMap: Record<ExportJobStatus, { label: string; type: "" | "warning" |
 };
 
 const reportTypeLabels: Record<ReportType, string> = {
+  risk_assessment: "演示研判报告",
   single_task: "单任务报告",
   batch_summary: "批量汇总",
   quality_analysis: "质量分析",

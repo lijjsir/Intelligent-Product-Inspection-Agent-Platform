@@ -133,6 +133,10 @@ export interface MeetingBusinessContextTask {
 }
 
 export interface MeetingBusinessContext {
+  risk_case_id?: string | null;
+  risk_assessment_id?: string | null;
+  risk_assessment_version?: number | null;
+  execution_mode?: string | null;
   task_ids: string[];
   product_ids: string[];
   batch_nos: string[];

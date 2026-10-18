@@ -4,8 +4,12 @@ import { useRouter } from "vue-router";
 import { ArrowRight, RefreshRight } from "@element-plus/icons-vue";
 import { supervisionApi } from "@/api/supervision.api";
 import { STATUS_LABELS, type SupervisionRecord } from "@/types/supervision.types";
-import SupervisionAgentRail from "@/components/business/supervision/SupervisionAgentRail.vue";
 import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
+import DemoLabWorkspace from "@/components/business/supervision/DemoLabWorkspace.vue";
+import { useAuthStore } from "@/stores/auth.store";
+import { useRuntimeContext } from "@/composables/useRuntimeContext";
+const runtime=useRuntimeContext();
+const auth = useAuthStore();
 
 const router = useRouter();
 const loading = ref(false);
@@ -34,6 +38,8 @@ const metrics = computed(() => ({
 }));
 
 async function load() {
+  await runtime.load();
+  if(runtime.context.value?.execution_mode==='demo' || !runtime.context.value)return;
   loading.value = true;
   try {
     const [sessionResult, deviceResult] = await Promise.all([
@@ -66,7 +72,10 @@ onMounted(load);
 </script>
 
 <template>
-  <main class="laboratory-page" v-loading="loading">
+  <el-alert v-if="!runtime.context.value" title="正在核对运行环境，请稍候或刷新重试。" type="info" :closable="false" />
+  <DemoLabWorkspace v-else-if="runtime.context.value.execution_mode==='demo'" />
+  <main v-else class="laboratory-page" v-loading="loading">
+    <details v-if="runtime.context.value.execution_mode === 'business' && auth.role === 'expert'" style="margin-bottom:24px"><summary style="cursor:pointer; padding:16px">风险事项的可选验证与资料回流</summary><DemoLabWorkspace /></details>
     <SupervisionModuleHeader
       title="实验室检测"
       agent-name="实验室检测 Agent"
@@ -79,7 +88,8 @@ onMounted(load);
       </template>
     </SupervisionModuleHeader>
 
-    <SupervisionAgentRail class="agent-navigation" />
+
+    <p class="task-relationship">检测任务记录具体工作；实验室按批次组织样品、设备与测量，检测结果保存在关联任务中。</p>
 
     <section class="device-loop" aria-label="模型与设备闭环">
       <div><span>01</span><strong>设备采集</strong><small>接收测量与时序事件</small></div>
@@ -176,6 +186,7 @@ onMounted(load);
 </template>
 
 <style scoped>
+.task-relationship { color: #52677d; line-height: 1.7; margin: 18px 0; }
 .laboratory-page {
   max-width: 1520px;
   margin: 0 auto;
