@@ -31,6 +31,7 @@ describe("role-owned menus", () => {
     const auth = useAuthStore(); auth.token = 'session'; auth.role = 'expert'; auth.roles = ['expert'];
     auth.effectivePermissions = ['chat'];
     expect(auth.resolveDefaultRoute()).toBe('/app/chat');
-    expect(useMenu().menu.value.some(item => item.title === '质监工作台')).toBe(false);
+    const paths = useMenu().menu.value.flatMap(item => 'items' in item ? item.items.map(child => child.path) : [item.path]);
+    expect(paths).not.toContain('/app/workbench');
   });
 });

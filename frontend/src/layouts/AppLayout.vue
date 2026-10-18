@@ -17,7 +17,6 @@
       </div>
 
       <nav class="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-        <button v-if="isExpertChat" type="button" class="expert-navigation-toggle" :aria-expanded="expertNavigationExpanded" @click="expertNavigationExpanded=!expertNavigationExpanded"><Menu aria-hidden="true" /><span>{{ expertNavigationExpanded ? '收起平台功能' : '展开平台功能' }}</span><ArrowRight :class="{expanded:expertNavigationExpanded}" /></button>
         <template v-for="entry in navigationMenu" :key="entry.title">
           <div v-if="isMenuGroup(entry)" class="nav-group">
             <button
@@ -230,12 +229,10 @@ const navigation = useNavigationStore();
 
 const { menu, primaryRole } = useMenu();
 const isOrdinaryUser = computed(() => primaryRole.value === ROLE_USER);
-const expertNavigationExpanded = ref(false);
 const isExpertChat = computed(() => primaryRole.value===ROLE_EXPERT && showChatControls.value);
 const usesChatSidebar = computed(() => canChat.value && (isOrdinaryUser.value || isExpertChat.value));
 const navigationMenu = computed(() => {
   const entries = usesChatSidebar.value ? menu.value.filter((entry) => isMenuGroup(entry) || entry.path !== '/app/profile') : menu.value;
-  if (isExpertChat.value && !expertNavigationExpanded.value) return entries.filter((entry) => !isMenuGroup(entry) && entry.path==='/app/chat');
   return entries;
 });
 const searchDialogVisible = ref(false);
@@ -489,12 +486,6 @@ function logout() {
 
 <style scoped>
 .user-conversations { margin-top: 20px; border-top: 1px solid #29435e; padding-top: 17px; }
-.expert-navigation-toggle { display:flex; align-items:center; gap:8px; padding:9px 10px; margin-bottom:3px; border:0; border-radius:8px; background:transparent; color:#8eabc9; font:inherit; font-size:12px; cursor:pointer; }
-.expert-navigation-toggle:hover { background:#183654; color:#d2e2f5; }
-.expert-navigation-toggle svg { width:15px; height:15px; flex:none; }
-.expert-navigation-toggle svg:last-child { margin-left:auto; width:12px; height:12px; transition:transform 150ms; }
-.expert-navigation-toggle svg.expanded { transform:rotate(90deg); }
-.expert-navigation-toggle:focus-visible { outline:2px solid #62a6ef; outline-offset:1px; }
 .new-conversation { width: 100%; justify-content: flex-start; margin-bottom: 14px; background: transparent !important; border-color: #2c4866 !important; color: #dbe9fb !important; }
 .conversation-search { display: flex; align-items: center; gap: 8px; color: #8eabc9; padding: 9px; border:0; background:transparent; font:inherit; font-size:12px; cursor:pointer; width:100%; border-radius:8px; }
 .conversation-search:hover { background:#183654; color:#c9dbf0; }

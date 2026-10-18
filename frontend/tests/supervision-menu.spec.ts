@@ -23,7 +23,7 @@ describe("supervision role boundaries and business form submission", () => {
     const workbench = appRoutes.find((r) => r.name === "app-supervision-workbench");
     expect(workbench?.meta.roles).toEqual(["expert"]);
   });
-  it("keeps the six business modules and groups laboratory work, tasks and results", () => {
+  it("separates overview, quality analysis and independent supporting modules", () => {
     setActivePinia(createPinia());
     const auth = useAuthStore();
     auth.role = "expert";
@@ -31,19 +31,16 @@ describe("supervision role boundaries and business form submission", () => {
     const { menu } = useMenu();
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
+      "质监工作台",
       "数据采集",
       "市场监控",
       "风险研判",
       "监督抽查",
-      "协同中心",
-      "报告中心",
     ]);
-    expect(menu.value.map(item => item.title)).toEqual(["质监工作台", "质量监督", "实验室检测", "标准与知识", "AI 对话", "个人设置"]);
-    expect(menu.value.some((item) => item.title === "质监工作台" && !("items" in item))).toBe(true);
-    const taskResult = menu.value.find((item) => "items" in item && item.title === "实验室检测");
-    expect(
-      taskResult && "items" in taskResult ? taskResult.items.map((item) => item.title) : [],
-    ).toEqual(["实验室工作台", "检测任务", "检测结果"]);
+    expect(menu.value.map(item => item.title)).toEqual(["AI 对话", "质量监督", "实验室检测", "检测任务", "检测结果", "协同中心", "报告中心", "标准与知识", "个人设置"]);
+    for (const title of ['实验室检测','检测任务','检测结果','协同中心','报告中心']) {
+      expect(menu.value.some(item => item.title === title && !('items' in item))).toBe(true);
+    }
     const resources = menu.value.find(item => 'items' in item && item.title === '标准与知识');
     expect(resources && 'items' in resources ? resources.items.map(item => item.title) : []).toEqual(['标准审核', '知识资料']);
     const paths = menu.value.flatMap(item => 'items' in item ? item.items.map(child => child.path) : [item.path]);

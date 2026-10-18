@@ -104,29 +104,16 @@ function getCollaborationMenuItems(): MenuItem[] {
   ];
 }
 
-function getQualitySupervisionGroup(includeDataIntake: boolean): MenuGroup {
+function getQualitySupervisionGroup(): MenuGroup {
   return {
     title: "质量监督",
     icon: "Operation",
     items: [
-      ...(includeDataIntake ? [{ title: "数据采集", path: "/app/quality-data" }] : []),
+      { title: "质监工作台", path: "/app/workbench" },
+      { title: "数据采集", path: "/app/quality-data" },
       { title: "市场监控", path: "/app/quality-analytics" },
       { title: "风险研判", path: "/app/risk-assessments" },
       { title: "监督抽查", path: "/app/sampling-plans", activeMatchPaths: ["/app/risk-sampling"] },
-      { title: "协同中心", path: "/app/collab", activeMatchPaths: ["/app/meetings"] },
-      { title: "报告中心", path: "/app/risk-reports", activeMatchPaths: ["/app/export"] },
-    ],
-  };
-}
-
-function getLaboratoryGroup(): MenuGroup {
-  return {
-    title: "实验室检测",
-    icon: "List",
-    items: [
-      { title: "实验室工作台", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
-      { title: "检测任务", path: "/app/tasks" },
-      { title: "检测结果", path: "/app/results" },
     ],
   };
 }
@@ -148,14 +135,17 @@ function getUserMenu(): MenuStructure {
 
 function getExpertMenu(): MenuStructure {
   return [
-    { title: "质监工作台", path: "/app/workbench" },
-    getQualitySupervisionGroup(true),
-    getLaboratoryGroup(),
+    { title: "AI 对话", path: "/app/chat" },
+    getQualitySupervisionGroup(),
+    { title: "实验室检测", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
+    { title: "检测任务", path: "/app/tasks" },
+    { title: "检测结果", path: "/app/results" },
+    { title: "协同中心", path: "/app/collab", activeMatchPaths: ["/app/meetings"] },
+    { title: "报告中心", path: "/app/risk-reports", activeMatchPaths: ["/app/export"] },
     { title: "标准与知识", items: [
       { title: "标准审核", path: "/app/standard-reviews", activeMatchPaths: ["/governance/admin/inspection-standards"] },
       { title: "知识资料", path: "/app/rag-spaces" },
     ] },
-    { title: "AI 对话", path: "/app/chat" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }
