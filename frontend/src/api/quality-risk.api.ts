@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { http, type ApiRequestConfig } from "./http";
 import type { PagedResponse } from "@/types/common.types";
 import type {
   ProductCategoryV4,
@@ -16,6 +16,8 @@ import type {
   IntakeReferenceOptions,
   QualityRecordContext,
 } from "@/types/quality-risk.types";
+
+type ReadFeedback = Pick<ApiRequestConfig, "suppressErrorToast">;
 
 export const qualityRiskApi = {
   productOptions: () =>
@@ -146,11 +148,11 @@ export const qualityRiskApi = {
     http.get<Blob>("/v1/quality-data/import-template", { responseType: "blob" }),
   confirmImport: (id: string) => http.post<any>(`/v1/quality-data/imports/${id}/confirm`, {}),
   cancelImport: (id: string) => http.post(`/v1/quality-data/imports/${id}/cancel`, {}),
-  riskCases: (params: Record<string, unknown> = {}) =>
-    http.get<PagedResponse<RiskCaseV4>>("/v1/risk-cases", { params }),
+  riskCases: (params: Record<string, unknown> = {}, feedback: ReadFeedback = {}) =>
+    http.get<PagedResponse<RiskCaseV4>>("/v1/risk-cases", { ...feedback, params }),
   createRiskCase: (payload: Record<string, unknown>) =>
     http.post<RiskCaseV4>("/v1/risk-cases", payload),
-  riskWorkspace: (id: string) => http.get<RiskWorkspace>(`/v1/risk-cases/${id}/workspace`),
+  riskWorkspace: (id: string, feedback: ReadFeedback = {}) => http.get<RiskWorkspace>(`/v1/risk-cases/${id}/workspace`, feedback),
   createDemoDraft: (
     id: string,
     payload: {
@@ -204,7 +206,7 @@ export const qualityRiskApi = {
       comment,
       ...fields,
     }),
-  assessment: (id: string) => http.get<RiskAssessmentV4>(`/v1/risk-assessments/${id}`),
+  assessment: (id: string, feedback: ReadFeedback = {}) => http.get<RiskAssessmentV4>(`/v1/risk-assessments/${id}`, feedback),
   policies: () => http.get<any[]>("/v1/risk-policies"),
   createPolicy: (payload: Record<string, unknown>) => http.post("/v1/risk-policies", payload),
   publishPolicy: (id: string) => http.post(`/v1/risk-policies/${id}/publish`, {}),

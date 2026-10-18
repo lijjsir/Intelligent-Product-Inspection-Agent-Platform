@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from uuid import UUID
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -451,6 +452,12 @@ async def risk_lab_list(case_id: UUID, svc=Depends(risk_lab_service)):
     return ResponseEnvelope(data=await svc.list(str(case_id)))
 
 
+@router.get('/risk-cases/{case_id}/laboratory-{kind}-options')
+async def risk_lab_option_page(case_id: UUID, kind: Literal['tasks', 'records'], page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=50),
+    keyword: str = Query('', max_length=200), selected_ids: list[UUID] = Query(default=[], max_length=20), svc=Depends(risk_lab_service)):
+    return ResponseEnvelope(data=await svc.option_page(str(case_id), kind, page=page, size=size, keyword=keyword, selected_ids=selected_ids))
+
+
 @router.post("/risk-cases/{case_id}/laboratory-verifications")
 async def risk_lab_decide(case_id: UUID, payload: LabDecision, svc=Depends(risk_lab_service)):
     data = await svc.decide(str(case_id), payload)
@@ -486,7 +493,14 @@ async def risk_lab_execution_withdraw(link_id: UUID, return_id: UUID, payload: L
 
 @router.get("/risk-reports")
 async def risk_report_list(case_id: UUID | None = None, svc=Depends(risk_report_service)):
-    return ResponseEnvelope(data=await svc.list(str(case_id) if case_id else None))
+    return ResponseEnvelope(data=await svc.list(str(case_id) if case_id else None), warnings=[{
+        'code':'bounded_legacy_list', 'message':'旧列表最多返回 50 条摘要；完整浏览请使用 /risk-report-pages 分页接口。'}])
+
+
+@router.get('/risk-report-pages')
+async def risk_report_page(case_id: UUID | None = None, size: int = Query(20, ge=1, le=50),
+    cursor: str | None = Query(None, max_length=2048), keyword: str = Query('', max_length=200), svc=Depends(risk_report_service)):
+    return ResponseEnvelope(data=await svc.page(str(case_id) if case_id else None, size=size, cursor=cursor, keyword=keyword))
 
 
 @router.get("/risk-reports/{report_id}")

@@ -1,8 +1,8 @@
 """Optional local demo validation; link existing tasks/reports, never execute tasks."""
 import copy
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import require_role
@@ -57,18 +57,58 @@ class RiskLabService:
         return False
 
     async def options(self, case_id):
+        tasks = await self.option_page(case_id, 'tasks', size=100)
+        records = await self.option_page(case_id, 'records', size=100)
+        return {'tasks':tasks['items'], 'records':records['items'], 'boundary':self.boundary,
+            'truncated':{'tasks':tasks['total'] > 100, 'records':records['total'] > 100}}
+
+    async def option_page(self, case_id, kind, *, page=1, size=20, keyword='', selected_ids=()):
         await self.guard()
+        if kind not in {'tasks','records'} or page < 1 or not 1 <= size <= 100:
+            raise ValidationError('选择列表分页参数无效')
+        try:
+            selected_ids = list(dict.fromkeys(str(UUID(str(value))) for value in selected_ids))
+        except (ValueError, TypeError, AttributeError):
+            raise ValidationError('已选记录编号无效') from None
+        if len(selected_ids) > 20:
+            raise ValidationError('一次最多核对 20 个已选记录')
         case = await self.demo.risk.risk_case(case_id)
         product_id = (case.scope or {}).get('product_id')
-        tasks = list(await self.db.scalars(select(InspectionTask).where(InspectionTask.org_id == self.org_id,
-            InspectionTask.deleted_at.is_(None), InspectionTask.quality_product_id == product_id))) if product_id else []
-        records = list(await self.db.scalars((await self.demo.risk.scoped_records()).where(
-            QualitySourceRecord.record_type == "inspection_report", QualitySourceRecord.data_nature == ('synthetic' if self.demo.is_demo else 'observed'))
-            .order_by(QualitySourceRecord.created_at.desc())))
-        return {"tasks": [{"id": t.id, "label": f"{'演示' if self.demo.is_demo else '检测'}任务 {t.id}", "status": t.status} for t in tasks
-                if (case.scope or {}).get("product_id") and ((t.meta_data or {}).get("execution_mode") == "demo") == self.demo.is_demo],
-            "records": [{"id": r.id, "label": str((r.content or {}).get("title") or (r.content or {}).get("text") or "检测资料")[:160],
-                "already_linked": r.id in (case.source_record_ids or [])} for r in records if self.matches(case, r)], "boundary": self.boundary}
+        keyword = keyword.strip()
+        if kind == 'tasks':
+            model = InspectionTask
+            mode = model.meta_data['execution_mode'].as_string()
+            query = select(model).where(model.org_id == self.org_id, model.deleted_at.is_(None),
+                model.quality_product_id == product_id, mode == 'demo' if self.demo.is_demo else func.coalesce(mode, '') != 'demo')
+            if not product_id: query = query.where(False)
+            search = [model.spec_code.contains(keyword, autoescape=True), model.meta_data['task_name'].as_string().contains(keyword, autoescape=True),
+                model.meta_data['product_name'].as_string().contains(keyword, autoescape=True)]
+            part = keyword.replace('-', '').lower()
+            if len(part) >= 4 and all(c in '0123456789abcdef' for c in part):
+                search.append(func.lower(func.hex(model.id)).contains(part, autoescape=True))
+        else:
+            model = QualitySourceRecord
+            query = (await self.demo.risk.scoped_records()).where(model.record_type == 'inspection_report',
+                model.data_nature == ('synthetic' if self.demo.is_demo else 'observed'),
+                or_(model.created_by == self.actor, model.authorization_scope.in_(['organization','business','public'])))
+            if product_id:
+                query = query.where(model.product_ref['product_id'].as_string() == product_id)
+            elif (case.scope or {}).get('enterprise_id'):
+                query = query.where(func.coalesce(model.enterprise_ref['enterprise_id'].as_string(), model.enterprise_ref['id'].as_string()) == case.scope['enterprise_id'])
+            else: query = query.where(False)
+            search = [model.content['title'].as_string().contains(keyword, autoescape=True),
+                model.content['text'].as_string().contains(keyword, autoescape=True), model.external_record_id.contains(keyword, autoescape=True)]
+        def serialize(row):
+            if kind == 'tasks':
+                return {'id':row.id, 'label':f"{'演示' if self.demo.is_demo else '检测'}任务 · {row.spec_code} · {row.id}", 'status':row.status}
+            return {'id':row.id, 'label':str((row.content or {}).get('title') or (row.content or {}).get('text') or '检测资料')[:160],
+                'already_linked':row.id in (case.source_record_ids or [])}
+        chosen = list(await self.db.scalars(query.where(model.id.in_(selected_ids)))) if selected_ids else []
+        if keyword: query = query.where(or_(*search))
+        total = await self.db.scalar(select(func.count()).select_from(query.subquery()))
+        rows = await self.db.scalars(query.order_by(model.created_at.desc(), model.id.desc()).offset((page-1)*size).limit(size))
+        return {'items':[serialize(r) for r in rows], 'total':int(total or 0), 'page':page, 'size':size,
+            'selected':[serialize(r) for r in chosen], 'unavailable_selected_ids':sorted(set(selected_ids)-{r.id for r in chosen})}
 
     async def row(self, link_id):
         query = select(SupervisionRecord).where(SupervisionRecord.id == link_id,

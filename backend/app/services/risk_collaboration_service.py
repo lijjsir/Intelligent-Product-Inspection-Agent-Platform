@@ -184,6 +184,8 @@ class RiskCollaborationService:
         room = await self.meetings.get_room(self.org_id, row.data["room_id"])
         if not room:
             raise NotFoundError("关联会议室已不可用")
+        if bound_id(room) != row.id:
+            raise ForbiddenError('协同与会议室的关联已变化，请重新核对访问范围')
         await check_room_access(self.db, self.org_id, self.actor, self.current.role, room)
         return await self.serialize(row, details=True)
 

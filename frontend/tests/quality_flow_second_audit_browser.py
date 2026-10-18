@@ -23,10 +23,15 @@ async def main():
         await page.locator('#login-username').fill(a['username']);await page.locator('#login-password').fill(a['password'])
         await page.get_by_role('button',name='登录',exact=False).click();await page.wait_for_url('**/app/**')
         # A freshly opened market page must work on the next calendar day too.
-        await page.goto(BASE+'/app/quality-analytics',wait_until='networkidle')
+        # The shell owns a persistent collaboration stream. Assert the business
+        # content is ready rather than waiting for every network connection.
+        analytics_requests=[]
+        page.on('request',lambda r:analytics_requests.append(r.url) if '/quality-supervision/analytics' in r.url else None)
+        await page.goto(BASE+'/app/quality-analytics',wait_until='domcontentloaded')
         await expect(page.get_by_label('统计截止日',exact=True)).to_have_value('2026-10-17')
         await expect(page.locator('.market-monitor')).to_contain_text('固定统计日期为 2026-10-17')
         await expect(page.locator('.market-monitor')).to_contain_text('不代表今日实时市场')
+        assert not analytics_requests,'Collapsed historical statistics must not start analysis'
         await page.screenshot(path=str(OUT/'second-audit-market-default.png'),full_page=True)
         # Provide one in-memory selector option. The ID does not exist in MySQL;
         # its reads will deliberately fail. All real case reads stay untouched.
@@ -41,16 +46,16 @@ async def main():
             await asyncio.sleep(1.5)
             await route.fulfill(status=503,json={'success':False,'code':'service_unavailable','message':'故障注入：旧请求失败','error':{'code':'service_unavailable','message':'故障注入：旧请求失败'}})
         await page.route(re.compile(r'/api/v1/risk-cases(?:\?.*)?$'),choices)
-        await page.route(re.compile(r'/api/v1/risk-reports\?case_id='+OTHER+r'$'),report_failure)
+        await page.route(re.compile(r'/api/v1/risk-report-pages\?case_id='+OTHER+r'(?:&.*)?$'),report_failure)
         await page.route('**/api/v1/risk-cases/'+OTHER+'/workspace',slow_failure)
-        await page.goto(BASE+f'/app/risk-reports?case_id={CASE}',wait_until='networkidle')
-        assert await page.locator('.report-row').count()>=3
+        await page.goto(BASE+f'/app/risk-reports?case_id={CASE}',wait_until='domcontentloaded')
+        await expect(page.locator('.report-row')).to_have_count(3)
         await page.locator('#report-case').select_option(OTHER)
         await expect(page.locator('.report-row')).to_have_count(0)
         await expect(page.locator('.risk-report-center')).to_contain_text('故障注入：报告列表不可用')
         await expect(page.locator('.report-preview')).to_have_count(0)
         await page.screenshot(path=str(OUT/'second-audit-report-failure-cleared.png'),full_page=True)
-        await page.goto(BASE+f'/app/laboratory?case_id={CASE}',wait_until='networkidle')
+        await page.goto(BASE+f'/app/laboratory?case_id={CASE}',wait_until='domcontentloaded')
         await expect(page.locator('.lab-history')).to_have_count(1)
         await page.locator('#lab-case').select_option(OTHER)
         await expect(page.locator('.risk-lab-panel')).to_have_count(0,timeout=700)
@@ -59,6 +64,7 @@ async def main():
         await asyncio.sleep(1.7)
         await expect(page.locator('.lab-history')).to_have_count(1)
         await expect(page.locator('.demo-lab-workspace')).not_to_contain_text('故障注入：旧请求失败')
+        await expect(page.locator('.el-message')).to_have_count(0)
         await page.screenshot(path=str(OUT/'second-audit-lab-context-restored.png'),full_page=True)
         # A successful mutation arriving after leaving the page must not alter
         # the new page's route. Reuse a real report body, without posting data.
@@ -71,8 +77,9 @@ async def main():
             await asyncio.sleep(1.5)
             await route.fulfill(status=200,json={'success':True,'code':'ok','data':existing})
         await page.route('**/api/v1/risk-cases/'+CASE+'/reports',delayed_success)
-        await page.goto(BASE+f'/app/risk-reports?case_id={CASE}',wait_until='networkidle')
+        await page.goto(BASE+f'/app/risk-reports?case_id={CASE}',wait_until='domcontentloaded')
         await page.get_by_role('button',name='生成本版演示研判报告',exact=True).click()
+        await page.locator('.app-sidebar').get_by_role('button',name='质量监督',exact=True).click()
         await page.locator('.app-sidebar').get_by_text('市场监控',exact=True).click()
         await page.wait_for_url('**/app/quality-analytics**')
         await asyncio.sleep(1.8)
@@ -91,7 +98,7 @@ async def main():
             await route.fulfill(status=200,json={'success':True,'code':'ok','data':data})
         await page.route('**/api/v1/risk-reports/'+record['new_report_id']+'/exports',start_export)
         await page.route(re.compile(r'/api/v1/exports/'+job['id']+r'$'),export_status)
-        await page.goto(BASE+f"/app/risk-reports?case_id={CASE}&report={record['new_report_id']}",wait_until='networkidle')
+        await page.goto(BASE+f"/app/risk-reports?case_id={CASE}&report={record['new_report_id']}",wait_until='domcontentloaded')
         async with page.expect_download(timeout=30000) as event:
             await page.locator('.report-preview').get_by_role('button',name='导出 PDF',exact=True).click()
         await (await event.value).save_as(str(OUT/'second-audit-polled-export.pdf'))
@@ -101,7 +108,8 @@ async def main():
         await expect(page.locator('.risk-report-center')).to_contain_text('故障注入：导出失败')
         assert not errors,errors
         result={'passed':True,'api_mode':'real frontend with explicit read-failure injection','demo_anchor_after_midnight':True,
-            'report_failure_drops_old_rows':True,'case_switch_hides_old_lab_actions':True,'late_failure_cannot_replace_current_case':True,
+            'collapsed_statistics_do_not_start_analysis':True,
+            'report_failure_drops_old_rows':True,'case_switch_hides_old_lab_actions':True,'late_failure_cannot_replace_current_case':True,'late_failure_has_no_global_toast':True,
             'late_success_cannot_rewrite_new_page_route':True,'inflight_export_waits_for_same_job':True,'failed_export_shows_failure':True,
             'fixture_business_rows_written':False,'page_errors':errors}
         (OUT/'second-audit-browser.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

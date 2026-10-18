@@ -193,16 +193,9 @@ class RiskReportService:
         return result
 
     async def list(self, case_id=None):
-        await self.guard()
-        rows = list(await self.db.scalars(select(SupervisionRecord).where(SupervisionRecord.org_id == self.org_id,
-            SupervisionRecord.kind == KIND).order_by(SupervisionRecord.created_at.desc())))
-        items = []
-        for row in rows:
-            if self.actor not in row.data["reader_ids"] or (case_id and row.data["snapshot"]["case_id"] != case_id):
-                continue
-            try:
-                report = await self.get(row.id)
-            except (ForbiddenError, NotFoundError):
-                continue
-            items.append({k: report[k] for k in ("id", "title", "status", "frozen_at", "effective_status", "source_issues")})
-        return items
+        # Legacy array response stays bounded; new clients use the cursor route.
+        return (await self.page(case_id, size=50))['items']
+
+    async def page(self, case_id=None, *, size=20, cursor=None, keyword=''):
+        from app.services.risk_report_listing_service import RiskReportListingService
+        return await RiskReportListingService(self).page(case_id, size=size, cursor=cursor, keyword=keyword)

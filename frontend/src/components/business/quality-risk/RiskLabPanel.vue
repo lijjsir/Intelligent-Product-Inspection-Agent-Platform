@@ -7,6 +7,7 @@ import { riskCompletionApi, type LabLink } from "@/api/risk-completion.api";
 import type { RiskAssessmentV4, RiskWorkflowContext } from "@/types/quality-risk.types";
 import { useAuthStore } from "@/stores/auth.store";
 import RiskExecutionReturnPanel from "./RiskExecutionReturnPanel.vue";
+import LabResourcePicker from "./LabResourcePicker.vue";
 const props = defineProps<{
   caseId: string;
   assessment: RiskAssessmentV4 | null;
@@ -22,11 +23,7 @@ const router = useRouter(),
 const loading = ref(false),
   saving = ref(false),
   error = ref("");
-const rows = ref<LabLink[]>([]),
-  options = ref<Awaited<ReturnType<typeof riskCompletionApi.labOptions>>["data"]["data"]>({
-    tasks: [],
-    records: [],
-  });
+const rows = ref<LabLink[]>([]);
 const form = reactive({
   mode: "skip" as "skip" | "verify",
   purpose: "",
@@ -61,7 +58,6 @@ async function load() {
   loading.value = true;
   error.value = "";
   rows.value = [];
-  options.value = { tasks: [], records: [] };
   returnId.value = "";
   recordIds.value = [];
   note.value = "";
@@ -69,13 +65,9 @@ async function load() {
   form.purpose = "";
   form.task_id = null;
   try {
-    const [list, result] = await Promise.all([
-      riskCompletionApi.labs(requestedCase),
-      riskCompletionApi.labOptions(requestedCase),
-    ]);
+    const list = await riskCompletionApi.labs(requestedCase);
     if (key !== epoch) return;
     rows.value = list.data.data;
-    options.value = result.data.data;
     const row = current.value;
     form.mode = row?.mode || "skip";
     form.purpose = row?.purpose || "";
@@ -164,13 +156,9 @@ onBeforeUnmount(() => {
         ><el-input v-model="form.purpose" type="textarea" :rows="3" :maxlength="2000"
       /></el-form-item>
       <el-form-item v-if="form.mode === 'verify'" label="关联既有检测任务（可选）"
-        ><el-select v-model="form.task_id" clearable placeholder="可直接接入报告，无需虚构任务"
-          ><el-option
-            v-for="task in options.tasks"
-            :key="task.id"
-            :label="task.label"
-            :value="task.id" /></el-select
-      ></el-form-item>
+        ><LabResourcePicker :case-id="caseId" kind="tasks" :model-value="form.task_id" label="关联既有检测任务"
+          :disabled="!canDecide || saving || loading" @update:model-value="form.task_id = typeof $event === 'string' ? $event : null" />
+      </el-form-item>
       <el-button
         v-if="canDecide"
         type="primary"
@@ -197,13 +185,9 @@ onBeforeUnmount(() => {
               :value="row.id" /></el-select
         ></el-form-item>
         <el-form-item label="已接入且确认同一对象的检测资料"
-          ><el-select v-model="recordIds" multiple placeholder="选择原受理记录"
-            ><el-option
-              v-for="record in options.records"
-              :key="record.id"
-              :label="`${record.already_linked ? '【已在事项中】' : ''}${record.label}`"
-              :value="record.id" /></el-select
-        ></el-form-item>
+          ><LabResourcePicker :case-id="caseId" kind="records" :model-value="recordIds" label="选择已接入的检测资料"
+            :disabled="saving || loading" @update:model-value="recordIds = Array.isArray($event) ? $event : []" />
+        </el-form-item>
         <el-form-item label="回流说明"
           ><el-input v-model="note" type="textarea" :rows="3" :maxlength="2000"
         /></el-form-item>

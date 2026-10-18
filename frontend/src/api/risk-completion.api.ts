@@ -56,7 +56,11 @@ export interface ReportSummary {
   frozen_at: string;
   effective_status: string;
   source_issues: string[];
+  validation_checked?: boolean;
 }
+export interface ReportPage {items: ReportSummary[]; next_cursor: string | null; has_more: boolean; size: number; notice: string}
+export interface LabOption {id: string; label: string; status?: string; already_linked?: boolean}
+export interface LabOptionPage {items: LabOption[]; selected: LabOption[]; unavailable_selected_ids: string[]; total: number; page: number; size: number}
 export interface RiskReport extends ReportSummary {
   snapshot_hash: string;
   snapshot: {
@@ -93,6 +97,11 @@ export const riskCompletionApi = {
   ) => http.post<LabLink>(`/v1/risk-laboratory-verifications/${id}/evidence`, data, quiet),
   reports: (caseId?: string) =>
     http.get<ReportSummary[]>("/v1/risk-reports", { ...quiet, params: { case_id: caseId } }),
+  reportPage: (params: {case_id?: string; cursor?: string; keyword?: string; size?: number}) =>
+    http.get<ReportPage>('/v1/risk-report-pages', {...quiet, params}),
+  labOptionPage: (caseId: string, kind: 'tasks' | 'records', params: {page: number; keyword: string; selected_ids: string[]}) =>
+    http.get<LabOptionPage>(`/v1/risk-cases/${caseId}/laboratory-${kind}-options`, {...quiet,
+      params:{...params, size:20}, paramsSerializer:{indexes:null}}),
   report: (id: string) => http.get<RiskReport>(`/v1/risk-reports/${id}`, quiet),
   executionCandidates: (id: string, page = 1) =>
     http.get<{items: ExecutionCandidate[]; total: number; page: number; size: number}>(

@@ -62,6 +62,9 @@ def handle(route):
         data = []
     elif path == f'/risk-cases/{CASE}/laboratory-options':
         data = {'tasks':[], 'records':[]}
+    elif path in [f'/risk-cases/{CASE}/laboratory-tasks-options', f'/risk-cases/{CASE}/laboratory-records-options']:
+        chosen = [{'id':'task-formal','label':'隔离检测任务','status':'pending'}] if 'tasks-options' in path and query.get('selected_ids') else []
+        data = {'items':[], 'selected':chosen, 'unavailable_selected_ids':[], 'total':0, 'page':1, 'size':20}
     elif path == f'/risk-cases/{CASE}/laboratory-verifications':
         if request.method == 'POST':
             payload = request.post_data_json
@@ -81,6 +84,8 @@ def handle(route):
         data = state['report']
     elif path == '/risk-reports':
         data = [state['report']] if state.get('report') else []
+    elif path == '/risk-report-pages':
+        data = {'items':[state['report']] if state.get('report') else [], 'next_cursor':None, 'has_more':False, 'size':20, 'notice':'打开报告核对当前依据'}
     elif path == '/risk-reports/report-formal':
         data = state['report']
     elif path == '/risk-sampling/suggestions':

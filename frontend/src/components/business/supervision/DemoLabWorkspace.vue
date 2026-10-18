@@ -3,12 +3,12 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { qualityRiskApi } from "@/api/quality-risk.api";
 import { extractApiErrorMessage } from "@/api/http";
-import type { RiskCaseV4, RiskWorkspace } from "@/types/quality-risk.types";
+import type { RiskWorkspace } from "@/types/quality-risk.types";
 import RiskLabPanel from "@/components/business/quality-risk/RiskLabPanel.vue";
+import RiskCasePicker from "@/components/business/quality-risk/RiskCasePicker.vue";
 const route = useRoute(),
   router = useRouter();
-const cases = ref<RiskCaseV4[]>([]),
-  workspace = ref<RiskWorkspace | null>(null),
+const workspace = ref<RiskWorkspace | null>(null),
   error = ref("");
 let epoch = 0;
 async function load() {
@@ -17,11 +17,8 @@ async function load() {
   error.value = "";
   workspace.value = null;
   try {
-    const choices = (await qualityRiskApi.riskCases({ page: 1, size: 200 })).data.data.items;
-    const w = id ? (await qualityRiskApi.riskWorkspace(id)).data.data : null;
+    const w = id ? (await qualityRiskApi.riskWorkspace(id, {suppressErrorToast:true})).data.data : null;
     if (key === epoch) {
-      cases.value = choices;
-      if (w && !cases.value.some((c) => c.id === w.case.id)) cases.value.push(w.case);
       workspace.value = w;
     }
   } catch (e) {
@@ -43,18 +40,10 @@ onBeforeUnmount(() => {
     <p>
       检测任务承载具体检测工作；本入口记录风险事项为何需要验证、关联什么资料，以及资料如何返回原事项。演示环境不启动检测。
     </p>
-    <el-alert v-if="error" type="error" :title="error" :closable="false" /><label for="lab-case"
-      >选择来源事项</label
-    ><select
-      id="lab-case"
-      :value="route.query.case_id || ''"
-      @change="router.replace({ query: { case_id: ($event.target as HTMLSelectElement).value } })"
-    >
-      <option value="">请选择</option>
-      <option v-for="row in cases" :key="row.id" :value="row.id">
-        {{ row.code }} · {{ row.title }}
-      </option></select
-    ><RiskLabPanel
+    <el-alert v-if="error" type="error" :title="error" :closable="false" />
+    <RiskCasePicker id="lab-case" label="选择来源事项" empty-label="请选择" :model-value="typeof route.query.case_id === 'string' ? route.query.case_id : undefined"
+      :selected-case="workspace?.case" @update:model-value="router.replace({query:{case_id:$event}})" />
+    <RiskLabPanel
       v-if="workspace"
       :case-id="workspace.case.id"
       :assessment="workspace.latest_assessment"

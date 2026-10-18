@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import SupervisionAnalytics from "@/components/business/supervision/SupervisionAnalytics.vue";
 import MarketMonitoring from "@/components/business/supervision/MarketMonitoring.vue";
 import { useAuthStore } from "@/stores/auth.store";
 const auth = useAuthStore();
+const analyticsOpened = ref(false);
 </script>
 <template>
   <main class="supervision-analytics-page">
@@ -13,9 +15,9 @@ const auth = useAuthStore();
       type="info"
       :closable="false"
     />
-    <details class="legacy-stats">
+    <details class="legacy-stats" @toggle="analyticsOpened ||= ($event.target as HTMLDetailsElement).open">
       <summary>已确认风险与抽查统计</summary>
-      <SupervisionAnalytics />
+      <SupervisionAnalytics v-if="analyticsOpened" />
     </details>
   </main>
 </template>

@@ -452,9 +452,10 @@ class QualityRiskService(QualityIntakeMixin, QualityFoundationMixin):
         if status:
             stmt = stmt.where(QualityRiskCase.status == status)
         if keyword:
-            stmt = stmt.where(QualityRiskCase.title.contains(keyword, autoescape=True))
+            from sqlalchemy import or_
+            stmt = stmt.where(or_(QualityRiskCase.title.contains(keyword, autoescape=True), QualityRiskCase.code.contains(keyword, autoescape=True)))
         total = await self.db.scalar(select(func.count()).select_from(stmt.subquery()))
-        rows = list(await self.db.scalars(stmt.order_by(QualityRiskCase.created_at.desc()).offset((page - 1) * size).limit(size)))
+        rows = list(await self.db.scalars(stmt.order_by(QualityRiskCase.created_at.desc(), QualityRiskCase.id.desc()).offset((page - 1) * size).limit(size)))
         await BusinessNumberService(self.db).attach(rows)
         return {"items": [self.risk_case_response(x) for x in rows], "total": int(total or 0), "page": page, "size": size}
 

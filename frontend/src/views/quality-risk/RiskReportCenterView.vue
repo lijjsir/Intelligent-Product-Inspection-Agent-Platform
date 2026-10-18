@@ -7,7 +7,8 @@ import { riskCompletionApi, type RiskReport, type ReportSummary } from "@/api/ri
 import { exportApi } from "@/api/export.api";
 import { extractApiErrorMessage } from "@/api/http";
 import { useRuntimeContext } from "@/composables/useRuntimeContext";
-import type { RiskAssessmentV4, RiskCaseV4, RiskWorkspace } from "@/types/quality-risk.types";
+import type { RiskAssessmentV4, RiskWorkspace } from "@/types/quality-risk.types";
+import RiskCasePicker from '@/components/business/quality-risk/RiskCasePicker.vue';
 import { formatServerDateTime } from "@/utils/date-time";
 import { ReportExportError, waitForReportExport } from "@/utils/wait-for-report-export";
 import { useAuthStore } from "@/stores/auth.store";
@@ -18,14 +19,25 @@ const route = useRoute(),
 const loading = ref(false),
   saving = ref(false),
   error = ref("");
-const cases = ref<RiskCaseV4[]>([]),
-  rows = ref<ReportSummary[]>([]),
+const rows = ref<ReportSummary[]>([]),
   selected = ref<RiskReport | null>(null),
   workspace = ref<RiskWorkspace | null>(null),
   assessment = ref<RiskAssessmentV4 | null>(null);
 const caseId = computed(() =>
   typeof route.query.case_id === "string" ? route.query.case_id : undefined,
 );
+const keyword = ref(''), appliedKeyword = ref(''), reportPage = ref(1), nextCursor = ref<string | null>(null), notice = ref('');
+const cursors = ref<Array<string | undefined>>([undefined]);
+function resetPages() { reportPage.value = 1; cursors.value = [undefined]; nextCursor.value = null; }
+function searchReports() {
+  if (loading.value || saving.value) return;
+  appliedKeyword.value = keyword.value.trim(); resetPages(); void load(true);
+}
+function movePage(direction: number) {
+  if (loading.value || saving.value || (direction > 0 && !nextCursor.value) || (direction < 0 && reportPage.value <= 1)) return;
+  if (direction > 0 && nextCursor.value) cursors.value[reportPage.value] = nextCursor.value;
+  reportPage.value += direction; void load(true);
+}
 const isDemo = computed(() => runtime.context.value?.execution_mode === "demo");
 const basis = computed(() => isDemo.value ? assessment.value?.demo_validation?.basis_hash : workspace.value?.workflow_context?.basis_hash);
 const canGenerate = computed(
@@ -36,7 +48,7 @@ const canGenerate = computed(
 );
 let epoch = 0;
 let alive = true;
-async function load() {
+async function load(listOnly = false) {
   const key = ++epoch;
   const requestedCase = caseId.value;
   const pinned = typeof route.query.assessment_id === "string" ? route.query.assessment_id : null;
@@ -44,35 +56,36 @@ async function load() {
   loading.value = true;
   error.value = "";
   rows.value = [];
-  selected.value = null;
-  workspace.value = null;
-  assessment.value = null;
+  nextCursor.value = null;
+  notice.value = '';
+  if (!listOnly) {
+    selected.value = null;
+    workspace.value = null;
+    assessment.value = null;
+  }
   try {
     await runtime.load();
-    const [list, options] = await Promise.all([
-      riskCompletionApi.reports(requestedCase),
-      qualityRiskApi.riskCases({ page: 1, size: 200 }),
-    ]);
-    const w = requestedCase ? (await qualityRiskApi.riskWorkspace(requestedCase)).data.data : null;
+    const list = await riskCompletionApi.reportPage({case_id:requestedCase, cursor:cursors.value[reportPage.value-1], keyword:appliedKeyword.value, size:20});
+    const w = listOnly ? workspace.value : requestedCase ? (await qualityRiskApi.riskWorkspace(requestedCase, {suppressErrorToast:true})).data.data : null;
     if (pinned && !w?.assessment_versions.some((v) => v.id === pinned))
       throw new Error("指定研判不属于当前事项");
-    const a = pinned
-      ? (await qualityRiskApi.assessment(pinned)).data.data
+    const a = listOnly ? assessment.value : pinned
+      ? (await qualityRiskApi.assessment(pinned, {suppressErrorToast:true})).data.data
       : w?.latest_assessment || null;
-    const report = requestedReport
+    const report = listOnly ? selected.value : requestedReport
       ? (await riskCompletionApi.report(requestedReport)).data.data
       : null;
     if (report && requestedCase && report.snapshot.case_id !== requestedCase)
       throw new Error("报告不属于当前事项");
     if (key !== epoch) return;
-    rows.value = list.data.data;
-    cases.value = options.data.data.items;
-    if (w && !cases.value.some((c) => c.id === w.case.id)) cases.value.push(w.case);
+    rows.value = list.data.data.items;
+    nextCursor.value = list.data.data.next_cursor;
+    notice.value = list.data.data.notice;
     workspace.value = w;
     assessment.value = a;
     selected.value = report;
   } catch (e) {
-    if (key === epoch) error.value = extractApiErrorMessage(e, "研判报告加载失败");
+    if (key === epoch) { selected.value = null; error.value = extractApiErrorMessage(e, "研判报告加载失败"); }
   } finally {
     if (key === epoch) loading.value = false;
   }
@@ -89,6 +102,7 @@ async function generate() {
       await riskCompletionApi.createReport(targetCase, a.id, basis.value)
     ).data.data;
     if (!alive || targetCase !== caseId.value || targetEpoch !== epoch) return;
+    resetPages();
     await router.replace({ query: { ...route.query, report: report.id } });
     await load();
     ElMessage.success("研判报告已固定，未创建检测任务");
@@ -128,7 +142,10 @@ async function download(format: "pdf" | "docx") {
     saving.value = false;
   }
 }
-watch(() => [route.query.case_id, route.query.assessment_id, route.query.report], load);
+watch(() => [route.query.case_id, route.query.assessment_id, route.query.report], (now, old) => {
+  if (now[0] !== old?.[0]) resetPages();
+  void load();
+});
 onMounted(load);
 onBeforeUnmount(() => {
   alive = false;
@@ -144,7 +161,7 @@ onBeforeUnmount(() => {
         <p>独立研判报告保存对象、证据、结论、限制、独立复核与抽查建议，不依赖检测任务。</p>
       </div>
       <div class="actions">
-        <el-button @click="load">刷新报告</el-button
+        <el-button @click="load()">刷新报告</el-button
         ><el-button @click="router.push('/app/export')">检测任务报告</el-button>
       </div>
     </header>
@@ -162,22 +179,8 @@ onBeforeUnmount(() => {
         :closable="false"
       />
       <section>
-        <label for="report-case">来源事项</label
-        ><select
-          id="report-case"
-          :value="caseId || ''"
-          :disabled="saving"
-          @change="
-            router.replace({
-              query: { case_id: ($event.target as HTMLSelectElement).value || undefined },
-            })
-          "
-        >
-          <option value="">全部事项</option>
-          <option v-for="row in cases" :key="row.id" :value="row.id">
-            {{ row.code }} · {{ row.title }}
-          </option>
-        </select>
+        <RiskCasePicker id="report-case" label="来源事项" :model-value="caseId" :selected-case="workspace?.case" :disabled="saving || loading"
+          @update:model-value="router.replace({query:{case_id:$event}})" />
         <p v-if="assessment">
           当前选择研判第 {{ assessment.version }} 版；{{
             canGenerate
@@ -191,7 +194,9 @@ onBeforeUnmount(() => {
       </section>
       <section>
         <h2>研判报告记录</h2>
-        <el-empty v-if="!rows.length" description="暂无可访问的研判报告" :image-size="60" /><button
+        <el-form class="report-search" @submit.prevent="searchReports"><el-input v-model="keyword" aria-label="报告标题搜索" placeholder="按报告标题搜索" :maxlength="200" :disabled="saving || loading" clearable @clear="searchReports" /><el-button native-type="submit" :disabled="saving || loading">搜索报告</el-button></el-form>
+        <p>{{ notice }}</p>
+        <el-empty v-if="!rows.length" :description="nextCursor ? '本页暂无可访问报告，可以继续查看下一页' : '暂无可访问的研判报告'" :image-size="60" /><button
           v-for="row in rows"
           :key="row.id"
           class="report-row"
@@ -203,11 +208,17 @@ onBeforeUnmount(() => {
             >{{
               row.effective_status === "historical_snapshot"
                 ? "历史快照，需核对当前依据"
-                : isDemo ? "演示固定快照" : "已固定快照"
+                : row.effective_status === 'snapshot_unchecked' ? '生成时快照，打开核对当前依据' : isDemo ? "演示固定快照" : "已固定快照"
             }}
             · {{ formatServerDateTime(row.frozen_at) }}</span
           >
         </button>
+        <div class="actions report-pages">
+          <el-button :disabled="saving || loading || reportPage <= 1" @click="movePage(-1)">上一页报告</el-button>
+          <span>第 {{ reportPage }} 页 · 本页 {{ rows.length }} 条</span>
+          <el-button :disabled="saving || loading || !nextCursor" @click="movePage(1)">下一页报告</el-button>
+          <el-button v-if="reportPage > 1 || error" :disabled="saving || loading" @click="resetPages(); load()">回到报告首页</el-button>
+        </div>
       </section>
       <section v-if="selected" class="report-preview">
         <header>
@@ -253,6 +264,9 @@ onBeforeUnmount(() => {
   gap: 20px;
   min-width: 0;
 }
+.report-search { display:flex; gap:10px; margin-bottom:12px; }
+.report-search :deep(.el-input) { min-width:0; }
+.report-pages { justify-content:flex-start; margin-top:16px; }
 header,
 .actions {
   display: flex;
