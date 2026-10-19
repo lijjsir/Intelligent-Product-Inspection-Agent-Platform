@@ -147,6 +147,7 @@ function applyContext(value:ExecutionTaskContext,reset=false){
     form.product_category=value.task_scope.product_category;form.production_date=value.task_scope.production_date;
     const requested=typeof route.query.session==='string'?route.query.session:'';
     form.session_id=requested ? (value.sessions.some(item=>item.id===requested)?requested:'') : value.sessions.length===1?value.sessions[0]!.id:'';form.samples=[];
+    form.production_date=value.task_scope.production_date||value.sessions.find(item=>item.id===form.session_id)?.production_date||null;
     form.policy_id=value.policies.find(item=>!item.issues.length)?.id||'';
     form.imageViews=Object.fromEntries(value.images.map(item=>[item.image_hash,item.view]));
   }
@@ -177,7 +178,7 @@ function conditionFields(item:EvidenceDraft){
   const rule=selectedRequirements.value.find(r=>`${r.revision_id}:${r.id}`===item.requirement_ref);
   return Object.entries(rule?.expected_conditions||{}).map(([key,value])=>({key,value,type:typeof value}));
 }
-watch(()=>form.session_id,()=>{for(const item of form.evidence)if(item.kind==='measurement_record')Object.assign(item,emptyEvidence());});
+watch(()=>form.session_id,()=>{for(const item of form.evidence)if(item.kind==='measurement_record')Object.assign(item,emptyEvidence());if(!taskContext.value?.task_scope.production_date)form.production_date=taskContext.value?.sessions.find(item=>item.id===form.session_id)?.production_date||null;});
 
 async function openReportLink(){
   busy.value=true;error.value='';
@@ -263,6 +264,7 @@ async function load() {
   }
 }
 
+defineExpose({openCreate});
 async function openCreate() {
   if(busy.value||loading.value)return;
   const target=props.taskId,key=++contextEpoch;

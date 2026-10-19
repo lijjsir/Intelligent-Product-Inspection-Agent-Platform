@@ -12,6 +12,7 @@ from app.models.supervision import SupervisionRecord,MeasurementRecord
 from app.models.inspection_execution import InspectionPolicyPublication
 from app.services.execution_evidence_service import ExecutionEvidenceService,parsed_time
 from app.services.knowledge_source_service import fingerprint
+from app.services.task_sample_scope import sample_scope_issues
 
 
 def valid_uuid(value):
@@ -134,9 +135,8 @@ class InspectionExecutionContextService:
         samples=[]
         for s in native_samples:
             sample_issues=[] if s.data.get("sampled_at") else ["尚未记录采样时间"]
-            if task.product_sku_id and s.data.get("product_sku_id")!=task.product_sku_id:sample_issues.append("样品型号与任务型号不一致")
-            if task.batch_id and s.data.get("batch_id")!=task.batch_id:sample_issues.append("样品批次与任务批次不一致")
-            if scope['quality_product_id'] and s.data.get('quality_product_id') and s.data['quality_product_id']!=scope['quality_product_id']:sample_issues.append("样品产品与任务产品不一致")
+            if s.status!='active':sample_issues.append('样品已停用或撤回')
+            sample_issues.extend(sample_scope_issues(task,s.data,scope))
             samples.append({"id":s.id,"label":s.name,"code":s.code,"kind":"platform_sample","sampled_at":s.data.get("sampled_at"),"issues":sample_issues})
         physical_ids=[valid_uuid(i) for i in (task.meta_data or {}).get("physical_sample_ids",[]) if valid_uuid(i)]
         physical=(await self.session.scalars(select(PhysicalSample).where(PhysicalSample.org_id==self.org_id,
@@ -145,6 +145,7 @@ class InspectionExecutionContextService:
             sample_issues=[] if s.sampled_at else ["样品尚未完成采样登记"]
             if scope['quality_product_id'] and s.product_id!=scope['quality_product_id']:sample_issues.append("实物样品产品与任务产品不一致")
             if scope['production_batch_ref'] and s.production_batch_ref!=scope['production_batch_ref']:sample_issues.append("实物样品批次与任务批次不一致")
+            if scope['unit_serial_ref'] and s.unit_serial_ref!=scope['unit_serial_ref']:sample_issues.append('实物样品单件标识与任务不一致')
             samples.append({"id":s.id,"label":s.external_sample_code or s.unit_serial_ref or "抽查实物样品", "code":s.external_sample_code,
                 "kind":"physical_sample","sampled_at":str(s.sampled_at) if s.sampled_at else None,"issues":sample_issues})
         ids=[s.id for s in sessions if not session_id or s.id==session_id]

@@ -7,7 +7,7 @@ export interface ExecutionRun {id:string;task_id:string;row_version:number;statu
 export interface ExecutionTaskContext {
   case_preparation?:{initial_execution_keys:string[];report_attachment_id:string;standard_refs:{revision_id:string;candidate_id:string;measurement_key:string}[];
     planned_items:{measurement_key:string;value:number;unit:string;report_page:number;report_item:string;method:string;conditions_values:Record<string,unknown>}[]}|null;
-  context_hash:string;task_scope:{task_id:string;product_id:string;product_name:string;product_category:string;production_date:string|null;production_batch_ref:string|null;unit_serial_ref:string|null;input_mode:string;issues:string[]};
+  context_hash:string;task_scope:{task_id:string;product_id:string;product_name:string;product_category:string;production_date:string|null;production_batch_ref:string|null;unit_serial_ref:string|null;input_mode:string;issues:string[];quality_product_id?:string|null;quality_batch_id?:string|null;product_sku_id?:string|null;batch_id?:string|null};
   images:{image_hash:string;index:number;view:string}[];
   samples:{id:string;label:string;kind:string;code?:string;report_attachment_id?:string;issues:string[]}[];
   sessions:{id:string;label:string;code:string;sample_ids:string[];product_category?:string;production_date?:string}[];

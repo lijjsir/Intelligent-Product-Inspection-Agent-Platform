@@ -331,10 +331,19 @@ class SupervisionService:
                     or not clean.get("device_ids")
                 ):
                     raise ValidationError("测量会话必须包含样品、设备和检测项目")
-            if kind == "samples" and (
-                task.product_sku_id != clean["product_sku_id"] or task.batch_id != clean["batch_id"]
-            ):
-                raise ValidationError("样品产品或批次与任务不匹配")
+            if kind == "samples":
+                if task.status in {'signed', 'archived'}:
+                    raise ConflictError('已归档任务不能登记或修改样品')
+                from app.services.inspection_execution_context_service import InspectionExecutionContextService
+                from app.services.task_sample_scope import sample_scope_issues
+                scope = await InspectionExecutionContextService(self.db, self.current).scope(task)
+                issues = [*scope['issues'], *sample_scope_issues(task, clean, scope)]
+                if issues:
+                    raise ValidationError('样品产品或批次与任务不匹配', detail={'issues': issues})
+                from app.services.execution_evidence_service import parsed_time
+                from app.core.datetime import utcnow
+                if clean.get('sampled_at') and parsed_time(clean['sampled_at']) > utcnow():
+                    raise ValidationError('实际采样时间不能在未来；未采样时请保持未登记')
         for key, target in (("case_id", "risk-cases"), ("plan_id", "sampling-plans")):
             if clean.get(key):
                 if key == "case_id":
@@ -651,6 +660,18 @@ class SupervisionService:
         validated, duplicates = [], 0
         validation_by_event: dict[str, str] = {}
         expected = {x["item"]: x for x in session.data["test_items"]}
+        from app.models.task import InspectionTask
+        from app.services.inspection_execution_context_service import InspectionExecutionContextService
+        from app.services.task_sample_scope import sample_scope_issues
+        from app.core.datetime import utcnow
+        from app.services.execution_evidence_service import parsed_time
+        context_service = InspectionExecutionContextService(self.db, self.current)
+        task = await context_service.entity(InspectionTask, session.data['task_id'])
+        if not task:
+            raise ValidationError('测量任务不存在或已撤回')
+        if task.status in {'signed','archived'}:
+            raise ConflictError('已归档任务不能继续接收测量')
+        scope = await context_service.scope(task)
         for measurement in payload.measurements:
             m = measurement.model_dump(mode="json")
             if device_id is not None and m["device_id"] != device_id:
@@ -668,6 +689,13 @@ class SupervisionService:
             sample = await self.get("samples", m["sample_id"])
             if sample.status != "active" or not sample.data.get("sampled_at"):
                 raise ValidationError("样品尚未完成实际抽样登记")
+            # Recheck object identity even for older sessions or changed sample rows.
+            object_issues = [*scope['issues'], *sample_scope_issues(task, sample.data, scope)]
+            if object_issues:
+                raise ValidationError('测量样品与任务对象不匹配', detail={'issues': object_issues})
+            sampled, measured = parsed_time(sample.data.get('sampled_at')), parsed_time(m['measured_at'])
+            if not sampled or not measured or sampled > measured or measured > utcnow():
+                raise ValidationError('请核对实际采样、测量时间：采样不能晚于测量，测量不能在未来')
             t = expected.get(m["item"])
             if not t or t["unit"] != m["unit"] or t["method"] != m["method"]:
                 raise ValidationError(
@@ -795,6 +823,8 @@ class SupervisionService:
         measurements, errors = [], []
         for i, row in enumerate(rows, start=2):
             data = {field: row.get(mapping.get(field, field)) for field in Measurement.model_fields}
+            for field in ('uncertainty','sequence_no','calibration_version','command_id'):
+                if data.get(field)=='':data[field]=None
             if not data.get("conditions"):data.pop("conditions",None)
             elif isinstance(data["conditions"],str):
                 try:data["conditions"]=json.loads(data["conditions"])

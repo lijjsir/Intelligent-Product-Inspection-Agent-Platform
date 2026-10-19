@@ -67,6 +67,7 @@ async def handle(route):
         'status':'pending','priority':5,'has_result':False,'has_stability':False,'has_case_workflow':False,'created_at':STAMP,'image_urls':[],
         'risk_verification_id':next((l['id'] for l in state['links'] if l['task_id']==TASK),None)}
     elif path=='/results/execution-options':data=[]
+    elif path=='/samples':data={'items':[],'total':0,'page':1,'size':20}
     elif path=='/quality-data/reference-options':data={'categories':[{'id':CATEGORY,'name':'模拟类别'}],'products':[{'id':PRODUCT,'name':'【模拟】验证产品','category_id':CATEGORY}],'enterprises':[]}
     elif path=='/quality-data/records':data={'items':state['records'],'total':len(state['records']),'page':1,'size':20}
     elif path=='/quality-data/events':

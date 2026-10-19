@@ -566,7 +566,7 @@ async def template(svc=Depends(service)):
     from fastapi.responses import Response
 
     svc.require_role({"user", "expert", "algorithm_engineer", "admin"})
-    content = "event_id,sample_id,device_id,item,measured_at,value,unit,method,quality_flag\n"
+    content = "event_id,sample_id,device_id,item,measured_at,value,unit,method,quality_flag,conditions,uncertainty,calibration_version\n"
     return Response(
         content.encode("utf-8-sig"),
         media_type="text/csv",

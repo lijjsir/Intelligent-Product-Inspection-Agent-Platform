@@ -334,10 +334,24 @@ class DeviceObservation(Strict):
 
 class SampleData(Strict):
     task_id: UUID
-    product_sku_id: UUID
-    batch_id: UUID
+    product_sku_id: UUID | None = None
+    batch_id: UUID | None = None
+    quality_product_id: UUID | None = None
+    quality_batch_id: UUID | None = None
+    production_batch_ref: str | None = Field(default=None, min_length=1, max_length=128)
+    unit_serial_ref: str | None = Field(default=None, min_length=1, max_length=128)
     sampled_at: datetime | None = None
     sampling_region_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def require_product_identity(self):
+        if not self.quality_product_id and not (self.product_sku_id and self.batch_id):
+            raise ValueError("样品必须明确关联质监具体产品，或完整的型号与批次")
+        if bool(self.product_sku_id) != bool(self.batch_id):
+            raise ValueError("型号与批次须同时填写")
+        if self.quality_batch_id and not self.quality_product_id:
+            raise ValueError("质监批次必须关联质监具体产品")
+        return self
 
 
 class ExposureData(Strict):

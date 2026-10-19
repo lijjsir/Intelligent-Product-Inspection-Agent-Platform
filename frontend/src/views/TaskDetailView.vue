@@ -19,6 +19,7 @@ import type { TaskResultIngestResponse, TaskResultIngestTarget, TaskStreamEvent 
 import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 import { taskStatusLabel } from "@/utils/task-status";
 import InspectionExecutionPanel from '@/components/business/InspectionExecutionPanel.vue';
+import MeasurementPanel from '@/components/business/supervision/MeasurementPanel.vue';
 import InspectionCaseWorkflowPanel from '@/components/business/InspectionCaseWorkflowPanel.vue';
 import RiskTaskOriginPanel from '@/components/business/quality-risk/RiskTaskOriginPanel.vue';
 
@@ -30,6 +31,7 @@ const datasetStore = useDatasetStore();
 const { hasRole, hasPermission } = usePermission();
 
 const loading = ref(true);
+const nativeExecution=ref<InstanceType<typeof InspectionExecutionPanel>|null>(null);
 const running = ref(false);
 const deleting = ref(false);
 const deleteDialogVisible = ref(false);
@@ -384,14 +386,15 @@ onUnmounted(() => {
     <div v-if="currentTask" class="content">
       <RiskTaskOriginPanel v-if="riskVerificationId&&hasRole(ROLE_EXPERT)&&hasPermission('quality_material_read_business')" :task-id="currentTask.id" :link-id="riskVerificationId" />
       <InspectionCaseWorkflowPanel v-if="currentTask.has_case_workflow&&hasPermission('inspection_execution')&&hasPermission('result')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
-      <InspectionExecutionPanel v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
+      <MeasurementPanel v-if="riskVerificationId&&hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id" preparation-only @ready="nativeExecution?.openCreate()" />
+      <InspectionExecutionPanel ref="nativeExecution" v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
       <el-card shadow="never">
         <template #header>基本信息</template>
         <el-descriptions :column="2">
           <el-descriptions-item label="任务 ID">{{ currentTask.id }}</el-descriptions-item>
           <el-descriptions-item v-if="!hasRole(ROLE_USER)" label="组织 ID">{{ currentTask.org_id }}</el-descriptions-item>
-          <el-descriptions-item label="产品线">{{ formatTaskEntityLabel(currentTask.product_line_name, currentTask.product_line_code || currentTask.product_id) }}</el-descriptions-item>
-          <el-descriptions-item label="SKU">{{ formatTaskEntityLabel(currentTask.product_name, currentTask.product_sku_code || currentTask.product_id) }}</el-descriptions-item>
+          <el-descriptions-item :label="currentTask.quality_product_id?'产品类别':'产品线'">{{ formatTaskEntityLabel(currentTask.product_line_name, currentTask.product_line_code || currentTask.product_id) }}</el-descriptions-item>
+          <el-descriptions-item :label="currentTask.quality_product_id?'具体产品':'SKU'">{{ formatTaskEntityLabel(currentTask.product_name, currentTask.product_sku_code || currentTask.product_id) }}</el-descriptions-item>
           <el-descriptions-item label="原始批次号">{{ currentTask.batch_no || "未提供" }}</el-descriptions-item>
           <el-descriptions-item v-if="currentTask.quality_batch_display_no" label="系统批次编号">{{ currentTask.quality_batch_display_no }}</el-descriptions-item>
           <el-descriptions-item label="检测标准">{{ currentTask.standard_name || currentTask.spec_code }}</el-descriptions-item>
@@ -580,8 +583,11 @@ onUnmounted(() => {
 
 .content {
   display: grid;
+  grid-template-columns:minmax(0,1fr);
+  min-width:0;
   gap: 20px;
 }
+.content > * {min-width:0;}
 
 .ingest-card {
   border: 1px solid rgba(217, 119, 6, 0.18);
