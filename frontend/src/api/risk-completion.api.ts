@@ -73,6 +73,8 @@ export interface LabOptionPage {items: LabOption[]; selected: LabOption[]; unava
 export interface RiskReport extends ReportSummary {
   snapshot_hash: string;
   snapshot: {
+    execution_mode?: 'demo'|'business';
+    laboratory?: Array<{mode:'skip'|'verify';assessment_id:string}>;
     case_id: string;
     assessment_id: string;
     assessment_version: number;

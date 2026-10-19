@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed,nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRuntimeContext } from "@/composables/useRuntimeContext";
+import { useRoute } from 'vue-router';
+import { useAuthStore } from '@/stores/auth.store';
 
 const { context, unavailable, load } = useRuntimeContext();
+const route=useRoute(),auth=useAuthStore();
+const showGuideLink=computed(()=>auth.primaryRole==='expert'&&auth.hasPermission('quality_material_read_business')&&route.path.startsWith('/app/')&&route.path!=='/app/workbench');
 const banner = ref<HTMLElement | null>(null);
 let observer: ResizeObserver | null = null;
 function updateHeight() {
@@ -20,9 +24,10 @@ watch(
     updateHeight();
   },
 );
-onMounted(() => {
+onMounted(async () => {
   observer = new ResizeObserver(updateHeight);
-  void load();
+  await load();await nextTick();
+  if(banner.value){observer?.observe(banner.value);updateHeight();}
 });
 onBeforeUnmount(() => {
   observer?.disconnect();
@@ -40,7 +45,7 @@ onBeforeUnmount(() => {
   >
     <template v-if="context?.execution_mode === 'demo'"
       ><strong>演示环境</strong><span>模拟资料 · 不用于正式风险结论</span
-      ><small>{{ context.case_code }}</small></template
+      ><small>{{ context.case_code }}</small><router-link v-if="showGuideLink" to="/app/workbench#demo-case-guide">返回演示导览</router-link></template
     >
     <template v-else
       ><span>环境信息暂不可用</span><button type="button" @click="load">重试</button></template
@@ -80,6 +85,8 @@ onBeforeUnmount(() => {
 .runtime-banner button {
   text-decoration: underline;
 }
+.runtime-banner a{color:inherit;text-decoration:underline;text-underline-offset:3px;min-height:30px;display:inline-flex;align-items:center;}
+.runtime-banner a:focus-visible{outline:2px solid #52677d;outline-offset:3px;}
 .runtime-banner button:focus-visible {
   outline: 2px solid #52677d;
   outline-offset: 3px;

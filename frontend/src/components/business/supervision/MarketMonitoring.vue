@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { computed, onBeforeUnmount,onMounted, reactive, ref, watch } from "vue";
+import { onBeforeRouteLeave,useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { marketApi } from "@/api/market-monitoring.api";
 import { qualityRiskApi } from "@/api/quality-risk.api";
@@ -19,6 +19,7 @@ import type {
 
 const route = useRoute(),
   router = useRouter();
+const ownerPath=route.path;
 const report = ref<MarketReport | null>(null),
   error = ref(""),
   loading = ref(false);
@@ -117,6 +118,7 @@ function openCase(id: string) {
   void router.push({ path: "/app/risk-assessments", query: { case_id: id } });
 }
 async function syncQuery() {
+  if(route.path!==ownerPath)return;
   await router.replace({
     query: {
       ...route.query,
@@ -333,6 +335,10 @@ async function saveCoverage() {
   }
 }
 watch(tab, () => void syncQuery());
+// A scan completing during navigation must not replace the destination query.
+function invalidateRequests(){++epoch;++detailEpoch;}
+onBeforeRouteLeave(invalidateRequests);
+onBeforeUnmount(invalidateRequests);
 watch(
   () => route.query.signal,
   (id) => {

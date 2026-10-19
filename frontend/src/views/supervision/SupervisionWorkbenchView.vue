@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed,onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowRight, Plus, RefreshRight } from "@element-plus/icons-vue";
 import BusinessTodoPanel from "@/components/business/supervision/BusinessTodoPanel.vue";
 import { supervisionApi } from "@/api/supervision.api";
 import { qualityRiskApi } from "@/api/quality-risk.api";
+import DemoWalkthrough from '@/components/business/supervision/DemoWalkthrough.vue';
+import { useRuntimeContext } from '@/composables/useRuntimeContext';
+import { useAuthStore } from '@/stores/auth.store';
 
 const router = useRouter();
+const runtime=useRuntimeContext(),auth=useAuthStore();
+const demoExpert=computed(()=>runtime.context.value?.execution_mode==='demo'&&auth.primaryRole==='expert'&&auth.hasPermission('quality_material_read_business'));
+function showDemo(){document.getElementById('demo-case-guide')?.scrollIntoView({block:'start'});}
 const loading = ref(false);
 const labEnabled = ref<boolean | null>(null);
 const loadFailures = ref<string[]>([]);
@@ -84,20 +90,23 @@ async function loadOverview() {
   loading.value = false;
 }
 
-onMounted(loadOverview);
+onMounted(()=>{void runtime.load();void loadOverview();});
 </script>
 
 <template>
-  <main class="quality-desk">
+  <main class="quality-desk" :class="{'demo-desk':demoExpert}">
     <section class="desk-hero">
       <div class="hero-copy">
         <div class="hero-kicker"><span /> QUALITY SUPERVISION</div>
-        <h1>让每一次监管判断<br /><em>都有证据、有边界、可执行</em></h1>
-        <p>
+        <h1 v-if="demoExpert">质量风险分析演示<br /><em>从来源资料，走到研判与报告</em></h1>
+        <h1 v-else>让每一次监管判断<br /><em>都有证据、有边界、可执行</em></h1>
+        <p v-if="demoExpert">使用同一模拟案例查看数据接入、异常发现、风险研判、协同复核、抽查建议和报告。实验室验证可按证据需要选择。</p>
+        <p v-else>
           市场监控、舆情监测、监督抽查和实验室检测共享质量知识与可信能力，在统一风险决策中心形成闭环。
         </p>
         <div class="hero-actions">
-          <el-button type="primary" :icon="Plus" @click="router.push('/app/quality-data')">
+          <el-button v-if="demoExpert" type="primary" @click="showDemo">从案例导览开始</el-button>
+          <el-button v-else type="primary" :icon="Plus" @click="router.push('/app/quality-data')">
             接入质量数据
           </el-button>
           <el-button @click="router.push('/app/risk-assessments')">进入风险研判</el-button>
@@ -133,8 +142,9 @@ onMounted(loadOverview);
     </section>
 
     <el-alert v-if="loadFailures.length" class="overview-error" type="warning" :closable="false" :title="`${loadFailures.join('、')}未能加载，请刷新重试。`" />
+    <DemoWalkthrough v-if="demoExpert" id="demo-case-guide" />
 
-    <section class="capability-band" aria-label="质监大模型核心能力">
+    <section v-if="!demoExpert" class="capability-band" aria-label="质监大模型核心能力">
       <article
         v-for="item in capabilities"
         :key="item.code"
@@ -146,7 +156,7 @@ onMounted(loadOverview);
       </article>
     </section>
 
-    <section class="workflow-section" aria-labelledby="agent-flow-title">
+    <section v-if="!demoExpert" class="workflow-section" aria-labelledby="agent-flow-title">
       <header class="section-heading">
         <div>
           <span>闭环协作链</span>
@@ -196,6 +206,8 @@ onMounted(loadOverview);
 .overview-error {
   margin-top: 16px;
 }
+.demo-desk .desk-hero{background:#0b416b;box-shadow:0 16px 36px rgba(7,65,124,.12);}
+.demo-desk .hero-kicker{color:#c8e3f0;}
 
 .desk-hero {
   position: relative;
