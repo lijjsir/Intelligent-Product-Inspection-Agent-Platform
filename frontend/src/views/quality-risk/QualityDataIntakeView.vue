@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, type UploadFile, type UploadFiles } from "element-plus";
 import { extractApiErrorMessage } from "@/api/http";
 import { qualityRiskApi } from "@/api/quality-risk.api";
+import { riskCompletionApi } from '@/api/risk-completion.api';
 import { useAuthStore } from "@/stores/auth.store";
 import LocationPicker from "@/components/business/quality-risk/LocationPicker.vue";
 import type { LocationRef } from "@/types/quality-risk.types";
@@ -29,6 +30,9 @@ const onResize = () => {
 const ownOnly = computed(() => !auth.hasPermission("quality_material_read_business"));
 const canCreate = computed(() => auth.hasPermission("quality_material_submit"));
 const canImport = computed(() => auth.hasPermission("quality_ingestion_manage"));
+const validationOrigin=ref<Awaited<ReturnType<typeof riskCompletionApi.labIntakeContext>>['data']['data']|null>(null),validationError=ref('');
+const originObjectsConfirmed=ref(false);
+let originEpoch=0;
 const records = ref<QualitySourceRecord[]>([]);
 const total = ref(0),
   page = ref(1),
@@ -244,6 +248,7 @@ const form = reactive({
   product_description: "",
   enterprise_name: "",
   production_batch_ref: "",
+  unit_serial_ref:'',
 });
 const importForm = reactive({ origin_label: "", record_type: "consumer_complaint" });
 const types = Object.entries(RECORD_TYPE_LABELS);
@@ -288,6 +293,7 @@ async function loadRecords() {
   }
 }
 function openRecord() {
+  originObjectsConfirmed.value=false;
   recordError.value = "";
   Object.assign(form, {
     record_type:
@@ -301,6 +307,7 @@ function openRecord() {
     product_description: "",
     enterprise_name: "",
     production_batch_ref: "",
+    unit_serial_ref:'',
   });
   files.value = [];
   uploaded.value = [];
@@ -317,6 +324,7 @@ function fileChanged(_file: UploadFile, list: UploadFiles) {
 }
 async function saveRecord() {
   if (saving.value) return;
+  if(validationOrigin.value&&!originObjectsConfirmed.value){recordError.value='请先核对所填对象与原报告一致；未知信息请留空。';return;}
   if (!form.text.trim() && !files.value.length) {
     ElMessage.warning("请填写原始内容或选择附件");
     return;
@@ -345,6 +353,7 @@ async function saveRecord() {
       product_ref: {
         ...(categoryId.value ? { category_id: categoryId.value } : {}),
         ...(form.production_batch_ref ? { production_batch_ref: form.production_batch_ref } : {}),
+        ...(form.unit_serial_ref ? {unit_serial_ref:form.unit_serial_ref}:{}),
         ...(productId.value
           ? {
               product_id: productId.value,
@@ -354,7 +363,7 @@ async function saveRecord() {
       },
       location: location.value,
       attachment_ids: uploaded.value.map((x) => x.id),
-      provenance: { channel: "manual_form" },
+      provenance: { channel: "manual_form",...(validationOrigin.value?{validation_link_id:validationOrigin.value.link_id,object_reference_checked:true}: {}) },
     });
     recordDialog.value = false;
     ElMessage.success(
@@ -489,6 +498,12 @@ function closeDetail(value: boolean) {
 }
 async function applyRoute() {
   if (route.path !== "/app/quality-data") return;
+  const key=++originEpoch;validationError.value='';
+  if(route.query.validation_id!==validationOrigin.value?.link_id){validationOrigin.value=null;recordDialog.value=false;records.value=[];total.value=0;}
+  if(typeof route.query.validation_id==='string'&&!validationOrigin.value){
+    try{const origin=(await riskCompletionApi.labIntakeContext(route.query.validation_id)).data.data;if(key!==originEpoch)return;validationOrigin.value=origin;}
+    catch(e){if(key===originEpoch)validationError.value=extractApiErrorMessage(e,'来源验证申请无法核对，请从原事项重新进入');return;}
+  }
   const type = String(route.query.record_type || "");
   filterProductId.value = String(route.query.product_id || "");
   filterEnterpriseId.value = String(route.query.enterprise_id || "");
@@ -500,6 +515,15 @@ async function applyRoute() {
   if (route.query.record) await showRecord(String(route.query.record));
   if (route.query.create === "1" && canCreate.value) {
     openRecord();
+    if(validationOrigin.value){
+      form.record_type='inspection_report';productId.value=validationOrigin.value.product_id||'';categoryId.value=validationOrigin.value.category_id||'';
+      enterpriseId.value=validationOrigin.value.enterprise_id||'';form.production_batch_ref=validationOrigin.value.production_batch_ref||'';
+      form.unit_serial_ref=validationOrigin.value.unit_serial_ref||'';
+      const origin=validationOrigin.value;
+      if(origin.product)products.value=mergeOptions(products.value,[origin.product]);
+      if(origin.category)categories.value=mergeOptions(categories.value,[origin.category]);
+      if(origin.enterprise)enterprises.value=mergeOptions(enterprises.value,[origin.enterprise]);
+    }
     const query = { ...route.query };
     delete query.create;
     await router.replace({ query });
@@ -512,6 +536,7 @@ watch(
     route.query.record_type,
     route.query.product_id,
     route.query.enterprise_id,
+    route.query.validation_id,
   ],
   () => {
     void applyRoute();
@@ -523,10 +548,16 @@ onMounted(() => {
   if (route.path === "/app/quality-data") void applyRoute();
   else void loadRecords();
 });
-onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResize);});
 </script>
 <template>
   <main class="intake-page" :class="{ embedded }">
+    <el-alert v-if="validationError" :title="validationError" type="error" :closable="false" />
+    <section v-if="validationOrigin" class="record-origin">
+      <p>为 {{ validationOrigin.case_code }} 第 {{ validationOrigin.assessment_version }} 版接入报告：{{ validationOrigin.purpose }}</p>
+      <p>已带入事项对象供核对，仍须以报告原始对象为准。保存资料后，请返回原事项明确关联回流。</p>
+      <el-button @click="router.push({path:'/app/risk-assessments',query:{case_id:validationOrigin.case_id,assessment_id:validationOrigin.assessment_id,tab:'laboratory',validation_id:validationOrigin.link_id}})">返回来源事项选择报告回流</el-button>
+    </section>
     <header class="page-head">
       <div>
         <h1>{{ ownOnly ? "本人质量资料" : "数据采集" }}</h1>
@@ -916,6 +947,8 @@ onBeforeUnmount(() => window.removeEventListener("resize", onResize));
       :close-on-click-modal="false"
     >
       <el-alert v-if="recordError" :title="recordError" type="error" :closable="false" />
+      <el-alert v-if="validationOrigin" title="带入的对象仅供核对，请以原报告为准；资料保存后仍须在事项中明确关联回流。" type="info" :closable="false" />
+      <el-checkbox v-if="validationOrigin" v-model="originObjectsConfirmed">已核对所填产品、批次及单件与原报告一致；未知信息已留空</el-checkbox>
       <el-form label-position="top"
         ><el-form-item label="资料类型" required
           ><el-select v-model="form.record_type"
@@ -1009,6 +1042,7 @@ onBeforeUnmount(() => window.removeEventListener("resize", onResize));
                 ><el-input v-model="form.enterprise_name" /></el-form-item
               ><el-form-item label="真实生产批次号"
                 ><el-input v-model="form.production_batch_ref" /></el-form-item
+              ><el-form-item label="单件标识（未知留空）"><el-input v-model="form.unit_serial_ref" :maxlength="255" /></el-form-item
               ><el-form-item label="实际发生时间"
                 ><el-date-picker
                   v-model="form.occurred_at"

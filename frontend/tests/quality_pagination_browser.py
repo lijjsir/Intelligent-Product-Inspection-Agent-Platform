@@ -62,6 +62,7 @@ async def handle(route):
         data = {**row, 'snapshot_hash':'fixture', 'snapshot':{'case_id':CASE['id'], 'assessment_id':assessment['id'], 'assessment_version':1, 'source_refs':[]},
                 'sections':[{'title':'隔离报告预览','paragraphs':[row['title']]}]}
     elif path == '/quality-supervision/settings': data = {'enabled':True,'laboratory_validation_enabled':True}
+    elif path == '/quality-supervision/laboratory-summary': data={'collecting':0,'review':0,'signed':0,'online':0}
     elif path in ['/inspection-sessions','/devices']: data = page_of([],query)
     elif path == f"/risk-cases/{CASE['id']}/laboratory-verifications": data = [link]
     elif path == f"/risk-laboratory-verifications/{link['id']}/execution-results": data = page_of([],query)
@@ -124,12 +125,14 @@ async def main():
         await page.screenshot(path=str(OUT/'pagination-report-mobile.png'))
         await page.set_viewport_size({'width':1500,'height':1000})
         await page.goto(BASE+f"/app/laboratory?case_id={CASE['id']}",wait_until='networkidle')
-        await page.get_by_text('风险事项的可选验证与资料回流',exact=True).click()
         task_picker = page.get_by_role('group',name='关联既有检测任务分页选择',exact=True)
         await expect(task_picker).to_contain_text('任务0249')
         await task_picker.get_by_role('combobox').fill('任务0243')
         await page.get_by_role('option',name='任务0243',exact=True).click()
         await expect(task_picker).to_contain_text('任务0243')
+        # The report and native-task paths now have separate controls.
+        link.update(task_id=None,verification_path='report')
+        await page.reload(wait_until='networkidle')
         record_picker = page.get_by_role('group',name='选择已接入的检测资料分页选择',exact=True)
         await record_picker.get_by_role('combobox').fill('资料0243')
         await page.get_by_role('option',name='资料0243',exact=True).click()

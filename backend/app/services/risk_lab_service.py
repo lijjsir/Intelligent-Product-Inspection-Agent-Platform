@@ -33,6 +33,10 @@ class RiskLabService:
             raise ForbiddenError("本轮验证分支由专家工作区访问")
         return actor
 
+    @staticmethod
+    def path(data):
+        return data.get('verification_path') or ('skip' if data.get('mode')=='skip' else 'task' if data.get('task_id') else 'report')
+
     async def task(self, task_id, case):
         require_role("task", self.current.role)
         row = await self.db.scalar(self.demo.read(select(InspectionTask).where(InspectionTask.id == task_id,
@@ -50,11 +54,35 @@ class RiskLabService:
     def matches(self, case, record):
         product = (case.scope or {}).get("product_id")
         enterprise = (case.scope or {}).get("enterprise_id")
+        ref=record.product_ref or {}
         if product:
-            return (record.product_ref or {}).get("product_id") == product
-        if enterprise:
-            return (record.enterprise_ref or {}).get("enterprise_id", (record.enterprise_ref or {}).get("id")) == enterprise
-        return False
+            identity=ref.get('product_id')==product
+        elif enterprise:
+            identity=(record.enterprise_ref or {}).get('enterprise_id',(record.enterprise_ref or {}).get('id'))==enterprise
+        else:return False
+        return identity and all(not (case.scope or {}).get(key) or ref.get(key)==case.scope[key] for key in ('production_batch_ref','unit_serial_ref'))
+
+    async def intake_context(self,link_id):
+        await self.guard()
+        row=await self.row(link_id)
+        if row.data['mode']!='verify' or self.path(row.data)!='report':raise ValidationError('此验证申请不是引用已有报告路径')
+        case=await self.demo.risk.risk_case(row.data['case_id'])
+        from app.models.quality_risk import QualityProduct,ProductCategory
+        scope=case.scope or {}
+        async def entity(model,value,*conditions):
+            try:identifier=str(UUID(str(value)))
+            except (ValueError,TypeError,AttributeError):return None
+            return await self.db.scalar(select(model).where(model.org_id==self.org_id,model.id==identifier,*conditions))
+        product=await entity(QualityProduct,scope.get('product_id'),QualityProduct.deleted_at.is_(None),QualityProduct.is_active.is_(True))
+        category=await entity(ProductCategory,scope.get('category_id') or (product.category_id if product else None),ProductCategory.deleted_at.is_(None),ProductCategory.is_active.is_(True))
+        enterprise=await entity(SupervisionRecord,scope.get('enterprise_id'),SupervisionRecord.kind=='enterprises',SupervisionRecord.status=='active')
+        if product and category and category.id!=product.category_id:raise ValidationError('事项产品与类别不一致，请先整理对象')
+        return {'link_id':row.id,'case_id':case.id,'case_code':case.code,'assessment_id':row.data['assessment_id'],
+            'assessment_version':row.data['assessment_version'],'purpose':row.data['purpose'],
+            'product_id':product.id if product else None,'category_id':category.id if category else None,'enterprise_id':enterprise.id if enterprise else None,
+            'product':{'id':product.id,'name':product.name,'category_id':product.category_id} if product else None,
+            'category':{'id':category.id,'name':category.name} if category else None,'enterprise':{'id':enterprise.id,'name':enterprise.name} if enterprise else None,
+            'production_batch_ref':scope.get('production_batch_ref'),'unit_serial_ref':scope.get('unit_serial_ref')}
 
     async def options(self, case_id):
         tasks = await self.option_page(case_id, 'tasks', size=100)
@@ -96,6 +124,8 @@ class RiskLabService:
             elif (case.scope or {}).get('enterprise_id'):
                 query = query.where(func.coalesce(model.enterprise_ref['enterprise_id'].as_string(), model.enterprise_ref['id'].as_string()) == case.scope['enterprise_id'])
             else: query = query.where(False)
+            for key in ('production_batch_ref','unit_serial_ref'):
+                if (case.scope or {}).get(key):query=query.where(model.product_ref[key].as_string()==case.scope[key])
             search = [model.content['title'].as_string().contains(keyword, autoescape=True),
                 model.content['text'].as_string().contains(keyword, autoescape=True), model.external_record_id.contains(keyword, autoescape=True)]
         def serialize(row):
@@ -119,6 +149,9 @@ class RiskLabService:
         if row.data.get('execution_mode','demo') != self.demo.mode:
             raise ForbiddenError('验证关联不属于当前业务环境')
         await self.demo.risk.risk_case(row.data["case_id"], lock=self.demo.locked)
+        assessment=await self.db.scalar(self.demo.read(select(QualityRiskAssessment.id).where(QualityRiskAssessment.org_id==self.org_id,
+            QualityRiskAssessment.id==row.data['assessment_id'],QualityRiskAssessment.risk_case_id==row.data['case_id'],QualityRiskAssessment.deleted_at.is_(None))))
+        if not assessment:raise NotFoundError('原研判版本已不可访问')
         if self.demo.locked:
             row = await self.db.scalar(self.demo.read(query))
         return row
@@ -165,7 +198,8 @@ class RiskLabService:
                 data['events'] = [{k:v for k,v in event.items() if k != 'note'} for event in data['events']]
         return {"id": row.id, "status": row.status, "revision": row.version, "created_by": row.created_by,
             "is_latest_assessment": bool(latest and latest.id == assessment.id), "issues": list(dict.fromkeys(issues)),
-            "boundary": self.boundary, **data}
+            "boundary":('验证申请用于补证，不代表风险确认；引用已有报告或经确认创建待执行任务，均不自动执行检测。'
+                if not self.demo.is_demo and data.get('verification_path') else self.boundary), **data}
 
     async def list(self, case_id):
         await self.guard()
@@ -177,10 +211,14 @@ class RiskLabService:
     async def decide(self, case_id, payload):
         actor = await self.guard(write=True)
         case, assessment = await self.demo.target(case_id, str(payload.assessment_id))
-        if self.demo.is_demo and (not is_manual_demo(assessment) or assessment.status != "demo_reviewed"):
-            raise ConflictError("请先完成本版独立演示复核")
-        await self.demo.ensure_current(case, assessment)
-        if (await self.demo.validation(case, assessment))['basis_hash'] != payload.expected_basis_hash:
+        # Explicit paths create a preparation request, including during evidence
+        # gathering. Legacy clients keep their original reviewed-version gate.
+        if payload.verification_path is None:
+            if self.demo.is_demo and (not is_manual_demo(assessment) or assessment.status != 'demo_reviewed'):
+                raise ConflictError('请先完成本版独立演示复核')
+            await self.demo.ensure_current(case,assessment)
+        basis,issues=await self.demo.capture(case)
+        if stable_hash(basis) != payload.expected_basis_hash:
             raise ConflictError("事项依据已变化，请刷新后选择验证分支")
         if payload.mode == "skip" and payload.task_id:
             raise ValidationError("跳过验证时无需关联检测任务")
@@ -189,26 +227,32 @@ class RiskLabService:
         row = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(SupervisionRecord.org_id == self.org_id,
             SupervisionRecord.kind == KIND, SupervisionRecord.code == assessment.id)))
         values = {"mode": payload.mode, "purpose": payload.purpose, "task_id": str(payload.task_id) if payload.task_id else None}
+        if payload.verification_path: values['verification_path']=payload.verification_path
+        elif row and row.data.get('verification_path'):values['verification_path']='skip' if payload.mode=='skip' else 'task' if payload.task_id else 'report'
+        stage='reviewed' if assessment.status==('demo_reviewed' if self.demo.is_demo else 'accepted') and not issues else 'preliminary'
+        if stage=='reviewed' and payload.verification_path is not None:
+            try:await self.demo.ensure_current(case,assessment)
+            except (ConflictError,ValidationError,ForbiddenError,NotFoundError):stage='preliminary'
         if row:
-            if all(row.data[k] == v for k, v in values.items()):
+            if all((self.path(row.data) if k=='verification_path' else row.data.get(k)) == v for k, v in values.items()) and (payload.verification_path is None or row.data.get('basis_hash')==payload.expected_basis_hash):
                 return {**await self.serialize(row), "reused": True}
             if row.created_by != self.actor:
                 raise ForbiddenError("只有原编写人可以调整验证选择")
-            if row.version != payload.expected_revision or row.data.get("record_ids") or row.data.get('execution_returns'):
+            if row.version != payload.expected_revision or row.data.get("record_ids") or row.data.get('execution_returns') or row.data.get('task_creation'):
                 raise ConflictError("验证选择已更新或已有资料回流，请保留原记录并在新版研判中处理")
             row.version += 1
-            row.data = {**row.data, **values, "events": [*row.data["events"], self.demo.event(actor, "decision_changed", **values)]}
+            row.data = {**row.data, **values,'basis_hash':payload.expected_basis_hash,'request_stage':stage, "events": [*row.data["events"], self.demo.event(actor, "decision_changed", **values)]}
         else:
             if payload.expected_revision is not None:
                 raise ConflictError("验证记录不存在，请刷新后重新选择")
             row = SupervisionRecord(id=str(uuid5(NAMESPACE_URL, f"risk-lab:{self.org_id}:{assessment.id}")),
                 org_id=self.org_id, kind=KIND, code=assessment.id, name=f"【{'演示' if self.demo.is_demo else '实验室'}验证】{case.code} · 第{assessment.version}版",
-                version=1, created_by=self.actor, data={**values, "case_id": case.id, "case_code": case.code,
+                version=1, created_by=self.actor, data={**values,'request_stage':stage, "case_id": case.id, "case_code": case.code,
                     "assessment_id": assessment.id, "assessment_version": assessment.version, "basis_hash": payload.expected_basis_hash,
                     "execution_mode": self.demo.mode, "record_ids": [], "returned_basis_hash": None,
                     "events": [self.demo.event(actor, "decision_created", **values)]})
             self.db.add(row)
-        row.status = ('demo_' if self.demo.is_demo else '') + ('skipped' if payload.mode == 'skip' else 'requested')
+        row.status = ('demo_' if self.demo.is_demo else '') + ('validation_planned' if stage=='preliminary' else 'skipped' if payload.mode == 'skip' else 'requested')
         await self.db.flush()
         return {**await self.serialize(row), "reused": False}
 
@@ -308,6 +352,8 @@ class RiskLabService:
     async def return_records(self, link_id, payload):
         actor = await self.guard(write=True)
         row = await self.row(link_id)
+        if row.data.get('verification_path')=='task':
+            raise ValidationError('平台检测请从关联任务返回已独立复核的结果；引用已有报告请选择报告路径')
         ids = sorted({str(rid) for rid in payload.record_ids})
         if row.data.get("record_ids"):
             if sorted(row.data["record_ids"]) == ids and row.data.get("return_note") == payload.note:
@@ -321,7 +367,7 @@ class RiskLabService:
         for rid in ids:
             record = await self.demo.risk.record(rid)
             if record.record_type != "inspection_report" or record.data_nature != ('synthetic' if self.demo.is_demo else 'observed') or not self.matches(case, record):
-                raise ValidationError("只能回流当前环境中明确关联同一对象的检测资料，未知或不匹配对象请先整理")
+                raise ValidationError("只能回流当前环境中同一对象且匹配已限定批次、单件的检测资料；缺失或不匹配的对象信息请先核对整理")
         before, _ = await self.demo.capture(case)
         await self.demo.risk.append_risk_sources(case.id, ids)
         basis, blockers = await self.demo.capture(case)

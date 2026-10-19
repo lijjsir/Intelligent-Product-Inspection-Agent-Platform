@@ -31,8 +31,9 @@ def risk_report_sections(report):
         sections[-1]['paragraphs'].extend(f"检测执行 {entry['ref']['run_id']} 的原始资料：{origin['record_id']}；附件：{origin['attachment_id']}。"
             for entry in results for origin in entry['ref'].get('report_sources', []))
     sections.append({"title": "可选实验室验证", "paragraphs": ["未选择实验室分支；分析流程不依赖检测任务。"] if not labs else [
-        f"原研判第 {l['assessment_version']} 版：{'跳过验证' if l['mode']=='skip' else '关联验证'}；目的：{l['purpose']}；"
-        f"状态：{ {'demo_skipped':'演示已跳过','demo_requested':'演示待资料','demo_returned':'演示资料已回流', 'skipped':'已跳过', 'requested':'待验证', 'returned':'已回流', 'reference_withdrawn':'检测结果引用已撤回'}.get(l['status'],l['status'])}；"
+        f"原研判第 {l['assessment_version']} 版：{ {'skip':'暂不验证','report':'引用已有报告','task':'组织新的检测'}.get(l.get('verification_path'),'跳过验证' if l['mode']=='skip' else '关联验证')}；目的：{l['purpose']}；"
+        f"{'补证申请记录，不代表风险确认或独立复核通过；' if l.get('request_stage')=='preliminary' else ''}"
+        f"状态：{ {'demo_skipped':'演示已跳过','demo_requested':'演示待资料','demo_returned':'演示资料已回流', 'skipped':'已跳过', 'requested':'待验证', 'returned':'已回流', 'validation_planned':'待补证的验证申请','demo_validation_planned':'演示验证申请','reference_withdrawn':'检测结果引用已撤回'}.get(l['status'],l['status'])}；"
         f"任务：{l.get('task_id') or '未关联'}；返回资料：{'、'.join(l.get('record_ids',[])) or '无'}；"
         f"说明：{l.get('return_note') or '未返回资料'}" for l in labs]})
     if not demo:

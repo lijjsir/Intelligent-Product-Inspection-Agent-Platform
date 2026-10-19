@@ -38,7 +38,7 @@ onBeforeUnmount(() => {
   <main class="demo-lab-workspace">
     <h1>实验室检测 · 可选验证</h1>
     <p>
-      检测任务承载具体检测工作；本入口记录风险事项为何需要验证、关联什么资料，以及资料如何返回原事项。演示环境不启动检测。
+      暂不验证或引用已有报告无需检测任务；组织平台检测时才创建或关联任务。资料和结果返回原事项后，再形成新版研判与独立复核。
     </p>
     <el-alert v-if="error" type="error" :title="error" :closable="false" />
     <RiskCasePicker id="lab-case" label="选择来源事项" empty-label="请选择" :model-value="typeof route.query.case_id === 'string' ? route.query.case_id : undefined"

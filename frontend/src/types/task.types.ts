@@ -39,6 +39,7 @@ export interface DefectItem {
 }
 
 export interface InspectionTask {
+  risk_verification_id?:string|null;
   has_case_workflow?:boolean;
   has_execution_result?:boolean;
   display_no?: string | null;

@@ -62,7 +62,7 @@ with sync_playwright() as pw:
         author.goto(BASE+f"/app/risk-assessments?case_id={CASE}&tab=laboratory",wait_until='networkidle');panel=author.locator('.risk-lab-panel')
         rows=get(f"/risk-cases/{CASE}/laboratory-verifications");link=next(r for r in rows if r['id']==progress['lab_id'])
         if link['mode']=='skip':
-            panel.locator('label.el-radio').filter(has_text='需要验证资料').click();field(author,panel,'验证目的或跳过理由').fill(VERIFY)
+            panel.locator('label.el-radio').filter(has_text='引用已有报告').click();field(author,panel,'验证目的或跳过理由').fill(VERIFY)
             panel.get_by_role('button',name='保存本版验证选择',exact=True).click();expect(panel.locator('.lab-return')).to_be_visible()
         raw=get('/quality-data/records?page=1&size=200')['items'];record=next((r for r in raw if r.get('external_record_id')==MARKER),None)
         if not record:
@@ -77,7 +77,7 @@ with sync_playwright() as pw:
         progress['returned_record_id']=record['id'];checkpoint()
         panel.get_by_role('button',name='刷新关联与资料',exact=True).click()
         block=panel.locator('.lab-return');expect(block).to_be_visible()
-        block.locator('.el-form-item').filter(has=author.locator('label',has_text='已接入且确认同一对象的模拟检测资料')).locator('.el-select').click()
+        block.locator('.el-form-item').filter(has=author.locator('label',has_text='已接入且确认同一对象的检测资料')).locator('.el-select').click()
         author.get_by_role('option',name=re.compile(MARKER)).click();author.keyboard.press('Escape')
         field(author,block,'回流说明').fill(RETURN);block.get_by_role('button',name='关联资料并返回原事项',exact=True).click()
         expect(panel).to_contain_text('演示资料已回流')

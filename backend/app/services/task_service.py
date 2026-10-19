@@ -425,6 +425,14 @@ class TaskService:
             }
         for task in valid_tasks:
             meta = dict(getattr(task, "meta_data", None) or {})
+            origin=None
+            if str(self._actor_role)=='expert':
+                from app.core.permissions import has_permission
+                if has_permission('quality_material_read_business',self._actor_role):
+                    from uuid import UUID
+                    try:origin=str(UUID(str(meta.get('risk_verification_id'))))
+                    except (ValueError,TypeError,AttributeError):pass
+            setattr(task,'risk_verification_id',origin)
             setattr(task,"supervision",bool(meta.get("supervision")))
             org = org_map.get(str(task.org_id))
             setattr(task, "org_slug", getattr(org, "slug", None))

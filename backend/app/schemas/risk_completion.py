@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.schemas.demo_risk_workflow import Strict
 
@@ -13,6 +13,24 @@ class LabDecision(Strict):
     mode: Literal["skip", "verify"]
     purpose: str = Field(min_length=1, max_length=2000)
     task_id: UUID | None = None
+    verification_path: Literal['skip','report','task'] | None = None
+
+    @model_validator(mode='after')
+    def path_matches_mode(self):
+        if self.verification_path:
+            if (self.verification_path=='skip') != (self.mode=='skip'):
+                raise ValueError('验证路径与验证方式不一致')
+            if self.verification_path!='task' and self.task_id:
+                raise ValueError('暂不验证或引用已有报告不需要检测任务')
+        return self
+
+
+class LabTaskCreate(Strict):
+    expected_revision: int = Field(ge=1)
+    expected_basis_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    request_key: UUID
+    inspection_standard_id: UUID
+    priority: int = Field(default=5,ge=1,le=10)
 
 
 class LabReturn(Strict):

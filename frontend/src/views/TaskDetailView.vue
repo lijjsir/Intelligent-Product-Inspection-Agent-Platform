@@ -20,6 +20,7 @@ import { formatServerDateTime, parseServerDateTime } from "@/utils/date-time";
 import { taskStatusLabel } from "@/utils/task-status";
 import InspectionExecutionPanel from '@/components/business/InspectionExecutionPanel.vue';
 import InspectionCaseWorkflowPanel from '@/components/business/InspectionCaseWorkflowPanel.vue';
+import RiskTaskOriginPanel from '@/components/business/quality-risk/RiskTaskOriginPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -38,6 +39,7 @@ const loadingIngestOptions = ref(false);
 const ingestResult = ref<TaskResultIngestResponse | null>(null);
 const taskId = computed(() => String(route.params.id || ""));
 const currentTask = computed(() => taskStore.current?.id === taskId.value ? taskStore.current : null);
+const riskVerificationId=computed(()=>(typeof route.query?.validation_id==='string'?route.query.validation_id:'') || currentTask.value?.risk_verification_id || '');
 const isOpsView = computed(() => route.path.startsWith("/ops/"));
 const listBasePath = computed(() => (isOpsView.value ? "/ops/tasks" : "/app/tasks"));
 const timeline = ref<TaskStreamEvent[]>([]);
@@ -324,7 +326,7 @@ onUnmounted(() => {
       <div v-if="currentTask" class="title-area">
         <h2 class="text-2xl font-bold text-zinc-900">任务：{{ currentTask.id }}</h2>
         <el-tag :type="getStatusType(currentTask.status)" size="large">
-          {{ hasRole(ROLE_USER) ? taskStatusLabel(currentTask.status) : currentTask.status.toUpperCase() }}
+          {{ hasRole(ROLE_USER) || riskVerificationId ? taskStatusLabel(currentTask.status) : currentTask.status.toUpperCase() }}
         </el-tag>
         <el-button
           v-if="canRerunTask"
@@ -380,6 +382,7 @@ onUnmounted(() => {
     </div>
 
     <div v-if="currentTask" class="content">
+      <RiskTaskOriginPanel v-if="riskVerificationId&&hasRole(ROLE_EXPERT)&&hasPermission('quality_material_read_business')" :task-id="currentTask.id" :link-id="riskVerificationId" />
       <InspectionCaseWorkflowPanel v-if="currentTask.has_case_workflow&&hasPermission('inspection_execution')&&hasPermission('result')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
       <InspectionExecutionPanel v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
       <el-card shadow="never">

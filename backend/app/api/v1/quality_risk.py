@@ -53,7 +53,7 @@ from app.services.quality_risk_service import QualityRiskService
 from app.schemas.demo_risk_workflow import DemoDraftCreate, DemoDraftSave, DemoDraftSubmit, DemoDraftReview
 from app.schemas.risk_collaboration import RiskCollaborationCreate
 from app.schemas.demo_sampling import DemoSamplingCreate, DemoSamplingSave, DemoSamplingConfirm
-from app.schemas.risk_completion import LabDecision, LabReturn, LabExecutionReturn, LabExecutionWithdraw, RiskReportCreate, RiskReportExport
+from app.schemas.risk_completion import LabDecision, LabReturn, LabExecutionReturn, LabExecutionWithdraw, LabTaskCreate, RiskReportCreate, RiskReportExport
 
 router = APIRouter()
 
@@ -470,6 +470,31 @@ async def risk_lab_return(link_id: UUID, payload: LabReturn, svc=Depends(risk_la
     data = await svc.return_records(str(link_id), payload)
     await svc.db.commit()
     return ResponseEnvelope(data=data)
+
+
+@router.get('/risk-laboratory-verifications/{link_id}/task-preparation')
+async def risk_lab_task_context(link_id:UUID,svc=Depends(risk_lab_service)):
+    from app.services.risk_lab_task_service import RiskLabTaskService
+    return ResponseEnvelope(data=await RiskLabTaskService(svc).context(str(link_id)))
+
+
+@router.get('/risk-laboratory-verifications/{link_id}/intake-context')
+async def risk_lab_intake_context(link_id:UUID,svc=Depends(risk_lab_service)):
+    return ResponseEnvelope(data=await svc.intake_context(str(link_id)))
+
+
+@router.post('/risk-laboratory-verifications/{link_id}/tasks')
+async def risk_lab_create_task(link_id:UUID,payload:LabTaskCreate,svc=Depends(risk_lab_service)):
+    from app.services.risk_lab_task_service import RiskLabTaskService
+    result=await RiskLabTaskService(svc).create(str(link_id),payload)
+    await svc.db.commit()
+    return ResponseEnvelope(data=result)
+
+
+@router.get('/risk-laboratory-verifications/{link_id}/task-origin')
+async def risk_lab_task_origin(link_id:UUID,task_id:UUID,svc=Depends(risk_lab_service)):
+    from app.services.risk_lab_task_service import RiskLabTaskService
+    return ResponseEnvelope(data=await RiskLabTaskService(svc).origin(str(link_id),str(task_id)))
 
 
 @router.get('/risk-laboratory-verifications/{link_id}/execution-results')

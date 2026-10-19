@@ -90,6 +90,7 @@ class TaskCreate(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    risk_verification_id: str | None = None
     has_case_workflow: bool = False
     display_no: str | None = None
     supervision: bool = False

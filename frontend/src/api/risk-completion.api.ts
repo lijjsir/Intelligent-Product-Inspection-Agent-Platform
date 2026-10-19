@@ -1,6 +1,9 @@
 import { http } from "./http";
 import type { ExportJob } from "@/types/governance.types";
 export interface LabLink {
+  verification_path?: 'skip'|'report'|'task';
+  request_stage?: 'preliminary'|'reviewed';
+  task_creation?: {request_key:string;payload_hash:string};
   id: string;
   status: string;
   revision: number;
@@ -20,6 +23,12 @@ export interface LabLink {
   boundary: string;
   events: Array<{ actor_name: string; action: string; at: string }>;
   execution_returns?: ExecutionReturn[];
+}
+export interface LabTaskContext {
+  link_id:string;case_id:string;case_code:string;case_title:string;assessment_id:string;assessment_version:number;
+  purpose:string;revision:number;basis_hash:string;task_id:string|null;can_create:boolean;blockers:string[];
+  product_id:string|null;product_name:string;category_id:string|null;category_name:string;quality_batch_id:string|null;
+  production_batch_ref:string|null;unit_serial_ref:string|null;request_stage:string;
 }
 export interface ExecutionSummary {
   item_verdict?: string | null;
@@ -73,6 +82,12 @@ export interface RiskReport extends ReportSummary {
 }
 const quiet = { suppressErrorToast: true };
 export const riskCompletionApi = {
+  labIntakeContext:(id:string)=>http.get<{link_id:string;case_id:string;case_code:string;assessment_id:string;assessment_version:number;purpose:string;product_id:string|null;category_id:string|null;enterprise_id:string|null;production_batch_ref:string|null;unit_serial_ref:string|null;
+    product:{id:string;name:string;category_id:string}|null;category:{id:string;name:string}|null;enterprise:{id:string;name:string}|null}>(`/v1/risk-laboratory-verifications/${id}/intake-context`,quiet),
+  labTaskContext:(id:string)=>http.get<LabTaskContext>(`/v1/risk-laboratory-verifications/${id}/task-preparation`,quiet),
+  createLabTask:(id:string,body:{expected_revision:number;expected_basis_hash:string;request_key:string;inspection_standard_id:string;priority:number})=>
+    http.post<{task_id:string;link:LabLink;reused:boolean}>(`/v1/risk-laboratory-verifications/${id}/tasks`,body,quiet),
+  labTaskOrigin:(id:string,taskId:string)=>http.get<Pick<LabTaskContext,'link_id'|'case_id'|'case_code'|'case_title'|'assessment_id'|'assessment_version'|'purpose'|'task_id'|'request_stage'>>(`/v1/risk-laboratory-verifications/${id}/task-origin`,{...quiet,params:{task_id:taskId}}),
   labs: (caseId: string) =>
     http.get<LabLink[]>(`/v1/risk-cases/${caseId}/laboratory-verifications`, quiet),
   labOptions: (caseId: string) =>
@@ -89,6 +104,7 @@ export const riskCompletionApi = {
       mode: "skip" | "verify";
       purpose: string;
       task_id: string | null;
+      verification_path?:'skip'|'report'|'task';
     },
   ) => http.post<LabLink>(`/v1/risk-cases/${caseId}/laboratory-verifications`, data, quiet),
   returnRecords: (

@@ -72,7 +72,7 @@ onBeforeUnmount(()=>{++epoch;});
   <DemoLabWorkspace v-else-if="runtime.context.value.execution_mode==='demo'" />
   <main v-else class="laboratory-page" v-loading="loading">
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
-    <details v-if="runtime.context.value.execution_mode === 'business' && auth.role === 'expert'" style="margin-bottom:24px"><summary style="cursor:pointer; padding:16px">风险事项的可选验证与资料回流</summary><DemoLabWorkspace /></details>
+    <details v-if="runtime.context.value.execution_mode === 'business' && auth.role === 'expert'" open style="margin-bottom:24px"><summary style="cursor:pointer; padding:16px">风险事项的可选验证与资料回流</summary><DemoLabWorkspace /></details>
     <SupervisionModuleHeader
       title="实验室检测"
       agent-name="实验室检测 Agent"
