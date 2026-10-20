@@ -335,4 +335,20 @@ describe("collab store stream handling", () => {
     store.handleStreamEvent({event:'work_item_updated',work_item_id:'action_request:new',resource_id:'new',item_type:'action_request',status:'done'});
     await vi.waitFor(()=>expect(collabApi.workItemPage).toHaveBeenLastCalledWith(expect.objectContaining({view:'processed',keyword:'current',room_id:'room-1',cursor:'cursor-page-2'})));
   });
+  it('shows a recoverable localized message for server failures and clears it after retry',async()=>{
+    const store=useCollabStore();
+    vi.mocked(collabApi.workItemPage).mockRejectedValueOnce({message:'Request failed with status code 500',response:{status:500,data:'Internal Server Error'}});
+    await expect(store.loadWorkItems('pending')).rejects.toBeDefined();
+    expect(store.workItemError).toBe('协同工作项暂时无法加载，请点击“重新加载”重试。');
+    expect(store.workItems).toEqual([]);expect(store.loadingWorkItems).toBe(false);
+    vi.mocked(collabApi.workItemPage).mockResolvedValueOnce({data:{data:{items:[workItem()],next_cursor:null}}} as never);
+    await store.loadWorkItems('pending');
+    expect(store.workItemError).toBe('');expect(store.workItems).toHaveLength(1);
+  });
+  it('retains an actionable server permission message instead of treating it as an empty inbox',async()=>{
+    const store=useCollabStore();
+    vi.mocked(collabApi.workItemPage).mockRejectedValueOnce({response:{status:403,data:{message:'原事项授权已撤回'}}});
+    await expect(store.loadWorkItems('pending')).rejects.toBeDefined();
+    expect(store.workItemError).toBe('原事项授权已撤回');
+  });
 });

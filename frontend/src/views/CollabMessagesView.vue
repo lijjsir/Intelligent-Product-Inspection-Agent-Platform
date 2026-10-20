@@ -162,7 +162,7 @@ async function loadActiveWorkItems() {
     if(key!==loadEpoch)return;
     pinnedWorkItem.value=detail;selectedWorkItemId.value=detail?.id||'';
   } catch(e) {
-    if(key===loadEpoch){pinnedWorkItem.value=null;selectedWorkItemId.value='';detailError.value=extractApiErrorMessage(e,'工作项加载失败，请核对访问范围后重试');}
+    if(key===loadEpoch){pinnedWorkItem.value=null;selectedWorkItemId.value='';detailError.value=store.workItemError?'':extractApiErrorMessage(e,'工作项加载失败，请核对访问范围后重试');}
     // The store exposes a recoverable error state in the page.
   }
 }
@@ -386,7 +386,7 @@ onBeforeUnmount(()=>{++loadEpoch;});
       <div class="workbench">
         <aside class="work-list" aria-label="协作工作项列表">
           <el-skeleton v-if="store.loadingWorkItems" :rows="6" animated class="p-5" />
-          <el-empty v-else-if="!store.workItems.length" :description="store.workItemNextCursor ? '本页暂无可处理工作项，可继续查看下一页' : '当前视图暂无工作项'" />
+          <el-empty v-else-if="!store.workItems.length&&!store.workItemError" :description="store.workItemNextCursor ? '本页暂无可处理工作项，可继续查看下一页' : '当前视图暂无工作项'" />
           <button
             v-for="item in store.workItems"
             v-else

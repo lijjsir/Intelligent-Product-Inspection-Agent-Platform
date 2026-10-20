@@ -2,13 +2,33 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, exists, func, literal, or_, select, union_all
+from sqlalchemy import String, and_, exists, func, literal, or_, select, union_all
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.functions import FunctionElement
 
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.models.collab import CollabMessage, CollabMessageReceipt, CollabThread, CollabThreadParticipant
 from app.models.meeting import MeetingRoom, MeetingRoomMember, MemoryTransferLog
 from app.models.memory import MemoryItem
 from app.services.record_scan_page import read_mark, write_mark
+
+
+class _ScopeUUIDText(FunctionElement):
+    """Compare generated UUIDs with legacy scope columns, without changing tables."""
+    type = String(36)
+    inherit_cache = True
+
+
+@compiles(_ScopeUUIDText)
+def _scope_uuid_text_default(element, compiler, **kw):
+    return compiler.process(list(element.clauses)[0], **kw)
+
+
+@compiles(_ScopeUUIDText, 'mysql')
+def _scope_uuid_text_mysql(element, compiler, **kw):
+    value = compiler.process(list(element.clauses)[0], **kw)
+    # Explicit coercibility prevents connection/table collation conflicts.
+    return f'(CONVERT({value} USING utf8mb4) COLLATE utf8mb4_unicode_ci)'
 
 
 class CollabWorkItemPageService:
@@ -29,7 +49,7 @@ class CollabWorkItemPageService:
         transfer=MemoryTransferLog
         # Room scope IDs are strings, while room primary keys are binary UUIDs.
         from app.services.risk_report_listing_service import uuid_text
-        host=exists(select(MeetingRoom.id).where(MeetingRoom.org_id==self.org,uuid_text(MeetingRoom.id)==transfer.to_scope_id,MeetingRoom.deleted_at.is_(None),or_(MeetingRoom.created_by==self.actor,
+        host=exists(select(MeetingRoom.id).where(MeetingRoom.org_id==self.org,_ScopeUUIDText(uuid_text(MeetingRoom.id))==transfer.to_scope_id,MeetingRoom.deleted_at.is_(None),or_(MeetingRoom.created_by==self.actor,
             exists(select(MeetingRoomMember.id).where(MeetingRoomMember.org_id==self.org,MeetingRoomMember.room_id==MeetingRoom.id,MeetingRoomMember.user_id==self.actor,MeetingRoomMember.role=='host',MeetingRoomMember.deleted_at.is_(None))))))
         memory=select(literal('memory_share').label('kind'),transfer.id.label('id'),transfer.created_at.label('at')).where(transfer.org_id==self.org,transfer.deleted_at.is_(None),
             or_(transfer.from_scope_type!=transfer.to_scope_type,transfer.from_scope_id!=transfer.to_scope_id),

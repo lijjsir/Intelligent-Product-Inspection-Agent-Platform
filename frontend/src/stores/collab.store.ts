@@ -3,6 +3,7 @@ import { computed, ref, shallowRef } from "vue";
 import { collabApi } from "@/api/collab.api";
 import { meetingApi } from "@/api/meeting.api";
 import { useAuthStore } from "@/stores/auth.store";
+import { extractApiErrorMessage } from '@/api/http';
 import type {
   CollabActionStatus,
   CollabActionRequestCreatePayload,
@@ -205,7 +206,11 @@ export const useCollabStore = defineStore("collab", () => {
       workItems.value = page.items;workItemNextCursor.value=page.next_cursor;
       return workItems.value;
     } catch (error) {
-      if(key===workItemEpoch)workItemError.value = error instanceof Error ? error.message : "协作工作项加载失败";
+      if(key===workItemEpoch){
+        const status=(error as {response?:{status?:number}}|null)?.response?.status;
+        const fallback='协同工作项暂时无法加载，请点击“重新加载”重试。';
+        workItemError.value=!status||status>=500?fallback:extractApiErrorMessage(error,fallback);
+      }
       throw error;
     } finally {
       if(key===workItemEpoch)loadingWorkItems.value = false;
