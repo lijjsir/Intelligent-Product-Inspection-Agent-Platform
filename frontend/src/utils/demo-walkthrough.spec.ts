@@ -18,7 +18,7 @@ describe('demo case walkthrough identity and limits',()=>{
   it('uses the saved case and version without implying completion or creating business actions',()=>{
     const result=demoWalkthrough(workspace(),'DEMO-QS-001');
     expect(result.version).toBe(7);expect(result.recordCount).toBe(1);
-    expect(result.steps.map(s=>s.key)).toEqual(['intake','monitor','assessment','collaboration','sampling','report']);
+    expect(result.steps.map(s=>s.key)).toEqual(['intake','monitor','assessment','review','sampling','report']);
     expect(result.steps[0]!.to.query).toEqual({record:'record-a',product_id:'product-a'});
     expect(result.steps[2]!.to.query).toEqual({case_id:'case-a',assessment_id:'assessment-a'});
     expect(result.laboratory.query).toEqual({case_id:'case-a',assessment_id:'assessment-a',tab:'laboratory'});

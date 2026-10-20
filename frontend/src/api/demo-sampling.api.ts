@@ -21,7 +21,8 @@ export interface DemoSamplingSnapshot {
   evidence_ids: string[];
   conclusion: { summary: string; limitations: string; missing_inputs: string[] };
   review: { reviewed_by: string; reviewed_at: string | null; comment: string };
-  collaboration_id: string;
+  schema?:string;
+  collaboration_id: string|null;
   collaboration_purpose: string;
   decision_note: string;
   opinions: Array<{ id: string; author: string; origin: string; content: string }>;
@@ -69,7 +70,6 @@ export const demoSamplingApi = {
       `/v1/risk-cases/${candidate.snapshot.case_id}/risk-sampling-suggestions`,
       {
         assessment_id: candidate.snapshot.assessment_id,
-        collaboration_id: candidate.snapshot.collaboration_id,
         expected_context_hash: candidate.context_hash,
       },
       quiet,

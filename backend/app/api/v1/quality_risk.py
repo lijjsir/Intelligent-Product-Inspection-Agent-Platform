@@ -589,6 +589,10 @@ async def demo_sampling_get(suggestion_id: UUID, svc=Depends(demo_sampling_servi
 @router.post("/risk-cases/{risk_case_id}/demo-sampling-suggestions")
 @router.post("/risk-cases/{risk_case_id}/risk-sampling-suggestions")
 async def demo_sampling_create(risk_case_id: UUID, payload: DemoSamplingCreate, svc=Depends(demo_sampling_service)):
+    if payload.collaboration_id is not None:
+        from app.core.exceptions import ValidationError
+        await svc.guard()
+        raise ValidationError('研判协作已停用，请从已独立复核的研判版本重新选择建议候选')
     data = await svc.create(str(risk_case_id), payload)
     await svc.db.commit()
     return ResponseEnvelope(data=data)
@@ -597,6 +601,10 @@ async def demo_sampling_create(risk_case_id: UUID, payload: DemoSamplingCreate, 
 @router.patch("/demo-sampling/suggestions/{suggestion_id}")
 @router.patch("/risk-sampling/suggestions/{suggestion_id}")
 async def demo_sampling_save(suggestion_id: UUID, payload: DemoSamplingSave, svc=Depends(demo_sampling_service)):
+    await svc.guard()
+    if (await svc.row(str(suggestion_id))).data['snapshot'].get('collaboration_id'):
+        from app.core.exceptions import ConflictError
+        raise ConflictError('旧协作建议保留为历史记录，请从已复核研判新建建议')
     data = await svc.mutate(str(suggestion_id), payload)
     await svc.db.commit()
     return ResponseEnvelope(data=data)
@@ -605,6 +613,10 @@ async def demo_sampling_save(suggestion_id: UUID, payload: DemoSamplingSave, svc
 @router.post("/demo-sampling/suggestions/{suggestion_id}/confirm")
 @router.post("/risk-sampling/suggestions/{suggestion_id}/confirm")
 async def demo_sampling_confirm(suggestion_id: UUID, payload: DemoSamplingConfirm, svc=Depends(demo_sampling_service)):
+    await svc.guard()
+    if (await svc.row(str(suggestion_id))).data['snapshot'].get('collaboration_id'):
+        from app.core.exceptions import ConflictError
+        raise ConflictError('旧协作建议保留为历史记录，请从已复核研判新建建议')
     data = await svc.mutate(str(suggestion_id), payload, confirm=True)
     await svc.db.commit()
     return ResponseEnvelope(data=data)
@@ -622,9 +634,9 @@ async def list_risk_collaborations(risk_case_id: UUID, svc=Depends(risk_collabor
 
 @router.post("/risk-cases/{risk_case_id}/collaborations")
 async def create_risk_collaboration(risk_case_id: UUID, payload: RiskCollaborationCreate, svc=Depends(risk_collaboration_service)):
-    data = await svc.create(str(risk_case_id), payload)
-    await svc.db.commit()
-    return ResponseEnvelope(data=data)
+    await svc.guard()
+    from app.core.exceptions import ValidationError
+    raise ValidationError('研判协作已停用，请在事项中编写研判并完成独立复核')
 
 
 @router.get("/risk-collaborations/{collaboration_id}")

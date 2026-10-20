@@ -88,7 +88,7 @@ describe("useMenu", () => {
       const paths = flattenPaths();
 
       expect(paths).toContain("/app/meetings");
-      expect(paths).toContain("/app/collab");
+      expect(paths).not.toContain("/app/collab");
     }
   });
 
@@ -97,9 +97,9 @@ describe("useMenu", () => {
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
 
-    expect(flattenTitles()).toContain("协同中心");
+    expect(flattenTitles()).not.toContain("协同中心");
     expect(flattenTitles()).not.toContain("协作消息");
-    expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("协作中心");
+    expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("历史共享与请求记录");
   });
 
   it("puts the quality-supervision workbench before business flow for experts", () => {
@@ -107,8 +107,9 @@ describe("useMenu", () => {
 
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
-    expect(flattenPaths().slice(0, 4)).toEqual([
+    expect(flattenPaths().slice(0, 5)).toEqual([
       "/app/chat",
+      "/app/meetings",
       "/app/workbench",
       "/app/quality-data",
       "/app/quality-analytics",
@@ -122,7 +123,8 @@ describe("useMenu", () => {
       auth.role = role;
       auth.roles = [role];
 
-      expect(flattenPaths().slice(0, 2)).toEqual(["/app/meetings", "/app/collab"]);
+      expect(flattenPaths()[0]).toBe("/app/meetings");
+      expect(flattenPaths()).not.toContain("/app/collab");
     }
   });
 
@@ -140,7 +142,7 @@ describe("useMenu", () => {
     const { menu } = useMenu();
     const quality = menu.value.find(item => 'items' in item && item.title==='质量监督');
     expect(quality && 'items' in quality ? quality.items.map(item=>item.title) : []).toEqual(['质监工作台','数据采集','市场监控','风险研判','监督抽查']);
-    for (const title of ['实验室检测','检测任务','检测结果','协同中心','报告中心']) {
+    for (const title of ['实验室检测','检测任务','检测结果','报告中心']) {
       expect(menu.value.some(item => item.title === title && !('items' in item))).toBe(true);
     }
   });

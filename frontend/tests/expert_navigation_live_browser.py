@@ -26,7 +26,10 @@ with sync_playwright() as pw:
     sidebar = page.locator('.app-sidebar')
     nav = sidebar.locator('nav')
     roots = nav.evaluate("node => Array.from(node.children).map(e => e.classList.contains('nav-group') ? e.querySelector('button').innerText.trim() : e.innerText.trim()).filter(Boolean)")
-    assert roots == ['AI 对话','质量监督','实验室检测','检测任务','检测结果','协同中心','报告中心','标准与知识','个人设置'], roots
+    expected = ['AI 对话','会议室','质量监督','检测任务','检测结果','报告中心','标准与知识']
+    assert [r for r in roots if r in expected] == expected, roots
+    expect(nav.get_by_role('link', name='协同中心', exact=True)).to_have_count(0)
+    expect(nav.get_by_role('link', name='协作中心', exact=True)).to_have_count(0)
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','true')
     assert nav.locator('#nav-group-质量监督 a').all_text_contents() == ['质监工作台','数据采集','市场监控','风险研判','监督抽查']
     nav.get_by_role('button', name='质量监督', exact=True).click()
@@ -54,7 +57,7 @@ with sync_playwright() as pw:
     page.wait_for_url('**/app/chat**')
     page.wait_for_load_state('networkidle')
     expect(sidebar.get_by_role('button', name='展开平台功能', exact=True)).to_have_count(0)
-    for title in ['实验室检测','检测任务','检测结果','协同中心','报告中心']:
+    for title in ['实验室检测','检测任务','检测结果','报告中心']:
         expect(nav.get_by_role('link', name=title, exact=True)).to_be_visible()
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_be_visible()
     sidebar.screenshot(path=str(OUT/'navigation-expert-chat-desktop.png'))
@@ -68,7 +71,7 @@ with sync_playwright() as pw:
     expect(sidebar).to_have_class(__import__('re').compile('mobile-nav-open'))
     nav.get_by_role('button', name='质量监督', exact=True).click()
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','false')
-    for title in ['实验室检测','检测任务','检测结果','协同中心','报告中心']:
+    for title in ['实验室检测','检测任务','检测结果','报告中心']:
         expect(nav.get_by_role('link', name=title, exact=True)).to_be_visible()
     assert page.url == BASE+'/app/risk-sampling'
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')

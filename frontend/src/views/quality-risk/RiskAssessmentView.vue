@@ -10,7 +10,6 @@ import { resultApi } from "@/api/result.api";
 import { useAuthStore } from "@/stores/auth.store";
 import { useQualityReferenceStore } from "@/stores/quality-reference.store";
 import DemoRiskWorkflowPanel from "@/components/business/quality-risk/DemoRiskWorkflowPanel.vue";
-import RiskCollaborationPanel from "@/components/business/quality-risk/RiskCollaborationPanel.vue";
 import RiskLabPanel from "@/components/business/quality-risk/RiskLabPanel.vue";
 import {
   RECORD_TYPE_LABELS,
@@ -34,7 +33,7 @@ const detailLoading = ref(false),
   creating = ref(false);
 const detailError = ref(""),
   listError = ref("");
-function initialTab() { return ['collaboration','laboratory','reports','sampling','sources','versions'].includes(String(route.query.tab)) ? String(route.query.tab) : 'assessment'; }
+function initialTab() { return ['laboratory','reports','sampling','sources','versions'].includes(String(route.query.tab)) ? String(route.query.tab) : 'assessment'; }
 const detailTab = ref(initialTab());
 let detailEpoch = 0;
 const caseStatuses: Record<string, string> = {
@@ -818,20 +817,8 @@ onMounted(() => {
                 >
               </article>
             </el-tab-pane>
-            <el-tab-pane
-              v-if="workspace.workflow_context?.can_author"
-              label="协同讨论"
-              name="collaboration"
-              lazy
-            >
-              <RiskCollaborationPanel
-                :case-id="selected.id"
-                :assessment="assessment"
-                :is-latest="isLatest" :context="workspace.workflow_context"
-              />
-            </el-tab-pane>
             <el-tab-pane v-if="workspace.workflow_context?.can_author" label="抽查建议" name="sampling">
-              <el-alert type="info" :closable="false" title="最新研判独立复核通过、同单位协同完成后，可以编写抽查建议。建议保留原始资料与公开意见，不启动检测。" />
+              <el-alert type="info" :closable="false" title="最新研判独立复核通过后，可以编写抽查建议。建议保留来源版本与证据，不启动检测。" />
               <el-button style="margin-top:16px;min-height:44px" type="primary" @click="viewSampling">查看本事项抽查建议</el-button>
             </el-tab-pane>
             <el-tab-pane v-if="workspace.workflow_context?.can_author" label="可选验证" name="laboratory" lazy>

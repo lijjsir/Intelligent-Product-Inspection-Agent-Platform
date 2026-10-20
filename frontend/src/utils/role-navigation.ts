@@ -100,7 +100,6 @@ function getAlgorithmEngineerMenu(): MenuStructure {
 function getCollaborationMenuItems(): MenuItem[] {
   return [
     { title: "会议室", path: "/app/meetings" },
-    { title: "协作中心", path: "/app/collab" },
   ];
 }
 
@@ -136,11 +135,11 @@ function getUserMenu(): MenuStructure {
 function getExpertMenu(): MenuStructure {
   return [
     { title: "AI 对话", path: "/app/chat" },
+    { title: "会议室", path: "/app/meetings" },
     getQualitySupervisionGroup(),
     { title: "实验室检测", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
     { title: "检测任务", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
-    { title: "协同中心", path: "/app/collab", activeMatchPaths: ["/app/meetings"] },
     { title: "报告中心", path: "/app/risk-reports", activeMatchPaths: ["/app/export"] },
     { title: "标准与知识", items: [
       { title: "标准审核", path: "/app/standard-reviews", activeMatchPaths: ["/governance/admin/inspection-standards"] },

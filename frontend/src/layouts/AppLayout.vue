@@ -44,17 +44,6 @@
                   :class="['nav-link', { 'nav-link-active': isMenuItemActive(item) }]"
                 >
                   <span>{{ item.title }}</span>
-                  <span
-                    v-if="item.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
-                    class="nav-count-badge"
-                    :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
-                  >
-                    {{
-                      collabStore.pendingWorkItemCount > 99
-                        ? "99+"
-                        : collabStore.pendingWorkItemCount
-                    }}
-                  </span>
                 </RouterLink>
                 <span v-else class="nav-link cursor-not-allowed text-zinc-400">
                   <span>{{ item.title }}</span>
@@ -71,15 +60,6 @@
               :class="['nav-link', { 'nav-link-active': isMenuItemActive(entry) }]"
             >
               <span>{{ entry.title }}</span>
-              <span
-                v-if="entry.path === '/app/collab' && collabStore.pendingWorkItemCount > 0"
-                class="nav-count-badge"
-                :aria-label="`${collabStore.pendingWorkItemCount} 项待我处理`"
-              >
-                {{
-                  collabStore.pendingWorkItemCount > 99 ? "99+" : collabStore.pendingWorkItemCount
-                }}
-              </span>
             </RouterLink>
             <span v-else class="nav-link cursor-not-allowed text-zinc-400">
               <span>{{ entry.title }}</span>
@@ -198,7 +178,6 @@ import { ArrowRight, Menu, Search, Setting, Top, MoreFilled, EditPen, Delete } f
 import ConversationSearchDialog from '@/components/chat/ConversationSearchDialog.vue';
 import { useAuthStore } from "@/stores/auth.store";
 import { useChatStore } from "@/stores/chat.store";
-import { useCollabStore } from "@/stores/collab.store";
 import { useUserStore } from "@/stores/user.store";
 import { useNavigationStore } from "@/stores/navigation.store";
 import {
@@ -224,7 +203,6 @@ const route = useRoute();
 const auth = useAuthStore();
 const userStore = useUserStore();
 const chatStore = useChatStore();
-const collabStore = useCollabStore();
 const navigation = useNavigationStore();
 
 const { menu, primaryRole } = useMenu();
@@ -247,7 +225,6 @@ const canChat = computed(() => {
   return (role === ROLE_USER || role === ROLE_EXPERT) && auth.hasPermission('chat');
 });
 
-const canCollaborate = computed(() => primaryRole.value !== ROLE_USER && auth.hasPermission('collab'));
 
 const showChatControls = computed(
   () => auth.isAuthed && canChat.value && route.path.startsWith("/app/chat"),
@@ -469,16 +446,11 @@ onMounted(() => {
   if (auth.isAuthed && !userStore.current) {
     userStore.fetchCurrentUser().catch(() => undefined);
   }
-  if (auth.isAuthed && canCollaborate.value) {
-    void collabStore.loadSummary();
-    collabStore.connectStream();
-  }
   if (auth.isAuthed && canChat.value && isOrdinaryUser.value && !showChatControls.value) void chatStore.fetchSessions().catch(() => undefined);
 });
 
 function logout() {
   chatStore.stopStream();
-  collabStore.disconnectStream();
   auth.logout();
   router.push("/login");
 }

@@ -82,7 +82,7 @@ class RiskReportListingService:
         tasks = await self.load(InspectionTask, [e['ref']['task_id'] for s in snapshots for e in s.get('execution_results', [])])
         suggestions = await self.load(SupervisionRecord, [item['id'] for s in snapshots for item in s['sampling']],
             SupervisionRecord.kind == ('demo-sampling-suggestions' if self.mode == 'demo' else 'risk-sampling-suggestions'))
-        links = await self.load(SupervisionRecord, [r.data['snapshot']['collaboration_id'] for r in suggestions.values()]+
+        links = await self.load(SupervisionRecord, [r.data['snapshot']['collaboration_id'] for r in suggestions.values() if r.data['snapshot'].get('collaboration_id')]+
             [ref['id'] for s in snapshots for ref in s.get('source_refs', []) if ref['kind'] == 'collab-context'],
             SupervisionRecord.kind == 'risk-collaborations')
         rooms = await self.load(MeetingRoom, [r.data['room_id'] for r in links.values()])
@@ -98,6 +98,11 @@ class RiskReportListingService:
             (rooms[r.data['room_id']].memory_policy or {}).get('risk_collaboration_id') == r.id and
             r.data['case_id'] in link_cases and r.data['assessment_id'] in link_assessments and
             link_assessments[r.data['assessment_id']].risk_case_id == r.data['case_id']}
+        direct_records=await self.load(QualitySourceRecord,[rid for r in suggestions.values() if not r.data['snapshot'].get('collaboration_id') for rid in r.data['snapshot']['source_record_ids']])
+        direct_authorized={r.id for r in direct_records.values() if r.created_by==self.actor or
+            (r.authorization_scope in {'organization','business','public'} and has_permission('quality_material_read_business',self.current.role))}
+        permitted_suggestions={r.id for r in suggestions.values() if (r.data['snapshot'].get('collaboration_id') in permitted_links if r.data['snapshot'].get('collaboration_id') else
+            all(rid in direct_authorized for rid in r.data['snapshot']['source_record_ids']))}
         result = set()
         for row in rows:
             s = row.data['snapshot']
@@ -105,7 +110,7 @@ class RiskReportListingService:
             if self.mode == 'business' and (cases[s['case_id']].scope or {}).get('execution_mode') == 'demo': continue
             if any(r['id'] not in authorized_records for r in s['records']): continue
             if any(a['id'] not in permitted_files for a in s['attachments']): continue
-            if any(item['id'] not in suggestions or suggestions[item['id']].data['snapshot']['collaboration_id'] not in permitted_links for item in s['sampling']): continue
+            if any(item['id'] not in permitted_suggestions for item in s['sampling']): continue
             if any(ref['id'] not in permitted_links for ref in s.get('source_refs', []) if ref['kind'] == 'collab-context'): continue
             allowed = True
             for entry in s.get('execution_results', []):

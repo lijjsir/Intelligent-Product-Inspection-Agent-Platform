@@ -1421,16 +1421,9 @@ function pendingMemoryShareLabel(memory: MeetingMemory) {
   return "等待目标范围确认";
 }
 
-function openMemoryShareInCollab(memory: MeetingMemory) {
-  const request = pendingMemoryShare(memory);
-  const transferId = String(request?.id || memory.pending_transfer_id || "");
-  void router.push({
-    path: "/app/collab",
-    query: {
-      view: "initiated",
-      ...(transferId ? { work_item: `memory_share:${transferId}` } : {}),
-    },
-  });
+function openMemoryShareGovernance() {
+  openWorkspaceSection('memory');
+  selectWorkspaceMemoryTab('governance');
 }
 
 function memoryTechnicalInfo(memory: MeetingMemory) {
@@ -1823,11 +1816,6 @@ function buildMemoryPublishScopeOptions(_memory?: MeetingMemory | null) {
       value: room.id,
       description: `${room.member_count || 0} 位成员· ${meetingRoomStatusLabel(room.status) || "未知状态"}`,
     }));
-  const targetMembers = store.members.map((member) => ({
-    label: member.user_id === currentUserId.value ? `${member.username || "我"}（我）` : member.username || member.user_id,
-    value: member.user_id,
-    description: member.role === "host" ? "会议主持人 · 由本人确认后进入个人记忆" : "会议成员 · 由本人确认后进入个人记忆",
-  }));
   const options: MemoryPublishScopeOption[] = [
     {
       key: "current_meeting_room",
@@ -1849,18 +1837,6 @@ function buildMemoryPublishScopeOptions(_memory?: MeetingMemory | null) {
       note: "先沉淀到当前会议室，再提交目标会议室主持人审批；通过后目标会议室成员和会议 Agent 才可召回。",
     },
   ];
-  options.push({
-    key: "user",
-    label: "共享给成员个人记忆",
-    value: "user",
-    scopeId: "",
-    requiresTargetId: true,
-    targetLabel: "选择成员",
-    targetPlaceholder: "搜索当前会议室成员",
-    targetOptions: targetMembers,
-    targetEmptyText: "当前会议室暂无可选成员",
-    note: "先沉淀到当前会议室，再由目标成员本人确认；批准后只增加个人记忆作用域。",
-  });
   options.push({
     key: "org_space",
     label: "组织共享空间",
@@ -4431,6 +4407,7 @@ onBeforeUnmount(() => {
                 <div>
                   <p class="section-kicker">共享审批</p>
                   <h3>待审批共享</h3>
+                  <el-button link @click="router.push('/app/collab')">历史共享与请求记录</el-button>
                 </div>
                 <span>{{ store.pendingMemoryShares.length }}</span>
               </header>
@@ -5303,7 +5280,7 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="pendingMemoryShare(memory)" class="memory-pending-share-state">
                 <span>{{ pendingMemoryShareLabel(memory) }}；批准前目标范围不可召回。</span>
-                <el-button size="small" text type="primary" @click="openMemoryShareInCollab(memory)">在协作中心查看</el-button>
+                <el-button size="small" text type="primary" @click="openMemoryShareGovernance">查看共享申请</el-button>
               </div>
               <p>{{ memoryPreview(memory) }}</p>
               <small class="memory-source">来源：本会议室· {{ scopeVisibilityNote(memory) }}</small>
@@ -5891,7 +5868,7 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="pendingMemoryShare(selectedSharedMemory)" class="memory-pending-share-state">
             <span>{{ pendingMemoryShareLabel(selectedSharedMemory) }}；批准前目标范围不可召回。</span>
-            <el-button size="small" text type="primary" @click="openMemoryShareInCollab(selectedSharedMemory)">在协作中心查看</el-button>
+            <el-button size="small" text type="primary" @click="openMemoryShareGovernance">查看共享申请</el-button>
           </div>
         </section>
         <section class="detail-section">

@@ -29,7 +29,7 @@ LABELS = {
     "report_generate": ("inspection", "检测报告", "生成与管理记录"),
     "report_read": ("inspection", "检测报告", "查看与下载"),
     "chat": ("collaboration", "AI 对话", "使用"),
-    "collab": ("collaboration", "协作中心", "使用"),
+    "collab": ("collaboration", "历史协作记录", "查阅"),
     "meeting": ("collaboration", "会议室", "参与"),
     "meeting_admin": ("collaboration", "会议管理", "管理"),
     "dataset": ("algorithm", "数据接入", "管理数据集"),

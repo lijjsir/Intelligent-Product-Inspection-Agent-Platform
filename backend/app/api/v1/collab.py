@@ -158,7 +158,7 @@ async def create_action_request(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.create_action_request(body))
+    raise ValidationError('通用处理请求已停用，历史记录仍可查阅')
 
 
 @router.get("/threads/{thread_id}/messages", response_model=ResponseEnvelope[list[CollabMessageResponse]])
@@ -180,7 +180,7 @@ async def send_message(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.send_work_item_comment(thread_id, body))
+    raise ValidationError('协作历史为只读记录，不再新增评论')
 
 
 @router.post("/messages/{message_id}/read", response_model=ResponseEnvelope[CollabMessageReceiptResponse])
@@ -201,7 +201,7 @@ async def update_message_action(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.update_action(message_id, body))
+    raise ValidationError('通用处理请求已停用，不再推进历史请求状态')
 
 
 @router.post("/threads/{thread_id}/archive", response_model=ResponseEnvelope[CollabThreadResponse])
@@ -211,7 +211,7 @@ async def archive_thread(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    return ResponseEnvelope(data=await service.archive_thread(thread_id))
+    raise ValidationError('协作历史为只读记录，不再改变会话状态')
 
 
 @router.delete("/threads/{thread_id}", response_model=ResponseEnvelope[dict])
@@ -252,5 +252,4 @@ async def upload_collab_attachments(
     db=Depends(get_db),
 ):
     service = _build_service(db, current)
-    items = await service.upload_attachments(files)
-    return ResponseEnvelope(data=CollabAttachmentUploadResponse(items=items))
+    raise ValidationError('协作历史为只读记录，不再上传附件')

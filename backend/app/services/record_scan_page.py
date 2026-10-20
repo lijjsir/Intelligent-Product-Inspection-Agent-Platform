@@ -34,14 +34,14 @@ def write_mark(purpose, scope, mark):
     return cipher(purpose).encrypt(json.dumps({'scope':stable_hash(scope),'mark':mark}).encode()).decode()
 
 
-async def scan_records(db, query, serialize, *, scope, purpose, size=20, cursor=None):
+async def scan_records(db, query, serialize, *, scope, purpose, size=20, cursor=None, model=SupervisionRecord):
     if not 1<=size<=50: raise ValidationError('每页数量须在 1 到 50 之间')
     mark=read_mark(purpose,scope,cursor)
     if mark:
         at=datetime.fromisoformat(mark['at'])
-        query=query.where(or_(SupervisionRecord.created_at<at,(SupervisionRecord.created_at==at)&(SupervisionRecord.id<mark['id'])))
+        query=query.where(or_(model.created_at<at,(model.created_at==at)&(model.id<mark['id'])))
     budget=max(20,size*2)
-    rows=list(await db.scalars(query.order_by(SupervisionRecord.created_at.desc(),SupervisionRecord.id.desc()).limit(budget+1).execution_options(populate_existing=True)))
+    rows=list(await db.scalars(query.order_by(model.created_at.desc(),model.id.desc()).limit(budget+1).execution_options(populate_existing=True)))
     items=[]; processed=0
     for row in rows[:budget]:
         processed+=1

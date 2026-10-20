@@ -132,21 +132,21 @@ onBeforeUnmount(() => {
       <div>
         <p>质量监督 · {{ isDemo ? "演示环境" : "抽查建议" }}</p>
         <h1>{{ isDemo ? "演示抽查建议" : "抽查建议" }}</h1>
-        <p>把已复核研判和同单位协同意见整理为建议，保留来源、缺口和未知信息。</p>
+        <p>把已独立复核的研判和证据整理为建议，保留来源、缺口和未知信息。</p>
       </div>
       <el-button :disabled="saving" @click="load()">刷新依据与列表</el-button>
     </header>
     <el-alert
       type="warning"
       :closable="false"
-      :title="isDemo ? '全部为模拟资料，仅用于流程验收。建议不进入正式候选，不启动抽查或实验室检测；本页未调用真实模型。' : '建议依据已独立复核的最新研判和已完成协同；正式抽查计划仍须独立审批，不自动启动检测。'"
+      :title="isDemo ? '全部为模拟资料，仅用于流程验收。建议不进入正式候选，不启动抽查或实验室检测；本页未调用真实模型。' : '建议依据已独立复核的最新研判及证据；正式抽查计划仍须独立审批，不自动启动检测。'"
     />
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-alert
       v-if="auth.role !== 'expert'"
       type="info"
       :closable="false"
-      title="请使用受邀专家账号查看研判建议。"
+      title="请使用有权读取来源资料的研判专家账号查看建议。"
     />
     <template v-else>
       <el-form class="panel-actions" @submit.prevent="appliedKeyword=keyword.trim();resetPages();load(true)"><el-input v-model="keyword" aria-label="抽查建议搜索" placeholder="按编号或标题搜索" :maxlength="200" :disabled="loading||saving" clearable /><el-button native-type="submit" :disabled="loading||saving">搜索建议</el-button><el-button :disabled="loading||saving" @click="resetPages();load(true)">回到建议首页</el-button></el-form>
@@ -156,7 +156,7 @@ onBeforeUnmount(() => {
         @click="
           router.push({
             path: '/app/risk-assessments',
-            query: { case_id: caseId, tab: 'collaboration' },
+            query: { case_id: caseId, tab: 'assessment' },
           })
         "
         >返回来源事项</el-button
@@ -164,7 +164,7 @@ onBeforeUnmount(() => {
       <el-button v-if="!isDemo" @click="router.push('/app/sampling-plans')">查看正式抽查计划</el-button>
       <section class="sampling-candidates">
         <h2>建议候选</h2>
-        <p>最新研判须独立复核通过，且本版协同工作项已完成。</p>
+        <p>最新研判须由另一位专家独立复核通过；无需协同工作项或会议。</p>
         <el-alert
           v-for="item in blockers"
           :key="item"
@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
         />
         <el-empty
           v-if="!candidates.length && !loading"
-          :description="candidatePaging.next ? '本页暂无可用候选，可继续查看下一页' : '暂无符合条件的建议候选，请先完成研判复核和同单位协同'"
+          :description="candidatePaging.next ? '本页暂无可用候选，可继续查看下一页' : '暂无符合条件的建议候选，请先完成研判及独立复核'"
           :image-size="56"
         />
         <article
@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
             <p>
               固定研判第 {{ candidate.snapshot.assessment_version }} 版 ·
               {{ candidate.snapshot.source_record_ids.length }} 条来源 ·
-              {{ candidate.snapshot.opinions.length }} 条公开意见
+              {{ candidate.snapshot.evidence_ids.length }} 条证据
             </p>
           </div>
           <el-button type="primary" :disabled="saving" @click="create(candidate)">{{
@@ -257,8 +257,8 @@ onBeforeUnmount(() => {
           }}
           条原始资料、{{ selected.snapshot.evidence_ids.length }} 条证据。
         </p>
-        <el-button @click="router.push(selected.snapshot.source_link)"
-          >查看本版研判与协同</el-button
+        <el-button @click="router.push({path:'/app/risk-assessments',query:{case_id:selected.snapshot.case_id,assessment_id:selected.snapshot.assessment_id}})"
+          >查看本版研判</el-button
         >
         <p class="preserve">{{ selected.snapshot.conclusion.summary }}</p>
         <p class="preserve">研判限制：{{ selected.snapshot.conclusion.limitations }}</p>
@@ -280,8 +280,8 @@ onBeforeUnmount(() => {
             >原始资料 {{ index + 1 }}</el-button
           >
         </details>
-        <h3>协同公开意见快照</h3>
-        <p class="preserve">{{ selected.snapshot.decision_note || "未填写处理说明" }}</p>
+        <h3 v-if="selected.snapshot.collaboration_id">历史协作意见快照</h3>
+        <p v-if="selected.snapshot.collaboration_id" class="preserve">{{ selected.snapshot.decision_note || "未填写处理说明" }}</p>
         <article v-for="opinion in selected.snapshot.opinions" :key="opinion.id" class="opinion">
           <small
             >{{ opinion.author }} ·
@@ -289,7 +289,7 @@ onBeforeUnmount(() => {
           >
           <p class="preserve">{{ opinion.content }}</p>
         </article>
-        <div v-if="!selected.can_edit" class="fixed-suggestion">
+        <div v-if="!selected.can_edit||selected.snapshot.collaboration_id" class="fixed-suggestion">
           <h3>抽查理由</h3>
           <p class="preserve">{{ selected.content.rationale || "未填写" }}</p>
           <h3>关注内容</h3>
@@ -339,7 +339,7 @@ onBeforeUnmount(() => {
             /></el-form-item>
           </div>
         </el-form>
-        <div v-if="selected.can_edit" class="actions">
+        <div v-if="selected.can_edit&&!selected.snapshot.collaboration_id" class="actions">
           <el-button :loading="saving" @click="save(false)">{{ isDemo ? "保存演示草稿" : "保存草稿" }}</el-button
           ><el-button type="primary" :disabled="saving || dirty" @click="save(true)"
             >{{ isDemo ? "确认并固定演示建议" : "确认并固定建议" }}</el-button

@@ -124,7 +124,6 @@ declare module 'vue' {
     QualityReportPanel: typeof import('./src/components/business/analytics/QualityReportPanel.vue')['default']
     QualityTracingPanel: typeof import('./src/components/business/analytics/QualityTracingPanel.vue')['default']
     RiskCasePicker: typeof import('./src/components/business/quality-risk/RiskCasePicker.vue')['default']
-    RiskCollaborationPanel: typeof import('./src/components/business/quality-risk/RiskCollaborationPanel.vue')['default']
     RiskDistributionTrendChart: typeof import('./src/components/business/analytics/RiskDistributionTrendChart.vue')['default']
     RiskExecutionReturnPanel: typeof import('./src/components/business/quality-risk/RiskExecutionReturnPanel.vue')['default']
     RiskLabPanel: typeof import('./src/components/business/quality-risk/RiskLabPanel.vue')['default']

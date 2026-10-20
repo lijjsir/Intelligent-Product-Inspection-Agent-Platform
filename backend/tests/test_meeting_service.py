@@ -2772,7 +2772,7 @@ async def test_quality_fact_without_business_binding_is_business_but_meeting_onl
     assert candidate.memory_type == "quality_fact"
     assert candidate.memory_category == "business_memory"
     assert candidate.recommended_scope == "meeting_room"
-    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "agent", "collab_thread"]
     assert candidate.shareability["missing_bindings"] == []
     assert any("不会把质检任务作为共享目标" in warning for warning in candidate.warnings)
 
@@ -3013,7 +3013,7 @@ async def test_confirm_memory_reclassifies_quality_fact_from_edited_content():
 
     assert result.memory_type == "quality_fact"
     assert result.memory_category == "business_memory"
-    assert result.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert result.shareability["allowed_scopes"] == ["meeting_room", "org_space", "agent", "collab_thread"]
     assert result.shareability["missing_bindings"] == []
 
 
@@ -3356,7 +3356,7 @@ async def test_risk_insight_without_business_binding_stays_in_meeting():
     assert candidate.memory_type == "risk_insight"
     assert candidate.memory_category == "meeting_memory"
     assert candidate.recommended_scope == "meeting_room"
-    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "user", "agent", "collab_thread"]
+    assert candidate.shareability["allowed_scopes"] == ["meeting_room", "org_space", "agent", "collab_thread"]
     assert candidate.shareability["missing_bindings"] == []
 
 

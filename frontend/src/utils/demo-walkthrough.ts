@@ -32,7 +32,7 @@ export function demoWalkthrough(workspace: RiskWorkspace, code: string) {
         to:{path:'/app/quality-data',query:{...(record?{record:record.id}:{}),...(workspace.case.scope.product_id?{product_id:String(workspace.case.scope.product_id)}:{})}}},
       {key:'monitor',title:'异常发现',role:'编写专家',description:'查看市场异常的统计窗口、增长规则和来源记录。',expectation:'数量线索提供研判入口，不直接等于风险结论。',to:{path:'/app/quality-analytics',query:{tab:'anomalies'}}},
       {key:'assessment',title:'风险研判',role:'编写专家 → 独立复核专家',description:'打开已保存版本，核对引用资料、证据缺口、限制和历史。',expectation:'需要操作时手动创建新版；另一位专家执行演示复核。',to:{path:'/app/risk-assessments',query:versionQuery}},
-      {key:'collaboration',title:'协同复核',role:'受邀专家',description:'从事项查看关联版本的协同记录、公开意见及处理状态。',expectation:'协同固定来源版本；新证据仍需回到事项重评。',to:{path:'/app/risk-assessments',query:{...versionQuery,tab:'collaboration'}}},
+      {key:'review',title:'独立复核',role:'独立复核专家',description:'由另一位专家核对研判的证据、结论与限制。',expectation:'编写人与复核人分离，无需会议或协同工作项。',to:{path:'/app/risk-assessments',query:versionQuery}},
       {key:'sampling',title:'抽查建议',role:'编写专家',description:'查看对象、核查方向、建议依据和适用限制。',expectation:'演示建议不进入正式抽查计划，不自动启动检测。',to:{path:'/app/risk-sampling',query:caseQuery}},
       {key:'report',title:'分析报告',role:'编写或复核专家',description:'查看已生成报告和历史快照；具备条件后可手动生成并导出。',expectation:'报告保留对象、证据、结论、限制、复核和建议。',to:{path:'/app/risk-reports',query:caseQuery}},
     ],laboratory:{path:'/app/risk-assessments',query:{...versionQuery,tab:'laboratory'}}};

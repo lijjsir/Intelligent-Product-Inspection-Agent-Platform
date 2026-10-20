@@ -10,7 +10,7 @@ from app.models.quality_risk import QualityRiskAssessment, QualityEvidenceItem, 
 from app.models.supervision import SupervisionRecord
 from app.services.demo_risk_workflow_service import DemoRiskWorkflowService, is_manual_demo, now
 from app.services.risk_workflow_context_service import RiskWorkflowContextService
-from app.services.demo_sampling_service import DemoSamplingService
+from app.services.demo_sampling_service import DemoSamplingService, ASSESSMENT_SCHEMA
 from app.services.quality_risk_service import stable_hash
 from app.services.risk_lab_service import RiskLabService
 
@@ -73,13 +73,16 @@ class RiskReportService:
         sampling_service.demo = sampling_service.collab.demo = self.demo
         labs = await lab_service.list(case.id)
         suggestions = await sampling_service.list(case.id)
+        direct_protocol=any(s['snapshot'].get('schema')==ASSESSMENT_SCHEMA and s['snapshot']['assessment_id']==assessment.id for s in suggestions) or not any(
+            s['snapshot'].get('collaboration_id') and s['snapshot']['assessment_id']==assessment.id for s in suggestions)
+        if direct_protocol:suggestions=[s for s in suggestions if s['snapshot'].get('schema')==ASSESSMENT_SCHEMA]
         refs = []
         for item in [*labs, *suggestions]:
             row = await self.db.scalar(self.demo.read(select(SupervisionRecord).where(
                 SupervisionRecord.id == item["id"], SupervisionRecord.org_id == self.org_id)))
             refs.append({"id": row.id, "kind": row.kind, "hash": self.record_hash(row)})
         for item in suggestions:
-            if item["snapshot"]["assessment_id"] == assessment.id:
+            if item["snapshot"].get('collaboration_id') and item["snapshot"]["assessment_id"] == assessment.id:
                 _, token = await sampling_service.context(case.id, item["snapshot"]["collaboration_id"])
                 refs.append({"id": item["snapshot"]["collaboration_id"], "kind": "collab-context", "hash": token})
         product_id = (case.scope or {}).get("product_id")
@@ -105,6 +108,7 @@ class RiskReportService:
                 "structured_data": e.structured_data, "nature": e.nature} for e in evidence],
             "laboratory": labs, "sampling": [{k: s[k] for k in ("id", "title", "status", "effective_status", "revision", "content", "snapshot")} for s in suggestions],
             "source_refs": refs, "boundary": boundary}
+        if direct_protocol:snapshot['sampling_protocol']='assessment-v2'
         if not self.demo.is_demo:
             snapshot['model_call'] = {key:(assessment.model_versions or {}).get(key) for key in (
                 'llm_called', 'model_success', 'attempted_calls', 'successful_calls', 'inference_status')}
@@ -182,6 +186,8 @@ class RiskReportService:
             SupervisionRecord.org_id == self.org_id, SupervisionRecord.kind.in_(["risk-lab-verifications", "demo-sampling-suggestions" if self.demo.is_demo else 'risk-sampling-suggestions']),
             or_(SupervisionRecord.data["case_id"].as_string() == case.id,
                 SupervisionRecord.data["snapshot"]["case_id"].as_string() == case.id)))))
+        if snapshot.get('sampling_protocol')=='assessment-v2':
+            related=[r for r in related if r.kind=='risk-lab-verifications' or r.data.get('snapshot',{}).get('schema')==ASSESSMENT_SCHEMA]
         expected_ids = {ref["id"] for ref in snapshot["source_refs"] if ref["kind"] != "collab-context"}
         if {r.id for r in related} != expected_ids:
             issues.append("本事项新增了验证选择或抽查建议；报告仍保留原快照")

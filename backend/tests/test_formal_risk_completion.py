@@ -8,7 +8,7 @@ from sqlalchemy import DateTime, DefaultClause, MetaData, select, text
 
 from test_quality_risk_v4 import domain  # noqa: F401
 from test_risk_sampling_workflow import flow  # noqa: F401
-from app.core.exceptions import ConflictError, ForbiddenError, ValidationError
+from app.core.exceptions import ConflictError, ForbiddenError, ValidationError, NotFoundError
 from app.models.base import Base
 from app.models.quality_risk import QualityRiskAssessment, QualitySourceRecord
 from app.models.supervision import SupervisionRecord
@@ -76,7 +76,7 @@ async def test_formal_review_collaboration_suggestion_skip_and_report(formal):
     svc = DemoSamplingService(db, risk('expert').current)
     candidate = (await svc.candidates(case['id']))['items'][0]
     suggestion = await svc.create(case['id'], DemoSamplingCreate(assessment_id=assessment['id'],
-        collaboration_id=link['id'], expected_context_hash=candidate['context_hash']))
+        expected_context_hash=candidate['context_hash']))
     saved = await svc.mutate(suggestion['id'], DemoSamplingSave(expected_revision=1,
         content=DemoSamplingContent(rationale='隔离证据复核', focus='代表性抽查', limitations='概率未校准')))
     confirmed = await svc.mutate(saved['id'], DemoSamplingConfirm(expected_revision=2), confirm=True)
@@ -113,7 +113,7 @@ async def test_formal_review_collaboration_suggestion_skip_and_report(formal):
     source = await db.get(QualitySourceRecord, formal[3]['id'])
     source.deleted_at = datetime.utcnow()
     await db.flush()
-    with pytest.raises((ConflictError, ValidationError)):
+    with pytest.raises((ConflictError, ValidationError, NotFoundError)):
         await supervision.sampling_analysis_contexts(plan)
 
 

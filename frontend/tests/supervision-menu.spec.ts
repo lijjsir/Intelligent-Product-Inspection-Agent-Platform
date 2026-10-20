@@ -37,8 +37,8 @@ describe("supervision role boundaries and business form submission", () => {
       "风险研判",
       "监督抽查",
     ]);
-    expect(menu.value.map(item => item.title)).toEqual(["AI 对话", "质量监督", "实验室检测", "检测任务", "检测结果", "协同中心", "报告中心", "标准与知识", "个人设置"]);
-    for (const title of ['实验室检测','检测任务','检测结果','协同中心','报告中心']) {
+    expect(menu.value.map(item => item.title)).toEqual(["AI 对话", "会议室", "质量监督", "实验室检测", "检测任务", "检测结果", "报告中心", "标准与知识", "个人设置"]);
+    for (const title of ['实验室检测','检测任务','检测结果','报告中心']) {
       expect(menu.value.some(item => item.title === title && !('items' in item))).toBe(true);
     }
     const resources = menu.value.find(item => 'items' in item && item.title === '标准与知识');

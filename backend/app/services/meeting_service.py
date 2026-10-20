@@ -1813,6 +1813,8 @@ class MeetingService:
             and requested_scope_id in {"", "current", room_id}
         )
         if not confirms_current_room:
+            if requested_scope == _MEMORY_SCOPE_USER:
+                raise ValidationError('个人记忆分享已停用，请选择会议室或组织共享空间')
             await self._ensure_memory_publish_allowed(
                 item,
                 requested_scope,
@@ -2227,6 +2229,8 @@ class MeetingService:
                 share_request=await self._serialize_memory_share_approval(existing),
             )
 
+        if self._normalize_memory_scope(request.target_scope_type) == _MEMORY_SCOPE_USER:
+            raise ValidationError('个人记忆分享已停用，请选择当前会议室、其他会议室或组织共享空间')
         item = await self._repo.get_memory_item(self._org_id, memory_id)
         if item is None:
             raise NotFoundError("meeting memory not found")
@@ -5938,7 +5942,6 @@ class MeetingService:
         allowed_scopes = [
             _MEMORY_SCOPE_MEETING_ROOM,
             _MEMORY_SCOPE_ORG_SPACE,
-            _MEMORY_SCOPE_USER,
             _MEMORY_SCOPE_AGENT,
             _MEMORY_SCOPE_COLLAB_THREAD,
         ]

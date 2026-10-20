@@ -151,8 +151,8 @@ export const appRoutes = [
   {
     path: "collab",
     name: "app-collab",
-    component: () => import("@/views/CollabMessagesView.vue"),
-    meta: { title: "协作中心", roles: COLLAB_APP_ROLES },
+    component: () => import("@/views/LegacyCollaborationView.vue"),
+    meta: { title: "历史共享与请求记录", roles: COLLAB_APP_ROLES },
   },
   {
     path: "rag-spaces",

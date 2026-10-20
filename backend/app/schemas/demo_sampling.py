@@ -8,7 +8,7 @@ from app.schemas.demo_risk_workflow import Strict
 
 class DemoSamplingCreate(Strict):
     assessment_id: UUID
-    collaboration_id: UUID
+    collaboration_id: UUID | None = None  # Legacy snapshot compatibility; new APIs use the reviewed assessment.
     expected_context_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 

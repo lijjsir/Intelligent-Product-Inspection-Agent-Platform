@@ -37,8 +37,8 @@ async def sampling(collaboration):
     await meeting.send_message(link["room_id"], "私密内容不带入建议", private_recipient_user_id=service("expert").actor)
     def svc(role="expert"):
         return DemoSamplingService(db, service(role).current)
-    candidate = (await svc().candidates(case["id"]))["items"][0]
-    create = DemoSamplingCreate(assessment_id=assessment["id"], collaboration_id=link["id"], expected_context_hash=candidate["context_hash"])
+    _, token = await svc().context(case["id"], link["id"]) # Build a legacy fixture, not a new API candidate.
+    create = DemoSamplingCreate(assessment_id=assessment["id"], collaboration_id=link["id"], expected_context_hash=token)
     return db, service, wf, case, source, assessment, link, public, svc, create
 
 
@@ -102,8 +102,8 @@ async def test_changed_basis_retains_original_and_blocks_confirmation(sampling, 
     with pytest.raises(ConflictError): await svc().mutate(first["id"], DemoSamplingConfirm(expected_revision=1), confirm=True)
     with pytest.raises(ConflictError): await svc().create(case["id"], create)
     if change != "source":
-        current = (await svc().candidates(case["id"]))["items"][0]
-        new = await svc().create(case["id"], create.model_copy(update={"expected_context_hash": current["context_hash"]}))
+        _, token = await svc().context(case['id'],str(create.collaboration_id))
+        new = await svc().create(case["id"], create.model_copy(update={"expected_context_hash": token}))
         assert new["id"] != first["id"] and len(await svc().list()) == 2
 
 
@@ -129,7 +129,7 @@ async def test_authorization_environment_foreign_and_removed_member(sampling, mo
 
 
 @pytest.mark.asyncio
-async def test_unreviewed_or_incomplete_collaboration_not_candidate(collaboration):
+async def test_new_candidate_requires_review_but_not_legacy_work_item_completion(collaboration):
     db, service, _, case, _, assessment, collab, payload = collaboration
     await collab().create(case["id"], payload)
     svc = DemoSamplingService(db, service("expert").current)
@@ -138,7 +138,7 @@ async def test_unreviewed_or_incomplete_collaboration_not_candidate(collaboratio
     from app.services.demo_risk_workflow_service import DemoRiskWorkflowService
     await DemoRiskWorkflowService(db, service("expert2").current).review(case["id"], assessment["id"], DemoDraftReview(expected_revision=3, decision="approve", comment="演示核对"))
     result = await svc.candidates(case["id"])
-    assert result["items"] == [] and "完成" in result["blockers"][0]
+    assert len(result["items"]) == 1 and result["items"][0]["snapshot"]["collaboration_id"] is None
 
 
 @pytest.mark.asyncio
