@@ -16,6 +16,8 @@ const tab = ref(props.initialTab);
 const busy = ref(false);
 const error = ref("");
 const fileUrl = ref("");
+const previewUrl = ref("");
+let fileEpoch = 0, previewEpoch = 0;
 const canSubmit = computed(() => auth.hasPermission("standard_admission_submit"));
 const canReview = computed(() => auth.primaryRole === "expert" && auth.hasPermission("standard_admission_review") && revision.value?.created_by !== auth.userId &&
   (!revision.value?.review_assignment?.reviewer_id || revision.value.review_assignment.reviewer_id===auth.userId));
@@ -66,9 +68,24 @@ function executionEvidenceHint(item: StandardCandidate) {
   if (item.candidate_type === "method_condition") return "这是试验方法或条件核对项，不是可直接从图片判断的外观缺陷。";
   return "执行时需要根据条款保留人工核对说明和来源依据。";
 }
+function candidateReading(item: StandardCandidate) {
+  const text=item.normalized_text || item.source_text;
+  return text.includes('〔公式或特殊符号请查看本页原件〕') || text.includes('〔符号见原页〕')
+    ? '本条含公式或特殊符号，请查看本页原件核对完整内容。' : text;
+}
 let interval: ReturnType<typeof setInterval> | undefined;
 
-function resetFile() { if (fileUrl.value) URL.revokeObjectURL(fileUrl.value); fileUrl.value = ""; }
+function resetFile() { ++fileEpoch; ++previewEpoch; if (fileUrl.value) URL.revokeObjectURL(fileUrl.value); if (previewUrl.value) URL.revokeObjectURL(previewUrl.value); fileUrl.value = ""; previewUrl.value = ""; }
+async function loadPagePreview() {
+  const epoch=++previewEpoch, id=props.documentId, rid=selected.value, page=originalPage.value;
+  if(previewUrl.value) URL.revokeObjectURL(previewUrl.value);
+  previewUrl.value='';
+  const result=await api.pagePreview(id,rid,page);
+  if(epoch!==previewEpoch || id!==props.documentId || rid!==selected.value || page!==originalPage.value) return;
+  if(previewUrl.value) URL.revokeObjectURL(previewUrl.value);
+  previewUrl.value=URL.createObjectURL(result.data as unknown as Blob);
+}
+function previewFailed() { if(previewUrl.value)URL.revokeObjectURL(previewUrl.value);previewUrl.value=''; }
 async function loadVersions(keep = false) {
   const result = await api.revisions(props.documentId);
   versions.value = result.data.data;
@@ -103,9 +120,18 @@ async function amend() {
 async function viewOriginal() {
   await run(async () => {
     resetFile();
-    const result = await api.file(props.documentId,selected.value);
+    const epoch=fileEpoch, id=props.documentId, rid=selected.value;
+    const result = await api.file(id,rid);
+    if(epoch!==fileEpoch || id!==props.documentId || rid!==selected.value)return;
     fileUrl.value = URL.createObjectURL(result.data as unknown as Blob);
+    await loadPagePreview();
   });
+}
+async function viewCandidateOriginal(item: StandardCandidate) {
+  originalPage.value = item.page_number;
+  if (!fileUrl.value) await viewOriginal();
+  else await run(loadPagePreview);
+  if (!props.reviewMode) tab.value = 'original';
 }
 function openAction(value: string) { action.value=value;reason.value="";evidence.value="";conflictResolution.value="";decision.value="approve";actionOpen.value=true; }
 function actionPayload() { return {expected_version:revision.value!.row_version,request_key:crypto.randomUUID(),reason:reason.value.trim(),evidence_refs:evidence.value.split("\n").map(x=>x.trim()).filter(Boolean)}; }
@@ -137,7 +163,7 @@ async function saveCandidate() {
 async function openCandidateReview(item:StandardCandidate) {
   reviewingCandidate.value=item;candidateDecision.value="confirm";reason.value="";evidence.value="";
   originalPage.value=item.page_number;candidateReviewOpen.value=true;
-  if(props.reviewMode&&!fileUrl.value) await viewOriginal();
+  if(props.reviewMode) { if(!fileUrl.value) await viewOriginal(); else await run(loadPagePreview); }
 }
 async function reviewCandidate() {
   if(!reviewingCandidate.value||!revision.value||!reason.value.trim())return;
@@ -155,7 +181,7 @@ async function submitWorkflowAction() {
   });
 }
 watch(() => props.documentId, async () => { selected.value="";revision.value=null;resetFile();await run(() => loadVersions()); },{immediate:true});
-watch(selected, () => { resetFile();applicabilityResult.value=null; });
+watch(selected, () => { resetFile();originalPage.value=1;applicabilityResult.value=null; });
 interval=setInterval(() => {
   if (!busy.value && !actionOpen.value && !candidateOpen.value && revision.value &&
     (revision.value.processing_status==="pending" || revision.value.publication_status==="publishing")) void run(() => loadVersions(true));
@@ -192,7 +218,7 @@ onBeforeUnmount(() => { clearInterval(interval);resetFile(); });
         <el-button v-if="canSubmit && (revision.processing_status !== 'parsed' || revision.jobs?.some(j=>j.status==='failed'))" @click="openAction('retry')">重新处理</el-button>
       </div>
       <div :class="{'review-layout':reviewMode}">
-      <aside v-if="reviewMode" class="review-original"><div class="action-row"><strong>原文对照</strong><el-button :loading="busy" @click="viewOriginal">打开原PDF核对</el-button><a v-if="originalSource" :href="originalSource" target="_blank" rel="noopener noreferrer">新窗口查看</a></div><iframe v-if="originalSource" :src="originalSource" title="标准审核原PDF" class="pdf-frame"/><el-empty v-else description="打开原PDF，与右侧提取内容逐项核对"/></aside>
+      <aside v-if="reviewMode" class="review-original"><div class="action-row"><strong>原文对照 · 第 {{ originalPage }} 页</strong><el-button :loading="busy" @click="viewOriginal">打开原PDF核对</el-button><a v-if="originalSource" :href="originalSource" target="_blank" rel="noopener noreferrer">新窗口查看PDF</a></div><el-input-number v-if="originalSource" v-model="originalPage" :min="1" :max="revision.page_count" aria-label="原文页码" :disabled="busy" size="small" @change="run(loadPagePreview)"/><div v-if="previewUrl" class="original-page-preview"><a :href="previewUrl" target="_blank" rel="noopener noreferrer"><img :src="previewUrl" :alt="`标准原件第${originalPage}页`" @error="previewFailed" /></a></div><iframe v-else-if="originalSource" :src="originalSource" title="标准审核原PDF" class="pdf-frame"/><el-empty v-else description="打开原PDF，与右侧提取内容逐项核对"/></aside>
       <el-tabs v-model="tab" class="review-content">
         <el-tab-pane label="基本信息与适用范围" name="metadata">
           <el-collapse v-if="Object.keys(revision.metadata_candidates || {}).length" class="header-clues"><el-collapse-item title="自动识别的正文元信息候选（须对照原PDF核对）"><div v-for="(item,key) in revision.metadata_candidates" :key="key"><strong>{{ metaLabels[key] }}：</strong>{{ item.value }} <span class="muted">· PDF第 {{ item.page_number }} 页</span></div><el-button v-if="canSubmit" class="clue-button" @click="useHeaderClues">填入候选后核对</el-button><p class="muted">编号出现在正文中也可能只是引用其他标准；这些候选不代表来源、类型或现行状态已确认。</p></el-collapse-item></el-collapse>
@@ -210,8 +236,9 @@ onBeforeUnmount(() => { clearInterval(interval);resetFile(); });
         </el-tab-pane>
         <el-tab-pane label="原文与条款" name="original">
           <div class="action-row"><el-button @click="viewOriginal">打开原PDF核对</el-button><span class="muted">共 {{ revision.page_count }} 页；数字和表格请以原文核对结果为准。</span></div>
-          <iframe v-if="fileUrl && !reviewMode" :src="fileUrl" title="标准原PDF" class="pdf-frame" />
-          <el-collapse><el-collapse-item v-for="page in revision.pages" :key="page.page_number" :title="`PDF第 ${page.page_number} 页 · 解析文本`" :name="page.page_number"><pre>{{ page.text }}</pre></el-collapse-item></el-collapse>
+          <div v-if="previewUrl && !reviewMode" class="original-page-preview"><a :href="previewUrl" target="_blank" rel="noopener noreferrer"><img :src="previewUrl" :alt="`标准原件第${originalPage}页`" @error="previewFailed" /></a></div>
+          <iframe v-else-if="fileUrl && !reviewMode" :src="originalSource" title="标准原PDF" class="pdf-frame" />
+          <el-collapse><el-collapse-item v-for="page in revision.pages" :key="page.page_number" :title="`PDF第 ${page.page_number} 页 · 阅读文本`" :name="page.page_number"><pre>{{ page.text }}</pre><el-alert v-for="warning in page.text_warnings || []" :key="warning" :title="warning" type="warning" :closable="false"/><details v-if="page.raw_text"><summary>查看原始提取文本（可能包含字体映射错误）</summary><pre>{{ page.raw_text }}</pre></details></el-collapse-item></el-collapse>
           <el-empty v-if="!revision.pages?.length" description="等待解析正文，可先查看原PDF或检查处理状态"/>
         </el-tab-pane>
         <el-tab-pane :label="`候选条款与检测要求（${revision.candidate_count}）`" name="requirements">
@@ -219,9 +246,10 @@ onBeforeUnmount(() => { clearInterval(interval);resetFile(); });
           <p class="muted">自动解析结果全部是候选。检测要求、方法条件和正文条款分别保留；只有专家确认并完成发布后，才进入正式检测要求总览。</p>
           <article v-for="item in revision.candidates" :key="item.id" class="requirement-card">
             <header><strong>{{ item.clause_no || '待核对条款号' }} · {{ item.indicator || '待识别检测项目' }}</strong><span><el-tag effect="plain">{{ item.candidate_type === 'method_condition' ? '方法条件' : item.candidate_type === 'body_clause' ? '正文条款' : '检测要求候选' }}</el-tag> <el-tag :type="item.status==='confirmed'?'success':'info'">{{ item.status==='pending'?'待专业核对':label(item.status) }}</el-tag></span></header>
-            <p class="source-ref">PDF第 {{ item.page_number }} 页 · 识别置信度 {{ item.extraction_confidence ?? '待评估' }}</p><pre>{{ item.source_text }}</pre>
-            <dl class="evidence-compare"><dt>原始 OCR</dt><dd>{{ item.ocr_text || item.source_text }}</dd><dt>规范化文本</dt><dd>{{ item.normalized_text || '未生成；请以原 PDF 为准' }}</dd></dl>
-            <el-alert v-if="item.normalization_notes" :title="item.normalization_notes" type="warning" :closable="false" />
+            <p class="source-ref">PDF第 {{ item.page_number }} 页 · 自动提取，待专业核对 <el-button link type="primary" @click="viewCandidateOriginal(item)">查看本条原页</el-button></p>
+            <pre class="candidate-reading">{{ candidateReading(item) }}</pre>
+            <el-alert v-for="warning in item.text_warnings || []" :key="warning" :title="warning" type="warning" :closable="false" />
+            <details class="extraction-details"><summary>提取依据与整理说明</summary><dl class="evidence-compare"><dt>{{ item.source_extraction_method === 'ocr' ? 'OCR 提取文本' : '条款提取文本' }}</dt><dd>{{ item.ocr_text || item.source_text }}</dd><dt>整理说明</dt><dd>{{ item.normalization_notes || '旧版提取结果；公式和数字请以原 PDF 为准。' }}</dd></dl></details>
              <dl v-if="item.requirement"><dt>核对要求</dt><dd>{{ item.requirement }}</dd><dt>方法 / 条件</dt><dd>{{ item.method }} / {{ item.conditions }}</dd><dt>测量字段 / 单位</dt><dd>{{ item.measurement_key }} / {{ item.unit }}</dd><dt>执行证据</dt><dd><el-tag size="small" effect="plain">{{ executionEvidenceLabel(item) }}</el-tag><span class="evidence-hint">{{ executionEvidenceHint(item) }}</span></dd></dl>
             <p v-if="item.review_reason" class="muted">核对意见：{{item.review_reason}} · {{item.review_evidence_refs?.join('；')}}</p>
             <footer><div><span class="muted">{{ item.warning }}</span><p v-if="item.prepared_by===auth.userId" class="muted">本人整理，须交其他专家确认</p></div><div v-if="revision.publication_status==='unpublished'"><el-button v-if="canEditCandidates" @click="editCandidate(item)">编辑整理稿</el-button><el-button v-if="canEditCandidates" link @click="editCandidate(item,true)">同条款新增项目</el-button><el-button v-if="canReviewCandidate(item)&&item.status!=='confirmed'" type="primary" @click="openCandidateReview(item)">逐项专业核对</el-button></div></footer>
@@ -278,6 +306,7 @@ onBeforeUnmount(() => { clearInterval(interval);resetFile(); });
 <style scoped>
 .review-layout{display:grid;grid-template-columns:minmax(340px,.85fr) minmax(0,1fr);gap:20px;align-items:start}.review-original{position:sticky;top:0;border:1px solid var(--el-border-color);border-radius:6px;padding:12px;min-width:0}.review-original .pdf-frame{width:100%;height:690px}.review-content{min-width:0}.review-layout .metadata-grid{grid-template-columns:1fr}.review-layout .requirement-card{padding:14px}.review-layout .requirement-card footer{flex-direction:column}@media(max-width:1000px){.review-layout{grid-template-columns:1fr}.review-original{position:static}.review-original .pdf-frame{height:460px}}
 .standard-detail{display:flex;flex-direction:column;gap:16px;color:var(--el-text-color-primary)}
+.original-page-preview{max-height:690px;overflow:auto;margin-top:16px;border:1px solid var(--el-border-color)}.original-page-preview img{display:block;width:100%;height:auto}.original-page-preview a{display:block}
 .document-heading{display:flex;justify-content:space-between;align-items:start;gap:24px;padding:0 0 18px;border-bottom:2px solid var(--el-color-primary)}
 .document-heading h2{margin:4px 0;font-size:25px;font-variant-numeric:tabular-nums}.document-heading p{margin:6px 0}.document-heading .el-select{width:210px;flex-shrink:0}
 .eyebrow{font-size:12px;letter-spacing:2px;color:var(--el-color-primary)}
@@ -288,6 +317,7 @@ onBeforeUnmount(() => { clearInterval(interval);resetFile(); });
 .applicability-result{margin-top:18px}
 pre{font:13px/1.8 'Microsoft YaHei',sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0;max-height:300px;overflow:auto}
 .requirements-summary{display:flex;gap:20px;align-items:center;margin:6px 0}.requirements-summary strong{color:var(--el-color-primary)}
+.extraction-details{margin:12px 0}.extraction-details summary{cursor:pointer;color:var(--el-text-color-secondary);font-size:13px;padding:8px 0}.candidate-reading{max-height:360px}.extraction-details .evidence-compare{max-height:300px;overflow:auto}.source-ref{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .requirement-card{margin:16px 0;padding:20px;border:1px solid var(--el-border-color);border-left:3px solid var(--el-color-primary);border-radius:6px}
 .evidence-compare{display:grid;grid-template-columns:120px 1fr;gap:7px 12px;padding:12px;background:var(--el-fill-color-light);border-radius:5px;font-size:13px}.evidence-compare dt{color:var(--el-text-color-secondary)}.evidence-compare dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .requirement-card header,.requirement-card footer{display:flex;justify-content:space-between;gap:16px;align-items:start}.source-ref{font-size:12px;color:var(--el-text-color-secondary)}.requirement-card dl{display:grid;grid-template-columns:130px 1fr;gap:8px;font-size:13px}.requirement-card dd{margin:0}.requirement-card footer{padding-top:12px;border-top:1px solid var(--el-border-color-lighter)}.candidate-original{padding:12px 16px;background:var(--el-fill-color-light);border-radius:6px;margin-bottom:18px}

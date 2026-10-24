@@ -2,6 +2,7 @@ export interface StandardCandidate {
   id: string; clause_no: string; page_number: number; source_text: string;
   candidate_type?: "inspection_requirement" | "method_condition" | "body_clause" | string;
   ocr_text?: string; normalized_text?: string; extraction_confidence?: number; normalization_notes?: string;
+  source_extraction_method?: string; text_warnings?: string[];
   indicator: string; method: string; conditions: string; unit: string; requirement: string;
   operator: "le" | "ge" | "range" | "eq" | "text" | "unresolved";
   measurement_key: string; applicability: string; status: "pending" | "confirmed" | "rejected";
@@ -19,7 +20,7 @@ export interface StandardRevision {
   published_by: string | null; published_at: string | null;
   review_assignment?: {reviewer_id: string|null; domain?:string; due_at?:string|null; mode:string; reason:string}|null;
   page_count: number; candidate_count: number; confirmed_count: number; issues: string[];
-  pages?: { page_number: number; text: string }[]; candidates?: StandardCandidate[];
+  pages?: { page_number: number; text: string; raw_text?: string; text_warnings?: string[] }[]; candidates?: StandardCandidate[];
   metadata_candidates?: Record<string,{value:string;page_number:number;source_text:string}>;
   reviews?: {id:string; action:string; actor_id:string; reason:string; evidence_refs:string[]; created_at:string}[];
   jobs?: {id:string; action:string; status:string; attempts:number; error_message:string|null; next_attempt_at:string|null}[];

@@ -320,6 +320,7 @@ class IngestionPreviewResponse(Strict):
 
 
 class RiskCaseCreate(Strict):
+    assessment_purpose: Literal["current_supervision", "historical_review"] | None = None
     title: str = Field(min_length=1, max_length=255)
     scope_type: Literal["category", "enterprise", "product", "production_batch", "individual_unit", "mixed"]
     scope: dict = Field(default_factory=dict)
@@ -329,6 +330,7 @@ class RiskCaseCreate(Strict):
 
 
 class RiskCaseResponse(Strict):
+    assessment_purpose: str = "current_supervision"
     display_no: str | None = None
     id: str
     org_id: str
@@ -350,7 +352,37 @@ class RiskAnalyzeRequest(Strict):
     inspection_execution_run_id: str | None = None
 
 
+class HistoricalReviewRefresh(Strict):
+    assessment_id: UUID
+
+
+class RiskAnalysisJobCreate(RiskAnalyzeRequest):
+    request_key: UUID
+    base_assessment_id: UUID | None = Field(...)
+
+    @field_validator('policy_id','inspection_execution_run_id')
+    @classmethod
+    def analysis_reference(cls,value):
+        return str(UUID(value)) if value else None
+
+
+class RiskAnalysisJobResponse(Strict):
+    id: str
+    case_id: str
+    created_by: str
+    status: str
+    assessment_id: str | None = None
+    error_code: str | None = None
+    message: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class RiskAssessmentResponse(Strict):
+    analysis_origin: dict | None = None
+    analysis_summary: dict = Field(default_factory=dict)
+    purpose_review: dict = Field(default_factory=dict)
     demo_workflow: dict | None = None
     demo_validation: dict | None = None
     source_validation:dict=Field(default_factory=dict)
@@ -411,6 +443,8 @@ class RiskSourcesAppend(Strict):
 
 
 class RiskReviewRequest(Strict):
+    historical_scope_confirmed: bool = False
+    conflict_resolution: str | None = Field(default=None, max_length=4000)
     assessment_id: str | None = None
     decision: Literal["accept", "request_evidence", "revise"]
     comment: str = Field(min_length=1, max_length=4000)

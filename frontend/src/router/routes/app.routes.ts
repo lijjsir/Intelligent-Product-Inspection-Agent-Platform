@@ -61,9 +61,16 @@ export const appRoutes = [
   },
   {
     path: "workbench",
-    name: "app-supervision-workbench",
-    component: () => import("@/views/supervision/SupervisionWorkbenchView.vue"),
-    meta: { title: "质监工作台", roles: [ROLE_USER, ROLE_EXPERT] },
+    name: "app-legacy-supervision-workbench",
+    redirect: (to: { hash: string }) => to.hash === '#demo-case-guide'
+      ? '/app/quality-data#demo-case-guide' : '/app/quality-analytics',
+    meta: { roles: [ROLE_EXPERT] },
+  },
+  {
+    path: "risk-assessments/records/risk-cases",
+    name: "app-supervision-risk-records",
+    component: () => import("@/views/supervision/SupervisionRecordsView.vue"),
+    meta: { title: "历史风险记录", supervisionKind: "risk-cases", roles: [ROLE_EXPERT] },
   },
   {
     path: "laboratory",

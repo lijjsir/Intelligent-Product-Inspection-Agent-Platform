@@ -8,6 +8,7 @@ celery_app.conf.result_backend = settings.celery_result_backend
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.imports = (
+    "worker.tasks.risk_analysis_task",
     "worker.tasks.supervision_task",
     "worker.tasks.alert_dispatch_task",
     "worker.tasks.health_check_task",
@@ -23,6 +24,7 @@ celery_app.conf.imports = (
 )
 
 celery_app.conf.beat_schedule = {
+    "risk-analysis-dispatch": {"task":"worker.tasks.risk_analysis_task.dispatch_risk_analysis","schedule":10.0},
     "standard-sync-outbox-dispatch": {"task": "worker.tasks.standard_sync_outbox_task.dispatch_standard_sync_outbox", "schedule": 20.0},
     "supervision-run-dispatch": {"task": "worker.tasks.supervision_task.dispatch_supervision_runs", "schedule": 30.0},
     "model-health-check": {
@@ -45,6 +47,7 @@ celery_app.conf.beat_schedule = {
 
 # Import task modules eagerly so the worker always registers named tasks.
 from worker.tasks import (  # noqa: E402,F401
+    risk_analysis_task,
     alert_dispatch_task,
     algo_workspace_task,
     dataset_pipeline_task,

@@ -4,177 +4,110 @@ import { computed } from "vue";
 const props = withDefaults(
   defineProps<{
     title: string;
-    agentName: string;
     description: string;
-    principle: string;
+    principle?: string;
+    agentName?: string;
+    eyebrow?: string;
     tone?: "blue" | "cyan" | "amber" | "violet";
   }>(),
-  { tone: "blue" },
+  { tone: "blue", eyebrow: "质量监督" },
 );
-
-const palette = computed(
-  () =>
-    ({
-      blue: { accent: "#0b63ce", soft: "#eaf3ff", glow: "rgba(11, 99, 206, 0.16)" },
-      cyan: { accent: "#087f8c", soft: "#e9f8f8", glow: "rgba(8, 127, 140, 0.15)" },
-      amber: { accent: "#c96a0a", soft: "#fff4e5", glow: "rgba(201, 106, 10, 0.16)" },
-      violet: { accent: "#6d4bc3", soft: "#f2edff", glow: "rgba(109, 75, 195, 0.15)" },
-    })[props.tone],
+const accent = computed(
+  () => ({ blue: "#2563eb", cyan: "#087f8c", amber: "#a55c11", violet: "#5964ab" })[props.tone],
 );
 </script>
 
 <template>
-  <section
-    class="module-header"
-    :style="{
-      '--module-accent': palette.accent,
-      '--module-soft': palette.soft,
-      '--module-glow': palette.glow,
-    }"
-  >
+  <header class="module-header" :style="{ '--module-accent': accent }">
     <div class="module-copy">
-      <p class="module-kicker">QUALITY SUPERVISION · {{ agentName }}</p>
+      <p class="module-kicker">{{ eyebrow }}</p>
       <h1>{{ title }}</h1>
       <p class="module-description">{{ description }}</p>
-      <div class="module-principle">
-        <span>工作原则</span>
-        <strong>{{ principle }}</strong>
-      </div>
+      <p v-if="principle" class="module-principle">{{ principle }}</p>
     </div>
-    <div v-if="$slots.actions" class="module-actions">
-      <slot name="actions" />
-    </div>
-  </section>
+    <div v-if="$slots.actions" class="module-actions"><slot name="actions" /></div>
+  </header>
 </template>
 
 <style scoped>
 .module-header {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 24px;
-  min-height: 184px;
-  overflow: hidden;
-  padding: 26px 30px;
-  border: 1px solid color-mix(in srgb, var(--module-accent) 22%, #dbe5f0);
-  border-radius: 20px;
-  background:
-    radial-gradient(circle at 88% 12%, var(--module-glow), transparent 30%),
-    linear-gradient(120deg, var(--module-soft), #fff 46%, #f8fbff);
-  box-shadow: 0 14px 38px rgba(15, 54, 96, 0.08);
+  padding: 22px 24px;
+  margin-bottom: 20px;
+  border: 1px solid var(--piap-line, #dbe5f2);
+  border-left: 3px solid var(--module-accent);
+  border-radius: 12px;
+  background: #fff;
 }
-
-.module-header::after {
-  position: absolute;
-  right: -60px;
-  bottom: -110px;
-  width: 270px;
-  height: 270px;
-  border: 1px solid color-mix(in srgb, var(--module-accent) 16%, transparent);
-  border-radius: 50%;
-  content: "";
-}
-
 .module-copy {
-  position: relative;
-  z-index: 1;
   min-width: 0;
 }
-
 .module-kicker {
-  margin: 0 0 8px;
+  margin: 0 0 7px;
   color: var(--module-accent);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
 }
-
 .module-copy h1 {
   margin: 0;
-  color: #102a43;
-  font-size: clamp(28px, 3vw, 40px);
-  letter-spacing: -0.035em;
-  line-height: 1.1;
+  color: var(--piap-ink, #13213a);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.3;
 }
-
 .module-description {
-  max-width: 780px;
-  margin: 12px 0 0;
-  color: #52677d;
+  max-width: 760px;
+  margin: 9px 0 0;
+  color: var(--el-text-color-regular);
   font-size: 14px;
   line-height: 1.75;
 }
-
 .module-principle {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 16px;
-  padding: 6px 10px 6px 7px;
-  border: 1px solid color-mix(in srgb, var(--module-accent) 18%, #dbe5f0);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.78);
-  color: #42566b;
+  margin: 7px 0 0;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
+  line-height: 1.75;
 }
-
-.module-principle span {
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: var(--module-soft);
-  color: var(--module-accent);
-  font-weight: 700;
-}
-
-.module-principle strong {
-  font-weight: 650;
-}
-
 .module-actions {
-  position: relative;
-  z-index: 1;
   display: flex;
-  max-width: 360px;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+  max-width: 440px;
 }
-
 .module-actions :deep(.el-button) {
-  min-height: 42px;
-  margin-left: 0;
-  border-radius: 10px;
+  min-height: 40px;
+  margin: 0;
 }
-
-@media (max-width: 880px) {
+@media (max-width: 960px) {
   .module-header {
-    grid-template-columns: 1fr;
-  }
-
-  .module-actions {
-    grid-column: 1;
-    max-width: none;
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 560px) {
-  .module-header {
-    grid-template-columns: 1fr;
+    align-items: flex-start;
+    flex-direction: column;
     gap: 16px;
-    min-height: 0;
-    padding: 22px 18px;
-    border-radius: 15px;
   }
-
   .module-actions {
-    grid-column: auto;
+    justify-content: flex-start;
+    max-width: none;
   }
-
+}
+@media (max-width: 600px) {
+  .module-header {
+    padding: 18px 16px;
+    margin-bottom: 16px;
+  }
+  .module-copy h1 {
+    font-size: 25px;
+  }
+  .module-actions {
+    width: 100%;
+  }
   .module-actions :deep(.el-button) {
     min-height: 44px;
-    flex: 1;
   }
 }
 </style>

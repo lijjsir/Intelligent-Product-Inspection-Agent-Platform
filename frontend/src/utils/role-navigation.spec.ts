@@ -27,11 +27,16 @@ describe("role-owned menus", () => {
     expect(paths).not.toContain("/app/chat");
     expect(auth.resolveDefaultRoute()).toBe("/governance/admin/models");
   });
-  it('falls back to chat when an expert does not have business-workbench permissions', () => {
+  it('opens chat directly for experts without market-monitoring permissions', () => {
     const auth = useAuthStore(); auth.token = 'session'; auth.role = 'expert'; auth.roles = ['expert'];
     auth.effectivePermissions = ['chat'];
     expect(auth.resolveDefaultRoute()).toBe('/app/chat');
     const paths = useMenu().menu.value.flatMap(item => 'items' in item ? item.items.map(child => child.path) : [item.path]);
-    expect(paths).not.toContain('/app/workbench');
+    expect(paths).not.toContain('/app/quality-analytics');
+  });
+  it('opens chat for experts even when market monitoring is also permitted', () => {
+    const auth = useAuthStore(); auth.token = 'session'; auth.role = 'expert'; auth.roles = ['expert'];
+    auth.effectivePermissions = ['chat', 'quality', 'quality_material_read_business'];
+    expect(auth.resolveDefaultRoute()).toBe('/app/chat');
   });
 });

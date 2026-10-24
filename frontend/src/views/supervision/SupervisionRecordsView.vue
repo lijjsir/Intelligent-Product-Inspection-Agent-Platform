@@ -12,6 +12,7 @@ import SupervisionAssessment from "@/components/business/supervision/Supervision
 import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
 import BulkImportDialog from "@/components/business/supervision/BulkImportDialog.vue";
 import DemoSamplingSuggestions from "@/components/business/supervision/DemoSamplingSuggestions.vue";
+import RecordReviewActions from "@/components/business/supervision/RecordReviewActions.vue";
 import { useRuntimeContext } from "@/composables/useRuntimeContext";
 const importDialog = ref(false);
 import { cleanFields, defaults, fields } from "@/components/business/supervision/form-fields";
@@ -30,14 +31,14 @@ const route = useRoute(),
 const kind = computed(() => (route.meta.supervisionKind || "risk-cases") as SupervisionKind);
 const pagedOptions: Record<string,ReferenceLoader>=Object.fromEntries(['regions','devices','enterprises','plans','samples','cases','tasks','standards'].map(key=>[key,async query=>(await supervisionApi.referenceOptions(key,{...query,task_id:key==='samples' ? form.value.task_id || undefined:undefined})).data.data]));
 const runtime = useRuntimeContext();
-const demoSampling = computed(() => kind.value === 'sampling-plans' && runtime.context.value?.execution_mode === 'demo');
-const title = computed(() => KIND_LABELS[kind.value]);
+const demoSampling = computed(() => kind.value === 'sampling-plans' && runtime.context.value?.execution_mode === 'demo' && !route.query.record && route.query.records !== '1');
+const title = computed(() => kind.value === 'risk-cases' ? '风险记录处理' : KIND_LABELS[kind.value]);
 const moduleMeta = computed(() => {
   if (kind.value === "risk-cases") {
     return {
-      agentName: "舆情监测 Agent",
+      agentName: "风险记录复核",
       tone: "cyan" as const,
-      description: "从投诉、舆情、图片与附件中分离事实、情绪和推测，形成可定位、可补证的风险线索。",
+      description: "核对原始风险记录，补充证据并完成独立复核。",
       principle: "舆情热度不等于质量风险 · 每个判断必须引用证据",
     };
   }
@@ -80,6 +81,7 @@ const rows = ref<SupervisionRecord[]>([]),
 const page = ref(1),
   total = ref(0),
   keyword = ref(""),
+  statusFilter = ref(""),
   form = ref<Record<string, any>>({}),
   name = ref(""),
   code = ref(""),
@@ -163,6 +165,7 @@ async function load() {
       page: page.value,
       size: 20,
       keyword: keyword.value || undefined,
+      status: statusFilter.value || undefined,
     });
     const detail=selectedId?(await supervisionApi.get(target,selectedId,{suppressErrorToast:true})).data.data:null;
     if(key!==readEpoch)return;
@@ -347,7 +350,7 @@ async function cancelRun() {
 async function submit(operation: string) {
   if (!selected.value) return;
   await supervisionApi.review(kind.value, selected.value.id, selected.value.version, operation);
-  ElMessage.success("已提交，其他专家可在质监工作台处理");
+  ElMessage.success("已提交，其他专家可打开此记录完成独立复核");
   await load();
 }
 async function archive(status: string) {
@@ -410,7 +413,11 @@ watch(kind, () => {
   run.value = null;
   selected.value = null;
   page.value = 1;
+  statusFilter.value = "";
   load();
+});
+watch(() => route.query.record, (record, previous) => {
+  if (record !== previous) void load();
 });
 onMounted(load);
 onUnmounted(() => {
@@ -476,6 +483,14 @@ onUnmounted(() => {
     >
     <template v-else>
       <div class="filter-bar">
+        <el-select v-if="['risk-cases', 'sampling-plans', 'inspection-sessions'].includes(kind)" v-model="statusFilter" clearable placeholder="全部状态" aria-label="业务记录状态" @change="page = 1; load()">
+          <el-option label="待补证" value="awaiting_evidence" />
+          <el-option :label="kind === 'sampling-plans' ? '待批准' : '待复核'" value="awaiting_review" />
+          <el-option v-if="kind === 'sampling-plans'" label="已批准" value="approved" />
+          <el-option v-else-if="kind === 'inspection-sessions'" label="已确认" value="signed" />
+          <el-option v-else label="风险已确认" value="risk_assessed" />
+          <el-option label="草稿" value="draft" />
+        </el-select>
         <el-input
           v-model="keyword"
           placeholder="按名称搜索"
@@ -509,7 +524,7 @@ onUnmounted(() => {
                   :type="
                     ['awaiting_evidence', 'inactive'].includes(row.status) ? 'warning' : 'info'
                   "
-                  >{{ STATUS_LABELS[row.status] || row.status }}</el-tag
+                  >{{ row.status === 'awaiting_review' && kind === 'sampling-plans' ? '待批准' : STATUS_LABELS[row.status] || row.status }}</el-tag
                 ></template
               ></el-table-column
             ><el-table-column prop="version" label="版本" width="60" /></el-table
@@ -537,6 +552,7 @@ onUnmounted(() => {
             >
           </div>
           <div class="action-bar">
+            <RecordReviewActions v-if="auth.role === 'expert' && ['risk-cases', 'sampling-plans', 'inspection-sessions'].includes(kind)" :record="selected" @changed="load" />
             <el-button
               v-if="kind === 'risk-cases' && ['user', 'expert'].includes(auth.role)"
               size="small"

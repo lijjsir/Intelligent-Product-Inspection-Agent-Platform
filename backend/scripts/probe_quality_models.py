@@ -49,10 +49,12 @@ async def probe(keys):
                     response = await asyncio.wait_for(client.chat([{'role':'user',
                         'content':'Health check. Return only the JSON object {"ok":true}.'}], temperature=0), timeout=25)
                     result['ok'] = parse_model_json(response) == {'ok':True}
-                    result['usage'] = response.get('usage')
+                    result['usage'] = response.get('usage') or (response.get('__meta__') or {}).get('usage')
             except Exception as exc:
                 # Error strings may contain request URLs or credentials. Report only type.
                 result['error_type'] = type(exc).__name__
+                response = getattr(exc, 'response', None)
+                if response is not None:result['http_status'] = response.status_code
             result['elapsed_seconds'] = round(time.monotonic()-started, 2)
             items.append(result)
     for key in set(keys)-{r.model_key for r in rows}:
@@ -61,10 +63,17 @@ async def probe(keys):
         'business_data_sent':False, 'results':items}, ensure_ascii=False))
 
 
+async def run_probe(keys):
+    try:
+        await probe(keys)
+    finally:
+        await _engine.dispose()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model-key', action='append', required=True)
     args = parser.parse_args()
     if not 1 <= len(args.model_key) <= 4:
         parser.error('Choose one to four model keys')
-    asyncio.run(probe(list(dict.fromkeys(args.model_key))))
+    asyncio.run(run_probe(list(dict.fromkeys(args.model_key))))

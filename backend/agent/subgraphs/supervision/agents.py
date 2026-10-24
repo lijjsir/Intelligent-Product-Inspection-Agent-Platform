@@ -14,7 +14,20 @@ ModelCall = Callable[[str, dict], Awaitable[dict]]
 
 
 def parse_model_json(response: dict) -> dict:
-    text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(response, dict):
+        raise ValueError("模型结果必须为对象")
+    if "choices" not in response:
+        # LLMClient.chat already normalizes a JSON completion into its payload.
+        # Keep transport metadata out of business output; do not parse it twice.
+        payload = {key: value for key, value in response.items() if key != "__meta__"}
+        if not payload:
+            raise ValueError("模型结果为空")
+        if set(payload) != {"text"} or "__meta__" not in response:
+            return payload
+        text = payload["text"]
+    else:
+        choices = response.get("choices") or []
+        text = (choices[0].get("message", {}).get("content", "") if choices else "")
     text = str(text).strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
@@ -98,7 +111,10 @@ class PublicOpinionMonitoringAgent:
             public_sources = [
                 e
                 for e in evidence
-                if e.get("source_type") in {"complaint", "public_opinion", "image"}
+                if e.get("source_type") in {
+                    "complaint", "consumer_complaint", "public_opinion", "image",
+                    "supervision_inspection", "inspection_report", "enforcement_case",
+                }
             ]
             missing = []
             if state["snapshot"].get("standard"):
@@ -106,7 +122,7 @@ class PublicOpinionMonitoringAgent:
             if not evidence:
                 missing.append("真实来源证据")
             if not public_sources:
-                missing.append("投诉、舆情或图像线索")
+                missing.append("可定位的投诉、舆情、检验或执法事实线索")
             output = {
                 "status": "insufficient_evidence",
                 "risk_level": "unknown",
@@ -128,7 +144,7 @@ class PublicOpinionMonitoringAgent:
                         {
                             "snapshot": state["snapshot"],
                             "standard_execution_context": execution_context,
-                            "instruction": "仅依据observed证据，从投诉、舆情和图像中识别企业、产品、缺陷与风险线索，区分情绪强度和质量事实。不得推断不可观察的内部缺陷。返回JSON：summary、risk_level(low/medium/high/critical/unknown)、evidence_ids、normalized_signals(string[])、conflicts(string[])、missing_inputs(string[])、limitations(string[])。每个判断必须引用给定证据编号。",
+                            "instruction": "仅依据observed证据，从投诉、舆情、监督抽查、检验报告、执法记录和图像中识别企业、产品、缺陷与风险线索，区分情绪、来源事实及待核实判断。判断范围以snapshot.data.assessment_context为准。若scope.assessment_purpose为historical_review或scope.case_mode为public_historical_review，只核对historical_period内公开样品或事件，不把缺少当前在售批次资料当作认定历史公开事实的必要条件；引用原报告结论与重算原始试验须分开，无原始读数时保留限制，不能补造。历史抽查只对应原样品与当时依据，不能推成当前在售产品结论；同一报告摘录或转载不算独立样本。不得推断不可观察的内部缺陷。风险等级须有依据，不能确定仍返回unknown。返回JSON：summary、risk_type(简短风险分类，最多128字，不确定返回null)、risk_level(low/medium/high/critical/unknown)、evidence_ids、normalized_signals(string[])、conflicts(string[])、missing_inputs(string[])、limitations(string[])。每个判断必须引用给定证据编号。",
                         },
                     )
                     allowed = {e["evidence_id"] for e in evidence}
@@ -139,6 +155,7 @@ class PublicOpinionMonitoringAgent:
                     if level not in {"low", "medium", "high", "critical", "unknown"}:
                         raise ValueError("无效风险等级")
                     output.update(
+                        risk_type=str(raw.get("risk_type") or "") if len(str(raw.get("risk_type") or "")) <= 128 else None,
                         summary=str(raw.get("summary", ""))[:8000],
                         risk_level=level,
                         evidence_ids=citations,

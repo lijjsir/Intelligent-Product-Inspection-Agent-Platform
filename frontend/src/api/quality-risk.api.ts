@@ -12,6 +12,7 @@ import type {
   RiskAssessmentV4,
   RiskCaseV4,
   RiskWorkspace,
+  RiskAnalysisJob,
   DemoRiskContent,
   IntakeReferenceOptions,
   QualityRecordContext,
@@ -127,6 +128,8 @@ export const qualityRiskApi = {
   attachment: (id: string) => http.get<QualityAttachment>(`/v1/quality-data/attachments/${id}`),
   downloadAttachment: (id: string) =>
     http.get<Blob>(`/v1/quality-data/attachments/${id}/download`, { responseType: "blob" }),
+  previewAttachmentPage: (id: string, page: number) =>
+    http.get<Blob>(`/v1/quality-data/attachments/${id}/pages/${page}/preview`, { responseType: "blob", suppressErrorToast: true }),
   previewImport: (
     sourceId: string | null,
     requestKey: string,
@@ -190,11 +193,17 @@ export const qualityRiskApi = {
     ),
   appendRiskSources: (id: string, sourceRecordIds: string[]) =>
     http.post<RiskCaseV4>(`/v1/risk-cases/${id}/sources`, { source_record_ids: sourceRecordIds }),
-  analyzeRisk: (id: string, policyId?: string, inspectionExecutionRunId?: string) =>
-    http.post<RiskAssessmentV4>(`/v1/risk-cases/${id}/analyze`, {
+  analyzeRisk: (id: string, requestKey: string, baseAssessmentId: string|null, policyId?: string, inspectionExecutionRunId?: string) =>
+    http.post<RiskAnalysisJob>(`/v1/risk-cases/${id}/analysis-jobs`, {
+      request_key: requestKey, base_assessment_id: baseAssessmentId,
       policy_id: policyId || null,
       inspection_execution_run_id: inspectionExecutionRunId || null,
     }),
+  latestAnalysisJob: (id: string) => http.get<RiskAnalysisJob|null>(`/v1/risk-cases/${id}/analysis-jobs/latest`,{suppressErrorToast:true}),
+  cancelAnalysisJob:(id:string,jobId:string)=>http.post<RiskAnalysisJob>(`/v1/risk-cases/${id}/analysis-jobs/${jobId}/cancel`),
+  analysisJob: (id: string,jobId: string) => http.get<RiskAnalysisJob>(`/v1/risk-cases/${id}/analysis-jobs/${jobId}`,{suppressErrorToast:true}),
+  refreshHistoricalReview: (id: string, assessmentId: string) =>
+    http.post<RiskAssessmentV4>(`/v1/risk-cases/${id}/historical-reviews/refresh`, {assessment_id:assessmentId}),
   reviewRisk: (
     id: string,
     decision: string,

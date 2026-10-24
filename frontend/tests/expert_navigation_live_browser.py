@@ -21,19 +21,20 @@ with sync_playwright() as pw:
     page.locator('#login-username').fill(account['username'])
     page.locator('#login-password').fill(account['password'])
     page.get_by_role('button', name='登录', exact=False).click()
-    page.wait_for_url('**/app/workbench')
+    page.wait_for_url('**/app/chat')
     page.wait_for_load_state('networkidle')
     sidebar = page.locator('.app-sidebar')
     nav = sidebar.locator('nav')
     roots = nav.evaluate("node => Array.from(node.children).map(e => e.classList.contains('nav-group') ? e.querySelector('button').innerText.trim() : e.innerText.trim()).filter(Boolean)")
-    expected = ['AI 对话','会议室','质量监督','检测任务','检测结果','报告中心','标准与知识']
+    expected = ['AI 对话','会议室','质量监督','检测任务','检测结果','报告中心','标准审核','知识资料']
     assert [r for r in roots if r in expected] == expected, roots
     expect(nav.get_by_role('link', name='协同中心', exact=True)).to_have_count(0)
     expect(nav.get_by_role('link', name='协作中心', exact=True)).to_have_count(0)
-    expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','true')
-    assert nav.locator('#nav-group-质量监督 a').all_text_contents() == ['质监工作台','数据采集','市场监控','风险研判','监督抽查']
+    expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','false')
     nav.get_by_role('button', name='质量监督', exact=True).click()
-    assert page.url == BASE+'/app/workbench'
+    assert nav.locator('#nav-group-质量监督 a').all_text_contents() == ['数据采集','市场监控','风险研判','监督抽查','实验室检测']
+    nav.get_by_role('button', name='质量监督', exact=True).click()
+    assert page.url == BASE+'/app/chat'
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','false')
     nav.get_by_role('button', name='质量监督', exact=True).click()
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','true')
@@ -42,14 +43,14 @@ with sync_playwright() as pw:
     expect(nav.get_by_text('实验室工作台', exact=True)).to_have_count(0)
     nav.get_by_role('link', name='实验室检测', exact=True).click()
     page.wait_for_url('**/app/laboratory')
-    expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','false')
+    expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','true')
     expect(nav.locator('.nav-link-active')).to_have_text('实验室检测')
     nav.get_by_role('link', name='检测任务', exact=True).click()
     page.wait_for_url('**/app/tasks')
     expect(nav.locator('.nav-link-active')).to_have_text('检测任务')
-    nav.get_by_role('button', name='标准与知识', exact=True).click()
+    expect(nav.get_by_role('button', name='标准与知识', exact=True)).to_have_count(0)
     assert page.url == BASE+'/app/tasks'
-    assert nav.locator('.nav-group-link[aria-expanded=true]').count() == 1
+    assert nav.locator('.nav-group-link[aria-expanded=true]').count() == 0
     expect(nav.get_by_role('link', name='标准审核', exact=True)).to_be_visible()
     expect(nav.get_by_role('link', name='知识资料', exact=True)).to_be_visible()
     # The chat page must show the same platform entries without a second toggle.
@@ -57,7 +58,7 @@ with sync_playwright() as pw:
     page.wait_for_url('**/app/chat**')
     page.wait_for_load_state('networkidle')
     expect(sidebar.get_by_role('button', name='展开平台功能', exact=True)).to_have_count(0)
-    for title in ['实验室检测','检测任务','检测结果','报告中心']:
+    for title in ['检测任务','检测结果','会议室','报告中心']:
         expect(nav.get_by_role('link', name=title, exact=True)).to_be_visible()
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_be_visible()
     sidebar.screenshot(path=str(OUT/'navigation-expert-chat-desktop.png'))
@@ -71,15 +72,16 @@ with sync_playwright() as pw:
     expect(sidebar).to_have_class(__import__('re').compile('mobile-nav-open'))
     nav.get_by_role('button', name='质量监督', exact=True).click()
     expect(nav.get_by_role('button', name='质量监督', exact=True)).to_have_attribute('aria-expanded','false')
-    for title in ['实验室检测','检测任务','检测结果','报告中心']:
+    expect(nav.get_by_role('link', name='实验室检测', exact=True)).not_to_be_visible()
+    for title in ['检测任务','检测结果','会议室','报告中心']:
         expect(nav.get_by_role('link', name=title, exact=True)).to_be_visible()
     assert page.url == BASE+'/app/risk-sampling'
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     page.screenshot(path=str(OUT/'navigation-expert-mobile.png'))
     assert not errors and not failures, (errors, failures)
-    result = {'passed':True, 'api_mode':'real local demo API', 'expert_landing':'/app/workbench',
+    result = {'passed':True, 'api_mode':'real local demo API', 'expert_landing':'/app/chat',
         'root_order':roots, 'disclosure_does_not_navigate':True, 'exclusive_groups':True,
-        'workbench_is_overview_child_not_parent':True, 'standalone_laboratory_task_result_collaboration_report':True,
+        'removed_workbench_and_direct_business_navigation':True, 'laboratory_belongs_to_quality_supervision':True,
         'platform_navigation_always_visible_on_chat':True,
         'task_highlight_and_suggestion_deep_link':True, 'desktop_mobile_verified':True,
         'business_mutations_performed':False, 'page_errors':errors, 'http_5xx':failures}

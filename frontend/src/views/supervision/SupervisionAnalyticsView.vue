@@ -24,9 +24,9 @@ const analyticsOpened = ref(false);
 
 <style scoped>
 .supervision-analytics-page {
-  max-width: 1520px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 18px 18px 40px;
+  padding: 20px;
 }
 
 .legacy-stats {

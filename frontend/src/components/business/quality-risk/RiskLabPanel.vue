@@ -16,6 +16,7 @@ const props = defineProps<{
   context?: RiskWorkflowContext | null;
 }>();
 const isDemo = computed(() => props.context?.execution_mode !== "business");
+const isHistorical = computed(() => props.assessment?.scope.assessment_purpose === 'historical_review' || props.assessment?.scope.case_mode === 'public_historical_review');
 const basis = computed(() => isDemo.value ? props.assessment?.demo_validation?.basis_hash : props.context?.basis_hash);
 const eligible = computed(() => isDemo.value ? props.assessment?.demo_validation?.is_current : props.context?.eligible && props.context.assessment_id === props.assessment?.id);
 const emit = defineEmits<{ changed: [] }>();
@@ -151,6 +152,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="risk-lab-panel" v-loading="loading">
     <h2>实验室验证（可选）</h2>
+    <el-alert v-if="isHistorical" type="info" :closable="false" title="历史资料复盘可引用已有报告；原件核对不需要补建检测任务。当前产品的新检测须另建当前监管事项。" />
     <p>先选择需要哪一种验证。验证资料始终返回原事项；没有检测需求时可以直接继续分析。</p>
     <el-alert v-if="isDemo" title="演示环境：模拟资料与人工研判，不创建实际检测任务，不调用设备或模型。" type="warning" :closable="false" />
     <el-alert v-if="error" type="error" :title="error" :closable="false" />
@@ -160,7 +162,7 @@ onBeforeUnmount(() => {
         <el-radio-group v-model="form.path" class="verification-paths">
           <el-radio value="skip">暂不验证</el-radio>
           <el-radio value="report">引用已有报告</el-radio>
-          <el-radio value="task" :disabled="isDemo">组织新的检测</el-radio>
+          <el-radio value="task" :disabled="isDemo || isHistorical">组织新的检测</el-radio>
         </el-radio-group>
       </el-form-item>
       <p v-if="form.path==='skip'">现有资料可以继续分析时，记录暂不验证的理由即可，无需检测任务。</p>

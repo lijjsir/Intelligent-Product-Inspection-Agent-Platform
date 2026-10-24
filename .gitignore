@@ -74,6 +74,9 @@ logs/
 # Locally generated verification artifacts
 frontend/tests/artifacts/
 /frontend/test-results/
+/design-previews/**/assets/
+/design-previews/**/renders/
+/design-previews/**/facts.js
 /backend/scripts/data/
 tmp_pdf_images/
 

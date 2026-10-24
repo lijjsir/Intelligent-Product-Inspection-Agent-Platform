@@ -37,7 +37,7 @@ async def main():
         code='DEMO-QS-001';case=(await api(ctx,page,'/risk-cases?keyword='+code+'&page=1&size=100'))['items'][0]
         assert case['code']==code
         before=await api(ctx,page,f"/risk-cases/{case['id']}/workspace")
-        await page.goto(BASE+'/app/workbench',wait_until='networkidle')
+        await page.goto(BASE+'/app/quality-data#demo-case-guide',wait_until='networkidle')
         guide=page.locator('.demo-walkthrough');await expect(guide).to_contain_text(code)
         await expect(guide.locator('.walkthrough-steps li')).to_have_count(6)
         await expect(page.locator('.agent-line')).to_have_count(0)
@@ -60,7 +60,7 @@ async def main():
         await guide.get_by_role('link',name='演示步骤2：异常发现',exact=True).click()
         await page.wait_for_url('**/app/quality-analytics?**')
         await page.get_by_role('link',name='返回演示导览',exact=True).click()
-        await page.wait_for_url('**/app/workbench#demo-case-guide');await page.wait_for_load_state('networkidle')
+        await page.wait_for_url('**/app/quality-data#demo-case-guide');await page.wait_for_load_state('networkidle')
         await expect(guide).to_contain_text(code)
         await page.unroute('**/api/v1/market-monitoring/scan',slow_scan)
         await guide.get_by_role('link',name='查看跳过验证的报告示例',exact=True).click();await page.wait_for_url('**/app/risk-reports?**');await page.wait_for_load_state('networkidle')
@@ -104,11 +104,11 @@ async def main():
         assert before['case']==after['case'] and before['assessment_versions']==after['assessment_versions']
         assert (await api(ctx,page,'/tasks?page=1&size=1'))['total']==0
         assert (await api(ctx,page,'/sampling-plans?page=1&size=1'))['total']==0
-        peer,peer_page=await login(browser,'demo_reviewer');await peer_page.goto(BASE+'/app/workbench',wait_until='networkidle')
+        peer,peer_page=await login(browser,'demo_reviewer');await peer_page.goto(BASE+'/app/quality-data#demo-case-guide',wait_until='networkidle')
         await expect(peer_page.locator('.demo-walkthrough')).to_contain_text(code)
         await expect(peer_page.locator('.demo-walkthrough .walkthrough-steps li')).to_have_count(6)
         normal,normal_page=await login(browser,'demo_analyst',business_fixture=True)
-        await normal_page.goto(BASE+'/app/workbench?demo=1&execution_mode=demo',wait_until='networkidle')
+        await normal_page.goto(BASE+'/app/quality-data?demo=1&execution_mode=demo#demo-case-guide',wait_until='networkidle')
         await expect(normal_page.locator('.demo-walkthrough')).to_have_count(0)
         await expect(normal_page.get_by_role('link',name='返回演示导览',exact=True)).to_have_count(0)
         assert not errors and not server_errors,(errors,server_errors)

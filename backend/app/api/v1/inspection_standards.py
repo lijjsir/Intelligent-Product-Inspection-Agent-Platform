@@ -306,6 +306,18 @@ async def revision_file(document_id: str, revision_id: str, current: CurrentUser
     return Response(content,media_type="application/pdf",headers={"Content-Disposition":f"inline; filename*=UTF-8''{quote(rev.snapshot['file_name'])}"})
 
 
+@standard_documents_router.get("/{document_id}/revisions/{revision_id}/pages/{page_number}/preview")
+async def revision_page_preview(document_id: str, revision_id: str, page_number: int,
+    current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
+    require_role("inspection_standard_library_read", current.role)
+    service=StandardAdmissionService(db,current.org_id)
+    _,rev=await service.revision(document_id,revision_id)
+    content=await asyncio.to_thread(service.read_original,rev)
+    from app.services.standard_pdf_reading_text import render_standard_page
+    image=await asyncio.to_thread(render_standard_page,content,page_number)
+    return Response(image,media_type='image/png',headers={'Cache-Control':'private, no-store'})
+
+
 @standard_documents_router.post("/{document_id}/revisions", response_model=ResponseEnvelope[dict])
 async def amend_revision(document_id: str, payload: RevisionMetadata, current: CurrentUser=Depends(get_current_user), db=Depends(get_db)):
     require_role("standard_admission_submit", current.role)

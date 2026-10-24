@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from io import BytesIO
 from uuid import UUID
 from typing import Literal
@@ -36,6 +37,9 @@ from app.schemas.quality_risk import (
     QualityEventCreate,
     QualitySourceRecordResponse,
     RiskAnalyzeRequest,
+    HistoricalReviewRefresh,
+    RiskAnalysisJobCreate,
+    RiskAnalysisJobResponse,
     RiskAssessmentResponse,
     RiskCaseCreate,
     RiskCaseResponse,
@@ -369,6 +373,19 @@ async def download_quality_attachment(attachment_id: str, svc=Depends(intake_ser
                              headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(row.file_name)}", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
+@router.get("/quality-data/attachments/{attachment_id}/pages/{page_number}/preview")
+async def preview_quality_attachment(attachment_id: str, page_number: int, svc=Depends(intake_service)):
+    svc.require_intake()
+    row = await svc.accessible_attachment(attachment_id)
+    result = await asyncio.to_thread(svc.storage.get_bytes, bucket=row.bucket, object_key=row.object_key)
+    if result is None:
+        raise NotFoundError("附件文件不存在")
+    from app.services.quality_attachment_preview import render_attachment_page
+    image, page_count = await asyncio.to_thread(render_attachment_page, result[0], row.sha256, page_number)
+    return Response(image, media_type="image/png", headers={"Cache-Control": "private, no-store",
+        "X-Pdf-Page-Count": str(page_count), "X-Original-Sha256": row.sha256, "X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/risk-cases", response_model=ResponseEnvelope[PagedResponse[RiskCaseResponse]])
 async def list_risk_cases(
     page: int = Query(1, ge=1),
@@ -390,9 +407,42 @@ async def get_risk_case(risk_case_id: str, svc=Depends(service)):
     return ResponseEnvelope(data=svc.risk_case_response(await svc.risk_case(risk_case_id)))
 
 
-@router.post("/risk-cases/{risk_case_id}/analyze", response_model=ResponseEnvelope[RiskAssessmentResponse])
+@router.post("/risk-cases/{risk_case_id}/analysis-jobs",response_model=ResponseEnvelope[RiskAnalysisJobResponse],status_code=202)
+async def queue_risk_analysis(risk_case_id: UUID,payload: RiskAnalysisJobCreate,svc=Depends(service)):
+    from app.services.risk_analysis_job_service import RiskAnalysisJobService
+    data=await RiskAnalysisJobService(svc.db,svc.current).queue(str(risk_case_id),payload)
+    await svc.db.commit()  # acknowledge only a durable request, independent of broker state
+    return ResponseEnvelope(data=data)
+
+
+@router.get("/risk-cases/{risk_case_id}/analysis-jobs/latest",response_model=ResponseEnvelope[RiskAnalysisJobResponse | None])
+async def latest_risk_analysis(risk_case_id: UUID,svc=Depends(service)):
+    from app.services.risk_analysis_job_service import RiskAnalysisJobService
+    return ResponseEnvelope(data=await RiskAnalysisJobService(svc.db,svc.current).latest(str(risk_case_id)))
+
+
+@router.get("/risk-cases/{risk_case_id}/analysis-jobs/{job_id}",response_model=ResponseEnvelope[RiskAnalysisJobResponse])
+async def get_risk_analysis(risk_case_id: UUID,job_id: UUID,svc=Depends(service)):
+    from app.services.risk_analysis_job_service import RiskAnalysisJobService
+    return ResponseEnvelope(data=await RiskAnalysisJobService(svc.db,svc.current).get(str(risk_case_id),str(job_id)))
+
+
+@router.post("/risk-cases/{risk_case_id}/analysis-jobs/{job_id}/cancel",response_model=ResponseEnvelope[RiskAnalysisJobResponse])
+async def cancel_risk_analysis(risk_case_id: UUID,job_id: UUID,svc=Depends(service)):
+    from app.services.risk_analysis_job_service import RiskAnalysisJobService
+    data=await RiskAnalysisJobService(svc.db,svc.current).cancel(str(risk_case_id),str(job_id))
+    await svc.db.commit()
+    return ResponseEnvelope(data=data)
+
+
+@router.post("/risk-cases/{risk_case_id}/analyze", response_model=ResponseEnvelope[RiskAssessmentResponse],deprecated=True)
 async def analyze_risk(risk_case_id: str, payload: RiskAnalyzeRequest, svc=Depends(service)):
     return ResponseEnvelope(data=await svc.analyze_risk(risk_case_id, payload))
+
+
+@router.post("/risk-cases/{risk_case_id}/historical-reviews/refresh", response_model=ResponseEnvelope[RiskAssessmentResponse])
+async def refresh_historical_review(risk_case_id: str, payload: HistoricalReviewRefresh, svc=Depends(service)):
+    return ResponseEnvelope(data=await svc.refresh_historical_requirements(risk_case_id, str(payload.assessment_id)))
 
 
 @router.get("/risk-cases/{risk_case_id}/workspace", response_model=ResponseEnvelope[RiskWorkspaceResponse])

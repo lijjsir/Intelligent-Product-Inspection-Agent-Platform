@@ -5,11 +5,11 @@ executable-looking requirement.  It labels the candidate's role so equipment,
 method conditions and explanatory prose do not appear as product indicators.
 """
 import re
-import unicodedata
 import uuid
+from app.services.standard_pdf_reading_text import normalize_reading_typography, SYMBOL_NOTICE, GLYPH_NOTICE
 
 HEADING = re.compile(r"^\s*(\d+(?:\.\d+){0,5})\s+(.{0,160})$")
-REQUIREMENT = re.compile(r"应|不得|不应|不大于|不小于|至少|至多|范围|限值|≤|≥|±|质量比|分度值|温度|时间|长度|直径|高度|质量|尺寸")
+REQUIREMENT = re.compile(r"应|不得|不应|不大于|不小于|至少|至多|范围|限值|≤|≥|±|质量比|分度值|温度|时间|长度|直径|高度|质量|尺寸|采用|符合|计算")
 METHOD = re.compile(r"仪器设备|试验设备|试验步骤|测试步骤|试验条件|环境条件|水槽|干燥箱|钢直尺|游标卡尺|量筒|天平|照度计|试样数量|抽取")
 EXPLANATORY = re.compile(r"范围|规范性引用文件|术语和定义|原理|试验报告|报告应至少包含")
 _UNIT_TOKEN = r"(?:mm|cm|mL|ml|min|h|℃|°C|g|kg|lx|km/h|MPa|N|%)"
@@ -24,13 +24,13 @@ UNIT = re.compile(rf"(?:{_UNIT_TOKEN}|%|±|~|～|至|：|:)", re.I)
 
 def _normalise_ocr(text: str) -> str:
     """Only normalize typography; never infer a broken number or unit."""
-    return (text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    return (normalize_reading_typography(text).replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
         .replace("−", "-").replace("－", "-").replace("～", "~").replace("：", ":"))
 
 
 def _heading_match(line: str):
     """Match ASCII and full-width clause numbering without changing source text."""
-    return HEADING.match(unicodedata.normalize("NFKC", str(line or "")))
+    return HEADING.match(normalize_reading_typography(str(line or "")))
 
 
 def _candidate_confidence(text: str, role: str) -> float:
@@ -44,6 +44,7 @@ def _candidate_confidence(text: str, role: str) -> float:
 
 def extract_candidates(pages: list[dict]) -> list[dict]:
     candidates = []
+    page_meta = {int(p['page_number']):p for p in pages}
     blocks = []
     clause, title, start_page = "", "", None
     current = []
@@ -69,6 +70,9 @@ def extract_candidates(pages: list[dict]) -> list[dict]:
         p = int(source_page or 1)
         cid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"candidate-v1:{p}:{number}:{text}"))
         role = "method_condition" if METHOD.search(text) else "body_clause" if EXPLANATORY.search(text) and not NUMERIC.search(text) else "inspection_requirement"
+        if re.search(r"仪器|校正|校准", heading):role = "method_condition"
+        damaged = SYMBOL_NOTICE in text or GLYPH_NOTICE in text
+        if damaged:role = "body_clause"
         normalized = _normalise_ocr(text)
         confidence = _candidate_confidence(normalized, role)
         candidates.append({"id": cid, "clause_no": number, "page_number": p, "source_text": text,
@@ -77,7 +81,9 @@ def extract_candidates(pages: list[dict]) -> list[dict]:
             "extraction_method": "local_clause_candidates_v1", "missing_fields": ["指标与规格分支", "方法", "试验条件", "单位", "限值或文字要求", "测量字段与适用对象"],
             "warning": "原文候选；表格列、跨页内容和OCR数字须对照原PDF核实。" if role == "inspection_requirement" else "这是方法条件或正文候选，不能直接作为产品合格指标。", "reviewed_by": None,
             "ocr_text": text, "normalized_text": normalized, "extraction_confidence": confidence,
-            "normalization_notes": "仅做标点和全角字符规范化；未推断缺失数字、单位或符号。"})
+            "source_extraction_method":page_meta.get(p, {}).get('extraction_method', 'legacy_extraction'),
+            "text_warnings":page_meta.get(p, {}).get('text_warnings', []) if damaged else [],
+            "normalization_notes": "仅整理字形、标点和阅读排版；未推断缺失数字、单位或公式。"})
     return candidates
 
 

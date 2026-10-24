@@ -81,7 +81,7 @@ class RiskWorkflowContextService(DemoRiskWorkflowService):
             return await super().ensure_current(case, row)
         if not row.submitted_by:
             raise ConflictError('历史研判缺少编写身份，请重新生成并独立复核')
-        context = await RiskDecisionContextService(self.db, self.current, self.risk.storage).accepted(case.id)
+        context = await RiskDecisionContextService(self.db, self.current, self.risk.storage).accepted(case.id, allow_historical=True)
         if context['source_ref']['assessment_id'] != row.id:
             raise ConflictError('正式研判已有新版本')
         validation = await self.validation(case, row)
@@ -113,10 +113,13 @@ class RiskWorkflowContextService(DemoRiskWorkflowService):
             return row.model_versions['demo_workflow']['content']
         analysis = (row.model_versions or {}).get('analysis_summary') or {}
         level = {'unknown':'未知','low':'低','medium':'中','high':'高','critical':'严重'}.get(row.risk_level, '未知')
-        return {'summary':f"{row.risk_type or '质量风险'}：独立复核后本版风险等级为{level}。",
+        from app.services.risk_purpose_policy import HISTORICAL, purpose, HISTORY_BOUNDARY
+        historical = purpose(case.scope) == HISTORICAL
+        limits = [*(analysis.get('limitations') or []), *((row.model_versions or {}).get('purpose_review') or {}).get('limitations', [])]
+        return {'summary':f"{'历史资料复盘：' if historical else ''}{row.risk_type or '质量风险'}：独立复核后本版{'历史风险信号' if historical else '风险等级'}为{level}。",
             'reasoning':'\n'.join(filter(None, [
                 '生成时分析摘要（供复核追溯）：' + analysis['summary'] if analysis.get('summary') else '',
                 '；'.join(row.possible_causes or []) or '分析依据以原始资料、引用证据和独立复核意见为准。'])),
-            'limitations':'；'.join(analysis.get('limitations') or ['本报告是风险研判记录，不替代检测报告或抽查执行指令；发生概率以原研判校准状态为准。']),
+            'limitations':'；'.join(dict.fromkeys(limits or [HISTORY_BOUNDARY if historical else '本报告是风险研判记录，不替代检测报告或抽查执行指令；发生概率以原研判校准状态为准。'])),
             'risk_type':row.risk_type, 'risk_level':row.risk_level, 'cited_record_ids':list(case.source_record_ids or []),
             'missing_inputs':list(row.missing_inputs or []), 'recommendations':list(row.recommendations or [])}

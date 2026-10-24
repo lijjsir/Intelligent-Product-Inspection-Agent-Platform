@@ -26,6 +26,8 @@ async def test_ordinary_user_cannot_publish_or_preview_admission():
         await api.publish_revision("doc","rev",payload,current=current("user"),db=object())
     with pytest.raises(ForbiddenError):
         await api.list_revisions("doc",current=current("user"),db=object())
+    with pytest.raises(ForbiddenError):
+        await api.revision_page_preview('doc','rev',1,current=current('user'),db=object())
 
 
 def test_publication_state_cannot_be_forged_in_action_body():

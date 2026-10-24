@@ -1305,3 +1305,63 @@ def test_adaptive_supervision_migration_adds_and_removes_schema():
             "inspection_results",
         }
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_record_review_actions_preserve_independence_version_and_tenant_boundaries(domain):
+    from app.core.exceptions import NotFoundError
+    db, svc, ids = domain
+    record = SupervisionRecord(org_id=ids["org"], kind="risk-cases", code="REVIEW-RECORD",
+        name="Historical risk", created_by=ids["actors"]["expert"], status="awaiting_review", version=2,
+        data={"analysis": {"risk_level": "high", "author_id": ids["actors"]["expert"]}})
+    db.add(record)
+    await db.flush()
+    current = BusinessReview(org_id=ids["org"], record_id=record.id, version=2,
+        operation="risk.review", requester_id=ids["actors"]["expert"])
+    db.add_all([current, BusinessReview(org_id=ids["org"], record_id=record.id, version=1,
+        operation="risk.review", requester_id=ids["actors"]["expert"])])
+    await db.flush()
+    own = await svc("expert").record_reviews("risk-cases", record.id)
+    assert len(own) == 1 and own[0]["can_decide"] is False
+    independent = await svc("expert2").record_reviews("risk-cases", record.id)
+    assert len(independent) == 1 and independent[0]["id"] == current.id
+    assert independent[0]["can_decide"] is True
+    with pytest.raises(ForbiddenError):
+        await svc("expert2", ids["other_org"]).record_reviews("risk-cases", record.id)
+    with pytest.raises(NotFoundError):
+        await svc("expert2").record_reviews("risk-cases", uid())
+    with pytest.raises(ForbiddenError):
+        await svc("algorithm_engineer").record_reviews("risk-cases", record.id)
+    await svc("expert2").review_decision(current.id, ReviewDecision(decision="accept", comment="Independent review"))
+    completed = await svc("expert2").record_reviews("risk-cases", record.id)
+    assert completed[0]["can_decide"] is False and completed[0]["status"] == "accepted"
+    assert record.status == "risk_assessed" and record.version == 2
+
+
+@pytest.mark.asyncio
+async def test_historical_risk_record_http_access_uses_separate_namespace(domain):
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    from app.api.v1 import supervision as api
+    from app.core.error_handlers import register_error_handlers
+    db, svc, ids = domain
+    record = SupervisionRecord(org_id=ids["org"], kind="risk-cases", code="HISTORY-1",
+        name="Evidence required", created_by=ids["actors"]["expert"], status="awaiting_evidence",
+        data={"description": "Original evidence", "occurred_at": datetime.now().isoformat(), "evidence": []})
+    db.add(record)
+    await db.flush()
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(api.router, prefix="/api/v1")
+    app.dependency_overrides[api.service] = lambda: svc("expert")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        base = "/api/v1/legacy-risk-cases"
+        listing = await client.get(base, params={"status": "awaiting_evidence"})
+        assert listing.status_code == 200 and listing.json()["data"]["total"] == 1
+        detail = await client.get(f"{base}/{record.id}")
+        assert detail.status_code == 200 and detail.json()["data"]["id"] == record.id
+        reviews = await client.get(f"{base}/{record.id}/reviews")
+        assert reviews.status_code == 200 and reviews.json()["data"] == []
+        saved = await client.patch(f"{base}/{record.id}", json={"version": record.version,
+            "name": "Evidence updated", "data": {**record.data, "description": "Additional evidence"}})
+        assert saved.status_code == 200 and saved.json()["data"]["version"] == 2

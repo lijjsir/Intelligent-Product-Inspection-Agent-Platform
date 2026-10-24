@@ -28,6 +28,7 @@ export const standardAdmissionApi = {
     return http.post<StandardRevision>(`${base(id)}/${rid}/candidates`, payload);
   },
   file(id: string, rid: string) { return http.get<Blob>(`${base(id)}/${rid}/file`, {responseType: "blob"}); },
+  pagePreview(id: string,rid: string,page: number) { return http.get<Blob>(`${base(id)}/${rid}/pages/${page}/preview`,{responseType:"blob"}); },
   applicability(id: string, rid: string, payload: {product_category:string; production_date:string|null; conditions:string}) {
     return http.post<{status:string; missing_fields:string[]; mismatches:string[]; scope_notes:string;notice:string}>(`${base(id)}/${rid}/applicability`,payload);
   },

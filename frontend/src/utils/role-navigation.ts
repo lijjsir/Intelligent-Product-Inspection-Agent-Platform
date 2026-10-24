@@ -108,11 +108,11 @@ function getQualitySupervisionGroup(): MenuGroup {
     title: "质量监督",
     icon: "Operation",
     items: [
-      { title: "质监工作台", path: "/app/workbench" },
       { title: "数据采集", path: "/app/quality-data" },
       { title: "市场监控", path: "/app/quality-analytics" },
       { title: "风险研判", path: "/app/risk-assessments" },
       { title: "监督抽查", path: "/app/sampling-plans", activeMatchPaths: ["/app/risk-sampling"] },
+      { title: "实验室检测", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
     ],
   };
 }
@@ -137,14 +137,11 @@ function getExpertMenu(): MenuStructure {
     { title: "AI 对话", path: "/app/chat" },
     { title: "会议室", path: "/app/meetings" },
     getQualitySupervisionGroup(),
-    { title: "实验室检测", path: "/app/laboratory", activeMatchPaths: ["/app/inspection-sessions", "/app/samples"] },
     { title: "检测任务", path: "/app/tasks" },
     { title: "检测结果", path: "/app/results" },
     { title: "报告中心", path: "/app/risk-reports", activeMatchPaths: ["/app/export"] },
-    { title: "标准与知识", items: [
-      { title: "标准审核", path: "/app/standard-reviews", activeMatchPaths: ["/governance/admin/inspection-standards"] },
-      { title: "知识资料", path: "/app/rag-spaces" },
-    ] },
+    { title: "标准审核", path: "/app/standard-reviews", activeMatchPaths: ["/governance/admin/inspection-standards"] },
+    { title: "知识资料", path: "/app/rag-spaces" },
     { title: "个人设置", path: "/app/profile" },
   ];
 }

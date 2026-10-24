@@ -20,7 +20,7 @@ checks, errors, unexpected_http = [], [], []
 fixture = [{"id": f"browser-{i}", "source_id": "browser-source", "record_type": "consumer_complaint" if i < 201 else "public_opinion",
     "occurred_at": None, "received_at": "2026-10-14T00:00:00Z", "content": {"text": f"browser signal {i}"},
     "enterprise_ref": {}, "product_ref": {}, "location": {}, "normalization_status": "stored"} for i in range(406)]
-state = {"workbench_failure": False, "fixture": False, "opinion_failure": False}
+state = {"fixture": False, "opinion_failure": False}
 
 
 def envelope(route, data, status=200):
@@ -43,8 +43,6 @@ def guard(route):
     if path.endswith("/stream"):
         route.fulfill(status=200, content_type="text/event-stream", body=": isolated browser\n\n"); return
     assert request.method == "GET", "Browser checks must not modify live business records"
-    if state["workbench_failure"] and path in {"/api/v1/quality-data/records", "/api/v1/business-reviews"}:
-        envelope(route, None, 503); return
     if state["fixture"] and path == "/api/v1/quality-data/records":
         if state["opinion_failure"]:
             envelope(route, None, 503); return
@@ -84,21 +82,11 @@ with sync_playwright() as pw:
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.route("**/api/v1/**", guard)
     page.goto(BASE + "/app/workbench", wait_until="networkidle")
-    expect(page.locator(".metric-grid > div").nth(1).locator("strong")).not_to_have_text("—")
-    page.screenshot(path=str(OUT / "workbench-normal.png"), full_page=True)
-    state["workbench_failure"] = True
-    page.reload(wait_until="networkidle")
-    expect(page.locator(".metric-grid > div").nth(1).locator("strong")).to_have_text("—")
-    expect(page.locator(".overview-error")).to_contain_text("未能加载")
-    expect(page.locator(".todo-panel .el-alert")).to_be_visible()
-    expect(page.get_by_text("当前队列已处理完", exact=True)).to_have_count(0)
-    page.screenshot(path=str(OUT / "workbench-failed.png"), full_page=True)
-    state["workbench_failure"] = False
-    page.get_by_role("button", name="刷新工作台数据", exact=True).click()
-    page.locator(".todo-panel").get_by_role("button", name="刷新", exact=True).click()
-    expect(page.locator(".overview-error")).to_have_count(0)
-    expect(page.locator(".metric-grid > div").nth(1).locator("strong")).not_to_have_text("—")
-    checks.append("Workbench failures are unknown values; todo failures do not appear completed; refresh recovers")
+    expect(page).to_have_url(BASE + "/app/quality-analytics")
+    expect(page.locator(".todo-panel")).to_have_count(0)
+    expect(page.locator(".app-sidebar").get_by_text("质监工作台", exact=True)).to_have_count(0)
+    page.screenshot(path=str(OUT / "direct-business-entry.png"), full_page=True)
+    checks.append("Retired workbench redirects to market monitoring without a standalone todo panel")
 
     state["fixture"] = True
     page.goto(BASE + "/app/risk-cases", wait_until="networkidle")

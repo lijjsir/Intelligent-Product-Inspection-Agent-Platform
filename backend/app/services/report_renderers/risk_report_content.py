@@ -20,6 +20,18 @@ def risk_report_sections(report):
     if not demo:
         calls = s.get('model_call') or {}
         sections[1]['paragraphs'].append(f"模型请求次数：{calls.get('attempted_calls') if calls.get('attempted_calls') is not None else '未记录'}；已解析返回次数：{calls.get('successful_calls') if calls.get('successful_calls') is not None else '未记录'}；推理流程状态：{calls.get('inference_status') or '规则流程或历史未记录'}。调用返回不等于业务结论正确。")
+        origin = s.get('analysis_origin')
+        if origin:
+            sections[1]['paragraphs'].append(f"本版沿用第 {origin['version']} 版已保存分析（{origin['assessment_id']}），重新核验原证据并整理复核要求，未重新调用模型。原分析调用记录：{json.dumps(origin.get('original_model_call', {}), ensure_ascii=False)}。")
+    if s.get('report_type') == 'historical_review':
+        sections[0]['paragraphs'].append(f"用途：历史资料复盘；资料时期：{s.get('historical_period') or '未明确'}。")
+        sections[1]['title'] = '平台复盘分析（经独立复核）'
+        sections.insert(1, {'title':'原始资料记载（不代表本平台重新检测）', 'paragraphs':[
+            f"来源：{item['record_id']}；报告编号：{item.get('report_no')}；出具日期：{item.get('issued_date')}；原结论：{item.get('original_verdict')}；摘录值：{json.dumps(item.get('transcribed_values', []), ensure_ascii=False)}"
+            for item in s.get('documentary_findings', [])] or ['原通报或执法事实见下列来源；未另行出具本平台检测结论。']})
+        sections.append({'title':'复核范围与冲突处理', 'paragraphs':[
+            '复核人已确认历史原件、对象、时期和结论范围限制。',
+            s['review'].get('conflict_resolution') or '未记录额外冲突处理意见。']})
     labs = s["laboratory"]
     results = s.get('execution_results', [])
     if results:

@@ -308,7 +308,8 @@ async def change_settings(
     )
 
 
-def register_records(kind):
+def register_records(kind, resource=None):
+    resource = resource or kind
     async def list_records(
         page: int = Query(1, ge=1),
         size: int = Query(20, ge=1, le=200),
@@ -376,7 +377,7 @@ def register_records(kind):
         ("/{record_id}/revisions", revisions, ["GET"]),
     ):
         router.add_api_route(
-            f"/{kind}{suffix}", endpoint, methods=methods, name=f"{kind}_{endpoint.__name__}"
+            f"/{resource}{suffix}", endpoint, methods=methods, name=f"{kind}_{endpoint.__name__}"
         )
     if kind in {"risk-cases", "sampling-plans", "inspection-sessions"}:
 
@@ -397,24 +398,34 @@ def register_records(kind):
             await svc.require_enabled()
             return ResponseEnvelope(data=await svc.submit_review(kind, str(record_id), payload))
 
+        async def get_reviews(record_id: UUID, svc=Depends(service)):
+            return ResponseEnvelope(data=await svc.record_reviews(kind, str(record_id)))
+
         async def feedback(record_id: UUID, payload: FeedbackData, svc=Depends(service)):
             await svc.require_enabled()
             return ResponseEnvelope(data=await svc.feedback(kind, str(record_id), payload))
 
         router.add_api_route(
-            f"/{kind}/{{record_id}}/runs", run, methods=["POST"], name=f"{kind}_run"
+            f"/{resource}/{{record_id}}/runs", run, methods=["POST"], name=f"{kind}_run"
         )
         router.add_api_route(
-            f"/{kind}/{{record_id}}/reviews", submit_review, methods=["POST"], name=f"{kind}_review"
+            f"/{resource}/{{record_id}}/reviews", submit_review, methods=["POST"], name=f"{kind}_review"
         )
         router.add_api_route(
-            f"/{kind}/{{record_id}}/feedback", feedback, methods=["POST"], name=f"{kind}_feedback"
+            f"/{resource}/{{record_id}}/reviews", get_reviews, methods=["GET"], name=f"{kind}_reviews"
+        )
+        router.add_api_route(
+            f"/{resource}/{{record_id}}/feedback", feedback, methods=["POST"], name=f"{kind}_feedback"
         )
 
 
 for _kind in DATA_SCHEMAS:
     if _kind not in {"risk-cases", "regions"}:
         register_records(_kind)
+
+# Historical risk-review todos still refer to supervision records, not the newer
+# risk-case model. Keep their evidence and review workflow in its own namespace.
+register_records("risk-cases", "legacy-risk-cases")
 
 
 @router.post("/enterprises/imports/preview")

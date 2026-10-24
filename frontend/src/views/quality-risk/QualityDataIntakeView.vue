@@ -1,15 +1,20 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, type UploadFile, type UploadFiles } from "element-plus";
 import { extractApiErrorMessage } from "@/api/http";
 import { qualityRiskApi } from "@/api/quality-risk.api";
 import { riskCompletionApi } from '@/api/risk-completion.api';
 import { useAuthStore } from "@/stores/auth.store";
+import DemoWalkthrough from "@/components/business/supervision/DemoWalkthrough.vue";
+import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
+import { useRuntimeContext } from "@/composables/useRuntimeContext";
 import LocationPicker from "@/components/business/quality-risk/LocationPicker.vue";
 import type { LocationRef } from "@/types/quality-risk.types";
 import KnowledgeSubmitDialog from "@/components/business/KnowledgeSubmitDialog.vue";
 import MaterialTaskDraftDialog from "@/components/business/MaterialTaskDraftDialog.vue";
+import QualityRecordOriginalPanel from "@/components/business/quality-risk/QualityRecordOriginalPanel.vue";
+import { isPdfAttachment, safeSourceUrl } from "@/utils/quality-source-reading";
 import { formatServerDateTime } from "@/utils/date-time";
 import {
   RECORD_TYPE_LABELS,
@@ -21,6 +26,9 @@ import {
 } from "@/types/quality-risk.types";
 defineProps<{ embedded?: boolean }>();
 const auth = useAuthStore();
+const runtime = useRuntimeContext();
+void runtime.load();
+const showDemoGuide = computed(() => runtime.context.value?.execution_mode === 'demo' && auth.primaryRole === 'expert' && auth.hasPermission('quality_material_read_business'));
 const route = useRoute(),
   router = useRouter();
 const smallScreen = ref(window.innerWidth <= 650);
@@ -42,6 +50,12 @@ const total = ref(0),
 const recordDialog = ref(false),
   importDialog = ref(false);
 const selected = ref<QualitySourceRecord | null>(null);
+const comparisonOpen = ref(false);
+const comparisonAttachmentId = ref("");
+const comparisonTargetPage = ref(0);
+const comparisonPageRequest = ref(0);
+const originalSourceUrl = computed(() => selected.value ? safeSourceUrl(selected.value.provenance) : "");
+const originalSourceIsPdf = computed(() => !!originalSourceUrl.value && /\.pdf$/i.test(new URL(originalSourceUrl.value).pathname));
 const knowledgeSubmitOpen = ref(false),
   taskDraftOpen = ref(false);
 const products = ref<IntakeReferenceOptions["products"]>([]);
@@ -224,6 +238,25 @@ watch(
   },
 );
 const selectedAttachments = ref<QualityAttachment[]>([]);
+const pdfAttachments = computed(() => selectedAttachments.value.filter(isPdfAttachment));
+const comparisonSourcePdf = computed(() => pdfAttachments.value.find(file => file.sha256 === selected.value?.provenance.original_sha256) || (pdfAttachments.value.length === 1 ? pdfAttachments.value[0] : undefined));
+function openComparison(attachmentId = "") {
+  comparisonTargetPage.value = 0;
+  comparisonAttachmentId.value = attachmentId;
+  comparisonOpen.value = true;
+}
+function compareOriginalPage(page: unknown) {
+  const number = Number(page);
+  if (!comparisonSourcePdf.value || !Number.isInteger(number) || number < 1) return;
+  comparisonAttachmentId.value = comparisonSourcePdf.value.id;
+  comparisonTargetPage.value = number;
+  ++comparisonPageRequest.value;
+}
+async function resetComparisonScroll() {
+  await nextTick();
+  document.querySelector('.quality-record-comparison .el-dialog__body')?.scrollTo({ top: 0 });
+}
+watch(() => selected.value?.id, () => { comparisonOpen.value = false; comparisonAttachmentId.value = ""; });
 const files = ref<UploadFiles>([]),
   uploaded = ref<QualityAttachment[]>([]);
 const keyword = ref(""),
@@ -484,6 +517,7 @@ async function downloadAttachment(file: QualityAttachment) {
 }
 function closeDetail(value: boolean) {
   if (!value) {
+    comparisonOpen.value = false;
     ++contextEpoch;
     selected.value = null;
     context.value = null;
@@ -558,12 +592,8 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
       <p>已带入事项对象供核对，仍须以报告原始对象为准。保存资料后，请返回原事项明确关联回流。</p>
       <el-button @click="router.push({path:'/app/risk-assessments',query:{case_id:validationOrigin.case_id,assessment_id:validationOrigin.assessment_id,tab:'laboratory',validation_id:validationOrigin.link_id}})">返回来源事项选择报告回流</el-button>
     </section>
-    <header class="page-head">
-      <div>
-        <h1>{{ ownOnly ? "本人质量资料" : "数据采集" }}</h1>
-        <p>统一接入投诉、舆情、抽检和报告等原始资料，保留出处，供监测与风险研判引用。</p>
-      </div>
-      <div class="actions">
+    <SupervisionModuleHeader :title="ownOnly ? '本人质量资料' : '数据采集'" :eyebrow="embedded ? '质量资料' : '质量监督'" description="接入投诉、舆情、抽检和检测报告，整理来源与对象，供监测和风险研判引用。" principle="原始资料保留出处；报告接入后，在对应风险事项中确认引用关系。">
+      <template #actions>
         <el-button v-if="canImport" @click="openImport">文件导入</el-button
         ><el-button
           v-if="!embedded && auth.hasPermission('inspection_standard_library_read')"
@@ -574,8 +604,12 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
           @click="router.push('/app/rag-spaces')"
           >查看知识资料</el-button
         ><el-button v-if="canCreate" type="primary" @click="openRecord">提交资料</el-button>
-      </div>
-    </header>
+      </template>
+    </SupervisionModuleHeader>
+    <details v-if="showDemoGuide" :open="route.hash === '#demo-case-guide'">
+      <summary style="padding: 16px 0; cursor: pointer">演示案例导览</summary>
+      <DemoWalkthrough id="demo-case-guide" />
+    </details>
     <nav class="source-kinds" aria-label="资料分类">
       <button
         v-for="item in coreTypes"
@@ -638,7 +672,12 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
       ><el-button @click="searchRecords">查询</el-button
       ><el-button @click="loadRecords">刷新</el-button>
     </div>
-    <div v-if="smallScreen" class="mobile-records">
+    <el-skeleton v-if="loading && !records.length" :rows="4" animated />
+    <el-empty v-else-if="!listError && !records.length" description="当前条件下没有质量资料" :image-size="70">
+      <p class="muted" style="margin-bottom: 14px">可调整筛选条件，或接入投诉、舆情与检测报告。</p>
+      <el-button v-if="canCreate" @click="openRecord">提交资料</el-button>
+    </el-empty>
+    <div v-else-if="smallScreen" class="mobile-records">
       <button v-for="row in records" :key="row.id" class="mobile-record" @click="selectRecord(row)">
         <strong>{{ row.content.text || row.content.description || "附件资料" }}</strong
         ><span
@@ -682,6 +721,7 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
       >
     </el-table>
     <el-pagination
+      v-if="total > 0"
       v-model:current-page="page"
       :page-size="20"
       :total="total"
@@ -691,7 +731,8 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
     <el-drawer
       :model-value="!!selected || contextLoading || !!contextError"
       title="原始资料详情"
-      size="min(620px,96vw)"
+      class="quality-record-detail"
+      size="min(560px,92vw)"
       append-to-body
       @update:model-value="closeDetail"
     >
@@ -708,10 +749,30 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
         ></template
       >
       <template v-if="selected"
-        ><h2>{{ selected.display_no || "历史资料" }}</h2>
+        ><div class="record-detail-heading"><h2>{{ selected.display_no || "历史资料" }}</h2><el-tag size="small">{{ RECORD_TYPE_LABELS[selected.record_type] || selected.record_type }}</el-tag></div>
+        <div class="record-detail-layout">
+        <div class="record-detail-content">
+        <section class="record-original-entry" aria-label="资料原文入口">
+          <h3>原文与附件</h3>
+          <p v-if="contextLoading" class="muted">正在读取原文资源…</p>
+          <p v-else-if="contextError" class="muted">附件信息暂未加载，请重试后核对。</p>
+          <template v-else>
+            <p v-if="pdfAttachments.length" class="original-resource-type">PDF 原件 · {{ pdfAttachments.length }} 份</p>
+            <p v-else-if="originalSourceIsPdf" class="original-resource-type">来源提供 PDF 链接 · 本条未附本地 PDF</p>
+            <p v-else-if="originalSourceUrl" class="original-resource-type">网页资料 · 本条没有 PDF 附件</p>
+            <p v-else class="original-resource-type">{{ selectedAttachments.length ? '原始附件' : '未提供原件附件或来源链接' }}</p>
+            <ul v-if="selectedAttachments.length" class="original-file-list">
+              <li v-for="file in selectedAttachments" :key="file.id"><span class="file-format">{{ isPdfAttachment(file) ? 'PDF' : file.file_name.split('.').pop()?.toUpperCase() || '附件' }}</span><button type="button" @click="openComparison(file.id)">{{ file.file_name }}</button></li>
+            </ul>
+            <div class="original-entry-actions"><el-button v-if="selectedAttachments.length" type="primary" @click="openComparison()">{{ pdfAttachments.length ? '查看原文PDF' : '阅读原始资料' }}</el-button><a v-if="originalSourceUrl" :href="originalSourceUrl" target="_blank" rel="noopener noreferrer">{{ originalSourceIsPdf ? '打开来源 PDF ↗' : '打开来源网页 ↗' }}</a></div>
+            <p v-if="selectedAttachments.length" class="muted">完整对照在独立窗口打开，关闭后保留当前侧栏。</p>
+          </template>
+        </section>
+        <section class="record-extract" aria-label="资料记录内容"><h3>已保存的资料记录</h3>
         <p class="raw-text">
           {{ selected.content.text || JSON.stringify(selected.content, null, 2) }}
         </p>
+        </section>
         <el-alert
           v-if="contextError"
           :title="contextError"
@@ -753,7 +814,7 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
             >
           </dl>
         </section>
-        <el-descriptions :column="1" border
+        <el-descriptions :column="1" border class="record-metadata"
           ><el-descriptions-item label="出处">{{
             selected.provenance.origin_label || "未知"
           }}</el-descriptions-item
@@ -772,7 +833,8 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
           ><el-descriptions-item label="接收时间">{{
             formatServerDateTime(selected.received_at)
           }}</el-descriptions-item
-          ><el-descriptions-item label="外部真实编号">{{
+          ><el-descriptions-item v-if="selected.content.report_no" label="原报告编号">{{ selected.content.report_no }}</el-descriptions-item
+          ><el-descriptions-item label="来源记录标识">{{
             selected.external_record_id || "未提供"
           }}</el-descriptions-item
           ><el-descriptions-item label="来源文件行号">{{
@@ -852,9 +914,30 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
             >下载 {{ file.file_name }}</el-button
           >
         </div>
-        <p class="muted">资料已受理；对象关联与风险结论分别核对。</p></template
+        <p class="muted">资料已受理；对象关联与风险结论分别核对。</p></div></div></template
       >
     </el-drawer>
+    <el-dialog v-model="comparisonOpen" title="原文对照" class="quality-record-comparison" width="min(1380px,96vw)" top="3vh" append-to-body destroy-on-close :close-on-click-modal="false" @opened="resetComparisonScroll">
+      <template v-if="selected"><div class="comparison-context"><strong>{{ selected.content.report_no || selected.display_no || '资料原文' }}</strong><span>左侧原文，右侧逐项整理结果；点击出处页码核对。</span></div>
+      <div class="record-comparison-layout" :class="{'pdf-comparison-layout':pdfAttachments.length>0}"><QualityRecordOriginalPanel :record="selected" :attachments="selectedAttachments" :initial-attachment-id="comparisonAttachmentId" :target-page="comparisonTargetPage" :page-request-key="comparisonPageRequest" @download="downloadAttachment" />
+      <section class="comparison-record" aria-label="对照资料记录">
+        <template v-if="selected.content.transcribed_values?.length">
+          <div class="comparison-result-heading"><h3>逐项提取 / 整理结果</h3><el-tag type="info" size="small">待核对</el-tag></div>
+          <p class="comparison-note">以下为已保存的整理摘录，尚需对照原件核对；不代表本平台重新检测。</p>
+          <dl class="comparison-result-meta"><template v-if="selected.content.report_no"><dt>原报告编号</dt><dd>{{ selected.content.report_no }}</dd></template><template v-if="selected.content.issued_date"><dt>报告签发日期</dt><dd>{{ selected.content.issued_date }}</dd></template><template v-if="selected.content.documentary_verdict"><dt>原报告记载</dt><dd>{{ selected.content.documentary_verdict }}</dd></template></dl>
+          <section class="comparison-readings" aria-label="逐项数值对照"><article v-for="(reading, index) in selected.content.transcribed_values" :key="index" :class="{'selected-reading':comparisonTargetPage === Number(reading.original_pdf_page)}">
+            <div class="reading-heading"><h4>{{ reading.indicator }}</h4><el-tag size="small" :type="reading.documentary_verdict === '不合格' ? 'danger' : reading.documentary_verdict === '合格' ? 'success' : 'info'">原判{{ reading.documentary_verdict || '未提供' }}</el-tag></div>
+            <p class="reading-value">{{ reading.value }} <small>{{ reading.unit }}</small></p>
+            <p v-if="reading.designed_max != null" class="reading-requirement">原要求：不超过设计车速 {{ reading.designed_max }} {{ reading.unit }}<template v-if="reading.regulatory_max != null">，且不超过 {{ reading.regulatory_max }} {{ reading.unit }}</template></p>
+            <p v-else-if="reading.limit != null" class="reading-requirement">原要求：≤ {{ reading.limit }} {{ reading.unit }}</p>
+            <p v-else-if="reading.lower_limit != null && reading.upper_limit != null" class="reading-requirement">原要求：{{ reading.lower_limit }}–{{ reading.upper_limit }} {{ reading.unit }}</p>
+            <el-button v-if="reading.original_pdf_page" link type="primary" :disabled="!comparisonSourcePdf" @click="compareOriginalPage(reading.original_pdf_page)">对照原 PDF 第{{ reading.original_pdf_page }}页</el-button>
+          </article></section>
+          <details class="comparison-summary"><summary>资料说明与适用范围</summary><p class="comparison-saved-text">{{ selected.content.text }}</p></details>
+        </template>
+        <template v-else><h3>已保存资料 · 供逐项核对</h3><p class="comparison-note">这条资料尚无逐项数值摘录，以下保留已保存内容供原文对照。</p><p class="comparison-saved-text">{{ selected.content.text || JSON.stringify(selected.content, null, 2) }}</p></template>
+      </section></div></template>
+    </el-dialog>
     <KnowledgeSubmitDialog
       v-if="selected"
       v-model="knowledgeSubmitOpen"
@@ -1251,7 +1334,9 @@ onBeforeUnmount(() => {++originEpoch;window.removeEventListener("resize", onResi
 }
 
 .intake-page {
-  padding: 24px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 20px;
   color: #20364a;
 }
 .embedded {
@@ -1341,6 +1426,71 @@ h2 {
 </style>
 
 <style>
+.quality-record-detail .el-drawer__header{margin-bottom:0;padding-bottom:16px;border-bottom:1px solid #dce4ec}
+.quality-record-detail .el-drawer__body{padding:20px;overflow:auto}
+.quality-record-detail .record-detail-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.quality-record-detail .record-detail-heading h2{font-size:18px;margin:0;overflow-wrap:anywhere}
+.quality-record-detail .record-detail-layout{display:block;min-width:0}
+.quality-record-detail .record-detail-content{min-width:0}
+.quality-record-detail .record-original-entry{border:1px solid #dce4ec;border-left:3px solid #087f8c;background:#f7fafb;border-radius:6px;padding:16px;margin-bottom:22px}
+.quality-record-detail .record-original-entry h3{font-size:15px;margin:0 0 12px}
+.quality-record-detail .original-resource-type{font-size:13px;font-weight:600;line-height:1.8;margin:0 0 10px;color:#284861}
+.quality-record-detail .original-file-list{list-style:none;padding:0;margin:12px 0;display:grid;gap:10px}
+.quality-record-detail .original-file-list li{display:flex;gap:8px;align-items:flex-start;min-width:0}
+.quality-record-detail .file-format{background:#e7eef6;color:#47627e;border-radius:4px;padding:2px 6px;font-size:10px;margin-top:3px;flex-shrink:0}
+.quality-record-detail .original-file-list button{background:none;border:0;color:#245de5;text-align:left;font-size:13px;line-height:1.8;overflow-wrap:anywhere;padding:0;cursor:pointer}
+.quality-record-detail .original-entry-actions{display:flex;align-items:center;flex-wrap:wrap;gap:14px}
+.quality-record-detail .original-entry-actions a{font-size:13px;color:#245de5;overflow-wrap:anywhere}
+.quality-record-detail .original-entry-actions .el-button{margin:0}
+.quality-record-detail .record-extract h3{font-size:15px;margin:0 0 10px}
+.quality-record-detail .raw-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.85;font-size:14px;margin:0}
+.quality-record-detail .record-metadata{margin-top:18px}
+.quality-record-detail .record-metadata table{table-layout:fixed;width:100%}
+.quality-record-detail .record-metadata .el-descriptions__label{width:112px;min-width:112px;white-space:normal;word-break:normal}
+.quality-record-detail .record-metadata .el-descriptions__content{overflow-wrap:anywhere;word-break:break-word}
+.quality-record-detail .attachments{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.quality-record-detail .attachments .el-button{height:auto;min-height:32px;white-space:normal;overflow-wrap:anywhere;margin-left:0;text-align:left}
+.quality-record-detail .object-links,.quality-record-detail .related-cases{border:1px solid #dce4ec;border-radius:6px;padding:14px;margin:18px 0}
+.quality-record-detail .object-link-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.quality-record-detail .object-link-heading h3,.quality-record-detail .related-cases h3{font-size:15px;margin:0}
+.quality-record-detail .object-links dl{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px;font-size:13px}
+.quality-record-detail .object-links dt,.quality-record-detail .muted{color:#607386;font-size:13px}
+.quality-record-detail .object-links dd{margin:0;overflow-wrap:anywhere}
+.quality-record-detail .related-cases .el-button{white-space:normal;height:auto;min-height:32px;overflow-wrap:anywhere;text-align:left;margin:8px 0}
+@media(max-width:980px){.quality-record-detail .record-detail-layout{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:650px){.quality-record-detail .el-drawer__body{padding:14px}.quality-record-detail .record-metadata .el-descriptions__label{width:100px;min-width:100px}}
+.quality-record-comparison.el-dialog{background:#fff;max-height:94dvh;overflow:hidden}
+.quality-record-comparison .el-dialog__body{max-height:calc(94dvh - 96px);overflow:auto;padding-top:10px;overflow-anchor:none}
+.quality-record-comparison .comparison-context{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;padding:0 0 18px;font-size:14px}
+.quality-record-comparison .comparison-context span,.quality-record-comparison .comparison-note{font-size:12px;color:#607386;line-height:1.8}
+.quality-record-comparison .record-comparison-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:24px;align-items:start;min-width:0}
+.quality-record-comparison .pdf-comparison-layout{grid-template-columns:minmax(0,1.9fr) minmax(0,1fr)}
+.quality-record-comparison .comparison-record{min-width:0;font-size:14px;line-height:1.9}
+.quality-record-comparison .comparison-record h3{font-size:15px;margin:0 0 10px}
+.quality-record-comparison .comparison-saved-text{white-space:pre-wrap;overflow-wrap:anywhere;margin:14px 0;line-height:1.95}
+.quality-record-comparison .comparison-readings{margin-top:24px;border-top:1px solid #dce4ec;padding-top:16px}
+.quality-record-comparison .comparison-readings article{padding:12px 0;border-bottom:1px solid #e8edf2}
+.quality-record-comparison .comparison-result-heading{display:flex;justify-content:space-between;gap:12px;align-items:center}.quality-record-comparison .comparison-result-heading h3{margin:0}
+.quality-record-comparison .comparison-result-meta{display:grid;grid-template-columns:95px minmax(0,1fr);gap:8px;font-size:12px;margin:16px 0}.quality-record-comparison .comparison-result-meta dt{color:#607386}.quality-record-comparison .comparison-result-meta dd{margin:0;overflow-wrap:anywhere}
+.quality-record-comparison .comparison-readings{margin:16px 0 0;padding:0;border:0;display:grid;gap:12px}
+.quality-record-comparison .comparison-readings article{padding:14px;border:1px solid #dce4ec;border-radius:7px;background:#fff}.quality-record-comparison .comparison-readings article.selected-reading{border-color:#6692ea;background:#f7faff}
+.quality-record-comparison .reading-heading{display:flex;gap:10px;justify-content:space-between;align-items:center}.quality-record-comparison .reading-heading h4{margin:0;font-size:14px}
+.quality-record-comparison .reading-value{margin:9px 0;font-size:25px;font-weight:650;line-height:1.4}.quality-record-comparison .reading-value small{font-size:13px;font-weight:400;color:#607386}
+.quality-record-comparison .reading-requirement{font-size:12px;line-height:1.8;color:#607386;margin:0 0 8px}
+.quality-record-comparison .comparison-summary{margin-top:18px;border-top:1px solid #dce4ec;padding-top:14px;font-size:13px}.quality-record-comparison .comparison-summary summary{cursor:pointer;color:#526b87}
+@media(min-width:981px){
+  .quality-record-comparison .record-original-panel{position:static;max-height:calc(94dvh - 170px);display:flex;flex-direction:column}
+  .quality-record-comparison .record-original-panel>header,.quality-record-comparison .original-source,.quality-record-comparison .original-controls,.quality-record-comparison .original-page-controls,.quality-record-comparison .original-help{flex-shrink:0}
+  .quality-record-comparison .original-text-wrap{min-height:0;display:flex;flex-direction:column;flex:1;overflow:hidden}
+  .quality-record-comparison .original-text-search,.quality-record-comparison .web-source-notice{flex-shrink:0}
+  .quality-record-comparison .original-text{min-height:140px;max-height:none;flex:1}
+  .quality-record-comparison .original-raw-copy{max-height:200px;overflow:auto;flex-shrink:0}
+  .quality-record-comparison .original-page-canvas{flex:1;min-height:180px;max-height:none}
+  .quality-record-comparison .original-pdf-frame{flex:1;min-height:420px;height:calc(94dvh - 300px)}
+  .quality-record-comparison .pdf-original-panel{height:calc(94dvh - 170px)}
+  .quality-record-comparison .comparison-record{max-height:calc(94dvh - 170px);overflow:auto;padding-right:6px}
+}
+@media(max-width:980px){.quality-record-comparison .record-comparison-layout{grid-template-columns:minmax(0,1fr)}.quality-record-comparison .comparison-record{border-top:1px solid #dce4ec;padding-top:18px}}
 .quality-intake-form.el-dialog {
   background: #fff !important;
   max-height: 94dvh;

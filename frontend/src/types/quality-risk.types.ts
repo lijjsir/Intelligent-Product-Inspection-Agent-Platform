@@ -163,6 +163,7 @@ export interface QualityRecordContext {
 }
 
 export interface RiskCaseV4 {
+  assessment_purpose?: "current_supervision" | "historical_review";
   display_no?: string | null;
   id: string;
   code: string;
@@ -185,6 +186,9 @@ export interface RiskCaseV4 {
 }
 
 export interface RiskAssessmentV4 {
+  analysis_origin?: { mode: string; assessment_id: string; version: number } | null;
+  analysis_summary?: { summary?: string; limitations?: string[] };
+  purpose_review?: { purpose?: "current_supervision" | "historical_review"; required_inputs?: string[]; limitations?: string[]; boundary?: string };
   demo_workflow?: DemoRiskWorkflow | null;
   demo_validation?: {
     is_current: boolean;
@@ -242,6 +246,13 @@ export interface RiskWorkspace {
     created_at?: string | null;
     reviewed_at?: string | null;
   }>;
+}
+
+export interface RiskAnalysisJob {
+  id: string; case_id: string; created_by: string;
+  status: 'queued'|'running'|'succeeded'|'completed_with_warnings'|'failed'|'stale'|'cancelled';
+  assessment_id: string|null; error_code: string|null; message: string;
+  created_at: string; started_at: string|null; finished_at: string|null;
 }
 
 export interface DemoRiskContent {

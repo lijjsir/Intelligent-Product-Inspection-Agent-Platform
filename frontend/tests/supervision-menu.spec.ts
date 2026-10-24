@@ -19,9 +19,14 @@ describe("supervision role boundaries and business form submission", () => {
       "algorithm_engineer",
     ]);
   });
-  it("exposes the streamlined quality-supervision workbench only to business roles", () => {
-    const workbench = appRoutes.find((r) => r.name === "app-supervision-workbench");
-    expect(workbench?.meta.roles).toEqual(["expert"]);
+  it("retires the workbench and redirects old links to business pages", () => {
+    expect(appRoutes.find(r => r.name === "app-supervision-workbench")).toBeUndefined();
+    const workbench = appRoutes.find(r => r.path === "workbench");
+    expect(workbench?.component).toBeUndefined();
+    expect(typeof workbench?.redirect).toBe("function");
+    const redirect = workbench?.redirect as (to: { hash: string }) => string;
+    expect(redirect({ hash: '' })).toBe('/app/quality-analytics');
+    expect(redirect({ hash: '#demo-case-guide' })).toBe('/app/quality-data#demo-case-guide');
   });
   it("separates overview, quality analysis and independent supporting modules", () => {
     setActivePinia(createPinia());
@@ -31,20 +36,24 @@ describe("supervision role boundaries and business form submission", () => {
     const { menu } = useMenu();
     const quality = menu.value.find((item) => "items" in item && item.title === "质量监督");
     expect(quality && "items" in quality ? quality.items.map((item) => item.title) : []).toEqual([
-      "质监工作台",
       "数据采集",
       "市场监控",
       "风险研判",
       "监督抽查",
+      "实验室检测",
     ]);
-    expect(menu.value.map(item => item.title)).toEqual(["AI 对话", "会议室", "质量监督", "实验室检测", "检测任务", "检测结果", "报告中心", "标准与知识", "个人设置"]);
-    for (const title of ['实验室检测','检测任务','检测结果','报告中心']) {
+    expect(menu.value.map(item => item.title)).toEqual(["AI 对话", "会议室", "质量监督", "检测任务", "检测结果", "报告中心", "标准审核", "知识资料", "个人设置"]);
+    for (const title of ['检测任务','检测结果','会议室','报告中心','标准审核','知识资料']) {
       expect(menu.value.some(item => item.title === title && !('items' in item))).toBe(true);
     }
-    const resources = menu.value.find(item => 'items' in item && item.title === '标准与知识');
-    expect(resources && 'items' in resources ? resources.items.map(item => item.title) : []).toEqual(['标准审核', '知识资料']);
+    expect(menu.value.some(item => item.title === '标准与知识')).toBe(false);
     const paths = menu.value.flatMap(item => 'items' in item ? item.items.map(child => child.path) : [item.path]);
     expect(new Set(paths).size).toBe(paths.length);
+  });
+  it("keeps historical risk evidence editable within risk assessment", () => {
+    const record = appRoutes.find(r => r.name === 'app-supervision-risk-records');
+    expect(record?.path).toBe('risk-assessments/records/risk-cases');
+    expect(record?.meta.supervisionKind).toBe('risk-cases');
   });
   it("submits only editable case inputs and retains nested real-source evidence", () => {
     const result = cleanFields(

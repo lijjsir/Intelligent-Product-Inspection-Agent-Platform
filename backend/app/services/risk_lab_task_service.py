@@ -19,6 +19,8 @@ class RiskLabTaskService:
         case=await self.lab.demo.risk.risk_case(row.data['case_id'])
         latest=await self.lab.demo.latest(case)
         scope=case.scope or {};reasons=[]
+        from app.services.risk_purpose_policy import HISTORICAL, purpose
+        if purpose(scope) == HISTORICAL:reasons.append('历史资料复盘请引用原报告；新检测须另建当前监管事项。')
         for key in ('product_id','category_id','quality_batch_id'):
             if scope.get(key):
                 try:UUID(str(scope[key]))

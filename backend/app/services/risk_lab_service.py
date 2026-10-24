@@ -211,6 +211,9 @@ class RiskLabService:
     async def decide(self, case_id, payload):
         actor = await self.guard(write=True)
         case, assessment = await self.demo.target(case_id, str(payload.assessment_id))
+        if not self.demo.is_demo and (payload.verification_path == 'task' or payload.task_id):
+            from app.services.risk_purpose_policy import require_current_purpose
+            require_current_purpose(case)
         # Explicit paths create a preparation request, including during evidence
         # gathering. Legacy clients keep their original reviewed-version gate.
         if payload.verification_path is None:

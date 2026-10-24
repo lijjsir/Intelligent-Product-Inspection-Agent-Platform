@@ -120,7 +120,7 @@ with sync_playwright() as pw:
     assert author.evaluate('document.documentElement.scrollWidth<=innerWidth')
     author.locator('.report-preview h2').scroll_into_view_if_needed();author.screenshot(path=str(OUT/'phase5-report-mobile.png'),full_page=True)
     author.goto(BASE+f'/app/laboratory?case_id={CASE}',wait_until='networkidle');expect(author.locator('.risk-lab-panel')).to_contain_text('演示资料已回流')
-    expect(author.locator('.demo-lab-workspace')).to_contain_text('可选验证');assert author.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    expect(author.locator('.demo-lab-workspace')).to_contain_text('验证与证据回流');assert author.evaluate('document.documentElement.scrollWidth<=innerWidth')
     author.locator('.lab-history').scroll_into_view_if_needed();author.screenshot(path=str(OUT/'phase5-lab-mobile.png'),full_page=True)
     peer.goto(BASE+f"/app/risk-reports?case_id={CASE}&report={progress['new_report_id']}",wait_until='networkidle');expect(peer.locator('.report-preview')).to_contain_text('独立复核')
     peer.locator('.report-preview').get_by_role('button',name='查看原研判版本',exact=True).click();peer.wait_for_url('**/app/risk-assessments?case_id=**');expect(peer_flow).to_contain_text('第 6 版复核意见')

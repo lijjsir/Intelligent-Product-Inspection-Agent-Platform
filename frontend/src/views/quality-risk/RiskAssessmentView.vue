@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { CircleCheck, DataAnalysis, Plus, RefreshRight } from "@element-plus/icons-vue";
@@ -9,8 +9,10 @@ import { qualityRiskApi } from "@/api/quality-risk.api";
 import { resultApi } from "@/api/result.api";
 import { useAuthStore } from "@/stores/auth.store";
 import { useQualityReferenceStore } from "@/stores/quality-reference.store";
+import { useRiskAnalysisJob } from '@/composables/useRiskAnalysisJob';
 import DemoRiskWorkflowPanel from "@/components/business/quality-risk/DemoRiskWorkflowPanel.vue";
 import RiskLabPanel from "@/components/business/quality-risk/RiskLabPanel.vue";
+import SupervisionModuleHeader from "@/components/business/supervision/SupervisionModuleHeader.vue";
 import {
   RECORD_TYPE_LABELS,
   type QualityRecordType,
@@ -27,6 +29,10 @@ const router = useRouter();
 const rows = ref<RiskCaseV4[]>([]);
 const policies = ref<any[]>([]);
 const workspace = ref<RiskWorkspace | null>(null);
+const analysisCaseId=computed(()=>String(route.query.case_id||''));
+const analysisJobs=useRiskAnalysisJob(analysisCaseId,async()=>{await refreshLatest();});
+const analysisActive=analysisJobs.active;
+const jobLabels:Record<string,string>={queued:'排队中',running:'分析中',succeeded:'草稿已生成',completed_with_warnings:'草稿需人工核对',failed:'分析未完成',stale:'材料或版本已变化',cancelled:'排队已取消'};
 const detailLoading = ref(false),
   analyzing = ref(false),
   reviewing = ref(false),
@@ -90,10 +96,15 @@ const dialog = ref(false),
 const extraSourceIds = ref<string[]>([]);
 const selected = ref<RiskCaseV4 | null>(null);
 const assessment = ref<RiskAssessmentV4 | null>(null);
-const expertLevel = ref<"low" | "medium" | "high" | "critical">("medium");
+const expertLevel = ref<"" | "low" | "medium" | "high" | "critical">("");
 const expertRiskType = ref("");
+const historicalConfirmed = ref(false), conflictResolution = ref("");
+const isHistorical = computed(() => selected.value?.assessment_purpose === 'historical_review' || selected.value?.scope.case_mode === 'public_historical_review');
+const historicalReports = computed(() => workspace.value?.records.filter(record => record.record_type === 'inspection_report') || []);
 
 const form = reactive({
+  assessment_purpose: "current_supervision",
+  historical_period: "",
   title: "",
   scope_type: "category",
   scope_value: "",
@@ -109,6 +120,7 @@ const isLatest = computed(
 const canReview = computed(
   () =>
     isExpert.value &&
+    !analysisActive.value &&
     isLatest.value &&
     !!assessment.value &&
     assessment.value.submitted_by !== auth.userId &&
@@ -151,11 +163,13 @@ const riskLabels: Record<string, string> = {
 };
 
 function applyAssessment(value: RiskAssessmentV4 | null) {
+  historicalConfirmed.value = false;
+  conflictResolution.value = "";
   assessment.value = value;
-  expertLevel.value = !value || value.risk_level === "unknown" ? "medium" : value.risk_level;
+  expertLevel.value = !value || value.risk_level === "unknown" ? "" : value.risk_level;
   expertRiskType.value = value?.risk_type || "";
 }
-async function openCase(id: string) {
+async function openCase(id: string, focusDetail = false) {
   const epoch = ++detailEpoch;
   workspace.value = null;
   selected.value = null;
@@ -182,7 +196,13 @@ async function openCase(id: string) {
     if (epoch === detailEpoch)
       detailError.value = extractApiErrorMessage(error, "研判事项未能加载，请重试");
   } finally {
-    if (epoch === detailEpoch) detailLoading.value = false;
+    if (epoch === detailEpoch) {
+      detailLoading.value = false;
+      if (focusDetail) {
+        await nextTick();
+        if (epoch === detailEpoch) showCaseDetail();
+      }
+    }
   }
 }
 async function selectVersion(id: string) {
@@ -246,7 +266,7 @@ watch(
   () => [route.query.case_id, route.query.assessment_id],
   ([value]) => {
     detailTab.value = initialTab();
-    if (value) void openCase(String(value));
+    if (value) void openCase(String(value), true);
     else {
       ++detailEpoch;
       selected.value = null;
@@ -262,8 +282,22 @@ function closeCase() {
   delete query.case_id;
   delete query.assessment_id;
   delete query.tab;
-  void router.push({ query });
+  void router.push({ query }).then(async () => { await nextTick(); showRegister(); });
 }
+function showCaseDetail() {
+  const detail = document.getElementById('risk-case-detail');
+  detail?.scrollIntoView({ block: 'start' });
+  detail?.focus({ preventScroll: true });
+}
+function showRegister() {
+  const register = document.getElementById('risk-case-register');
+  register?.scrollIntoView({ block: 'start' });
+  register?.focus({ preventScroll: true });
+}
+function caseStatusTone(value: string): 'success' | 'warning' | 'info' {
+  return value === 'risk_assessed' ? 'success' : value === 'awaiting_evidence' ? 'warning' : 'info';
+}
+function caseRowClass({ row }: { row: RiskCaseV4 }) { return row.id === selected.value?.id ? 'is-selected-case' : ''; }
 function viewSampling() {
   if (selected.value)
     void router.push({ path: workspace.value?.workflow_context?.execution_mode === "business" ? "/app/risk-sampling" : "/app/sampling-plans", query: { case_id: selected.value.id } });
@@ -299,6 +333,8 @@ async function attachSources() {
 }
 async function openCreate() {
   Object.assign(form, {
+    assessment_purpose: "current_supervision",
+    historical_period: "",
     title: "",
     scope_type: "category",
     scope_value: "",
@@ -314,6 +350,9 @@ async function openCreate() {
 }
 
 async function saveCase() {
+  if (form.assessment_purpose === 'historical_review' && !form.historical_period.trim()) {
+    ElMessage.warning('请填写历史资料对应的时期'); return;
+  }
   if (!form.title.trim() || !form.scope_value.trim() || !form.source_record_ids.length) {
     ElMessage.warning("请填写标题、研判范围并选择至少一条原始资料");
     return;
@@ -324,6 +363,7 @@ async function saveCase() {
     const category = references.categories.find((item) => item.id === form.scope_value);
     const product = references.products.find((item) => item.id === form.scope_value);
     const scope = {
+      ...(form.assessment_purpose === 'historical_review' ? { historical_period: form.historical_period.trim() } : {}),
       name: category?.name || product?.name || form.scope_value,
       ...(category ? { category_id: category.id } : {}),
       ...(product ? { product_id: product.id, category_id: product.category_id } : {}),
@@ -332,6 +372,7 @@ async function saveCase() {
       ...(form.scope_type === "individual_unit" ? { unit_serial_ref: form.scope_value } : {}),
     };
     const result = await qualityRiskApi.createRiskCase({
+      assessment_purpose: form.assessment_purpose,
       title: form.title,
       scope_type: form.scope_type,
       scope,
@@ -349,35 +390,48 @@ async function saveCase() {
 }
 
 async function selectCase(row: RiskCaseV4) {
-  if (route.query.case_id === row.id) await openCase(row.id);
+  if (route.query.case_id === row.id) await openCase(row.id, true);
   else await router.push({ query: { ...route.query, case_id: row.id } });
 }
 
 async function analyze() {
-  if (!selected.value || analyzing.value || !canAnalyze.value) return;
-  const caseId = selected.value.id;
+  if (!selected.value || analyzing.value || analysisActive.value || !canAnalyze.value) return;
+  const requestedCase=selected.value.id;
   analyzing.value = true;
   try {
-    await qualityRiskApi.analyzeRisk(
-      caseId,
+    const job=await analysisJobs.submit(
+      workspace.value?.latest_assessment?.id || null,
       policyId.value || undefined,
-      inspectionExecutionRunId.value || undefined,
+      isHistorical.value ? undefined : inspectionExecutionRunId.value || undefined,
     );
-    ElMessage.success("风险研判草稿已保存，请核对证据并提交独立复核");
-    await load();
-    if (route.query.case_id === caseId) {
-      await openCase(caseId);
-      detailTab.value = "assessment";
-    }
+    if(job)ElMessage.success('分析请求已保存，可离开页面，重新打开后继续查看进度');
+  } catch(error) {
+    if(route.query.case_id===requestedCase)detailError.value=extractApiErrorMessage(error,'请求未提交，请刷新核对当前版本后重试');
   } finally {
     analyzing.value = false;
   }
+}
+async function refreshHistoricalReview() {
+  if (!selected.value || !assessment.value || analyzing.value || !isExpert.value) return;
+  const caseId = selected.value.id, sourceId = assessment.value.id;
+  analyzing.value = true;
+  try {
+    await qualityRiskApi.refreshHistoricalReview(caseId, sourceId);
+    ElMessage.success('已核验原证据并整理复核要求；沿用分析来源已记录，未重新调用模型');
+    if (route.query.case_id === caseId) await refreshLatest();
+  } finally { analyzing.value = false; }
 }
 async function review(decision: "accept" | "request_evidence") {
   if (!selected.value || !canReview.value || reviewing.value) return;
   if (decision === "accept" && assessment.value?.source_validation?.blockers?.length) {
     ElMessage.warning("请先处理来源核验阻断项并重新生成草稿");
     return;
+  }
+  if (decision === 'accept' && !expertLevel.value) {
+    ElMessage.warning('请明确选择有依据的风险等级；仍无法确认时请退回补证'); return;
+  }
+  if (decision === 'accept' && isHistorical.value && (!historicalConfirmed.value || (assessment.value?.conflicts.length && !conflictResolution.value.trim()))) {
+    ElMessage.warning('请确认历史原件与范围，并填写已有冲突的核对意见'); return;
   }
   const caseId = selected.value.id;
   reviewing.value = true;
@@ -388,11 +442,12 @@ async function review(decision: "accept" | "request_evidence") {
       decision === "accept" ? "通过风险研判" : "退回补证",
       { inputType: "textarea", inputValidator: (value: string) => !!value.trim() || "请填写意见" },
     );
-    if (route.query.case_id !== caseId) return;
+    if (route.query.case_id !== caseId || assessment.value?.id !== assessmentId) return;
     await qualityRiskApi.reviewRisk(caseId, decision, prompt.value, {
       assessment_id: assessmentId,
+      ...(decision === 'accept' && isHistorical.value ? {historical_scope_confirmed: historicalConfirmed.value, conflict_resolution: conflictResolution.value.trim() || null} : {}),
       ...(decision === "accept"
-        ? { risk_level: expertLevel.value, risk_type: expertRiskType.value || null }
+        ? { risk_level: expertLevel.value || undefined, risk_type: expertRiskType.value || null }
         : {}),
     });
     ElMessage.success(decision === "accept" ? "风险研判已确认" : "已退回补证");
@@ -413,31 +468,25 @@ function sourceLabel(id: string) {
 onMounted(() => {
   void load();
   void loadOptions();
-  if (route.query.case_id) void openCase(String(route.query.case_id));
+  if (route.query.case_id) void openCase(String(route.query.case_id), true);
 });
 </script>
 
 <template>
   <main class="risk-page">
-    <header class="risk-hero">
-      <div class="hero-copy">
-        <p>SHARED RISK ASSESSMENT</p>
-        <h1>风险研判</h1>
-        <span
-          >汇合市场与舆情证据，形成可复核的风险类型、影响范围、依据和监管建议。资料、历史版本和复核意见在同一事项中持续关联。</span
-        >
-      </div>
-      <div class="hero-actions">
+    <SupervisionModuleHeader title="风险研判" tone="cyan" description="汇合市场与舆情证据，在同一事项中形成研判、独立复核和后续处理建议。" principle="新证据进入原事项并形成新版研判；需要实物验证时，再进入实验室检测。">
+      <template #actions>
+        <el-button v-if="isExpert" @click="router.push('/app/risk-assessments/records/risk-cases')">历史风险记录</el-button>
         <el-button v-if="isExpert" @click="router.push('/app/risk-policies')"
           >风险等级规则</el-button
         ><el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate"
           >新建研判事项</el-button
         >
-      </div>
-    </header>
+      </template>
+    </SupervisionModuleHeader>
 
     <div class="risk-layout" :class="{ detailed: route.query.case_id }">
-      <section class="case-list">
+      <section id="risk-case-register" class="case-list" tabindex="-1" aria-label="研判事项台账">
         <header>
           <div>
             <p>RISK REGISTER</p>
@@ -448,10 +497,11 @@ onMounted(() => {
         <div class="filters">
           <el-input
             v-model="keyword"
+            aria-label="搜索风险标题"
             clearable
             placeholder="搜索风险标题"
             @keyup.enter="search"
-          /><el-select v-model="status" clearable placeholder="全部状态" @change="search"
+          /><el-select v-model="status" aria-label="事项状态筛选" clearable placeholder="全部状态" @change="search"
             ><el-option label="收集中" value="collecting" /><el-option
               label="待补证"
               value="awaiting_evidence" /><el-option
@@ -461,13 +511,17 @@ onMounted(() => {
         </div>
         <el-alert v-if="listError" :title="listError" type="error" :closable="false" />
         <el-table
+          class="case-table"
           :data="rows"
           v-loading="listLoading"
           highlight-current-row
+          :row-class-name="caseRowClass"
           @row-click="selectCase"
         >
-          <el-table-column prop="code" label="编号" width="160" />
-          <el-table-column prop="title" label="风险对象" min-width="210" />
+          <el-table-column prop="code" label="编号" width="175" />
+          <el-table-column prop="title" label="风险对象" min-width="230">
+            <template #default="{ row }"><button type="button" class="case-title-button" @click.stop="selectCase(row)">{{ row.title }}</button></template>
+          </el-table-column>
           <el-table-column label="范围" width="120"
             ><template #default="{ row }">{{
               scopeLabels[row.scope_type] || row.scope_type
@@ -491,6 +545,15 @@ onMounted(() => {
             ></el-table-column
           >
         </el-table>
+        <div class="case-cards" v-loading="listLoading">
+          <button v-for="row in rows" :key="row.id" type="button" class="case-card"
+            :aria-pressed="row.id === selected?.id" @click="selectCase(row)">
+            <span class="case-card-heading"><span class="case-code">{{ row.code }}</span><el-tag :type="caseStatusTone(row.status)">{{ caseStatuses[row.status] || row.status }}</el-tag></span>
+            <span class="case-card-title">{{ row.title }}</span>
+            <span class="case-card-meta"><span>范围：{{ scopeLabels[row.scope_type] || row.scope_type }}</span><span>证据：{{ row.evidence_ids.length }} 项</span></span>
+          </button>
+          <el-empty v-if="!rows.length && !listLoading" description="暂无符合条件的研判事项" :image-size="60" />
+        </div>
         <el-pagination
           v-model:current-page="page"
           :page-size="20"
@@ -502,7 +565,9 @@ onMounted(() => {
 
       <aside
         v-if="route.query.case_id"
+        id="risk-case-detail"
         class="case-detail"
+        tabindex="-1"
         v-loading="detailLoading"
         aria-label="研判事项详情"
       >
@@ -520,16 +585,27 @@ onMounted(() => {
               <small>{{ selected.code }}</small>
               <h2>{{ selected.title }}</h2>
             </div>
-            <el-button text @click="closeCase">收起</el-button>
+            <div class="detail-navigation"><el-button text @click="showRegister">返回台账</el-button><el-button text @click="closeCase">收起</el-button></div>
           </div>
           <div class="scope-card">
+            <el-tag size="small">{{ isHistorical ? '历史资料复盘' : '当前监管研判' }}</el-tag>
             <span>当前研判范围</span
             ><strong>{{ selected.scope.name || selected.scope_type }}</strong
             ><small
               >来源记录 {{ selected.source_record_ids.length }} 条 · 可引用证据
               {{ selected.evidence_ids.length }} 项</small
             >
+            <small v-if="isHistorical">资料时期：{{ selected.scope.historical_period || '待明确' }}；仅针对原资料记载的对象。</small>
           </div>
+          <section v-if="analysisJobs.job.value" class="analysis-job-status" aria-live="polite">
+            <el-alert :type="['failed','stale','completed_with_warnings'].includes(analysisJobs.job.value.status)?'warning':analysisJobs.job.value.status==='succeeded'?'success':'info'" :closable="false"
+              :title="jobLabels[analysisJobs.job.value.status]" :description="analysisJobs.job.value.message" />
+            <p v-if="analysisActive" class="muted">任务在后台运行，关闭页面不会取消；请勿重复提交。</p>
+            <el-button link type="primary" @click="analysisJobs.loadLatest">刷新任务进度</el-button>
+            <el-button v-if="analysisJobs.job.value.status==='queued' && analysisJobs.job.value.created_by===auth.userId" link
+              :loading="analysisJobs.cancelling.value" @click="analysisJobs.cancel">取消排队</el-button>
+          </section>
+          <el-alert v-if="analysisJobs.connectionError.value" type="warning" :closable="false" :title="analysisJobs.connectionError.value" />
           <div class="followup-actions">
             <el-button
               v-for="signalId in (selected.scope.market_signal_ids as string[]) || []"
@@ -543,7 +619,7 @@ onMounted(() => {
               >查看市场线索依据</el-button
             >
             <el-button
-              v-if="isExpert"
+              v-if="isExpert && !isHistorical"
               :disabled="
                 !assessment ||
                 !isLatest ||
@@ -554,14 +630,14 @@ onMounted(() => {
               >查看抽查候选</el-button
             ><el-button
               v-if="canCreate"
-              :disabled="analyzing || reviewing || detailLoading"
+              :disabled="analyzing || analysisActive || reviewing || detailLoading"
               @click="openSources"
               >关联补充资料</el-button
             >
           </div>
           <template v-if="workspace.workflow_context?.execution_mode === 'business' && workspace.workflow_context.can_author && !workspace.workflow_context.eligible">
             <el-alert v-for="(blocker, index) in workspace.workflow_context.blockers" :key="index"
-              type="info" :closable="false" :title="'正式下游暂不可用：' + blocker.message" />
+              type="info" :closable="false" :title="(isHistorical ? '复盘报告尚不可生成：' : '后续处理暂不可用：') + blocker.message" />
           </template>
           <el-tabs v-model="detailTab">
             <el-tab-pane label="研判结论" name="assessment">
@@ -579,6 +655,7 @@ onMounted(() => {
                 <div v-if="canAnalyze" class="action-row risk-inputs">
                   <el-select
                     v-model="policyId"
+                    :disabled="analysisActive"
                     clearable
                     placeholder="选择已发布风险等级规则（可选）"
                     ><el-option
@@ -588,9 +665,10 @@ onMounted(() => {
                       :value="item.id" /></el-select
                   ><el-select
                     v-if="
-                      auth.hasPermission('inspection_execution') && auth.hasPermission('result')
+                      !isHistorical && auth.hasPermission('inspection_execution') && auth.hasPermission('result')
                     "
                     v-model="inspectionExecutionRunId"
+                    :disabled="analysisActive"
                     clearable
                     filterable
                     placeholder="关联已复核的检测证据（可选）"
@@ -603,11 +681,13 @@ onMounted(() => {
                   ><el-button
                     type="primary"
                     :icon="DataAnalysis"
-                    :loading="analyzing"
+                    :loading="analyzing || analysisActive"
                     :disabled="detailLoading || reviewing"
                     @click="analyze"
                     >生成风险研判草稿</el-button
                   >
+                  <el-button v-if="isHistorical && isExpert && assessment?.analysis_summary?.summary && !assessment.purpose_review?.purpose"
+                    :loading="analyzing" :disabled="detailLoading || analysisActive || reviewing" @click="refreshHistoricalReview">整理此版历史复核要求</el-button>
                 </div>
                 <el-empty
                   v-if="!assessment"
@@ -624,8 +704,29 @@ onMounted(() => {
                     ><span v-if="!isLatest">历史版本，仅供查阅</span>
                   </div>
                   <section class="assessment-card">
+                    <el-alert v-if="assessment.analysis_origin" type="info" :closable="false"
+                      :title="`本版沿用第 ${assessment.analysis_origin.version} 版已保存的模型分析，已重新核验原证据；仅整理复核要求，未重新调用模型，仍需独立复核。`" />
+                    <section v-if="isHistorical" class="historical-sources">
+                      <h3>原始资料记载</h3>
+                      <p>以下是历史原件的摘录，供复核人逐项核对。</p>
+                      <article v-for="record in historicalReports" :key="record.id">
+                        <strong>{{ record.content.report_no }} · {{ record.content.issued_date }}</strong>
+                        <p>{{ record.content.documentary_verdict || record.content.conclusion }}</p>
+                        <ul>
+                          <li v-for="(reading, index) in record.content.transcribed_values || []" :key="index">
+                            {{ reading.indicator }}：{{ reading.value }} {{ reading.unit }}；原件第 {{ reading.original_pdf_page }} 页；原报告：{{ reading.documentary_verdict }}
+                          </li>
+                        </ul>
+                        <el-button link type="primary" @click="router.push({ path: '/app/quality-data', query: { record: record.id } })">核对报告原件与出处</el-button>
+                      </article>
+                      <el-button v-if="!historicalReports.length" link type="primary" @click="detailTab = 'sources'">查看原通报与执法资料</el-button>
+                    </section>
+                    <section v-if="assessment.analysis_summary?.summary">
+                      <h3>{{ isHistorical ? (assessment.status === 'accepted' ? '平台复盘分析（已独立复核）' : '平台复盘分析（待独立核对）') : '平台分析摘要' }}</h3>
+                      <p>{{ assessment.analysis_summary.summary }}</p>
+                    </section>
                     <div class="assessment-title">
-                      <span>风险等级</span
+                      <span>{{ isHistorical ? '历史风险信号等级' : '风险等级' }}</span
                       ><el-tag
                         :type="
                           assessment.risk_level === 'high' || assessment.risk_level === 'critical'
@@ -657,7 +758,7 @@ onMounted(() => {
                       v-if="assessment.missing_inputs.length"
                       type="warning"
                       :closable="false"
-                      :title="`仍需补充：${assessment.missing_inputs.join('、')}`"
+                      :title="`${isHistorical ? '确认前需处理' : '仍需补充'}：${assessment.missing_inputs.join('、')}`"
                     />
                     <section v-if="assessment.source_validation?.blockers?.length">
                       <h3>确认前必须处理</h3>
@@ -671,7 +772,7 @@ onMounted(() => {
                       </ul>
                     </section>
                     <section v-if="assessment.source_validation?.uncertainties?.length">
-                      <h3>保留的不确定性</h3>
+                      <h3>{{ isHistorical ? '结论范围与资料限制' : '保留的不确定性' }}</h3>
                       <ul>
                         <li
                           v-for="issue in assessment.source_validation.uncertainties"
@@ -707,13 +808,19 @@ onMounted(() => {
                     <div v-if="canReview" class="expert-confirm">
                       <h3>专家确认</h3>
                       <el-input v-model="expertRiskType" placeholder="确认风险类型" />
-                      <el-select v-model="expertLevel"
+                      <el-select v-model="expertLevel" placeholder="请明确选择风险等级"
                         ><el-option label="低" value="low" /><el-option
                           label="中"
                           value="medium" /><el-option label="高" value="high" /><el-option
                           label="严重"
                           value="critical"
                       /></el-select>
+                      <template v-if="isHistorical">
+                        <el-checkbox v-model="historicalConfirmed">已核对原件、对象和时期，确认结论仅限所列历史资料</el-checkbox>
+                        <el-form-item v-if="assessment.conflicts.length" label="冲突核对与保留依据" required>
+                          <el-input v-model="conflictResolution" type="textarea" :rows="3" maxlength="4000" placeholder="逐项说明核对结果；仍未知的内容须保留为限制" />
+                        </el-form-item>
+                      </template>
                     </div>
                   </section>
                   <div v-if="canReview" class="review-actions">
@@ -721,7 +828,7 @@ onMounted(() => {
                       type="primary"
                       :icon="CircleCheck"
                       :loading="reviewing"
-                      :disabled="!!assessment.source_validation?.blockers?.length || detailLoading"
+                      :disabled="!expertLevel || !!assessment.source_validation?.blockers?.length || detailLoading || (isHistorical && (!historicalConfirmed || (!!assessment.conflicts.length && !conflictResolution.trim())))"
                       @click="review('accept')"
                       >独立复核通过</el-button
                     ><el-button
@@ -756,7 +863,7 @@ onMounted(() => {
                         {{
                           typeof conflict === "string"
                             ? conflict
-                            : conflict.message || conflict.reason || JSON.stringify(conflict)
+                            : conflict.message || conflict.reason || conflict.conflict || JSON.stringify(conflict)
                         }}
                       </li>
                     </ul>
@@ -817,15 +924,15 @@ onMounted(() => {
                 >
               </article>
             </el-tab-pane>
-            <el-tab-pane v-if="workspace.workflow_context?.can_author" label="抽查建议" name="sampling">
+            <el-tab-pane v-if="workspace.workflow_context?.can_author && !isHistorical" label="抽查建议" name="sampling">
               <el-alert type="info" :closable="false" title="最新研判独立复核通过后，可以编写抽查建议。建议保留来源版本与证据，不启动检测。" />
               <el-button style="margin-top:16px;min-height:44px" type="primary" @click="viewSampling">查看本事项抽查建议</el-button>
             </el-tab-pane>
             <el-tab-pane v-if="workspace.workflow_context?.can_author" label="可选验证" name="laboratory" lazy>
               <RiskLabPanel :case-id="selected.id" :assessment="assessment" :is-latest="isLatest" :context="workspace.workflow_context" @changed="refreshLatest" />
             </el-tab-pane>
-            <el-tab-pane v-if="workspace.workflow_context?.can_author" label="研判报告" name="reports">
-              <el-alert type="info" :closable="false" title="独立研判报告固定对象、证据、结论、限制、复核和抽查建议。不经过实验室也能生成报告。" />
+            <el-tab-pane v-if="workspace.workflow_context?.can_author" :label="isHistorical ? '复盘报告' : '研判报告'" name="reports">
+              <el-alert type="info" :closable="false" :title="isHistorical ? '独立复核后生成历史资料复盘报告，分别保存原报告记载、平台分析和结论限制。' : '独立研判报告固定对象、证据、结论、限制、复核和抽查建议。不经过实验室也能生成报告。'" />
               <el-button style="margin-top:16px;min-height:44px" type="primary" @click="router.push({path:'/app/risk-reports',query:{case_id:selected.id,assessment_id:assessment?.id}})">查看本版研判报告</el-button>
             </el-tab-pane>
             <el-tab-pane :label="`版本与复核（${versions.length}）`" name="versions">
@@ -899,6 +1006,15 @@ onMounted(() => {
       :close-on-click-modal="false"
     >
       <el-form label-position="top" v-loading="sourceLoading">
+        <el-form-item label="研判用途" required>
+          <el-select v-model="form.assessment_purpose" aria-label="研判用途">
+            <el-option label="当前监管研判" value="current_supervision" />
+            <el-option label="历史资料复盘" value="historical_review" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="form.assessment_purpose === 'historical_review'" label="历史资料时期" required>
+          <el-input v-model="form.historical_period" maxlength="128" placeholder="例如：2021—2022年，保留资料原有时间精度" />
+        </el-form-item>
         <el-form-item label="风险线索标题" required
           ><el-input v-model="form.title" placeholder="例如：电动自行车充电温升异常"
         /></el-form-item>
@@ -960,9 +1076,9 @@ onMounted(() => {
 
 <style scoped>
 .risk-page {
-  max-width: 1600px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 20px;
   color: #20364a;
 }
 .risk-hero {
@@ -1013,7 +1129,7 @@ onMounted(() => {
   margin-top: 22px;
 }
 .risk-layout.detailed {
-  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 .case-list,
 .case-detail {
@@ -1026,6 +1142,28 @@ onMounted(() => {
 }
 .case-detail {
   border-top: 3px solid #087f8c;
+}
+.case-list { container-type: inline-size; }
+.case-list, .case-detail { scroll-margin-top: 20px; }
+.case-table :deep(.cell) { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }
+.case-table :deep(.el-tag) { max-width: 100%; height: auto; min-height: 24px; padding: 3px 8px; white-space: normal; line-height: 1.5; }
+.case-table :deep(.el-tag__content) { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.case-table :deep(.is-selected-case > td.el-table__cell) { background: var(--el-color-primary-light-9); }
+.case-title-button { display: block; width: 100%; min-height: 44px; border: 0; padding: 0; background: transparent; color: var(--el-color-primary); font: inherit; line-height: 1.7; text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
+.case-title-button:focus-visible, .case-card:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 3px; }
+.case-cards { display: none; gap: 12px; }
+.case-card { display: grid; gap: 12px; width: 100%; padding: 16px; border: 1px solid var(--el-border-color); border-radius: 6px; background: var(--el-bg-color); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.case-card[aria-pressed="true"] { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.case-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.case-code { min-width: 0; color: var(--el-text-color-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.case-card-heading :deep(.el-tag) { flex-shrink: 0; max-width: 50%; height: auto; min-height: 24px; padding: 3px 8px; white-space: normal; line-height: 1.5; }
+.case-card-heading :deep(.el-tag__content) { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.case-card-title { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.case-card-meta { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--el-text-color-secondary); font-size: 13px; }
+.detail-navigation { display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; }
+@container (max-width: 740px) {
+  .case-table { display: none; }
+  .case-cards { display: grid; }
 }
 .case-list > header,
 .detail-head,
@@ -1074,6 +1212,7 @@ onMounted(() => {
   font-size: 17px;
   overflow-wrap: anywhere;
 }
+.scope-card :deep(.el-tag) { justify-self: start; }
 .followup-actions,
 .version-bar {
   margin: 16px 0;
@@ -1139,6 +1278,10 @@ onMounted(() => {
   padding-top: 10px;
   border-top: 1px solid #dbe5ea;
 }
+.historical-sources { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #dbe5ea; }
+.historical-sources li { line-height: 1.8; overflow-wrap: anywhere; }
+.expert-confirm :deep(.el-checkbox) { height: auto; align-items: flex-start; }
+.expert-confirm :deep(.el-checkbox__label) { white-space: normal; line-height: 1.6; }
 .review-actions {
   margin-top: 16px;
 }
@@ -1200,15 +1343,9 @@ onMounted(() => {
 .el-select {
   width: 100%;
 }
-@media (max-width: 1100px) {
-  .risk-layout.detailed {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .risk-layout.detailed .case-detail {
-    grid-row: 1;
-  }
-}
 @media (max-width: 600px) {
+  .detail-head { flex-direction: column; align-items: stretch; }
+  .detail-navigation { justify-content: flex-end; }
   .risk-page {
     padding: 14px;
   }

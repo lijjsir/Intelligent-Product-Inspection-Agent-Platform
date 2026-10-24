@@ -60,3 +60,15 @@ async def test_partial_provider_success_does_not_claim_complete_model_success(mo
     assert call.model_versions['attempted_calls'] == 2
     assert call.model_versions['successful_calls'] == 1
     assert call.model_versions['model_success'] is False
+
+
+@pytest.mark.asyncio
+async def test_supervision_accepts_json_already_normalized_by_llm_client(monkeypatch):
+    from app.services.model_config_service import ModelConfigService
+    from agent.llm.client import LLMClient
+    monkeypatch.setattr(ModelConfigService, 'list_runtime_models', AsyncMock(return_value=[model()]))
+    monkeypatch.setattr(LLMGateway, '_within_rate_limit', AsyncMock(return_value=True))
+    monkeypatch.setattr(LLMClient, 'chat', AsyncMock(return_value={'summary': 'real response format', 'risk_level': 'unknown', '__meta__': {'usage': {'total_tokens': 15}}}))
+    call = await SupervisionService(SimpleNamespace(), CurrentUser(user_id='expert',org_id='local',role='expert')).model_call()
+    assert await call('assessment', {}) == {'summary':'real response format', 'risk_level':'unknown'}
+    assert call.model_versions['successful_calls'] == 1 and call.model_versions['model_success'] is True

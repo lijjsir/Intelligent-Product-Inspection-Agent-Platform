@@ -89,12 +89,19 @@ class RiskReportService:
         product = await self.db.scalar(select(QualityProduct).where(QualityProduct.id == product_id,
             QualityProduct.org_id == self.org_id)) if product_id else None
         mode = self.demo.mode
+        from app.services.risk_purpose_policy import HISTORICAL, purpose, HISTORY_BOUNDARY
+        historical = not self.demo.is_demo and purpose(case.scope) == HISTORICAL
         if not self.demo.is_demo:
             content = {**content, 'probability': assessment.probability}
         boundary = BOUNDARY if self.demo.is_demo else '风险研判报告固定已独立复核的事项、证据和建议；不替代检测报告或抽查执行指令。后续来源变化请在平台核对当前有效性。'
+        if historical:boundary = HISTORY_BOUNDARY
         from app.models.user import User
         author = await self.db.get(User, assessment.submitted_by)
         snapshot = {"schema": "demo-risk-report-v1" if self.demo.is_demo else 'risk-report-v1', "execution_mode": mode,
+            "report_type": "historical_review" if historical else "risk_assessment",
+            "historical_period": (case.scope or {}).get("historical_period") if historical else None,
+            "purpose_review": copy.deepcopy((assessment.model_versions or {}).get("purpose_review") or {}),
+            "analysis_origin": copy.deepcopy((assessment.model_versions or {}).get("analysis_origin")),
             "llm_called": False if self.demo.is_demo else bool((assessment.model_versions or {}).get('llm_called')),
             "case_id": case.id, "case_code": case.code, "case_title": case.title, "scope": copy.deepcopy(case.scope),
             "object_name": product.name if product else ((case.scope or {}).get('name') or (case.scope or {}).get('product_category') or '对象名称未知') if not self.demo.is_demo else '对象名称未知', "assessment_id": assessment.id,
@@ -109,6 +116,15 @@ class RiskReportService:
             "laboratory": labs, "sampling": [{k: s[k] for k in ("id", "title", "status", "effective_status", "revision", "content", "snapshot")} for s in suggestions],
             "source_refs": refs, "boundary": boundary}
         if direct_protocol:snapshot['sampling_protocol']='assessment-v2'
+        if historical:
+            verification = (assessment.model_versions or {}).get('review_verification') or {}
+            snapshot['review']['historical_scope_confirmed'] = verification.get('historical_scope_confirmed')
+            snapshot['review']['conflict_resolution'] = verification.get('conflict_resolution')
+            snapshot['documentary_findings'] = [{"record_id":r['id'], "report_no":r['content'].get('report_no'),
+                "issued_date":r['content'].get('issued_date'),
+                "original_verdict":r['content'].get('documentary_verdict') or r['content'].get('conclusion') or r['content'].get('findings'),
+                "transcribed_values":r['content'].get('transcribed_values', [])}
+                for r in records if r['type'] == 'inspection_report']
         if not self.demo.is_demo:
             snapshot['model_call'] = {key:(assessment.model_versions or {}).get(key) for key in (
                 'llm_called', 'model_success', 'attempted_calls', 'successful_calls', 'inference_status')}
@@ -122,7 +138,7 @@ class RiskReportService:
         if existing:
             return {**await self.get(existing.id), "reused": True}
         row = SupervisionRecord(id=str(uuid5(NAMESPACE_URL, f"risk-report:{self.org_id}:{token}")), org_id=self.org_id,
-            kind=KIND, code=token, name=f"【{'演示' if self.demo.is_demo else ''}研判报告】{case.code} · 第{assessment.version}版", status="demo_frozen" if self.demo.is_demo else 'frozen', version=1,
+            kind=KIND, code=token, name=f"【{'历史资料复盘报告' if historical else '演示研判报告' if self.demo.is_demo else '研判报告'}】{case.code} · 第{assessment.version}版", status="demo_frozen" if self.demo.is_demo else 'frozen', version=1,
             created_by=self.actor, data={"snapshot": snapshot, "snapshot_hash": token, "frozen_at": now(),
                 "reader_ids": sorted({self.actor, assessment.submitted_by, assessment.reviewed_by})})
         self.db.add(row)

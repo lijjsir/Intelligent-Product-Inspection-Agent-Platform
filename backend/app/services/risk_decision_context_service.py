@@ -17,19 +17,27 @@ class RiskDecisionContextService:
     def __init__(self, session, current, storage=None):
         self.session, self.current, self.storage = session, current, storage
 
-    async def accepted(self, case_id, *, expected=None):
+    async def accepted(self, case_id, *, expected=None, allow_historical=False):
         case = await self.session.scalar(select(QualityRiskCase).where(
             QualityRiskCase.id == case_id, QualityRiskCase.org_id == self.current.org_id,
             QualityRiskCase.deleted_at.is_(None)).execution_options(populate_existing=True))
         if not case:
             raise NotFoundError("风险案件不存在或不在授权组织范围")
+        from app.services.risk_purpose_policy import HISTORICAL, purpose, require_current_purpose
+        if not allow_historical:
+            require_current_purpose(case)
         assessment = await self.session.scalar(select(QualityRiskAssessment).where(
             QualityRiskAssessment.org_id == self.current.org_id,
             QualityRiskAssessment.risk_case_id == case.id, QualityRiskAssessment.deleted_at.is_(None))
             .order_by(QualityRiskAssessment.version.desc()).limit(1).execution_options(populate_existing=True))
         if not assessment or case.status != "risk_assessed" or assessment.status != "accepted":
+            if allow_historical and purpose(case.scope) == HISTORICAL:
+                raise ValidationError("历史复盘须由另一位专家复核本版后，才能生成复盘报告")
             raise ValidationError("候选必须来自当前已独立复核的风险研判")
         review = (assessment.model_versions or {}).get("review_verification") or {}
+        if purpose(case.scope) == HISTORICAL and (not review.get("historical_scope_confirmed") or
+                (assessment.conflicts and not (review.get("conflict_resolution") or "").strip())):
+            raise ValidationError("历史复盘缺少原件范围确认或冲突核对意见")
         if (assessment.trust_status != "verified" or not assessment.reviewed_by
                 or assessment.reviewed_by == assessment.submitted_by or not assessment.reviewed_at
                 or review.get("actor_id") != assessment.reviewed_by or review.get("decision") != "accept"
@@ -37,7 +45,7 @@ class RiskDecisionContextService:
             raise ValidationError("风险研判缺少有效的独立复核凭据，请重新生成并复核")
         validation = await validate_risk(self.session, self.current, case, assessment, self.storage)
         if validation["blockers"]:
-            raise ValidationError("风险来源已失效或需要重新核验，不能用于当前监控或抽查",
+            raise ValidationError("风险来源已失效或需要重新核验，不能继续使用本版结论",
                 detail={"case_id": case.id, "blockers": validation["blockers"]})
         fields = ["id", "version", "scope", "risk_type", "risk_level", "probability", "evidence_ids",
             "standard_matches", "conflicts", "missing_inputs", "possible_causes", "recommendations",

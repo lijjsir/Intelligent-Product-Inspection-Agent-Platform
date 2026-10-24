@@ -36,13 +36,16 @@ export interface SupervisionRun {
   output?: Record<string, any>;
   error?: string;
 }
-export interface BusinessTodo {
+export interface RecordReview {
   id: string;
   record_id: string;
-  kind: SupervisionKind;
-  name: string;
-  operation: string;
   version: number;
+  operation: string;
+  status: string;
+  requester_id: string;
+  reviewer_id?: string | null;
+  comment?: string | null;
+  can_decide: boolean;
 }
 export const KIND_LABELS: Record<SupervisionKind, string> = {
   enterprises: "监管对象",

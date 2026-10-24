@@ -7,6 +7,8 @@ Local secrets, test data, models, caches, and generated files are not selected.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import subprocess
 import tarfile
 from pathlib import Path
@@ -43,6 +45,7 @@ SOURCE_FILES = {
     "frontend/public/piap-icon-512.png",
     "frontend/public/piap-icon.svg",
     "backend/scripts/init_memory_qdrant.py",
+    "backend/scripts/verify_local_quality_release.py",
     "compose.lab.yml",
     "deploy/lab/Dockerfile.frontend",
     "deploy/lab/Dockerfile.backend-hotfix",
@@ -81,7 +84,9 @@ def selected_files() -> list[str]:
         parts = Path(path).parts
         if any(part in DENIED_PARTS for part in parts):
             continue
-        if Path(path).name in DENIED_NAMES:
+        if Path(path).name in DENIED_NAMES or Path(path).name.startswith('.env') or Path(path).suffix.lower() in {'.pem','.key','.p12','.pfx'}:
+            continue
+        if Path(path).name.startswith('test_') or Path(path).name.endswith(('.spec.ts','.test.ts','.spec.tsx','.test.tsx')):
             continue
         source = ROOT / path
         if not source.is_file() or source.is_symlink():
@@ -101,6 +106,14 @@ def main() -> None:
     with tarfile.open(args.output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
         for path in paths:
             archive.add(ROOT / path, arcname=path, recursive=False)
+    manifest={'schema':'piap-source-release-v1','archive_sha256':hashlib.sha256(args.output.read_bytes()).hexdigest(),
+        'source_kind':'current working-tree snapshot; includes uncommitted source changes',
+        'contains_database':False,'contains_original_materials':False,
+        'files':{path:hashlib.sha256((ROOT/path).read_bytes()).hexdigest() for path in paths}}
+    try:
+        manifest['git_base']=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True,stderr=subprocess.DEVNULL).strip()
+    except (subprocess.CalledProcessError,OSError):manifest['git_base']=None
+    args.output.with_name(args.output.name+'.manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     source_bytes = sum((ROOT / path).stat().st_size for path in paths)
     print(f"Files: {len(paths)}")
     print(f"Source size: {source_bytes / (1024 * 1024):.1f} MiB")

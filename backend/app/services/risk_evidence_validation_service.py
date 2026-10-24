@@ -37,6 +37,14 @@ async def validate_risk(session,current,case,assessment,storage=None,*,freeze_so
         QualitySourceRecord.id.in_({e.source_record_id for e in evidence}),QualitySourceRecord.deleted_at.is_(None))
         .execution_options(populate_existing=True))).all()
     by_id={r.id:r for r in records};observed_sources=set()
+    from app.services.risk_purpose_policy import HISTORICAL, RULES_VERSION, purpose, historical_requirements
+    historical = purpose(case.scope) == HISTORICAL
+    purpose_review = (assessment.model_versions or {}).get("purpose_review") or {}
+    if historical:
+        if purpose_review.get("rules_version") != RULES_VERSION or purpose_review.get("purpose") != HISTORICAL:
+            blockers.append(blocker("risk_purpose_version", "历史草稿未区分复盘用途与证据要求，请生成新版后复核"))
+        for message in historical_requirements(case.scope, records):
+            blockers.append(blocker("risk_historical_evidence", message))
     validator=ExecutionEvidenceService(session,current,storage)
     for missing in set(ids)-{e.id for e in evidence}:blockers.append(blocker("risk_evidence_missing","引用证据已撤回、丢失或不在组织范围",{"evidence_id":missing}))
     for e in evidence:
@@ -132,6 +140,8 @@ async def validate_risk(session,current,case,assessment,storage=None,*,freeze_so
         except (NotFoundError, ForbiddenError, ValidationError, ConflictError) as exc:
             blockers.append(blocker('risk_execution_return_invalid', exc.message))
     uncertainties=list(dict.fromkeys(m for m in (assessment.missing_inputs or []) if m!="真实来源证据" and m!="经规则或专家确认的风险等级"))
+    if historical:
+        uncertainties = list(dict.fromkeys([*uncertainties, *purpose_review.get("limitations", [])]))
     if assessment.probability is None:uncertainties.append("发生概率尚未校准，当前确认只适用于本案风险信号及建议")
     return {"validator_version":VALIDATOR_VERSION,"checked_at":utcnow().isoformat(),"blockers":blockers,
         "uncertainties":uncertainties,"sources":sources,"independent_observed_sources":len(observed_sources),

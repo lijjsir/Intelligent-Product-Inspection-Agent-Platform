@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { marketApi } from "@/api/market-monitoring.api";
 import { qualityRiskApi } from "@/api/quality-risk.api";
 import { extractApiErrorMessage } from "@/api/http";
+import SupervisionModuleHeader from "./SupervisionModuleHeader.vue";
 import type { IntakeReferenceOptions, RiskCaseV4 } from "@/types/quality-risk.types";
 import type {
   MarketCoverage,
@@ -354,14 +355,9 @@ onMounted(async () => {
 
 <template>
   <section class="market-monitor">
-    <header class="market-header">
-      <div>
-        <p class="eyebrow">质量监督 / 持续观察</p>
-        <h1>市场监控</h1>
-        <p>从接入资料发现数量变化，将值得核查的线索交给研判。</p>
-      </div>
-      <el-button :disabled="!report" @click="openConfig">规则与覆盖</el-button>
-    </header>
+    <SupervisionModuleHeader title="市场监控" description="观察投诉与舆情的数量变化，发现集中线索，将需要核查的对象交给风险研判。" principle="数量变化提示核查方向，风险结论仍需结合来源证据与独立复核。">
+      <template #actions><el-button :disabled="!report" @click="openConfig">规则与覆盖</el-button></template>
+    </SupervisionModuleHeader>
     <form class="monitor-toolbar" @submit.prevent="load">
       <label
         >观察对象<el-select v-model="objectType" aria-label="观察对象" style="width: 140px"

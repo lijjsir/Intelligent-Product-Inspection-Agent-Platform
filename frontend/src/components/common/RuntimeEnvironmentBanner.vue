@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth.store';
 
 const { context, unavailable, load } = useRuntimeContext();
 const route=useRoute(),auth=useAuthStore();
-const showGuideLink=computed(()=>auth.primaryRole==='expert'&&auth.hasPermission('quality_material_read_business')&&route.path.startsWith('/app/')&&route.path!=='/app/workbench');
+const showGuideLink=computed(()=>auth.primaryRole==='expert'&&auth.hasPermission('quality_material_read_business')&&route.path.startsWith('/app/')&&!(route.path==='/app/quality-data'&&route.hash==='#demo-case-guide'));
 const banner = ref<HTMLElement | null>(null);
 let observer: ResizeObserver | null = null;
 function updateHeight() {
@@ -45,7 +45,7 @@ onBeforeUnmount(() => {
   >
     <template v-if="context?.execution_mode === 'demo'"
       ><strong>演示环境</strong><span>模拟资料 · 不用于正式风险结论</span
-      ><small>{{ context.case_code }}</small><router-link v-if="showGuideLink" to="/app/workbench#demo-case-guide">返回演示导览</router-link></template
+      ><small>{{ context.case_code }}</small><router-link v-if="showGuideLink" to="/app/quality-data#demo-case-guide">返回演示导览</router-link></template
     >
     <template v-else
       ><span>环境信息暂不可用</span><button type="button" @click="load">重试</button></template

@@ -88,6 +88,8 @@ def extract_pdf_pages(file_path: str | Path) -> tuple[list[dict[str, Any]], int]
         text = str(parsed.get("text") or "").strip()
         if text:
             pages.append({"page_number": 1, "text": text})
+    from app.services.standard_pdf_reading_text import restore_pdf_reading_layout
+    pages = restore_pdf_reading_layout(pages, path)
     pages = repair_unreadable_pdf_pages_with_ocr(pages, file_path=path)
     return pages, int(parsed.get("page_count") or len(raw_pages) or len(pages))
 

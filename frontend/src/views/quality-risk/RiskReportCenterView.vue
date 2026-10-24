@@ -39,6 +39,7 @@ function movePage(direction: number) {
   reportPage.value += direction; void load(true);
 }
 const isDemo = computed(() => runtime.context.value?.execution_mode === "demo");
+const isHistorical = computed(() => workspace.value?.case.assessment_purpose === 'historical_review' || workspace.value?.case.scope.case_mode === 'public_historical_review');
 const basis = computed(() => isDemo.value ? assessment.value?.demo_validation?.basis_hash : workspace.value?.workflow_context?.basis_hash);
 const canGenerate = computed(
   () =>
@@ -189,7 +190,7 @@ onBeforeUnmount(() => {
           }}
         </p>
         <el-button v-if="caseId" type="primary" :disabled="!canGenerate || saving" @click="generate"
-          >{{ isDemo ? "生成本版演示研判报告" : "生成本版研判报告" }}</el-button
+          >{{ isDemo ? "生成本版演示研判报告" : isHistorical ? "生成历史资料复盘报告" : "生成本版研判报告" }}</el-button
         >
       </section>
       <section>

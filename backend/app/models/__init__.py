@@ -248,3 +248,4 @@ __all__ = [
     "PromptDefinition",
     "PromptSyncEvent",
 ]
+from app.models.risk_analysis_job import RiskAnalysisJob

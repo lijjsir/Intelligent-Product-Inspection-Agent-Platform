@@ -98,11 +98,12 @@ describe("useMenu", () => {
     auth.roles = [ROLE_EXPERT];
 
     expect(flattenTitles()).not.toContain("协同中心");
+    expect(flattenTitles()).toContain("会议室");
     expect(flattenTitles()).not.toContain("协作消息");
     expect(appRoutes.find((route) => route.name === "app-collab")?.meta?.title).toBe("历史共享与请求记录");
   });
 
-  it("puts the quality-supervision workbench before business flow for experts", () => {
+  it("opens business modules directly for experts", () => {
     const auth = useAuthStore();
 
     auth.role = ROLE_EXPERT;
@@ -110,9 +111,9 @@ describe("useMenu", () => {
     expect(flattenPaths().slice(0, 5)).toEqual([
       "/app/chat",
       "/app/meetings",
-      "/app/workbench",
       "/app/quality-data",
       "/app/quality-analytics",
+      "/app/risk-assessments",
     ]);
 
     for (const role of [
@@ -128,7 +129,7 @@ describe("useMenu", () => {
     }
   });
 
-  it("keeps expert laboratory, tasks, results and collaboration as independent entries", () => {
+  it("groups laboratory with supervision while keeping execution records accessible", () => {
     const auth = useAuthStore();
     auth.role = ROLE_EXPERT;
     auth.roles = [ROLE_EXPERT];
@@ -141,10 +142,12 @@ describe("useMenu", () => {
 
     const { menu } = useMenu();
     const quality = menu.value.find(item => 'items' in item && item.title==='质量监督');
-    expect(quality && 'items' in quality ? quality.items.map(item=>item.title) : []).toEqual(['质监工作台','数据采集','市场监控','风险研判','监督抽查']);
-    for (const title of ['实验室检测','检测任务','检测结果','报告中心']) {
+    expect(quality && 'items' in quality ? quality.items.map(item=>item.title) : []).toEqual(['数据采集','市场监控','风险研判','监督抽查','实验室检测']);
+    expect(menu.value.some(item => item.title === '实验室检测')).toBe(false);
+    for (const title of ['检测任务','检测结果','会议室','报告中心','标准审核','知识资料']) {
       expect(menu.value.some(item => item.title === title && !('items' in item))).toBe(true);
     }
+    expect(menu.value.some(item => item.title === '标准与知识')).toBe(false);
   });
 
   it("keeps ordinary-user navigation focused on chat, personal tasks and settings", () => {

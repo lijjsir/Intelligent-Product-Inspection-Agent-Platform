@@ -3,13 +3,15 @@ import type {
   SupervisionKind,
   SupervisionRecord,
   SupervisionRun,
-  BusinessTodo,
+  RecordReview,
   InspectionDecision,
   InspectionEvidenceState,
   InspectionGoal,
   InspectionTestItem,
 } from "@/types/supervision.types";
 import type { PagedResponse } from "@/types/common.types";
+
+const recordResource = (kind: SupervisionKind) => kind === "risk-cases" ? "legacy-risk-cases" : kind;
 
 export interface ReferenceOption {value: string; label: string;disabled?:boolean}
 export interface ReferencePage {items: ReferenceOption[]; selected: ReferenceOption[]; unavailable_selected_ids: string[]; total: number | null; has_more: boolean; page: number; size: number}
@@ -91,15 +93,15 @@ export const supervisionApi = {
   enable: (enabled: boolean) =>
     http.patch("/v1/quality-supervision/settings", {}, { params: { enabled } }),
   list: (kind: SupervisionKind, params: Record<string, any> = {}) =>
-    http.get<PagedResponse<SupervisionRecord>>(`/v1/${kind}`, { params, suppressErrorToast: true }),
-  get: (kind: SupervisionKind, id: string, feedback: Pick<ApiRequestConfig,'suppressErrorToast'> = {}) => http.get<SupervisionRecord>(`/v1/${kind}/${id}`, feedback),
+    http.get<PagedResponse<SupervisionRecord>>(`/v1/${recordResource(kind)}`, { params, suppressErrorToast: true }),
+  get: (kind: SupervisionKind, id: string, feedback: Pick<ApiRequestConfig,'suppressErrorToast'> = {}) => http.get<SupervisionRecord>(`/v1/${recordResource(kind)}/${id}`, feedback),
   create: (kind: SupervisionKind, payload: Record<string, any>) =>
-    http.post<SupervisionRecord>(`/v1/${kind}`, payload),
+    http.post<SupervisionRecord>(`/v1/${recordResource(kind)}`, payload),
   update: (kind: SupervisionKind, id: string, payload: Record<string, any>) =>
-    http.patch<SupervisionRecord>(`/v1/${kind}/${id}`, payload),
-  revisions: (kind: SupervisionKind, id: string) => http.get<any[]>(`/v1/${kind}/${id}/revisions`),
+    http.patch<SupervisionRecord>(`/v1/${recordResource(kind)}/${id}`, payload),
+  revisions: (kind: SupervisionKind, id: string) => http.get<any[]>(`/v1/${recordResource(kind)}/${id}/revisions`),
   run: (kind: SupervisionKind, id: string, version: number, operation: string) =>
-    http.post<SupervisionRun>(`/v1/${kind}/${id}/runs`, {
+    http.post<SupervisionRun>(`/v1/${recordResource(kind)}/${id}/runs`, {
       version,
       operation,
       request_key: `${operation}:${id}:${version}`,
@@ -108,12 +110,13 @@ export const supervisionApi = {
   retry: (id: string) => http.post(`/v1/supervision-runs/${id}/retry`, {}),
   cancel: (id: string) => http.post(`/v1/supervision-runs/${id}/cancel`, {}),
   review: (kind: SupervisionKind, id: string, version: number, operation: string) =>
-    http.post(`/v1/${kind}/${id}/reviews`, { version, operation }),
-  todos: () => http.get<BusinessTodo[]>("/v1/business-reviews", { suppressErrorToast: true }),
+    http.post(`/v1/${recordResource(kind)}/${id}/reviews`, { version, operation }),
+  recordReviews: (kind: SupervisionKind, id: string) =>
+    http.get<RecordReview[]>(`/v1/${recordResource(kind)}/${id}/reviews`, { suppressErrorToast: true }),
   decide: (id: string, decision: string, comment: string) =>
     http.post(`/v1/business-reviews/${id}/decision`, { decision, comment }),
   feedback: (kind: SupervisionKind, id: string, payload: Record<string, any>) =>
-    http.post(`/v1/${kind}/${id}/feedback`, payload),
+    http.post(`/v1/${recordResource(kind)}/${id}/feedback`, payload),
   connection: (id: string) => http.post<{ token: string }>(`/v1/devices/${id}/connection`, {}),
   runtime: (id: string, payload: Record<string, any>) =>
     http.patch(`/v1/devices/${id}/runtime`, payload),

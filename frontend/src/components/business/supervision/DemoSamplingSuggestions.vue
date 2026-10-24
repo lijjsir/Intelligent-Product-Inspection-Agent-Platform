@@ -11,6 +11,7 @@ import {
 } from "@/api/demo-sampling.api";
 import { useRuntimeContext } from "@/composables/useRuntimeContext";
 import { useAuthStore } from "@/stores/auth.store";
+import SupervisionModuleHeader from "./SupervisionModuleHeader.vue";
 import { formatServerDateTime } from "@/utils/date-time";
 
 const route = useRoute(),
@@ -128,14 +129,9 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="demo-sampling-page" v-loading="loading">
-    <header>
-      <div>
-        <p>质量监督 · {{ isDemo ? "演示环境" : "抽查建议" }}</p>
-        <h1>{{ isDemo ? "演示抽查建议" : "抽查建议" }}</h1>
-        <p>把已独立复核的研判和证据整理为建议，保留来源、缺口和未知信息。</p>
-      </div>
-      <el-button :disabled="saving" @click="load()">刷新依据与列表</el-button>
-    </header>
+    <SupervisionModuleHeader :title="isDemo ? '演示抽查建议' : '抽查建议'" tone="amber" description="依据已独立复核的风险事项和证据编写抽查建议，明确抽查对象、关注内容和资源条件。" principle="建议保留来源版本；正式抽查计划须独立批准，检测按验证需求组织。">
+      <template #actions><el-button @click="router.push('/app/sampling-plans?records=1')">查看抽查计划记录</el-button><el-button :disabled="saving" @click="load()">刷新依据与列表</el-button></template>
+    </SupervisionModuleHeader>
     <el-alert
       type="warning"
       :closable="false"
@@ -370,8 +366,8 @@ onBeforeUnmount(() => {
 .demo-sampling-page {
   display: grid;
   gap: 20px;
-  padding: 28px;
-  max-width: 1280px;
+  padding: 20px;
+  max-width: 1440px;
   margin: auto;
   color: var(--el-text-color-primary);
 }
